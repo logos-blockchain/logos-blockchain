@@ -5,11 +5,22 @@ use nomos_core::{
     mantle::{Note, SignedMantleTx, Value, tx_builder::MantleTxBuilder},
 };
 use nomos_wallet::{WalletMsg, WalletService, WalletServiceError};
-use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
+use overwatch::{
+    overwatch::OverwatchHandle,
+    services::{AsServiceId, relay::RelayError},
+};
 use tokio::sync::oneshot;
 use zksign::PublicKey;
 
-use crate::http::DynError;
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Relay(RelayError),
+    #[error(transparent)]
+    Recv(oneshot::error::RecvError),
+    #[error(transparent)]
+    Service(WalletServiceError),
+}
 
 /// Get the balance of a wallet address.
 ///
@@ -21,21 +32,23 @@ use crate::http::DynError;
 ///
 /// # Returns
 ///
-/// A `Result` containing the `Result` of the balance query on success, or an
-/// error on failure.
+/// A `Result` containing an `Option<Value>` representing the balance on
+/// success, where `None` indicates that the address does not exist, or an error
+/// on failure.
 pub async fn get_balance<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>(
     handle: &OverwatchHandle<RuntimeServiceId>,
     tip: HeaderId,
     wallet_address: PublicKey,
-) -> Result<Result<Option<Value>, WalletServiceError>, DynError>
+) -> Result<Option<Value>, Error>
 where
     RuntimeServiceId: Debug
         + Display
         + Sync
         + AsServiceId<WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
+    let relay = handle.relay().await.map_err(Error::Relay)?;
     let (sender, receiver) = oneshot::channel();
+
     relay
         .send(WalletMsg::GetBalance {
             tip,
@@ -43,8 +56,9 @@ where
             resp_tx: sender,
         })
         .await
-        .map_err(|(error, _)| error)?;
-    Ok(receiver.await?)
+        .map_err(|(error, _)| Error::Relay(error))?;
+
+    receiver.await.map_err(Error::Recv)?.map_err(Error::Service)
 }
 
 /// Transfer funds from some addresses to another.
@@ -60,8 +74,8 @@ where
 /// - `amount`: The amount to transfer.
 ///
 /// # Returns
-/// A `Result` containing the `Result` of the signed transaction on success, or
-/// an error on failure.
+/// A `Result` containing the signed transaction on success, or an error on
+/// failure.
 pub async fn transfer_funds<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>(
     handle: &OverwatchHandle<RuntimeServiceId>,
     tip: HeaderId,
@@ -69,14 +83,14 @@ pub async fn transfer_funds<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>(
     funding_public_keys: Vec<PublicKey>,
     recipient_public_key: PublicKey,
     amount: u64,
-) -> Result<Result<SignedMantleTx, WalletServiceError>, DynError>
+) -> Result<SignedMantleTx, Error>
 where
     RuntimeServiceId: Debug
         + Display
         + Sync
         + AsServiceId<WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
+    let relay = handle.relay().await.map_err(Error::Relay)?;
     let (sender, receiver) = oneshot::channel();
     let transaction_builder =
         MantleTxBuilder::new().add_ledger_output(Note::new(amount, recipient_public_key));
@@ -90,7 +104,7 @@ where
             resp_tx: sender,
         })
         .await
-        .map_err(|(error, _)| error)?;
+        .map_err(|(error, _)| Error::Relay(error))?;
 
-    Ok(receiver.await?)
+    receiver.await.map_err(Error::Recv)?.map_err(Error::Service)
 }

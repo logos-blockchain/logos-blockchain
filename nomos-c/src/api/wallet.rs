@@ -1,3 +1,4 @@
+use nomos_api::http::wallet::Error;
 use nomos_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction as _, Value},
@@ -35,14 +36,17 @@ pub(crate) fn get_balance_sync(
         eprintln!("[Failed]to create tokio runtime. Aborting.");
         return Err(OperationStatus::RuntimeError);
     };
+
     runtime
         .block_on(nomos_api::http::wallet::get_balance(
             node.get_overwatch_handle(),
             tip,
             wallet_address,
         ))
-        .map_err(|_dyn_error| OperationStatus::RelayError)?
-        .map_err(|_service_error| OperationStatus::ServiceError)
+        .map_err(|error| match error {
+            Error::Relay(_) | Error::Recv(_) => OperationStatus::RelayError,
+            Error::Service(_) => OperationStatus::ServiceError,
+        })
 }
 
 #[unsafe(no_mangle)]
@@ -239,8 +243,10 @@ pub(crate) fn transfer_funds_sync(
             recipient_public_key,
             amount,
         ))
-        .map_err(|_dyn_error| OperationStatus::RelayError)?
-        .map_err(|_service_error| OperationStatus::ServiceError)
+        .map_err(|error| match error {
+            Error::Relay(_) | Error::Recv(_) => OperationStatus::RelayError,
+            Error::Service(_) => OperationStatus::ServiceError,
+        })
 }
 
 #[unsafe(no_mangle)]
