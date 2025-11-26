@@ -114,7 +114,7 @@ pub unsafe extern "C" fn get_balance(
 }
 
 #[repr(C)]
-pub struct TransferFunds {
+pub struct TransferFundsArguments {
     pub optional_tip: *const HeaderIdC,
     pub change_public_key: *const u8,
     pub funding_public_keys: *const *const u8,
@@ -123,8 +123,8 @@ pub struct TransferFunds {
     pub amount: u64,
 }
 
-impl TransferFunds {
-    /// Validates the arguments of the [`TransferFunds`] struct.
+impl TransferFundsArguments {
+    /// Validates the arguments of the [`TransferFundsArguments`] struct.
     ///
     /// # Returns
     ///
@@ -179,8 +179,12 @@ impl TransferFunds {
 /// # Arguments
 ///
 /// - `node`: A [`NomosNode`] instance.
-/// - `arguments`: A reference to a [`TransferFunds`] struct containing the
-///   transfer parameters.
+/// - `tip`: The header ID at which to perform the transfer.
+/// - `change_public_key`: The public key to receive any change from the
+///   transaction.
+/// - `funding_public_keys`: A vector of public keys to fund the transaction.
+/// - `recipient_public_key`: The public key of the recipient.
+/// - `amount`: The amount to transfer.
 ///
 /// # Returns
 ///
@@ -188,19 +192,82 @@ impl TransferFunds {
 /// [`OperationStatus`] error on failure.
 pub(crate) fn transfer_funds_sync(
     node: &NomosNode,
-    arguments: &TransferFunds,
+    tip: HeaderId,
+    change_public_key: PublicKey,
+    funding_public_keys: Vec<PublicKey>,
+    recipient_public_key: PublicKey,
+    amount: u64,
 ) -> Result<SignedMantleTx, OperationStatus> {
     let Ok(runtime) = tokio::runtime::Runtime::new() else {
         eprintln!("[transfer_funds_sync] Failed to create tokio runtime. Aborting.");
         return Err(OperationStatus::RuntimeError);
     };
 
+    runtime
+        .block_on(nomos_api::http::wallet::transfer_funds(
+            node.get_overwatch_handle(),
+            tip,
+            change_public_key,
+            funding_public_keys,
+            recipient_public_key,
+            amount,
+        ))
+        .map_err(|error| match error {
+            Error::Relay(_) | Error::Recv(_) => OperationStatus::RelayError,
+            Error::Service(_) => OperationStatus::ServiceError,
+        })
+}
+
+#[unsafe(no_mangle)]
+/// Transfer funds from some addresses to another.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a [`NomosNode`] instance.
+/// - `arguments`: A non-null pointer to a [`TransferFundsArguments`] struct
+///   containing the transaction arguments.
+/// - `output_transaction_hash`: A non-null pointer to a [`HashC`] where the
+///   output transaction hash will be written. The hash will be written in
+///   little-endian format.
+///
+/// # Returns
+///
+/// An [`OperationStatus`] indicating success or the specific error encountered.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers. The caller
+/// must ensure that all pointers are valid.
+pub unsafe extern "C" fn transfer_funds(
+    node: *const NomosNode,
+    arguments: *const TransferFundsArguments,
+    output_transaction_hash: *mut HashC,
+) -> OperationStatus {
+    if node.is_null() {
+        eprintln!("[transfer_funds] Received a null `node` pointer. Exiting.");
+        return OperationStatus::NullPtr;
+    }
+    if arguments.is_null() {
+        eprintln!("[transfer_funds] Received a null `arguments` pointer. Exiting.");
+        return OperationStatus::NullPtr;
+    }
+    let arguments = unsafe { &*arguments };
+    if let Err((error_message, status)) = unsafe { arguments.validate() } {
+        eprintln!("[transfer_funds] {error_message} Exiting.");
+        return status;
+    }
+    if output_transaction_hash.is_null() {
+        eprintln!("[transfer_funds] Received a null `output_transaction_hash` pointer. Exiting.");
+        return OperationStatus::NullPtr;
+    }
+
+    let node = unsafe { &*node };
     let tip = if arguments.optional_tip.is_null() {
         match get_cryptarchia_info_sync(node) {
             Ok(cryptarchia_info) => cryptarchia_info.tip,
-            Err(error) => {
-                eprintln!("[transfer_funds_sync] Failed to get cryptarchia info. Aborting.");
-                return Err(error);
+            Err(status) => {
+                eprintln!("[transfer_funds] Failed to get cryptarchia info. Aborting.");
+                return status;
             }
         }
     } else {
@@ -234,66 +301,14 @@ pub(crate) fn transfer_funds_sync(
     };
     let amount = Value::from(arguments.amount);
 
-    runtime
-        .block_on(nomos_api::http::wallet::transfer_funds(
-            node.get_overwatch_handle(),
-            tip,
-            change_public_key,
-            funding_public_keys,
-            recipient_public_key,
-            amount,
-        ))
-        .map_err(|error| match error {
-            Error::Relay(_) | Error::Recv(_) => OperationStatus::RelayError,
-            Error::Service(_) => OperationStatus::ServiceError,
-        })
-}
-
-#[unsafe(no_mangle)]
-/// Transfer funds from some addresses to another.
-///
-/// # Arguments
-///
-/// - `node`: A non-null pointer to a [`NomosNode`] instance.
-/// - `arguments`: A non-null pointer to a [`TransferFunds`] struct containing
-///   the transaction arguments.
-/// - `output_transaction_hash`: A non-null pointer to a [`HashC`] where the
-///   output transaction hash will be written. The hash will be written in
-///   little-endian format.
-///
-/// # Returns
-///
-/// An [`OperationStatus`] indicating success or the specific error encountered.
-///
-/// # Safety
-///
-/// This function is unsafe because it dereferences raw pointers. The caller
-/// must ensure that all pointers are valid.
-pub unsafe extern "C" fn transfer_funds(
-    node: *const NomosNode,
-    arguments: *const TransferFunds,
-    output_transaction_hash: *mut HashC,
-) -> OperationStatus {
-    if node.is_null() {
-        eprintln!("[transfer_funds] Received a null `node` pointer. Exiting.");
-        return OperationStatus::NullPtr;
-    }
-    if arguments.is_null() {
-        eprintln!("[transfer_funds] Received a null `arguments` pointer. Exiting.");
-        return OperationStatus::NullPtr;
-    }
-    let arguments = unsafe { &*arguments };
-    if let Err((error_message, status)) = unsafe { arguments.validate() } {
-        eprintln!("[transfer_funds] {error_message} Exiting.");
-        return status;
-    }
-    if output_transaction_hash.is_null() {
-        eprintln!("[transfer_funds] Received a null `output_transaction_hash` pointer. Exiting.");
-        return OperationStatus::NullPtr;
-    }
-
-    let node = unsafe { &*node };
-    match transfer_funds_sync(node, arguments) {
+    match transfer_funds_sync(
+        node,
+        tip,
+        change_public_key,
+        funding_public_keys,
+        recipient_public_key,
+        amount,
+    ) {
         Ok(transaction) => {
             let transaction_hash = transaction.hash().as_signing_bytes();
             let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
