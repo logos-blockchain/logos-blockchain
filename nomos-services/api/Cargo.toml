@@ -35,6 +35,7 @@ nomos-libp2p             = { workspace = true }
 nomos-network            = { workspace = true }
 nomos-sdp                = { workspace = true }
 nomos-storage            = { features = ["rocksdb-backend"], workspace = true }
+nomos-wallet             = { workspace = true }
 overwatch                = { workspace = true }
 serde                    = { workspace = true }
 serde_json               = { default-features = false, version = "1.0.140" }
@@ -43,6 +44,7 @@ tokio                    = { default-features = false, features = ["net"], versi
 tokio-stream             = { default-features = false, version = "0.1" }
 tracing                  = { default-features = false, version = "0.1" }
 tx-service               = { features = ["libp2p", "mock", "openapi"], workspace = true }
+zksign                   = { workspace = true }
 
 # axum related dependencies
 axum = { default-features = false, features = [
