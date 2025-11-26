@@ -28,7 +28,7 @@ impl NomosNode {
 
     // Helper methods to safely access the inner types
     #[must_use]
-    const fn get_overwatch_handle(&self) -> &OverwatchHandle<RuntimeServiceId> {
+    pub(crate) const fn get_overwatch_handle(&self) -> &OverwatchHandle<RuntimeServiceId> {
         unsafe {
             self.overwatch
                 .cast::<NomosOverwatch>()
@@ -39,7 +39,7 @@ impl NomosNode {
     }
 
     #[must_use]
-    fn get_runtime_handle(&self) -> &Handle {
+    pub(crate) fn get_runtime_handle(&self) -> &Handle {
         unsafe {
             self.runtime
                 .cast::<Runtime>()
