@@ -1,43 +1,40 @@
-use chain_service::CryptarchiaInfo;
-use cryptarchia_engine::State;
-
 use crate::{NomosNode, errors::OperationStatus};
 
 #[repr(C)]
-pub enum StateC {
+pub enum State {
     Bootstrapping = 0x0,
     Online = 0x1,
 }
 
-impl From<State> for StateC {
-    fn from(value: State) -> Self {
+impl From<cryptarchia_engine::State> for State {
+    fn from(value: cryptarchia_engine::State) -> Self {
         match value {
-            State::Bootstrapping => Self::Bootstrapping,
-            State::Online => Self::Online,
+            cryptarchia_engine::State::Bootstrapping => Self::Bootstrapping,
+            cryptarchia_engine::State::Online => Self::Online,
         }
     }
 }
 
-pub type HashC = [u8; 32];
-pub type HeaderIdC = HashC;
+pub type Hash = [u8; 32];
+pub type HeaderId = Hash;
 
 #[repr(C)]
-pub struct CryptarchiaInfoC {
-    pub lib: HeaderIdC,
-    pub tip: HeaderIdC,
+pub struct CryptarchiaInfo {
+    pub lib: HeaderId,
+    pub tip: HeaderId,
     pub slot: u64,
     pub height: u64,
-    pub mode: StateC,
+    pub mode: State,
 }
 
-impl From<CryptarchiaInfo> for CryptarchiaInfoC {
-    fn from(value: CryptarchiaInfo) -> Self {
+impl From<chain_service::CryptarchiaInfo> for CryptarchiaInfo {
+    fn from(value: chain_service::CryptarchiaInfo) -> Self {
         Self {
             lib: value.lib.into(),
             tip: value.tip.into(),
             slot: u64::from(value.slot),
             height: value.height,
-            mode: StateC::from(value.mode),
+            mode: State::from(value.mode),
         }
     }
 }
@@ -57,7 +54,7 @@ impl From<CryptarchiaInfo> for CryptarchiaInfoC {
 /// [`OperationStatus`] error on failure.
 pub(crate) fn get_cryptarchia_info_sync(
     node: &NomosNode,
-) -> Result<CryptarchiaInfo, OperationStatus> {
+) -> Result<chain_service::CryptarchiaInfo, OperationStatus> {
     let Ok(runtime) = tokio::runtime::Runtime::new() else {
         eprintln!("[get_cryptarchia_info_sync] Failed to create tokio runtime. Aborting.");
         return Err(OperationStatus::RuntimeError);
@@ -71,13 +68,12 @@ pub(crate) fn get_cryptarchia_info_sync(
     Ok(cryptarchia_info)
 }
 
-#[unsafe(no_mangle)]
 /// Get the current Cryptarchia info.
 ///
 /// # Arguments
 ///
 /// - `node`: A non-null pointer to a [`NomosNode`].
-/// - `output_cryptarchia_info`: A non-null pointer to a [`CryptarchiaInfoC`]
+/// - `output_cryptarchia_info`: A non-null pointer to a [`CryptarchiaInfo`]
 ///   struct where the output Cryptarchia info will be written.
 ///
 /// # Returns
@@ -89,9 +85,10 @@ pub(crate) fn get_cryptarchia_info_sync(
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that all pointers are non-null and point to valid
 /// memory.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_cryptarchia_info(
     node: *const NomosNode,
-    output_cryptarchia_info: *mut CryptarchiaInfoC,
+    output_cryptarchia_info: *mut CryptarchiaInfo,
 ) -> OperationStatus {
     if node.is_null() {
         eprintln!("[get_cryptarchia_info] Received a null `node` pointer. Exiting.");
@@ -106,9 +103,9 @@ pub unsafe extern "C" fn get_cryptarchia_info(
     let node = unsafe { &*node };
     match get_cryptarchia_info_sync(node) {
         Ok(cryptarchia_info) => {
-            let cryptarchia_info_c = CryptarchiaInfoC::from(cryptarchia_info);
+            let cryptarchia_info = CryptarchiaInfo::from(cryptarchia_info);
             unsafe {
-                *output_cryptarchia_info = cryptarchia_info_c;
+                std::ptr::write(output_cryptarchia_info, cryptarchia_info);
             };
             OperationStatus::Ok
         }

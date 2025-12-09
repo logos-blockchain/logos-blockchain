@@ -5928,17 +5928,20 @@ dependencies = [
  "nomos-network",
  "nomos-sdp",
  "nomos-storage",
+ "nomos-wallet",
  "overwatch",
  "reqwest 0.12.25",
  "serde",
  "serde_json",
  "subnetworks-assignations",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-stream",
  "tracing",
  "tx-service",
  "utoipa",
  "utoipa-swagger-ui",
+ "zksign",
 ]
 
 [[package]]
@@ -6101,10 +6104,16 @@ name = "nomos-c"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
+ "chain-service",
+ "cryptarchia-engine",
+ "nomos-api",
+ "nomos-core",
  "nomos-node",
+ "num-bigint",
  "overwatch",
  "serde_yaml",
  "tokio",
+ "zksign",
 ]
 
 [[package]]

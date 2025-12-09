@@ -79,13 +79,13 @@ fn initialize_nomos_node(config_path: *const c_char) -> Result<NomosNode, NomosN
     Ok(NomosNode::new(app, rt))
 }
 
-#[unsafe(no_mangle)]
 /// # Safety
 ///
 /// The caller must ensure that:
 /// - `node` is a valid pointer to a `NomosNode` instance
 /// - The `NomosNode` instance was created by this library
 /// - The pointer will not be used after this function returns
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn stop_node(node: *mut NomosNode) -> NomosNodeErrorCode {
     if node.is_null() {
         eprintln!("Attempted to stop a null node pointer. This is a bug. Aborting.");

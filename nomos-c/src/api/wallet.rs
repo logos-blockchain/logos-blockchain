@@ -1,14 +1,11 @@
 use nomos_api::http::wallet::Error;
-use nomos_core::{
-    header::HeaderId,
-    mantle::{SignedMantleTx, Transaction as _, Value},
-};
+use nomos_core::mantle::{SignedMantleTx, Transaction as _, Value};
 use num_bigint::BigUint;
 use zksign::PublicKey;
 
 use crate::{
     NomosNode,
-    api::cryptarchia::{HashC, HeaderIdC, get_cryptarchia_info_sync},
+    api::cryptarchia::{Hash, HeaderId, get_cryptarchia_info_sync},
     errors::OperationStatus,
 };
 
@@ -29,7 +26,7 @@ use crate::{
 /// [`OperationStatus`] error on failure.
 pub(crate) fn get_balance_sync(
     node: &NomosNode,
-    tip: HeaderId,
+    tip: nomos_core::header::HeaderId,
     wallet_address: PublicKey,
 ) -> Result<Option<Value>, OperationStatus> {
     let Ok(runtime) = tokio::runtime::Runtime::new() else {
@@ -73,7 +70,7 @@ pub(crate) fn get_balance_sync(
 pub unsafe extern "C" fn get_balance(
     node: *const NomosNode,
     wallet_address: *const u8,
-    optional_tip: *const HeaderIdC,
+    optional_tip: *const HeaderId,
     output_balance: *mut Value,
 ) -> OperationStatus {
     if node.is_null() {
@@ -96,7 +93,7 @@ pub unsafe extern "C" fn get_balance(
             Err(error) => return error,
         }
     } else {
-        HeaderId::from(unsafe { *optional_tip })
+        nomos_core::header::HeaderId::from(unsafe { *optional_tip })
     };
     let wallet_address_bytes = unsafe { std::slice::from_raw_parts(wallet_address, 32) };
     let wallet_address = PublicKey::from(BigUint::from_bytes_le(wallet_address_bytes));
@@ -104,7 +101,7 @@ pub unsafe extern "C" fn get_balance(
     match get_balance_sync(node, tip, wallet_address) {
         Ok(Some(balance)) => {
             unsafe {
-                *output_balance = balance;
+                std::ptr::write(output_balance, balance);
             };
             OperationStatus::Ok
         }
@@ -115,7 +112,7 @@ pub unsafe extern "C" fn get_balance(
 
 #[repr(C)]
 pub struct TransferFundsArguments {
-    pub optional_tip: *const HeaderIdC,
+    pub optional_tip: *const HeaderId,
     pub change_public_key: *const u8,
     pub funding_public_keys: *const *const u8,
     pub funding_public_keys_len: usize,
@@ -192,7 +189,7 @@ impl TransferFundsArguments {
 /// [`OperationStatus`] error on failure.
 pub(crate) fn transfer_funds_sync(
     node: &NomosNode,
-    tip: HeaderId,
+    tip: nomos_core::header::HeaderId,
     change_public_key: PublicKey,
     funding_public_keys: Vec<PublicKey>,
     recipient_public_key: PublicKey,
@@ -226,7 +223,7 @@ pub(crate) fn transfer_funds_sync(
 /// - `node`: A non-null pointer to a [`NomosNode`] instance.
 /// - `arguments`: A non-null pointer to a [`TransferFundsArguments`] struct
 ///   containing the transaction arguments.
-/// - `output_transaction_hash`: A non-null pointer to a [`HashC`] where the
+/// - `output_transaction_hash`: A non-null pointer to a [`Hash`] where the
 ///   output transaction hash will be written. The hash will be written in
 ///   little-endian format.
 ///
@@ -241,7 +238,7 @@ pub(crate) fn transfer_funds_sync(
 pub unsafe extern "C" fn transfer_funds(
     node: *const NomosNode,
     arguments: *const TransferFundsArguments,
-    output_transaction_hash: *mut HashC,
+    output_transaction_hash: *mut Hash,
 ) -> OperationStatus {
     if node.is_null() {
         eprintln!("[transfer_funds] Received a null `node` pointer. Exiting.");
@@ -271,7 +268,7 @@ pub unsafe extern "C" fn transfer_funds(
             }
         }
     } else {
-        HeaderId::from(unsafe { *arguments.optional_tip })
+        nomos_core::header::HeaderId::from(unsafe { *arguments.optional_tip })
     };
     let change_public_key = {
         let change_public_key_bytes =
