@@ -1,0 +1,52 @@
+name: Cargo Hack Check (Cache-Aware)
+
+
+description: Runs cargo hack check with cache support
+
+
+inputs:
+  cache-directory:
+    description: The directory to cache the cargo-hack keys in
+    required: false
+    default: ~/.cache/cargo-hack-check
+
+
+runs:
+  using: composite
+  steps:
+    - name: Restore Cargo Hack Keys (main)
+      if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+      with:
+        path: ${{ inputs.cache-directory }}
+        key: cargo-hack-check/main/${{ github.sha }}
+        restore-keys: |
+          cargo-hack-check/main/
+
+    - name: Restore Cargo Hack Keys (PR)
+      if: github.event_name == 'pull_request'
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+      with:
+        path: ${{ inputs.cache-directory }}
+        key: cargo-hack-check/pr/${{ github.event.pull_request.number }}/${{ github.sha }}
+        restore-keys: |
+          cargo-hack-check/pr/${{ github.event.pull_request.number }}/
+          cargo-hack-check/main/
+
+    - name: Run Cache-Aware Cargo Hack Check
+      shell: bash
+      run: python3 ./scripts/cargo-hack-check/script.py
+
+    - name: Save Cargo Hack Keys (main)
+      if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+      with:
+        path: ${{ inputs.cache-directory }}
+        key: cargo-hack-check/main/${{ github.sha }}
+
+    - name: Save Cargo Hack Keys (PR)
+      if: github.event_name == 'pull_request'
+      uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+      with:
+        path: ${{ inputs.cache-directory }}
+        key: cargo-hack-check/pr/${{ github.event.pull_request.number }}/${{ github.sha }}

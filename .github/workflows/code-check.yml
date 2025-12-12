@@ -74,19 +74,21 @@ jobs:
         uses: ./.github/actions/setup-circuits
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install cargo-hack
         uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25  # Version 2.49.35
         with:
           tool: cargo-hack
+
       - name: Set up Cargo cache
         uses: ./.github/actions/setup-cargo-cache
         with:
           key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Run cargo-hack
-        env:
-          RUSTFLAGS: -D warnings
-        run: cargo hack check --feature-powerset --keep-going --all-targets
+
+      - name: Run Cargo Hack Check (Cache-Aware)
+        uses: ./.github/actions/cargo-hack-check-cached
+
       - name: Update Cargo cache
         if: success() || failure()
         uses: ./.github/actions/update-cargo-cache
