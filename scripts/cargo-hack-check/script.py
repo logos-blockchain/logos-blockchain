@@ -7,7 +7,7 @@ import dataclasses
 from collections import namedtuple
 from pathlib import Path
 from sys import stderr
-from typing import List, Dict, Set, Iterable, TypedDict, Self, Any
+from typing import List, Dict, Set, Iterable, TypedDict, Any
 import heapq
 import subprocess
 import re
@@ -299,7 +299,7 @@ class CargoHackCheckEntry:
         return self.manifest_path.as_posix()
 
     @classmethod
-    def from_command_line(cls, cmd_line: str) -> Self:
+    def from_command_line(cls, cmd_line: str) -> "CargoHackCheckEntry":
         manifest_path = cls._MANIFEST_RE.search(cmd_line)
         if manifest_path:
             return cls(cmd_line, manifest_path.group(1))

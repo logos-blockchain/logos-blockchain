@@ -17,6 +17,7 @@ runs:
     - name: Restore Cargo Hack Keys (main)
       if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
       uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+      continue-on-error: true
       with:
         path: ${{ inputs.cache-directory }}
         key: cargo-hack-check/main/${{ github.sha }}
@@ -26,6 +27,7 @@ runs:
     - name: Restore Cargo Hack Keys (PR)
       if: github.event_name == 'pull_request'
       uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+      continue-on-error: true
       with:
         path: ${{ inputs.cache-directory }}
         key: cargo-hack-check/pr/${{ github.event.pull_request.number }}/${{ github.sha }}
