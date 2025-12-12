@@ -315,6 +315,7 @@ class CargoHackCheckEntry:
         return hash(self.manifest_path_posix)
 
     def as_feature_powerset_command(self) -> List[str]:
+        # TODO: Current command used: "cargo hack check --feature-powerset --keep-going --all-targets"
         return [
             "cargo", "hack", "check", "--feature-powerset", "--no-dev-deps", "--manifest-path", self.manifest_path_posix
         ]
