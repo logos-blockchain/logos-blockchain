@@ -7,7 +7,7 @@ import dataclasses
 from collections import namedtuple
 from pathlib import Path
 from sys import stderr
-from typing import List, Dict, Set, Iterable, TypedDict, Any
+from typing import List, Dict, Set, Iterable, TypedDict, Any, Optional
 import heapq
 import subprocess
 import re
@@ -102,7 +102,7 @@ class WorkspaceMember:
         with self.get_cache_path().open("w") as file:
             file.write(cache_key)
 
-    def load_cache_key(self) -> str | None:
+    def load_cache_key(self) -> Optional[str]:
         try:
             with self.get_cache_path().open("r") as file:
                 return file.read().strip()
@@ -124,8 +124,8 @@ class Workspace:
 
 
 class DepsKindEntry(TypedDict, total=False):
-    kind: str | None
-    target: str | None
+    kind: Optional[str]
+    target: Optional[str]
 
 
 class DepsEntry(TypedDict):
