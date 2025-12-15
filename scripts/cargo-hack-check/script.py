@@ -74,7 +74,7 @@ class WorkspaceMember:
     def __hash__(self):
         return hash(self.id)
 
-    def __eq__(self, other: WorkspaceMember | Any):
+    def __eq__(self, other: "WorkspaceMember | Any"):
         if not isinstance(other, WorkspaceMember):
             raise TypeError("Comparison is only supported between WorkspaceMember instances.")
         return self.id == other.id
