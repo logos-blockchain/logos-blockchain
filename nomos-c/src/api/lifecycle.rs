@@ -3,9 +3,9 @@ use std::ffi::c_char;
 use nomos_node::{Config, get_services_to_start, run_node_from_config};
 use tokio::runtime::Runtime;
 
-use crate::{NomosNode, api::ReturnResult, errors::NomosNodeErrorCode};
+use crate::{NomosNode, api::PointerResult, errors::NomosNodeErrorCode};
 
-type InitializedNomosNodeResult = ReturnResult<NomosNode, NomosNodeErrorCode>;
+pub type InitializedNomosNodeResult = PointerResult<NomosNode, NomosNodeErrorCode>;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn start_nomos_node(config_path: *const c_char) -> InitializedNomosNodeResult {

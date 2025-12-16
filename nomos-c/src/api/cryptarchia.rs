@@ -1,4 +1,8 @@
-use crate::{NomosNode, errors::OperationStatus};
+use crate::{
+    NomosNode,
+    api::{PointerResult, free},
+    errors::OperationStatus,
+};
 
 #[repr(C)]
 pub enum State {
@@ -68,6 +72,8 @@ pub(crate) fn get_cryptarchia_info_sync(
     Ok(cryptarchia_info)
 }
 
+pub type CryptarchiaInfoResult = PointerResult<CryptarchiaInfo, OperationStatus>;
+
 /// Get the current Cryptarchia info.
 ///
 /// # Arguments
@@ -86,29 +92,22 @@ pub(crate) fn get_cryptarchia_info_sync(
 /// The caller must ensure that all pointers are non-null and point to valid
 /// memory.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn get_cryptarchia_info(
-    node: *const NomosNode,
-    output_cryptarchia_info: *mut CryptarchiaInfo,
-) -> OperationStatus {
+pub unsafe extern "C" fn get_cryptarchia_info(node: *const NomosNode) -> CryptarchiaInfoResult {
     if node.is_null() {
         eprintln!("[get_cryptarchia_info] Received a null `node` pointer. Exiting.");
-        return OperationStatus::NullPtr;
+        return CryptarchiaInfoResult::from_error(OperationStatus::NullPtr);
     }
-    if output_cryptarchia_info.is_null() {
-        eprintln!(
-            "[get_cryptarchia_info] Received a null `output_cryptarchia_info` pointer. Exiting."
-        );
-        return OperationStatus::NullPtr;
-    }
+
     let node = unsafe { &*node };
     match get_cryptarchia_info_sync(node) {
         Ok(cryptarchia_info) => {
             let cryptarchia_info = CryptarchiaInfo::from(cryptarchia_info);
-            unsafe {
-                std::ptr::write(output_cryptarchia_info, cryptarchia_info);
-            };
-            OperationStatus::Ok
+            CryptarchiaInfoResult::from_value(cryptarchia_info)
         }
-        Err(error) => error,
+        Err(error) => CryptarchiaInfoResult::from_error(error),
     }
+}
+
+pub extern "C" fn free_cryptarchia_info(pointer: *mut CryptarchiaInfo) {
+    free::<CryptarchiaInfo>(pointer);
 }

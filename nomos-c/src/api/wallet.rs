@@ -5,7 +5,11 @@ use zksign::PublicKey;
 
 use crate::{
     NomosNode,
-    api::cryptarchia::{Hash, HeaderId, get_cryptarchia_info_sync},
+    api::{
+        ValueResult,
+        cryptarchia::{Hash, HeaderId, get_cryptarchia_info_sync},
+        free,
+    },
     errors::OperationStatus,
 };
 
@@ -46,6 +50,8 @@ pub(crate) fn get_balance_sync(
         })
 }
 
+pub type BalanceResult = ValueResult<Value, OperationStatus>;
+
 #[unsafe(no_mangle)]
 /// Get the balance of a wallet address
 ///
@@ -71,26 +77,21 @@ pub unsafe extern "C" fn get_balance(
     node: *const NomosNode,
     wallet_address: *const u8,
     optional_tip: *const HeaderId,
-    output_balance: *mut Value,
-) -> OperationStatus {
+) -> BalanceResult {
     if node.is_null() {
         eprintln!("[get_balance] Received a null `node` pointer. Exiting.");
-        return OperationStatus::NullPtr;
+        return BalanceResult::from_error(OperationStatus::NullPtr);
     }
     if wallet_address.is_null() {
         eprintln!("[get_balance] Received a null `wallet_address` pointer. Exiting.");
-        return OperationStatus::NullPtr;
-    }
-    if output_balance.is_null() {
-        eprintln!("[get_balance] Received a null `output_balance` pointer. Exiting.");
-        return OperationStatus::NullPtr;
+        return BalanceResult::from_error(OperationStatus::NullPtr);
     }
 
     let node = unsafe { &*node };
     let tip = if optional_tip.is_null() {
         match get_cryptarchia_info_sync(node) {
             Ok(cryptarchia_info) => cryptarchia_info.tip,
-            Err(error) => return error,
+            Err(error) => return BalanceResult::from_error(error),
         }
     } else {
         nomos_core::header::HeaderId::from(unsafe { *optional_tip })
@@ -99,15 +100,15 @@ pub unsafe extern "C" fn get_balance(
     let wallet_address = PublicKey::from(BigUint::from_bytes_le(wallet_address_bytes));
 
     match get_balance_sync(node, tip, wallet_address) {
-        Ok(Some(balance)) => {
-            unsafe {
-                std::ptr::write(output_balance, balance);
-            };
-            OperationStatus::Ok
-        }
-        Ok(None) => OperationStatus::NotFound,
-        Err(status) => status,
+        Ok(Some(balance)) => BalanceResult::from_value(balance),
+        Ok(None) => BalanceResult::from_error(OperationStatus::NotFound),
+        Err(status) => BalanceResult::from_error(status),
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn free_balance(pointer: *mut Value) {
+    free::<Value>(pointer);
 }
 
 #[repr(C)]
@@ -215,6 +216,8 @@ pub(crate) fn transfer_funds_sync(
         })
 }
 
+pub type TransferFundsResult = ValueResult<Hash, OperationStatus>;
+
 #[unsafe(no_mangle)]
 /// Transfer funds from some addresses to another.
 ///
@@ -238,24 +241,19 @@ pub(crate) fn transfer_funds_sync(
 pub unsafe extern "C" fn transfer_funds(
     node: *const NomosNode,
     arguments: *const TransferFundsArguments,
-    output_transaction_hash: *mut Hash,
-) -> OperationStatus {
+) -> TransferFundsResult {
     if node.is_null() {
         eprintln!("[transfer_funds] Received a null `node` pointer. Exiting.");
-        return OperationStatus::NullPtr;
+        return TransferFundsResult::from_error(OperationStatus::NullPtr);
     }
     if arguments.is_null() {
         eprintln!("[transfer_funds] Received a null `arguments` pointer. Exiting.");
-        return OperationStatus::NullPtr;
+        return TransferFundsResult::from_error(OperationStatus::NullPtr);
     }
     let arguments = unsafe { &*arguments };
     if let Err((error_message, status)) = unsafe { arguments.validate() } {
         eprintln!("[transfer_funds] {error_message} Exiting.");
-        return status;
-    }
-    if output_transaction_hash.is_null() {
-        eprintln!("[transfer_funds] Received a null `output_transaction_hash` pointer. Exiting.");
-        return OperationStatus::NullPtr;
+        return TransferFundsResult::from_error(status);
     }
 
     let node = unsafe { &*node };
@@ -264,7 +262,7 @@ pub unsafe extern "C" fn transfer_funds(
             Ok(cryptarchia_info) => cryptarchia_info.tip,
             Err(status) => {
                 eprintln!("[transfer_funds] Failed to get cryptarchia info. Aborting.");
-                return status;
+                return TransferFundsResult::from_error(status);
             }
         }
     } else {
@@ -310,13 +308,14 @@ pub unsafe extern "C" fn transfer_funds(
             let transaction_hash = transaction.hash().as_signing_bytes();
             let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
                 eprintln!("[transfer_funds] Failed to convert transaction hash to array. Exiting.");
-                return OperationStatus::RuntimeError;
+                return TransferFundsResult::from_error(OperationStatus::RuntimeError);
             };
-            unsafe {
-                *output_transaction_hash = transaction_hash_array;
-            };
-            OperationStatus::Ok
+            TransferFundsResult::from_value(transaction_hash_array)
         }
-        Err(status) => status,
+        Err(status) => TransferFundsResult::from_error(status),
     }
+}
+
+pub extern "C" fn free_transfer_funds(pointer: *mut Hash) {
+    free::<Hash>(pointer);
 }
