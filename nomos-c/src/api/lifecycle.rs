@@ -7,6 +7,18 @@ use crate::{NomosNode, api::PointerResult, errors::NomosNodeErrorCode};
 
 pub type InitializedNomosNodeResult = PointerResult<NomosNode, NomosNodeErrorCode>;
 
+/// Creates and starts a Nomos node based on the provided configuration file
+/// path.
+///
+/// # Arguments
+///
+/// - `config_path`: A pointer to a string representing the path to the
+///   configuration file.
+///
+/// # Returns
+///
+/// An `InitializedNomosNodeResult` containing either a pointer to the
+/// initialized `NomosNode` or an error code.
 #[unsafe(no_mangle)]
 pub extern "C" fn start_nomos_node(config_path: *const c_char) -> InitializedNomosNodeResult {
     initialize_nomos_node(config_path).map_or_else(
@@ -14,7 +26,17 @@ pub extern "C" fn start_nomos_node(config_path: *const c_char) -> InitializedNom
         InitializedNomosNodeResult::from_value,
     )
 }
-
+/// Initializes and starts a Nomos node based on the provided configuration file
+/// path.
+///
+/// # Arguments
+///
+/// - `config_path`: A pointer to a string representing the path to the
+///   configuration file.
+///
+/// # Returns
+///
+/// A `Result` containing either the initialized `NomosNode` or an error code.
 fn initialize_nomos_node(config_path: *const c_char) -> Result<NomosNode, NomosNodeErrorCode> {
     // TODO: Remove flags when dynamic run of services is implemented.
     let must_blend_service_group_start = true;
@@ -66,6 +88,16 @@ fn initialize_nomos_node(config_path: *const c_char) -> Result<NomosNode, NomosN
     Ok(NomosNode::new(app, rt))
 }
 
+/// Stops and frees the resources associated with the given Nomos node.
+///
+/// # Arguments
+///
+/// - `node`: A pointer to the `NomosNode` instance to be stopped.
+///
+/// # Returns
+///
+/// An `NomosNodeErrorCode` indicating success or failure.
+///
 /// # Safety
 ///
 /// The caller must ensure that:

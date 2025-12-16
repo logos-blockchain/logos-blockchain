@@ -79,18 +79,24 @@ pub type CryptarchiaInfoResult = PointerResult<CryptarchiaInfo, OperationStatus>
 /// # Arguments
 ///
 /// - `node`: A non-null pointer to a [`NomosNode`].
-/// - `output_cryptarchia_info`: A non-null pointer to a [`CryptarchiaInfo`]
-///   struct where the output Cryptarchia info will be written.
 ///
 /// # Returns
 ///
-/// An [`OperationStatus`] indicating success or the specific error encountered.
+/// A [`CryptarchiaInfoResult`] containing a pointer to the allocated
+/// [`CryptarchiaInfo`] struct on success, or an [`OperationStatus`] error on
+/// failure.
 ///
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers.
 /// The caller must ensure that all pointers are non-null and point to valid
 /// memory.
+///
+/// # Memory Management
+///
+/// This function allocates memory for the output [`CryptarchiaInfo`] struct.
+/// The caller must free this memory using the [`free_cryptarchia_info`]
+/// function.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_cryptarchia_info(node: *const NomosNode) -> CryptarchiaInfoResult {
     if node.is_null() {
@@ -108,6 +114,12 @@ pub unsafe extern "C" fn get_cryptarchia_info(node: *const NomosNode) -> Cryptar
     }
 }
 
+/// Frees the memory allocated for a [`CryptarchiaInfo`] struct.
+///
+/// # Arguments
+///
+/// - `pointer`: A pointer to the [`CryptarchiaInfo`] struct to be freed.
+#[unsafe(no_mangle)]
 pub extern "C" fn free_cryptarchia_info(pointer: *mut CryptarchiaInfo) {
     free::<CryptarchiaInfo>(pointer);
 }

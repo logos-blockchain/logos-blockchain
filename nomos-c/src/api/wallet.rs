@@ -52,7 +52,6 @@ pub(crate) fn get_balance_sync(
 
 pub type BalanceResult = ValueResult<Value, OperationStatus>;
 
-#[unsafe(no_mangle)]
 /// Get the balance of a wallet address
 ///
 /// # Arguments
@@ -62,17 +61,17 @@ pub type BalanceResult = ValueResult<Value, OperationStatus>;
 ///   address to query.
 /// - `optional_tip`: An optional pointer to the header ID to query the balance
 ///   at. If null, the current tip will be used.
-/// - `output_balance`: A non-null pointer to a [`Value`] where the output
-///   balance will be written.
 ///
 /// # Returns
 ///
-/// An [`OperationStatus`] indicating success or the specific error encountered.
+/// A [`ValueResult`] containing the balance on success, or an
+/// [`OperationStatus`] error on failure.
 ///
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_balance(
     node: *const NomosNode,
     wallet_address: *const u8,
@@ -104,11 +103,6 @@ pub unsafe extern "C" fn get_balance(
         Ok(None) => BalanceResult::from_error(OperationStatus::NotFound),
         Err(status) => BalanceResult::from_error(status),
     }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn free_balance(pointer: *mut Value) {
-    free::<Value>(pointer);
 }
 
 #[repr(C)]
@@ -218,7 +212,6 @@ pub(crate) fn transfer_funds_sync(
 
 pub type TransferFundsResult = ValueResult<Hash, OperationStatus>;
 
-#[unsafe(no_mangle)]
 /// Transfer funds from some addresses to another.
 ///
 /// # Arguments
@@ -226,18 +219,24 @@ pub type TransferFundsResult = ValueResult<Hash, OperationStatus>;
 /// - `node`: A non-null pointer to a [`NomosNode`] instance.
 /// - `arguments`: A non-null pointer to a [`TransferFundsArguments`] struct
 ///   containing the transaction arguments.
-/// - `output_transaction_hash`: A non-null pointer to a [`Hash`] where the
-///   output transaction hash will be written. The hash will be written in
-///   little-endian format.
 ///
 /// # Returns
 ///
-/// An [`OperationStatus`] indicating success or the specific error encountered.
+/// A [`TransferFundsResult`] containing a pointer to a [`Hash`] where the
+/// transaction hash will be written on success, or an [`OperationStatus`] error
+/// on failure. The hash will be written in little-endian format.
 ///
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid.
+///
+/// # Memory Management
+///
+/// This function allocates memory for the output [`CryptarchiaInfo`] struct.
+/// The caller must free this memory using the [`free_cryptarchia_info`]
+/// function.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn transfer_funds(
     node: *const NomosNode,
     arguments: *const TransferFundsArguments,
@@ -316,6 +315,12 @@ pub unsafe extern "C" fn transfer_funds(
     }
 }
 
+/// Frees the memory allocated for a [`Hash`] value.
+///
+/// # Arguments
+///
+/// - `pointer`: A pointer to the [`Hash`] to be freed.
+#[unsafe(no_mangle)]
 pub extern "C" fn free_transfer_funds(pointer: *mut Hash) {
     free::<Hash>(pointer);
 }

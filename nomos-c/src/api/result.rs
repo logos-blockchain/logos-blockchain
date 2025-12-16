@@ -1,3 +1,7 @@
+/// Simple wrapper around a value or an error.
+///
+/// Value is not guaranteed. You should check the error field before accessing
+/// the value.
 #[repr(C)]
 pub struct ValueResult<Type, Error> {
     pub value: Type,
@@ -20,6 +24,10 @@ impl<Type: Default, Error: Default> ValueResult<Type, Error> {
     }
 }
 
+/// Simple wrapper around a pointer to a value or an error.
+///
+/// Pointer is not guaranteed. You should check the error field before
+/// dereferencing the pointer.
 #[repr(C)]
 pub struct PointerResult<Type, Error> {
     pub value: *mut Type,
