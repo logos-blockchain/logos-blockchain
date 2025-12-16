@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Display};
 
+use key_management_system_keys::keys::ZkPublicKey;
 use nomos_core::{
     header::HeaderId,
     mantle::{Note, SignedMantleTx, Value, tx_builder::MantleTxBuilder},
@@ -10,7 +11,6 @@ use overwatch::{
     services::{AsServiceId, relay::RelayError},
 };
 use tokio::sync::oneshot;
-use zksign::PublicKey;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -38,7 +38,7 @@ pub enum Error {
 pub async fn get_balance<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>(
     handle: &OverwatchHandle<RuntimeServiceId>,
     tip: HeaderId,
-    wallet_address: PublicKey,
+    wallet_address: ZkPublicKey,
 ) -> Result<Option<Value>, Error>
 where
     RuntimeServiceId: Debug
@@ -79,9 +79,9 @@ where
 pub async fn transfer_funds<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>(
     handle: &OverwatchHandle<RuntimeServiceId>,
     tip: HeaderId,
-    change_public_key: PublicKey,
-    funding_public_keys: Vec<PublicKey>,
-    recipient_public_key: PublicKey,
+    change_public_key: ZkPublicKey,
+    funding_public_keys: Vec<ZkPublicKey>,
+    recipient_public_key: ZkPublicKey,
     amount: u64,
 ) -> Result<SignedMantleTx, Error>
 where

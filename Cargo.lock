@@ -85,9 +85,9 @@ dependencies = [
 
 [[package]]
 name = "aligned"
-version = "0.4.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "377e4c0ba83e4431b10df45c1d4666f178ea9c552cac93e60c3a88bf32785923"
+checksum = "ee4508988c62edf04abd8d92897fca0c2995d907ce1dfeaf369dac3716a40685"
 dependencies = [
  "as-slice",
 ]
@@ -1709,7 +1709,7 @@ dependencies = [
  "nomos-tracing-service",
  "nomos-utils",
  "rand 0.8.5",
- "reqwest 0.12.25",
+ "reqwest 0.12.26",
  "serde",
  "serde_json",
  "serde_path_to_error",
@@ -1994,7 +1994,7 @@ dependencies = [
  "nomos-core",
  "nomos-da-messages",
  "nomos-http-api-common",
- "reqwest 0.12.25",
+ "reqwest 0.12.26",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -3182,7 +3182,7 @@ dependencies = [
  "futures",
  "nomos-core",
  "nomos-http-api-common",
- "reqwest 0.12.25",
+ "reqwest 0.12.26",
  "serde",
 ]
 
@@ -4346,7 +4346,7 @@ dependencies = [
  "rgb",
  "tiff",
  "zune-core 0.5.0",
- "zune-jpeg 0.5.6",
+ "zune-jpeg 0.5.7",
 ]
 
 [[package]]
@@ -5283,13 +5283,13 @@ dependencies = [
 
 [[package]]
 name = "libredox"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "416f7e718bdb06000964960ffa43b4335ad4012ae8b99060261aa4a8088d5ccb"
+checksum = "df15f6eac291ed1cf25865b1ee60399f57e7c227e7f51bdbd4c5270396a9ed50"
 dependencies = [
  "bitflags 2.10.0",
  "libc",
- "redox_syscall",
+ "redox_syscall 0.6.0",
 ]
 
 [[package]]
@@ -5603,9 +5603,9 @@ dependencies = [
 
 [[package]]
 name = "moxcms"
-version = "0.7.10"
+version = "0.7.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80986bbbcf925ebd3be54c26613d861255284584501595cf418320c078945608"
+checksum = "ac9557c559cd6fc9867e122e20d2cbefc9ca29d80d027a8e39310920ed2f0a97"
 dependencies = [
  "num-traits",
  "pxfm",
@@ -5917,6 +5917,7 @@ dependencies = [
  "chain-service",
  "futures",
  "hyper 1.8.1",
+ "key-management-system-keys",
  "kzgrs-backend",
  "nomos-core",
  "nomos-da-dispersal",
@@ -5930,7 +5931,7 @@ dependencies = [
  "nomos-storage",
  "nomos-wallet",
  "overwatch",
- "reqwest 0.12.25",
+ "reqwest 0.12.26",
  "serde",
  "serde_json",
  "subnetworks-assignations",
@@ -5941,7 +5942,6 @@ dependencies = [
  "tx-service",
  "utoipa",
  "utoipa-swagger-ui",
- "zksign",
 ]
 
 [[package]]
@@ -6106,6 +6106,7 @@ dependencies = [
  "cbindgen",
  "chain-service",
  "cryptarchia-engine",
+ "key-management-system-keys",
  "nomos-api",
  "nomos-core",
  "nomos-node",
@@ -6113,7 +6114,6 @@ dependencies = [
  "overwatch",
  "serde_yaml",
  "tokio",
- "zksign",
 ]
 
 [[package]]
@@ -6126,7 +6126,7 @@ dependencies = [
  "kzgrs-backend",
  "nomos-core",
  "nomos-tracing",
- "reqwest 0.12.25",
+ "reqwest 0.12.26",
  "serde_json",
  "tokio",
  "tracing",
@@ -6596,7 +6596,7 @@ dependencies = [
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
  "rand 0.8.5",
- "reqwest 0.12.25",
+ "reqwest 0.12.26",
  "serde",
  "tokio",
  "tracing",
@@ -6988,7 +6988,7 @@ dependencies = [
  "bytes",
  "http 1.4.0",
  "opentelemetry",
- "reqwest 0.12.25",
+ "reqwest 0.12.26",
 ]
 
 [[package]]
@@ -7176,7 +7176,7 @@ checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
 dependencies = [
  "cfg-if",
  "libc",
- "redox_syscall",
+ "redox_syscall 0.5.18",
  "smallvec",
  "windows-link 0.2.1",
 ]
@@ -8344,6 +8344,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redox_syscall"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec96166dafa0886eb81fe1c0a388bece180fbef2135f97c1e2cf8302e74b43b5"
+dependencies = [
+ "bitflags 2.10.0",
+]
+
+[[package]]
 name = "redox_users"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8470,9 +8479,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.12.25"
+version = "0.12.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6eff9328d40131d43bd911d42d79eb6a47312002a4daefc9e37f17e74a7701a"
+checksum = "3b4c14b2d9afca6a60277086b0cc6a6ae0b568f6f7916c943a8cdc79f8be240f"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -10066,7 +10075,7 @@ dependencies = [
  "nomos-wallet",
  "num-bigint",
  "rand 0.8.5",
- "reqwest 0.12.25",
+ "reqwest 0.12.26",
  "serde_json",
  "serde_yaml",
  "serial_test",
@@ -10613,7 +10622,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba3beec919fbdf99d719de8eda6adae3281f8a5b71ae40431f44dc7423053d34"
 dependencies = [
  "loki-api",
- "reqwest 0.12.25",
+ "reqwest 0.12.26",
  "serde",
  "serde_json",
  "snap",
@@ -11049,7 +11058,7 @@ dependencies = [
  "axum",
  "mime_guess",
  "regex",
- "reqwest 0.12.25",
+ "reqwest 0.12.26",
  "rust-embed",
  "serde",
  "serde_json",
@@ -12306,9 +12315,9 @@ dependencies = [
 
 [[package]]
 name = "zune-jpeg"
-version = "0.5.6"
+version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f520eebad972262a1dde0ec455bce4f8b298b1e5154513de58c114c4c54303e8"
+checksum = "51d915729b0e7d5fe35c2f294c5dc10b30207cc637920e5b59077bfa3da63f28"
 dependencies = [
  "zune-core 0.5.0",
 ]

@@ -1,7 +1,7 @@
+use key_management_system_keys::keys::ZkPublicKey;
 use nomos_api::http::wallet::Error;
 use nomos_core::mantle::{SignedMantleTx, Transaction as _, Value};
 use num_bigint::BigUint;
-use zksign::PublicKey;
 
 use crate::{
     NomosNode,
@@ -31,7 +31,7 @@ use crate::{
 pub(crate) fn get_balance_sync(
     node: &NomosNode,
     tip: nomos_core::header::HeaderId,
-    wallet_address: PublicKey,
+    wallet_address: ZkPublicKey,
 ) -> Result<Option<Value>, OperationStatus> {
     let Ok(runtime) = tokio::runtime::Runtime::new() else {
         eprintln!("[Failed]to create tokio runtime. Aborting.");
@@ -96,7 +96,7 @@ pub unsafe extern "C" fn get_balance(
         nomos_core::header::HeaderId::from(unsafe { *optional_tip })
     };
     let wallet_address_bytes = unsafe { std::slice::from_raw_parts(wallet_address, 32) };
-    let wallet_address = PublicKey::from(BigUint::from_bytes_le(wallet_address_bytes));
+    let wallet_address = ZkPublicKey::from(BigUint::from_bytes_le(wallet_address_bytes));
 
     match get_balance_sync(node, tip, wallet_address) {
         Ok(Some(balance)) => BalanceResult::from_value(balance),
@@ -185,9 +185,9 @@ impl TransferFundsArguments {
 pub(crate) fn transfer_funds_sync(
     node: &NomosNode,
     tip: nomos_core::header::HeaderId,
-    change_public_key: PublicKey,
-    funding_public_keys: Vec<PublicKey>,
-    recipient_public_key: PublicKey,
+    change_public_key: ZkPublicKey,
+    funding_public_keys: Vec<ZkPublicKey>,
+    recipient_public_key: ZkPublicKey,
     amount: u64,
 ) -> Result<SignedMantleTx, OperationStatus> {
     let Ok(runtime) = tokio::runtime::Runtime::new() else {
@@ -270,7 +270,7 @@ pub unsafe extern "C" fn transfer_funds(
     let change_public_key = {
         let change_public_key_bytes =
             unsafe { std::slice::from_raw_parts(arguments.change_public_key, 32) };
-        PublicKey::from(BigUint::from_bytes_le(change_public_key_bytes))
+        ZkPublicKey::from(BigUint::from_bytes_le(change_public_key_bytes))
     };
     let funding_public_keys = {
         let funding_public_keys_pointers = unsafe {
@@ -284,14 +284,14 @@ pub unsafe extern "C" fn transfer_funds(
             .map(|funding_public_key_pointer| {
                 let funding_public_key_bytes =
                     unsafe { std::slice::from_raw_parts(*funding_public_key_pointer, 32) };
-                PublicKey::from(BigUint::from_bytes_le(funding_public_key_bytes))
+                ZkPublicKey::from(BigUint::from_bytes_le(funding_public_key_bytes))
             })
             .collect::<Vec<_>>()
     };
     let recipient_public_key = {
         let recipient_public_key_bytes =
             unsafe { std::slice::from_raw_parts(arguments.recipient_public_key, 32) };
-        PublicKey::from(BigUint::from_bytes_le(recipient_public_key_bytes))
+        ZkPublicKey::from(BigUint::from_bytes_le(recipient_public_key_bytes))
     };
     let amount = Value::from(arguments.amount);
 
