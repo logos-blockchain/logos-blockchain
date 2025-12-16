@@ -3,29 +3,16 @@ use std::ffi::c_char;
 use nomos_node::{Config, get_services_to_start, run_node_from_config};
 use tokio::runtime::Runtime;
 
-use crate::{NomosNode, errors::NomosNodeErrorCode};
+use crate::{NomosNode, api::ReturnResult, errors::NomosNodeErrorCode};
 
-#[repr(C)]
-pub struct InitializedNomosNodeResult {
-    nomos_node: *mut NomosNode,
-    error_code: NomosNodeErrorCode,
-}
+type InitializedNomosNodeResult = ReturnResult<NomosNode, NomosNodeErrorCode>;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn start_nomos_node(config_path: *const c_char) -> InitializedNomosNodeResult {
-    match initialize_nomos_node(config_path) {
-        Ok(nomos_node) => {
-            let node_ptr = Box::into_raw(Box::new(nomos_node));
-            InitializedNomosNodeResult {
-                nomos_node: node_ptr,
-                error_code: NomosNodeErrorCode::None,
-            }
-        }
-        Err(error_code) => InitializedNomosNodeResult {
-            nomos_node: core::ptr::null_mut(),
-            error_code,
-        },
-    }
+    initialize_nomos_node(config_path).map_or_else(
+        InitializedNomosNodeResult::from_error,
+        InitializedNomosNodeResult::from_value,
+    )
 }
 
 fn initialize_nomos_node(config_path: *const c_char) -> Result<NomosNode, NomosNodeErrorCode> {

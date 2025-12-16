@@ -1,14 +1,17 @@
+#[derive(Default)]
 #[repr(u8)]
 pub enum NomosNodeErrorCode {
+    #[default]
     None = 0x0,
     CouldNotInitialize = 0x1,
     StopError = 0x2,
     NullPtr = 0x3,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Default, PartialEq, Eq)]
 #[repr(u8)]
 pub enum OperationStatus {
+    #[default]
     Ok = 0x0,
     NotFound = 0x1,
     NullPtr = 0x2,
