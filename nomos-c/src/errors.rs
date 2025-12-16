@@ -1,5 +1,5 @@
 #[derive(Default)]
-#[repr(u8)]
+#[repr(C)]
 pub enum NomosNodeErrorCode {
     #[default]
     None = 0x0,
@@ -9,7 +9,7 @@ pub enum NomosNodeErrorCode {
 }
 
 #[derive(Default, PartialEq, Eq)]
-#[repr(u8)]
+#[repr(C)]
 pub enum OperationStatus {
     #[default]
     Ok = 0x0,
