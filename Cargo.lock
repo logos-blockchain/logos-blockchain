@@ -1749,6 +1749,7 @@ dependencies = [
  "services-utils",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-stream",
  "tracing",
  "tracing-futures",
  "tx-service",

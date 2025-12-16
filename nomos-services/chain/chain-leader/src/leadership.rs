@@ -6,7 +6,9 @@ use nomos_core::{
 };
 use nomos_ledger::{EpochState, UtxoTree};
 use serde::{Deserialize, Serialize};
-use tokio::sync::watch::Sender;
+use tokio::sync::broadcast::Sender;
+
+use crate::WinningPoLSlotInfo;
 
 #[derive(Clone)]
 pub struct Leader {
@@ -168,7 +170,7 @@ fn public_inputs_for_slot(
 /// notifying all consumers via the provided sender channel.
 pub struct WinningPoLSlotNotifier<'service> {
     leader: &'service Leader,
-    sender: &'service Sender<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>,
+    sender: &'service Sender<WinningPoLSlotInfo>,
     /// Keeps track of the last processed epoch, if any, and for it the first
     /// winning slot that was pre-computed, if any.
     last_processed_epoch_and_found_first_winning_slot: Option<(Epoch, Option<Slot>)>,
@@ -177,7 +179,7 @@ pub struct WinningPoLSlotNotifier<'service> {
 impl<'service> WinningPoLSlotNotifier<'service> {
     pub(super) const fn new(
         leader: &'service Leader,
-        sender: &'service Sender<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>,
+        sender: &'service Sender<WinningPoLSlotInfo>,
     ) -> Self {
         Self {
             leader,
@@ -241,11 +243,11 @@ impl<'service> WinningPoLSlotNotifier<'service> {
                     &latest_tree,
                 );
 
-                if let Err(err) = self.sender.send(Some((
+                if let Err(err) = self.sender.send((
                     leader_private,
                     secret_key.clone(),
                     epoch_state.epoch,
-                ))) {
+                )) {
                     tracing::error!(
                         "Failed to send pre-calculated PoL winning slots to receivers. Error: {err:?}"
                     );
@@ -283,7 +285,7 @@ impl<'service> WinningPoLSlotNotifier<'service> {
             return;
         }
 
-        if let Err(err) = self.sender.send(Some((private_inputs, secret_key, epoch))) {
+        if let Err(err) = self.sender.send((private_inputs, secret_key, epoch)) {
             tracing::error!(
                 "Failed to send pre-calculated PoL winning slots to receivers. Error: {err:?}"
             );

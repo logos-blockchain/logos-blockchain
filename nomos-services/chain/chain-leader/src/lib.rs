@@ -3,12 +3,12 @@ mod leadership;
 mod mempool;
 mod relays;
 
-use core::fmt::Debug;
+use core::fmt::{self, Debug, Formatter};
 use std::{collections::BTreeSet, fmt::Display, iter, pin::Pin, time::Duration};
 
 use chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use cryptarchia_engine::{Epoch, Slot};
-use futures::{StreamExt as _, future, stream};
+use futures::{Stream, StreamExt as _, future::ready, stream};
 use key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
 pub use leadership::LeaderConfig;
 use nomos_core::{
@@ -33,7 +33,8 @@ use overwatch::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use services_utils::wait_until_services_are_ready;
 use thiserror::Error;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{broadcast, oneshot};
+use tokio_stream::{iter, wrappers::BroadcastStream};
 use tracing::{Level, error, info, instrument, span};
 use tracing_futures::Instrument as _;
 use tx_service::{
@@ -51,6 +52,7 @@ use crate::{
 };
 
 type SamplingRelay<BlobId> = OutboundRelay<DaSamplingServiceMsg<BlobId>>;
+pub type WinningPoLSlotInfo = (LeaderPrivate, UnsecuredZkKey, Epoch);
 
 const LEADER_ID: &str = "Leader";
 
@@ -70,7 +72,6 @@ pub enum Error {
     BlockCreation(#[from] BlockError),
 }
 
-#[derive(Debug)]
 pub enum LeaderMsg {
     /// Request a new receiver that yields PoL-winning slot information.
     ///
@@ -85,8 +86,18 @@ pub enum LeaderMsg {
     /// * a new consumer subscribes -> the latest value that was sent to all the
     ///   other consumers, if any
     WinningPolEpochSlotStreamSubscribe {
-        sender: oneshot::Sender<watch::Receiver<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>>,
+        sender: oneshot::Sender<Pin<Box<dyn Stream<Item = WinningPoLSlotInfo> + Send + Sync>>>,
     },
+}
+
+impl Debug for LeaderMsg {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WinningPolEpochSlotStreamSubscribe { .. } => {
+                f.debug_struct("WinningPolEpochSlotStreamSubscribe").finish()
+            }
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -137,7 +148,8 @@ pub struct CryptarchiaLeader<
     Wallet: nomos_wallet::api::WalletServiceData,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    winning_pol_epoch_slots_sender: watch::Sender<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>,
+    last_seen_winning_pol_slot: Option<WinningPoLSlotInfo>,
+    winning_pol_epoch_slots_sender: broadcast::Sender<WinningPoLSlotInfo>,
 }
 
 impl<
@@ -295,11 +307,10 @@ where
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
         _initial_state: Self::State,
     ) -> Result<Self, DynError> {
-        let winning_pol_epoch_slots_sender = watch::Sender::new(None);
-
         Ok(Self {
             service_resources_handle,
-            winning_pol_epoch_slots_sender,
+            winning_pol_epoch_slots_sender: broadcast::Sender::new(16),
+            last_seen_winning_pol_slot: None,
         })
     }
 
@@ -467,7 +478,7 @@ where
                     }
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
-                        handle_inbound_message(msg, &self.winning_pol_epoch_slots_sender);
+                        handle_inbound_message(msg, &self.winning_pol_epoch_slots_sender, self.last_seen_winning_pol_slot.clone());
                     }
                 }
             }
@@ -591,7 +602,7 @@ where
                 _ => true,
             });
 
-            future::ready(is_valid)
+            ready(is_valid)
         });
 
         let mut tx_stream: Pin<Box<_>> = Box::pin(filtered_stream);
@@ -678,13 +689,15 @@ where
 
 fn handle_inbound_message(
     msg: LeaderMsg,
-    winning_pol_epoch_slots_sender: &watch::Sender<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>,
+    winning_pol_epoch_slots_sender: &broadcast::Sender<WinningPoLSlotInfo>,
+    last_seen_winning_pol_slot: Option<WinningPoLSlotInfo>,
 ) {
     let LeaderMsg::WinningPolEpochSlotStreamSubscribe { sender } = msg;
 
-    sender
-        .send(winning_pol_epoch_slots_sender.subscribe())
-        .unwrap_or_else(|_| {
-            error!("Could not subscribe to POL epoch winning slots channel.");
-        });
+    sender.send(Box::pin(
+        iter(last_seen_winning_pol_slot)
+            .chain(BroadcastStream::new(winning_pol_epoch_slots_sender.subscribe()).filter_map(|item| ready(item.ok()))),
+    )).unwrap_or_else(|_| {
+        error!("Could not subscribe to POL epoch winning slots channel.");
+    });
 }

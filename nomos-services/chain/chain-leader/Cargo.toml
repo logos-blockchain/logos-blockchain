@@ -30,6 +30,7 @@ serde                      = { workspace = true }
 services-utils             = { workspace = true }
 thiserror                  = "1.0"
 tokio                      = { default-features = false, version = "1" }
+tokio-stream               = { default-features = false, version = "0.1" }
 tracing                    = { workspace = true }
 tracing-futures            = { default-features = false, version = "0.2" }
 tx-service                 = { workspace = true }

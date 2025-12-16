@@ -1,6 +1,5 @@
 use core::{
     fmt::{Debug, Display},
-    future::ready,
     marker::PhantomData,
     time::Duration,
 };
@@ -24,7 +23,6 @@ use pol::{PolChainInputsData, PolWalletInputsData, PolWitnessInputsData};
 use poq::{AGED_NOTE_MERKLE_TREE_HEIGHT, SLOT_SECRET_MERKLE_TREE_HEIGHT};
 use services_utils::wait_until_services_are_ready;
 use tokio::sync::oneshot::channel;
-use tokio_stream::wrappers::WatchStream;
 
 use crate::generic_services::{
     CryptarchiaLeaderService, CryptarchiaService, SdpService, WalletService,
@@ -125,8 +123,7 @@ where
         // Return a `WatchStream` that filters out `None`s (i.e., at the very beginning
         // of chain leader start).
         Some(Box::new(
-            WatchStream::new(pol_winning_slot_receiver)
-                .filter_map(ready)
+            pol_winning_slot_receiver
                 .map(|(leader_private, secret_key, _)| {
                     let PolWitnessInputsData {
                         wallet:
