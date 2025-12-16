@@ -6,7 +6,7 @@ use chain_leader::pol::{
 use cryptarchia_engine::Slot;
 use divan::{Bencher, black_box, counter::ItemsCount};
 use groth16::{Fr, fr_from_bytes};
-use nomos_utils::blake256_rng::{Blake2b256, Blake256RngSeed};
+use nomos_utils::blake_rng::{Blake2b256, BlakeRng256Seed};
 
 fn main() {
     divan::main();
@@ -18,7 +18,7 @@ fn precompute_slot_secret(bencher: Bencher, (tree_depth, cache_depth): (usize, u
         .with_inputs(|| {
             let seed = Blake2b256::digest(b"1987");
             let seed_bytes: [u8; 32] = seed.try_into().unwrap();
-            let seed = Blake256RngSeed::from(seed_bytes);
+            let seed = BlakeRng256Seed::from(seed_bytes);
             seed
         })
         .bench_values(|seed| {
@@ -47,7 +47,7 @@ fn precompute_leaves(bencher: Bencher) {
         .with_inputs(|| {
             let seed = Blake2b256::digest(b"1987");
             let seed_bytes: [u8; 32] = seed.try_into().unwrap();
-            let seed = Blake256RngSeed::from(seed_bytes);
+            let seed = BlakeRng256Seed::from(seed_bytes);
             seed
         })
         .bench_values(|seed| {
