@@ -2,7 +2,7 @@ use core::num::NonZeroUsize;
 
 use libp2p::{PeerId, identity::Keypair};
 use nomos_blend::scheduling::membership::Membership;
-use nomos_utils::blake_rng::BlakeRng;
+use nomos_utils::blake_rng::BlakeRng512;
 use rand::SeedableRng as _;
 use tokio::sync::mpsc;
 
@@ -12,7 +12,7 @@ use crate::{
 };
 
 pub struct TestSwarm {
-    pub swarm: BlendSwarm<BlakeRng>,
+    pub swarm: BlendSwarm<BlakeRng512>,
     pub command_sender: mpsc::Sender<Command>,
 }
 
@@ -42,7 +42,7 @@ impl SwarmBuilder {
             self.membership,
             command_receiver,
             3u64.try_into().unwrap(),
-            BlakeRng::from_entropy(),
+            BlakeRng512::from_entropy(),
             PROTOCOL_NAME,
             self.replication_factor
                 .unwrap_or_else(|| 1usize.try_into().unwrap()),

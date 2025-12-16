@@ -14,7 +14,7 @@ use nomos_blend::{
 };
 use nomos_core::{codec::SerializeOp as _, crypto::ZkHash, sdp::ActivityMetadata};
 use nomos_time::SlotTick;
-use nomos_utils::blake_rng::BlakeRng;
+use nomos_utils::blake_rng::BlakeRng512;
 use poq::CORE_MERKLE_TREE_HEIGHT;
 use rand::SeedableRng as _;
 
@@ -78,7 +78,7 @@ async fn test_handle_incoming_blend_message() {
         scheduler_settings(&timing_settings(), settings.crypto.num_blend_layers);
     let mut scheduler = SessionMessageScheduler::new(
         scheduler_session_info(&public_info),
-        BlakeRng::from_entropy(),
+        BlakeRng512::from_entropy(),
         scheduler_settings,
     );
     let reward_session_info = reward_session_info(&public_info);
@@ -199,7 +199,7 @@ async fn test_handle_session_transition_expired() {
         settings.clone(),
         overwatch_handle.clone(),
         public_info.clone(),
-        BlakeRng::from_entropy(),
+        BlakeRng512::from_entropy(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
 
@@ -223,7 +223,7 @@ async fn test_handle_session_transition_expired() {
     let (sdp_relay, mut sdp_relay_receiver) = sdp_relay();
 
     // Call `handle_session_transition_expired`.
-    handle_session_transition_expired::<_, NodeId, BlakeRng, MockProofsVerifier, _>(
+    handle_session_transition_expired::<_, NodeId, BlakeRng512, MockProofsVerifier, _>(
         &mut backend,
         token_collector,
         &sdp_relay,
@@ -278,7 +278,7 @@ async fn test_handle_session_event() {
     );
     let scheduler = SessionMessageScheduler::new(
         scheduler_session_info(&public_info),
-        BlakeRng::from_entropy(),
+        BlakeRng512::from_entropy(),
         scheduler_settings(&settings.time, settings.crypto.num_blend_layers),
     );
     let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
@@ -286,7 +286,7 @@ async fn test_handle_session_event() {
         settings.clone(),
         overwatch_handle.clone(),
         public_info.clone(),
-        BlakeRng::from_entropy(),
+        BlakeRng512::from_entropy(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();

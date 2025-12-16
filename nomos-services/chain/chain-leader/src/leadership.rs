@@ -11,7 +11,6 @@ use nomos_core::{
     utils::merkle::MerklePath,
 };
 use nomos_ledger::{EpochState, UtxoTree};
-use nomos_utils::blake_rng::Blake2b256;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch::Sender;
 

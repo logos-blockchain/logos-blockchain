@@ -5,7 +5,7 @@ use core::{
 use std::collections::HashSet;
 
 use futures::{StreamExt as _, task::noop_waker_ref};
-use nomos_utils::blake_rng::BlakeRng;
+use nomos_utils::blake_rng::BlakeRng512;
 use rand::SeedableRng as _;
 use tokio_stream::iter;
 
@@ -20,7 +20,7 @@ use crate::{
 
 #[tokio::test]
 async fn no_substream_ready_and_no_data_messages() {
-    let rng = BlakeRng::from_entropy();
+    let rng = BlakeRng512::from_entropy();
     let rounds = [Round::from(0)];
     let mut scheduler = SessionMessageScheduler::<_, (), ()>::with_test_values(
         // Round `1` scheduled, tick will yield round `0`.
@@ -51,7 +51,7 @@ async fn no_substream_ready_and_no_data_messages() {
 
 #[tokio::test]
 async fn no_substream_ready_with_data_messages() {
-    let rng = BlakeRng::from_entropy();
+    let rng = BlakeRng512::from_entropy();
     let rounds = [Round::from(0)];
     let mut scheduler = SessionMessageScheduler::<_, (), u32>::with_test_values(
         // Round `1` scheduled, tick will yield round `0`.
@@ -90,7 +90,7 @@ async fn no_substream_ready_with_data_messages() {
 
 #[tokio::test]
 async fn cover_traffic_substream_ready() {
-    let rng = BlakeRng::from_entropy();
+    let rng = BlakeRng512::from_entropy();
     let rounds = [Round::from(0)];
     let mut scheduler = SessionMessageScheduler::<_, (), u32>::with_test_values(
         // Round `0` scheduled, tick will yield round `0`.
@@ -126,7 +126,7 @@ async fn cover_traffic_substream_ready() {
 
 #[tokio::test]
 async fn release_delayer_substream_ready() {
-    let rng = BlakeRng::from_entropy();
+    let rng = BlakeRng512::from_entropy();
     let rounds = [Round::from(0)];
     let mut scheduler = SessionMessageScheduler::<_, u32, u32>::with_test_values(
         // Round `1` scheduled, tick will yield round `0`.
@@ -162,7 +162,7 @@ async fn release_delayer_substream_ready() {
 
 #[tokio::test]
 async fn both_substreams_ready() {
-    let rng = BlakeRng::from_entropy();
+    let rng = BlakeRng512::from_entropy();
     let rounds = [Round::from(0)];
     let mut scheduler = SessionMessageScheduler::<_, u32, ()>::with_test_values(
         // Round `0` scheduled, tick will yield round `0`.
@@ -199,7 +199,7 @@ async fn both_substreams_ready() {
 
 #[tokio::test]
 async fn round_change() {
-    let rng = BlakeRng::from_entropy();
+    let rng = BlakeRng512::from_entropy();
     let rounds = [
         Round::from(0),
         Round::from(1),

@@ -152,7 +152,7 @@ impl<const OUTPUT_SIZE: usize> StreamCipher for BlakeRng<OUTPUT_SIZE> {
 
 #[cfg(test)]
 mod tests {
-    use blake2::{Blake2b512, Digest};
+    use blake2::Digest;
     use nistrs::prelude::*;
 
     use super::*;

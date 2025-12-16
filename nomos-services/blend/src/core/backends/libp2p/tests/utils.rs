@@ -25,7 +25,7 @@ use nomos_blend::{
     scheduling::membership::{Membership, Node},
 };
 use nomos_libp2p::{Protocol, SwarmEvent};
-use nomos_utils::blake_rng::BlakeRng;
+use nomos_utils::blake_rng::BlakeRng512;
 use rand::SeedableRng as _;
 use tokio::{
     sync::{broadcast, mpsc},
@@ -45,7 +45,7 @@ use crate::{
 };
 
 pub type InnerSwarm<ProofsVerifier> =
-    BlendSwarm<BlakeRng, ProofsVerifier, TestObservationWindowProvider>;
+    BlendSwarm<BlakeRng512, ProofsVerifier, TestObservationWindowProvider>;
 
 pub struct TestSwarm<ProofsVerifier>
 where
@@ -132,7 +132,7 @@ impl SwarmBuilder {
             swarm_message_receiver,
             incoming_message_sender,
             self.public_info,
-            BlakeRng::from_entropy(),
+            BlakeRng512::from_entropy(),
             3u64.try_into().unwrap(),
             1usize.try_into().unwrap(),
         );

@@ -1,10 +1,7 @@
 use blake2::Digest as _;
-use chain_leader::pol::{
-    SlotSecret,
-    merkle::{MerklePolCache, MerklePolSubtree},
-};
+use chain_leader::pol::merkle::{MerklePolCache, MerklePolSubtree};
 use cryptarchia_engine::Slot;
-use divan::{Bencher, black_box, counter::ItemsCount};
+use divan::{Bencher, black_box};
 use groth16::{Fr, fr_from_bytes};
 use nomos_utils::blake_rng::{Blake2b256, BlakeRng256Seed};
 
@@ -17,9 +14,8 @@ fn precompute_slot_secret(bencher: Bencher, (tree_depth, cache_depth): (usize, u
     bencher
         .with_inputs(|| {
             let seed = Blake2b256::digest(b"1987");
-            let seed_bytes: [u8; 32] = seed.try_into().unwrap();
-            let seed = BlakeRng256Seed::from(seed_bytes);
-            seed
+            let seed_bytes: [u8; 32] = seed.into();
+            BlakeRng256Seed::from(seed_bytes)
         })
         .bench_values(|seed| {
             black_box(MerklePolCache::new(
@@ -46,9 +42,9 @@ fn precompute_leaves(bencher: Bencher) {
     bencher
         .with_inputs(|| {
             let seed = Blake2b256::digest(b"1987");
-            let seed_bytes: [u8; 32] = seed.try_into().unwrap();
-            let seed = BlakeRng256Seed::from(seed_bytes);
-            seed
+            let seed_bytes: [u8; 32] = seed.into();
+
+            BlakeRng256Seed::from(seed_bytes)
         })
         .bench_values(|seed| {
             black_box(
