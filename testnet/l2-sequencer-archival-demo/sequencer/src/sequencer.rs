@@ -35,6 +35,8 @@ pub enum SequencerError {
     Io(#[from] io::Error),
     #[error("Invalid key file: expected {expected} bytes, got {actual}")]
     InvalidKeyFile { expected: usize, actual: usize },
+    #[error("{0}")]
+    InvalidChannelId(String),
     #[error("Transaction not included after timeout")]
     Timeout,
     #[error("Serialization error: {0}")]
@@ -104,6 +106,7 @@ impl Sequencer {
         db: AccountDb,
         node_endpoint: &str,
         signing_key_path: &str,
+        channel_id_str: &str,
         node_auth_username: Option<String>,
         node_auth_password: Option<String>,
     ) -> Result<Self> {
@@ -117,8 +120,20 @@ impl Sequencer {
         // Load or generate the signing key
         let signing_key = load_or_create_signing_key(Path::new(signing_key_path))?;
 
-        // Create a channel ID from the signing key's public key
-        let channel_id = ChannelId::from(signing_key.public_key().to_bytes());
+        // Decode channel ID from 64-character hex string (32 bytes)
+        let decoded = hex::decode(channel_id_str).map_err(|_| {
+            SequencerError::InvalidChannelId(format!(
+                "SEQUENCER_CHANNEL_ID must be a valid hex string, got: '{channel_id_str}'"
+            ))
+        })?;
+        let channel_bytes: [u8; 32] = decoded.try_into().map_err(|v: Vec<u8>| {
+            SequencerError::InvalidChannelId(format!(
+                "SEQUENCER_CHANNEL_ID must be exactly 64 hex characters (32 bytes), got {} characters ({} bytes)",
+                v.len() * 2,
+                v.len()
+            ))
+        })?;
+        let channel_id = ChannelId::from(channel_bytes);
         info!("Channel ID: {}", hex::encode(channel_id.as_ref()));
 
         Ok(Self {

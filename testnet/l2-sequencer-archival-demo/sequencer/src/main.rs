@@ -47,6 +47,7 @@ async fn main() {
     info!("  HTTP API:       {}", config.listen_addr);
     info!("  Nomos Node:     {}", config.node_endpoint);
     info!("  Database:       {}", config.db_path);
+    info!("  Channel ID:     {}", config.channel_id);
     info!("  Initial funds:  {} tokens", config.initial_balance);
 
     // Initialize database
@@ -64,6 +65,7 @@ async fn main() {
         db,
         &config.node_endpoint,
         &config.signing_key_path,
+        &config.channel_id,
         config.node_auth_username,
         config.node_auth_password,
     ) {
