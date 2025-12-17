@@ -64,7 +64,7 @@ impl NomosNode {
             eprintln!("Could not stop services: {e}");
             return OperationStatus::StopError;
         }
-        OperationStatus::Success
+        OperationStatus::Ok
     }
 }
 

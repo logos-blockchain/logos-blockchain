@@ -2,7 +2,7 @@
 #[repr(C)]
 pub enum OperationStatus {
     #[default]
-    Success = 0x0,
+    Ok = 0x0,
     NotFound = 0x1,
     NullPointer = 0x2,
     RelayError = 0x3,
@@ -18,7 +18,7 @@ pub enum OperationStatus {
 impl OperationStatus {
     #[must_use]
     #[unsafe(no_mangle)]
-    pub extern "C" fn is_success(&self) -> bool {
-        *self == Self::Success
+    pub extern "C" fn is_ok(&self) -> bool {
+        *self == Self::Ok
     }
 }
