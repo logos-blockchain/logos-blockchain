@@ -13,8 +13,10 @@ use serde::{Deserialize, Serialize};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, error};
 
-use crate::db::DbError;
-use crate::sequencer::{Sequencer, SequencerError};
+use crate::{
+    db::DbError,
+    sequencer::{Sequencer, SequencerError},
+};
 
 pub type AppState = Arc<Sequencer>;
 
@@ -30,18 +32,17 @@ fn friendly_error(err: &SequencerError) -> String {
                 account,
                 balance,
                 required,
-            } => format!(
-                "Insufficient balance: {} has {} tokens but needs {}",
-                account, balance, required
-            ),
-            DbError::SelfTransfer { account } => {
-                format!("Cannot transfer to yourself ({})", account)
+            } => {
+                format!("Insufficient balance: {account} has {balance} tokens but needs {required}")
             }
-            _ => "Internal database error".to_string(),
+            DbError::SelfTransfer { account } => {
+                format!("Cannot transfer to yourself ({account})")
+            }
+            _ => "Internal database error".to_owned(),
         },
-        SequencerError::Timeout => "Transaction timed out waiting for confirmation".to_string(),
-        SequencerError::Serialization(_) => "Invalid transaction data".to_string(),
-        _ => "Internal server error".to_string(),
+        SequencerError::Timeout => "Transaction timed out waiting for confirmation".to_owned(),
+        SequencerError::Serialization(_) => "Invalid transaction data".to_owned(),
+        _ => "Internal server error".to_owned(),
     }
 }
 
