@@ -6,4 +6,3 @@ pub mod mantle;
 pub mod mempool;
 pub mod sdp;
 pub mod storage;
-pub mod wallet;

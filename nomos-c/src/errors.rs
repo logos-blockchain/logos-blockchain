@@ -20,6 +20,7 @@ pub enum OperationStatus {
     ChannelReceiveError = 0x5,
     ServiceError = 0x6,
     RuntimeError = 0x7,
+    DynError = 0x8,
 }
 
 impl OperationStatus {

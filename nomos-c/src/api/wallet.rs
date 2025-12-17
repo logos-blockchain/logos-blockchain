@@ -1,7 +1,10 @@
+use std::fmt::{Debug, Display};
+
 use key_management_system_keys::keys::ZkPublicKey;
-use nomos_api::http::wallet::Error;
 use nomos_core::mantle::{SignedMantleTx, Transaction as _, Value};
+use nomos_wallet::{WalletService, api::WalletApi};
 use num_bigint::BigUint;
+use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 
 use crate::{
     NomosNode,
@@ -13,10 +16,25 @@ use crate::{
     errors::OperationStatus,
 };
 
+async fn get_wallet_api<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+) -> WalletApi<WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>, RuntimeServiceId>
+where
+    RuntimeServiceId: Debug
+        + Display
+        + Sync
+        + AsServiceId<WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>>,
+{
+    let relay = handle
+        .relay::<WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>>()
+        .await
+        .unwrap();
+    WalletApi::<WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>, RuntimeServiceId>::new(relay)
+}
+
 /// Get the balance of a wallet address
 ///
-/// This is a synchronous wrapper around the asynchronous
-/// [`get_balance`](nomos_api::http::wallet::get_balance) function.
+/// This is a synchronous wrapper around [`WalletApi::get_balance`].
 ///
 /// # Arguments
 ///
@@ -38,16 +56,13 @@ pub(crate) fn get_balance_sync(
         return Err(OperationStatus::RuntimeError);
     };
 
+    let handle = node.get_overwatch_handle();
     runtime
-        .block_on(nomos_api::http::wallet::get_balance(
-            node.get_overwatch_handle(),
-            tip,
-            wallet_address,
-        ))
-        .map_err(|error| match error {
-            Error::Relay(_) | Error::Recv(_) => OperationStatus::RelayError,
-            Error::Service(_) => OperationStatus::ServiceError,
+        .block_on(async {
+            let api = get_wallet_api(handle).await;
+            api.get_balance(tip, wallet_address).await
         })
+        .map_err(|_| OperationStatus::DynError)
 }
 
 pub type BalanceResult = ValueResult<Value, OperationStatus>;
@@ -162,8 +177,7 @@ impl TransferFundsArguments {
 
 /// Transfer funds from some addresses to another.
 ///
-/// This is a synchronous wrapper around the asynchronous
-/// [`transfer_funds`](nomos_api::http::wallet::transfer_funds) function.
+/// This is a synchronous wrapper around [`WalletApi::transfer_funds`].
 ///
 /// This function does not validate the arguments. It assumes they have already
 /// been validated.
@@ -195,19 +209,20 @@ pub(crate) fn transfer_funds_sync(
         return Err(OperationStatus::RuntimeError);
     };
 
+    let handle = node.get_overwatch_handle();
     runtime
-        .block_on(nomos_api::http::wallet::transfer_funds(
-            node.get_overwatch_handle(),
-            tip,
-            change_public_key,
-            funding_public_keys,
-            recipient_public_key,
-            amount,
-        ))
-        .map_err(|error| match error {
-            Error::Relay(_) | Error::Recv(_) => OperationStatus::RelayError,
-            Error::Service(_) => OperationStatus::ServiceError,
+        .block_on(async {
+            let api = get_wallet_api(handle).await;
+            api.transfer_funds(
+                tip,
+                change_public_key,
+                funding_public_keys,
+                recipient_public_key,
+                amount,
+            )
+            .await
         })
+        .map_err(|_| OperationStatus::DynError)
 }
 
 pub type TransferFundsResult = ValueResult<Hash, OperationStatus>;
