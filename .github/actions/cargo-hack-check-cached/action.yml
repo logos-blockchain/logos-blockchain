@@ -14,6 +14,11 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Debug
+      shell: Bash
+      run: |
+        ./scripts/cargo-hack-check/compute_crate_hash.sh nomos-bundler Cargo.lock
+
     - name: Restore Cargo Hack Keys (main)
       if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
       uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # Version 4.2.3
