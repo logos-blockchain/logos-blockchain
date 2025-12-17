@@ -5,8 +5,20 @@
 </template>
 
 <script setup>
+import { onMounted, onUnmounted } from 'vue'
 import { RouterView } from 'vue-router'
 import NavBar from './components/navbar/NavBarCompact.vue'
+import { useArchiveStore } from '@/stores/archiveView'
+
+const archiveStore = useArchiveStore()
+
+onMounted(() => {
+  archiveStore.startPolling()
+})
+
+onUnmounted(() => {
+  archiveStore.stopPolling()
+})
 </script>
 
 <style scoped>

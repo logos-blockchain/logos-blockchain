@@ -71,12 +71,4 @@ import { useArchiveStore } from '@/stores/archiveView';
 import { TransactionList } from '@/components';
 
 const archiveStore = useArchiveStore();
-
-onMounted(() => {
-  archiveStore.startPolling();
-});
-
-onUnmounted(() => {
-  archiveStore.stopPolling();
-});
 </script>
