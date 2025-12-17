@@ -2,22 +2,22 @@
 #[repr(C)]
 pub enum OperationStatus {
     #[default]
-    Ok = 0x0,
+    Success = 0x0,
     NotFound = 0x1,
-    NullPtr = 0x2,
+    NullPointer = 0x2,
     RelayError = 0x3,
     ChannelSendError = 0x4,
     ChannelReceiveError = 0x5,
     ServiceError = 0x6,
     RuntimeError = 0x7,
     DynError = 0x8,
-    CouldNotInitialize = 0x9,
+    InitializationError = 0x9,
     StopError = 0xA,
 }
 
 impl OperationStatus {
     #[must_use]
-    pub fn is_ok(&self) -> bool {
-        *self == Self::Ok
+    pub fn is_success(&self) -> bool {
+        *self == Self::Success
     }
 }

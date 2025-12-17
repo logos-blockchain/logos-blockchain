@@ -44,22 +44,22 @@ fn initialize_nomos_node(config_path: *const c_char) -> Result<NomosNode, Operat
     let config_path = unsafe { std::ffi::CStr::from_ptr(config_path) }
         .to_str()
         .map_err(|e| {
-            eprintln!("Could not convert config path to string: {e}");
-            OperationStatus::CouldNotInitialize
+            eprintln!("Could not convert the config path to string: {e}");
+            OperationStatus::InitializationError
         })?;
     let config_reader = std::fs::File::open(config_path).map_err(|e| {
         eprintln!("Could not open config file: {e}");
-        OperationStatus::CouldNotInitialize
+        OperationStatus::InitializationError
     })?;
     let config = serde_yaml::from_reader::<_, Config>(config_reader).map_err(|e| {
         eprintln!("Could not parse config file: {e}");
-        OperationStatus::CouldNotInitialize
+        OperationStatus::InitializationError
     })?;
 
     let rt = Runtime::new().unwrap();
     let app = run_node_from_config(config).map_err(|e| {
-        eprintln!("Could not initialize overwatch: {e}");
-        OperationStatus::CouldNotInitialize
+        eprintln!("Could not initialize Overwatch: {e}");
+        OperationStatus::InitializationError
     })?;
 
     let app_handle = app.handle();
@@ -73,14 +73,14 @@ fn initialize_nomos_node(config_path: *const c_char) -> Result<NomosNode, Operat
         .await
         .map_err(|e| {
             eprintln!("Could not get services to start: {e}");
-            OperationStatus::CouldNotInitialize
+            OperationStatus::InitializationError
         })?;
         app_handle
             .start_service_sequence(services_to_start)
             .await
             .map_err(|e| {
                 eprintln!("Could not start services: {e}");
-                OperationStatus::CouldNotInitialize
+                OperationStatus::InitializationError
             })?;
         Ok(())
     })?;
@@ -108,7 +108,7 @@ fn initialize_nomos_node(config_path: *const c_char) -> Result<NomosNode, Operat
 pub unsafe extern "C" fn stop_node(node: *mut NomosNode) -> OperationStatus {
     if node.is_null() {
         eprintln!("Attempted to stop a null node pointer. This is a bug. Aborting.");
-        return OperationStatus::NullPtr;
+        return OperationStatus::NullPointer;
     }
 
     let node = unsafe { Box::from_raw(node) };

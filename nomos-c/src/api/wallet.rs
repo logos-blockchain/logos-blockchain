@@ -78,11 +78,11 @@ pub unsafe extern "C" fn get_balance(
 ) -> BalanceResult {
     if node.is_null() {
         eprintln!("[get_balance] Received a null `node` pointer. Exiting.");
-        return BalanceResult::from_error(OperationStatus::NullPtr);
+        return BalanceResult::from_error(OperationStatus::NullPointer);
     }
     if wallet_address.is_null() {
         eprintln!("[get_balance] Received a null `wallet_address` pointer. Exiting.");
-        return BalanceResult::from_error(OperationStatus::NullPtr);
+        return BalanceResult::from_error(OperationStatus::NullPointer);
     }
 
     let node = unsafe { &*node };
@@ -129,13 +129,13 @@ impl TransferFundsArguments {
         if self.change_public_key.is_null() {
             return Err((
                 "TransferFunds contains a null `change_public_key` pointer.".to_owned(),
-                OperationStatus::NullPtr,
+                OperationStatus::NullPointer,
             ));
         }
         if self.funding_public_keys.is_null() {
             return Err((
                 "TransferFunds contains a null `funding_public_keys` pointer.".to_owned(),
-                OperationStatus::NullPtr,
+                OperationStatus::NullPointer,
             ));
         }
 
@@ -145,14 +145,14 @@ impl TransferFundsArguments {
             if funding_public_key.is_null() {
                 let error_message =
                     format!("TransferFunds contains a null pointer at `funding_public_keys[{i}]`.");
-                return Err((error_message, OperationStatus::NullPtr));
+                return Err((error_message, OperationStatus::NullPointer));
             }
         }
 
         if self.recipient_public_key.is_null() {
             return Err((
                 "TransferFunds contains a null `recipient_public_key` pointer.".to_owned(),
-                OperationStatus::NullPtr,
+                OperationStatus::NullPointer,
             ));
         }
         Ok(())
@@ -244,11 +244,11 @@ pub unsafe extern "C" fn transfer_funds(
 ) -> TransferFundsResult {
     if node.is_null() {
         eprintln!("[transfer_funds] Received a null `node` pointer. Exiting.");
-        return TransferFundsResult::from_error(OperationStatus::NullPtr);
+        return TransferFundsResult::from_error(OperationStatus::NullPointer);
     }
     if arguments.is_null() {
         eprintln!("[transfer_funds] Received a null `arguments` pointer. Exiting.");
-        return TransferFundsResult::from_error(OperationStatus::NullPtr);
+        return TransferFundsResult::from_error(OperationStatus::NullPointer);
     }
     let arguments = unsafe { &*arguments };
     if let Err((error_message, status)) = unsafe { arguments.validate() } {

@@ -101,7 +101,7 @@ pub type CryptarchiaInfoResult = PointerResult<CryptarchiaInfo, OperationStatus>
 pub unsafe extern "C" fn get_cryptarchia_info(node: *const NomosNode) -> CryptarchiaInfoResult {
     if node.is_null() {
         eprintln!("[get_cryptarchia_info] Received a null `node` pointer. Exiting.");
-        return CryptarchiaInfoResult::from_error(OperationStatus::NullPtr);
+        return CryptarchiaInfoResult::from_error(OperationStatus::NullPointer);
     }
 
     let node = unsafe { &*node };
