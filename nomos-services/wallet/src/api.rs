@@ -5,11 +5,12 @@ use nomos_core::{
 };
 use overwatch::{
     DynError,
+    overwatch::OverwatchHandle,
     services::{AsServiceId, ServiceData, relay::OutboundRelay},
 };
 use tokio::sync::oneshot;
 
-use crate::{WalletMsg, WalletServiceSettings};
+use crate::{WalletMsg, WalletService, WalletServiceSettings};
 
 pub trait WalletServiceData:
     ServiceData<Settings = WalletServiceSettings, Message = WalletMsg>
@@ -21,7 +22,7 @@ pub trait WalletServiceData:
 }
 
 impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> WalletServiceData
-    for crate::WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
+    for WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
 {
     type Kms = Kms;
     type Cryptarchia = Cryptarchia;
@@ -48,6 +49,12 @@ where
             relay,
             _id: std::marker::PhantomData,
         }
+    }
+
+    #[must_use]
+    pub async fn from_overwatch_handle(handle: &OverwatchHandle<RuntimeServiceId>) -> Self {
+        let relay = handle.relay::<Wallet>().await.unwrap();
+        Self::new(relay)
     }
 
     pub async fn get_balance(

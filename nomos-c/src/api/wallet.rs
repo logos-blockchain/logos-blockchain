@@ -1,10 +1,7 @@
-use std::fmt::{Debug, Display};
-
 use key_management_system_keys::keys::ZkPublicKey;
 use nomos_core::mantle::{SignedMantleTx, Transaction as _, Value};
 use nomos_wallet::{WalletService, api::WalletApi};
 use num_bigint::BigUint;
-use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 
 use crate::{
     NomosNode,
@@ -15,22 +12,6 @@ use crate::{
     },
     errors::OperationStatus,
 };
-
-async fn get_wallet_api<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>(
-    handle: &OverwatchHandle<RuntimeServiceId>,
-) -> WalletApi<WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>, RuntimeServiceId>
-where
-    RuntimeServiceId: Debug
-        + Display
-        + Sync
-        + AsServiceId<WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>>,
-{
-    let relay = handle
-        .relay::<WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>>()
-        .await
-        .unwrap();
-    WalletApi::<WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>, RuntimeServiceId>::new(relay)
-}
 
 /// Get the balance of a wallet address
 ///
@@ -56,10 +37,12 @@ pub(crate) fn get_balance_sync(
         return Err(OperationStatus::RuntimeError);
     };
 
-    let handle = node.get_overwatch_handle();
     runtime
         .block_on(async {
-            let api = get_wallet_api(handle).await;
+            let api = WalletApi::<WalletService<_, _, _, _, _>, _>::from_overwatch_handle(
+                node.get_overwatch_handle(),
+            )
+            .await;
             api.get_balance(tip, wallet_address).await
         })
         .map_err(|_| OperationStatus::DynError)
@@ -209,10 +192,12 @@ pub(crate) fn transfer_funds_sync(
         return Err(OperationStatus::RuntimeError);
     };
 
-    let handle = node.get_overwatch_handle();
     runtime
         .block_on(async {
-            let api = get_wallet_api(handle).await;
+            let api = WalletApi::<WalletService<_, _, _, _, _>, _>::from_overwatch_handle(
+                node.get_overwatch_handle(),
+            )
+            .await;
             api.transfer_funds(
                 tip,
                 change_public_key,
