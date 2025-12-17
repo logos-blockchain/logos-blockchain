@@ -21,7 +21,7 @@
         />
       </div>
 
-      <div class="w-full"> 
+      <div class="w-full relative group"> 
         <TransactionCreator @transfer="handleTransfer" class="max-w-none w-full" />
       </div>
     </header>

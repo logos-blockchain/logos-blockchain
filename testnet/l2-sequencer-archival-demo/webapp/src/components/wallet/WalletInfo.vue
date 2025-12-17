@@ -66,8 +66,6 @@
 </template>
 
 <script setup>
-import { defineProps, defineEmits } from 'vue';
-
 defineProps({
   walletAddress: {
     type: String,
@@ -80,6 +78,4 @@ defineProps({
 });
 
 const emit = defineEmits(['regenerate', 'prev', 'next']);
-
-// Note: Removed formatAddress since character names are short
 </script>

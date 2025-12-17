@@ -36,7 +36,6 @@
 <script setup>
 // ... (script remains the same)
 import { Switch } from '@headlessui/vue';
-import { defineProps, defineEmits } from 'vue';
 
 defineProps({
   modelValue: {
