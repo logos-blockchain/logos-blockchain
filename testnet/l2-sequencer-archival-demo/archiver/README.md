@@ -70,14 +70,14 @@ dotenv ./target/release/logos-blockchain-archiver
 
 ## HTTP API
 
-### GET `/blocks`
+### GET `/block_stream`
 
 Server-Sent Events stream of L2 blocks.
 
 **Example:**
 
 ```bash
-curl -N http://localhost:8080/blocks
+curl -N http://localhost:8080/block_stream
 ```
 
 **Response format:**
