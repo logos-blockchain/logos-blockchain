@@ -1,13 +1,3 @@
-#[derive(Default)]
-#[repr(C)]
-pub enum NomosNodeErrorCode {
-    #[default]
-    None = 0x0,
-    CouldNotInitialize = 0x1,
-    StopError = 0x2,
-    NullPtr = 0x3,
-}
-
 #[derive(Default, PartialEq, Eq)]
 #[repr(C)]
 pub enum OperationStatus {
@@ -21,9 +11,12 @@ pub enum OperationStatus {
     ServiceError = 0x6,
     RuntimeError = 0x7,
     DynError = 0x8,
+    CouldNotInitialize = 0x9,
+    StopError = 0xA,
 }
 
 impl OperationStatus {
+    #[must_use]
     pub fn is_ok(&self) -> bool {
         *self == Self::Ok
     }

@@ -4,7 +4,7 @@ use nomos_node::RuntimeServiceId;
 use overwatch::overwatch::{Overwatch, OverwatchHandle};
 use tokio::runtime::{Handle, Runtime};
 
-use crate::NomosNodeErrorCode;
+use crate::errors::OperationStatus;
 
 // Define an opaque type for the complex Overwatch type
 type NomosOverwatch = Overwatch<RuntimeServiceId>;
@@ -57,14 +57,14 @@ impl NomosNode {
         (overwatch, runtime)
     }
 
-    pub(crate) fn stop(self) -> NomosNodeErrorCode {
+    pub(crate) fn stop(self) -> OperationStatus {
         let runtime_handle = self.get_runtime_handle();
         let overwatch_handle = self.get_overwatch_handle();
         if let Err(e) = runtime_handle.block_on(overwatch_handle.stop_all_services()) {
             eprintln!("Could not stop services: {e}");
-            return NomosNodeErrorCode::StopError;
+            return OperationStatus::StopError;
         }
-        NomosNodeErrorCode::None
+        OperationStatus::Ok
     }
 }
 

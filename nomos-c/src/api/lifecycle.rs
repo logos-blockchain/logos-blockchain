@@ -3,9 +3,9 @@ use std::ffi::c_char;
 use nomos_node::{Config, get_services_to_start, run_node_from_config};
 use tokio::runtime::Runtime;
 
-use crate::{NomosNode, api::PointerResult, errors::NomosNodeErrorCode};
+use crate::{NomosNode, api::PointerResult, errors::OperationStatus};
 
-pub type InitializedNomosNodeResult = PointerResult<NomosNode, NomosNodeErrorCode>;
+pub type InitializedNomosNodeResult = PointerResult<NomosNode, OperationStatus>;
 
 /// Creates and starts a Nomos node based on the provided configuration file
 /// path.
@@ -37,7 +37,7 @@ pub extern "C" fn start_nomos_node(config_path: *const c_char) -> InitializedNom
 /// # Returns
 ///
 /// A `Result` containing either the initialized `NomosNode` or an error code.
-fn initialize_nomos_node(config_path: *const c_char) -> Result<NomosNode, NomosNodeErrorCode> {
+fn initialize_nomos_node(config_path: *const c_char) -> Result<NomosNode, OperationStatus> {
     // TODO: Remove flags when dynamic run of services is implemented.
     let must_blend_service_group_start = true;
     let must_da_service_group_start = true;
@@ -45,21 +45,21 @@ fn initialize_nomos_node(config_path: *const c_char) -> Result<NomosNode, NomosN
         .to_str()
         .map_err(|e| {
             eprintln!("Could not convert config path to string: {e}");
-            NomosNodeErrorCode::CouldNotInitialize
+            OperationStatus::CouldNotInitialize
         })?;
     let config_reader = std::fs::File::open(config_path).map_err(|e| {
         eprintln!("Could not open config file: {e}");
-        NomosNodeErrorCode::CouldNotInitialize
+        OperationStatus::CouldNotInitialize
     })?;
     let config = serde_yaml::from_reader::<_, Config>(config_reader).map_err(|e| {
         eprintln!("Could not parse config file: {e}");
-        NomosNodeErrorCode::CouldNotInitialize
+        OperationStatus::CouldNotInitialize
     })?;
 
     let rt = Runtime::new().unwrap();
     let app = run_node_from_config(config).map_err(|e| {
         eprintln!("Could not initialize overwatch: {e}");
-        NomosNodeErrorCode::CouldNotInitialize
+        OperationStatus::CouldNotInitialize
     })?;
 
     let app_handle = app.handle();
@@ -73,14 +73,14 @@ fn initialize_nomos_node(config_path: *const c_char) -> Result<NomosNode, NomosN
         .await
         .map_err(|e| {
             eprintln!("Could not get services to start: {e}");
-            NomosNodeErrorCode::CouldNotInitialize
+            OperationStatus::CouldNotInitialize
         })?;
         app_handle
             .start_service_sequence(services_to_start)
             .await
             .map_err(|e| {
                 eprintln!("Could not start services: {e}");
-                NomosNodeErrorCode::CouldNotInitialize
+                OperationStatus::CouldNotInitialize
             })?;
         Ok(())
     })?;
@@ -96,7 +96,7 @@ fn initialize_nomos_node(config_path: *const c_char) -> Result<NomosNode, NomosN
 ///
 /// # Returns
 ///
-/// An `NomosNodeErrorCode` indicating success or failure.
+/// An `OperationStatus` indicating success or failure.
 ///
 /// # Safety
 ///
@@ -105,10 +105,10 @@ fn initialize_nomos_node(config_path: *const c_char) -> Result<NomosNode, NomosN
 /// - The `NomosNode` instance was created by this library
 /// - The pointer will not be used after this function returns
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn stop_node(node: *mut NomosNode) -> NomosNodeErrorCode {
+pub unsafe extern "C" fn stop_node(node: *mut NomosNode) -> OperationStatus {
     if node.is_null() {
         eprintln!("Attempted to stop a null node pointer. This is a bug. Aborting.");
-        return NomosNodeErrorCode::NullPtr;
+        return OperationStatus::NullPtr;
     }
 
     let node = unsafe { Box::from_raw(node) };
