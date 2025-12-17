@@ -9,9 +9,13 @@ use axum::{
 };
 use demo_sequencer::BlockData;
 use futures::{Stream, StreamExt as _};
+use reqwest::Method;
+use reqwest::header;
 use tokio::{net::TcpListener, sync::broadcast::Receiver};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_util::sync::CancellationToken;
+use tower_http::cors::Any;
+use tower_http::cors::CorsLayer;
 
 pub struct Server {
     block_receiver_channel: Receiver<BlockData>,
@@ -42,12 +46,18 @@ impl Server {
     }
 
     fn into_router_and_cancellation_token(self) -> (Router, CancellationToken) {
+        let cors = CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
+
         (
             Router::new()
                 .route("/block_stream", get(handle_block_stream))
                 .with_state(AppState {
                     block_receiver_channel: self.block_receiver_channel,
-                }),
+                })
+                .layer(cors),
             self.cancellation_token,
         )
     }

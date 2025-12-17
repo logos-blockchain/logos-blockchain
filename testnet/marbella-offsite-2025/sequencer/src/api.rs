@@ -8,7 +8,11 @@ use axum::{
     routing::{get, post},
 };
 use demo_sequencer::{Transaction, TransferRequest};
+use reqwest::Method;
+use reqwest::header;
 use serde::{Deserialize, Serialize};
+use tower_http::cors::Any;
+use tower_http::cors::CorsLayer;
 use tracing::{debug, error};
 
 use crate::sequencer::Sequencer;
@@ -164,10 +168,16 @@ async fn health() -> impl IntoResponse {
 }
 
 pub fn create_router(sequencer: Arc<Sequencer>) -> axum::Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
+
     axum::Router::new()
         .route("/transfer", post(transfer))
         .route("/accounts/:account", get(get_balance))
         .route("/accounts", get(list_accounts))
         .route("/health", get(health))
         .with_state(sequencer)
+        .layer(cors)
 }

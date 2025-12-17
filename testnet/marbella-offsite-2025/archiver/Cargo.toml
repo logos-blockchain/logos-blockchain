@@ -24,9 +24,11 @@ futures            = { default-features = false, version = "0.3" }
 hex                = { default-features = false, features = ["alloc"], version = "0.4" }
 nomos-core         = { workspace = true }
 owo-colors         = { default-features = false, version = "4.2.3" }
+reqwest            = { features = ["json", "rustls-tls"], workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
 tokio              = { workspace = true }
 tokio-stream       = { default-features = false, version = "0.1" }
 tokio-util         = { default-features = false, version = "0.7" }
+tower-http         = { version = "0.6.8", features = ["cors"] }
 url                = { default-features = false, version = "2.5.4" }

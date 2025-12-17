@@ -28,5 +28,6 @@ serde                         = { features = ["derive"], workspace = true }
 serde_json                    = { workspace = true }
 thiserror                     = { workspace = true }
 tokio                         = { default-features = false, features = ["macros", "net", "rt-multi-thread", "sync"], version = "1" }
+tower-http                    = { version = "0.6.8", features = ["cors"] }
 tracing                       = { workspace = true }
 tracing-subscriber            = { version = "0.3", features = ["env-filter"] }

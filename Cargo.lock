@@ -2632,6 +2632,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "tokio",
+ "tower-http 0.6.8",
  "tracing",
  "tracing-subscriber 0.3.22",
 ]
@@ -5458,11 +5459,13 @@ dependencies = [
  "hex",
  "nomos-core",
  "owo-colors",
+ "reqwest 0.12.25",
  "serde",
  "serde_json",
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "tower-http 0.6.8",
  "url",
 ]
 

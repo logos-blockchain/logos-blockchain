@@ -578,6 +578,7 @@ impl Sequencer {
             .collect();
 
         transactions.sort_by_key(|tx| tx.index);
+        transactions.reverse();
         Ok(transactions)
     }
 
