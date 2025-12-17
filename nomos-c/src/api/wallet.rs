@@ -1,5 +1,5 @@
 use key_management_system_keys::keys::ZkPublicKey;
-use nomos_core::mantle::{SignedMantleTx, Transaction as _, Value};
+use nomos_core::mantle::{SignedMantleTx, Transaction as _};
 use nomos_wallet::{WalletService, api::WalletApi};
 use num_bigint::BigUint;
 
@@ -9,6 +9,7 @@ use crate::{
         ValueResult,
         cryptarchia::{Hash, HeaderId, get_cryptarchia_info_sync},
         free,
+        types::value::Value,
     },
     errors::OperationStatus,
 };
