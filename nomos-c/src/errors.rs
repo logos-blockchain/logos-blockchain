@@ -17,7 +17,8 @@ pub enum OperationStatus {
 
 impl OperationStatus {
     #[must_use]
-    pub fn is_success(&self) -> bool {
+    #[unsafe(no_mangle)]
+    pub extern "C" fn is_success(&self) -> bool {
         *self == Self::Success
     }
 }
