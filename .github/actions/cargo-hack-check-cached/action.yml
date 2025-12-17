@@ -8,7 +8,7 @@ inputs:
   cache-directory:
     description: The directory to cache the cargo-hack keys in
     required: false
-    default: ~/.cache/cargo-hack-check
+    default: ./.cache/cargo-hack-check
 
 
 runs:
