@@ -188,19 +188,21 @@ impl AccountDb {
     }
 
     /// Get the next block ID and increment the counter
-    pub async fn next_block_id(&self) -> Result<u64> {
+    /// Returns (`new_block_id`, `parent_block_id`) where parent is 0 for
+    /// genesis
+    pub async fn next_block_id(&self) -> Result<(u64, u64)> {
         let write_txn = self.db.write().await.begin_write()?;
 
-        let block_id = {
+        let (block_id, parent_id) = {
             let mut table = write_txn.open_table(COUNTER_TABLE)?;
             let current = table.get(BLOCK_ID_KEY)?.map_or(0, |v| v.value());
             let next = current + 1;
             table.insert(BLOCK_ID_KEY, next)?;
-            next
+            (next, current)
         };
 
         write_txn.commit()?;
-        Ok(block_id)
+        Ok((block_id, parent_id))
     }
 
     /// Get the next transaction index and increment the counter
@@ -300,6 +302,7 @@ impl AccountDb {
         Ok(transactions)
     }
 
+    #[must_use]
     pub const fn initial_balance(&self) -> u64 {
         self.initial_balance
     }

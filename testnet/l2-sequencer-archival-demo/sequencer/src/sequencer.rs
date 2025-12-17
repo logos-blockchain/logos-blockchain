@@ -1,7 +1,10 @@
 use std::{collections::HashSet, fs, io, path::Path, time::Duration};
 
 use common_http_client::CommonHttpClient;
-use demo_sequencer::{BlockData, Transaction, TransferRequest, TransferResponse};
+use demo_sequencer::{
+    BlockData, Transaction, TransferRequest, TransferResponse,
+    db::{AccountDb, DbError},
+};
 use key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use nomos_core::{
     header::HeaderId,
@@ -21,12 +24,10 @@ use thiserror::Error;
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
-use crate::db::AccountDb;
-
 #[derive(Debug, Error)]
 pub enum SequencerError {
     #[error("Database error: {0}")]
-    Db(#[from] Box<crate::db::DbError>),
+    Db(#[from] Box<DbError>),
     #[error("HTTP client error: {0}")]
     Http(#[from] common_http_client::Error),
     #[error("URL parse error: {0}")]
@@ -43,8 +44,8 @@ pub enum SequencerError {
     Serialization(String),
 }
 
-impl From<crate::db::DbError> for SequencerError {
-    fn from(err: crate::db::DbError) -> Self {
+impl From<DbError> for SequencerError {
+    fn from(err: DbError) -> Self {
         Self::Db(Box::new(err))
     }
 }
@@ -491,7 +492,7 @@ impl Sequencer {
         &self,
         pending: &[PendingTransfer],
     ) -> Result<(BlockData, MsgId)> {
-        let block_id = self.db.next_block_id().await?;
+        let (block_id, parent_block_id) = self.db.next_block_id().await?;
         let transactions: Vec<Transaction> = pending
             .iter()
             .map(|p| Transaction {
@@ -506,6 +507,7 @@ impl Sequencer {
 
         let block_data = BlockData {
             block_id,
+            parent_block_id,
             transactions,
         };
 
@@ -513,8 +515,9 @@ impl Sequencer {
             .map_err(|e| SequencerError::Serialization(e.to_string()))?;
 
         info!(
-            "BLOCK #{} posting to chain ({} tx)",
+            "BLOCK #{} (parent: #{}) posting to chain ({} tx)",
             block_id,
+            parent_block_id,
             pending.len()
         );
 

@@ -7,16 +7,13 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use demo_sequencer::{Transaction, TransferRequest};
+use demo_sequencer::{Transaction, TransferRequest, db::DbError};
 use reqwest::{Method, header};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, error};
 
-use crate::{
-    db::DbError,
-    sequencer::{Sequencer, SequencerError},
-};
+use crate::sequencer::{Sequencer, SequencerError};
 
 pub type AppState = Arc<Sequencer>;
 

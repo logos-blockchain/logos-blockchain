@@ -1,14 +1,14 @@
 mod api;
 mod config;
-mod db;
 mod sequencer;
 
 use std::sync::Arc;
 
+use demo_sequencer::db::AccountDb;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
-use crate::{api::create_router, config::Config, db::AccountDb, sequencer::Sequencer};
+use crate::{api::create_router, config::Config, sequencer::Sequencer};
 
 fn print_banner() {
     const BLUE: &str = "\x1b[38;5;39m";

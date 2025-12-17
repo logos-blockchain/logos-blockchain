@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub mod db;
+
 /// Request to transfer funds between accounts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferRequest {
@@ -33,5 +35,8 @@ pub struct TransferResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockData {
     pub block_id: u64,
+    /// Parent block ID (0 for genesis)
+    #[serde(default)]
+    pub parent_block_id: u64,
     pub transactions: Vec<Transaction>,
 }
