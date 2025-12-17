@@ -45,6 +45,10 @@ def with_tag_and_crate(crate: str, message: str) -> str:
     return with_tag(f"({crate}) {message}")
 
 
+def with_indent(message: str, indent_level: int = 1, bullet: str = "-") -> str:
+    indent = " " * indent_level
+    return f"{indent}{bullet} {message}"
+
 def ensure_cache_directory_exists():
     CACHE_DIRECTORY.mkdir(parents=True, exist_ok=True)
 
@@ -369,8 +373,11 @@ class CargoHackCheckCommand:
             return
 
         for dependent in self.dependents:
-            print(with_tag_and_crate(self.crate_name, f"Invalidating dependent {dependent.name}..."), file=stderr)
-            dependent.get_cache_path().unlink(missing_ok=True)
+            try:
+                dependent.get_cache_path().unlink(missing_ok=False)
+                print(with_indent(f"{dependent.name} was invalidated.", 4), file=stderr)
+            except FileNotFoundError:
+                print(with_indent(f"{dependent.name} was not found in cache.", 4), file=stderr)
 
 
 #################
