@@ -15,21 +15,10 @@ pub struct Transaction {
     pub from: String,
     pub to: String,
     pub amount: u64,
-}
-
-impl Transaction {
-    /// Create a new transaction from a transfer request with a random ID
-    #[must_use]
-    pub fn from_transfer_request(request: &TransferRequest) -> Self {
-        let mut id_bytes = [0u8; 16];
-        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut id_bytes);
-        Self {
-            id: hex::encode(id_bytes),
-            from: request.from.clone(),
-            to: request.to.clone(),
-            amount: request.amount,
-        }
-    }
+    #[serde(default)]
+    pub confirmed: bool,
+    #[serde(default)]
+    pub index: u64,
 }
 
 /// Response after successful transfer

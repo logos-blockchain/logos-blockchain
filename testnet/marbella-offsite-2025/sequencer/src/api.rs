@@ -7,9 +7,9 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use demo_sequencer::TransferRequest;
+use demo_sequencer::{Transaction, TransferRequest};
 use serde::{Deserialize, Serialize};
-use tracing::{error, info};
+use tracing::{debug, error};
 
 use crate::sequencer::Sequencer;
 
@@ -24,6 +24,15 @@ pub struct ErrorResponse {
 pub struct BalanceResponse {
     pub account: String,
     pub balance: u64,
+    pub confirmed_balance: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transactions: Option<Vec<Transaction>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AccountQuery {
+    #[serde(default)]
+    pub tx: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -43,8 +52,8 @@ async fn transfer(
     State(sequencer): State<AppState>,
     Json(request): Json<TransferRequest>,
 ) -> impl IntoResponse {
-    info!(
-        "Received transfer request: {} -> {} ({})",
+    debug!(
+        "API /transfer {} -> {} ({})",
         request.from, request.to, request.amount
     );
 
@@ -63,22 +72,59 @@ async fn transfer(
     }
 }
 
-/// GET /balance/{account}
+async fn fetch_account_data(
+    sequencer: &Sequencer,
+    account: &str,
+    include_tx: bool,
+) -> Result<(u64, u64, Option<Vec<Transaction>>), String> {
+    let balance = sequencer
+        .get_balance(account)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let confirmed_balance = sequencer
+        .get_confirmed_balance(account)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let transactions = if include_tx {
+        Some(
+            sequencer
+                .get_account_transactions(account)
+                .await
+                .map_err(|e| e.to_string())?,
+        )
+    } else {
+        None
+    };
+
+    Ok((balance, confirmed_balance, transactions))
+}
+
+/// GET /accounts/{account}?tx=true
 async fn get_balance(
     State(sequencer): State<AppState>,
     axum::extract::Path(account): axum::extract::Path<String>,
+    axum::extract::Query(query): axum::extract::Query<AccountQuery>,
 ) -> impl IntoResponse {
-    info!("Received balance request for: {}", account);
+    debug!("API /accounts/{}", account);
 
-    match sequencer.get_balance(&account).await {
-        Ok(balance) => (StatusCode::OK, Json(BalanceResponse { account, balance })).into_response(),
+    match fetch_account_data(&sequencer, &account, query.tx).await {
+        Ok((balance, confirmed_balance, transactions)) => (
+            StatusCode::OK,
+            Json(BalanceResponse {
+                account,
+                balance,
+                confirmed_balance,
+                transactions,
+            }),
+        )
+            .into_response(),
         Err(e) => {
-            error!("Get balance failed: {e}");
+            error!("Get account failed: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
+                Json(ErrorResponse { error: e }),
             )
                 .into_response()
         }
@@ -88,7 +134,7 @@ async fn get_balance(
 /// GET /accounts
 /// Returns all accounts and their balances
 async fn list_accounts(State(sequencer): State<AppState>) -> impl IntoResponse {
-    info!("Received list accounts request");
+    debug!("API /accounts");
 
     match sequencer.list_accounts().await {
         Ok(accounts) => {
@@ -120,7 +166,7 @@ async fn health() -> impl IntoResponse {
 pub fn create_router(sequencer: Arc<Sequencer>) -> axum::Router {
     axum::Router::new()
         .route("/transfer", post(transfer))
-        .route("/balance/:account", get(get_balance))
+        .route("/accounts/:account", get(get_balance))
         .route("/accounts", get(list_accounts))
         .route("/health", get(health))
         .with_state(sequencer)

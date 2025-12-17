@@ -10,6 +10,26 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberI
 
 use crate::{api::create_router, config::Config, db::AccountDb, sequencer::Sequencer};
 
+fn print_banner() {
+    const BLUE: &str = "\x1b[38;5;39m";
+    const RESET: &str = "\x1b[0m";
+    println!(
+        r"
+{BLUE} __  __                 _____ _           _
+|  \/  | ___ _ __ ___  / ____| |__   __ _(_)_ __
+| |\/| |/ _ \ '_ ` _ \| |    | '_ \ / _` | | '_ \
+| |  | |  __/ | | | | | |____| | | | (_| | | | | |
+|_|  |_|\___|_| |_| |_|\_____|_| |_|\__,_|_|_| |_|
+ ____
+/ ___|  ___  __ _ _   _  ___ _ __   ___ ___ _ __
+\___ \ / _ \/ _` | | | |/ _ \ '_ \ / __/ _ \ '__|
+ ___) |  __/ (_| | |_| |  __/ | | | (_|  __/ |
+|____/ \___|\__, |\__,_|\___|_| |_|\___\___|_|
+               |_|{RESET}
+"
+    );
+}
+
 #[tokio::main]
 async fn main() {
     // Initialize tracing
@@ -18,34 +38,26 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    info!("Starting sequencer...");
+    print_banner();
+    info!("MemChainSequencer starting up...");
 
     // Load configuration
     let config = Config::from_env();
-    info!("Configuration loaded:");
-    info!("  Listen address: {}", config.listen_addr);
-    info!("  Node endpoint: {}", config.node_endpoint);
-    info!("  Database path: {}", config.db_path);
-    info!("  Signing key path: {}", config.signing_key_path);
-    info!("  Initial balance: {}", config.initial_balance);
-    info!(
-        "  Node auth: {}",
-        if config.node_auth_username.is_some() {
-            "enabled"
-        } else {
-            "disabled"
-        }
-    );
+    info!("Configuration");
+    info!("  HTTP API:       {}", config.listen_addr);
+    info!("  Nomos Node:     {}", config.node_endpoint);
+    info!("  Database:       {}", config.db_path);
+    info!("  Initial funds:  {} tokens", config.initial_balance);
 
     // Initialize database
     let db = match AccountDb::new(&config.db_path, config.initial_balance) {
         Ok(db) => db,
         Err(e) => {
-            error!("Failed to initialize database: {e}");
+            error!("Database initialization failed: {e}");
             std::process::exit(1);
         }
     };
-    info!("Database initialized");
+    info!("Database ready");
 
     // Initialize sequencer
     let sequencer = match Sequencer::new(
@@ -57,21 +69,28 @@ async fn main() {
     ) {
         Ok(s) => Arc::new(s),
         Err(e) => {
-            error!("Failed to initialize sequencer: {e}");
+            error!("Sequencer initialization failed: {e}");
             std::process::exit(1);
         }
     };
-    info!("Sequencer initialized");
+    info!("Sequencer ready");
+
+    // Spawn background processing loop
+    let sequencer_clone = Arc::clone(&sequencer);
+    tokio::spawn(async move {
+        sequencer_clone.run_processing_loop().await;
+    });
+    info!("Background processor started");
 
     // Create HTTP router
     let app = create_router(sequencer);
 
     // Start HTTP server
-    info!("Starting HTTP server on {}", config.listen_addr);
+    info!("MemChainSequencer listening on {}", config.listen_addr);
     let listener = match tokio::net::TcpListener::bind(config.listen_addr).await {
         Ok(l) => l,
         Err(e) => {
-            error!("Failed to bind to {}: {e}", config.listen_addr);
+            error!("Failed to bind: {e}");
             std::process::exit(1);
         }
     };
