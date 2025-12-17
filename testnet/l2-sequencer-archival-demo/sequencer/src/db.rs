@@ -33,6 +33,8 @@ pub enum DbError {
         balance: u64,
         required: u64,
     },
+    #[error("Cannot transfer to self: {account}")]
+    SelfTransfer { account: String },
 }
 
 impl From<redb::TransactionError> for DbError {
@@ -93,8 +95,14 @@ impl AccountDb {
 
     /// Transfer amount from one account to another.
     /// Creates accounts with initial balance if they don't exist.
-    /// Returns error if sender has insufficient balance.
+    /// Returns error if sender has insufficient balance or if from == to.
     pub async fn transfer(&self, from: &str, to: &str, amount: u64) -> Result<(u64, u64)> {
+        if from == to {
+            return Err(DbError::SelfTransfer {
+                account: from.to_owned(),
+            });
+        }
+
         let write_txn = self.db.write().await.begin_write()?;
 
         let (from_balance, to_balance) = {

@@ -8,20 +8,41 @@ use axum::{
     routing::{get, post},
 };
 use demo_sequencer::{Transaction, TransferRequest};
-use reqwest::Method;
-use reqwest::header;
+use reqwest::{Method, header};
 use serde::{Deserialize, Serialize};
-use tower_http::cors::Any;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, error};
 
-use crate::sequencer::Sequencer;
+use crate::db::DbError;
+use crate::sequencer::{Sequencer, SequencerError};
 
 pub type AppState = Arc<Sequencer>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
+}
+
+fn friendly_error(err: &SequencerError) -> String {
+    match err {
+        SequencerError::Db(db_err) => match db_err.as_ref() {
+            DbError::InsufficientBalance {
+                account,
+                balance,
+                required,
+            } => format!(
+                "Insufficient balance: {} has {} tokens but needs {}",
+                account, balance, required
+            ),
+            DbError::SelfTransfer { account } => {
+                format!("Cannot transfer to yourself ({})", account)
+            }
+            _ => "Internal database error".to_string(),
+        },
+        SequencerError::Timeout => "Transaction timed out waiting for confirmation".to_string(),
+        SequencerError::Serialization(_) => "Invalid transaction data".to_string(),
+        _ => "Internal server error".to_string(),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -68,7 +89,7 @@ async fn transfer(
             (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
-                    error: e.to_string(),
+                    error: friendly_error(&e),
                 }),
             )
                 .into_response()
