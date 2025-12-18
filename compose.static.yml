@@ -142,13 +142,11 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:testnet
     environment:
       - SEQUENCER_LISTEN_ADDR=0.0.0.0:8080
-      - SEQUENCER_NODE_ENDPOINT=${SEQUENCER_NODE_ENDPOINT}
+      - SEQUENCER_NODE_ENDPOINT=http://nomos-node-0:18080
       - SEQUENCER_DB_PATH=/data/sequencer.db
       - SEQUENCER_SIGNING_KEY_PATH=/data/sequencer.key
-      - SEQUENCER_CHANNEL_ID=${CHANNEL_ID}
+      - SEQUENCER_CHANNEL_ID=6d656d636f696e00000000000000000000000000000000000000000000000001
       - SEQUENCER_INITIAL_BALANCE=1000
-      - SEQUENCER_NODE_AUTH_USERNAME=${SEQUENCER_NODE_USERNAME}
-      - SEQUENCER_NODE_AUTH_PASSWORD=${SEQUENCER_NODE_PASSWORD}
     volumes:
       - l2-sequencer-data:/data
     entrypoint: ["/usr/bin/demo-sequencer"]
@@ -157,11 +155,9 @@ services:
     container_name: l2_archiver
     image: ghcr.io/logos-blockchain/logos-blockchain:testnet
     environment:
-      - TESTNET_ENDPOINT=${ARCHIVER_NODE_ENDPOINT}
-      - TESTNET_USERNAME=${ARCHIVER_NODE_USERNAME}
-      - TESTNET_PASSWORD=${ARCHIVER_NODE_PASSWORD}
-      - CHANNEL_ID=${CHANNEL_ID}
-      - TOKEN_NAME=${TOKEN_NAME:-MEM}
+      - TESTNET_ENDPOINT=http://nomos-node-1:18080
+      - CHANNEL_ID=6d656d636f696e00000000000000000000000000000000000000000000000001
+      - TOKEN_NAME=MEM
     entrypoint: ["/usr/bin/logos-blockchain-archiver"]
 
 volumes:
