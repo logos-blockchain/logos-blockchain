@@ -6,6 +6,7 @@ use clap::Parser as _;
 use common_http_client::{BasicAuthCredentials, CommonHttpClient};
 use demo_sequencer::db::AccountDb;
 use futures::StreamExt as _;
+use owo_colors::OwoColorize as _;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -34,9 +35,10 @@ async fn main() {
         channel_id,
         token_name,
         initial_balance,
+        port_number,
     } = CliArgs::parse();
 
-    let listen_address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8090));
+    let listen_address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port_number));
 
     print_startup_banner(&nomos_node_http_endpoint, &channel_id, &listen_address);
 
@@ -85,7 +87,10 @@ async fn main() {
                     .unwrap();
                 let block_id = validated_l2_block.as_ref().block_id;
                 if blocks_db.unmark_block_as_invalid(block_id).await.unwrap() {
-                    println!("Marked previously invalid block {block_id} as valid.",);
+                    println!(
+                        "  {} Previously invalid block {block_id} now marked as valid",
+                        "✅".green(),
+                    );
                 }
                 rollup_block_sender.send(validated_l2_info).unwrap();
             }

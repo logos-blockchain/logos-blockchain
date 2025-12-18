@@ -1,13 +1,18 @@
 # Archiver Demo
 
-A real-time block archiver that subscribes to a Logos Blockchain node's Last Immutable Block (LIB) stream, extracts L2 sequencer inscriptions from a specified channel, and exposes them via a Server-Sent Events (SSE) HTTP endpoint.
+A real-time block archiver that subscribes to a Logos Blockchain node's Last Immutable Block (LIB) stream, extracts L2 sequencer inscriptions from a specified channel, validates transactions, and exposes them via HTTP endpoints.
 
 ## What It Does
 
-1. **Connects to a Nomos node** via HTTP to subscribe to the LIB stream
+1. **Connects to a Logos Blockchain node** via HTTP to subscribe to the LIB stream
 2. **Filters inscriptions** by channel ID to extract L2 sequencer block data
-3. **Broadcasts blocks** to connected clients via an SSE endpoint at `/blocks`
-4. **Pretty prints** transaction details to the console with colored output
+3. **Validates blocks** — a block is invalid if:
+   - It references an invalid parent block, or
+   - It contains a transaction where the sender has insufficient balance
+4. **Persists valid blocks** and tracks invalid block IDs
+5. **Broadcasts blocks** to connected clients via an SSE endpoint at `/block_stream`
+6. **Serves historical blocks** via a REST endpoint at `/blocks`
+7. **Pretty prints** transaction details to the console with colored output
 
 ## Building
 
@@ -19,13 +24,15 @@ cargo build --release -p logos-blockchain-archiver
 
 ### Command Line Arguments
 
-| Flag | Env Variable | Description | Required |
-|------|--------------|-------------|----------|
-| `-e` | `ENDPOINT` | Nomos node HTTP endpoint URL | Yes |
-| `-u` | `USERNAME` | Basic auth username | Yes |
-| `-p` | `PASSWORD` | Basic auth password | Yes |
-| `-c` | `CHANNEL_ID` | Channel ID (64 hex chars / 32 bytes) | Yes |
-| `-t` | `TOKEN_NAME` | Token name to display in output | Yes |
+| Flag | Env Variable | Description | Default |
+|------|--------------|-------------|---------|
+| `-e` | `TESTNET_ENDPOINT` | Logos Blockchain node HTTP endpoint URL | Required |
+| `-u` | `TESTNET_USERNAME` | Basic auth username | Required |
+| `-p` | `TESTNET_PASSWORD` | Basic auth password | Required |
+| `-c` | `CHANNEL_ID` | Channel ID (64 hex chars / 32 bytes) | Required |
+| `-t` | `TOKEN_NAME` | Token name to display in output | Required |
+| `-b` | `INITIAL_BALANCE` | Initial balance for new accounts | `1000` |
+| `-n` | `PORT_NUMBER` | HTTP server port | `8090` |
 
 ### Using CLI Flags
 
@@ -35,17 +42,21 @@ cargo build --release -p logos-blockchain-archiver
   -u admin \
   -p secret \
   -c 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
-  -t DEMO
+  -t DEMO \
+  -b 1000 \
+  -n 8090
 ```
 
 ### Using Environment Variables
 
 ```bash
-export ENDPOINT=http://localhost:8080
-export USERNAME=admin
-export PASSWORD=secret
+export TESTNET_ENDPOINT=http://localhost:8080
+export TESTNET_USERNAME=admin
+export TESTNET_PASSWORD=secret
 export CHANNEL_ID=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 export TOKEN_NAME=DEMO
+export INITIAL_BALANCE=1000
+export PORT_NUMBER=8090
 
 ./target/release/logos-blockchain-archiver
 ```
@@ -55,11 +66,13 @@ export TOKEN_NAME=DEMO
 Create a `.env` file:
 
 ```env
-ENDPOINT=http://localhost:8080
-USERNAME=admin
-PASSWORD=secret
+TESTNET_ENDPOINT=http://localhost:8080
+TESTNET_USERNAME=admin
+TESTNET_PASSWORD=secret
 CHANNEL_ID=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 TOKEN_NAME=DEMO
+INITIAL_BALANCE=1000
+PORT_NUMBER=8090
 ```
 
 Then run with a tool like `dotenv`:
@@ -70,14 +83,16 @@ dotenv ./target/release/logos-blockchain-archiver
 
 ## HTTP API
 
+The archiver starts an HTTP server on the configured port (default `8090`).
+
 ### GET `/block_stream`
 
-Server-Sent Events stream of L2 blocks.
+Server-Sent Events stream of validated L2 blocks in real-time.
 
 **Example:**
 
 ```bash
-curl -N http://localhost:8080/block_stream
+curl -N http://localhost:8090/block_stream
 ```
 
 **Response format:**
@@ -88,7 +103,17 @@ data: {"block_id":1,"transactions":[{"id":"...","from":"alice","to":"bob","amoun
 data: {"block_id":2,"transactions":[{"id":"...","from":"bob","to":"charlie","amount":50}]}
 ```
 
-Each `data:` line contains a JSON-serialized `BlockData` object.
+Each `data:` line contains a JSON-serialized validated block object.
+
+### GET `/blocks`
+
+Returns all stored validated blocks as a JSON array.
+
+**Example:**
+
+```bash
+curl http://localhost:8090/blocks
+```
 
 ## Console Output
 

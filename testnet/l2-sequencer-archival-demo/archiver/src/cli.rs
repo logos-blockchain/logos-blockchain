@@ -18,6 +18,8 @@ pub struct CliArgs {
     pub token_name: String,
     #[clap(short = 'b', env = "INITIAL_BALANCE", default_value = "1000")]
     pub initial_balance: u64,
+    #[clap(short = 'n', env = "PORT_NUMBER", default_value = "8090")]
+    pub port_number: u16,
 }
 
 #[expect(

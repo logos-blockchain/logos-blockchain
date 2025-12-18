@@ -164,6 +164,17 @@ pub async fn validate_block(
     accounts_db: &AccountDb,
     blocks_db: &BlockStore,
 ) -> Result<ValidatedBlockData, BlockData> {
+    // We consider block `0` to be the genesis block and always valid, hence its
+    // children won't be checked against the DB.
+    if block.parent_block_id > 0
+        && !blocks_db
+            .is_block_valid(block.parent_block_id)
+            .await
+            .unwrap()
+    {
+        return Err(block);
+    }
+
     let are_txs_valid = accounts_db
         .try_apply_transfers(
             block
@@ -177,18 +188,5 @@ pub async fn validate_block(
         return Err(block);
     }
 
-    // Genesis block
-    if block.block_id == 0 {
-        return Ok(ValidatedBlockData(block));
-    }
-
-    let is_parent_valid = blocks_db
-        .is_block_valid(block.parent_block_id)
-        .await
-        .unwrap();
-    if is_parent_valid {
-        Ok(ValidatedBlockData(block))
-    } else {
-        Err(block)
-    }
+    Ok(ValidatedBlockData(block))
 }
