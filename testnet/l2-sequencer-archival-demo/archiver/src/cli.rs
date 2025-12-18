@@ -16,7 +16,7 @@ pub struct CliArgs {
     pub channel_id: ChannelId,
     #[clap(short = 't', env = "TOKEN_NAME")]
     pub token_name: String,
-    #[clap(short = 'b', env = "INITIAL_BALANCE", default_value = "1_000")]
+    #[clap(short = 'b', env = "INITIAL_BALANCE", default_value = "1000")]
     pub initial_balance: u64,
 }
 
