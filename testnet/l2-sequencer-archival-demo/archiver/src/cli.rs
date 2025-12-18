@@ -6,11 +6,11 @@ use url::Url;
 
 #[derive(Parser, Debug)]
 pub struct CliArgs {
-    #[clap(short = 'e', env = "ENDPOINT")]
+    #[clap(short = 'e', env = "TESTNET_ENDPOINT")]
     pub nomos_node_http_endpoint: Url,
-    #[clap(short = 'u', env = "USERNAME")]
+    #[clap(short = 'u', env = "TESTNET_USERNAME")]
     pub username: String,
-    #[clap(short = 'p', env = "PASSWORD")]
+    #[clap(short = 'p', env = "TESTNET_PASSWORD")]
     pub password: String,
     #[clap(short = 'c', env = "CHANNEL_ID", value_parser = parse_channel_id)]
     pub channel_id: ChannelId,
