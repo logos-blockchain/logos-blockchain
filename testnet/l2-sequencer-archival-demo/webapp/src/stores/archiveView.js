@@ -1,58 +1,66 @@
 import { defineStore } from 'pinia';
 
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+const STREAM_URL = `${BASE_URL}/block_stream`;
+
 export const useArchiveStore = defineStore('archive', {
   state: () => ({
     transactions: [],
     loading: false,
     eventSource: null,
+    // Status can be: 'disconnected', 'connecting', 'connected', or 'error'
+    connectionStatus: 'disconnected', 
   }),
 
   actions: {
-    startPolling() {
-      // Prevent multiple connections
+    startStream() {
       if (this.eventSource) return;
+
       this.loading = true;
-      this.eventSource = new EventSource("http://127.0.0.1:8090/block_stream");
+      this.connectionStatus = 'connecting';
+      
+      this.eventSource = new EventSource(STREAM_URL);
 
       this.eventSource.onopen = () => {
         this.loading = false;
+        this.connectionStatus = 'connected';
+        console.log("Archive Stream Connected");
       };
 
       this.eventSource.onmessage = (event) => {
         try {
           const blockData = JSON.parse(event.data);
           
-          if (blockData && blockData.transactions) {
-            // Map through the new transactions and force confirmed to true
-            const confirmedTransactions = blockData.transactions.map(tx => ({
+          if (blockData?.transactions?.length) {
+            const newTxs = blockData.transactions.map(tx => ({
               ...tx,
               confirmed: true
             }));
 
-            // Prepend the updated transactions to the existing list
-            this.transactions = [...confirmedTransactions, ...this.transactions];
-            
-            // Keep memory clean (limit to 100 txs)
-            if (this.transactions.length > 100) {
-              this.transactions = this.transactions.slice(0, 100);
-            }
+            this.transactions = [...newTxs, ...this.transactions].slice(0, 100);
           }
         } catch (err) {
-          console.error("❌ Error parsing block data:", err);
+          console.error("Error parsing block data:", err);
         }
       };
 
       this.eventSource.onerror = (err) => {
-        this.stopPolling();
-        setTimeout(() => this.startPolling(), 5000);
+        console.error("Archive Stream Error:", err);
+        this.connectionStatus = 'error';
+        this.stopStream();
+        
+        // Attempt reconnection after 5 seconds
+        setTimeout(() => this.startStream(), 5000);
       };
     },
 
-    stopPolling() {
+    stopStream() {
       if (this.eventSource) {
         this.eventSource.close();
         this.eventSource = null;
-        console.log("🔌 Archive Stream Disconnected");
+        this.loading = false;
+        this.connectionStatus = 'disconnected';
+        console.log("Archive Stream Disconnected");
       }
     }
   }

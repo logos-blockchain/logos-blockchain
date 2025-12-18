@@ -1,14 +1,12 @@
 <template>
-  <div class="home flex flex-col min-h-screen pt-[30vh] p-4 sm:p-6 lg:p-8">
-    
-    <div class="flex justify-center m-[20px] p-[50px]">
+  <div class="archive flex flex-col min-h-screen pt-24 p-4 sm:p-6 lg:p-8">
+    <div class="flex justify-center m-20 pb-20 sm:pt-20">
       <img 
         src="@/assets/graphics/tsubasa-lg.png" 
         alt="Logo" 
         class="w-[300px]"
       />
     </div>
-
     <header class="w-full grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8 items-start mb-8">
       <div class="w-full relative group">
         <WalletInfo 
@@ -48,12 +46,10 @@ const handleTransfer = async (data) => {
 };
 
 onMounted(() => {
-  // Start polling for Alisa
-  walletStore.startPolling('Alisa');
+  walletStore.startPolling();
 });
 
 onUnmounted(() => {
-  // Clean up timer when user leaves page
   walletStore.stopPolling();
 });
 </script>

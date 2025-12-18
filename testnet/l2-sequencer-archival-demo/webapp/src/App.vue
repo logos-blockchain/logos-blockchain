@@ -13,11 +13,11 @@ import { useArchiveStore } from '@/stores/archiveView'
 const archiveStore = useArchiveStore()
 
 onMounted(() => {
-  archiveStore.startPolling()
+  archiveStore.startStream()
 })
 
 onUnmounted(() => {
-  archiveStore.stopPolling()
+  archiveStore.stopStream()
 })
 </script>
 

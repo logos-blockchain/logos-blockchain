@@ -23,19 +23,26 @@
             </div>
 
             <div class="flex flex-col pt-4">
-              <span class="text-sm font-semibold text-gray-500 dark:text-gray-400 mb-3">
-                Feed Status
-              </span>
-              <div class="flex items-center space-x-3 bg-gray-50 dark:bg-gray-800/50 px-4 py-2 rounded-xl border border-gray-100 dark:border-gray-800 w-fit">
-                <span class="relative flex h-2 w-2">
-                  <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                  <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                <span class="text-sm font-semibold text-gray-500 dark:text-gray-400 mb-3">
+                  Feed Status
                 </span>
-                <p class="text-gray-500 dark:text-gray-400 font-mono uppercase tracking-[0.1em] text-[10px] font-bold">
-                  Live • Refreshing 5s
-                </p>
+                <div class="flex items-center space-x-3 bg-gray-50 dark:bg-gray-800/50 px-4 py-2 rounded-xl border border-gray-100 dark:border-gray-800 w-fit">
+                  <span class="relative flex h-2 w-2">
+                    <span 
+                      :class="statusClasses.ping"
+                      class="absolute inline-flex h-full w-full rounded-full opacity-75"
+                    ></span>
+                    <span 
+                      :class="statusClasses.dot"
+                      class="relative inline-flex rounded-full h-2 w-2"
+                    ></span>
+                  </span>
+
+                  <p class="text-gray-500 dark:text-gray-400 font-mono uppercase tracking-[0.1em] text-[10px] font-bold">
+                    {{ statusText }}
+                  </p>
+                </div>
               </div>
-            </div>
           </div>
         </div>
       </div>
@@ -66,9 +73,32 @@
 </template>
 
 <script setup>
-import { onMounted, onUnmounted } from 'vue';
+import { onMounted, onUnmounted, computed } from 'vue';
 import { useArchiveStore } from '@/stores/archiveView';
 import { TransactionList } from '@/components';
 
 const archiveStore = useArchiveStore();
+
+const statusClasses = computed(() => {
+  const isConnected = archiveStore.connectionStatus === 'connected';
+  const isError = archiveStore.connectionStatus === 'error';
+
+  return {
+    dot: isConnected ? 'bg-green-500' : (isError ? 'bg-red-500' : 'bg-yellow-500'),
+    ping: isConnected ? 'animate-ping bg-green-400' : (isError ? 'bg-red-400' : 'bg-yellow-400')
+  };
+});
+
+const statusText = computed(() => {
+  switch (archiveStore.connectionStatus) {
+    case 'connected':
+      return 'Live • Stream Active';
+    case 'connecting':
+      return 'Connecting...';
+    case 'error':
+      return 'Offline • Reconnecting';
+    default:
+      return 'Stream Disconnected';
+  }
+});
 </script>
