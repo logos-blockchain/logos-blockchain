@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 async-stream       = { default-features = false, version = "0.3.6" }
-axum               = { default-features = false, version = "0.8.7", features = ["http2", "tokio"] }
+axum               = { default-features = false, version = "0.8.7", features = ["http2", "json", "tokio"] }
 broadcast-service  = { workspace = true }
 clap               = { default-features = false, features = ["derive", "env", "std"], version = "4.5.13" }
 common-http-client = { workspace = true }
@@ -24,9 +24,11 @@ futures            = { default-features = false, version = "0.3" }
 hex                = { default-features = false, features = ["alloc"], version = "0.4" }
 nomos-core         = { workspace = true }
 owo-colors         = { default-features = false, version = "4.2.3" }
+redb               = { default-features = false, version = "3.1.0" }
 reqwest            = { features = ["json", "rustls-tls"], workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
+thiserror          = { workspace = true }
 tokio              = { workspace = true }
 tokio-stream       = { default-features = false, version = "0.1" }
 tokio-util         = { default-features = false, version = "0.7" }

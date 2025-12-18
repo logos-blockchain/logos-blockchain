@@ -1,7 +1,7 @@
 use core::{convert::Infallible, net::SocketAddr};
 
 use axum::{
-    Router,
+    Json, Router,
     extract::State,
     response::{Sse, sse::Event},
     routing::get,
@@ -9,27 +9,30 @@ use axum::{
 };
 use demo_sequencer::BlockData;
 use futures::{Stream, StreamExt as _};
-use reqwest::Method;
-use reqwest::header;
+use reqwest::{Method, header};
 use tokio::{net::TcpListener, sync::broadcast::Receiver};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_util::sync::CancellationToken;
-use tower_http::cors::Any;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{Any, CorsLayer};
+
+use crate::db::BlockStore;
 
 pub struct Server {
     block_receiver_channel: Receiver<BlockData>,
     cancellation_token: CancellationToken,
+    blocks_db: BlockStore,
 }
 
 impl Server {
     pub const fn new(
         block_receiver_channel: Receiver<BlockData>,
         cancellation_token: CancellationToken,
+        blocks_db: BlockStore,
     ) -> Self {
         Self {
             block_receiver_channel,
             cancellation_token,
+            blocks_db,
         }
     }
 
@@ -54,8 +57,10 @@ impl Server {
         (
             Router::new()
                 .route("/block_stream", get(handle_block_stream))
+                .route("/blocks", get(handle_get_blocks))
                 .with_state(AppState {
                     block_receiver_channel: self.block_receiver_channel,
+                    blocks_db: self.blocks_db,
                 })
                 .layer(cors),
             self.cancellation_token,
@@ -65,12 +70,14 @@ impl Server {
 
 struct AppState {
     block_receiver_channel: Receiver<BlockData>,
+    blocks_db: BlockStore,
 }
 
 impl Clone for AppState {
     fn clone(&self) -> Self {
         Self {
             block_receiver_channel: self.block_receiver_channel.resubscribe(),
+            blocks_db: self.blocks_db.clone(),
         }
     }
 }
@@ -84,4 +91,11 @@ async fn handle_block_stream(
         .map(|json_serialized_block_data| Ok(Event::default().data(json_serialized_block_data)));
 
     Sse::new(stream)
+}
+
+async fn handle_get_blocks(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<BlockData>>, Infallible> {
+    let blocks = state.blocks_db.get_all_blocks().await.unwrap();
+    Ok(Json(blocks))
 }

@@ -12,7 +12,8 @@ pub struct Config {
     pub db_path: String,
     /// Path to the signing key file (will be created if it doesn't exist)
     pub signing_key_path: String,
-    /// Channel ID for inscriptions (hex string, will be padded/truncated to 32 bytes)
+    /// Channel ID for inscriptions (hex string, will be padded/truncated to 32
+    /// bytes)
     pub channel_id: String,
     /// Initial balance for new accounts
     #[serde(default = "default_initial_balance")]

@@ -10,13 +10,14 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    block::BlockStream, cli::CliArgs, ctrl_c::listen_for_sigint, http::Server,
+    block::BlockStream, cli::CliArgs, ctrl_c::listen_for_sigint, db::BlockStore, http::Server,
     output::print_startup_banner,
 };
 
 mod block;
 mod cli;
 mod ctrl_c;
+mod db;
 mod http;
 mod output;
 
@@ -42,14 +43,20 @@ async fn main() {
 
     let client = CommonHttpClient::new(Some(BasicAuthCredentials::new(username, Some(password))));
 
+    let blocks_db = BlockStore::new("blocks.database").unwrap();
+
     // Start sigint handler
 
     listen_for_sigint(cancellation_token.clone());
 
     // Start HTTP server
 
-    Server::new(rollup_block_sender.subscribe(), cancellation_token.clone())
-        .start(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8090).into());
+    Server::new(
+        rollup_block_sender.subscribe(),
+        cancellation_token.clone(),
+        blocks_db.clone(),
+    )
+    .start(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8090).into());
 
     // Start LIB subscriber
 
@@ -62,6 +69,7 @@ async fn main() {
     ));
 
     while let Some(block) = block_stream.next().await {
+        blocks_db.add_block(block.clone()).await.unwrap();
         rollup_block_sender.send(block).unwrap();
     }
 }
