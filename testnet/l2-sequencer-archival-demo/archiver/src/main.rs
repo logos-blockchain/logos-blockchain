@@ -30,7 +30,7 @@ async fn main() {
         token_name,
     } = CliArgs::parse();
 
-    let listen_address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8080));
+    let listen_address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8090));
 
     print_startup_banner(&nomos_node_http_endpoint, &channel_id, &listen_address);
 
@@ -49,7 +49,7 @@ async fn main() {
     // Start HTTP server
 
     Server::new(rollup_block_sender.subscribe(), cancellation_token.clone())
-        .start(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8080).into());
+        .start(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8090).into());
 
     // Start LIB subscriber
 

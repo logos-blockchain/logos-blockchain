@@ -11,7 +11,7 @@ const router = createRouter({
     },
     {
       path: '/archive',
-      name: 'projects',
+      name: 'archive',
       component: ArchiveView,
     },
   ],
