@@ -4,13 +4,16 @@ use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use clap::Parser as _;
 use common_http_client::{BasicAuthCredentials, CommonHttpClient};
-use demo_sequencer::BlockData;
 use futures::StreamExt as _;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    block::BlockStream, cli::CliArgs, ctrl_c::listen_for_sigint, db::BlockStore, http::Server,
+    block::{BlockStream, L2BlockInfo},
+    cli::CliArgs,
+    ctrl_c::listen_for_sigint,
+    db::BlockStore,
+    http::Server,
     output::print_startup_banner,
 };
 
@@ -37,14 +40,11 @@ async fn main() {
 
     // Setup
 
-    let (rollup_block_sender, _) = broadcast::channel::<BlockData>(100);
+    let (rollup_block_sender, _) = broadcast::channel::<L2BlockInfo>(100);
 
     let cancellation_token = CancellationToken::new();
 
-    let client = CommonHttpClient::new(Some(BasicAuthCredentials::new(
-        "strode".into(),
-        Some(password),
-    )));
+    let client = CommonHttpClient::new(Some(BasicAuthCredentials::new(username, Some(password))));
 
     let blocks_db = BlockStore::new("blocks.database").unwrap();
 

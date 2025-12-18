@@ -4,16 +4,23 @@ use common_http_client::CommonHttpClient;
 use demo_sequencer::BlockData;
 use futures::{Stream, StreamExt as _};
 use nomos_core::{
-    block::Block,
+    header::HeaderId,
     mantle::{
         Op, SignedMantleTx,
         ops::channel::{ChannelId, inscribe::InscriptionOp},
     },
 };
 use owo_colors::OwoColorize as _;
+use serde::{Deserialize, Serialize};
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 use url::Url;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct L2BlockInfo {
+    pub data: BlockData,
+    pub l1_block_id: HeaderId,
+}
 
 pub struct BlockStream;
 
@@ -24,7 +31,7 @@ impl BlockStream {
         endpoint_url: &Url,
         channel_id: &ChannelId,
         token_name: &str,
-    ) -> impl Stream<Item = BlockData> {
+    ) -> impl Stream<Item = L2BlockInfo> {
         #[expect(tail_expr_drop_order, reason = "Generated internally by stream macro.")]
         let block_stream = stream! {
             let mut lib_stream = Box::pin(http_client
@@ -55,8 +62,11 @@ impl BlockStream {
                         ).dimmed());
 
                         let block = http_client.get_block_by_id(endpoint_url.clone(), header_id).await.unwrap().unwrap();
-                        for l2_block in extract_l2_blocks(block, channel_id, token_name) {
-                            yield l2_block;
+                        for l2_block in extract_l2_blocks(block.transactions().cloned(), channel_id, token_name) {
+                            yield L2BlockInfo {
+                                data: l2_block,
+                                l1_block_id: block.header().id()
+                            };
                         }
                     }
                 }
@@ -68,13 +78,11 @@ impl BlockStream {
 }
 
 fn extract_l2_blocks(
-    block: Block<SignedMantleTx>,
+    block_txs: impl Iterator<Item = SignedMantleTx>,
     decoded_channel_id: &ChannelId,
     token_name: &str,
 ) -> Vec<BlockData> {
-    let block_channel_ops: Vec<BlockData> = block
-        .into_transactions()
-        .into_iter()
+    let block_channel_ops: Vec<BlockData> = block_txs
         .flat_map(|tx| tx.mantle_tx.ops)
         .filter_map(|op| match op {
             Op::ChannelInscribe(InscriptionOp {

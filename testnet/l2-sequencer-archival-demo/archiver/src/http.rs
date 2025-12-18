@@ -7,7 +7,6 @@ use axum::{
     routing::get,
     serve,
 };
-use demo_sequencer::BlockData;
 use futures::{Stream, StreamExt as _};
 use reqwest::{Method, header};
 use tokio::{net::TcpListener, sync::broadcast::Receiver};
@@ -15,17 +14,17 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::db::BlockStore;
+use crate::{block::L2BlockInfo, db::BlockStore};
 
 pub struct Server {
-    block_receiver_channel: Receiver<BlockData>,
+    block_receiver_channel: Receiver<L2BlockInfo>,
     cancellation_token: CancellationToken,
     blocks_db: BlockStore,
 }
 
 impl Server {
     pub const fn new(
-        block_receiver_channel: Receiver<BlockData>,
+        block_receiver_channel: Receiver<L2BlockInfo>,
         cancellation_token: CancellationToken,
         blocks_db: BlockStore,
     ) -> Self {
@@ -69,7 +68,7 @@ impl Server {
 }
 
 struct AppState {
-    block_receiver_channel: Receiver<BlockData>,
+    block_receiver_channel: Receiver<L2BlockInfo>,
     blocks_db: BlockStore,
 }
 
@@ -95,7 +94,7 @@ async fn handle_block_stream(
 
 async fn handle_get_blocks(
     State(state): State<AppState>,
-) -> Result<Json<Vec<BlockData>>, Infallible> {
+) -> Result<Json<Vec<L2BlockInfo>>, Infallible> {
     let blocks = state.blocks_db.get_all_blocks().await.unwrap();
     Ok(Json(blocks))
 }
