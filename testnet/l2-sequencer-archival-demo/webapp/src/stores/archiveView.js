@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia';
 
-//const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
-const BASE_URL = 'http://localhost:8090';
+const BASE_URL = import.meta.env.VITE_ARCHIVER_URL || 'http://localhost:8090';
 const STREAM_URL = `${BASE_URL}/block_stream`;
 const CACHE_URL = `${BASE_URL}/blocks`;
 

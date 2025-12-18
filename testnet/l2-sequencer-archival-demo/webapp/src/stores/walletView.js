@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+const BASE_URL = import.meta.env.VITE_SEQUENCER_URL || 'http://localhost:8080';
 const TSUBASA_NAMES = [
   'Tsubasa', 'Hyuga', 'Misaki', 'Wakabayashi', 
   'Wakashimazu', 'Misugi', 'Matsuyama', 'Ishizaki'
