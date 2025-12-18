@@ -1,7 +1,7 @@
 use async_stream::stream;
 use broadcast_service::BlockInfo;
 use common_http_client::CommonHttpClient;
-use demo_sequencer::BlockData;
+use demo_sequencer::{BlockData, db::AccountDb};
 use futures::{Stream, StreamExt as _};
 use nomos_core::{
     header::HeaderId,
@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 use url::Url;
+
+use crate::db::BlockStore;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct L2BlockInfo {
@@ -126,4 +128,67 @@ fn extract_l2_blocks(
     }
 
     block_channel_ops
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ValidatedBlockData(BlockData);
+
+impl AsRef<BlockData> for ValidatedBlockData {
+    fn as_ref(&self) -> &BlockData {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ValidatedL2Info(L2BlockInfo);
+
+impl ValidatedL2Info {
+    pub fn new(validated_block_data: ValidatedBlockData, l1_block_id: HeaderId) -> Self {
+        Self(L2BlockInfo {
+            data: validated_block_data.0,
+            l1_block_id,
+        })
+    }
+}
+
+impl AsRef<L2BlockInfo> for ValidatedL2Info {
+    fn as_ref(&self) -> &L2BlockInfo {
+        &self.0
+    }
+}
+
+pub async fn validate_block(
+    block: BlockData,
+    accounts_db: &AccountDb,
+    blocks_db: &BlockStore,
+) -> Result<ValidatedBlockData, BlockData> {
+    let are_txs_valid = accounts_db
+        .try_apply_transfers(
+            block
+                .transactions
+                .iter()
+                .map(|tx| (tx.from.as_str(), tx.to.as_str(), tx.amount)),
+        )
+        .await
+        .is_ok();
+    if !are_txs_valid {
+        return Err(block);
+    }
+
+    // Genesis block
+    if block.block_id == 0 {
+        return Ok(ValidatedBlockData(block));
+    }
+
+    let is_parent_valid = blocks_db
+        .is_block_valid(block.parent_block_id)
+        .await
+        .unwrap();
+    if is_parent_valid {
+        Ok(ValidatedBlockData(block))
+    } else {
+        Err(block)
+    }
 }

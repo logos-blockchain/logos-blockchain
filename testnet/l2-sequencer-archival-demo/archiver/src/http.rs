@@ -14,17 +14,17 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::{block::L2BlockInfo, db::BlockStore};
+use crate::{block::ValidatedL2Info, db::BlockStore};
 
 pub struct Server {
-    block_receiver_channel: Receiver<L2BlockInfo>,
+    block_receiver_channel: Receiver<ValidatedL2Info>,
     cancellation_token: CancellationToken,
     blocks_db: BlockStore,
 }
 
 impl Server {
     pub const fn new(
-        block_receiver_channel: Receiver<L2BlockInfo>,
+        block_receiver_channel: Receiver<ValidatedL2Info>,
         cancellation_token: CancellationToken,
         blocks_db: BlockStore,
     ) -> Self {
@@ -68,7 +68,7 @@ impl Server {
 }
 
 struct AppState {
-    block_receiver_channel: Receiver<L2BlockInfo>,
+    block_receiver_channel: Receiver<ValidatedL2Info>,
     blocks_db: BlockStore,
 }
 
@@ -94,7 +94,7 @@ async fn handle_block_stream(
 
 async fn handle_get_blocks(
     State(state): State<AppState>,
-) -> Result<Json<Vec<L2BlockInfo>>, Infallible> {
+) -> Result<Json<Vec<ValidatedL2Info>>, Infallible> {
     let blocks = state.blocks_db.get_all_blocks().await.unwrap();
     Ok(Json(blocks))
 }

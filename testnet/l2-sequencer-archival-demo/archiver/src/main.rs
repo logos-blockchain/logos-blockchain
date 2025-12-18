@@ -4,12 +4,13 @@ use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use clap::Parser as _;
 use common_http_client::{BasicAuthCredentials, CommonHttpClient};
+use demo_sequencer::db::AccountDb;
 use futures::StreamExt as _;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    block::{BlockStream, L2BlockInfo},
+    block::{BlockStream, ValidatedL2Info, validate_block},
     cli::CliArgs,
     ctrl_c::listen_for_sigint,
     db::BlockStore,
@@ -32,6 +33,7 @@ async fn main() {
         password,
         channel_id,
         token_name,
+        initial_balance,
     } = CliArgs::parse();
 
     let listen_address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8090));
@@ -40,13 +42,14 @@ async fn main() {
 
     // Setup
 
-    let (rollup_block_sender, _) = broadcast::channel::<L2BlockInfo>(100);
+    let (rollup_block_sender, _) = broadcast::channel::<ValidatedL2Info>(100);
 
     let cancellation_token = CancellationToken::new();
 
     let client = CommonHttpClient::new(Some(BasicAuthCredentials::new(username, Some(password))));
 
     let blocks_db = BlockStore::new("blocks.database").unwrap();
+    let accounts_db = AccountDb::new("accounts.database", initial_balance).unwrap();
 
     // Start sigint handler
 
@@ -72,7 +75,26 @@ async fn main() {
     ));
 
     while let Some(block) = block_stream.next().await {
-        blocks_db.add_block(block.clone()).await.unwrap();
-        rollup_block_sender.send(block).unwrap();
+        match validate_block(block.data, &accounts_db, &blocks_db).await {
+            Ok(validated_l2_block) => {
+                let validated_l2_info =
+                    ValidatedL2Info::new(validated_l2_block.clone(), block.l1_block_id);
+                blocks_db
+                    .add_block(validated_l2_info.clone())
+                    .await
+                    .unwrap();
+                let block_id = validated_l2_block.as_ref().block_id;
+                if blocks_db.unmark_block_as_invalid(block_id).await.unwrap() {
+                    println!("Marked previously invalid block {block_id} as valid.",);
+                }
+                rollup_block_sender.send(validated_l2_info).unwrap();
+            }
+            Err(invalid_l2_block) => {
+                blocks_db
+                    .mark_block_as_invalid(invalid_l2_block.block_id)
+                    .await
+                    .unwrap();
+            }
+        }
     }
 }

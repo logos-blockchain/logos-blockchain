@@ -8,9 +8,10 @@ use redb::{
 use thiserror::Error;
 use tokio::sync::RwLock;
 
-use crate::block::L2BlockInfo;
+use crate::block::ValidatedL2Info;
 
 const BLOCKS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("blocks");
+const INVALID_BLOCKS_TABLE: TableDefinition<u64, ()> = TableDefinition::new("invalid_blocks");
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -53,25 +54,50 @@ impl BlockStore {
         })
     }
 
-    pub async fn add_block(&self, block: L2BlockInfo) -> Result<(), DbError> {
+    pub async fn add_block(&self, block: ValidatedL2Info) -> Result<(), DbError> {
         let serialized = block.to_bytes().unwrap();
         let write_txn = self.db.write().await.begin_write()?;
         write_txn
             .open_table(BLOCKS_TABLE)?
-            .insert(block.data.block_id, &*serialized)?;
+            .insert(block.as_ref().data.block_id, &*serialized)?;
         write_txn.commit()?;
         Ok(())
     }
 
-    pub async fn get_all_blocks(&self) -> Result<Vec<L2BlockInfo>, DbError> {
+    pub async fn mark_block_as_invalid(&self, block_id: u64) -> Result<(), DbError> {
+        let write_txn = self.db.write().await.begin_write()?;
+        write_txn
+            .open_table(INVALID_BLOCKS_TABLE)?
+            .insert(block_id, &())?;
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub async fn unmark_block_as_invalid(&self, block_id: u64) -> Result<bool, DbError> {
+        let write_txn = self.db.write().await.begin_write()?;
+        let is_old_value_removed = write_txn
+            .open_table(INVALID_BLOCKS_TABLE)?
+            .remove(&block_id)?
+            .is_some();
+        write_txn.commit()?;
+        Ok(is_old_value_removed)
+    }
+
+    pub async fn is_block_valid(&self, block_id: u64) -> Result<bool, DbError> {
+        let read_txn = self.db.read().await.begin_read()?;
+        let table = read_txn.open_table(INVALID_BLOCKS_TABLE)?;
+        Ok(table.get(&block_id)?.is_none())
+    }
+
+    pub async fn get_all_blocks(&self) -> Result<Vec<ValidatedL2Info>, DbError> {
         let read_txn = self.db.read().await.begin_read()?;
 
-        let deserialized_blocks: Vec<L2BlockInfo> = read_txn
+        let deserialized_blocks: Vec<ValidatedL2Info> = read_txn
             .open_table(BLOCKS_TABLE)?
             .iter()?
             .filter_map(Result::ok)
             .map(|(_, value)| value)
-            .map(|value| L2BlockInfo::from_bytes(value.value()).unwrap())
+            .map(|value| ValidatedL2Info::from_bytes(value.value()).unwrap())
             .collect();
 
         Ok(deserialized_blocks)

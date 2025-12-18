@@ -1,3 +1,4 @@
+use core::iter::once;
 use std::sync::Arc;
 
 use redb::{Database, ReadableTable as _, ReadableTableMetadata as _, TableDefinition};
@@ -97,54 +98,71 @@ impl AccountDb {
     /// Creates accounts with initial balance if they don't exist.
     /// Returns error if sender has insufficient balance or if from == to.
     pub async fn transfer(&self, from: &str, to: &str, amount: u64) -> Result<(u64, u64)> {
-        if from == to {
-            return Err(DbError::SelfTransfer {
-                account: from.to_owned(),
-            });
-        }
+        self.try_apply_transfers(once((from, to, amount))).await?;
+        let read_txn = self
+            .db
+            .read()
+            .await
+            .begin_read()?
+            .open_table(ACCOUNTS_TABLE)?;
 
+        Ok((
+            read_txn.get(from)?.unwrap().value(),
+            read_txn.get(to)?.unwrap().value(),
+        ))
+    }
+
+    pub async fn try_apply_transfers(
+        &self,
+        transfers: impl Iterator<Item = (&str, &str, u64)>,
+    ) -> Result<()> {
         let write_txn = self.db.write().await.begin_write()?;
-
-        let (from_balance, to_balance) = {
+        {
             let mut table = write_txn.open_table(ACCOUNTS_TABLE)?;
 
-            // Get or create 'from' account balance
-            let from_balance = if let Some(existing) = table.get(from)? {
-                existing.value()
-            } else {
-                table.insert(from, self.initial_balance)?;
-                self.initial_balance
-            };
+            for (from, to, amount) in transfers {
+                if from == to {
+                    return Err(DbError::SelfTransfer {
+                        account: from.to_owned(),
+                    });
+                }
 
-            // Check if sender has enough balance
-            if from_balance < amount {
-                return Err(DbError::InsufficientBalance {
-                    account: from.to_owned(),
-                    balance: from_balance,
-                    required: amount,
-                });
+                // Get or create 'from' account balance
+                let from_balance = if let Some(existing) = table.get(&from)? {
+                    existing.value()
+                } else {
+                    table.insert(&from, self.initial_balance)?;
+                    self.initial_balance
+                };
+
+                // Check if sender has enough balance
+                if from_balance < amount {
+                    return Err(DbError::InsufficientBalance {
+                        account: from.to_owned(),
+                        balance: from_balance,
+                        required: amount,
+                    });
+                }
+
+                // Get or create 'to' account balance
+                let to_balance = if let Some(existing) = table.get(&to)? {
+                    existing.value()
+                } else {
+                    table.insert(&to, self.initial_balance)?;
+                    self.initial_balance
+                };
+
+                // Perform the transfer
+                let new_from_balance = from_balance - amount;
+                let new_to_balance = to_balance + amount;
+
+                table.insert(&from, new_from_balance)?;
+                table.insert(&to, new_to_balance)?;
             }
-
-            // Get or create 'to' account balance
-            let to_balance = if let Some(existing) = table.get(to)? {
-                existing.value()
-            } else {
-                table.insert(to, self.initial_balance)?;
-                self.initial_balance
-            };
-
-            // Perform the transfer
-            let new_from_balance = from_balance - amount;
-            let new_to_balance = to_balance + amount;
-
-            table.insert(from, new_from_balance)?;
-            table.insert(to, new_to_balance)?;
-
-            (new_from_balance, new_to_balance)
-        };
+        }
 
         write_txn.commit()?;
-        Ok((from_balance, to_balance))
+        Ok(())
     }
 
     /// List all accounts and their balances
