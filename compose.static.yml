@@ -125,3 +125,56 @@ services:
       - "4317:4317"  # otlp grpc
     depends_on:
       - tempo-init
+
+  # L2 Sequencer Demo Services
+  l2-nginx:
+    container_name: l2_nginx
+    image: nginx:alpine
+    ports:
+      - "8200:80"
+    volumes:
+      - ./testnet/l2-sequencer-archival-demo/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - l2-frontend:/usr/share/nginx/html:ro
+    depends_on:
+      - l2-sequencer
+      - l2-archiver
+      - l2-frontend-init
+
+  # Copy frontend from main image to shared volume
+  l2-frontend-init:
+    container_name: l2_frontend_init
+    image: ghcr.io/logos-blockchain/logos-blockchain:testnet
+    volumes:
+      - l2-frontend:/out
+    entrypoint: ["cp", "-r", "/var/www/l2-demo/.", "/out/"]
+
+  l2-sequencer:
+    container_name: l2_sequencer
+    image: ghcr.io/logos-blockchain/logos-blockchain:testnet
+    environment:
+      - SEQUENCER_LISTEN_ADDR=0.0.0.0:8080
+      - SEQUENCER_NODE_ENDPOINT=${SEQUENCER_NODE_ENDPOINT}
+      - SEQUENCER_DB_PATH=/data/sequencer.db
+      - SEQUENCER_SIGNING_KEY_PATH=/data/sequencer.key
+      - SEQUENCER_CHANNEL_ID=${CHANNEL_ID}
+      - SEQUENCER_INITIAL_BALANCE=1000
+      - SEQUENCER_NODE_AUTH_USERNAME=${SEQUENCER_NODE_USERNAME}
+      - SEQUENCER_NODE_AUTH_PASSWORD=${SEQUENCER_NODE_PASSWORD}
+    volumes:
+      - l2-sequencer-data:/data
+    entrypoint: ["/usr/bin/demo-sequencer"]
+
+  l2-archiver:
+    container_name: l2_archiver
+    image: ghcr.io/logos-blockchain/logos-blockchain:testnet
+    environment:
+      - ENDPOINT=${ARCHIVER_NODE_ENDPOINT}
+      - USERNAME=${ARCHIVER_NODE_USERNAME}
+      - PASSWORD=${ARCHIVER_NODE_PASSWORD}
+      - CHANNEL_ID=${CHANNEL_ID}
+      - TOKEN_NAME=${TOKEN_NAME:-MEM}
+    entrypoint: ["/usr/bin/logos-blockchain-archiver"]
+
+volumes:
+  l2-sequencer-data:
+  l2-frontend:

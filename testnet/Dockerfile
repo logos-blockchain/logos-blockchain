@@ -5,6 +5,19 @@
 ARG VERSION=v0.3.1
 
 # ===========================
+# FRONTEND BUILD
+# ===========================
+
+FROM oven/bun:1 AS frontend-builder
+
+WORKDIR /app
+COPY testnet/l2-sequencer-archival-demo/webapp/package.json testnet/l2-sequencer-archival-demo/webapp/bun.lock* ./
+RUN bun install --frozen-lockfile
+
+COPY testnet/l2-sequencer-archival-demo/webapp .
+RUN bun run build
+
+# ===========================
 # BUILD IMAGE
 # ===========================
 
@@ -55,9 +68,14 @@ COPY --from=builder /nomos/target/release/nomos-executor /usr/bin/nomos-executor
 COPY --from=builder /nomos/target/release/nomos-cli /usr/bin/nomos-cli
 COPY --from=builder /nomos/target/release/cfgsync-server /usr/bin/cfgsync-server
 COPY --from=builder /nomos/target/release/cfgsync-client /usr/bin/cfgsync-client
+COPY --from=builder /nomos/target/release/demo-sequencer /usr/bin/demo-sequencer
+COPY --from=builder /nomos/target/release/logos-blockchain-archiver /usr/bin/logos-blockchain-archiver
+
+# L2 demo frontend
+COPY --from=frontend-builder /app/dist /var/www/l2-demo
 
 ENV NOMOS_CIRCUITS=/opt/circuits
 
-EXPOSE 3000 8080 9000 60000
+EXPOSE 3000 8080 8090 9000 60000
 
 ENTRYPOINT ["/usr/bin/nomos-node"]
