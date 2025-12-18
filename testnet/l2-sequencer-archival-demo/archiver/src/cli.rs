@@ -9,9 +9,9 @@ pub struct CliArgs {
     #[clap(short = 'e', env = "TESTNET_ENDPOINT")]
     pub nomos_node_http_endpoint: Url,
     #[clap(short = 'u', env = "TESTNET_USERNAME")]
-    pub username: String,
+    pub username: Option<String>,
     #[clap(short = 'p', env = "TESTNET_PASSWORD")]
-    pub password: String,
+    pub password: Option<String>,
     #[clap(short = 'c', env = "CHANNEL_ID", value_parser = parse_channel_id)]
     pub channel_id: ChannelId,
     #[clap(short = 't', env = "TOKEN_NAME")]
