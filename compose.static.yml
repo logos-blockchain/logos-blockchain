@@ -129,24 +129,13 @@ services:
   # L2 Sequencer Demo Services
   l2-nginx:
     container_name: l2_nginx
-    image: nginx:alpine
+    image: ghcr.io/logos-blockchain/logos-blockchain:testnet
     ports:
       - "8200:80"
-    volumes:
-      - ./testnet/l2-sequencer-archival-demo/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - l2-frontend:/usr/share/nginx/html:ro
     depends_on:
       - l2-sequencer
       - l2-archiver
-      - l2-frontend-init
-
-  # Copy frontend from main image to shared volume
-  l2-frontend-init:
-    container_name: l2_frontend_init
-    image: ghcr.io/logos-blockchain/logos-blockchain:testnet
-    volumes:
-      - l2-frontend:/out
-    entrypoint: ["cp", "-r", "/var/www/l2-demo/.", "/out/"]
+    entrypoint: ["nginx", "-g", "daemon off;"]
 
   l2-sequencer:
     container_name: l2_sequencer
@@ -168,13 +157,12 @@ services:
     container_name: l2_archiver
     image: ghcr.io/logos-blockchain/logos-blockchain:testnet
     environment:
-      - ENDPOINT=${ARCHIVER_NODE_ENDPOINT}
-      - USERNAME=${ARCHIVER_NODE_USERNAME}
-      - PASSWORD=${ARCHIVER_NODE_PASSWORD}
+      - TESTNET_ENDPOINT=${ARCHIVER_NODE_ENDPOINT}
+      - TESTNET_USERNAME=${ARCHIVER_NODE_USERNAME}
+      - TESTNET_PASSWORD=${ARCHIVER_NODE_PASSWORD}
       - CHANNEL_ID=${CHANNEL_ID}
       - TOKEN_NAME=${TOKEN_NAME:-MEM}
     entrypoint: ["/usr/bin/logos-blockchain-archiver"]
 
 volumes:
   l2-sequencer-data:
-  l2-frontend:

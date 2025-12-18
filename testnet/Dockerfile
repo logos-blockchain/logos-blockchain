@@ -15,6 +15,8 @@ COPY testnet/l2-sequencer-archival-demo/webapp/package.json testnet/l2-sequencer
 RUN bun install --frozen-lockfile
 
 COPY testnet/l2-sequencer-archival-demo/webapp .
+ENV VITE_SEQUENCER_URL=/api/sequencer
+ENV VITE_ARCHIVER_URL=/api/archiver
 RUN bun run build
 
 # ===========================
@@ -59,6 +61,7 @@ RUN apt-get update && apt-get install -yq \
     libstdc++6 \
     libssl3 \
     ca-certificates \
+    nginx \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/circuits /opt/circuits
@@ -71,8 +74,9 @@ COPY --from=builder /nomos/target/release/cfgsync-client /usr/bin/cfgsync-client
 COPY --from=builder /nomos/target/release/demo-sequencer /usr/bin/demo-sequencer
 COPY --from=builder /nomos/target/release/logos-blockchain-archiver /usr/bin/logos-blockchain-archiver
 
-# L2 demo frontend
+# L2 demo frontend and nginx config
 COPY --from=frontend-builder /app/dist /var/www/l2-demo
+COPY --from=builder /nomos/testnet/l2-sequencer-archival-demo/nginx/nginx.conf /etc/nginx/nginx.conf
 
 ENV NOMOS_CIRCUITS=/opt/circuits
 
