@@ -1,14 +1,16 @@
 import { defineStore } from 'pinia';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+//const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+const BASE_URL = 'http://localhost:8090';
 const STREAM_URL = `${BASE_URL}/block_stream`;
+const CACHE_URL = `${BASE_URL}/blocks`;
 
 export const useArchiveStore = defineStore('archive', {
   state: () => ({
     transactions: [],
     loading: false,
     eventSource: null,
-    // Status can be: 'disconnected', 'connecting', 'connected', or 'error'
+    // Status can be: 'disconnected', 'waiting', 'connected', or 'error'
     connectionStatus: 'disconnected', 
   }),
 
@@ -17,7 +19,7 @@ export const useArchiveStore = defineStore('archive', {
       if (this.eventSource) return;
 
       this.loading = true;
-      this.connectionStatus = 'connecting';
+      this.connectionStatus = 'waiting';
       
       this.eventSource = new EventSource(STREAM_URL);
 
@@ -62,6 +64,26 @@ export const useArchiveStore = defineStore('archive', {
         this.connectionStatus = 'disconnected';
         console.log("Archive Stream Disconnected");
       }
-    }
+    },
+
+    async fetchCachedBlocks() {
+      this.loading = true;
+      try {
+        const res = await fetch(CACHE_URL);
+        if (!res.ok) throw new Error('Failed to fetch cached blocks');
+        
+        const blocks = await res.json();
+        
+        const historicalTxs = blocks.flatMap(block => 
+          (block.transactions || []).map(tx => ({ ...tx, confirmed: true }))
+        );
+
+        this.transactions = historicalTxs.slice(0, 100);
+      } catch (err) {
+        console.error("Error fetching cached blocks:", err);
+      } finally {
+        this.loading = false;
+      }
+    },
   }
 });

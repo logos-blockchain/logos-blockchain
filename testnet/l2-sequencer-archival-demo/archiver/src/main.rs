@@ -41,7 +41,10 @@ async fn main() {
 
     let cancellation_token = CancellationToken::new();
 
-    let client = CommonHttpClient::new(Some(BasicAuthCredentials::new(username, Some(password))));
+    let client = CommonHttpClient::new(Some(BasicAuthCredentials::new(
+        "strode".into(),
+        Some(password),
+    )));
 
     let blocks_db = BlockStore::new("blocks.database").unwrap();
 

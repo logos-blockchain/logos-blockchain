@@ -57,17 +57,11 @@
     </header>
 
     <main class="w-full pb-24">
-      <div v-if="archiveStore.loading" class="flex justify-center py-20">
-        <div class="h-8 w-8 border-2 border-gray-900 dark:border-white border-t-transparent rounded-full animate-spin"></div>
-      </div>
-
-      <div v-else>
         <TransactionList 
           :transactions="archiveStore.transactions" 
           currentAccount="ARCHIVE_VIEW"
           class="max-w-none w-full" 
         />
-      </div>
     </main>
   </div>
 </template>
@@ -93,12 +87,21 @@ const statusText = computed(() => {
   switch (archiveStore.connectionStatus) {
     case 'connected':
       return 'Live • Stream Active';
-    case 'connecting':
-      return 'Connecting...';
+    case 'waiting':
+      return 'Waiting...';
     case 'error':
       return 'Offline • Reconnecting';
     default:
       return 'Stream Disconnected';
   }
 });
+
+onMounted(async () => {
+  await archiveStore.fetchCachedBlocks();
+  archiveStore.startStream()
+})
+
+onUnmounted(() => {
+  archiveStore.stopStream()
+})
 </script>

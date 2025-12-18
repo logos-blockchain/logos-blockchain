@@ -7,18 +7,7 @@
 <script setup>
 import { onMounted, onUnmounted } from 'vue'
 import { RouterView } from 'vue-router'
-import NavBar from './components/navbar/NavBarCompact.vue'
-import { useArchiveStore } from '@/stores/archiveView'
-
-const archiveStore = useArchiveStore()
-
-onMounted(() => {
-  archiveStore.startStream()
-})
-
-onUnmounted(() => {
-  archiveStore.stopStream()
-})
+import NavBar from './components/navbar/NavbarCompact.vue'
 </script>
 
 <style scoped>
