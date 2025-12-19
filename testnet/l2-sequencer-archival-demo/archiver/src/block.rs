@@ -59,7 +59,7 @@ impl BlockStream {
                         };
 
                         println!("  {} Block at height {} ({})","🔗".blue(),
-                            height.to_string().bright_white().bold(),
+                            height.bright_white().bold(),
                             &hex::encode(header_id.as_ref()
                         ).dimmed());
 
@@ -102,15 +102,15 @@ fn extract_l2_blocks(
         println!("  {} No inscriptions in this block", "○".dimmed());
     } else {
         for block_data in &block_channel_ops {
-            println!("{}", "┌".to_owned().bright_green());
+            println!("{}", "┌".bright_green());
             println!(
                 "│ {} Block #{}",
                 "📦".green(),
-                block_data.block_id.to_string().bright_green().bold()
+                block_data.block_id.bright_green().bold()
             );
             println!(
                 "│ 💳 {} transaction(s)",
-                block_data.transactions.len().to_string().yellow().bold()
+                block_data.transactions.len().yellow().bold()
             );
 
             for tx_item in &block_data.transactions {
@@ -119,11 +119,11 @@ fn extract_l2_blocks(
                     "↳".dimmed(),
                     tx_item.from.bright_cyan(),
                     tx_item.to.bright_magenta(),
-                    tx_item.amount.to_string().yellow(),
+                    tx_item.amount.yellow(),
                     token_name
                 );
             }
-            println!("{}", "└".to_owned().bright_green());
+            println!("{}", "└".bright_green());
         }
     }
 

@@ -18,7 +18,7 @@ pub fn print_startup_banner(endpoint: &Url, channel_id: &ChannelId, listen_addr:
     println!(
         "  {} {}",
         "📡 Nomos Node:".bright_blue().bold(),
-        endpoint.to_string().white()
+        endpoint.white()
     );
     println!(
         "  {} {}",
