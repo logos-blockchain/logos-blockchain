@@ -6,7 +6,7 @@ use futures::{Stream, StreamExt as _};
 use nomos_core::{
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx,
+        Op, SignedMantleTx, Transaction as _, TxHash,
         ops::channel::{ChannelId, inscribe::InscriptionOp},
     },
 };
@@ -22,6 +22,7 @@ use crate::db::BlockStore;
 pub struct L2BlockInfo {
     pub data: BlockData,
     pub l1_block_id: HeaderId,
+    pub l1_transaction_id: TxHash,
 }
 
 pub struct BlockStream;
@@ -64,10 +65,11 @@ impl BlockStream {
                         ).dimmed());
 
                         let block = http_client.get_block_by_id(endpoint_url.clone(), header_id).await.unwrap().unwrap();
-                        for l2_block in extract_l2_blocks(block.transactions().cloned(), channel_id, token_name) {
+                        for (l2_block, l1_transaction_id) in extract_l2_blocks(block.transactions().cloned(), channel_id, token_name) {
                             yield L2BlockInfo {
                                 data: l2_block,
-                                l1_block_id: block.header().id()
+                                l1_block_id: block.header().id(),
+                                l1_transaction_id,
                             };
                         }
                     }
@@ -83,25 +85,32 @@ fn extract_l2_blocks(
     block_txs: impl Iterator<Item = SignedMantleTx>,
     decoded_channel_id: &ChannelId,
     token_name: &str,
-) -> Vec<BlockData> {
-    let block_channel_ops: Vec<BlockData> = block_txs
-        .flat_map(|tx| tx.mantle_tx.ops)
-        .filter_map(|op| match op {
-            Op::ChannelInscribe(InscriptionOp {
-                channel_id,
-                inscription,
-                ..
-            }) if &channel_id == decoded_channel_id => {
-                Some(serde_json::from_slice::<BlockData>(&inscription).unwrap())
-            }
-            _ => None,
+) -> Vec<(BlockData, TxHash)> {
+    let block_channel_ops: Vec<(BlockData, TxHash)> = block_txs
+        .flat_map(|tx| {
+            let tx_hash = tx.mantle_tx.hash();
+            tx.mantle_tx
+                .ops
+                .iter()
+                .filter_map(|op| match op {
+                    Op::ChannelInscribe(InscriptionOp {
+                        channel_id,
+                        inscription,
+                        ..
+                    }) if channel_id == decoded_channel_id => {
+                        let block_data = serde_json::from_slice::<BlockData>(inscription).unwrap();
+                        Some((block_data, tx_hash))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
         })
         .collect();
 
     if block_channel_ops.is_empty() {
         println!("  {} No inscriptions in this block", "○".dimmed());
     } else {
-        for block_data in &block_channel_ops {
+        for (block_data, _) in &block_channel_ops {
             println!("{}", "┌".bright_green());
             println!(
                 "│ {} Block #{}",
@@ -145,10 +154,15 @@ impl AsRef<BlockData> for ValidatedBlockData {
 pub struct ValidatedL2Info(L2BlockInfo);
 
 impl ValidatedL2Info {
-    pub fn new(validated_block_data: ValidatedBlockData, l1_block_id: HeaderId) -> Self {
+    pub fn new(
+        validated_block_data: ValidatedBlockData,
+        l1_block_id: HeaderId,
+        l1_transaction_id: TxHash,
+    ) -> Self {
         Self(L2BlockInfo {
             data: validated_block_data.0,
             l1_block_id,
+            l1_transaction_id,
         })
     }
 }

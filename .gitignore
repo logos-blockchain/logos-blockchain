@@ -26,3 +26,5 @@ zk/**/bin/*
 
 # C headers
 nomos-c/libnomos.h
+
+node_modules

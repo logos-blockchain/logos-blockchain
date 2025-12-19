@@ -81,8 +81,11 @@ async fn main() {
     while let Some(block) = block_stream.next().await {
         match validate_block(block.data, &accounts_db, &blocks_db).await {
             Ok(validated_l2_block) => {
-                let validated_l2_info =
-                    ValidatedL2Info::new(validated_l2_block.clone(), block.l1_block_id);
+                let validated_l2_info = ValidatedL2Info::new(
+                    validated_l2_block.clone(),
+                    block.l1_block_id,
+                    block.l1_transaction_id,
+                );
                 blocks_db
                     .add_block(validated_l2_info.clone())
                     .await
