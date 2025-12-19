@@ -1,3 +1,7 @@
+# NOTE: This docker-compose only works on x86_64 (AMD64) architecture.
+# The ZK prover will panic when running under ARM emulation.
+# For ARM machines (e.g., Apple Silicon), run the binaries directly instead.
+
 services:
   l2-nginx:
     container_name: l2_nginx
