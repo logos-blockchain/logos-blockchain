@@ -36,6 +36,8 @@ async fn main() {
         token_name,
         initial_balance,
         port_number,
+        blocks_db_path,
+        accounts_db_path,
     } = CliArgs::parse();
 
     let listen_address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port_number));
@@ -50,8 +52,8 @@ async fn main() {
 
     let client = CommonHttpClient::new(username.map(|u| BasicAuthCredentials::new(u, password)));
 
-    let blocks_db = BlockStore::new("blocks.database").unwrap();
-    let accounts_db = AccountDb::new("accounts.database", initial_balance).unwrap();
+    let blocks_db = BlockStore::new(&blocks_db_path).unwrap();
+    let accounts_db = AccountDb::new(&accounts_db_path, initial_balance).unwrap();
 
     // Start sigint handler
 

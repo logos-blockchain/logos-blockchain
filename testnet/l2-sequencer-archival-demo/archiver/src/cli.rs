@@ -20,6 +20,10 @@ pub struct CliArgs {
     pub initial_balance: u64,
     #[clap(short = 'n', env = "PORT_NUMBER", default_value = "8090")]
     pub port_number: u16,
+    #[clap(long, env = "ARCHIVER_BLOCKS_DB_PATH", default_value = "blocks.database")]
+    pub blocks_db_path: String,
+    #[clap(long, env = "ARCHIVER_ACCOUNTS_DB_PATH", default_value = "accounts.database")]
+    pub accounts_db_path: String,
 }
 
 #[expect(
