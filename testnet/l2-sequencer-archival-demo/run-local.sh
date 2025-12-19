@@ -129,6 +129,9 @@ export SEQUENCER_SIGNING_KEY_PATH="${SEQUENCER_SIGNING_KEY_PATH:-$DATA_DIR/seque
 export ARCHIVER_BLOCKS_DB_PATH="${ARCHIVER_BLOCKS_DB_PATH:-$DATA_DIR/blocks.database}"
 export ARCHIVER_ACCOUNTS_DB_PATH="${ARCHIVER_ACCOUNTS_DB_PATH:-$DATA_DIR/accounts.database}"
 
+export VITE_SEQUENCER_URL=$VITE_SEQUENCER_URL
+export VITE_EXPLORER_URL=$VITE_EXPLORER_URL
+export VITE_ARCHIVER_URL=$VITE_ARCHIVER_URL
 
 echo -e "${GREEN}======================================${NC}"
 echo -e "${GREEN}  L2 Demo - Local Development${NC}"
@@ -210,4 +213,4 @@ echo -e "${YELLOW}Press Ctrl+C to stop all services${NC}"
 echo ""
 
 # Run frontend in foreground (so we see its output)
-VITE_SEQUENCER_URL=http://localhost:8080 VITE_ARCHIVER_URL=http://localhost:8090 bun run dev --host
+bun run dev --host
