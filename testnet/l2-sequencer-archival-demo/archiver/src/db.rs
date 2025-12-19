@@ -47,6 +47,7 @@ impl BlockStore {
 
         let write_txn = db.begin_write()?;
         drop(write_txn.open_table(BLOCKS_TABLE)?);
+        drop(write_txn.open_table(INVALID_BLOCKS_TABLE)?);
         write_txn.commit()?;
 
         Ok(Self {

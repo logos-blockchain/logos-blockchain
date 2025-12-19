@@ -10,7 +10,7 @@ export const useArchiveStore = defineStore('archive', {
     loading: false,
     eventSource: null,
     // Status can be: 'disconnected', 'waiting', 'connected', or 'error'
-    connectionStatus: 'disconnected', 
+    connectionStatus: 'disconnected',
   }),
 
   actions: {
@@ -19,7 +19,7 @@ export const useArchiveStore = defineStore('archive', {
 
       this.loading = true;
       this.connectionStatus = 'waiting';
-      
+
       this.eventSource = new EventSource(STREAM_URL);
 
       this.eventSource.onopen = () => {
@@ -31,9 +31,9 @@ export const useArchiveStore = defineStore('archive', {
       this.eventSource.onmessage = (event) => {
         try {
           const blockData = JSON.parse(event.data);
-          
-          if (blockData?.transactions?.length) {
-            const newTxs = blockData.transactions.map(tx => ({
+
+          if (blockData?.data.transactions?.length) {
+            const newTxs = blockData.data.transactions.map(tx => ({
               ...tx,
               confirmed: true
             }));
@@ -49,7 +49,7 @@ export const useArchiveStore = defineStore('archive', {
         console.error("Archive Stream Error:", err);
         this.connectionStatus = 'error';
         this.stopStream();
-        
+
         // Attempt reconnection after 5 seconds
         setTimeout(() => this.startStream(), 5000);
       };
@@ -70,11 +70,11 @@ export const useArchiveStore = defineStore('archive', {
       try {
         const res = await fetch(CACHE_URL);
         if (!res.ok) throw new Error('Failed to fetch cached blocks');
-        
+
         const blocks = await res.json();
-        
-        const historicalTxs = blocks.flatMap(block => 
-          (block.transactions || []).map(tx => ({ ...tx, confirmed: true }))
+
+        const historicalTxs = blocks.flatMap(block =>
+          (block.data.transactions || []).map(tx => ({ ...tx, confirmed: true }))
         );
 
         this.transactions = historicalTxs.slice(0, 100);
