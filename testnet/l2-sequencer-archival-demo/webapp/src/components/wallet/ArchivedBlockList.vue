@@ -45,6 +45,16 @@
         class="mt-0" 
       />
     </div>
+
+    <!-- Empty state when no blocks -->
+    <div 
+      v-if="!blocks || blocks.length === 0" 
+      class="w-full p-1 border border-gray-100 dark:border-gray-400 rounded-2xl"
+    >
+      <div class="px-6 py-4 text-center text-gray-500 dark:text-gray-400">
+        No recent transactions found.
+      </div>
+    </div>
   </div>
 </template>
 
