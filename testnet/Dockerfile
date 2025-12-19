@@ -80,6 +80,6 @@ COPY --from=builder /nomos/testnet/l2-sequencer-archival-demo/nginx/nginx.conf /
 
 ENV NOMOS_CIRCUITS=/opt/circuits
 
-EXPOSE 3000 8080 8090 9000 60000
+EXPOSE 80 3000 8080 8090 9000 18080 60000
 
 ENTRYPOINT ["/usr/bin/nomos-node"]
