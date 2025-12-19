@@ -1,13 +1,14 @@
 import { defineStore } from 'pinia';
 
 // const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8090';
+const EXPLORER_URL = import.meta.env.VITE_EXPLORER_URL || 'http://localhost:8000';
 const BASE_URL = 'http://localhost:8090';
 const STREAM_URL = `${BASE_URL}/block_stream`;
 const CACHE_URL = `${BASE_URL}/blocks`;
 
 export const useArchiveStore = defineStore('archive', {
   state: () => ({
-    blocks: [], 
+    blocks: [],
     loading: false,
     eventSource: null,
     // Status can be: 'disconnected', 'waiting', 'connected', or 'error'
@@ -33,10 +34,10 @@ export const useArchiveStore = defineStore('archive', {
       try {
         const res = await fetch(CACHE_URL);
         if (!res.ok) throw new Error('Failed to fetch cached blocks');
-        
+
         const data = await res.json();
         const processed = this.processBlocks(data);
-        
+
         // Reverse so newest blocks (highest ID) are at the top
         this.blocks = [...processed].reverse().slice(0, 50);
       } catch (err) {
@@ -60,9 +61,9 @@ export const useArchiveStore = defineStore('archive', {
         try {
           const rawData = JSON.parse(event.data);
           const rawBlocks = Array.isArray(rawData) ? rawData : [rawData];
-          
+
           const processed = this.processBlocks(rawBlocks);
-          
+
           // Prepend new blocks to the beginning of the state
           this.blocks = [...processed.reverse(), ...this.blocks].slice(0, 50);
         } catch (err) {
@@ -83,6 +84,16 @@ export const useArchiveStore = defineStore('archive', {
         this.eventSource = null;
         this.connectionStatus = 'disconnected';
       }
-    }
+    },
+
+    openBlockInExplorer(blockId) {
+      if (!blockId) return;
+      window.open(`${EXPLORER_URL}/blocks/${blockId}`, '_blank');
+    },
+
+    openTransactionInExplorer(txId) {
+      if (!txId) return;
+      window.open(`${EXPLORER_URL}/transactions/${txId}`, '_blank');
+    },
   }
 });

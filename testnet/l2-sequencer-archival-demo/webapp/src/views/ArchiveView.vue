@@ -59,7 +59,8 @@
     <main class="w-full pb-24">
       <ArchivedBlockList 
         :blocks="archiveStore.blocks"
-        class="max-w-none w-full" 
+        @openBlock="archiveStore.openBlockInExplorer"
+        @openTransaction="archiveStore.openTransactionInExplorer"
       />
     </main>
   </div>
