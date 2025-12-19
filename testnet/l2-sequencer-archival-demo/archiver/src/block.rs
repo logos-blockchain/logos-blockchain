@@ -172,6 +172,12 @@ pub async fn validate_block(
             .await
             .unwrap()
     {
+        println!(
+            "  {} Block {} rejected: parent block {} is invalid",
+            "❌".red(),
+            block.block_id.bright_red().bold(),
+            block.parent_block_id.yellow()
+        );
         return Err(block);
     }
 
@@ -185,6 +191,11 @@ pub async fn validate_block(
         .await
         .is_ok();
     if !are_txs_valid {
+        println!(
+            "  {} Block {} rejected: contains invalid transactions",
+            "❌".red(),
+            block.block_id.bright_red().bold()
+        );
         return Err(block);
     }
 

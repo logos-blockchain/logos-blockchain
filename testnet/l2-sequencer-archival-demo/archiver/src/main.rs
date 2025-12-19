@@ -48,8 +48,7 @@ async fn main() {
 
     let cancellation_token = CancellationToken::new();
 
-    let basic_auth = username.map(|u| BasicAuthCredentials::new(u, password));
-    let client = CommonHttpClient::new(basic_auth);
+    let client = CommonHttpClient::new(username.map(|u| BasicAuthCredentials::new(u, password)));
 
     let blocks_db = BlockStore::new("blocks.database").unwrap();
     let accounts_db = AccountDb::new("accounts.database", initial_balance).unwrap();
