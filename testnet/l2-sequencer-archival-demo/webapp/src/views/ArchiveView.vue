@@ -57,11 +57,10 @@
     </header>
 
     <main class="w-full pb-24">
-        <TransactionList 
-          :transactions="archiveStore.transactions" 
-          currentAccount="ARCHIVE_VIEW"
-          class="max-w-none w-full" 
-        />
+      <ArchivedBlockList 
+        :blocks="archiveStore.blocks"
+        class="max-w-none w-full" 
+      />
     </main>
   </div>
 </template>
@@ -69,7 +68,7 @@
 <script setup>
 import { onMounted, onUnmounted, computed } from 'vue';
 import { useArchiveStore } from '@/stores/archiveView';
-import { TransactionList } from '@/components';
+import { ArchivedBlockList } from '@/components';
 
 const archiveStore = useArchiveStore();
 
