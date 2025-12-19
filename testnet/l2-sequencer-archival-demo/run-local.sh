@@ -198,6 +198,11 @@ fi
 # Get local IP for sharing
 LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
 
+# Set VITE URLs using local IP so they work over network
+export VITE_SEQUENCER_URL="${VITE_SEQUENCER_URL:-http://$LOCAL_IP:8080}"
+export VITE_ARCHIVER_URL="${VITE_ARCHIVER_URL:-http://$LOCAL_IP:8090}"
+export VITE_EXPLORER_URL="${VITE_EXPLORER_URL:-http://$LOCAL_IP:8000}"
+
 echo ""
 echo -e "${GREEN}======================================${NC}"
 echo -e "${GREEN}  All services running!${NC}"
@@ -206,8 +211,9 @@ echo ""
 echo -e "${BLUE}Access points:${NC}"
 echo "  Frontend:  http://localhost:5173"
 echo "  Frontend:  http://$LOCAL_IP:5173  (share this with others on same network)"
-echo "  Sequencer: http://localhost:8080"
-echo "  Archiver:  http://localhost:8090"
+echo "  Sequencer: $VITE_SEQUENCER_URL"
+echo "  Archiver:  $VITE_ARCHIVER_URL"
+echo "  Explorer:  $VITE_EXPLORER_URL"
 echo ""
 echo -e "${YELLOW}Press Ctrl+C to stop all services${NC}"
 echo ""
