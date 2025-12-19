@@ -12,13 +12,13 @@
 #
 # Required env vars:
 #   SEQUENCER_NODE_ENDPOINT      - Nomos node HTTP endpoint for sequencer
-#   TESTNET_ENDPOINT             - Nomos node HTTP endpoint for archiver
+#   ARCHIVER_NODE_ENDPOINT       - Nomos node HTTP endpoint for archiver
 #   TOKEN_NAME                   - Token name (e.g., "MEM")
 #
 # Optional env vars:
 #   CHANNEL_ID                   - Channel ID (64 hex chars). If not set, reads from data/channel_id or generates new.
-#   SEQUENCER_NODE_AUTH_USERNAME / SEQUENCER_NODE_AUTH_PASSWORD
-#   TESTNET_USERNAME / TESTNET_PASSWORD
+#   TESTNET_USERNAME             - Basic auth username (used for both sequencer and archiver)
+#   TESTNET_PASSWORD             - Basic auth password (used for both sequencer and archiver)
 #   SEQUENCER_LISTEN_ADDR        - Default: 0.0.0.0:8080
 #   SEQUENCER_DB_PATH            - Default: ./data/sequencer.db
 #   SEQUENCER_SIGNING_KEY_PATH   - Default: ./data/sequencer.key
@@ -73,7 +73,7 @@ fi
 # Validate required env vars
 missing_vars=()
 [ -z "$SEQUENCER_NODE_ENDPOINT" ] && missing_vars+=("SEQUENCER_NODE_ENDPOINT")
-[ -z "$TESTNET_ENDPOINT" ] && missing_vars+=("TESTNET_ENDPOINT")
+[ -z "$ARCHIVER_NODE_ENDPOINT" ] && missing_vars+=("ARCHIVER_NODE_ENDPOINT")
 [ -z "$TOKEN_NAME" ] && missing_vars+=("TOKEN_NAME")
 
 if [ ${#missing_vars[@]} -ne 0 ]; then
@@ -116,6 +116,11 @@ fi
 export CHANNEL_ID
 export SEQUENCER_CHANNEL_ID="$CHANNEL_ID"
 
+# Map shared credentials to what each binary expects
+export SEQUENCER_NODE_AUTH_USERNAME="$TESTNET_USERNAME"
+export SEQUENCER_NODE_AUTH_PASSWORD="$TESTNET_PASSWORD"
+export TESTNET_ENDPOINT="$ARCHIVER_NODE_ENDPOINT"
+
 # Set defaults for sequencer
 export SEQUENCER_DB_PATH="${SEQUENCER_DB_PATH:-$DATA_DIR/sequencer.db}"
 export SEQUENCER_SIGNING_KEY_PATH="${SEQUENCER_SIGNING_KEY_PATH:-$DATA_DIR/sequencer.key}"
@@ -131,7 +136,7 @@ echo -e "${GREEN}======================================${NC}"
 echo ""
 echo -e "${BLUE}Configuration:${NC}"
 echo "  Sequencer endpoint: $SEQUENCER_NODE_ENDPOINT"
-echo "  Archiver endpoint:  $TESTNET_ENDPOINT"
+echo "  Archiver endpoint:  $ARCHIVER_NODE_ENDPOINT"
 echo "  Channel ID:         $CHANNEL_ID"
 echo "  Token:              $TOKEN_NAME"
 echo "  Data directory:     $DATA_DIR"
