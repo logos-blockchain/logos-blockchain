@@ -1,14 +1,16 @@
 mod api;
 mod config;
+mod ctrl_c;
 mod sequencer;
 
 use std::sync::Arc;
 
 use demo_sequencer::db::AccountDb;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
-use crate::{api::create_router, config::Config, sequencer::Sequencer};
+use crate::{api::create_router, config::Config, ctrl_c::listen_for_sigint, sequencer::Sequencer};
 
 fn print_banner() {
     const BLUE: &str = "\x1b[38;5;39m";
@@ -77,6 +79,10 @@ async fn main() {
     };
     info!("Sequencer ready");
 
+    // Setup cancellation token for graceful shutdown
+    let cancellation_token = CancellationToken::new();
+    listen_for_sigint(cancellation_token.clone());
+
     // Spawn background processing loop
     let sequencer_clone = Arc::clone(&sequencer);
     tokio::spawn(async move {
@@ -97,7 +103,11 @@ async fn main() {
         }
     };
 
-    if let Err(e) = axum::serve(listener, app).await {
+    let shutdown_signal = cancellation_token.cancelled_owned();
+    if let Err(e) = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await
+    {
         error!("Server error: {e}");
         std::process::exit(1);
     }
