@@ -98,7 +98,15 @@ fn extract_l2_blocks(
                         inscription,
                         ..
                     }) if channel_id == decoded_channel_id => {
-                        let block_data = serde_json::from_slice::<BlockData>(inscription).unwrap();
+                        let Ok(block_data) = serde_json::from_slice::<BlockData>(inscription)
+                        else {
+                            println!(
+                                "  {} Failed to decode L2 block in tx {}",
+                                "⚠️".yellow(),
+                                hex::encode(tx_hash.as_signing_bytes()).dimmed()
+                            );
+                            return None;
+                        };
                         Some((block_data, tx_hash))
                     }
                     _ => None,
