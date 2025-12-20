@@ -1,28 +1,28 @@
 #!/bin/bash
 
 # L2 Demo - Local Development Runner
-# Runs sequencer, archiver, and frontend without Docker (works on ARM Mac)
+# Runs sequencer, archiver, and/or frontend without Docker (works on ARM Mac)
 #
 # Usage:
-#   ./run-local.sh --env-file /path/to/.env-local [--clean]
+#   ./run-local.sh <service> --env-file /path/to/.env-local [--clean]
 #
-# Example:
-#   ./run-local.sh --env-file ~/Eng/offsite-sequencer-env/.env-local
-#   ./run-local.sh --env-file ~/Eng/offsite-sequencer-env/.env-local --clean  # Fresh start
+# Services:
+#   sequencer  - Run only the sequencer
+#   archiver   - Run only the archiver
+#   frontend   - Run only the frontend
+#   all        - Run all services (default)
+#
+# Examples:
+#   ./run-local.sh all --env-file ~/Eng/offsite-sequencer-env/.env-local
+#   ./run-local.sh sequencer --env-file ~/Eng/offsite-sequencer-env/.env-local
+#   ./run-local.sh archiver --env-file ~/Eng/offsite-sequencer-env/.env-local
+#   ./run-local.sh frontend --env-file ~/Eng/offsite-sequencer-env/.env-local
+#   ./run-local.sh all --env-file ~/Eng/offsite-sequencer-env/.env-local --clean
 #
 # Required env vars:
 #   SEQUENCER_NODE_ENDPOINT      - Nomos node HTTP endpoint for sequencer
 #   ARCHIVER_NODE_ENDPOINT       - Nomos node HTTP endpoint for archiver
 #   TOKEN_NAME                   - Token name (e.g., "MEM")
-#
-# Optional env vars:
-#   CHANNEL_ID                   - Channel ID (64 hex chars). If not set, reads from data/channel_id or generates new.
-#   TESTNET_USERNAME             - Basic auth username (used for both sequencer and archiver)
-#   TESTNET_PASSWORD             - Basic auth password (used for both sequencer and archiver)
-#   SEQUENCER_LISTEN_ADDR        - Default: 0.0.0.0:8080
-#   SEQUENCER_DB_PATH            - Default: ./data/sequencer.db
-#   SEQUENCER_SIGNING_KEY_PATH   - Default: ./data/sequencer.key
-#   SEQUENCER_INITIAL_BALANCE    - Default: 1000
 
 set -e
 
@@ -37,7 +37,25 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Parse arguments
+# Parse service argument (first positional arg)
+SERVICE="all"
+if [[ $# -gt 0 && ! "$1" =~ ^-- ]]; then
+    SERVICE="$1"
+    shift
+fi
+
+# Validate service
+case $SERVICE in
+    sequencer|archiver|frontend|all)
+        ;;
+    *)
+        echo -e "${RED}Unknown service: $SERVICE${NC}"
+        echo "Valid services: sequencer, archiver, frontend, all"
+        exit 1
+        ;;
+esac
+
+# Parse remaining arguments
 ENV_FILE=""
 CLEAN_START=false
 while [[ $# -gt 0 ]]; do
@@ -129,12 +147,16 @@ export SEQUENCER_SIGNING_KEY_PATH="${SEQUENCER_SIGNING_KEY_PATH:-$DATA_DIR/seque
 export ARCHIVER_BLOCKS_DB_PATH="${ARCHIVER_BLOCKS_DB_PATH:-$DATA_DIR/blocks.database}"
 export ARCHIVER_ACCOUNTS_DB_PATH="${ARCHIVER_ACCOUNTS_DB_PATH:-$DATA_DIR/accounts.database}"
 
-export VITE_SEQUENCER_URL=$VITE_SEQUENCER_URL
-export VITE_EXPLORER_URL=$VITE_EXPLORER_URL
-export VITE_ARCHIVER_URL=$VITE_ARCHIVER_URL
+# Get local IP for sharing
+LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
+
+# Set VITE URLs using local IP so they work over network
+export VITE_SEQUENCER_URL="${VITE_SEQUENCER_URL:-http://$LOCAL_IP:8080}"
+export VITE_ARCHIVER_URL="${VITE_ARCHIVER_URL:-http://$LOCAL_IP:8090}"
+export VITE_EXPLORER_URL="${VITE_EXPLORER_URL:-http://$LOCAL_IP:8000}"
 
 echo -e "${GREEN}======================================${NC}"
-echo -e "${GREEN}  L2 Demo - Local Development${NC}"
+echo -e "${GREEN}  L2 Demo - $SERVICE${NC}"
 echo -e "${GREEN}======================================${NC}"
 echo ""
 echo -e "${BLUE}Configuration:${NC}"
@@ -149,74 +171,108 @@ echo ""
 SEQUENCER_BIN="$REPO_ROOT/target/release/demo-sequencer"
 ARCHIVER_BIN="$REPO_ROOT/target/release/logos-blockchain-archiver"
 
-if [ ! -f "$SEQUENCER_BIN" ] || [ ! -f "$ARCHIVER_BIN" ]; then
-    echo -e "${YELLOW}Building binaries (this may take a while)...${NC}"
+if [[ "$SERVICE" == "sequencer" || "$SERVICE" == "all" ]] && [ ! -f "$SEQUENCER_BIN" ]; then
+    echo -e "${YELLOW}Building sequencer...${NC}"
     cd "$REPO_ROOT"
-    cargo build --release -p demo-sequencer -p logos-blockchain-archiver
+    cargo build --release -p demo-sequencer
 fi
 
-# Trap to kill background processes on exit
-cleanup() {
-    echo ""
-    echo -e "${YELLOW}Shutting down...${NC}"
-    kill $SEQUENCER_PID 2>/dev/null || true
-    kill $ARCHIVER_PID 2>/dev/null || true
-    kill $FRONTEND_PID 2>/dev/null || true
-    exit 0
-}
-trap cleanup SIGINT SIGTERM
-
-# Start sequencer
-echo -e "${GREEN}Starting sequencer...${NC}"
-cd "$REPO_ROOT"
-"$SEQUENCER_BIN" &
-SEQUENCER_PID=$!
-sleep 2
-
-# Start archiver
-echo -e "${GREEN}Starting archiver...${NC}"
-"$ARCHIVER_BIN" &
-ARCHIVER_PID=$!
-sleep 2
-
-# Start frontend dev server
-echo -e "${GREEN}Starting frontend...${NC}"
-cd "$SCRIPT_DIR/webapp"
-
-# Check if bun is installed
-if ! command -v bun &> /dev/null; then
-    echo -e "${RED}Error: bun is not installed. Install it with: curl -fsSL https://bun.sh/install | bash${NC}"
-    cleanup
+if [[ "$SERVICE" == "archiver" || "$SERVICE" == "all" ]] && [ ! -f "$ARCHIVER_BIN" ]; then
+    echo -e "${YELLOW}Building archiver...${NC}"
+    cd "$REPO_ROOT"
+    cargo build --release -p logos-blockchain-archiver
 fi
 
-# Install dependencies if needed
-if [ ! -d "node_modules" ]; then
-    echo -e "${YELLOW}Installing frontend dependencies...${NC}"
-    bun install
-fi
+# Run the selected service(s)
+case $SERVICE in
+    sequencer)
+        echo -e "${GREEN}Starting sequencer...${NC}"
+        cd "$REPO_ROOT"
+        exec "$SEQUENCER_BIN"
+        ;;
+    archiver)
+        echo -e "${GREEN}Starting archiver...${NC}"
+        cd "$REPO_ROOT"
+        exec "$ARCHIVER_BIN"
+        ;;
+    frontend)
+        cd "$SCRIPT_DIR/webapp"
 
-# Get local IP for sharing
-LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
+        if ! command -v bun &> /dev/null; then
+            echo -e "${RED}Error: bun is not installed. Install it with: curl -fsSL https://bun.sh/install | bash${NC}"
+            exit 1
+        fi
 
-# Set VITE URLs using local IP so they work over network
-export VITE_SEQUENCER_URL="${VITE_SEQUENCER_URL:-http://$LOCAL_IP:8080}"
-export VITE_ARCHIVER_URL="${VITE_ARCHIVER_URL:-http://$LOCAL_IP:8090}"
-export VITE_EXPLORER_URL="${VITE_EXPLORER_URL:-http://$LOCAL_IP:8000}"
+        if [ ! -d "node_modules" ]; then
+            echo -e "${YELLOW}Installing frontend dependencies...${NC}"
+            bun install
+        fi
 
-echo ""
-echo -e "${GREEN}======================================${NC}"
-echo -e "${GREEN}  All services running!${NC}"
-echo -e "${GREEN}======================================${NC}"
-echo ""
-echo -e "${BLUE}Access points:${NC}"
-echo "  Frontend:  http://localhost:5173"
-echo "  Frontend:  http://$LOCAL_IP:5173  (share this with others on same network)"
-echo "  Sequencer: $VITE_SEQUENCER_URL"
-echo "  Archiver:  $VITE_ARCHIVER_URL"
-echo "  Explorer:  $VITE_EXPLORER_URL"
-echo ""
-echo -e "${YELLOW}Press Ctrl+C to stop all services${NC}"
-echo ""
+        echo -e "${GREEN}Starting frontend...${NC}"
+        echo ""
+        echo -e "${BLUE}Access points:${NC}"
+        echo "  Frontend:  http://localhost:5173"
+        echo "  Frontend:  http://$LOCAL_IP:5173  (share this with others on same network)"
+        echo "  Sequencer: $VITE_SEQUENCER_URL"
+        echo "  Archiver:  $VITE_ARCHIVER_URL"
+        echo "  Explorer:  $VITE_EXPLORER_URL"
+        echo ""
+        exec bun run dev --host
+        ;;
+    all)
+        # Trap to kill background processes on exit
+        cleanup() {
+            echo ""
+            echo -e "${YELLOW}Shutting down...${NC}"
+            kill $SEQUENCER_PID 2>/dev/null || true
+            kill $ARCHIVER_PID 2>/dev/null || true
+            exit 0
+        }
+        trap cleanup SIGINT SIGTERM
 
-# Run frontend in foreground (so we see its output)
-bun run dev --host
+        # Start sequencer
+        echo -e "${GREEN}Starting sequencer...${NC}"
+        cd "$REPO_ROOT"
+        "$SEQUENCER_BIN" &
+        SEQUENCER_PID=$!
+        sleep 2
+
+        # Start archiver
+        echo -e "${GREEN}Starting archiver...${NC}"
+        "$ARCHIVER_BIN" &
+        ARCHIVER_PID=$!
+        sleep 2
+
+        # Start frontend dev server
+        echo -e "${GREEN}Starting frontend...${NC}"
+        cd "$SCRIPT_DIR/webapp"
+
+        if ! command -v bun &> /dev/null; then
+            echo -e "${RED}Error: bun is not installed. Install it with: curl -fsSL https://bun.sh/install | bash${NC}"
+            cleanup
+        fi
+
+        if [ ! -d "node_modules" ]; then
+            echo -e "${YELLOW}Installing frontend dependencies...${NC}"
+            bun install
+        fi
+
+        echo ""
+        echo -e "${GREEN}======================================${NC}"
+        echo -e "${GREEN}  All services running!${NC}"
+        echo -e "${GREEN}======================================${NC}"
+        echo ""
+        echo -e "${BLUE}Access points:${NC}"
+        echo "  Frontend:  http://localhost:5173"
+        echo "  Frontend:  http://$LOCAL_IP:5173  (share this with others on same network)"
+        echo "  Sequencer: $VITE_SEQUENCER_URL"
+        echo "  Archiver:  $VITE_ARCHIVER_URL"
+        echo "  Explorer:  $VITE_EXPLORER_URL"
+        echo ""
+        echo -e "${YELLOW}Press Ctrl+C to stop all services${NC}"
+        echo ""
+
+        # Run frontend in foreground
+        bun run dev --host
+        ;;
+esac
