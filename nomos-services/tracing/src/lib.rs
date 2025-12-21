@@ -250,24 +250,16 @@ where
 
             let level_filter = {
                 #[cfg(feature = "profiling")]
+                if let ConsoleLayer::Console(console_config) = &config.console
+                    && let Some(console_layer) = console::create_console_layer(console_config)
                 {
-                    if let ConsoleLayer::Console(console_config) = &config.console {
-                        if let Some(console_layer) = console::create_console_layer(console_config) {
-                            layers.push(console_layer);
-                            LevelFilter::TRACE
-                        } else {
-                            LevelFilter::from(config.level)
-                        }
-                    } else {
-                        LevelFilter::from(config.level)
-                    }
-                }
-
-                // Fallback for Windows or when profiling feature is disabled:
-                #[cfg(not(feature = "profiling"))]
-                {
+                    layers.push(console_layer);
+                    LevelFilter::TRACE
+                } else {
                     LevelFilter::from(config.level)
                 }
+                #[cfg(not(feature = "profiling"))]
+                LevelFilter::from(config.level)
             };
 
             layers.push(logger_layer);
