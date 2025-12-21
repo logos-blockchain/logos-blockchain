@@ -7,6 +7,6 @@
 # * .github/workflows/code-check.yml (fmt job)
 # * .pre-commit-config.yml (fmt hook)
 # Then, if there is any new allow-by-default rustc lint introduced/stabilized, add it to the respective entry in our `config.toml`.
-channel = "1.91.0"
+channel = "1.92.0"
 # Even if clippy should be included in the default profile, in some cases it is not installed. So we force it with an explicit declaration.
 components = ["clippy"]

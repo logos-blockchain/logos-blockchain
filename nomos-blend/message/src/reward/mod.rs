@@ -6,6 +6,7 @@ use std::collections::HashSet;
 
 pub use activity::ActivityProof;
 use nomos_core::sdp::SessionNumber;
+use serde::{Deserialize, Serialize};
 pub use session::SessionInfo;
 pub use token::{BlendingToken, HammingDistance};
 
@@ -13,11 +14,8 @@ pub use crate::reward::session::{BlendingTokenEvaluation, Error, SessionRandomne
 
 const LOG_TARGET: &str = "blend::message::reward";
 
-pub trait BlendingTokenCollector {
-    fn collect(&mut self, token: BlendingToken);
-}
-
 /// Holds blending tokens collected during a single session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionBlendingTokenCollector {
     session_number: SessionNumber,
     token_evaluation: BlendingTokenEvaluation,
@@ -34,6 +32,10 @@ impl SessionBlendingTokenCollector {
         }
     }
 
+    pub fn collect(&mut self, token: BlendingToken) {
+        self.tokens.insert(token);
+    }
+
     #[must_use]
     pub fn rotate_session(
         self,
@@ -47,20 +49,20 @@ impl SessionBlendingTokenCollector {
         (new_collector, old_collector)
     }
 
-    #[cfg(test)]
     #[must_use]
-    const fn tokens(&self) -> &HashSet<BlendingToken> {
+    pub const fn session_number(&self) -> SessionNumber {
+        self.session_number
+    }
+
+    #[cfg(any(test, feature = "unsafe-test-functions"))]
+    #[must_use]
+    pub const fn tokens(&self) -> &HashSet<BlendingToken> {
         &self.tokens
     }
 }
 
-impl BlendingTokenCollector for SessionBlendingTokenCollector {
-    fn collect(&mut self, token: BlendingToken) {
-        self.tokens.insert(token);
-    }
-}
-
 /// Holds blending tokens collected during the old session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OldSessionBlendingTokenCollector {
     collector: SessionBlendingTokenCollector,
     next_session_randomness: SessionRandomness,
@@ -92,16 +94,15 @@ impl OldSessionBlendingTokenCollector {
             .map(|(token, _)| ActivityProof::new(self.collector.session_number, token))
     }
 
-    #[cfg(test)]
     #[must_use]
-    const fn tokens(&self) -> &HashSet<BlendingToken> {
-        self.collector.tokens()
+    pub const fn session_number(&self) -> SessionNumber {
+        self.collector.session_number()
     }
-}
 
-impl BlendingTokenCollector for OldSessionBlendingTokenCollector {
-    fn collect(&mut self, token: BlendingToken) {
-        self.collector.collect(token);
+    #[cfg(any(test, feature = "unsafe-test-functions"))]
+    #[must_use]
+    pub const fn tokens(&self) -> &HashSet<BlendingToken> {
+        self.collector.tokens()
     }
 }
 
@@ -112,6 +113,7 @@ pub const fn evaluate_hamming_distance(distance: u64, activity_threshold: u64) -
 
 #[cfg(test)]
 mod tests {
+    use key_management_system_keys::keys::Ed25519Key;
     use nomos_blend_proofs::{
         quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
         selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
@@ -167,7 +169,7 @@ mod tests {
         proof_of_selection: u8,
     ) -> BlendingToken {
         BlendingToken::new(
-            ed25519_dalek::SigningKey::from_bytes(&[signing_key; _]).verifying_key(),
+            Ed25519Key::from_bytes(&[signing_key; _]).public_key(),
             VerifiedProofOfQuota::from_bytes_unchecked([proof_of_quota; PROOF_OF_QUOTA_SIZE]),
             VerifiedProofOfSelection::from_bytes_unchecked(
                 [proof_of_selection; PROOF_OF_SELECTION_SIZE],

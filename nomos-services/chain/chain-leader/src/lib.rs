@@ -1,4 +1,3 @@
-use crate::mempool::MempoolAdapter as _;
 mod blend;
 mod leadership;
 mod mempool;
@@ -9,8 +8,8 @@ use std::{collections::BTreeSet, fmt::Display, iter, pin::Pin, time::Duration};
 
 use chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use cryptarchia_engine::{Epoch, Slot};
-use ed25519_dalek::SigningKey;
 use futures::{StreamExt as _, future, stream};
+use key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
 pub use leadership::LeaderConfig;
 use nomos_core::{
     block::{Block, Error as BlockError, MAX_TRANSACTIONS},
@@ -43,11 +42,11 @@ use tx_service::{
     network::NetworkAdapter as MempoolNetworkAdapter,
     storage::MempoolStorageAdapter,
 };
-use zksign::SecretKey;
 
 use crate::{
     blend::BlendAdapter,
     leadership::{Leader, WinningPoLSlotNotifier},
+    mempool::MempoolAdapter as _,
     relays::CryptarchiaConsensusRelays,
 };
 
@@ -86,7 +85,7 @@ pub enum LeaderMsg {
     /// * a new consumer subscribes -> the latest value that was sent to all the
     ///   other consumers, if any
     WinningPolEpochSlotStreamSubscribe {
-        sender: oneshot::Sender<watch::Receiver<Option<(LeaderPrivate, SecretKey, Epoch)>>>,
+        sender: oneshot::Sender<watch::Receiver<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>>,
     },
 }
 
@@ -138,7 +137,7 @@ pub struct CryptarchiaLeader<
     Wallet: nomos_wallet::api::WalletServiceData,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    winning_pol_epoch_slots_sender: watch::Sender<Option<(LeaderPrivate, SecretKey, Epoch)>>,
+    winning_pol_epoch_slots_sender: watch::Sender<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>,
 }
 
 impl<
@@ -646,7 +645,7 @@ where
         let txs: Vec<_> = selected_txs_stream.take(MAX_TRANSACTIONS).collect().await;
 
         // TODO: use PoL signing key
-        let dummy_signing_key = SigningKey::from_bytes(&[0u8; 32]);
+        let dummy_signing_key = Ed25519Key::from_bytes(&[0u8; 32]);
 
         let block = Block::create(parent, slot, proof, txs, &dummy_signing_key)?;
 
@@ -679,7 +678,7 @@ where
 
 fn handle_inbound_message(
     msg: LeaderMsg,
-    winning_pol_epoch_slots_sender: &watch::Sender<Option<(LeaderPrivate, SecretKey, Epoch)>>,
+    winning_pol_epoch_slots_sender: &watch::Sender<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>,
 ) {
     let LeaderMsg::WinningPolEpochSlotStreamSubscribe { sender } = msg;
 

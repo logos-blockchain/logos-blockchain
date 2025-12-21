@@ -1,2 +1,2 @@
-language    = "C"  # Not "C++"
+language    = "C"  # For increased compatibility
 no_includes = true

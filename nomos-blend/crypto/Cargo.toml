@@ -14,7 +14,6 @@ workspace = true
 
 [dependencies]
 blake2         = { workspace = true }
-ed25519-dalek  = { default-features = false, features = ["serde"], version = "2" }
 groth16        = { workspace = true }
 nomos-utils    = { features = ["rng"], workspace = true }
 poq            = { workspace = true }
@@ -23,9 +22,8 @@ rs-merkle-tree = { default-features = false, version = "0.1", features = ["memor
 serde          = { workspace = true }
 subtle         = { workspace = true }
 thiserror      = "1"
-x25519-dalek   = { default-features = false, features = ["serde", "static_secrets", "zeroize"], version = "2" }
+x25519-dalek   = { workspace = true, features = ["serde", "static_secrets", "zeroize"] }
 zeroize        = { workspace = true }
-zksign         = { workspace = true }
 
 [dev-dependencies]
 num-bigint = { default-features = false, version = "0.4" }

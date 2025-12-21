@@ -1,15 +1,16 @@
+use key_management_system_service::keys::ZkPublicKey;
 use nomos_core::{
     header::HeaderId,
     mantle::{Note, Utxo, Value, tx_builder::MantleTxBuilder},
 };
 use overwatch::{
     DynError,
+    overwatch::OverwatchHandle,
     services::{AsServiceId, ServiceData, relay::OutboundRelay},
 };
 use tokio::sync::oneshot;
-use zksign::PublicKey;
 
-use crate::{WalletMsg, WalletServiceSettings};
+use crate::{WalletMsg, WalletService, WalletServiceSettings};
 
 pub trait WalletServiceData:
     ServiceData<Settings = WalletServiceSettings, Message = WalletMsg>
@@ -21,7 +22,7 @@ pub trait WalletServiceData:
 }
 
 impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> WalletServiceData
-    for crate::WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
+    for WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
 {
     type Kms = Kms;
     type Cryptarchia = Cryptarchia;
@@ -50,10 +51,16 @@ where
         }
     }
 
+    #[must_use]
+    pub async fn from_overwatch_handle(handle: &OverwatchHandle<RuntimeServiceId>) -> Self {
+        let relay = handle.relay::<Wallet>().await.unwrap();
+        Self::new(relay)
+    }
+
     pub async fn get_balance(
         &self,
         tip: HeaderId,
-        pk: PublicKey,
+        pk: ZkPublicKey,
     ) -> Result<Option<Value>, DynError> {
         let (resp_tx, rx) = oneshot::channel();
 
@@ -69,8 +76,8 @@ where
         &self,
         tip: HeaderId,
         tx_builder: MantleTxBuilder,
-        change_pk: PublicKey,
-        funding_pks: Vec<PublicKey>,
+        change_pk: ZkPublicKey,
+        funding_pks: Vec<ZkPublicKey>,
     ) -> Result<nomos_core::mantle::SignedMantleTx, DynError> {
         let (resp_tx, rx) = oneshot::channel();
 
@@ -91,9 +98,9 @@ where
     pub async fn transfer_funds(
         &self,
         tip: HeaderId,
-        change_pk: PublicKey,
-        funding_pks: Vec<PublicKey>,
-        recipient_pk: PublicKey,
+        change_pk: ZkPublicKey,
+        funding_pks: Vec<ZkPublicKey>,
+        recipient_pk: ZkPublicKey,
         amount: Value,
     ) -> Result<nomos_core::mantle::SignedMantleTx, DynError> {
         let mantle_tx_builder =

@@ -7,6 +7,7 @@ use std::{
 };
 
 pub use error::WalletError;
+use key_management_system_keys::keys::ZkPublicKey;
 use nomos_core::{
     block::Block,
     header::HeaderId,
@@ -16,7 +17,6 @@ use nomos_core::{
     },
 };
 use nomos_ledger::LedgerState;
-use zksign::PublicKey;
 
 pub struct WalletBlock {
     pub id: HeaderId,
@@ -40,11 +40,11 @@ impl<Tx: AuthenticatedMantleTx> From<Block<Tx>> for WalletBlock {
 #[derive(Clone)]
 pub struct WalletState {
     pub utxos: rpds::HashTrieMapSync<NoteId, Utxo>,
-    pub pk_index: rpds::HashTrieMapSync<PublicKey, rpds::HashTrieSetSync<NoteId>>,
+    pub pk_index: rpds::HashTrieMapSync<ZkPublicKey, rpds::HashTrieSetSync<NoteId>>,
 }
 
 impl WalletState {
-    pub fn from_ledger(known_keys: &HashSet<PublicKey>, ledger: &LedgerState) -> Self {
+    pub fn from_ledger(known_keys: &HashSet<ZkPublicKey>, ledger: &LedgerState) -> Self {
         let mut utxos = rpds::HashTrieMapSync::new_sync();
         let mut pk_index = rpds::HashTrieMapSync::new_sync();
 
@@ -67,7 +67,7 @@ impl WalletState {
 
     pub fn utxos_owned_by_pks(
         &self,
-        pks: impl IntoIterator<Item = impl Borrow<PublicKey>>,
+        pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
     ) -> Vec<Utxo> {
         pks.into_iter()
             .filter_map(|pk| self.pk_index.get(pk.borrow()))
@@ -79,8 +79,8 @@ impl WalletState {
     pub fn fund_tx<G: GasConstants>(
         &self,
         tx_builder: &MantleTxBuilder,
-        change_pk: PublicKey,
-        pks: impl IntoIterator<Item = impl Borrow<PublicKey>>,
+        change_pk: ZkPublicKey,
+        pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
     ) -> Result<MantleTxBuilder, WalletError> {
         let mut utxos = self.utxos_owned_by_pks(pks);
 
@@ -121,7 +121,7 @@ impl WalletState {
     }
 
     #[must_use]
-    pub fn balance(&self, pk: PublicKey) -> Option<Value> {
+    pub fn balance(&self, pk: ZkPublicKey) -> Option<Value> {
         let balance = self
             .pk_index
             .get(&pk)?
@@ -133,7 +133,7 @@ impl WalletState {
     }
 
     #[must_use]
-    pub fn apply_block(&self, known_keys: &HashSet<PublicKey>, block: &WalletBlock) -> Self {
+    pub fn apply_block(&self, known_keys: &HashSet<ZkPublicKey>, block: &WalletBlock) -> Self {
         let mut utxos = self.utxos.clone();
         let mut pk_index = self.pk_index.clone();
 
@@ -178,17 +178,17 @@ impl WalletState {
 
 #[derive(Clone)]
 pub struct Wallet {
-    known_keys: HashSet<PublicKey>,
+    known_keys: HashSet<ZkPublicKey>,
     wallet_states: BTreeMap<HeaderId, WalletState>,
 }
 
 impl Wallet {
     pub fn from_lib(
-        known_keys: impl IntoIterator<Item = PublicKey>,
+        known_keys: impl IntoIterator<Item = ZkPublicKey>,
         lib: HeaderId,
         ledger: &LedgerState,
     ) -> Self {
-        let known_keys: HashSet<PublicKey> = known_keys.into_iter().collect();
+        let known_keys: HashSet<ZkPublicKey> = known_keys.into_iter().collect();
         let wallet_state = WalletState::from_ledger(&known_keys, ledger);
 
         Self {
@@ -198,7 +198,7 @@ impl Wallet {
     }
 
     #[must_use]
-    pub const fn known_keys(&self) -> &HashSet<PublicKey> {
+    pub const fn known_keys(&self) -> &HashSet<ZkPublicKey> {
         &self.known_keys
     }
 
@@ -220,7 +220,7 @@ impl Wallet {
         Ok(())
     }
 
-    pub fn balance(&self, tip: HeaderId, pk: PublicKey) -> Result<Option<Value>, WalletError> {
+    pub fn balance(&self, tip: HeaderId, pk: ZkPublicKey) -> Result<Option<Value>, WalletError> {
         Ok(self.wallet_state_at(tip)?.balance(pk))
     }
 
@@ -228,8 +228,8 @@ impl Wallet {
         &self,
         tip: HeaderId,
         tx_builder: &MantleTxBuilder,
-        change_pk: PublicKey,
-        funding_pks: impl IntoIterator<Item = impl Borrow<PublicKey>>,
+        change_pk: ZkPublicKey,
+        funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
     ) -> Result<MantleTxBuilder, WalletError> {
         self.wallet_state_at(tip)?
             .fund_tx::<G>(tx_builder, change_pk, funding_pks)
@@ -284,8 +284,8 @@ mod tests {
 
     use super::*;
 
-    fn pk(v: u64) -> PublicKey {
-        PublicKey::from(BigUint::from(v))
+    fn pk(v: u64) -> ZkPublicKey {
+        ZkPublicKey::from(BigUint::from(v))
     }
 
     fn tx_hash(v: u64) -> TxHash {

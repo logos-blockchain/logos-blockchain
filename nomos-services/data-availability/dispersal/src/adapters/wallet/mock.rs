@@ -1,7 +1,6 @@
 use std::convert::Infallible;
 
-use ed25519::signature::Signer as _;
-use ed25519_dalek::SigningKey;
+use key_management_system_keys::keys::{Ed25519Key, ZkKey};
 use nomos_core::mantle::{
     Op, OpProof, SignedMantleTx, Transaction as _, ops::channel::blob::BlobOp,
     tx_builder::MantleTxBuilder,
@@ -39,8 +38,8 @@ impl DaWalletAdapter for MockWalletAdapter {
         // Hardcoded signing key for testing (matches the all-zeros key expected in
         // tests) TODO: In production, this should come from a key management
         // system
-        let signing_key = SigningKey::from_bytes(&[0u8; 32]);
-        let signer = signing_key.verifying_key();
+        let signing_key = Ed25519Key::from_bytes(&[0u8; 32]);
+        let signer = signing_key.public_key();
 
         let blob_op = BlobOp {
             channel: channel_id,
@@ -58,13 +57,13 @@ impl DaWalletAdapter for MockWalletAdapter {
 
         // Sign the transaction hash
         let tx_hash = mantle_tx.hash();
-        let signature = signing_key.sign(&tx_hash.as_signing_bytes());
+        let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
         // Create signed transaction with valid signature proof
         Ok(SignedMantleTx::new(
             mantle_tx,
             vec![OpProof::Ed25519Sig(signature)],
-            zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
+            ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
         )
         .expect("Transaction with valid signature should be valid"))
     }

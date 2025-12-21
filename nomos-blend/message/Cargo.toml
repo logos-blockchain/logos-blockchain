@@ -15,9 +15,7 @@ workspace = true
 [dependencies]
 blake2                     = { workspace = true }
 derivative                 = { default-features = false, version = "2" }
-ed25519-dalek              = { default-features = false, version = "2.2.0" }
 groth16                    = { workspace = true }
-hex                        = { default-features = false, version = "0.4" }
 itertools                  = { default-features = false, version = "0.14" }
 key-management-system-keys = { workspace = true }
 nomos-blend-crypto         = { workspace = true }

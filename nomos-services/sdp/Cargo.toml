@@ -13,15 +13,14 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait   = "0.1"
-ed25519-dalek = { default-features = false, version = "2.2.0" }
-futures       = { default-features = false, version = "0.3" }
-nomos-core    = { workspace = true }
-overwatch     = { workspace = true }
-serde         = { workspace = true, features = ["derive"] }
-thiserror     = { workspace = true }
-tokio         = { default-features = false, version = "1" }
-tokio-stream  = { default-features = false, version = "0.1" }
-tracing       = { workspace = true }
-tx-service    = { workspace = true }
-zksign        = { workspace = true }
+async-trait                = "0.1"
+futures                    = { default-features = false, version = "0.3" }
+key-management-system-keys = { workspace = true }
+nomos-core                 = { workspace = true }
+overwatch                  = { workspace = true }
+serde                      = { workspace = true, features = ["derive"] }
+thiserror                  = { workspace = true }
+tokio                      = { default-features = false, version = "1" }
+tokio-stream               = { default-features = false, version = "0.1" }
+tracing                    = { workspace = true }
+tx-service                 = { workspace = true }

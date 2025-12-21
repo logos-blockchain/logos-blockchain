@@ -5,7 +5,6 @@ use std::{
     task::{Context, Poll},
 };
 
-use either::Either;
 use futures::{
     AsyncWriteExt as _, FutureExt as _, StreamExt as _,
     future::BoxFuture,
@@ -646,10 +645,7 @@ where
         MembershipHandler<Id = PeerId, NetworkId = SubnetworkId> + Clone + Send + Sync + 'static,
     Addressbook: AddressBookHandler<Id = PeerId> + Send + Sync + 'static,
 {
-    type ConnectionHandler = Either<
-        <libp2p_stream::Behaviour as NetworkBehaviour>::ConnectionHandler,
-        libp2p::swarm::dummy::ConnectionHandler,
-    >;
+    type ConnectionHandler = <libp2p_stream::Behaviour as NetworkBehaviour>::ConnectionHandler;
     type ToSwarm = HistoricSamplingEvent;
 
     fn handle_established_inbound_connection(
@@ -661,9 +657,12 @@ where
     ) -> Result<THandler<Self>, ConnectionDenied> {
         let _ = self.connection_broadcast_sender.send(peer);
 
-        self.stream_behaviour
-            .handle_established_inbound_connection(connection_id, peer, local_addr, remote_addr)
-            .map(Either::Left)
+        self.stream_behaviour.handle_established_inbound_connection(
+            connection_id,
+            peer,
+            local_addr,
+            remote_addr,
+        )
     }
 
     fn handle_established_outbound_connection(
@@ -684,7 +683,6 @@ where
                 role_override,
                 port_use,
             )
-            .map(Either::Left)
     }
 
     fn on_swarm_event(&mut self, event: FromSwarm) {
@@ -697,7 +695,6 @@ where
         connection_id: ConnectionId,
         event: THandlerOutEvent<Self>,
     ) {
-        let Either::Left(event) = event;
         self.stream_behaviour
             .on_connection_handler_event(peer_id, connection_id, event);
     }

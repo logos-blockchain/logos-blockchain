@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use zksign::PublicKey;
+use key_management_system_keys::keys::ZkPublicKey;
 
 use super::{GasConstants, GasCost as _, MantleTx, Note, Op, Utxo};
 use crate::mantle::ledger::Tx as LedgerTx;
@@ -77,7 +77,7 @@ impl MantleTxBuilder {
     }
 
     #[must_use]
-    pub fn return_change<G: GasConstants>(self, change_pk: PublicKey) -> Option<Self> {
+    pub fn return_change<G: GasConstants>(self, change_pk: ZkPublicKey) -> Option<Self> {
         // Calculate the funding delta with a dummy change note to account for
         // the gas cost increase from adding the output
         let delta_with_change = self.with_dummy_change_note().funding_delta::<G>();
@@ -115,7 +115,7 @@ impl MantleTxBuilder {
     pub fn with_dummy_change_note(&self) -> Self {
         self.clone().add_ledger_output(Note {
             value: 0,
-            pk: PublicKey::zero(),
+            pk: ZkPublicKey::zero(),
         })
     }
 

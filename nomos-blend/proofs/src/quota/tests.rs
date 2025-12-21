@@ -1,15 +1,11 @@
 use const_hex::FromHex as _;
 use groth16::{Field as _, fr_from_bytes_unchecked};
-use nomos_blend_crypto::{
-    ZkHash,
-    keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey},
-    merkle::MerkleTree,
-};
-use zksign::SecretKey;
+use key_management_system_keys::keys::UnsecuredZkKey;
+use nomos_blend_crypto::{ZkHash, merkle::MerkleTree};
 
 use crate::{
     quota::{
-        DOMAIN_SEPARATION_TAG_FR, VerifiedProofOfQuota,
+        DOMAIN_SEPARATION_TAG_FR, ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, VerifiedProofOfQuota,
         fixtures::{valid_proof_of_core_quota_inputs, valid_proof_of_leadership_quota_inputs},
         inputs::prove::{
             PrivateInputs, PublicInputs,
@@ -116,14 +112,15 @@ struct PoQInputs<const INPUTS: usize> {
 fn generate_inputs<const INPUTS: usize>() -> PoQInputs<INPUTS> {
     let keys: [_; INPUTS] = (1..=INPUTS as u64)
         .map(|i| {
-            let sk = SecretKey::new(ZkHash::from(i));
+            let sk = UnsecuredZkKey::new(ZkHash::from(i));
             let pk = sk.to_public_key();
             (sk, pk)
         })
         .collect::<Vec<_>>()
         .try_into()
         .unwrap();
-    let merkle_tree = MerkleTree::new(keys.clone().map(|(_, pk)| pk).to_vec()).unwrap();
+    let merkle_tree =
+        MerkleTree::new(keys.clone().map(|(_, pk)| pk.into_inner()).to_vec()).unwrap();
     let public_inputs = {
         let core_inputs = CoreInputs {
             quota: 1,
@@ -145,7 +142,7 @@ fn generate_inputs<const INPUTS: usize>() -> PoQInputs<INPUTS> {
         }
     };
     let secret_inputs = keys.map(|(sk, pk)| {
-        let proof = merkle_tree.get_proof_for_key(&pk).unwrap();
+        let proof = merkle_tree.get_proof_for_key(pk.as_fr()).unwrap();
         ProofOfCoreQuotaInputs {
             core_sk: sk.into_inner(),
             core_path_and_selectors: proof,

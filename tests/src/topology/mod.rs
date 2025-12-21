@@ -27,7 +27,6 @@ use nomos_network::backends::libp2p::Libp2pInfo;
 use nomos_utils::net::get_available_udp_port;
 use rand::{Rng as _, thread_rng};
 use tokio::time::{sleep, timeout};
-use zksign::SecretKey;
 
 use crate::{
     adjust_timeout,
@@ -129,7 +128,7 @@ impl TopologyConfig {
 #[derive(Clone)]
 pub struct GenesisNoteSpec {
     pub note: Note,
-    pub note_sk: SecretKey,
+    pub note_sk: ZkKey,
 }
 
 #[derive(Clone)]
@@ -786,19 +785,15 @@ pub fn create_kms_configs(
                     ),
                     (
                         blend_conf.core.zk.secret_key_kms_id.clone(),
-                        ZkKey::new(zk_secret_key.clone()).into(),
+                        zk_secret_key.clone().into(),
                     ),
                     (
-                        key_id_for_preload_backend(
-                            &Ed25519Key::from(da_conf.signer.clone()).into(),
-                        ),
-                        Ed25519Key::from(da_conf.signer.clone()).into(),
+                        key_id_for_preload_backend(&da_conf.signer.clone().into()),
+                        da_conf.signer.clone().into(),
                     ),
                     (
-                        key_id_for_preload_backend(
-                            &ZkKey::new(da_conf.secret_zk_key.clone()).into(),
-                        ),
-                        ZkKey::new(da_conf.secret_zk_key.clone()).into(),
+                        key_id_for_preload_backend(&zk_secret_key.clone().into()),
+                        zk_secret_key.clone().into(),
                     ),
                 ]
                 .into(),

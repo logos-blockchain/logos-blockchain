@@ -1,6 +1,5 @@
 use std::task::{Context, Poll};
 
-use either::Either;
 use futures::{
     AsyncWriteExt as _, FutureExt as _, StreamExt as _, future::BoxFuture, stream::FuturesUnordered,
 };
@@ -166,10 +165,7 @@ impl<Membership: MembershipHandler> DispersalValidatorBehaviour<Membership> {
 impl<M: MembershipHandler<Id = PeerId, NetworkId = SubnetworkId> + 'static> NetworkBehaviour
     for DispersalValidatorBehaviour<M>
 {
-    type ConnectionHandler = Either<
-        <libp2p_stream::Behaviour as NetworkBehaviour>::ConnectionHandler,
-        libp2p::swarm::dummy::ConnectionHandler,
-    >;
+    type ConnectionHandler = <libp2p_stream::Behaviour as NetworkBehaviour>::ConnectionHandler;
     type ToSwarm = DispersalEvent;
 
     fn handle_established_inbound_connection(
@@ -179,9 +175,12 @@ impl<M: MembershipHandler<Id = PeerId, NetworkId = SubnetworkId> + 'static> Netw
         local_addr: &Multiaddr,
         remote_addr: &Multiaddr,
     ) -> Result<THandler<Self>, ConnectionDenied> {
-        self.stream_behaviour
-            .handle_established_inbound_connection(connection_id, peer, local_addr, remote_addr)
-            .map(Either::Left)
+        self.stream_behaviour.handle_established_inbound_connection(
+            connection_id,
+            peer,
+            local_addr,
+            remote_addr,
+        )
     }
 
     fn handle_established_outbound_connection(
@@ -192,15 +191,9 @@ impl<M: MembershipHandler<Id = PeerId, NetworkId = SubnetworkId> + 'static> Netw
         role_override: Endpoint,
         port_use: PortUse,
     ) -> Result<THandler<Self>, ConnectionDenied> {
-        // FIXME:
-        // Sampling or replication behaviour might open connection to a member peer.
-        // During the lifetime of a connection the remote peer might decide to
-        // disperse data via existing connection - in such case the connection
-        // needs to already have a handler that accepts DA_DISPERSAL_PROTOCOL
-        // messages.
-        // if !self.membership.is_allowed(&peer) {
-        //     return Ok(Either::Right(libp2p::swarm::dummy::ConnectionHandler));
-        // }
+        // No membership filtering - validators accept dispersal from any peer,
+        // including non-members. This allows non-member executors to disperse
+        // data to the network.
         self.stream_behaviour
             .handle_established_outbound_connection(
                 connection_id,
@@ -209,7 +202,6 @@ impl<M: MembershipHandler<Id = PeerId, NetworkId = SubnetworkId> + 'static> Netw
                 role_override,
                 port_use,
             )
-            .map(Either::Left)
     }
 
     fn on_swarm_event(&mut self, event: FromSwarm) {
@@ -222,7 +214,6 @@ impl<M: MembershipHandler<Id = PeerId, NetworkId = SubnetworkId> + 'static> Netw
         connection_id: ConnectionId,
         event: THandlerOutEvent<Self>,
     ) {
-        let Either::Left(event) = event;
         self.stream_behaviour
             .on_connection_handler_event(peer_id, connection_id, event);
     }

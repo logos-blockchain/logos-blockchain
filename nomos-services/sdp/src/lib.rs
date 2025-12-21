@@ -8,6 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _};
+use key_management_system_keys::keys::ZkPublicKey;
 use nomos_core::{
     block::BlockNumber,
     mantle::{NoteId, SignedMantleTx, tx_builder::MantleTxBuilder},
@@ -26,7 +27,6 @@ use overwatch::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, oneshot};
 use tokio_stream::wrappers::BroadcastStream;
-use zksign::PublicKey;
 
 use crate::adapters::{
     mempool::SdpMempoolAdapter,
@@ -68,7 +68,7 @@ pub struct SdpSettings {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Declaration {
     pub id: DeclarationId,
-    pub zk_id: PublicKey,
+    pub zk_id: ZkPublicKey,
     pub locked_note_id: NoteId,
 }
 

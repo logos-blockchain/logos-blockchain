@@ -4,10 +4,10 @@ use bytes::Bytes;
 use groth16::{
     Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes, fr_from_bytes_unchecked, serde::serde_fr,
 };
+use key_management_system_keys::keys::ZkPublicKey;
 use num_bigint::BigUint;
 use poseidon2::Digest;
 use serde::{Deserialize, Serialize};
-use zksign::PublicKey;
 
 use crate::{
     crypto::ZkHasher,
@@ -49,12 +49,12 @@ impl From<Fr> for NoteId {
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 pub struct Note {
     pub value: Value,
-    pub pk: PublicKey,
+    pub pk: ZkPublicKey,
 }
 
 impl Note {
     #[must_use]
-    pub const fn new(value: Value, pk: PublicKey) -> Self {
+    pub const fn new(value: Value, pk: ZkPublicKey) -> Self {
         Self { value, pk }
     }
 
@@ -180,9 +180,9 @@ mod test {
     use super::*;
     #[test]
     fn test_utxo_by_index() {
-        let pk0 = PublicKey::from(Fr::from(BigUint::from(0u8)));
-        let pk1 = PublicKey::from(Fr::from(BigUint::from(1u8)));
-        let pk2 = PublicKey::from(Fr::from(BigUint::from(2u8)));
+        let pk0 = ZkPublicKey::from(Fr::from(BigUint::from(0u8)));
+        let pk1 = ZkPublicKey::from(Fr::from(BigUint::from(1u8)));
+        let pk2 = ZkPublicKey::from(Fr::from(BigUint::from(2u8)));
         let tx = Tx {
             inputs: vec![NoteId(BigUint::from(0u8).into())],
             outputs: vec![

@@ -1,10 +1,7 @@
 use core::convert::Infallible;
 
-use key_management_system_keys::keys::UnsecuredEd25519Key;
-use nomos_blend_crypto::{
-    keys::{Ed25519PublicKey, X25519PrivateKey},
-    signatures::Signature,
-};
+use key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
+use nomos_blend_crypto::keys::X25519PrivateKey;
 use nomos_blend_proofs::{
     quota::{ProofOfQuota, VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
@@ -214,7 +211,7 @@ fn invalid_public_header_signature() {
             PayloadType::Data,
             PAYLOAD_BODY.try_into().unwrap(),
         ));
-        *msg.public_header_mut().signature_mut() = Signature::from([100u8; _]);
+        *msg.public_header_mut().signature_mut() = Ed25519Signature::from([100u8; _]);
         msg
     };
 
@@ -296,14 +293,15 @@ fn serde_encapsulated_and_verified() {
 }
 
 fn generate_inputs(cnt: usize) -> (Vec<EncapsulationInput>, Vec<X25519PrivateKey>) {
-    let recipient_signing_keys = core::iter::repeat_with(UnsecuredEd25519Key::generate)
-        .take(cnt)
-        .collect::<Vec<_>>();
+    let recipient_signing_keys =
+        core::iter::repeat_with(UnsecuredEd25519Key::generate_with_blake_rng)
+            .take(cnt)
+            .collect::<Vec<_>>();
     let inputs = recipient_signing_keys
         .iter()
         .map(|recipient_signing_key| {
             EncapsulationInput::new(
-                UnsecuredEd25519Key::generate(),
+                UnsecuredEd25519Key::generate_with_blake_rng(),
                 &recipient_signing_key.public_key(),
                 VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
                 VerifiedProofOfSelection::from_bytes_unchecked([0; _]),

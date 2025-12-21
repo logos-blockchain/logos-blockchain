@@ -53,7 +53,14 @@ tower-http               = { default-features = false, features = ["cors", "limi
 tracing                  = { workspace = true }
 tx-service               = { workspace = true }
 utoipa                   = { workspace = true }
-utoipa-swagger-ui        = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# XCompiling from Unix has issues downloading assets. Use vendored instead.
+# This happens locally but might not on CI.
+utoipa-swagger-ui = { workspace = true, features = ["axum", "vendored"] }
+
+[target.'cfg(not(windows))'.dependencies]
+utoipa-swagger-ui = { workspace = true, features = ["axum"] }
 
 [features]
 default         = ["tracing"]

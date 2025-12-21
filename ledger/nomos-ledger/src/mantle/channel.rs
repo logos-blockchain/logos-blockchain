@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ed25519::signature::Verifier as _;
+use key_management_system_keys::keys::Ed25519Signature;
 use nomos_core::mantle::{
     TxHash,
     ops::channel::{
@@ -100,7 +100,7 @@ impl Channels {
         mut self,
         channel_id: ChannelId,
         op: &SetKeysOp,
-        sig: &ed25519::Signature,
+        sig: &Ed25519Signature,
         tx_hash: &TxHash,
     ) -> Result<Self, Error> {
         if op.keys.is_empty() {

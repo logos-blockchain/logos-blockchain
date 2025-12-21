@@ -1,7 +1,4 @@
-use nomos_blend_crypto::{
-    keys::{Ed25519PublicKey, Ed25519PublicKeyExt as _},
-    signatures::Signature,
-};
+use key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature};
 use nomos_blend_proofs::quota::{self, ProofOfQuota, VerifiedProofOfQuota};
 use serde::{Deserialize, Serialize};
 
@@ -15,14 +12,14 @@ pub struct PublicHeader {
     version: u8,
     signing_pubkey: Ed25519PublicKey,
     proof_of_quota: ProofOfQuota,
-    signature: Signature,
+    signature: Ed25519Signature,
 }
 
 impl PublicHeader {
     pub const fn new(
         signing_pubkey: Ed25519PublicKey,
         proof_of_quota: &ProofOfQuota,
-        signature: Signature,
+        signature: Ed25519Signature,
     ) -> Self {
         Self {
             proof_of_quota: *proof_of_quota,
@@ -33,7 +30,7 @@ impl PublicHeader {
     }
 
     pub fn verify_signature(&self, body: &[u8]) -> Result<(), Error> {
-        if self.signing_pubkey.verify_signature(body, &self.signature) {
+        if self.signing_pubkey.verify(body, &self.signature).is_ok() {
             Ok(())
         } else {
             Err(Error::SignatureVerificationFailed)
@@ -58,11 +55,11 @@ impl PublicHeader {
         &self.proof_of_quota
     }
 
-    pub const fn signature(&self) -> &Signature {
+    pub const fn signature(&self) -> &Ed25519Signature {
         &self.signature
     }
 
-    pub const fn into_components(self) -> (u8, Ed25519PublicKey, ProofOfQuota, Signature) {
+    pub const fn into_components(self) -> (u8, Ed25519PublicKey, ProofOfQuota, Ed25519Signature) {
         (
             self.version,
             self.signing_pubkey,
@@ -72,7 +69,7 @@ impl PublicHeader {
     }
 
     #[cfg(any(test, feature = "unsafe-test-functions"))]
-    pub const fn signature_mut(&mut self) -> &mut Signature {
+    pub const fn signature_mut(&mut self) -> &mut Ed25519Signature {
         &mut self.signature
     }
 
@@ -87,7 +84,7 @@ pub struct VerifiedPublicHeader {
     version: u8,
     signing_pubkey: Ed25519PublicKey,
     proof_of_quota: VerifiedProofOfQuota,
-    signature: Signature,
+    signature: Ed25519Signature,
 }
 
 impl From<VerifiedPublicHeader> for PublicHeader {
@@ -107,7 +104,7 @@ impl VerifiedPublicHeader {
     pub fn new(
         proof_of_quota: VerifiedProofOfQuota,
         signing_pubkey: Ed25519PublicKey,
-        signature: Signature,
+        signature: Ed25519Signature,
     ) -> Self {
         let (version, signing_pubkey, _, signature) =
             PublicHeader::new(signing_pubkey, proof_of_quota.as_ref(), signature).into_components();
@@ -145,12 +142,14 @@ impl VerifiedPublicHeader {
     }
 
     #[cfg(any(feature = "unsafe-test-functions", test))]
-    pub const fn signature_mut(&mut self) -> &mut Signature {
+    pub const fn signature_mut(&mut self) -> &mut Ed25519Signature {
         &mut self.signature
     }
 
     #[must_use]
-    pub const fn into_components(self) -> (u8, Ed25519PublicKey, VerifiedProofOfQuota, Signature) {
+    pub const fn into_components(
+        self,
+    ) -> (u8, Ed25519PublicKey, VerifiedProofOfQuota, Ed25519Signature) {
         (
             self.version,
             self.signing_pubkey,
@@ -162,7 +161,7 @@ impl VerifiedPublicHeader {
 
 #[cfg(test)]
 mod tests {
-    use nomos_blend_crypto::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
+    use key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
     use nomos_blend_proofs::quota::VerifiedProofOfQuota;
     use nomos_core::codec::{DeserializeOp as _, SerializeOp as _};
 

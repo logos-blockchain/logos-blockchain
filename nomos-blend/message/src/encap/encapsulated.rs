@@ -1,9 +1,8 @@
 use itertools::Itertools as _;
-use key_management_system_keys::keys::UnsecuredEd25519Key;
+use key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
 use nomos_blend_crypto::{
     cipher::{AdvancedCipher, Cipher},
-    keys::{Ed25519PublicKey, SharedKey},
-    signatures::Signature,
+    keys::SharedKey,
 };
 use nomos_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},
@@ -14,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Error, PayloadType,
-    crypto::{domains, key_ext::Ed25519SecretKeyExt as _},
+    crypto::domains,
     encap::{
         ProofsVerifier,
         decapsulated::{PartDecapsulationOutput, PrivateHeaderDecapsulationOutput},
@@ -209,8 +208,8 @@ impl EncapsulatedPart {
     }
 
     /// Signs the encapsulated part using the provided key.
-    pub(super) fn sign(&self, key: &UnsecuredEd25519Key) -> Signature {
-        key.sign(&signing_body(&self.private_header, &self.payload))
+    pub(super) fn sign(&self, key: &UnsecuredEd25519Key) -> Ed25519Signature {
+        key.sign_payload(&signing_body(&self.private_header, &self.payload))
     }
 }
 
@@ -323,7 +322,7 @@ impl EncapsulatedPrivateHeader {
         shared_key: &SharedKey,
         signing_pubkey: Ed25519PublicKey,
         proof_of_quota: &VerifiedProofOfQuota,
-        signature: Signature,
+        signature: Ed25519Signature,
         proof_of_selection: VerifiedProofOfSelection,
         is_last: bool,
     ) -> Self {

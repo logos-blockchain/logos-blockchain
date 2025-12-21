@@ -1,7 +1,6 @@
-use nomos_blend_crypto::keys::Ed25519PublicKey;
 use serde::{Deserialize, Serialize};
 
-use crate::ZkHash;
+use crate::{ZkHash, quota::Ed25519PublicKey};
 
 /// Public inputs for all types of Proof of Quota. Spec: <https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#25a261aa09df80ce943dce35dd5403ac>.
 #[derive(Debug, Clone, Copy)]
@@ -15,7 +14,7 @@ pub struct Inputs {
 #[cfg(test)]
 impl Default for Inputs {
     fn default() -> Self {
-        use nomos_blend_crypto::keys::ED25519_PUBLIC_KEY_SIZE;
+        use crate::quota::ED25519_PUBLIC_KEY_SIZE;
 
         Self {
             signing_key: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),

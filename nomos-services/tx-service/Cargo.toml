@@ -42,7 +42,7 @@ nomos-utils           = { workspace = true }
 overwatch-derive      = { workspace = true }
 tempfile              = "3"
 tokio                 = { default-features = false, version = "1" }
-tx-service            = { features = ["mock"], path = "." }
+tx-service            = { features = ["mock", "rocksdb-backend"], path = "." }
 
 [features]
 default         = []

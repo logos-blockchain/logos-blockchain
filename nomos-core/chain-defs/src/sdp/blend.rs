@@ -1,13 +1,15 @@
-use ed25519_dalek::PUBLIC_KEY_LENGTH;
+use key_management_system_keys::keys::ED25519_PUBLIC_KEY_SIZE;
 use nom::{IResult, Parser as _, bytes::complete::take, number::complete::u8 as nom_u8};
-use nomos_blend_crypto::keys::Ed25519PublicKey;
 use nomos_blend_proofs::{
     quota::{PROOF_OF_QUOTA_SIZE, ProofOfQuota},
     selection::{PROOF_OF_SELECTION_SIZE, ProofOfSelection},
 };
 use serde::{Deserialize, Serialize};
 
-use crate::sdp::{ACTIVE_METADATA_BLEND_TYPE, SessionNumber, parse_session_number};
+use crate::{
+    mantle::ops::channel::Ed25519PublicKey,
+    sdp::{ACTIVE_METADATA_BLEND_TYPE, SessionNumber, parse_session_number},
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ActivityProof {
@@ -68,7 +70,7 @@ fn parse_activity_proof(input: &[u8]) -> IResult<&[u8], ActivityProof> {
     }
     let (input, session) = parse_session_number(input)?;
 
-    let (input, signing_key) = parse_const_size_bytes::<PUBLIC_KEY_LENGTH>(input)?;
+    let (input, signing_key) = parse_const_size_bytes::<ED25519_PUBLIC_KEY_SIZE>(input)?;
     let signing_key = Ed25519PublicKey::from_bytes(&signing_key)
         .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Fail)))?;
 
@@ -110,6 +112,7 @@ fn parse_const_size_bytes<const N: usize>(input: &[u8]) -> IResult<&[u8], [u8; N
 
 #[cfg(test)]
 mod tests {
+    use key_management_system_keys::keys::Ed25519Key;
     use nomos_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 
     use super::*;
@@ -193,7 +196,7 @@ mod tests {
     }
 
     fn new_signing_key(byte: u8) -> Ed25519PublicKey {
-        ed25519_dalek::SigningKey::from_bytes(&[byte; _]).verifying_key()
+        Ed25519Key::from_bytes(&[byte; _]).public_key()
     }
 
     fn new_proof_of_quota_unchecked(byte: u8) -> ProofOfQuota {

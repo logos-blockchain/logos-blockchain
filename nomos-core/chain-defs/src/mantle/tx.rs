@@ -5,6 +5,7 @@ use groth16::{
     Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes,
     serde::serde_fr,
 };
+use key_management_system_keys::keys::ZkSignature;
 use num_bigint::BigUint;
 use poseidon2::{Digest, ZkHash};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -218,7 +219,7 @@ pub struct SignedMantleTx {
     pub mantle_tx: MantleTx,
     // TODO: make this more efficient
     pub ops_proofs: Vec<OpProof>,
-    pub ledger_tx_proof: zksign::Signature,
+    pub ledger_tx_proof: ZkSignature,
 }
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
@@ -254,7 +255,7 @@ impl SignedMantleTx {
     pub fn new(
         mantle_tx: MantleTx,
         ops_proofs: Vec<OpProof>,
-        ledger_tx_proof: zksign::Signature,
+        ledger_tx_proof: ZkSignature,
     ) -> Result<Self, VerificationError> {
         let tx = Self {
             mantle_tx,
@@ -272,7 +273,7 @@ impl SignedMantleTx {
     pub const fn new_unverified(
         mantle_tx: MantleTx,
         ops_proofs: Vec<OpProof>,
-        ledger_tx_proof: zksign::Signature,
+        ledger_tx_proof: ZkSignature,
     ) -> Self {
         Self {
             mantle_tx,
@@ -283,8 +284,6 @@ impl SignedMantleTx {
 
     // TODO: might drop proofs after verification
     fn verify_ops_proofs(&self) -> Result<(), VerificationError> {
-        use ed25519::signature::Verifier as _;
-
         // Check that we have the same number of proofs as ops
         if self.mantle_tx.ops.len() != self.ops_proofs.len() {
             return Err(VerificationError::ProofCountMismatch {
@@ -352,7 +351,7 @@ impl AuthenticatedMantleTx for SignedMantleTx {
         &self.mantle_tx
     }
 
-    fn ledger_tx_proof(&self) -> &zksign::Signature {
+    fn ledger_tx_proof(&self) -> &ZkSignature {
         &self.ledger_tx_proof
     }
 
@@ -388,7 +387,7 @@ impl<'de> Deserialize<'de> for SignedMantleTx {
         struct SignedMantleTxHelper {
             mantle_tx: MantleTx,
             ops_proofs: Vec<OpProof>,
-            ledger_tx_proof: zksign::Signature,
+            ledger_tx_proof: ZkSignature,
         }
 
         let helper = SignedMantleTxHelper::deserialize(deserializer)?;
@@ -399,8 +398,7 @@ impl<'de> Deserialize<'de> for SignedMantleTx {
 
 #[cfg(test)]
 mod tests {
-    use ed25519::signature::Signer as _;
-    use ed25519_dalek::SigningKey;
+    use key_management_system_keys::keys::{Ed25519Key, ZkKey};
 
     use super::*;
     use crate::mantle::{
@@ -417,7 +415,7 @@ mod tests {
         }
     }
 
-    fn create_test_blob_op(signing_key: &SigningKey) -> BlobOp {
+    fn create_test_blob_op(signing_key: &Ed25519Key) -> BlobOp {
         BlobOp {
             channel: [0; 32].into(),
             session: 0u64,
@@ -425,33 +423,33 @@ mod tests {
             blob_size: 0,
             da_storage_gas_price: 0,
             parent: [0; 32].into(),
-            signer: signing_key.verifying_key(),
+            signer: signing_key.public_key(),
         }
     }
 
-    fn create_test_inscribe_op(signing_key: &SigningKey) -> InscriptionOp {
+    fn create_test_inscribe_op(signing_key: &Ed25519Key) -> InscriptionOp {
         InscriptionOp {
             channel_id: [0; 32].into(),
             inscription: vec![1, 2, 3],
             parent: [0; 32].into(),
-            signer: signing_key.verifying_key(),
+            signer: signing_key.public_key(),
         }
     }
 
     #[test]
     fn test_signed_mantle_tx_new_with_valid_blob_proof() {
-        let signing_key = SigningKey::from_bytes(&[1; 32]);
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let blob_op = create_test_blob_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelBlob(blob_op)]);
 
         // Sign the transaction hash
         let tx_hash = mantle_tx.hash();
-        let signature = signing_key.sign(&tx_hash.as_signing_bytes());
+        let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
         let result = SignedMantleTx::new(
             mantle_tx,
             vec![OpProof::Ed25519Sig(signature)],
-            zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
+            ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
         );
 
         assert!(result.is_ok());
@@ -459,18 +457,18 @@ mod tests {
 
     #[test]
     fn test_signed_mantle_tx_new_with_valid_inscribe_proof() {
-        let signing_key = SigningKey::from_bytes(&[1; 32]);
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscribe_op = create_test_inscribe_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
 
         // Sign the transaction hash
         let tx_hash = mantle_tx.hash();
-        let signature = signing_key.sign(&tx_hash.as_signing_bytes());
+        let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
         let result = SignedMantleTx::new(
             mantle_tx,
             vec![OpProof::Ed25519Sig(signature)],
-            zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
+            ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
         );
 
         assert!(result.is_ok());
@@ -478,12 +476,11 @@ mod tests {
 
     #[test]
     fn test_signed_mantle_tx_new_missing_inscribe_proof() {
-        let signing_key = SigningKey::from_bytes(&[1; 32]);
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscribe_op = create_test_inscribe_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
 
-        let ledger_tx_proof =
-            zksign::SecretKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap();
+        let ledger_tx_proof = ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap();
         let result = SignedMantleTx::new(mantle_tx, vec![], ledger_tx_proof);
 
         assert!(matches!(
@@ -497,19 +494,19 @@ mod tests {
 
     #[test]
     fn test_signed_mantle_tx_new_invalid_blob_signature() {
-        let signing_key = SigningKey::from_bytes(&[1; 32]);
-        let wrong_signing_key = SigningKey::from_bytes(&[2; 32]);
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+        let wrong_signing_key = Ed25519Key::from_bytes(&[2; 32]);
         let blob_op = create_test_blob_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelBlob(blob_op)]);
 
         // Sign with wrong key
         let tx_hash = mantle_tx.hash();
-        let signature = wrong_signing_key.sign(&tx_hash.as_signing_bytes());
+        let signature = wrong_signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
         let result = SignedMantleTx::new(
             mantle_tx,
             vec![OpProof::Ed25519Sig(signature)],
-            zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
+            ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
         );
 
         assert!(matches!(
@@ -520,19 +517,19 @@ mod tests {
 
     #[test]
     fn test_signed_mantle_tx_new_invalid_inscribe_signature() {
-        let signing_key = SigningKey::from_bytes(&[1; 32]);
-        let wrong_signing_key = SigningKey::from_bytes(&[2; 32]);
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+        let wrong_signing_key = Ed25519Key::from_bytes(&[2; 32]);
         let inscribe_op = create_test_inscribe_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
 
         // Sign with wrong key
         let tx_hash = mantle_tx.hash();
-        let signature = wrong_signing_key.sign(&tx_hash.as_signing_bytes());
+        let signature = wrong_signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
         let result = SignedMantleTx::new(
             mantle_tx,
             vec![OpProof::Ed25519Sig(signature)],
-            zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
+            ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
         );
 
         assert!(matches!(
@@ -543,14 +540,14 @@ mod tests {
 
     #[test]
     fn test_signed_mantle_tx_new_incorrect_blob_proof_type() {
-        let signing_key = SigningKey::from_bytes(&[1; 32]);
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let blob_op = create_test_blob_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelBlob(blob_op)]);
 
         // Use wrong proof type
         let tx_hash = mantle_tx.hash();
-        let zk_sig = OpProof::ZkSig(zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap());
-        let ledger_tx_proof = zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap();
+        let zk_sig = OpProof::ZkSig(ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap());
+        let ledger_tx_proof = ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap();
         let result = SignedMantleTx::new(mantle_tx, vec![zk_sig], ledger_tx_proof);
 
         assert!(matches!(
@@ -564,14 +561,14 @@ mod tests {
 
     #[test]
     fn test_signed_mantle_tx_new_incorrect_inscribe_proof_type() {
-        let signing_key = SigningKey::from_bytes(&[1; 32]);
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscribe_op = create_test_inscribe_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
 
         // Use wrong proof type
         let tx_hash = mantle_tx.hash();
-        let zk_sig = OpProof::ZkSig(zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap());
-        let ledger_tx_proof = zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap();
+        let zk_sig = OpProof::ZkSig(ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap());
+        let ledger_tx_proof = ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap();
         let result = SignedMantleTx::new(mantle_tx, vec![zk_sig], ledger_tx_proof);
 
         assert!(matches!(
@@ -585,8 +582,8 @@ mod tests {
 
     #[test]
     fn test_signed_mantle_tx_new_multiple_ops_valid() {
-        let signing_key1 = SigningKey::from_bytes(&[1; 32]);
-        let signing_key2 = SigningKey::from_bytes(&[2; 32]);
+        let signing_key1 = Ed25519Key::from_bytes(&[1; 32]);
+        let signing_key2 = Ed25519Key::from_bytes(&[2; 32]);
 
         let blob_op = create_test_blob_op(&signing_key1);
         let inscribe_op = create_test_inscribe_op(&signing_key2);
@@ -597,13 +594,13 @@ mod tests {
         ]);
 
         let tx_hash = mantle_tx.hash();
-        let sig1 = signing_key1.sign(&tx_hash.as_signing_bytes());
-        let sig2 = signing_key2.sign(&tx_hash.as_signing_bytes());
+        let sig1 = signing_key1.sign_payload(&tx_hash.as_signing_bytes());
+        let sig2 = signing_key2.sign_payload(&tx_hash.as_signing_bytes());
 
         let result = SignedMantleTx::new(
             mantle_tx,
             vec![OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)],
-            zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
+            ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
         );
 
         assert!(result.is_ok());
@@ -611,9 +608,9 @@ mod tests {
 
     #[test]
     fn test_signed_mantle_tx_new_multiple_ops_one_invalid() {
-        let signing_key1 = SigningKey::from_bytes(&[1; 32]);
-        let signing_key2 = SigningKey::from_bytes(&[2; 32]);
-        let wrong_key = SigningKey::from_bytes(&[3; 32]);
+        let signing_key1 = Ed25519Key::from_bytes(&[1; 32]);
+        let signing_key2 = Ed25519Key::from_bytes(&[2; 32]);
+        let wrong_key = Ed25519Key::from_bytes(&[3; 32]);
 
         let blob_op = create_test_blob_op(&signing_key1);
         let inscribe_op = create_test_inscribe_op(&signing_key2);
@@ -624,13 +621,13 @@ mod tests {
         ]);
 
         let tx_hash = mantle_tx.hash();
-        let sig1 = signing_key1.sign(&tx_hash.as_signing_bytes());
-        let sig2 = wrong_key.sign(&tx_hash.as_signing_bytes()); // Wrong signature
+        let sig1 = signing_key1.sign_payload(&tx_hash.as_signing_bytes());
+        let sig2 = wrong_key.sign_payload(&tx_hash.as_signing_bytes()); // Wrong signature
 
         let result = SignedMantleTx::new(
             mantle_tx,
             vec![OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)],
-            zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
+            ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
         );
 
         assert!(matches!(
@@ -641,17 +638,17 @@ mod tests {
 
     #[test]
     fn test_signed_mantle_tx_deserialize_with_valid_proof() {
-        let signing_key = SigningKey::from_bytes(&[1; 32]);
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let blob_op = create_test_blob_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelBlob(blob_op)]);
 
         let tx_hash = mantle_tx.hash();
-        let signature = signing_key.sign(&tx_hash.as_signing_bytes());
+        let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
         let signed_tx = SignedMantleTx::new(
             mantle_tx,
             vec![OpProof::Ed25519Sig(signature)],
-            zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
+            ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
         )
         .unwrap();
 
@@ -665,12 +662,11 @@ mod tests {
 
     #[test]
     fn test_signed_mantle_tx_deserialize_with_missing_proof() {
-        let signing_key = SigningKey::from_bytes(&[1; 32]);
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let blob_op = create_test_blob_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelBlob(blob_op)]);
 
-        let ledger_tx_proof =
-            zksign::SecretKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap();
+        let ledger_tx_proof = ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap();
         let helper = SignedMantleTx {
             mantle_tx,
             ops_proofs: vec![],
@@ -690,18 +686,18 @@ mod tests {
 
     #[test]
     fn test_signed_mantle_tx_deserialize_with_invalid_signature() {
-        let signing_key = SigningKey::from_bytes(&[1; 32]);
-        let wrong_key = SigningKey::from_bytes(&[2; 32]);
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+        let wrong_key = Ed25519Key::from_bytes(&[2; 32]);
         let blob_op = create_test_blob_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelBlob(blob_op)]);
 
         let tx_hash = mantle_tx.hash();
-        let wrong_signature = wrong_key.sign(&tx_hash.as_signing_bytes());
+        let wrong_signature = wrong_key.sign_payload(&tx_hash.as_signing_bytes());
 
         let helper = SignedMantleTx {
             mantle_tx,
             ops_proofs: vec![OpProof::Ed25519Sig(wrong_signature)],
-            ledger_tx_proof: zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
+            ledger_tx_proof: ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
         };
 
         let serialized = serde_json::to_string(&helper).unwrap();
@@ -714,14 +710,14 @@ mod tests {
 
     #[test]
     fn test_signed_mantle_tx_new_proof_count_mismatch() {
-        let signing_key = SigningKey::from_bytes(&[1; 32]);
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let blob_op = create_test_blob_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelBlob(blob_op)]);
         let tx_hash = mantle_tx.hash();
-        let signature = signing_key.sign(&tx_hash.as_signing_bytes());
+        let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
         // Test too few proofs
-        let ledger_tx_proof = zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap();
+        let ledger_tx_proof = ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap();
         let result = SignedMantleTx::new(mantle_tx.clone(), vec![], ledger_tx_proof);
         assert!(matches!(
             result,
@@ -738,7 +734,7 @@ mod tests {
                 OpProof::Ed25519Sig(signature),
                 OpProof::Ed25519Sig(signature),
             ],
-            zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
+            ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
         );
         assert!(matches!(
             result,

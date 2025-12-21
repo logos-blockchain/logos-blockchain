@@ -5,10 +5,10 @@ use groth16::{fr_from_bytes_unchecked, fr_to_bytes};
 use poq::{CORE_MERKLE_TREE_HEIGHT, CorePathAndSelectors};
 use rs_merkle_tree::{Node, stores::MemoryStore, tree::MerkleProof};
 use thiserror::Error;
-use zksign::PublicKey;
 
 use crate::{ZkHash, ZkHasher};
 
+type ZkPublicKey = ZkHash;
 const TOTAL_MERKLE_LEAVES: usize = 1 << CORE_MERKLE_TREE_HEIGHT;
 
 #[derive(Debug, Error, PartialEq, Eq, PartialOrd, Ord)]
@@ -52,7 +52,7 @@ impl rs_merkle_tree::hasher::Hasher for InnerTreeZkHasher {
 pub struct MerkleTree {
     /// A map of key -> index after the input keys have been sorted, for proof
     /// generation starting from a given key.
-    sorted_key_indices: HashMap<PublicKey, usize>,
+    sorted_key_indices: HashMap<ZkPublicKey, usize>,
     /// The inner [`rs_merkle_tree::MerkleTree`] instance.
     inner_tree: rs_merkle_tree::MerkleTree<InnerTreeZkHasher, MemoryStore, CORE_MERKLE_TREE_HEIGHT>,
 }
@@ -75,7 +75,7 @@ impl MerkleTree {
     /// Create a new merkle tree with the provided keys.
     ///
     /// Keys are internally sorted by their numeric value, as described in the [`PoQ` specification](https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#215261aa09df81ec850ad7965bf6e76b).
-    pub fn new(mut keys: Vec<PublicKey>) -> Result<Self, Error> {
+    pub fn new(mut keys: Vec<ZkPublicKey>) -> Result<Self, Error> {
         // Sort the input keys by their decimal representation, relying on `Fr`'s
         // implementation of `PartialOrd`.
         keys.sort();
@@ -87,7 +87,7 @@ impl MerkleTree {
     /// If the input vector is empty or if it is larger than the maximum number
     /// of leaves supported by this fixed-height Merkle tree, it returns an
     /// error.
-    fn new_from_ordered(keys: Vec<PublicKey>) -> Result<Self, Error> {
+    fn new_from_ordered(keys: Vec<ZkPublicKey>) -> Result<Self, Error> {
         if keys.is_empty() {
             return Err(Error::EmptyKeySet);
         }
@@ -113,8 +113,7 @@ impl MerkleTree {
                 .add_leaves(
                     &keys
                         .into_iter()
-                        .map(PublicKey::into_inner)
-                        .map(|key_as_fr| fr_to_bytes(&key_as_fr).into())
+                        .map(|key| fr_to_bytes(&key).into())
                         .collect::<Vec<_>>(),
                 )
                 .expect("Adding leaves should not fail because we already check for input length and duplicates.");
@@ -151,7 +150,7 @@ impl MerkleTree {
     ///
     /// The resulting path has the same length as the fixed height of the tree.
     #[must_use]
-    pub fn get_proof_for_key(&self, key: &PublicKey) -> Option<CorePathAndSelectors> {
+    pub fn get_proof_for_key(&self, key: &ZkPublicKey) -> Option<CorePathAndSelectors> {
         let key_index = self.sorted_key_indices.get(key).copied()?;
 
         let proof = self
@@ -178,7 +177,7 @@ impl MerkleTree {
     fn verify_proof_for_key(
         &self,
         proof: &CorePathAndSelectors,
-        key: &PublicKey,
+        key: &ZkPublicKey,
     ) -> Result<(), Error> {
         let Some(key_index) = self.sorted_key_indices.get(key) else {
             return Err(Error::KeyNotFound);
@@ -186,7 +185,7 @@ impl MerkleTree {
         let inner_proof = MerkleProof {
             proof: proof.map(|(hash, _)| fr_to_bytes(&hash).into()),
             index: *key_index as u64,
-            leaf: fr_to_bytes(key.as_fr()).into(),
+            leaf: fr_to_bytes(key).into(),
             root: fr_to_bytes(&self.root()).into(),
         };
         let Ok(true) = self.inner_tree.verify_proof(&inner_proof) else {
@@ -218,7 +217,7 @@ fn compute_selectors(
 
 pub fn sort_nodes_and_build_merkle_tree<Node>(
     nodes: &mut [Node],
-    key: impl Fn(&Node) -> PublicKey,
+    key: impl Fn(&Node) -> ZkPublicKey,
 ) -> Result<MerkleTree, Error> {
     nodes.sort_by_key(|node| key(node));
     MerkleTree::new_from_ordered(nodes.iter().map(key).collect())
@@ -230,7 +229,6 @@ mod tests {
 
     use groth16::{Field as _, fr_from_bytes_unchecked};
     use num_bigint::BigUint;
-    use zksign::PublicKey;
 
     use crate::{
         ZkHash,
@@ -239,12 +237,12 @@ mod tests {
 
     #[test]
     fn single_key() {
-        let input_key = PublicKey::new(ZkHash::ONE);
+        let input_key = ZkHash::ONE;
 
         let merkle_tree = MerkleTree::new(vec![input_key]).unwrap();
 
         let merkle_root = merkle_tree.root();
-        assert_ne!(input_key.into_inner(), merkle_root,);
+        assert_ne!(input_key, merkle_root);
 
         let proof = merkle_tree.get_proof_for_key(&input_key).unwrap();
         merkle_tree
@@ -258,8 +256,8 @@ mod tests {
 
     #[test]
     fn two_keys() {
-        let key_one = PublicKey::new("101".parse::<BigUint>().unwrap().into());
-        let key_two = PublicKey::new("100".parse::<BigUint>().unwrap().into());
+        let key_one = "101".parse::<BigUint>().unwrap().into();
+        let key_two = "100".parse::<BigUint>().unwrap().into();
 
         let merkle_tree = MerkleTree::new(vec![key_one, key_two]).unwrap();
 
@@ -295,9 +293,9 @@ mod tests {
 
     #[test]
     fn three_keys() {
-        let key_one = PublicKey::new("101".parse::<BigUint>().unwrap().into());
-        let key_two = PublicKey::new("100".parse::<BigUint>().unwrap().into());
-        let key_three = PublicKey::new("102".parse::<BigUint>().unwrap().into());
+        let key_one = "101".parse::<BigUint>().unwrap().into();
+        let key_two = "100".parse::<BigUint>().unwrap().into();
+        let key_three = "102".parse::<BigUint>().unwrap().into();
 
         let merkle_tree = MerkleTree::new(vec![key_one, key_two, key_three]).unwrap();
 
@@ -347,7 +345,7 @@ mod tests {
     #[ignore = "It takes too long. We might want to enable it at some point, if it makes sense."]
     fn full_keys() {
         let input_keys: Vec<_> = (0..TOTAL_MERKLE_LEAVES)
-            .map(|i| PublicKey::new(fr_from_bytes_unchecked(&i.to_le_bytes())))
+            .map(|i| fr_from_bytes_unchecked(&i.to_le_bytes()))
             .collect();
         let last_key = *input_keys.last().unwrap();
         let merkle_tree = MerkleTree::new(input_keys).unwrap();
@@ -366,14 +364,13 @@ mod tests {
 
     #[test]
     fn too_many_keys() {
-        let too_many_keys =
-            repeat_n(PublicKey::new(ZkHash::ONE), TOTAL_MERKLE_LEAVES + 1).collect::<Vec<_>>();
+        let too_many_keys = repeat_n(ZkHash::ONE, TOTAL_MERKLE_LEAVES + 1).collect::<Vec<_>>();
         assert_eq!(MerkleTree::new(too_many_keys), Err(Error::TooManyKeys));
     }
 
     #[test]
     fn duplicate_keys() {
-        let key = PublicKey::new(ZkHash::ONE);
+        let key = ZkHash::ONE;
         assert_eq!(MerkleTree::new(vec![key, key]), Err(Error::DuplicateKey));
     }
 }

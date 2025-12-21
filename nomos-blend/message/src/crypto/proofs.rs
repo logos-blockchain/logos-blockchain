@@ -1,6 +1,6 @@
 use core::mem::swap;
 
-use nomos_blend_crypto::keys::Ed25519PublicKey;
+use key_management_system_keys::keys::Ed25519PublicKey;
 use nomos_blend_proofs::{
     quota::{
         self, ProofOfQuota, VerifiedProofOfQuota,
@@ -103,7 +103,7 @@ impl ProofsVerifier for RealProofsVerifier {
                 core,
                 leader,
                 session,
-                signing_key: *signing_key,
+                signing_key: *signing_key.as_inner(),
             })
             .or_else(|_| {
                 let Some(previous_epoch_inputs) = self.previous_epoch_inputs else {
@@ -114,7 +114,7 @@ impl ProofsVerifier for RealProofsVerifier {
                         core,
                         leader: previous_epoch_inputs,
                         session,
-                        signing_key: *signing_key,
+                        signing_key: *signing_key.as_inner(),
                     })
                     .map_err(Error::ProofOfQuota)
             })

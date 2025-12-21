@@ -23,7 +23,6 @@ chain-service                 = { workspace = true }
 common-http-client            = { workspace = true }
 cryptarchia-engine            = { features = ["serde"], workspace = true }
 cryptarchia-sync              = { workspace = true }
-ed25519-dalek                 = { version = "2.2.0", features = ["rand_core", "serde"] }
 executor-http-client          = { workspace = true }
 futures                       = { default-features = false, version = "0.3" }
 futures-util                  = { default-features = false, version = "0.3.31" }
@@ -32,7 +31,6 @@ hex                           = { default-features = false, version = "0.4.3" }
 key-management-system-service = { workspace = true }
 kzgrs-backend                 = { workspace = true }
 nomos-api                     = { workspace = true }
-nomos-blend                   = { workspace = true }
 nomos-blend-service           = { features = ["libp2p"], workspace = true }
 nomos-core                    = { workspace = true }
 nomos-da-dispersal            = { workspace = true }
@@ -63,7 +61,6 @@ time                          = { default-features = false, version = "0.3" }
 tokio                         = "1"
 tracing                       = { workspace = true }
 tx-service                    = { features = ["libp2p", "mock"], workspace = true }
-zksign                        = { workspace = true }
 
 [[test]]
 name = "test_cryptarchia_happy_path"
@@ -80,6 +77,10 @@ path = "src/tests/cryptarchia/orphan.rs"
 [[test]]
 name = "test_immutable_blocks"
 path = "src/tests/cryptarchia/immutable_blocks.rs"
+
+[[test]]
+name = "test_invalid_tx_handling"
+path = "src/tests/cryptarchia/invalid_tx_handling.rs"
 
 [[test]]
 name = "test_da"

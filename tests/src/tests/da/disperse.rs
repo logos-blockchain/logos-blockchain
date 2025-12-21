@@ -146,6 +146,23 @@ async fn disseminate_from_non_membership() {
     let lone_executor_config = create_executor_config(lone_general_config);
     let lone_executor = Executor::spawn(lone_executor_config).await;
 
+    // Wait for lone_executor to have membership info for session 0
+    // (even though it's not in the membership, it needs to know about the session)
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            if lone_executor
+                .da_get_membership(nomos_core::sdp::SessionNumber::from(0u64))
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("Timed out waiting for lone_executor membership");
+
     let data = [1u8; 31 * ITERATIONS];
 
     for i in 0..ITERATIONS {

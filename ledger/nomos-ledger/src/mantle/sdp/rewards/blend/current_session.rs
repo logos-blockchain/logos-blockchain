@@ -1,4 +1,5 @@
 use cryptarchia_engine::Epoch;
+use key_management_system_keys::keys::ZkPublicKey;
 use nomos_blend_crypto::merkle::sort_nodes_and_build_merkle_tree;
 use nomos_blend_message::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey,
@@ -11,7 +12,6 @@ use nomos_core::{
 };
 use rpds::HashTrieMapSync;
 use tracing::debug;
-use zksign::PublicKey;
 
 use crate::{
     EpochState,
@@ -131,16 +131,17 @@ impl CurrentSessionTracker {
 
     fn providers_and_zk_root(
         session_state: &SessionState,
-    ) -> (HashTrieMapSync<ProviderId, (PublicKey, u64)>, ZkHash) {
+    ) -> (HashTrieMapSync<ProviderId, (ZkPublicKey, u64)>, ZkHash) {
         let mut providers = session_state
             .declarations
             .values()
             .map(|declaration| (declaration.provider_id, declaration.zk_id))
             .collect::<Vec<_>>();
 
-        let zk_root = sort_nodes_and_build_merkle_tree(&mut providers, |(_, zk_id)| *zk_id)
-            .expect("Should not fail to build merkle tree of core nodes' zk public keys")
-            .root();
+        let zk_root =
+            sort_nodes_and_build_merkle_tree(&mut providers, |(_, zk_id)| zk_id.into_inner())
+                .expect("Should not fail to build merkle tree of core nodes' zk public keys")
+                .root();
 
         let providers = providers
             .into_iter()

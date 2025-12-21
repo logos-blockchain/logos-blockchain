@@ -5,7 +5,6 @@ use std::{
 };
 
 use cached::{Cached as _, TimedSizedCache};
-use either::Either;
 use futures::{
     AsyncReadExt as _, AsyncWriteExt as _, FutureExt as _, StreamExt as _,
     future::BoxFuture,
@@ -290,16 +289,16 @@ impl<M> ReplicationBehaviour<M>
 where
     M: MembershipHandler<NetworkId = SubnetworkId, Id = PeerId>,
 {
-    // FIXME: reenable when handling of incoming connection is fixed
     /// Check if some peer membership lies in at least a single subnetwork that
     /// the local peer is a member too.
-    // fn is_neighbour(&self, peer_id: &PeerId) -> bool {
-    //     self.membership
-    //         .membership(&self.local_peer_id)
-    //         .intersection(&self.membership.membership(peer_id))
-    //         .count()
-    //         > 0
-    // }
+    fn is_neighbour(&self, peer_id: &PeerId) -> bool {
+        self.membership
+            .membership(&self.local_peer_id)
+            .intersection(&self.membership.membership(peer_id))
+            .count()
+            > 0
+    }
+
     fn no_loopback_member_peers_of(&self, subnetwork: SubnetworkId) -> HashSet<PeerId> {
         let mut peers = self.membership.members_of(&subnetwork);
         // no loopback
@@ -392,11 +391,14 @@ where
         message: ReplicationRequest,
         mut write_half: WriteHalf<Stream>,
     ) -> Result<(PeerId, WriteHalf<Stream>), ReplicationError> {
-        pack_to_writer(&message, &mut write_half)
-            .await
-            .unwrap_or_else(|_| {
-                panic!("Message should always be serializable.\nMessage: '{message:?}'",)
-            });
+        pack_to_writer(&message, &mut write_half).await.map_err(
+            |error| {
+                // I/O errors are expected when the receiver drops the stream (e.g. non-neighbour
+                // filtering). Other errors indicate serialization bugs and should panic.
+                assert!(error.kind() != std::io::ErrorKind::Other, "Message should always be serializable.\nMessage: '{message:?}'\nError: {error:?}");
+                ReplicationError::Io { peer_id, error }
+            },
+        )?;
         write_half
             .flush()
             .await
@@ -411,6 +413,27 @@ where
     {
         match self.incoming_tasks.poll_next_unpin(cx) {
             Poll::Ready(Some(Ok((peer_id, message, read_half)))) => {
+                // For Share messages, only accept from neighbours (peers in the same
+                // subnetwork). TX messages are accepted from any connected peer
+                // to allow broad propagation. Receiving Share from
+                // non-neighbour indicates sender misbehavior.
+                if matches!(message, ReplicationRequest::Share(_)) && !self.is_neighbour(&peer_id) {
+                    trace!("Dropping Share replication from non-neighbour peer {peer_id}",);
+                    // Close stream by removing write half and dropping read half
+                    self.outbound_streams.remove(&peer_id);
+                    drop(read_half);
+                    cx.waker().wake_by_ref();
+                    return Some(ReplicationEvent::ReplicationError {
+                        error: ReplicationError::Io {
+                            peer_id,
+                            error: std::io::Error::new(
+                                std::io::ErrorKind::PermissionDenied,
+                                "Share replication from non-neighbour",
+                            ),
+                        },
+                    });
+                }
+
                 // Replicate the message to all connected peers from the same subnet if we
                 // haven't seen it yet
                 self.send_message_impl(Some(cx.waker()), &message);
@@ -527,8 +550,7 @@ where
         Ok(())
     }
 
-    /// Schedule reading from any new streams initiated by other peers, if
-    /// possible
+    /// Schedule reading from any new streams initiated by other peers
     fn poll_incoming_streams(&mut self, cx: &mut Context<'_>)
     where
         M: 'static,
@@ -564,10 +586,7 @@ impl<M> NetworkBehaviour for ReplicationBehaviour<M>
 where
     M: MembershipHandler<NetworkId = SubnetworkId, Id = PeerId> + 'static,
 {
-    type ConnectionHandler = Either<
-        <libp2p_stream::Behaviour as NetworkBehaviour>::ConnectionHandler,
-        libp2p::swarm::dummy::ConnectionHandler,
-    >;
+    type ConnectionHandler = <libp2p_stream::Behaviour as NetworkBehaviour>::ConnectionHandler;
     type ToSwarm = ReplicationEvent;
 
     fn handle_established_inbound_connection(
@@ -577,16 +596,17 @@ where
         local_addr: &Multiaddr,
         remote_addr: &Multiaddr,
     ) -> Result<THandler<Self>, ConnectionDenied> {
-        // FIXME: same as in dispersal protocol
-        // if !self.is_neighbour(&peer_id) {
-        //     trace!("refusing connection to {peer_id}");
-        //     return Ok(Either::Right(libp2p::swarm::dummy::ConnectionHandler));
-        // }
+        // No membership filtering at connection level. Neighbour filtering is done at
+        // message level (in `poll_incoming_tasks`) because connection handlers are
+        // immutable and can't be updated on session change when membership changes.
         trace!("{}, Connected to {peer_id}", self.local_peer_id);
         self.connected.insert(peer_id);
-        self.stream_behaviour
-            .handle_established_inbound_connection(connection_id, peer_id, local_addr, remote_addr)
-            .map(Either::Left)
+        self.stream_behaviour.handle_established_inbound_connection(
+            connection_id,
+            peer_id,
+            local_addr,
+            remote_addr,
+        )
     }
 
     fn handle_established_outbound_connection(
@@ -607,7 +627,6 @@ where
                 role_override,
                 port_use,
             )
-            .map(Either::Left)
     }
 
     fn on_swarm_event(&mut self, event: FromSwarm) {
@@ -625,7 +644,6 @@ where
         connection_id: ConnectionId,
         event: THandlerOutEvent<Self>,
     ) {
-        let Either::Left(event) = event;
         self.stream_behaviour
             .on_connection_handler_event(peer_id, connection_id, event);
     }

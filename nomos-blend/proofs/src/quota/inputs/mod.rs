@@ -1,9 +1,8 @@
-use nomos_blend_crypto::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
-
 pub mod prove;
 pub mod verify;
 
 pub use self::verify::Inputs as VerifyInputs;
+use crate::quota::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
 
 type HalfEphemeralSigningKey = [u8; ED25519_PUBLIC_KEY_SIZE / 2];
 

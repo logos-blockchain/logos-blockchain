@@ -41,10 +41,8 @@ thiserror                     = { default-features = false, version = "1" }
 tokio                         = { default-features = false, version = "1" }
 tokio-stream                  = { default-features = false, version = "0.1" }
 tracing                       = { workspace = true }
-zksign                        = { workspace = true }
 
 [dev-dependencies]
-ed25519-dalek     = { default-features = false, version = "2" }
 libp2p            = { default-features = false, features = ["plaintext", "tcp", "yamux"], workspace = true }
 libp2p-swarm-test = { default-features = false, version = "0.5.0" }
 nomos-blend       = { features = ["unsafe-test-functions"], workspace = true }

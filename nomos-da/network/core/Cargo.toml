@@ -14,7 +14,6 @@ workspace = true
 
 [dependencies]
 cached                   = { workspace = true }
-either                   = { default-features = false, version = "1.13.0" }
 fixed                    = { default-features = false, features = ["serde-str"], version = "1" }
 futures                  = { default-features = false, version = "0.3" }
 indexmap                 = { default-features = false, features = ["std"], version = "2.2" }
@@ -36,14 +35,13 @@ tracing                  = { workspace = true }
 tracing-subscriber       = { default-features = false, version = "0.3.18" }
 
 [dev-dependencies]
-bincode            = "1.3"
-ed25519-dalek      = { default-features = false, version = "2.2.0" }
-kzgrs              = { workspace = true }
-kzgrs-backend      = { features = ["testutils"], workspace = true }
-libp2p             = { features = ["plaintext", "yamux"], workspace = true }
-libp2p-swarm-test  = { default-features = false, features = ["tokio"], version = "0.5.0" }
-nomos-utils        = { workspace = true }
-rstest             = { default-features = false, version = "0.25" }
-tokio              = { default-features = false, version = "1" }
-tracing-subscriber = { default-features = false, features = ["env-filter", "fmt", "std"], version = "0.3" }
-zksign             = { workspace = true }
+bincode                    = "1.3"
+key-management-system-keys = { workspace = true }
+kzgrs                      = { workspace = true }
+kzgrs-backend              = { features = ["testutils"], workspace = true }
+libp2p                     = { features = ["plaintext", "yamux"], workspace = true }
+libp2p-swarm-test          = { default-features = false, features = ["tokio"], version = "0.5.0" }
+nomos-utils                = { workspace = true }
+rstest                     = { default-features = false, version = "0.25" }
+tokio                      = { default-features = false, version = "1" }
+tracing-subscriber         = { default-features = false, features = ["env-filter", "fmt", "std"], version = "0.3" }

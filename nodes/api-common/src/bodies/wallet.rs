@@ -3,15 +3,15 @@ pub mod balance {
         http::StatusCode,
         response::{IntoResponse, Response},
     };
+    use key_management_system_keys::keys::ZkPublicKey;
     use nomos_core::{header::HeaderId, mantle::Value};
     use serde::{Deserialize, Serialize};
-    use zksign::PublicKey;
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletBalanceResponseBody {
         pub tip: HeaderId,
         pub balance: Value,
-        pub address: PublicKey,
+        pub address: ZkPublicKey,
     }
 
     impl IntoResponse for WalletBalanceResponseBody {
@@ -26,19 +26,19 @@ pub mod transfer_funds {
         http::StatusCode,
         response::{IntoResponse, Response},
     };
+    use key_management_system_keys::keys::ZkPublicKey;
     use nomos_core::{
         header::HeaderId,
         mantle::{SignedMantleTx, Transaction as _, Value},
     };
     use serde::{Deserialize, Serialize};
-    use zksign::PublicKey;
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletTransferFundsRequestBody {
         pub tip: Option<HeaderId>,
-        pub change_public_key: PublicKey,
-        pub funding_public_keys: Vec<PublicKey>,
-        pub recipient_public_key: PublicKey,
+        pub change_public_key: ZkPublicKey,
+        pub funding_public_keys: Vec<ZkPublicKey>,
+        pub recipient_public_key: ZkPublicKey,
         pub amount: Value,
     }
 

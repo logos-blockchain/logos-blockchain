@@ -147,6 +147,7 @@ pub fn activity_threshold(
 
 #[cfg(test)]
 mod tests {
+    use key_management_system_keys::keys::Ed25519Key;
     use nomos_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 
     use super::*;
@@ -195,7 +196,7 @@ mod tests {
 
         let maybe_distance = evaluation.evaluate(
             &BlendingToken::new(
-                ed25519_dalek::SigningKey::from_bytes(&[0; _]).verifying_key(),
+                Ed25519Key::from_bytes(&[0; _]).public_key(),
                 VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
                 VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
             ),
@@ -205,7 +206,7 @@ mod tests {
 
         let maybe_distance = evaluation.evaluate(
             &BlendingToken::new(
-                ed25519_dalek::SigningKey::from_bytes(&[1; _]).verifying_key(),
+                Ed25519Key::from_bytes(&[1; _]).public_key(),
                 VerifiedProofOfQuota::from_bytes_unchecked([1; _]),
                 VerifiedProofOfSelection::from_bytes_unchecked([1; _]),
             ),

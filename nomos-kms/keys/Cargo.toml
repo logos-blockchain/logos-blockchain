@@ -15,11 +15,15 @@ workspace = true
 [dependencies]
 async-trait                  = { default-features = false, version = "0.1" }
 bytes                        = { workspace = true }
-ed25519-dalek                = { default-features = false, features = ["rand_core", "serde", "zeroize"], version = "2" }
+ed25519-dalek                = { workspace = true, features = ["rand_core", "serde", "zeroize"] }
+generic-array                = { default-features = false, version = "1.2.0" }
 groth16                      = { workspace = true }
 key-management-system-macros = { workspace = true }
 nomos-blend-proofs           = { workspace = true }
 nomos-utils                  = { features = ["rng", "serde", "types"], workspace = true }
+num-bigint                   = { default-features = false, version = "0.4.6" }
+poseidon2                    = { workspace = true }
+rand_core                    = { default-features = false, version = "0.6.4" }
 serde                        = { default-features = false, features = ["derive"], version = "1" }
 subtle                       = { workspace = true }
 thiserror                    = { default-features = false, version = "2" }

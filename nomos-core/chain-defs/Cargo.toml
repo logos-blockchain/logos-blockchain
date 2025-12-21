@@ -14,33 +14,29 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-ark-ff             = { default-features = false, version = "0.4" }
-async-trait        = { version = "0.1" }
-bincode            = "1.3"
-blake2             = { default-features = false, version = "0.10" }
-bytes              = { workspace = true }
-const-hex          = { default-features = false, features = ["alloc"], version = "1" }
-cryptarchia-engine = { features = ["serde"], workspace = true }
-ed25519            = { default-features = false, version = "2.2" }
-ed25519-dalek      = { default-features = false, features = ["serde"], version = "2.2.0" }
-futures            = { version = "0.3", default-features = false, features = ["alloc"] }
-generic-array      = "1.2.0"
-groth16            = { workspace = true, features = ["deser"] }
-hex                = { version = "0.4", default-features = false, features = ["alloc"] }
-multiaddr          = { default-features = false, version = "0.18" }
-nom                = { version = "8", default-features = false, features = ["alloc"] }
-nomos-blend-crypto = { workspace = true }
-nomos-blend-proofs = { workspace = true }
-nomos-utils        = { workspace = true }
-num-bigint         = { version = "0.4", default-features = false }
-pol                = { workspace = true }
-poseidon2          = { workspace = true }
-serde              = { workspace = true }
-serde_with         = { version = "3.14.0", default-features = false, features = ["alloc", "macros"] }
-strum              = { version = "0.27", features = ["derive"] }
-thiserror          = "1.0"
-tracing            = { workspace = true }
-zksign             = { workspace = true }
+ark-ff                     = { default-features = false, version = "0.4" }
+async-trait                = { version = "0.1" }
+bincode                    = "1.3"
+blake2                     = { default-features = false, version = "0.10" }
+bytes                      = { workspace = true }
+const-hex                  = { default-features = false, features = ["alloc"], version = "1" }
+cryptarchia-engine         = { features = ["serde"], workspace = true }
+futures                    = { version = "0.3", default-features = false, features = ["alloc"] }
+generic-array              = "1.2.0"
+groth16                    = { workspace = true, features = ["deser"] }
+hex                        = { version = "0.4", default-features = false, features = ["alloc"] }
+key-management-system-keys = { workspace = true }
+multiaddr                  = { default-features = false, version = "0.18" }
+nom                        = { version = "8", default-features = false, features = ["alloc"] }
+nomos-blend-proofs         = { workspace = true }
+nomos-utils                = { workspace = true }
+num-bigint                 = { version = "0.4", default-features = false }
+pol                        = { workspace = true }
+poseidon2                  = { workspace = true }
+serde                      = { workspace = true }
+strum                      = { version = "0.27", features = ["derive"] }
+thiserror                  = "1.0"
+tracing                    = { workspace = true }
 
 [dev-dependencies]
 rand       = { workspace = true }

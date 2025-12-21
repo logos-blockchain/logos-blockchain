@@ -67,7 +67,7 @@ pub fn new_nodes_with_empty_address(
         .map(|identity| Node {
             id: identity.public().into(),
             address: Multiaddr::empty(),
-            public_key: UnsecuredEd25519Key::generate().public_key(),
+            public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
         })
         .collect::<Vec<_>>();
     (ids.into_iter(), nodes)
@@ -280,7 +280,7 @@ impl SwarmExt for Swarm<BlendBehaviour<MockProofsVerifier, TestObservationWindow
             Node {
                 address,
                 id: *self.local_peer_id(),
-                public_key: UnsecuredEd25519Key::generate().public_key(),
+                public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
             },
             memory_addr_listener_id,
         )

@@ -1,6 +1,7 @@
 use std::sync::LazyLock;
 
 use ::serde::{Deserialize, Serialize};
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, VerifyingKey};
 use generic_array::{ArrayLength, GenericArray};
 use groth16::{Bn254, CompressSize, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes};
 use poq::{PoQProof, PoQVerifierInput, PoQWitnessInputs, ProveError, prove, verify};
@@ -21,6 +22,11 @@ mod tests;
 
 #[cfg(any(test, feature = "unsafe-test-functions"))]
 pub mod fixtures;
+
+// Cannot depend on `key-management-system-keys` crate here due to circular
+// dependency.
+pub(crate) type Ed25519PublicKey = VerifyingKey;
+pub(crate) const ED25519_PUBLIC_KEY_SIZE: usize = PUBLIC_KEY_LENGTH;
 
 const KEY_NULLIFIER_SIZE: usize = size_of::<ZkHash>();
 const PROOF_CIRCUIT_SIZE: usize = size_of::<PoQProof>();

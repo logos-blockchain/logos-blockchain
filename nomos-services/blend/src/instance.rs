@@ -302,12 +302,9 @@ impl Mode {
 mod tests {
     use std::time::Duration;
 
-    use key_management_system_service::keys::UnsecuredEd25519Key;
+    use key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
     use libp2p::Multiaddr;
-    use nomos_blend::{
-        crypto::keys::Ed25519PublicKey, message::crypto::key_ext::Ed25519SecretKeyExt as _,
-        scheduling::membership::Node,
-    };
+    use nomos_blend::scheduling::membership::Node;
     use nomos_network::config::NetworkConfig;
     use overwatch::{
         DynError, OpaqueServiceResourcesHandle,
@@ -705,7 +702,7 @@ mod tests {
     }
 
     fn key(id: u8) -> (UnsecuredEd25519Key, Ed25519PublicKey) {
-        let private_key = UnsecuredEd25519Key::from_bytes([id; 32]);
+        let private_key = UnsecuredEd25519Key::from_bytes(&[id; 32]);
         let public_key = private_key.public_key();
         (private_key, public_key)
     }

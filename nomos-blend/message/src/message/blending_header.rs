@@ -1,16 +1,15 @@
-use key_management_system_keys::keys::UnsecuredEd25519Key;
-use nomos_blend_crypto::{
-    keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey},
-    pseudo_random_sized_bytes,
-    signatures::{ED25519_SIGNATURE_SIZE, Signature},
+use key_management_system_keys::keys::{
+    ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
+    UnsecuredEd25519Key,
 };
+use nomos_blend_crypto::pseudo_random_sized_bytes;
 use nomos_blend_proofs::{
     quota::{PROOF_OF_QUOTA_SIZE, ProofOfQuota, VerifiedProofOfQuota},
     selection::{PROOF_OF_SELECTION_SIZE, ProofOfSelection, VerifiedProofOfSelection},
 };
 use serde::{Deserialize, Serialize};
 
-use crate::crypto::{domains, key_ext::Ed25519SecretKeyExt as _};
+use crate::crypto::domains;
 
 /// A blending header that is fully decapsulated.
 /// This must be encapsulated when being sent to the blend network.
@@ -18,7 +17,7 @@ use crate::crypto::{domains, key_ext::Ed25519SecretKeyExt as _};
 pub struct BlendingHeader {
     pub signing_pubkey: Ed25519PublicKey,
     pub proof_of_quota: ProofOfQuota,
-    pub signature: Signature,
+    pub signature: Ed25519Signature,
     pub proof_of_selection: ProofOfSelection,
     pub is_last: bool,
 }
@@ -50,9 +49,9 @@ impl BlendingHeader {
             // and then derive the public key from it
             // because a public key cannot always be successfully derived from random bytes.
             // TODO: This will be changed once we have zerocopy serde.
-            signing_pubkey: UnsecuredEd25519Key::from_bytes(r1).public_key(),
+            signing_pubkey: UnsecuredEd25519Key::from_bytes(&r1).public_key(),
             proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked(r2).into_inner(),
-            signature: Signature::from(r3),
+            signature: Ed25519Signature::from_bytes(&r3),
             proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked(r4).into_inner(),
             is_last: false,
         }

@@ -11,8 +11,7 @@ use blend::GeneralBlendConfig;
 use consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_tx_with_declarations};
 use da::GeneralDaConfig;
 use key_management_system_service::{
-    backend::preload::PreloadKMSBackendSettings,
-    keys::{Ed25519Key, ZkKey},
+    backend::preload::PreloadKMSBackendSettings, keys::Ed25519Key,
 };
 use network::GeneralNetworkConfig;
 use nomos_core::{
@@ -125,7 +124,7 @@ pub fn create_general_configs_with_blend_core_subset(
                 ),
                 (
                     blend_conf.core.zk.secret_key_kms_id.clone(),
-                    ZkKey::new(zk_secret_key.clone()).into(),
+                    zk_secret_key.clone().into(),
                 ),
             ]
             .into(),

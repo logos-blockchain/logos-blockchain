@@ -2,7 +2,7 @@ use std::{
     collections::HashSet, env, path::PathBuf, str::FromStr as _, sync::LazyLock, time::Duration,
 };
 
-use ed25519_dalek::SigningKey;
+use key_management_system_service::keys::{Ed25519Key, ZkKey};
 use nomos_da_network_core::swarm::{
     DAConnectionMonitorSettings, DAConnectionPolicySettings, ReplicationConfig,
 };
@@ -10,7 +10,6 @@ use nomos_libp2p::{Multiaddr, PeerId, ed25519};
 use nomos_node::NomosDaMembership;
 use num_bigint::BigUint;
 use subnetworks_assignations::MembershipHandler as _;
-use zksign::SecretKey;
 
 use crate::secret_key_to_peer_id;
 
@@ -82,7 +81,7 @@ impl Default for DaParams {
 #[derive(Debug, Clone)]
 pub struct GeneralDaConfig {
     pub node_key: ed25519::SecretKey,
-    pub signer: SigningKey,
+    pub signer: Ed25519Key,
     pub peer_id: PeerId,
     pub membership: NomosDaMembership,
     pub listening_address: Multiaddr,
@@ -102,7 +101,7 @@ pub struct GeneralDaConfig {
     pub subnets_refresh_interval: Duration,
     pub retry_shares_limit: usize,
     pub retry_commitments_limit: usize,
-    pub secret_zk_key: SecretKey,
+    pub secret_zk_key: ZkKey,
 }
 
 #[must_use]
@@ -141,14 +140,13 @@ pub fn create_da_configs(
             let verifier_sk = blst::min_sig::SecretKey::key_gen(id, &[]).unwrap();
             let verifier_sk_bytes = verifier_sk.to_bytes();
             let peer_id = peer_ids[i];
-            let signer = SigningKey::from_bytes(id);
+            let signer = Ed25519Key::from_bytes(id);
             let subnetwork_ids = membership.membership(&peer_id);
 
             // We need unique ZK secret keys, so we just derive them deterministically from
             // the generated Ed25519 public keys, which are guaranteed to be unique because
             // they are in turned derived from node ID.
-            let secret_zk_key =
-                SecretKey::from(BigUint::from_bytes_le(signer.verifying_key().as_bytes()));
+            let secret_zk_key = ZkKey::from(BigUint::from_bytes_le(signer.public_key().as_bytes()));
 
             GeneralDaConfig {
                 node_key,

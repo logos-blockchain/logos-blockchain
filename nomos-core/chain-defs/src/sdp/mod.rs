@@ -4,13 +4,16 @@ pub mod da;
 use std::hash::Hash;
 
 use blake2::{Blake2b, Digest as _};
+use key_management_system_keys::keys::ZkPublicKey;
 use multiaddr::Multiaddr;
 use nom::{IResult, Parser as _, bytes::complete::take};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use strum::EnumIter;
-use zksign::PublicKey;
 
-use crate::{block::BlockNumber, mantle::NoteId};
+use crate::{
+    block::BlockNumber,
+    mantle::{NoteId, ops::channel::Ed25519PublicKey},
+};
 
 pub type SessionNumber = u64;
 pub type StakeThreshold = u64;
@@ -85,8 +88,8 @@ impl From<ServiceType> for usize {
 
 pub type Nonce = u64;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct ProviderId(pub ed25519_dalek::VerifyingKey);
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct ProviderId(pub Ed25519PublicKey);
 
 #[derive(Debug)]
 pub struct InvalidKeyBytesError;
@@ -95,50 +98,9 @@ impl TryFrom<[u8; 32]> for ProviderId {
     type Error = InvalidKeyBytesError;
 
     fn try_from(bytes: [u8; 32]) -> Result<Self, Self::Error> {
-        ed25519_dalek::VerifyingKey::from_bytes(&bytes)
+        Ed25519PublicKey::from_bytes(&bytes)
             .map(ProviderId)
             .map_err(|_| InvalidKeyBytesError)
-    }
-}
-
-impl Serialize for ProviderId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if serializer.is_human_readable() {
-            // For JSON: serialize as hex string
-            const_hex::encode(self.0.as_bytes()).serialize(serializer)
-        } else {
-            // For binary: serialize as bytes
-            self.0.serialize(serializer)
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for ProviderId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        if deserializer.is_human_readable() {
-            // For JSON: deserialize from hex string
-            let s = String::deserialize(deserializer)?;
-            let bytes = const_hex::decode(&s).map_err(serde::de::Error::custom)?;
-            let key_bytes: [u8; 32] = bytes
-                .try_into()
-                .map_err(|_| serde::de::Error::custom("Invalid byte length: expected 32 bytes"))?;
-
-            let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&key_bytes)
-                .map_err(serde::de::Error::custom)?;
-
-            Ok(Self(verifying_key))
-        } else {
-            // For binary: deserialize from bytes
-            Ok(Self(ed25519_dalek::VerifyingKey::deserialize(
-                deserializer,
-            )?))
-        }
     }
 }
 
@@ -167,7 +129,7 @@ pub struct Declaration {
     pub provider_id: ProviderId,
     pub locked_note_id: NoteId,
     pub locators: Vec<Locator>,
-    pub zk_id: PublicKey,
+    pub zk_id: ZkPublicKey,
     pub created: BlockNumber,
     pub active: BlockNumber,
     pub withdrawn: Option<BlockNumber>,
@@ -177,7 +139,7 @@ pub struct Declaration {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderInfo {
     pub locators: Vec<Locator>,
-    pub zk_id: PublicKey,
+    pub zk_id: ZkPublicKey,
 }
 
 impl Declaration {
@@ -202,7 +164,7 @@ pub struct DeclarationMessage {
     pub service_type: ServiceType,
     pub locators: Vec<Locator>,
     pub provider_id: ProviderId,
-    pub zk_id: PublicKey,
+    pub zk_id: ZkPublicKey,
     pub locked_note_id: NoteId,
 }
 

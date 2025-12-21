@@ -385,7 +385,7 @@ fn bitvec_to_bytes(bv: &OpinionsBitVec) -> Vec<u8> {
 mod tests {
     use std::sync::Arc;
 
-    use ed25519_dalek::SigningKey;
+    use key_management_system_keys::keys::Ed25519Key;
     use rand::{RngCore, SeedableRng as _, rngs::SmallRng};
     use subnetworks_assignations::{
         MembershipCreator as _, MembershipHandler as _,
@@ -402,8 +402,8 @@ mod tests {
         std::iter::repeat_with(|| {
             let mut seed = [0u8; 32];
             rng.fill_bytes(&mut seed);
-            let signing_key = SigningKey::from_bytes(&seed);
-            let verifying_key = signing_key.verifying_key();
+            let signing_key = Ed25519Key::from_bytes(&seed);
+            let verifying_key = signing_key.public_key();
             let provider_id = ProviderId(verifying_key);
 
             // Create libp2p keypair from the same seed bytes

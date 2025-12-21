@@ -272,7 +272,7 @@ mod tests {
     use std::{collections::HashMap, convert::Infallible};
 
     use groth16::Field as _;
-    use nomos_blend_crypto::keys::Ed25519PublicKey;
+    use key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
     use nomos_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
     use nomos_blend_proofs::{
         quota::{ProofOfQuota, VerifiedProofOfQuota},
@@ -309,7 +309,7 @@ mod tests {
     }
 
     fn new_signing_key(byte: u8) -> Ed25519PublicKey {
-        ed25519_dalek::SigningKey::from_bytes(&[byte; _]).verifying_key()
+        Ed25519Key::from_bytes(&[byte; _]).public_key()
     }
 
     fn new_proof_of_selection_unchecked(byte: u8) -> ProofOfSelection {

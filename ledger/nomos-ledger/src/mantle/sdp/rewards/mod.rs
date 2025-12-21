@@ -6,6 +6,7 @@ mod test_utils;
 use std::collections::HashMap;
 
 use groth16::{Fr, fr_from_bytes};
+use key_management_system_keys::keys::ZkPublicKey;
 use nomos_core::{
     block::BlockNumber,
     crypto::{ZkDigest, ZkHasher},
@@ -13,7 +14,6 @@ use nomos_core::{
     sdp::{ActivityMetadata, ProviderId, ServiceParameters, ServiceType, SessionNumber},
 };
 use thiserror::Error;
-use zksign::PublicKey;
 
 use super::SessionState;
 use crate::EpochState;
@@ -116,11 +116,11 @@ fn create_reward_tx_hash(session_n: SessionNumber, service_type: ServiceType) ->
 /// - One note per `zk_id`
 /// - Filters out 0-value rewards
 fn distribute_rewards(
-    rewards: HashMap<PublicKey, RewardAmount>,
+    rewards: HashMap<ZkPublicKey, RewardAmount>,
     session_n: SessionNumber,
     service_type: ServiceType,
 ) -> Vec<Utxo> {
-    let mut sorted_rewards: Vec<(PublicKey, RewardAmount)> = rewards
+    let mut sorted_rewards: Vec<(ZkPublicKey, RewardAmount)> = rewards
         .into_iter()
         .filter(|(_, amount)| *amount > 0)
         .collect();

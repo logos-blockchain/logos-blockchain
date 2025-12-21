@@ -20,7 +20,7 @@ jobs:
         uses: actions-rs/toolchain@88dc2356392166efad76775c878094f4e83ff746  # Version 1.0.6
         with:
           # The same version must be used in the `.pre-commit-config.yaml` file
-          toolchain: nightly-2025-09-14
+          toolchain: nightly-2025-10-25
           profile: minimal
           components: rustfmt
           override: true
@@ -79,7 +79,7 @@ jobs:
       - name: Run cargo-hack
         env:
           RUSTFLAGS: -D warnings
-        run: cargo hack --feature-powerset --no-dev-deps check
+        run: cargo hack check --feature-powerset --keep-going --all-targets
       - name: Update Cargo cache
         if: success() || failure()
         uses: ./.github/actions/update-cargo-cache
@@ -112,7 +112,7 @@ jobs:
         os: [ ubuntu-latest, macos-latest ]
     runs-on: ${{ matrix.os }}
     env:
-          RUSTFLAGS: -D warnings
+      RUSTFLAGS: -D warnings
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2

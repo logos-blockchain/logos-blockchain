@@ -9,6 +9,7 @@ use channel::{
     inscribe::InscriptionOp,
     set_keys::SetKeysOp,
 };
+use key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
@@ -21,12 +22,9 @@ use super::{
         sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     },
 };
-use crate::{
-    mantle::{
-        encoding::{decode_op, encode_op},
-        ops::internal::{OpDe, OpSer},
-    },
-    utils::ed25519_serde,
+use crate::mantle::{
+    encoding::{decode_op, encode_op},
+    ops::internal::{OpDe, OpSer},
 };
 
 /// Core set of supported Mantle operations.
@@ -54,12 +52,11 @@ pub enum Op {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpProof {
     NoProof,
-    Ed25519Sig(#[serde(with = "ed25519_serde::sig_hex")] ed25519::Signature),
-    ZkSig(zksign::Signature),
+    Ed25519Sig(Ed25519Signature),
+    ZkSig(ZkSignature),
     ZkAndEd25519Sigs {
-        zk_sig: zksign::Signature,
-        #[serde(with = "ed25519_serde::sig_hex")]
-        ed25519_sig: ed25519::Signature,
+        zk_sig: ZkSignature,
+        ed25519_sig: Ed25519Signature,
     },
 }
 
@@ -169,11 +166,14 @@ mod tests {
     use serde_json::json;
 
     use super::{Op, channel::blob::BlobOp};
-    use crate::codec::{DeserializeOp as _, SerializeOp as _};
+    use crate::{
+        codec::{DeserializeOp as _, SerializeOp as _},
+        mantle::ops::channel::Ed25519PublicKey,
+    };
 
     // nothing special, just some valid bytes
-    static VK: LazyLock<ed25519_dalek::VerifyingKey> = LazyLock::new(|| {
-        ed25519_dalek::VerifyingKey::from_bytes(&[
+    static VK: LazyLock<Ed25519PublicKey> = LazyLock::new(|| {
+        Ed25519PublicKey::from_bytes(&[
             215, 90, 152, 1, 130, 177, 10, 183, 213, 75, 254, 211, 201, 100, 7, 58, 14, 225, 114,
             243, 218, 166, 35, 37, 175, 2, 26, 104, 247, 7, 81, 26,
         ])

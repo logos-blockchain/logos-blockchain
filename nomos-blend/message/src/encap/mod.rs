@@ -1,4 +1,4 @@
-use nomos_blend_crypto::keys::Ed25519PublicKey;
+use key_management_system_keys::keys::Ed25519PublicKey;
 use nomos_blend_proofs::{
     quota::{ProofOfQuota, VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},

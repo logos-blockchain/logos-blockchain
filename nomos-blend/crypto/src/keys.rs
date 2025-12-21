@@ -1,28 +1,9 @@
-use ed25519_dalek::{Verifier as _, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq as _;
 use x25519_dalek::StaticSecret;
 use zeroize::ZeroizeOnDrop;
 
-use crate::{cipher::Cipher, signatures::Signature};
-
-pub type Ed25519PublicKey = VerifyingKey;
-pub const ED25519_PUBLIC_KEY_SIZE: usize = ed25519_dalek::PUBLIC_KEY_LENGTH;
-
-pub trait Ed25519PublicKeyExt {
-    fn derive_x25519(&self) -> X25519PublicKey;
-    fn verify_signature(&self, body: &[u8], signature: &Signature) -> bool;
-}
-
-impl Ed25519PublicKeyExt for Ed25519PublicKey {
-    fn derive_x25519(&self) -> X25519PublicKey {
-        self.to_montgomery().to_bytes().into()
-    }
-
-    fn verify_signature(&self, body: &[u8], signature: &Signature) -> bool {
-        self.verify(body, signature.as_ref()).is_ok()
-    }
-}
+use crate::cipher::Cipher;
 
 pub const X25519_SECRET_KEY_LENGTH: usize = 32;
 

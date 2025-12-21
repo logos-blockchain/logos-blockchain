@@ -13,13 +13,13 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-nomos-core   = { workspace = true }
-nomos-ledger = { workspace = true }
-num-bigint   = { default-features = false, version = "0.4" }
-rpds         = { default-features = false, version = "1.1.1" }
-thiserror    = { workspace = true }
-tracing      = { workspace = true }
-zksign       = { workspace = true }
+key-management-system-keys = { workspace = true }
+nomos-core                 = { workspace = true }
+nomos-ledger               = { workspace = true }
+num-bigint                 = { default-features = false, version = "0.4" }
+rpds                       = { default-features = false, version = "1.1.1" }
+thiserror                  = { workspace = true }
+tracing                    = { workspace = true }
 
 [dev-dependencies]
 cryptarchia-engine = { workspace = true }

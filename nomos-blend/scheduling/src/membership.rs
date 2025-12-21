@@ -3,8 +3,8 @@ use std::{
     hash::Hash,
 };
 
+use key_management_system_keys::keys::Ed25519PublicKey;
 use multiaddr::Multiaddr;
-use nomos_blend_crypto::keys::Ed25519PublicKey;
 use rand::{Rng, seq::IteratorRandom as _};
 use serde::{Deserialize, Serialize};
 
@@ -30,7 +30,6 @@ pub struct Node<Id> {
     /// A listening address
     pub address: Multiaddr,
     /// A public key used for the blend message encryption
-    #[serde(with = "nomos_blend_message::crypto::serde::ed25519_pubkey_hex")]
     pub public_key: Ed25519PublicKey,
 }
 
@@ -64,7 +63,7 @@ where
     #[cfg(any(test, feature = "unsafe-test-functions"))]
     #[must_use]
     pub fn new_without_local(nodes: &[Node<NodeId>]) -> Self {
-        use nomos_blend_crypto::keys::ED25519_PUBLIC_KEY_SIZE;
+        use key_management_system_keys::keys::ED25519_PUBLIC_KEY_SIZE;
 
         Self::new(
             nodes,
@@ -142,7 +141,6 @@ impl<NodeId> Membership<NodeId> {
 #[cfg(test)]
 mod tests {
     use key_management_system_keys::keys::UnsecuredEd25519Key;
-    use nomos_blend_message::crypto::key_ext::Ed25519SecretKeyExt as _;
     use rand::rngs::OsRng;
 
     use super::*;
@@ -296,7 +294,7 @@ mod tests {
     }
 
     fn key(seed: u8) -> Ed25519PublicKey {
-        UnsecuredEd25519Key::from_bytes([seed; 32]).public_key()
+        UnsecuredEd25519Key::from_bytes(&[seed; 32]).public_key()
     }
 
     fn node(id: u32, seed: u8) -> Node<u32> {

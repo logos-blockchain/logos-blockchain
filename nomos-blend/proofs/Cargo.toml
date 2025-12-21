@@ -13,6 +13,7 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
+ed25519-dalek      = { workspace = true }
 generic-array      = { default-features = false, version = "1.2" }
 groth16            = { workspace = true }
 nomos-blend-crypto = { workspace = true }
@@ -22,9 +23,9 @@ serde              = { workspace = true }
 thiserror          = "1"
 
 [dev-dependencies]
-const-hex  = { default-features = false, version = "1.15.0" }
-nomos-core = { workspace = true }
-zksign     = { workspace = true }
+const-hex                  = { default-features = false, version = "1.15.0" }
+key-management-system-keys = { workspace = true }
+nomos-core                 = { workspace = true }
 
 [features]
 unsafe-test-functions = []

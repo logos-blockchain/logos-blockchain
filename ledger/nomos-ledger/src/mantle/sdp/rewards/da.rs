@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, HashMap};
 
+use key_management_system_keys::keys::ZkPublicKey;
 use nomos_core::{
     block::BlockNumber,
     mantle::Utxo,
     sdp::{ActivityMetadata, ProviderId, ServiceParameters, ServiceType},
 };
 use rpds::{HashTrieMapSync, HashTrieSetSync};
-use zksign::PublicKey;
 
 use crate::{
     EpochState,
@@ -28,8 +28,8 @@ const ACTIVITY_THRESHOLD: u64 = 2;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rewards {
-    current_opinions: HashTrieMapSync<PublicKey, usize>,
-    past_opinions: HashTrieMapSync<PublicKey, usize>,
+    current_opinions: HashTrieMapSync<ZkPublicKey, usize>,
+    past_opinions: HashTrieMapSync<ZkPublicKey, usize>,
     recorded_messages: HashTrieSetSync<ProviderId>, // avoid processing duplicate opinions
     // naming as in the spec, current session is s-1 if s is the session at this which this
     // message was sent
@@ -474,7 +474,7 @@ mod tests {
             create_test_session_state(&[provider1], ServiceType::DataAvailability, 0);
 
         // Extract zk_ids for verification
-        let current_zk_ids: Vec<PublicKey> = current_session
+        let current_zk_ids: Vec<ZkPublicKey> = current_session
             .declarations
             .values()
             .map(|d| d.zk_id)

@@ -1,6 +1,7 @@
 use std::{hash::Hash, pin::Pin};
 
 use futures::Stream;
+use key_management_system_keys::keys::ZkSignature;
 use thiserror::Error;
 
 pub mod encoding;
@@ -44,7 +45,7 @@ pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCost {
     fn mantle_tx(&self) -> &MantleTx;
 
     /// Returns the proof of the ledger transaction
-    fn ledger_tx_proof(&self) -> &zksign::Signature;
+    fn ledger_tx_proof(&self) -> &ZkSignature;
 
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)>;
 }
@@ -71,7 +72,7 @@ impl<T: AuthenticatedMantleTx> AuthenticatedMantleTx for &T {
         T::mantle_tx(self)
     }
 
-    fn ledger_tx_proof(&self) -> &zksign::Signature {
+    fn ledger_tx_proof(&self) -> &ZkSignature {
         T::ledger_tx_proof(self)
     }
 

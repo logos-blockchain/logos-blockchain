@@ -1,5 +1,6 @@
 use std::{cmp::Ordering, collections::HashMap, iter::once};
 
+use key_management_system_keys::keys::ZkPublicKey;
 use nomos_blend_message::{
     encap::ProofsVerifier as ProofsVerifierTrait,
     reward::{BlendingTokenEvaluation, HammingDistance},
@@ -9,7 +10,6 @@ use nomos_core::{
     sdp::{ProviderId, ServiceType, SessionNumber},
 };
 use rpds::{HashTrieMapSync, HashTrieSetSync};
-use zksign::PublicKey;
 
 use crate::mantle::sdp::rewards::{
     Error,
@@ -25,7 +25,7 @@ pub struct TargetSessionState<ProofsVerifier> {
     /// The target session number
     session_number: SessionNumber,
     /// The providers in the target session (their public keys and indices).
-    providers: HashTrieMapSync<ProviderId, (PublicKey, u64)>,
+    providers: HashTrieMapSync<ProviderId, (ZkPublicKey, u64)>,
     /// Parameters for evaluating activity proofs in the target session
     token_evaluation: BlendingTokenEvaluation,
     /// Verifiers for `PoQ` and `PoSel`.
@@ -36,7 +36,7 @@ pub struct TargetSessionState<ProofsVerifier> {
 impl<ProofsVerifier> TargetSessionState<ProofsVerifier> {
     pub const fn new(
         session_number: SessionNumber,
-        providers: HashTrieMapSync<ProviderId, (PublicKey, u64)>,
+        providers: HashTrieMapSync<ProviderId, (ZkPublicKey, u64)>,
         token_evaluation: BlendingTokenEvaluation,
         proof_verifiers: Vec<ProofsVerifier>,
     ) -> Self {
@@ -52,7 +52,7 @@ impl<ProofsVerifier> TargetSessionState<ProofsVerifier> {
         self.session_number
     }
 
-    pub fn providers(&self) -> impl Iterator<Item = (&ProviderId, &(PublicKey, u64))> {
+    pub fn providers(&self) -> impl Iterator<Item = (&ProviderId, &(ZkPublicKey, u64))> {
         self.providers.iter()
     }
 
@@ -74,7 +74,7 @@ where
         proof: &nomos_core::sdp::blend::ActivityProof,
         current_session_state: &CurrentSessionState,
         settings: &RewardsParameters,
-    ) -> Result<(PublicKey, HammingDistance), Error> {
+    ) -> Result<(ZkPublicKey, HammingDistance), Error> {
         if proof.session != self.session_number {
             return Err(Error::InvalidSession {
                 expected: self.session_number,
@@ -124,7 +124,7 @@ where
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TargetSessionTracker {
     /// Collecting proofs submitted by providers in the target session.
-    submitted_proofs: HashTrieMapSync<ProviderId, (PublicKey, HammingDistance)>,
+    submitted_proofs: HashTrieMapSync<ProviderId, (ZkPublicKey, HammingDistance)>,
     /// Tracking the minimum Hamming distance among submitted proofs.
     min_hamming_distance: MinHammingDistance,
 }
@@ -147,7 +147,7 @@ impl TargetSessionTracker {
         &self,
         provider_id: ProviderId,
         session: SessionNumber,
-        zk_id: PublicKey,
+        zk_id: ZkPublicKey,
         hamming_distance: HammingDistance,
     ) -> Result<Self, Error> {
         if self.submitted_proofs.contains_key(&provider_id) {

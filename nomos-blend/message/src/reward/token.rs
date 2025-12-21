@@ -2,7 +2,7 @@ use blake2::{
     Blake2bVar,
     digest::{Update as _, VariableOutput as _},
 };
-use nomos_blend_crypto::keys::Ed25519PublicKey;
+use key_management_system_keys::keys::Ed25519PublicKey;
 use nomos_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 use nomos_core::codec::SerializeOp as _;
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::reward::session::SessionRandomness;
 
 /// A blending token consisting of a proof of quota and a proof of selection.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BlendingToken {
     signing_key: Ed25519PublicKey,
     proof_of_quota: VerifiedProofOfQuota,
@@ -105,6 +105,7 @@ impl From<u64> for HammingDistance {
 
 #[cfg(test)]
 mod tests {
+    use key_management_system_keys::keys::Ed25519Key;
     use nomos_blend_proofs::{quota::PROOF_OF_QUOTA_SIZE, selection::PROOF_OF_SELECTION_SIZE};
 
     use super::*;
@@ -157,7 +158,7 @@ mod tests {
         proof_of_selection: u8,
     ) -> BlendingToken {
         BlendingToken {
-            signing_key: ed25519_dalek::SigningKey::from_bytes(&[signing_key; _]).verifying_key(),
+            signing_key: Ed25519Key::from_bytes(&[signing_key; _]).public_key(),
             proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked(
                 [proof_of_quota; PROOF_OF_QUOTA_SIZE],
             ),

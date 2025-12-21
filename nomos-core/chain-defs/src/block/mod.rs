@@ -3,7 +3,7 @@ use core::fmt::Debug;
 use ::serde::{Deserialize, Serialize, de::DeserializeOwned};
 use bytes::Bytes;
 use cryptarchia_engine::Slot;
-use ed25519_dalek::Verifier as _;
+use key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 
 use crate::{
     codec::{DeserializeOp as _, SerializeOp as _},
@@ -21,8 +21,8 @@ pub type BlockNumber = u64;
 pub enum Error {
     #[error("Failed to serialize: {0}")]
     Serialisation(#[from] crate::codec::Error),
-    #[error("Signature error: {0}")]
-    Signature(Box<ed25519_dalek::SignatureError>),
+    #[error("Signature error.")]
+    Signature,
     #[error("Too many transactions: {count} exceeds maximum of {max}")]
     TooManyTxs { count: usize, max: usize },
     #[error("Block root mismatch: calculated content does not match header")]
@@ -37,7 +37,7 @@ pub enum Error {
 pub struct Proposal {
     pub header: Header,
     pub references: References,
-    pub signature: ed25519_dalek::Signature,
+    pub signature: Ed25519Signature,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -48,7 +48,7 @@ pub struct References {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Block<Tx> {
     header: Header,
-    signature: ed25519_dalek::Signature,
+    signature: Ed25519Signature,
     transactions: Vec<Tx>,
 }
 
@@ -69,7 +69,7 @@ impl Proposal {
     }
 
     #[must_use]
-    pub const fn signature(&self) -> &ed25519_dalek::Signature {
+    pub const fn signature(&self) -> &Ed25519Signature {
         &self.signature
     }
 }
@@ -80,13 +80,13 @@ impl<Tx> Block<Tx> {
         slot: Slot,
         proof_of_leadership: Groth16LeaderProof,
         transactions: Vec<Tx>,
-        signing_key: &ed25519_dalek::SigningKey,
+        signing_key: &Ed25519Key,
     ) -> Result<Self, Error>
     where
         Tx: Transaction<Hash = TxHash>,
     {
         let expected_public_key = proof_of_leadership.leader_key();
-        let actual_public_key = signing_key.verifying_key();
+        let actual_public_key = signing_key.public_key();
         if expected_public_key != &actual_public_key {
             return Err(Error::KeyMismatch);
         }
@@ -114,7 +114,7 @@ impl<Tx> Block<Tx> {
     pub fn reconstruct(
         header: Header,
         transactions: Vec<Tx>,
-        signature: ed25519_dalek::Signature,
+        signature: Ed25519Signature,
     ) -> Result<Self, Error>
     where
         Tx: Transaction<Hash = TxHash>,
@@ -136,7 +136,7 @@ impl<Tx> Block<Tx> {
 
         leader_public_key
             .verify(&header_bytes, &signature)
-            .map_err(|e| Error::Signature(Box::new(e)))?;
+            .map_err(|_| Error::Signature)?;
 
         Ok(Self {
             header,
@@ -176,7 +176,7 @@ impl<Tx> Block<Tx> {
     }
 
     #[must_use]
-    pub const fn signature(&self) -> &ed25519_dalek::Signature {
+    pub const fn signature(&self) -> &Ed25519Signature {
         &self.signature
     }
 
@@ -218,7 +218,6 @@ impl<Tx: Clone + Eq + Serialize + DeserializeOwned> TryFrom<Block<Tx>> for Bytes
 mod tests {
     use std::iter;
 
-    use ed25519_dalek::SigningKey;
     use groth16::Fr;
     use num_bigint::BigUint;
 
@@ -244,8 +243,8 @@ mod tests {
         let aged_path = vec![MerkleNode::Right(Fr::from(0u8))];
         let latest_path = vec![MerkleNode::Left(Fr::from(0u8))];
 
-        let signing_key = SigningKey::from_bytes(&[0; 32]);
-        let verifying_key = signing_key.verifying_key();
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let verifying_key = signing_key.public_key();
 
         let private_inputs = LeaderPrivate::new(
             public_inputs,
@@ -276,7 +275,7 @@ mod tests {
         let proof_of_leadership = create_proof();
         let transactions: Vec<Tx> = vec![];
 
-        let valid_signing_key = SigningKey::from_bytes(&[0; 32]);
+        let valid_signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let valid_block = Block::create(
             parent_block,
             slot,
@@ -293,7 +292,7 @@ mod tests {
             Block::reconstruct(header.clone(), transactions.clone(), valid_signature)
                 .expect("Should reconstruct block with valid signature");
 
-        let wrong_signing_key = SigningKey::from_bytes(&[1u8; 32]);
+        let wrong_signing_key = Ed25519Key::from_bytes(&[1u8; 32]);
         let invalid_signature = header
             .sign(&wrong_signing_key)
             .expect("Signing should work");
@@ -311,7 +310,7 @@ mod tests {
         let parent_block = [0u8; 32].into();
         let slot = Slot::from(42u64);
         let proof_of_leadership = create_proof();
-        let signing_key = SigningKey::from_bytes(&[0; 32]);
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
 
         let _valid_block: Block<Tx> = Block::create(
             parent_block,

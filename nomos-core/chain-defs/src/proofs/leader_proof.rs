@@ -9,7 +9,10 @@ use thiserror::Error;
 const POL_PROOF_DEV_MODE: &str = "POL_PROOF_DEV_MODE";
 
 use crate::{
-    mantle::{ledger::Utxo, ops::leader_claim::VoucherCm},
+    mantle::{
+        ledger::Utxo,
+        ops::{channel::Ed25519PublicKey, leader_claim::VoucherCm},
+    },
     utils::merkle::{MerkleNode, MerklePath},
 };
 
@@ -19,7 +22,7 @@ pub struct Groth16LeaderProof {
     proof: pol::PoLProof,
     #[serde(with = "serde_fr")]
     entropy_contribution: Fr,
-    leader_key: ed25519_dalek::VerifyingKey,
+    leader_key: Ed25519PublicKey,
     voucher_cm: VoucherCm,
     #[cfg(feature = "pol-dev-mode")]
     public: LeaderPublic,
@@ -55,7 +58,7 @@ impl Groth16LeaderProof {
         Self {
             proof: pol::PoLProof::from_bytes(&[0u8; 128]),
             entropy_contribution: Fr::ZERO,
-            leader_key: ed25519_dalek::VerifyingKey::from_bytes(&[0u8; 32]).unwrap(),
+            leader_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
             #[cfg(feature = "pol-dev-mode")]
             public: LeaderPublic::new(Fr::ZERO, Fr::ZERO, Fr::ZERO, 0, 0),
@@ -95,7 +98,7 @@ pub trait LeaderProof {
     /// Get the entropy used in the proof.
     fn entropy(&self) -> Fr;
 
-    fn leader_key(&self) -> &ed25519_dalek::VerifyingKey;
+    fn leader_key(&self) -> &Ed25519PublicKey;
 
     fn voucher_cm(&self) -> &VoucherCm;
 }
@@ -129,7 +132,7 @@ impl LeaderProof for Groth16LeaderProof {
     fn verify_genesis(&self) -> bool {
         self.proof == pol::PoLProof::from_bytes(&[0u8; 128])
             && self.entropy_contribution == Fr::ZERO
-            && self.leader_key == ed25519_dalek::VerifyingKey::from_bytes(&[0u8; 32]).unwrap()
+            && self.leader_key == Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()
             && self.voucher_cm == VoucherCm::default()
     }
 
@@ -137,7 +140,7 @@ impl LeaderProof for Groth16LeaderProof {
         self.entropy_contribution
     }
 
-    fn leader_key(&self) -> &ed25519_dalek::VerifyingKey {
+    fn leader_key(&self) -> &Ed25519PublicKey {
         &self.leader_key
     }
 
@@ -239,7 +242,7 @@ impl LeaderPublic {
 #[derive(Debug, Clone)]
 pub struct LeaderPrivate {
     input: pol::PolWitnessInputsData,
-    pk: ed25519_dalek::VerifyingKey,
+    pk: Ed25519PublicKey,
     #[cfg(feature = "pol-dev-mode")]
     public: LeaderPublic,
 }
@@ -253,7 +256,7 @@ impl LeaderPrivate {
         latest_path: &MerklePath<Fr>,
         slot_secret: Fr,
         starting_slot: u64,
-        leader_pk: &ed25519_dalek::VerifyingKey,
+        leader_pk: &Ed25519PublicKey,
     ) -> Self {
         let public_key = *leader_pk;
         let leader_pk = ed25519_pk_to_fr_tuple(leader_pk);
@@ -326,7 +329,7 @@ mod proof_serde {
     }
 }
 
-fn ed25519_pk_to_fr_tuple(pk: &ed25519_dalek::VerifyingKey) -> (Fr, Fr) {
+fn ed25519_pk_to_fr_tuple(pk: &Ed25519PublicKey) -> (Fr, Fr) {
     let pk_bytes = pk.as_bytes();
     // Convert each half of the public key to Fr so that they alwasy fit
     (

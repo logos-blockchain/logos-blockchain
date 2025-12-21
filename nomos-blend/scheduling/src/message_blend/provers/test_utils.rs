@@ -1,5 +1,5 @@
 use futures::future::ready;
-use nomos_blend_crypto::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
+use key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
 use nomos_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
 use nomos_blend_proofs::quota::{
     self, VerifiedProofOfQuota,
@@ -24,7 +24,7 @@ pub const fn poq_public_inputs_from_session_public_inputs_and_signing_key(
     ): (PoQVerificationInputsMinusSigningKey, Ed25519PublicKey),
 ) -> PoQPublicInputs {
     PoQPublicInputs {
-        signing_key,
+        signing_key: signing_key.into_inner(),
         core,
         leader,
         session,
@@ -43,7 +43,9 @@ pub fn valid_proof_of_quota_inputs(
         },
         private_inputs,
     ) = valid_proof_of_core_quota_inputs(
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE])
+            .unwrap()
+            .into_inner(),
         core_quota,
     );
     (
@@ -71,7 +73,9 @@ pub fn valid_proof_of_leader_inputs(
         },
         private_inputs,
     ) = valid_proof_of_leadership_quota_inputs(
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE])
+            .unwrap()
+            .into_inner(),
         leader_quota,
     );
     (

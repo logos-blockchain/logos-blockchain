@@ -1,4 +1,5 @@
 use common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
+use key_management_system_keys::keys::ZkPublicKey;
 use nomos_core::{codec::SerializeOp as _, header::HeaderId};
 use nomos_http_api_common::{
     bodies::{
@@ -11,7 +12,6 @@ use nomos_http_api_common::{
     paths,
 };
 use url::Url;
-use zksign::PublicKey;
 
 pub struct WalletHttpClient {
     client: CommonHttpClient,
@@ -27,7 +27,7 @@ impl WalletHttpClient {
 
     fn build_get_balance_url(
         base_url: &Url,
-        wallet_address: PublicKey,
+        wallet_address: ZkPublicKey,
         tip: Option<HeaderId>,
     ) -> Result<Url, Error> {
         let Ok(wallet_address) = wallet_address.to_bytes() else {
@@ -54,7 +54,7 @@ impl WalletHttpClient {
     pub async fn get_balance(
         self,
         base_url: &Url,
-        wallet_address: PublicKey,
+        wallet_address: ZkPublicKey,
         tip: Option<HeaderId>,
     ) -> Result<WalletBalanceResponseBody, Error> {
         let url = Self::build_get_balance_url(base_url, wallet_address, tip)?;
@@ -83,8 +83,8 @@ mod tests {
         std::array::from_fn(|i| (i % 16) as u8)
     }
 
-    fn get_wallet_address() -> PublicKey {
-        PublicKey::from_bytes(get_ordered_hex_array().as_slice()).unwrap()
+    fn get_wallet_address() -> ZkPublicKey {
+        ZkPublicKey::from_bytes(get_ordered_hex_array().as_slice()).unwrap()
     }
 
     #[test]

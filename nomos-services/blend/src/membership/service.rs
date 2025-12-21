@@ -2,8 +2,9 @@ use std::{hash::Hash, marker::PhantomData};
 
 use broadcast_service::{BlockBroadcastMsg, SessionSubscription, SessionUpdate};
 use futures::StreamExt as _;
+use key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
 use nomos_blend::{
-    crypto::{keys::Ed25519PublicKey, merkle::sort_nodes_and_build_merkle_tree},
+    crypto::merkle::sort_nodes_and_build_merkle_tree,
     scheduling::membership::{Membership, Node},
 };
 use nomos_core::sdp::{ProviderId, ProviderInfo};
@@ -13,7 +14,6 @@ use overwatch::{
 };
 use tokio::sync::oneshot;
 use tracing::warn;
-use zksign::PublicKey;
 
 use crate::membership::{MembershipInfo, MembershipStream, ServiceMessage, ZkInfo, node_id};
 
@@ -21,7 +21,7 @@ use crate::membership::{MembershipInfo, MembershipStream, ServiceMessage, ZkInfo
 #[derive(Debug, Clone)]
 struct ZkNode<NodeId> {
     pub node: Node<NodeId>,
-    pub zk_key: PublicKey,
+    pub zk_key: ZkPublicKey,
 }
 
 pub struct Adapter<Service, NodeId>
@@ -33,7 +33,7 @@ where
     /// A signing public key of the local node, required to
     /// build a [`Membership`] instance.
     signing_public_key: Ed25519PublicKey,
-    zk_public_key: Option<PublicKey>,
+    zk_public_key: Option<ZkPublicKey>,
     _phantom: PhantomData<NodeId>,
 }
 
@@ -50,7 +50,7 @@ where
     fn new(
         relay: OutboundRelay<ServiceMessage<Self>>,
         signing_public_key: Ed25519PublicKey,
-        zk_public_key: Option<PublicKey>,
+        zk_public_key: Option<ZkPublicKey>,
     ) -> Self {
         Self {
             relay,
@@ -93,7 +93,7 @@ where
                 .map(move |(mut nodes, session_number)| {
                     let zk_tree = sort_nodes_and_build_merkle_tree(
                         &mut nodes,
-                        |ZkNode { zk_key, .. }| *zk_key,
+                        |ZkNode { zk_key, .. }| zk_key.into_inner(),
                     )
                     .expect("Should not fail to build merkle tree of core nodes' zk public keys.");
                     let membership_nodes = nodes
@@ -102,7 +102,7 @@ where
                         .collect::<Vec<_>>();
                     let core_and_path_selectors = maybe_zk_public_key.map(|zk_public_key| {
                         zk_tree
-                            .get_proof_for_key(&zk_public_key)
+                            .get_proof_for_key(zk_public_key.as_fr())
                             .expect("Zk public key of core node should be part of membership info.")
                     });
                     let membership = Membership::new(&membership_nodes, &signing_public_key);

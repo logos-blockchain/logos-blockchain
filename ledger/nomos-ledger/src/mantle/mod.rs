@@ -210,7 +210,7 @@ impl LedgerState {
 
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
+    use key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey};
     use nomos_core::mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
         gas::MainnetGasConstants,
@@ -223,21 +223,21 @@ mod tests {
     use super::*;
     use crate::cryptarchia::tests::{config, genesis_state, utxo};
 
-    fn create_test_keys() -> (SigningKey, VerifyingKey) {
+    fn create_test_keys() -> (Ed25519Key, Ed25519PublicKey) {
         create_test_keys_with_seed(0)
     }
 
-    fn create_test_keys_with_seed(seed: u8) -> (SigningKey, VerifyingKey) {
-        let signing_key = SigningKey::from_bytes(&[seed; 32]);
-        let verifying_key = signing_key.verifying_key();
+    fn create_test_keys_with_seed(seed: u8) -> (Ed25519Key, Ed25519PublicKey) {
+        let signing_key = Ed25519Key::from_bytes(&[seed; 32]);
+        let verifying_key = signing_key.public_key();
         (signing_key, verifying_key)
     }
 
-    fn create_signed_tx(op: Op, signing_key: &SigningKey) -> SignedMantleTx {
+    fn create_signed_tx(op: Op, signing_key: &Ed25519Key) -> SignedMantleTx {
         create_multi_signed_tx(vec![op], vec![signing_key])
     }
 
-    fn create_multi_signed_tx(ops: Vec<Op>, signing_keys: Vec<&SigningKey>) -> SignedMantleTx {
+    fn create_multi_signed_tx(ops: Vec<Op>, signing_keys: Vec<&Ed25519Key>) -> SignedMantleTx {
         let ledger_tx = LedgerTx::new(vec![], vec![]);
         let mantle_tx = MantleTx {
             ops: ops.clone(),
@@ -250,10 +250,12 @@ mod tests {
         let ops_proofs = signing_keys
             .into_iter()
             .zip(ops)
-            .map(|(key, _)| OpProof::Ed25519Sig(key.sign(tx_hash.as_signing_bytes().as_ref())))
+            .map(|(key, _)| {
+                OpProof::Ed25519Sig(key.sign_payload(tx_hash.as_signing_bytes().as_ref()))
+            })
             .collect();
 
-        let ledger_tx_proof = zksign::SecretKey::multi_sign(&[], &tx_hash.0).unwrap();
+        let ledger_tx_proof = ZkKey::multi_sign(&[], &tx_hash.0).unwrap();
 
         SignedMantleTx::new(mantle_tx, ops_proofs, ledger_tx_proof)
             .expect("Test transaction should have valid signatures")

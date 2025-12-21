@@ -13,27 +13,25 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-cryptarchia-engine  = { workspace = true }
-ed25519             = { default-features = false, version = "2.2.3" }
-groth16             = { workspace = true }
-mmr                 = { features = ["serde"], workspace = true }
-nomos-blend-crypto  = { workspace = true }
-nomos-blend-message = { workspace = true }
-nomos-blend-proofs  = { workspace = true }
-nomos-core          = { workspace = true }
-nomos-utils         = { workspace = true }
-num-bigint          = { default-features = false, version = "0.4" }
-rand                = { workspace = true }
-rpds                = { default-features = false, version = "1.1.1" }
-serde               = { default-features = false, features = ["derive"], optional = true, version = "1.0" }
-thiserror           = "1"
-tracing             = { workspace = true }
-utxotree            = { workspace = true }
-zksign              = { workspace = true }
+cryptarchia-engine         = { workspace = true }
+groth16                    = { workspace = true }
+key-management-system-keys = { workspace = true }
+mmr                        = { features = ["serde"], workspace = true }
+nomos-blend-crypto         = { workspace = true }
+nomos-blend-message        = { workspace = true }
+nomos-blend-proofs         = { workspace = true }
+nomos-core                 = { workspace = true }
+nomos-utils                = { workspace = true }
+num-bigint                 = { default-features = false, version = "0.4" }
+rand                       = { workspace = true }
+rpds                       = { default-features = false, version = "1.1.1" }
+serde                      = { default-features = false, features = ["derive"], optional = true, version = "1.0" }
+thiserror                  = "1"
+tracing                    = { workspace = true }
+utxotree                   = { workspace = true }
 
 [dev-dependencies]
-ed25519-dalek = { default-features = false, version = "2.0.0" }
-rand          = { features = ["std", "std_rng"], workspace = true }
+rand = { features = ["std", "std_rng"], workspace = true }
 
 [features]
 serde = ["cryptarchia-engine/serde", "dep:serde", "groth16/deser", "nomos-utils/serde", "utxotree/serde"]

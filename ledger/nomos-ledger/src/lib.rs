@@ -311,22 +311,18 @@ impl LedgerState {
 #[cfg(test)]
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
+    use key_management_system_keys::keys::{ZkKey, ZkPublicKey};
     use nomos_core::mantle::{
         GasCost as _, MantleTx, Note, SignedMantleTx, Transaction as _, gas::MainnetGasConstants,
         ledger::Tx as LedgerTx,
     };
     use num_bigint::BigUint;
-    use zksign::PublicKey;
 
     use super::*;
 
     type HeaderId = [u8; 32];
 
-    fn create_tx(
-        inputs: Vec<NoteId>,
-        outputs: Vec<Note>,
-        sks: &[zksign::SecretKey],
-    ) -> SignedMantleTx {
+    fn create_tx(inputs: Vec<NoteId>, outputs: Vec<Note>, sks: &[ZkKey]) -> SignedMantleTx {
         let ledger_tx = LedgerTx::new(inputs, outputs);
         let mantle_tx = MantleTx {
             ops: vec![],
@@ -336,7 +332,7 @@ mod tests {
         };
         SignedMantleTx {
             ops_proofs: vec![],
-            ledger_tx_proof: zksign::SecretKey::multi_sign(sks, mantle_tx.hash().as_ref()).unwrap(),
+            ledger_tx_proof: ZkKey::multi_sign(sks, mantle_tx.hash().as_ref()).unwrap(),
             mantle_tx,
         }
     }
@@ -361,8 +357,8 @@ mod tests {
     #[test]
     fn test_ledger_try_update_with_transaction() {
         let (ledger, genesis_id, utxo) = create_test_ledger();
-        let mut output_note = Note::new(1, PublicKey::new(BigUint::from(1u8).into()));
-        let sk = zksign::SecretKey::from(BigUint::from(0u8));
+        let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(1u8).into()));
+        let sk = ZkKey::from(BigUint::from(0u8));
         // determine fees
         let tx = create_tx(
             vec![utxo.id()],
