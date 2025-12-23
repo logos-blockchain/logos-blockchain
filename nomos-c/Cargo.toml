@@ -19,6 +19,7 @@ nomos-node                 = { default-features = true, workspace = true }
 nomos-wallet               = { workspace = true }
 num-bigint                 = { version = "0.4", default-features = false }
 overwatch                  = { workspace = true }
+serde_json                 = { workspace = true }
 serde_yaml                 = { default-features = false, workspace = true }
 tokio                      = { default-features = false, features = ["rt-multi-thread"], workspace = true }
 
