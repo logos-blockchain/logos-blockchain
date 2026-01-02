@@ -2623,10 +2623,7 @@ name = "demo-sequencer"
 version = "0.1.0"
 dependencies = [
  "axum 0.7.9",
- "broadcast-service",
- "chain-service",
  "common-http-client",
- "futures",
  "hex",
  "key-management-system-service",
  "nomos-core",
@@ -5460,7 +5457,6 @@ dependencies = [
  "broadcast-service",
  "clap",
  "common-http-client",
- "cryptarchia-engine",
  "demo-sequencer",
  "futures",
  "hex",

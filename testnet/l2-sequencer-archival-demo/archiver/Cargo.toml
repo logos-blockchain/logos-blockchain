@@ -18,7 +18,6 @@ axum               = { default-features = false, version = "0.8.7", features = [
 broadcast-service  = { workspace = true }
 clap               = { default-features = false, features = ["derive", "env", "std"], version = "4.5.13" }
 common-http-client = { workspace = true }
-cryptarchia-engine = { workspace = true }
 demo-sequencer     = { workspace = true }
 futures            = { default-features = false, version = "0.3" }
 hex                = { default-features = false, features = ["alloc"], version = "0.4" }

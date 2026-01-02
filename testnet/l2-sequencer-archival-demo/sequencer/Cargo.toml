@@ -14,10 +14,7 @@ workspace = true
 
 [dependencies]
 axum                          = { default-features = false, features = ["http1", "http2", "json", "tokio"], version = "0.7.5" }
-broadcast-service             = { workspace = true }
-chain-service                 = { workspace = true }
 common-http-client            = { workspace = true }
-futures                       = { default-features = false, version = "0.3" }
 hex                           = "0.4"
 key-management-system-service = { workspace = true }
 nomos-core                    = { workspace = true }
