@@ -10,10 +10,17 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-nomos-node = { default-features = true, workspace = true }
-overwatch  = { workspace = true }
-serde_yaml = { default-features = false, workspace = true }
-tokio      = { default-features = false, features = ["rt-multi-thread"], workspace = true }
+chain-service              = { workspace = true }
+cryptarchia-engine         = { workspace = true }
+key-management-system-keys = { workspace = true }
+nomos-api                  = { workspace = true }
+nomos-core                 = { workspace = true }
+nomos-node                 = { default-features = true, workspace = true }
+nomos-wallet               = { workspace = true }
+num-bigint                 = { version = "0.4", default-features = false }
+overwatch                  = { workspace = true }
+serde_yaml                 = { default-features = false, workspace = true }
+tokio                      = { default-features = false, features = ["rt-multi-thread"], workspace = true }
 
 [build-dependencies]
 cbindgen = "0.29"

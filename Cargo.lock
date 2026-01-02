@@ -6211,7 +6211,14 @@ name = "nomos-c"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
+ "chain-service",
+ "cryptarchia-engine",
+ "key-management-system-keys",
+ "nomos-api",
+ "nomos-core",
  "nomos-node",
+ "nomos-wallet",
+ "num-bigint",
  "overwatch",
  "serde_yaml",
  "tokio",
