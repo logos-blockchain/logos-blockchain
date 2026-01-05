@@ -1,11 +1,3 @@
-use std::{
-    collections::HashSet,
-    net::SocketAddr,
-    process::{Child, Command, Stdio},
-    str::FromStr as _,
-    time::Duration,
-};
-
 use broadcast_service::BlockInfo;
 use chain_service::CryptarchiaInfo;
 use common_http_client::CommonHttpClient;
@@ -55,16 +47,24 @@ use nomos_tracing::logging::local::FileConfig;
 use nomos_tracing_service::LoggerLayer;
 use nomos_utils::{math::NonNegativeF64, net::get_available_tcp_port};
 use reqwest::Url;
+use std::{
+    collections::HashSet,
+    net::SocketAddr,
+    process::{Child, Command, Stdio},
+    str::FromStr as _,
+    time::Duration,
+};
 use tempfile::NamedTempFile;
 
-use super::{CLIENT, create_tempdir, persist_tempdir};
+use super::{CLIENT, create_tempdir, get_exe_path, persist_tempdir};
 use crate::{
     IS_DEBUG_TRACING, adjust_timeout,
     nodes::{DA_GET_TESTING_ENDPOINT_ERROR, LOGS_PREFIX},
     topology::configs::{GeneralConfig, deployment::default_e2e_deployment_settings},
 };
 
-const BIN_PATH: &str = "../target/debug/nomos-executor";
+const BIN_PATH_DEBUG: &str = "../target/debug/nomos-executor";
+const BIN_PATH_RELEASE: &str = "../target/release/nomos-executor";
 
 pub struct Executor {
     addr: SocketAddr,
@@ -112,7 +112,8 @@ impl Executor {
         );
 
         serde_yaml::to_writer(&mut file, &config).unwrap();
-        let child = Command::new(std::env::current_dir().unwrap().join(BIN_PATH))
+        let exe_path = get_exe_path(BIN_PATH_DEBUG, BIN_PATH_RELEASE);
+        let child = Command::new(exe_path)
             .arg(&config_path)
             .current_dir(dir.path())
             .stdout(Stdio::inherit())

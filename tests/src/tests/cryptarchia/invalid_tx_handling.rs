@@ -88,7 +88,7 @@ async fn wait_for_transactions_processing(
     let mut scanned_blocks = HashSet::new();
 
     loop {
-        let info = validator.consensus_info().await;
+        let info = validator.consensus_info(false).await;
         let _: Option<()> = scan_chain_until(
             info.tip,
             &mut scanned_blocks,
@@ -109,6 +109,11 @@ async fn wait_for_transactions_processing(
         .await;
 
         if found_valid_txs.len() == valid_tx_hashes.len() {
+            println!(
+                "Found {}/{} valid transactions",
+                found_valid_txs.len(),
+                valid_tx_hashes.len()
+            );
             break;
         }
 

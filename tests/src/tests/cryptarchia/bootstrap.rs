@@ -98,7 +98,7 @@ async fn test_ibd_behind_nodes() {
     // Check if the behind node has caught up to the highest initial validator.
     let height_check_timestamp = Instant::now();
     let heights = stream::iter(&initial_validators)
-        .then(async |n| n.consensus_info().await.height)
+        .then(async |n| n.consensus_info(false).await.height)
         .collect::<Vec<_>>()
         .await;
     println!("initial validator heights: {heights:?}");
@@ -108,7 +108,7 @@ async fn test_ibd_behind_nodes() {
         .max()
         .expect("There should be at least one initial validator");
 
-    let behind_node_info = behind_node.consensus_info().await;
+    let behind_node_info = behind_node.consensus_info(true).await;
     println!("behind node info: {behind_node_info:?}");
 
     // We spent some time for checking the heights of nodes

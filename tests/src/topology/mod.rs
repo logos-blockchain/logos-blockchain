@@ -42,6 +42,7 @@ use crate::{
         da::GeneralDaConfig,
         time::default_time_config,
     },
+    verify_pol_proof_dev_mode,
 };
 
 pub struct TopologyConfig {
@@ -156,6 +157,8 @@ pub struct Topology {
 
 impl Topology {
     pub async fn spawn(config: TopologyConfig) -> Self {
+        verify_pol_proof_dev_mode();
+
         let n_participants = config.n_validators + config.n_executors;
 
         // we use the same random bytes for:
