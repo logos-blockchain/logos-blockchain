@@ -45,7 +45,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
       - name: Run `cargo deny`
-        uses: EmbarkStudios/cargo-deny-action@34899fc7ba81ca6268d5947a7a16b4649013fea1 # Version 2.0.11
+        uses: EmbarkStudios/cargo-deny-action@76cd80eb775d7bbbd2d80292136d74d39e1b4918 # Version 2.0.14
         with:
           arguments: "--locked"
           command-arguments: "--hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings"
