@@ -1,34 +1,53 @@
-name: Prune unnecessary cache
+name: Prune Cache
 
 inputs:
-  key-prefix:
-    description: The cache key prefix to prune
-    required: true
   github-token:
     description: The GH token to use for the API request
     required: true
+  key-prefix:
+    description: The cache key prefix to prune
+    required: true
+  ref:
+    description: Ref to scope cache deletion (e.g. main, refs/pull/123/merge). Omit for all.
+    required: false
+  limit:
+    description: Max number of caches to fetch (gh cache list page size)
+    required: false
+    default: "100"
 
 description: Prune unnecessary cache for the provided key
 
 runs:
   using: composite
   steps:
-    - name: Obtain cache entry to delete
-      id: fetch-outdated-cache
+    - name: Prune Cache
       shell: bash
+      env:
+        GH_REPO: ${{ github.repository }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        KEY_PREFIX: ${{ inputs.key-prefix }}
+        REF: ${{ inputs.ref }}
+        LIMIT: ${{ inputs.limit }}
       run: |
-        CACHE=$(curl  \
-          -H "Accept: application/vnd.github.v3+json" \
-          -H "Authorization: token ${{ inputs.github-token }}" \
-          https://api.github.com/repos/logos-blockchain/logos-blockchain/actions/caches | jq '.actions_caches[] | select(.key | startswith("${{ inputs.key-prefix }}")) | .id')
-        echo "cache=$CACHE" >> "$GITHUB_OUTPUT"
-      continue-on-error: true
-    - name: Delete cache entry
-      if: steps.fetch-outdated-cache.outputs.cache != null
-      shell: bash
-      run: |
-        curl -X DELETE \
-          -H "Accept: application/vnd.github.v3+json" \
-          -H "Authorization: token ${{ inputs.github-token }}" \
-          https://api.github.com/repos/logos-blockchain/logos-blockchain/actions/caches/${{ steps.fetch-outdated-cache.outputs.cache }}
-      continue-on-error: true
+        echo "Pruning caches with prefix: $KEY_PREFIX"
+
+        ARGS=()
+        [ -n "${REF:-}" ] && ARGS+=(--ref "$REF")
+
+        cacheKeysForPR=$(gh cache list \
+          "${ARGS[@]}" \
+          --limit "$LIMIT" \
+          --json id,key \
+          --jq '.[] | select(.key | startswith("'"$KEY_PREFIX"'")) | .id')
+
+        if [ -z "$cacheKeysForPR" ]; then
+          echo "No caches matched"
+          exit 0
+        fi
+
+        set +e
+        for cacheKey in $cacheKeysForPR; do
+          echo "Deleting cache $cacheKey"
+          gh cache delete "$cacheKey"
+        done
+        echo "Done"
