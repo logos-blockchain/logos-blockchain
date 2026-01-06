@@ -20,10 +20,10 @@ runs:
       continue-on-error: true
       with:
         path: ${{ inputs.cache-directory }}
-        key: cargo-hack-check/main/${{ runner.os }}/${{ github.sha }}
+        key: cargo-hack-check/${{ runner.os }}/main/${{ github.sha }}
         restore-keys: |
-          cargo-hack-check/main/${{ runner.os }}/
-          cargo-hack-check/main/
+          cargo-hack-check/${{ runner.os }}/main
+          cargo-hack-check/${{ runner.os }}
 
     - name: Restore Cargo Hack Keys (PR)
       if: github.event_name == 'pull_request'
@@ -31,12 +31,11 @@ runs:
       continue-on-error: true
       with:
         path: ${{ inputs.cache-directory }}
-        key: cargo-hack-check/pr/${{ github.event.pull_request.number }}/${{ runner.os }}/${{ github.sha }}
+        key: cargo-hack-check/${{ runner.os }}/pr#${{ github.event.pull_request.number }}/${{ github.sha }}
         restore-keys: |
-          cargo-hack-check/pr/${{ github.event.pull_request.number }}/${{ runner.os }}/
-          cargo-hack-check/pr/${{ github.event.pull_request.number }}/
-          cargo-hack-check/main/${{ runner.os }}/
-          cargo-hack-check/main/
+          cargo-hack-check/${{ runner.os }}/pr#${{ github.event.pull_request.number }}
+          cargo-hack-check/${{ runner.os }}/main
+          cargo-hack-check/${{ runner.os }}
 
     - name: Run Cache-Aware Cargo Hack Check
       shell: bash
@@ -47,11 +46,11 @@ runs:
       uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684  # Version 4.2.3
       with:
         path: ${{ inputs.cache-directory }}
-        key: cargo-hack-check/main/${{ runner.os }}/${{ github.sha }}
+        key: cargo-hack-check/${{ runner.os }}/main/${{ github.sha }}
 
     - name: Save Cargo Hack Keys (PR)
       if: github.event_name == 'pull_request'
       uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684  # Version 4.2.3
       with:
         path: ${{ inputs.cache-directory }}
-        key: cargo-hack-check/pr/${{ github.event.pull_request.number }}/${{ runner.os }}/${{ github.sha }}
+        key: cargo-hack-check/${{ runner.os }}/pr#${{ github.event.pull_request.number }}/${{ github.sha }}
