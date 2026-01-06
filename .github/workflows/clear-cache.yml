@@ -1,5 +1,3 @@
-# Sourced from: https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manage-caches#force-deleting-cache-entries
-
 name: Clean up GitHub Runner caches on PR close
 on:
   pull_request:
@@ -12,24 +10,9 @@ jobs:
     permissions:
       actions: write
     steps:
-      - name: Cleanup Cargo Hack Cache
-        run: |
-          echo "Fetching list of cache keys"
-          cacheKeysForPR=$(gh cache list \
-            --ref "$BRANCH" \
-            --limit 100 \
-            --json id,key \
-            --jq '.[] | select(.key | startswith("cargo-hack-check/")) | .id')
-
-          ## Setting this to not fail the workflow while deleting cache keys.
-          set +e
-          echo "Deleting caches..."
-          for cacheKey in $cacheKeysForPR
-          do
-              gh cache delete $cacheKey
-          done
-          echo "Done"
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          BRANCH: refs/pull/${{ github.event.pull_request.number }}/merge
+      - name: Delete Cargo Hack Cache
+        uses: ./.github/actions/prune-cache
+        continue-on-error: true
+        with:
+          key-prefix: "cargo-hack-check/"
+          github-token: ${{ inputs.github-token }}
