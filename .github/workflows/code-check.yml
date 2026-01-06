@@ -62,11 +62,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
+        platform:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - [self-hosted, Linux]
-          - [self-hosted, macOS]
-    runs-on: ${{ matrix.os }}
+          - os: [self-hosted, Linux]
+            label: self-hosted-linux
+          - os: [self-hosted, macOS]
+            label: self-hosted-macos
+    runs-on: ${{ matrix.platform.os }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
@@ -80,10 +82,23 @@ jobs:
         with:
           tool: cargo-hack
 
+      - name: Define cache key
+        shell: bash
+        run: |
+          BASE="code-check/feature-combinations/${{ matrix.platform.label }}"
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "CACHE_KEY=$BASE/pr#${{ github.event.pull_request.number }}" >> "$GITHUB_ENV"
+          elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "CACHE_KEY=$BASE/main" >> "$GITHUB_ENV"
+          else
+            echo "CACHE_KEY=$BASE" >> "$GITHUB_ENV"
+          fi
+
       - name: Set up Cargo cache
         uses: ./.github/actions/setup-cargo-cache
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
+          key: ${{ env.CACHE_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Cargo Hack Check (Cache-Aware)
@@ -93,7 +108,7 @@ jobs:
         if: success() || failure()
         uses: ./.github/actions/update-cargo-cache
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
+          key: ${{ env.CACHE_KEY }}
 
   unused-deps:
     name: Check for unused dependencies
@@ -125,25 +140,42 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+
+      - name: Define cache key
+        shell: bash
+        run: |
+          BASE="code-check/lints/${{ matrix.os }}"
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "CACHE_KEY=$BASE/pr#${{ github.event.pull_request.number }}" >> "$GITHUB_ENV"
+          elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "CACHE_KEY=$BASE/main" >> "$GITHUB_ENV"
+          else
+            echo "CACHE_KEY=$BASE" >> "$GITHUB_ENV"
+          fi
+
       - name: Set up Cargo cache
         uses: ./.github/actions/setup-cargo-cache
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
+          key: ${{ env.CACHE_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Setup Circuits
         uses: ./.github/actions/setup-circuits
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run cargo clippy on workspace
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: clippy
           args: --locked --all --all-targets --all-features
+
       - name: Update Cargo cache
         if: success() || failure()
         uses: ./.github/actions/update-cargo-cache
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
+          key: ${{ env.CACHE_KEY }}
  
   tests:
     name: Run test suite

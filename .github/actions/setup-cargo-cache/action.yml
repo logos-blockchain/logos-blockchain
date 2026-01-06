@@ -15,6 +15,7 @@ runs:
   steps:
     - name: Set up Cargo cache
       uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # Version 4.2.3
+      continue-on-error: true
       with:
         path: |
           ~/.cargo/registry/index/
@@ -22,13 +23,13 @@ runs:
           ~/.cargo/git/db/
           target/
         # Must be in sync with the key used in the update-cargo-cache action
-        key: ${{ inputs.key }}->#${{ github.run_id }}
+        key: ${{ inputs.key }}/${{ github.run_id }}
         restore-keys: |
           ${{ inputs.key }}
-      continue-on-error: true
+
     - name: Delete retrieved cache
       uses: ./.github/actions/prune-cache
-      with:
-        key-prefix: ${{ inputs.key }}->#
-        github-token: ${{ inputs.github-token }}
       continue-on-error: true
+      with:
+        key-prefix: ${{ inputs.key }}
+        github-token: ${{ inputs.github-token }}
