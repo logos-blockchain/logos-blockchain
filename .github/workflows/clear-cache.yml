@@ -16,4 +16,4 @@ jobs:
         with:
           github-token: ${{ inputs.github-token }}
           key-prefix: "cargo-hack-check/"
-          ref: refs/pull/${{ github.event.number }}/merge
+          ref: ${{ github.ref }}
