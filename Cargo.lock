@@ -11077,6 +11077,7 @@ version = "0.1.0"
 dependencies = [
  "ark-ff 0.4.2",
  "groth16",
+ "nomos-core",
  "num-bigint",
  "poseidon2",
  "quickcheck",

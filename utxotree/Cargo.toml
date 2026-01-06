@@ -12,6 +12,7 @@ version     = { workspace = true }
 [dependencies]
 ark-ff     = { default-features = false, version = "0.4" }
 groth16    = { features = ["deser"], workspace = true }
+nomos-core = { workspace = true }
 num-bigint = { default-features = false, version = "0.4" }
 poseidon2  = { workspace = true }
 rpds       = { default-features = false, features = ["serde"], version = "1" }
