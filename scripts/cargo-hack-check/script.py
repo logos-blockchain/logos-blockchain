@@ -428,7 +428,7 @@ def build_cargo_hack_commands_sorted_topologically() -> List[CargoHackCheckComma
 def main():
     sorted_commands = build_cargo_hack_commands_sorted_topologically()
     ensure_cache_directory_exists()
-    for command in sorted_commands[:1]:
+    for command in sorted_commands[:20]:
         return_code = command.run()
         if return_code != 0:
             # Save time by exiting early since dependent crates cannot be trusted.
@@ -438,4 +438,5 @@ def main():
 
 if __name__ == "__main__":
     status = main()
+    # TODO: Return different exit code for "everything skipped", to avoid saving cache again.
     exit(status)
