@@ -80,20 +80,20 @@ jobs:
         with:
           tool: cargo-hack
 
-#      - name: Set up Cargo cache
-#        uses: ./.github/actions/setup-cargo-cache
-#        with:
-#          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
-#          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Cargo cache
+        uses: ./.github/actions/setup-cargo-cache
+        with:
+          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Cargo Hack Check (Cache-Aware)
         uses: ./.github/actions/cargo-hack-check-cached
 
-#      - name: Update Cargo cache
-#        if: success() || failure()
-#        uses: ./.github/actions/update-cargo-cache
-#        with:
-#          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
+      - name: Update Cargo cache
+        if: success() || failure()
+        uses: ./.github/actions/update-cargo-cache
+        with:
+          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
 
   unused-deps:
     name: Check for unused dependencies
