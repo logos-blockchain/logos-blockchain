@@ -14,5 +14,6 @@ jobs:
         uses: ./.github/actions/prune-cache
         continue-on-error: true
         with:
-          key-prefix: "cargo-hack-check/"
           github-token: ${{ inputs.github-token }}
+          key-prefix: "cargo-hack-check/"
+          ref: refs/pull/${{ github.event.number }}/merge
