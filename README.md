@@ -158,7 +158,7 @@ To build the Nomos Docker image, run:
 docker build -t nomos .
 ```
 
-#### Running a Nomos Node
+#### Running Logos Blockchain Node with Docker
 
 To run a docker container with the Nomos node you need to mount both `config.yml` and `global_params_path` specified in
 the configuration.
@@ -175,6 +175,30 @@ cargo test --package kzgrs-backend write_random_kzgrs_params_to_file -- --ignore
 
 docker run -v "$(pwd)/nodes/nomos-node/config.yaml:/etc/nomos/config.yml" -v "$(pwd)/nomos-da/kzgrs-backend/kzgrs_test_params:/app/tests/kzgrs/kzgrs_test_params" nomos /etc/nomos/config.yml
 
+```
+
+#### Running Logos Blockchain Node locally
+
+When the node is build locally, it can be run with example config for one node network:
+```bash
+# Build logos blockchain binaries.
+cargo build --all-features --all-targets
+
+# Run node without connecting to any other node.
+CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true target/debug/nomos-node nodes/nomos-node/config-one-node.yaml
+```
+
+Node stores it's state inside the `db` directory, if there are any issues when restarting the node, please try removing `db` directory.
+
+#### Running Logos Blockchain Node with integration test
+
+To run the node programatically, one can use `local_testnet_one_node` integration test.
+```bash
+# Build logos blockchain binaries.
+cargo build --all-features --all-targets
+
+# Integration test uses binaries built in a previous step.
+CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true cargo test --all-features local_testnet_one_node -- --ignored --nocapture
 ```
 
 ## Running Tests
