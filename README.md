@@ -158,6 +158,39 @@ To build the Nomos Docker image, run:
 docker build -t nomos .
 ```
 
+#### Setting `chain_start_time` timestamp
+
+When running a node locally with a custom config or `config-one-node.yaml`, you may encounter the following error if the configuration's start time is too far in the past:
+```
+ERROR chain_leader: trying to propose a block for slot XXXX but epoch state is not available
+```
+
+To resolve this, you must manually update the `chain_start_time` in the config file to a recent timestamp (ideally within a few minutes of your current system time) before launching the node.
+
+##### 1. Generate a valid timestamp
+
+You can generate a timestamp in the required format using the following command in your terminal:
+Bash
+```bash
+# For macOS/Linux
+date -u +"%Y-%m-%d %H:%M:%S.000000 +00:00:00"
+```
+
+##### 2. Update the configuration file
+
+Open nodes/nomos-node/config-one-node.yaml and locate the time section. Replace the chain_start_time value with the output from the command above:
+YAML
+
+```bash
+time:
+  backend:
+    ntp_server: pool.ntp.org
+    # ... other settings ...
+  chain_start_time: 2026-01-07 10:45:00.000000 +00:00:00 # <--- Update this line
+```
+
+Once updated, restart the node.
+
 #### Running Logos Blockchain Node with Docker
 
 To run a docker container with the Nomos node you need to mount both `config.yml` and `global_params_path` specified in
