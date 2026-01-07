@@ -67,12 +67,18 @@ impl Leader {
                     epoch_state.total_stake()
                 );
 
-                let private_inputs = self.private_inputs_for_winning_utxo_and_slot(
+                let Some(private_inputs) = self.private_inputs_for_winning_utxo_and_slot(
                     utxo,
                     epoch_state,
                     public_inputs,
                     latest_tree,
-                );
+                ) else {
+                    tracing::error!(
+                        "Failed to build private inputs for winning utxo {:?} for {slot:?}",
+                        utxo.id(),
+                    );
+                    continue;
+                };
 
                 winning_pol_info_notifier.notify_about_winning_slot(
                     private_inputs.clone(),
@@ -110,18 +116,41 @@ impl Leader {
         None
     }
 
+    #[cfg_attr(
+        feature = "pol-dev-mode",
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "Return value is always Some in dev mode"
+        ),
+        expect(unused_variables, reason = "Some variables are unused in dev mode")
+    )]
     fn private_inputs_for_winning_utxo_and_slot(
         &self,
         utxo: &Utxo,
-        // TODO: Use aged tree to compute `aged_path`
         epoch_state: &EpochState,
         public_inputs: LeaderPublic,
-        // TODO: Use latest tree to compute `latest_path`
-        _latest_tree: &UtxoTree,
-    ) -> LeaderPrivate {
-        // TODO: Get the actual witness paths and leader key
-        let aged_path = Vec::new(); // Placeholder for aged path, aged UTXO tree is included in `EpochState`.
-        let latest_path = Vec::new();
+        latest_tree: &UtxoTree,
+    ) -> Option<LeaderPrivate> {
+        let aged_path = {
+            #[cfg(not(feature = "pol-dev-mode"))]
+            {
+                epoch_state.utxo_merkle_path(utxo)?
+            }
+            #[cfg(feature = "pol-dev-mode")]
+            {
+                Vec::new()
+            }
+        };
+        let latest_path = {
+            #[cfg(not(feature = "pol-dev-mode"))]
+            {
+                latest_tree.path(&utxo.id())?
+            }
+            #[cfg(feature = "pol-dev-mode")]
+            {
+                Vec::new()
+            }
+        };
         let slot_secret = *self.sk.as_fr();
         let starting_slot = self
             .config
@@ -131,7 +160,7 @@ impl Leader {
         let leader_signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let leader_pk = leader_signing_key.public_key(); // TODO: get actual leader public key
 
-        LeaderPrivate::new(
+        Some(LeaderPrivate::new(
             public_inputs,
             *utxo,
             &aged_path,
@@ -139,7 +168,7 @@ impl Leader {
             slot_secret,
             starting_slot,
             &leader_pk,
-        )
+        ))
     }
 
     fn slot_secret_key(&self, _slot: Slot) -> UnsecuredZkKey {
@@ -153,7 +182,7 @@ fn public_inputs_for_slot(
     latest_tree: &UtxoTree,
 ) -> LeaderPublic {
     LeaderPublic::new(
-        epoch_state.utxos.root(),
+        epoch_state.utxo_merkle_root(),
         latest_tree.root(),
         epoch_state.nonce,
         slot.into(),
@@ -207,6 +236,7 @@ impl<'service> WinningPoLSlotNotifier<'service> {
         self.check_epoch_winning_utxos(utxos, epoch_state);
     }
 
+    #[expect(clippy::cognitive_complexity, reason = "TODO: extract inner loop")]
     fn check_epoch_winning_utxos(&mut self, utxos: &[Utxo], epoch_state: &EpochState) {
         let slots_per_epoch = self.leader.config.epoch_length();
         let epoch_starting_slot: u64 = self
@@ -234,12 +264,18 @@ impl<'service> WinningPoLSlotNotifier<'service> {
                 }
                 tracing::debug!("Found winning utxo with ID {:?} for slot {slot}", utxo.id());
 
-                let leader_private = self.leader.private_inputs_for_winning_utxo_and_slot(
+                let Some(leader_private) = self.leader.private_inputs_for_winning_utxo_and_slot(
                     utxo,
                     epoch_state,
                     public_inputs,
                     &latest_tree,
-                );
+                ) else {
+                    tracing::error!(
+                        "Failed to build private inputs for winning utxo {:?} for {slot:?}",
+                        utxo.id(),
+                    );
+                    continue;
+                };
 
                 if let Err(err) = self.sender.send(Some((
                     leader_private,

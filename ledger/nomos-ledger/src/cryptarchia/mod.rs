@@ -7,6 +7,7 @@ use nomos_core::{
     crypto::{ZkDigest, ZkHasher},
     mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value, gas::GasConstants},
     proofs::leader_proof::{self, LeaderPublic},
+    utils::merkle::MerklePath,
 };
 
 pub type UtxoTree = utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
@@ -65,6 +66,16 @@ impl EpochState {
     #[must_use]
     pub const fn total_stake(&self) -> Value {
         self.total_stake
+    }
+
+    #[must_use]
+    pub fn utxo_merkle_root(&self) -> Fr {
+        self.utxos.root()
+    }
+
+    #[must_use]
+    pub fn utxo_merkle_path(&self, utxo: &Utxo) -> Option<MerklePath<Fr>> {
+        self.utxos.path(&utxo.id())
     }
 }
 
