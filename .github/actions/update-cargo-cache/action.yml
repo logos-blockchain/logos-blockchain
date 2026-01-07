@@ -25,7 +25,7 @@ runs:
           ~/.cargo/git/db/
           target/
 
-        # Must be in sync with the key used in the `setup-cargo-cache` workflow.
+        # Must be in sync with the keys used in the `setup-cargo-cache` workflow.
         key: ${{ inputs.key-prefix }}/main/${{ github.sha }}
 
     - name: Update Cargo cache (PR)
@@ -40,7 +40,7 @@ runs:
           ~/.cargo/git/db/
           target/
 
-        # Must be in sync with the key used in the `setup-cargo-cache` workflow.
+        # Must be in sync with the keys used in the `setup-cargo-cache` workflow.
         key: ${{ inputs.key-prefix }}/pr#${{ github.event.pull_request.number }}/${{ github.sha }}
 
     - name: Delete retrieved cache (main)
@@ -49,6 +49,7 @@ runs:
       continue-on-error: true
       with:
         github-token: ${{ inputs.github-token }}
+        # Must be in sync with the keys used in the `setup-cargo-cache` workflow.
         key-prefix: ${{ inputs.key-prefix }}/main
         mode: keep-latest
 
@@ -58,5 +59,6 @@ runs:
       continue-on-error: true
       with:
         github-token: ${{ inputs.github-token }}
+        # Must be in sync with the keys used in the `setup-cargo-cache` workflow.
         key-prefix: ${{ inputs.key-prefix }}/pr#${{ github.event.pull_request.number }}
         mode: keep-latest
