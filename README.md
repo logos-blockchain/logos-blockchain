@@ -179,7 +179,7 @@ docker run -v "$(pwd)/nodes/nomos-node/config.yaml:/etc/nomos/config.yml" -v "$(
 
 #### Running Logos Blockchain Node locally
 
-When the node is build locally, it can be run with example config for one node network:
+When the node is built locally, it can be run with example config for one node network:
 ```bash
 # Build logos blockchain binaries.
 cargo build --all-features --all-targets
