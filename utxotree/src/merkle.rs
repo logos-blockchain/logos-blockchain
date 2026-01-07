@@ -13,6 +13,7 @@ use rpds::RedBlackTreeSetSync;
 use crate::CompressedUtxoTree;
 
 const TREE_HEIGHT: usize = 32;
+const PATH_LENGTH: usize = TREE_HEIGHT - 1; // Exclude the root
 
 const EMPTY_VALUE: Fr = <Fr as Field>::ZERO;
 
@@ -222,10 +223,12 @@ impl<Item: AsRef<Fr>> Node<Item> {
 
                 if index < left.capacity() {
                     let (child_path, child_value) = left.path::<Hash>(index)?;
+                    assert!(child_path.len() < PATH_LENGTH, "Path length exceeded");
                     path.push(MerkleNode::Left(child_value));
                     path.extend(child_path);
                 } else {
                     let (child_path, child_value) = right.path::<Hash>(index - left.capacity())?;
+                    assert!(child_path.len() < PATH_LENGTH, "Path length exceeded");
                     path.push(MerkleNode::Right(child_value));
                     path.extend(child_path);
                 }
@@ -318,7 +321,15 @@ impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
     ///
     /// Returns `None` if the index does not exist or has been removed.
     pub(crate) fn path(&self, index: usize) -> Option<MerklePath<Fr>> {
-        self.root.path::<Hash>(index).map(|(path, _)| path)
+        self.root.path::<Hash>(index).map(|(path, _)| {
+            assert_eq!(
+                path.len(),
+                PATH_LENGTH,
+                "Path length({}) must be {PATH_LENGTH}",
+                path.len()
+            );
+            path
+        })
     }
 
     // This is only for maintaining holes information when recovering
@@ -634,7 +645,7 @@ mod tests {
 
         let path = tree.path(idx).unwrap();
         // Should have path from root down to leaf
-        assert_eq!(path.len(), TREE_HEIGHT - 1);
+        assert_eq!(path.len(), PATH_LENGTH);
 
         // Check that all should be Left nodes with expected hashes
         // by traversing the path backward from the leaf.
@@ -677,7 +688,7 @@ mod tests {
 
         // Test path for idx0
         let path = tree.path(idx0).unwrap();
-        assert_eq!(path.len(), TREE_HEIGHT - 1);
+        assert_eq!(path.len(), PATH_LENGTH);
         for node in &path {
             assert!(matches!(node, MerkleNode::Left(_)));
         }
@@ -686,7 +697,7 @@ mod tests {
 
         // Test path for idx1
         let path = tree.path(idx1).unwrap();
-        assert_eq!(path.len(), TREE_HEIGHT - 1);
+        assert_eq!(path.len(), PATH_LENGTH);
         let mut iter = path.iter();
         for _ in 0..(path.len() - 1) {
             assert!(matches!(iter.next().unwrap(), MerkleNode::Left(_)));
@@ -698,7 +709,7 @@ mod tests {
 
         // Test path for idx2
         let path = tree.path(idx2).unwrap();
-        assert_eq!(path.len(), TREE_HEIGHT - 1);
+        assert_eq!(path.len(), PATH_LENGTH);
         let mut iter = path.iter();
         for _ in 0..(path.len() - 2) {
             assert!(matches!(iter.next().unwrap(), MerkleNode::Left(_)));
