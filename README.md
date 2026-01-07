@@ -188,7 +188,7 @@ cargo build --all-features --all-targets
 CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true target/debug/nomos-node nodes/nomos-node/config-one-node.yaml
 ```
 
-Node stores it's state inside the `db` directory, if there are any issues when restarting the node, please try removing `db` directory.
+Node stores its state inside the `db` directory. If there are any issues when restarting the node, please try removing `db` directory.
 
 #### Running Logos Blockchain Node with integration test
 
