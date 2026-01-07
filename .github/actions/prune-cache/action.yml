@@ -2,52 +2,114 @@ name: Prune Cache
 
 inputs:
   github-token:
-    description: The GH token to use for the API request
+    description: GH token for API access
     required: true
   key-prefix:
-    description: The cache key prefix to prune
+    description: Cache key prefix
     required: true
   ref:
-    description: Ref to scope cache deletion (e.g. main, refs/pull/123/merge). Omit for all.
+    description: Optional ref to scope cache deletion (omit for all)
     required: false
   limit:
-    description: Max number of caches to fetch (gh cache list page size)
+    # NOTE: Uses a single page. Add pagination if the cache count grows.
+    description: Max number of caches to fetch (page size)
     required: false
     default: "100"
+  mode:
+    description: "Prune mode. Available options: 'delete-all' (default), 'keep-latest'"
+    required: false
+    default: "delete-all"
 
-description: Prune unnecessary cache for the provided key
+description: Prune caches matching a prefix
 
 runs:
   using: composite
   steps:
-    - name: Prune Cache
+    - name: Validate mode
+      shell: bash
+      run: |
+        case "${{ inputs.mode }}" in
+          delete-all|keep-latest)
+            exit 0
+            ;;
+          *)
+            echo "Invalid prune mode: '${{ inputs.mode }}'"
+            echo "Valid modes: delete-all, keep-latest"
+            exit 1
+            ;;
+        esac
+
+    - name: Select all caches
+      id: select
       shell: bash
       env:
-        GH_REPO: ${{ github.repository }}
         GH_TOKEN: ${{ inputs.github-token }}
         KEY_PREFIX: ${{ inputs.key-prefix }}
         REF: ${{ inputs.ref }}
         LIMIT: ${{ inputs.limit }}
       run: |
-        echo "Pruning caches with prefix: $KEY_PREFIX"
-
         ARGS=()
         [ -n "${REF:-}" ] && ARGS+=(--ref "$REF")
 
-        cacheKeysForPR=$(gh cache list \
+        IDS=$(gh cache list \
           "${ARGS[@]}" \
           --limit "$LIMIT" \
-          --json id,key \
-          --jq '.[] | select(.key | startswith("'"$KEY_PREFIX"'")) | .id')
+          --json id,key,createdAt \
+          --jq '
+            sort_by(.createdAt)
+            | reverse
+            | .[]
+            | select(.key | startswith("'"$KEY_PREFIX"'"))
+            | .id
+          ')
 
-        if [ -z "$cacheKeysForPR" ]; then
-          echo "No caches matched"
+        echo "ids<<EOF" >> "$GITHUB_OUTPUT"
+        echo "$IDS" >> "$GITHUB_OUTPUT"
+        echo "EOF" >> "$GITHUB_OUTPUT"
+
+    - name: Filter for keep-latest
+      id: keep-latest
+      if: inputs.mode == 'keep-latest'
+      shell: bash
+      run: |
+        IDS="${{ steps.select.outputs.ids }}"
+
+        if [ -z "$IDS" ]; then
+          echo "ids=" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
+        OUT=$(echo "$IDS" | tail -n +2)
+
+        echo "ids<<EOF" >> "$GITHUB_OUTPUT"
+        echo "$OUT" >> "$GITHUB_OUTPUT"
+        echo "EOF" >> "$GITHUB_OUTPUT"
+
+    - name: Prune selected caches
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        if [ "${{ inputs.mode }}" = "keep-latest" ]; then
+          IDS="${{ steps.keep-latest.outputs.ids }}"
+        elif [ "${{ inputs.mode }}" = "delete-all" ]; then
+          IDS="${{ steps.select.outputs.ids }}"
+        else
+          # This should never happen due to prior validation
+          exit 1
+        fi
+
+        if [ -z "$IDS" ]; then
+          echo "No caches to delete"
+          exit 0
+        fi
+
+        echo "Deleting caches:"
         set +e
-        for cacheKey in $cacheKeysForPR; do
-          echo "Deleting cache $cacheKey"
-          gh cache delete "$cacheKey"
+        for id in $IDS; do
+          echo "- $id"
+          gh cache delete "$id"
         done
+        set -e
+
         echo "Done"

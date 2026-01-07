@@ -1,19 +1,28 @@
-name: Clean up GitHub Runner caches on PR close
+name: Clear GitHub Runner caches on PR close
+
 on:
   pull_request:
     types:
       - closed
 
 jobs:
-  cleanup:
+  clear-caches:
     runs-on: ubuntu-latest
     permissions:
       actions: write
     steps:
-      - name: Delete Cargo Hack Cache
+      - name: Prune Cargo Hack Cache
         uses: ./.github/actions/prune-cache
         continue-on-error: true
         with:
           github-token: ${{ inputs.github-token }}
           key-prefix: "cargo-hack-check/"
+          ref: ${{ github.ref }}
+
+      - name: Prune Code Check Cache
+        uses: ./.github/actions/prune-cache
+        continue-on-error: true
+        with:
+          github-token: ${{ inputs.github-token }}
+          key-prefix: "code-check/"
           ref: ${{ github.ref }}
