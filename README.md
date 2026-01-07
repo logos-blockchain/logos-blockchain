@@ -165,9 +165,13 @@ When running a node locally with a custom config or `config-one-node.yaml`, you 
 ERROR chain_leader: trying to propose a block for slot XXXX but epoch state is not available
 ```
 
-To resolve this, you must manually update the `chain_start_time` in the config file to a recent timestamp (ideally within a few minutes of your current system time) before launching the node.
+To resolve this, you must manually update the chain_start_time in the config file to a recent timestamp (ideally within a few minutes of your current system time) before launching the node, **or use a command-line flag to start the node** with the chain start time set to the current time:
 
-##### 1. Generate a valid timestamp
+```bash
+CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true nomos-node nodes/nomos-node/config-one-node.yaml --dev-mode-reset-chain-clock
+```
+
+##### Manually set chain start time in config
 
 You can generate a timestamp in the required format using the following command in your terminal:
 Bash
@@ -175,8 +179,6 @@ Bash
 # For macOS/Linux
 date -u +"%Y-%m-%d %H:%M:%S.000000 +00:00:00"
 ```
-
-##### 2. Update the configuration file
 
 Open nodes/nomos-node/config-one-node.yaml and locate the time section. Replace the chain_start_time value with the output from the command above:
 YAML
