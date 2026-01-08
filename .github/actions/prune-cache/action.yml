@@ -48,20 +48,29 @@ runs:
         REF: ${{ inputs.ref }}
         LIMIT: ${{ inputs.limit }}
       run: |
-        ARGS=()
-        [ -n "${REF:-}" ] && ARGS+=(--ref "$REF")
+        set -euo pipefail
 
-        IDS=$(gh cache list \
-          "${ARGS[@]}" \
-          --limit "$LIMIT" \
-          --json id,key,createdAt \
-          --jq '
-            sort_by(.createdAt)
-            | reverse
-            | .[]
-            | select(.key | startswith("'"$KEY_PREFIX"'"))
-            | .id
-          ')
+        OWNER="${GITHUB_REPOSITORY%%/*}"
+        REPOSITORY="${GITHUB_REPOSITORY##*/}"
+
+        URL="https://api.github.com/repos/${OWNER}/${REPOSITORY}/actions/caches?per_page=${LIMIT}"
+        if [ -n "${REF:-}" ]; then
+          URL="${URL}&ref=${REF}"
+        fi
+
+        RESPONSE=$(curl -sS \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: token ${GH_TOKEN}" \
+          "$URL")
+
+        IDS=$(echo "$RESPONSE" | jq -r '
+          .actions_caches
+          | sort_by(.created_at)
+          | reverse
+          | .[]
+          | select(.key | startswith("'"$KEY_PREFIX"'"))
+          | .id
+        ')
 
         echo "ids<<EOF" >> "$GITHUB_OUTPUT"
         echo "$IDS" >> "$GITHUB_OUTPUT"
@@ -90,6 +99,8 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
+        set -euo pipefail
+
         if [ "${{ inputs.mode }}" = "keep-latest" ]; then
           IDS="${{ steps.keep-latest.outputs.ids }}"
         elif [ "${{ inputs.mode }}" = "delete-all" ]; then
@@ -98,6 +109,10 @@ runs:
           # This should never happen due to prior validation
           exit 1
         fi
+        
+        OWNER="${GITHUB_REPOSITORY%%/*}"
+        REPOSITORY="${GITHUB_REPOSITORY##*/}"
+        URL="https://api.github.com/repos/${OWNER}/${REPOSITORY}/actions/caches"
 
         if [ -z "$IDS" ]; then
           echo "No caches to delete"
@@ -108,7 +123,10 @@ runs:
         set +e
         for id in $IDS; do
           echo "- $id"
-          gh cache delete "$id"
+          curl -sS -X DELETE \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: token ${GH_TOKEN}" \
+            "${URL}/${id}"
         done
         set -e
 
