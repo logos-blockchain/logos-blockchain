@@ -88,6 +88,11 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           key-prefix: code-check/feature-combinations/${{ matrix.platform.label }}
 
+      - name: Clean
+        shell: bash
+        run: |
+          cargo clean
+
       - name: Run Cargo Hack Check (Cache-Aware)
         uses: ./.github/actions/cargo-hack-check-cached
 
