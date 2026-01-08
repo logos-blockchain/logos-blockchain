@@ -35,6 +35,7 @@ nomos-libp2p             = { workspace = true }
 nomos-network            = { workspace = true }
 nomos-sdp                = { workspace = true }
 nomos-storage            = { features = ["rocksdb-backend"], workspace = true }
+nomos-time               = { workspace = true }
 overwatch                = { workspace = true }
 serde                    = { workspace = true }
 serde_json               = { default-features = false, version = "1.0.140" }
