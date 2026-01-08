@@ -6,19 +6,26 @@ use std::{
 use ark_ff::Field;
 #[cfg(feature = "serde")]
 use groth16::serde::serde_fr;
+use nomos_core::utils::merkle::{MerkleNode, MerklePath};
 use poseidon2::{Digest, Fr};
 use rpds::RedBlackTreeSetSync;
 
 use crate::CompressedUtxoTree;
 
+const TREE_HEIGHT: usize = 32;
+const PATH_LENGTH: usize = TREE_HEIGHT - 1; // Exclude the root
+
 const EMPTY_VALUE: Fr = <Fr as Field>::ZERO;
 
 fn empty_subtree_root<Hash: Digest>(height: usize) -> Fr {
-    static PRECOMPUTED_EMPTY_ROOTS: OnceLock<[Fr; 32]> = OnceLock::new();
-    assert!(height < 32, "Height must be less than 32: {height}");
+    static PRECOMPUTED_EMPTY_ROOTS: OnceLock<[Fr; TREE_HEIGHT]> = OnceLock::new();
+    assert!(
+        height < TREE_HEIGHT,
+        "Height must be less than {TREE_HEIGHT}: {height}"
+    );
     PRECOMPUTED_EMPTY_ROOTS.get_or_init(|| {
-        let mut hashes = [EMPTY_VALUE; 32];
-        for i in 1..32 {
+        let mut hashes = [EMPTY_VALUE; TREE_HEIGHT];
+        for i in 1..TREE_HEIGHT {
             hashes[i] = Hash::compress(&[hashes[i - 1], hashes[i - 1]]);
         }
         hashes
@@ -188,6 +195,50 @@ impl<Item: AsRef<Fr>> Node<Item> {
             _ => panic!("Cannot remove from a empty / non-leaf node"),
         })
     }
+
+    /// Computes the Merkle path for the item at the given index.
+    ///
+    /// Returns a tuple of:
+    /// - The Merkle path from this node's children to the leaf
+    /// - The value of this node, so the caller (parent) can wrap it with the
+    ///   correct orientation.
+    ///
+    /// Returns `None` if the index does not exist or has been removed.
+    fn path<Hash>(self: &Arc<Self>, index: usize) -> Option<(MerklePath<Fr>, Fr)>
+    where
+        Hash: Digest,
+    {
+        match self.as_ref() {
+            Self::Inner {
+                left, right, value, ..
+            } => {
+                assert!(
+                    index < self.capacity(),
+                    "Index {} out of bounds for node with height {}",
+                    index,
+                    self.height()
+                );
+
+                let mut path = MerklePath::new();
+
+                if index < left.capacity() {
+                    let (child_path, child_value) = left.path::<Hash>(index)?;
+                    assert!(child_path.len() < PATH_LENGTH, "Path length exceeded");
+                    path.push(MerkleNode::Left(child_value));
+                    path.extend(child_path);
+                } else {
+                    let (child_path, child_value) = right.path::<Hash>(index - left.capacity())?;
+                    assert!(child_path.len() < PATH_LENGTH, "Path length exceeded");
+                    path.push(MerkleNode::Right(child_value));
+                    path.extend(child_path);
+                }
+
+                Some((path, *value))
+            }
+            Self::Leaf { item: Some(item) } => Some((MerklePath::new(), *item.as_ref())),
+            Self::Leaf { item: None } | Self::Empty { .. } => None,
+        }
+    }
 }
 
 /// A dynamic persistent Merkle tree that supports insertion and removal of
@@ -207,7 +258,9 @@ impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
     pub fn new() -> Self {
         let holes = RedBlackTreeSetSync::new_sync();
         Self {
-            root: Arc::new(Node::Empty { height: 31 }),
+            root: Arc::new(Node::Empty {
+                height: TREE_HEIGHT - 1,
+            }),
             holes,
             _hash: PhantomData,
         }
@@ -259,6 +312,24 @@ impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
             }
             Node::Empty { .. } => empty_subtree_root::<Hash>(self.root.height()),
         }
+    }
+
+    /// Computes the Merkle path for the item at the given index.
+    ///
+    /// The returned path excludes the root and contains nodes from the root's
+    /// children down to the leaf.
+    ///
+    /// Returns `None` if the index does not exist or has been removed.
+    pub(crate) fn path(&self, index: usize) -> Option<MerklePath<Fr>> {
+        self.root.path::<Hash>(index).map(|(path, _)| {
+            assert_eq!(
+                path.len(),
+                PATH_LENGTH,
+                "Path length({}) must be {PATH_LENGTH}",
+                path.len()
+            );
+            path
+        })
     }
 
     // This is only for maintaining holes information when recovering
@@ -383,7 +454,7 @@ mod tests {
     fn test_empty_tree() {
         let tree: DynamicMerkleTree<TestFr, TestHash> = DynamicMerkleTree::new();
         assert_eq!(tree.size(), 0);
-        assert_eq!(tree.root(), empty_subtree_root::<TestHash>(31));
+        assert_eq!(tree.root(), empty_subtree_root::<TestHash>(TREE_HEIGHT - 1));
     }
 
     #[test]
@@ -556,5 +627,97 @@ mod tests {
         // Final insertion should use the last hole (position 4)
         let (_, index3) = tree.insert(TestFr::from_rng(&mut rand::rng()));
         assert_eq!(index3, 4, "Should select remaining hole");
+    }
+
+    #[test]
+    fn test_path_empty_tree() {
+        let tree = DynamicMerkleTree::<TestFr, TestHash>::new();
+
+        // Getting a path from an empty tree should return None
+        assert!(tree.path(0).is_none());
+    }
+
+    #[test]
+    fn test_path_single_item() {
+        let tree = DynamicMerkleTree::<TestFr, TestHash>::new();
+        let item = TestFr::from_usize(0);
+        let (tree, idx) = tree.insert(item);
+
+        let path = tree.path(idx).unwrap();
+        // Should have path from root down to leaf
+        assert_eq!(path.len(), PATH_LENGTH);
+
+        // Check that all should be Left nodes with expected hashes
+        // by traversing the path backward from the leaf.
+        let mut expected_hash = *item.as_ref(); // init with the leaf value
+        for (height, node) in path.iter().rev().enumerate() {
+            assert!(matches!(node, MerkleNode::Left(_)));
+            assert_eq!(*node.item(), expected_hash);
+
+            // Update expected_hash
+            let sibling_hash = empty_subtree_root::<TestHash>(height);
+            expected_hash = <TestHash as Digest>::compress(&[expected_hash, sibling_hash]);
+        }
+        // The computed hash should match the tree root
+        assert_eq!(expected_hash, tree.root());
+    }
+
+    #[test]
+    fn test_path_removed_item() {
+        let tree = DynamicMerkleTree::<TestFr, TestHash>::new();
+        let (tree, idx) = tree.insert(TestFr::from_usize(0));
+
+        // Path should exist before removal
+        assert!(tree.path(idx).is_some());
+
+        // Remove the item
+        let tree = tree.remove(idx);
+        // Path should return None after removal
+        assert!(tree.path(idx).is_none());
+    }
+
+    #[test]
+    fn test_path_multiple_items() {
+        let tree = DynamicMerkleTree::<TestFr, TestHash>::new();
+        let item0 = TestFr::from_usize(0);
+        let item1 = TestFr::from_usize(1);
+        let item2 = TestFr::from_usize(2);
+        let (tree, idx0) = tree.insert(item0);
+        let (tree, idx1) = tree.insert(item1);
+        let (tree, idx2) = tree.insert(item2);
+
+        // Test path for idx0
+        let path = tree.path(idx0).unwrap();
+        assert_eq!(path.len(), PATH_LENGTH);
+        for node in &path {
+            assert!(matches!(node, MerkleNode::Left(_)));
+        }
+        // Verify the leaf value
+        assert_eq!(*path.last().unwrap().item(), *item0.as_ref());
+
+        // Test path for idx1
+        let path = tree.path(idx1).unwrap();
+        assert_eq!(path.len(), PATH_LENGTH);
+        let mut iter = path.iter();
+        for _ in 0..(path.len() - 1) {
+            assert!(matches!(iter.next().unwrap(), MerkleNode::Left(_)));
+        }
+        // Verify the leaf node
+        let last_node = iter.next().unwrap();
+        assert!(matches!(last_node, MerkleNode::Right(_)));
+        assert_eq!(*last_node.item(), *item1.as_ref());
+
+        // Test path for idx2
+        let path = tree.path(idx2).unwrap();
+        assert_eq!(path.len(), PATH_LENGTH);
+        let mut iter = path.iter();
+        for _ in 0..(path.len() - 2) {
+            assert!(matches!(iter.next().unwrap(), MerkleNode::Left(_)));
+        }
+        assert!(matches!(iter.next().unwrap(), MerkleNode::Right(_)));
+        // Verify the leaf node
+        let last_node = iter.next().unwrap();
+        assert!(matches!(last_node, MerkleNode::Left(_)));
+        assert_eq!(*last_node.item(), *item2.as_ref());
     }
 }

@@ -200,6 +200,41 @@ To build the Nomos command line executable, run:
 cargo build --release
 ```
 
+### Setting `chain_start_time` timestamp
+
+When running a node locally with a custom config or `config-one-node.yaml`, you may encounter the following error if the configuration's start time is too far in the past:
+```
+ERROR chain_leader: trying to propose a block for slot XXXX but epoch state is not available
+```
+
+To resolve this, you must manually update the chain_start_time in the config file to a recent timestamp (ideally within a few minutes of your current system time) before launching the node, **or use a command-line flag to start the node** with the chain start time set to the current time:
+
+```bash
+CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true nomos-node nodes/nomos-node/config-one-node.yaml --dev-mode-reset-chain-clock
+```
+
+#### Manually set chain start time in config
+
+You can generate a timestamp in the required format using the following command in your terminal:
+Bash
+```bash
+# For macOS/Linux
+date -u +"%Y-%m-%d %H:%M:%S.000000 +00:00:00"
+```
+
+Open nodes/nomos-node/config-one-node.yaml and locate the time section. Replace the chain_start_time value with the output from the command above:
+YAML
+
+```bash
+time:
+  backend:
+    ntp_server: pool.ntp.org
+    # ... other settings ...
+  chain_start_time: 2026-01-07 10:45:00.000000 +00:00:00 # <--- Update this line
+```
+
+Once updated, restart the node.
+
 ### Running a Nomos Node
 
 #### Docker
@@ -223,16 +258,29 @@ docker run -v "$(pwd)/nodes/nomos-node/config.yaml:/etc/nomos/config.yml" \
 
 ```
 
-#### Command line
+#### Running Logos Blockchain Node locally
 
-To use an example configuration located at `nodes/nomos-node/config.yaml`, first run the test that generates the random
+When the node is built locally, it can be run with example config for one node network:
+```bash
+# Build logos blockchain binaries.
+cargo build --all-features --all-targets
+
+# Run node without connecting to any other node.
+CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true target/debug/nomos-node nodes/nomos-node/config-one-node.yaml
+```
+
+Node stores its state inside the `db` directory. If there are any issues when restarting the node, please try removing `db` directory.
+
+**Notes**
+
+- To use an example configuration located at `nodes/nomos-node/config.yaml`, first run the test that generates the random
 kzgrs file (`kzgrs_test_params`), leave it in `./tests/kzgrs/kzgrs_test_params` or place it in a convenient location:
 
 ```bash
 cargo test --package kzgrs-backend write_random_kzgrs_params_to_file -- --ignored
 ```
 
-To run the Nomos node directly from the command line, edit the `global_params_path:` key in `/path/to/config.yaml` to 
+- To run the Nomos node directly from the command line, edit the `global_params_path:` key in `/path/to/config.yaml` to 
 point to the kzgrs file (`kzgrs_test_params`) and run with:
 
 ```bash
@@ -243,6 +291,18 @@ or copy the executable and run the binary directly:
 
 ```bash
 ./nomos-node /path/to/config.yaml
+```
+
+
+#### Running Logos Blockchain Node with integration test
+
+To run the node programatically, one can use `local_testnet_one_node` integration test.
+```bash
+# Build logos blockchain binaries.
+cargo build --all-features --all-targets
+
+# Integration test uses binaries built in a previous step.
+CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true cargo test --all-features local_testnet_one_node -- --ignored --nocapture
 ```
 
 ## Running Tests
