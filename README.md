@@ -14,13 +14,18 @@ necessary for running and interacting with the Nomos blockchain. Key features in
 
 ## Table of Contents
 
+## Table of Contents
+
 - [Nomos](#nomos)
   - [Table of Contents](#table-of-contents)
   - [Requirements](#requirements)
   - [Setting Up Zero-Knowledge Circuits](#setting-up-zero-knowledge-circuits)
     - [Quick Setup (Recommended)](#quick-setup-recommended)
+      - [Linux](#linux)
+      - [Windows](#windows)
     - [Custom Installation](#custom-installation)
-    - [What Gets Installed](#what-gets-installed)
+      - [Linux](#linux-1)
+      - [Windows](#windows-1)
     - [macOS Users](#macos-users)
     - [Verifying Installation](#verifying-installation)
   - [Design Goals](#design-goals)
@@ -28,11 +33,23 @@ necessary for running and interacting with the Nomos blockchain. Key features in
     - [Static Dispatching](#static-dispatching)
   - [Project Structure](#project-structure)
   - [Development Workflow](#development-workflow)
-    - [Docker](#docker)
-      - [Building the Image](#building-the-image)
-      - [Running a Nomos Node](#running-a-nomos-node)
+    - [Feature exclusions](#feature-exclusions)
+    - [Building the Image](#building-the-image)
+      - [Docker](#docker)
+      - [Command line](#command-line)
+    - [Setting `chain_start_time` timestamp](#setting-chain_start_time-timestamp)
+      - [Manually set chain start time in config](#manually-set-chain-start-time-in-config)
+    - [Running a Nomos Node](#running-a-nomos-node)
+      - [Docker](#docker-1)
+      - [Running Logos Blockchain Node locally](#running-logos-blockchain-node-locally)
+      - [Running Logos Blockchain Node with integration test](#running-logos-blockchain-node-with-integration-test)
   - [Running Tests](#running-tests)
   - [Generating Documentation](#generating-documentation)
+  - [Dependency Graph Visualization](#dependency-graph-visualization)
+    - [Installation](#installation)
+    - [Generating the Graph](#generating-the-graph)
+    - [Rendering the Graph](#rendering-the-graph)
+    - [Alternative: Online Visualization](#alternative-online-visualization)
   - [Contributing](#contributing)
   - [License](#license)
   - [Community](#community)
@@ -202,12 +219,15 @@ cargo build --release
 
 ### Setting `chain_start_time` timestamp
 
-When running a node locally with a custom config or `config-one-node.yaml`, you may encounter the following error if the configuration's start time is too far in the past:
+When running a node locally with a custom config or `config-one-node.yaml`, you may encounter the following error if the 
+configuration's start time is too far in the past:
 ```
 ERROR chain_leader: trying to propose a block for slot XXXX but epoch state is not available
 ```
 
-To resolve this, you must manually update the chain_start_time in the config file to a recent timestamp (ideally within a few minutes of your current system time) before launching the node, **or use a command-line flag to start the node** with the chain start time set to the current time:
+To resolve this, you must manually update the chain_start_time in the config file to a recent timestamp (ideally within 
+a few minutes of your current system time) before launching the node, **or use a command-line flag to start the node** 
+with the chain start time set to the current time:
 
 ```bash
 CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true nomos-node nodes/nomos-node/config-one-node.yaml --dev-mode-reset-chain-clock
@@ -222,7 +242,8 @@ Bash
 date -u +"%Y-%m-%d %H:%M:%S.000000 +00:00:00"
 ```
 
-Open nodes/nomos-node/config-one-node.yaml and locate the time section. Replace the chain_start_time value with the output from the command above:
+Open nodes/nomos-node/config-one-node.yaml and locate the time section. Replace the chain_start_time value with the 
+output from the command above:
 YAML
 
 ```bash
@@ -269,12 +290,14 @@ cargo build --all-features --all-targets
 CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true target/debug/nomos-node nodes/nomos-node/config-one-node.yaml
 ```
 
-Node stores its state inside the `db` directory. If there are any issues when restarting the node, please try removing `db` directory.
+Node stores its state inside the `db` directory. If there are any issues when restarting the node, please try removing 
+`db` directory.
 
 **Notes**
 
-- To use an example configuration located at `nodes/nomos-node/config.yaml`, first run the test that generates the random
-kzgrs file (`kzgrs_test_params`), leave it in `./tests/kzgrs/kzgrs_test_params` or place it in a convenient location:
+- To use an example configuration located at `nodes/nomos-node/config.yaml`, first run the test that generates the 
+random kzgrs file (`kzgrs_test_params`), leave it in `./tests/kzgrs/kzgrs_test_params` or place it in a convenient 
+location:
 
 ```bash
 cargo test --package kzgrs-backend write_random_kzgrs_params_to_file -- --ignored
