@@ -64,16 +64,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
-      - name: Ensure compression tools
+      - name: Check compression tools
         shell: bash
         run: |
           set -euo pipefail
-          
-          apt-get update
-          apt-get install -y \
-            gzip \
-            zstd \
-            p7zip-full
+
+          echo "Checking compression tools availability:"
+          echo
+
+          check() {
+            if command -v "$1" >/dev/null 2>&1; then
+              printf "  ✔ %-6s %s\n" "$1" "$("$1" --version 2>/dev/null | head -n1 || true)"
+              return 0
+            else
+              printf "  ✖ %-6s NOT FOUND\n" "$1"
+              return 1
+            fi
+          }
+
+          check gzip || true
+          check tar  || true
+          check du   || true
+          check zstd || true
+          check 7z   || true
+
+          echo
+          echo "Done"
 
       - name: Setup Circuits
         uses: ./.github/actions/setup-circuits
