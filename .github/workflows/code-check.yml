@@ -57,6 +57,116 @@ jobs:
       - name: Run cargo-deny
         run: cargo-deny --locked --all-features check --hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings
 
+  debug-cache-szie:
+    name: Debug Cargo cache size
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+
+      - name: Setup Circuits
+        uses: ./.github/actions/setup-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build
+        shell: bash
+        run: |
+          cargo build --all --all-features
+
+      - name: Ensure compression tools
+        shell: bash
+        run: |
+          set -euo pipefail
+      
+          sudo apt-get update
+          sudo apt-get install -y \
+            gzip \
+            zstd \
+            p7zip-full
+
+      - name: Get size of Cargo cache
+        id: cargo-cache-size
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DIRS=(
+            "$HOME/.cargo/registry/index"
+            "$HOME/.cargo/registry/cache"
+            "$HOME/.cargo/git/db"
+            "target"
+          )
+
+          echo "Directory sizes:"
+          TOTAL_BYTES=0
+
+          for d in "${DIRS[@]}"; do
+            if [ -d "$d" ]; then
+              SIZE_BYTES=$(du -sb "$d" | awk '{print $1}')
+              SIZE_HUMAN=$(du -sh "$d" | awk '{print $1}')
+              printf "  %-35s %8s\n" "$d" "$SIZE_HUMAN"
+              TOTAL_BYTES=$((TOTAL_BYTES + SIZE_BYTES))
+            else
+              printf "  %-35s %8s\n" "$d" "missing"
+            fi
+          done
+
+          echo
+          echo "Total (uncompressed): $(numfmt --to=iec --suffix=B "$TOTAL_BYTES")"
+
+      - name: Fast compression (gzip)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ARCHIVE="cargo-target-cache.tar.gz"
+
+          tar -czf "$ARCHIVE" \
+            -C "$HOME/.cargo" registry/index registry/cache git/db \
+            -C "$GITHUB_WORKSPACE" target
+
+          echo
+          echo "Compressed archive:"
+          du -sh "$ARCHIVE"
+
+      - name: Slow compression (zstd)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          command -v zstd >/dev/null
+
+          ARCHIVE="cargo-target-cache.tar.zst"
+
+          tar -cf - \
+            -C "$HOME/.cargo" registry/index registry/cache git/db \
+            -C "$GITHUB_WORKSPACE" target \
+          | zstd -19 -T0 -o "$ARCHIVE"
+
+          echo
+          echo "Compressed archive:"
+          du -sh "$ARCHIVE"
+
+      - name: Ultra compression (7z)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          command -v 7z >/dev/null
+
+          ARCHIVE="cargo-target-cache.7z"
+
+          7z a -t7z -mx=9 -mmt=on "$ARCHIVE" \
+            "$HOME/.cargo/registry/index" \
+            "$HOME/.cargo/registry/cache" \
+            "$HOME/.cargo/git/db" \
+            target
+
+          echo
+          echo "Compressed archive:"
+          du -sh "$ARCHIVE"
+
   features:
     name: Check packages feature combinations
     strategy:
@@ -87,11 +197,6 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           key-prefix: code-check/feature-combinations/${{ matrix.platform.label }}
-
-      - name: Clean
-        shell: bash
-        run: |
-          cargo clean
 
       - name: Run Cargo Hack Check (Cache-Aware)
         uses: ./.github/actions/cargo-hack-check-cached
