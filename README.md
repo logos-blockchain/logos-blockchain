@@ -14,13 +14,18 @@ necessary for running and interacting with the Nomos blockchain. Key features in
 
 ## Table of Contents
 
+## Table of Contents
+
 - [Nomos](#nomos)
   - [Table of Contents](#table-of-contents)
   - [Requirements](#requirements)
   - [Setting Up Zero-Knowledge Circuits](#setting-up-zero-knowledge-circuits)
     - [Quick Setup (Recommended)](#quick-setup-recommended)
+      - [Linux](#linux)
+      - [Windows](#windows)
     - [Custom Installation](#custom-installation)
-    - [What Gets Installed](#what-gets-installed)
+      - [Linux](#linux-1)
+      - [Windows](#windows-1)
     - [macOS Users](#macos-users)
     - [Verifying Installation](#verifying-installation)
   - [Design Goals](#design-goals)
@@ -28,11 +33,23 @@ necessary for running and interacting with the Nomos blockchain. Key features in
     - [Static Dispatching](#static-dispatching)
   - [Project Structure](#project-structure)
   - [Development Workflow](#development-workflow)
-    - [Docker](#docker)
-      - [Building the Image](#building-the-image)
-      - [Running a Nomos Node](#running-a-nomos-node)
+    - [Feature exclusions](#feature-exclusions)
+    - [Building the Image](#building-the-image)
+      - [Docker](#docker)
+      - [Command line](#command-line)
+    - [Setting `chain_start_time` timestamp](#setting-chain_start_time-timestamp)
+      - [Manually set chain start time in config](#manually-set-chain-start-time-in-config)
+    - [Running a Nomos Node](#running-a-nomos-node)
+      - [Docker](#docker-1)
+      - [Running Logos Blockchain Node locally](#running-logos-blockchain-node-locally)
+      - [Running Logos Blockchain Node with integration test](#running-logos-blockchain-node-with-integration-test)
   - [Running Tests](#running-tests)
   - [Generating Documentation](#generating-documentation)
+  - [Dependency Graph Visualization](#dependency-graph-visualization)
+    - [Installation](#installation)
+    - [Generating the Graph](#generating-the-graph)
+    - [Rendering the Graph](#rendering-the-graph)
+    - [Alternative: Online Visualization](#alternative-online-visualization)
   - [Contributing](#contributing)
   - [License](#license)
   - [Community](#community)
@@ -49,15 +66,28 @@ Nomos uses zero-knowledge circuits for various cryptographic operations. To set 
 
 ### Quick Setup (Recommended)
 
-Run the setup script to download and install the latest nomos-circuits release:
+Run the setup script to download and install the latest nomos-circuits release, which will install circuits to 
+`~/.nomos-circuits/` (`Linux`) or `$env:USERPROFILE\.nomos-circuits` (`Windows`) by default.:
+
+#### Linux
 
 ```bash
 ./scripts/setup-nomos-circuits.sh
 ```
 
-This will install circuits to `~/.nomos-circuits/` by default.
+#### Windows
+
+```powershell
+.\scripts\setup-nomos-circuits.ps1
+```
+
+Also make sure that Visual Studio build tools with LLVM (or other LLVM with clang) are installed with the 
+`LIBCLANG_PATH` environment variable specified and pointing to the 64-bit `libclang.dll` folder, for example
+`setx LIBCLANG_PATH "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin"`
 
 ### Custom Installation
+
+#### Linux
 
 You can specify a custom version or installation directory:
 
@@ -75,9 +105,26 @@ If you use a custom directory, you'll need to set the `NOMOS_CIRCUITS` environme
 export NOMOS_CIRCUITS=/opt/circuits
 ```
 
+#### Windows
+
+```powershell
+# Install a specific version
+.\scripts\setup-nomos-circuits.ps1 v0.3.0
+
+# Install to a custom directory
+.\scripts\setup-nomos-circuits.ps1 v0.2.0 $env:USERPROFILE\circuits
+```
+
+If you use a custom directory, you'll need to set the `NOMOS_CIRCUITS` environment variable:
+
+```powershell
+$env:NOMOS_CIRCUITS="$env:USERPROFILE\circuits"
+```
+
 ### macOS Users
 
-Since we don't yet have code-signing implemented on macOS, the setup script automatically removes quarantine attributes from downloaded binaries. This allows the binaries to run without manual authorization through System Settings.
+Since we don't yet have code-signing implemented on macOS, the setup script automatically removes quarantine attributes 
+from downloaded binaries. This allows the binaries to run without manual authorization through System Settings.
 
 ### Verifying Installation
 
@@ -148,9 +195,13 @@ nomos/
 
 ## Development Workflow
 
-### Docker
+### Feature exclusions
 
-#### Building the Image
+Currently the `"profiling"` feature is not supported in Windows builds.
+
+### Building the Image
+
+#### Docker
 
 To build the Nomos Docker image, run:
 
@@ -158,20 +209,31 @@ To build the Nomos Docker image, run:
 docker build -t nomos .
 ```
 
-#### Setting `chain_start_time` timestamp
+#### Command line
 
-When running a node locally with a custom config or `config-one-node.yaml`, you may encounter the following error if the configuration's start time is too far in the past:
+To build the Nomos command line executable, run:
+
+```bash
+cargo build --release
+```
+
+### Setting `chain_start_time` timestamp
+
+When running a node locally with a custom config or `config-one-node.yaml`, you may encounter the following error if the 
+configuration's start time is too far in the past:
 ```
 ERROR chain_leader: trying to propose a block for slot XXXX but epoch state is not available
 ```
 
-To resolve this, you must manually update the chain_start_time in the config file to a recent timestamp (ideally within a few minutes of your current system time) before launching the node, **or use a command-line flag to start the node** with the chain start time set to the current time:
+To resolve this, you must manually update the chain_start_time in the config file to a recent timestamp (ideally within 
+a few minutes of your current system time) before launching the node, **or use a command-line flag to start the node** 
+with the chain start time set to the current time:
 
 ```bash
 CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true nomos-node nodes/nomos-node/config-one-node.yaml --dev-mode-reset-chain-clock
 ```
 
-##### Manually set chain start time in config
+#### Manually set chain start time in config
 
 You can generate a timestamp in the required format using the following command in your terminal:
 Bash
@@ -180,7 +242,8 @@ Bash
 date -u +"%Y-%m-%d %H:%M:%S.000000 +00:00:00"
 ```
 
-Open nodes/nomos-node/config-one-node.yaml and locate the time section. Replace the chain_start_time value with the output from the command above:
+Open nodes/nomos-node/config-one-node.yaml and locate the time section. Replace the chain_start_time value with the 
+output from the command above:
 YAML
 
 ```bash
@@ -193,7 +256,9 @@ time:
 
 Once updated, restart the node.
 
-#### Running Logos Blockchain Node with Docker
+### Running a Nomos Node
+
+#### Docker
 
 To run a docker container with the Nomos node you need to mount both `config.yml` and `global_params_path` specified in
 the configuration.
@@ -208,7 +273,9 @@ kzgrs file and then run the docker container with the appropriate config and glo
 ```bash
 cargo test --package kzgrs-backend write_random_kzgrs_params_to_file -- --ignored
 
-docker run -v "$(pwd)/nodes/nomos-node/config.yaml:/etc/nomos/config.yml" -v "$(pwd)/nomos-da/kzgrs-backend/kzgrs_test_params:/app/tests/kzgrs/kzgrs_test_params" nomos /etc/nomos/config.yml
+docker run -v "$(pwd)/nodes/nomos-node/config.yaml:/etc/nomos/config.yml" \
+  -v "$(pwd)/nomos-da/kzgrs-backend/kzgrs_test_params:/app/tests/kzgrs/kzgrs_test_params" \
+  nomos /etc/nomos/config.yml
 
 ```
 
@@ -223,7 +290,32 @@ cargo build --all-features --all-targets
 CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true target/debug/nomos-node nodes/nomos-node/config-one-node.yaml
 ```
 
-Node stores its state inside the `db` directory. If there are any issues when restarting the node, please try removing `db` directory.
+Node stores its state inside the `db` directory. If there are any issues when restarting the node, please try removing 
+`db` directory.
+
+**Notes**
+
+- To use an example configuration located at `nodes/nomos-node/config.yaml`, first run the test that generates the 
+random kzgrs file (`kzgrs_test_params`), leave it in `./tests/kzgrs/kzgrs_test_params` or place it in a convenient 
+location:
+
+```bash
+cargo test --package kzgrs-backend write_random_kzgrs_params_to_file -- --ignored
+```
+
+- To run the Nomos node directly from the command line, edit the `global_params_path:` key in `/path/to/config.yaml` to 
+point to the kzgrs file (`kzgrs_test_params`) and run with:
+
+```bash
+cargo run --package nomos-node -- /path/to/config.yaml
+```
+
+or copy the executable and run the binary directly:
+
+```bash
+./nomos-node /path/to/config.yaml
+```
+
 
 #### Running Logos Blockchain Node with integration test
 
