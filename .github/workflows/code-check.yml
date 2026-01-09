@@ -57,6 +57,37 @@ jobs:
       - name: Run cargo-deny
         run: cargo-deny --locked --all-features check --hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings
 
+  debug-common-cache:
+    name: "Self hosted lints"
+    runs-on: [self-hosted, Linux]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+
+      - name: Set up Cargo cache
+        uses: ./.github/actions/setup-cargo-cache
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: code-check/feature-combinations/${{ matrix.platform.label }}  # Get cache from feature combinations on self-hosted
+
+      - name: Setup Circuits
+        uses: ./.github/actions/setup-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run cargo clippy on workspace
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: clippy
+          args: --locked --all --all-targets --all-features
+
+      - name: Update Cargo cache
+        if: success() || failure()
+        uses: ./.github/actions/update-cargo-cache
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: test/code-check/lints/${{ matrix.os }}
+
   features:
     name: Check packages feature combinations
     strategy:
