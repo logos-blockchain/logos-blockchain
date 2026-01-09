@@ -194,8 +194,33 @@ pub struct CryptarchiaLeaderArgs {
 
 #[derive(Parser, Debug, Clone)]
 pub struct TimeArgs {
-    #[clap(long = "consensus-chain-start", env = "CONSENSUS_CHAIN_START")]
+    #[clap(
+        long = "consensus-chain-start",
+        env = "CONSENSUS_CHAIN_START",
+        group = "start_time"
+    )]
     chain_start_time: Option<i64>,
+    #[clap(long = "dev-mode-reset-chain-clock", group = "start_time")]
+    dev_mode_reset_chain_clock: bool,
+}
+
+pub enum ChainStartMode {
+    FromEnv(i64),
+    FromConfig,
+    Now,
+}
+
+impl TimeArgs {
+    #[must_use]
+    pub const fn to_mode(&self) -> ChainStartMode {
+        if self.dev_mode_reset_chain_clock {
+            ChainStartMode::Now
+        } else if let Some(ts) = self.chain_start_time {
+            ChainStartMode::FromEnv(ts)
+        } else {
+            ChainStartMode::FromConfig
+        }
+    }
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -371,11 +396,15 @@ pub fn update_cryptarchia_leader_consensus(
 }
 
 pub fn update_time(time: &mut TimeConfig, time_args: &TimeArgs) -> Result<()> {
-    let TimeArgs { chain_start_time } = time_args;
-    if let Some(start_time) = chain_start_time {
-        time.chain_start_time = OffsetDateTime::from_unix_timestamp(*start_time)?;
+    match time_args.to_mode() {
+        ChainStartMode::Now => {
+            time.chain_start_time = OffsetDateTime::now_utc();
+        }
+        ChainStartMode::FromEnv(ts) => {
+            time.chain_start_time = OffsetDateTime::from_unix_timestamp(ts)?;
+        }
+        ChainStartMode::FromConfig => {}
     }
-
     Ok(())
 }
 
