@@ -19,6 +19,8 @@ ignore = [
   { id = "RUSTSEC-2025-0098", reason = "`unic-ucd-version` is unmaintained; consider using an alternative. Use `cargo tree -p difference -i > tmp.txt` to check the dependency tree." },
   { id = "RUSTSEC-2025-0100", reason = "`unic-ucd-ident` is unmaintained; consider using an alternative. Use `cargo tree -p difference -i > tmp.txt` to check the dependency tree." },
   { id = "RUSTSEC-2025-0134", reason = "`rusttls-pemfile` is unmaintained; consider using an alternative. Use `cargo tree -p difference -i > tmp.txt` to check the dependency tree." },
+  { id = "RUSTSEC-2025-0141", reason = "`bincode` is unmaintained but continuing to use it." },
+  { id = "RUSTSEC-2026-0002", reason = "`lru` v0.12.5 is unsound but required by libp2p v0.55.0 - will upgrade libp2p once it's ready." },
 ]
 yanked = "deny"
 
