@@ -64,6 +64,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
+      - name: Ensure compression tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          
+          apt-get update
+          apt-get install -y \
+            gzip \
+            zstd \
+            p7zip-full
+
       - name: Setup Circuits
         uses: ./.github/actions/setup-circuits
         with:
@@ -79,17 +90,6 @@ jobs:
         with:
           command: build
           args: --locked --all-features
-
-      - name: Ensure compression tools
-        shell: bash
-        run: |
-          set -euo pipefail
-      
-          sudo apt-get update
-          sudo apt-get install -y \
-            gzip \
-            zstd \
-            p7zip-full
 
       - name: Get size of Cargo cache
         id: cargo-cache-size
