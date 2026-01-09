@@ -30,3 +30,7 @@ circuits-utils = { workspace = true }
 
 [lints]
 workspace = true
+
+[features]
+default = ["build-verification-key"]
+build-verification-key = []

@@ -115,3 +115,19 @@ pub fn verification_key_path(circuit_name: &str) -> PathBuf {
         )
     }
 }
+
+/// Generates a placeholder verification key in the build output directory.
+///
+/// # Panics
+///
+/// Panics if the `OUT_DIR` environment variable is not set (which happens if
+/// called outside of a build script) or if the file system is read-only.
+#[must_use]
+pub fn dummy_verification_key_path() -> PathBuf {
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR not set"));
+    let dummy_path = out_dir.join("dummy_vk.json");
+    let dummy_content = r#"{"protocol": "dummy"}"#;
+
+    std::fs::write(&dummy_path, dummy_content).expect("Failed to write dummy VK");
+    dummy_path
+}

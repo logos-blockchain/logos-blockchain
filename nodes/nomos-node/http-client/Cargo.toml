@@ -15,9 +15,9 @@ workspace = true
 [dependencies]
 broadcast-service     = { workspace = true }
 futures               = { default-features = false, version = "0.3.31" }
-nomos-core            = { workspace = true }
-nomos-da-messages     = { workspace = true }
-nomos-http-api-common = { workspace = true }
+nomos-core            = { default-features = false, workspace = true }
+nomos-da-messages     = { default-features = false, workspace = true }
+nomos-http-api-common = { default-features = false, workspace = true }
 reqwest               = { features = ["json", "stream"], workspace = true }
 serde                 = { workspace = true }
 serde_json            = { default-features = false, version = "1.0.140" }
