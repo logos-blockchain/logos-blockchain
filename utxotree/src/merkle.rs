@@ -197,6 +197,7 @@ impl<Item: AsRef<Fr>> Node<Item> {
     }
 
     /// Computes the Merkle path for the item at the given index.
+    /// The path is ordered from root (excluded) to leaf.
     /// Returns `None` if the index does not exist or has been removed.
     fn path<Hash>(self: &Arc<Self>, index: usize) -> Option<MerklePath<Fr>>
     where
@@ -321,6 +322,7 @@ impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
     }
 
     /// Computes the Merkle path for the item at the given index.
+    /// The path is ordered from root (excluded) to leaf.
     /// Returns `None` if the index does not exist or has been removed.
     pub(crate) fn path(&self, index: usize) -> Option<MerklePath<Fr>> {
         self.root.path::<Hash>(index).inspect(|path| {
