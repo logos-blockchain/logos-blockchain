@@ -67,26 +67,26 @@ neither are defined, preference will be given to debug binaries.
 _**MacOS or Linux**_
 
 ```bash
-POL_PROOF_DEV_MODE=true cargo test --test test_cryptarchia_happy_path two_nodes_happy -- --no-capture
+POL_PROOF_DEV_MODE=some_value cargo test --test test_cryptarchia_happy_path two_nodes_happy -- --no-capture
 ```
 or 
 ```bash
-POL_PROOF_DEV_MODE=true USE_RELEASE_BINARIES=true cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
+POL_PROOF_DEV_MODE=some_value USE_RELEASE_BINARIES=some_value cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
 ```
 
 _**Windows (PowerShell)**_
 
 ```pwsh
-$env:POL_PROOF_DEV_MODE="true"; cargo test --test test_cryptarchia_happy_path two_nodes_happy -- --no-capture
+$env:POL_PROOF_DEV_MODE="some_value"; cargo test --test test_cryptarchia_happy_path two_nodes_happy -- --no-capture
 ```
 or
 ```pwsh
-$env:POL_PROOF_DEV_MODE="true"; $env:USE_RELEASE_BINARIES="true"; cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
+$env:POL_PROOF_DEV_MODE="some_value"; $env:USE_RELEASE_BINARIES="some_value"; cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
 
 ```
 
 **Notes:**
-- The `POL_PROOF_DEV_MODE` environment variable enables proofs to be generated in dev mode.
+- The presence of the `POL_PROOF_DEV_MODE` environment variable enables proofs to be generated in dev mode.
 
 
 ### 2. Run Tests with Debug Feature Flag
@@ -96,13 +96,13 @@ To execute the test suite with the debug feature flag, use the following command
 _**MacOS or Linux**_
 
 ```bash
-POL_PROOF_DEV_MODE=true cargo test -p tests -F debug disseminate_and_retrieve
+POL_PROOF_DEV_MODE=some_value cargo test -p tests -F debug disseminate_and_retrieve
 ```
 
 _**Windows (PowerShell)**_
 
 ```pwsh
-$env:POL_PROOF_DEV_MODE="true"; cargo test -p tests -F debug disseminate_and_retrieve
+$env:POL_PROOF_DEV_MODE="some_value"; cargo test -p tests -F debug disseminate_and_retrieve
 ```
 
 `-F debug`: Enables the debug feature flag for the integration tests, allowing for extra debug output or specific

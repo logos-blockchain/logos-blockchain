@@ -47,7 +47,7 @@ pub fn get_exe_path(debug_binary: &str, release_binary: &str) -> PathBuf {
                 debug_binary
             } else {
                 panic!(
-                    "Could not find nomos binary in debug path '{}'",
+                    "\nCould not find nomos binary in debug path '{}'\n",
                     debug_binary.display()
                 );
             }
@@ -57,23 +57,29 @@ pub fn get_exe_path(debug_binary: &str, release_binary: &str) -> PathBuf {
                 release_binary
             } else {
                 panic!(
-                    "Could not find nomos binary in release path '{}'",
+                    "\nCould not find nomos binary in release path '{}'\n",
                     release_binary.display()
                 );
             }
         }
-        (_, _) => {
+        (false, false) => {
             if std::fs::exists(&debug_binary).unwrap() {
                 debug_binary
             } else if std::fs::exists(&release_binary).unwrap() {
                 release_binary
             } else {
                 panic!(
-                    "Could not find nomos binary in debug '{}' or release path '{}'",
+                    "\nCould not find nomos binary in debug '{}' or release path '{}'\n",
                     debug_binary.display(),
                     release_binary.display()
                 );
             }
+        }
+        (true, true) => {
+            panic!(
+                "\nOnly one of 'USE_DEBUG_BINARIES' or 'USE_RELEASE_BINARIES' environment variables \
+                can be set.\n",
+            );
         }
     }
 }
