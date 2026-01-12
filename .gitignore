@@ -18,6 +18,7 @@ sim_config.json
 
 # Integration test temp dirs
 tests/.tmp*
+/.tmp*
 
 # Wildcard for any file that contains ignore
 *ignore*
