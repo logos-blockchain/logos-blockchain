@@ -28,6 +28,7 @@ impl From<ServiceConfig> for NetworkConfig<Libp2pConfig> {
                     identify_config: value.user.backend.swarm.identify_config,
                     identify_protocol_name: value.deployment.identify_protocol_name,
                     kad_protocol_name: value.deployment.kademlia_protocol_name,
+                    chain_sync_protocol_name: value.deployment.chain_sync_protocol_name,
                     kademlia_config: value.user.backend.swarm.kademlia_config,
                     nat_config: value.user.backend.swarm.nat_config,
                     node_key: value.user.backend.swarm.node_key,

@@ -30,11 +30,6 @@ use crate::{
     messages::{GetTipResponse, SerialisedBlock},
 };
 
-/// Cryptarchia networking protocol for synchronizing blocks.
-const SYNC_PROTOCOL_ID: &str = "/nomos/cryptarchia/sync/1.0.0";
-
-pub const SYNC_PROTOCOL: StreamProtocol = StreamProtocol::new(SYNC_PROTOCOL_ID);
-
 const MAX_INCOMING_REQUESTS: usize = 4;
 
 type SendingBlocksRequestsFuture = BoxFuture<'static, Result<BlocksRequestStream, ChainSyncError>>;
@@ -154,15 +149,17 @@ pub struct Behaviour {
     waker: Option<std::task::Waker>,
     /// Configuration for the behaviour.
     config: Config,
+    /// Protocol name.
+    protocol_name: StreamProtocol,
 }
 
 impl Behaviour {
     #[must_use]
-    pub fn new(config: Config) -> Self {
+    pub fn new(protocol_name: StreamProtocol, config: Config) -> Self {
         let stream_behaviour = StreamBehaviour::new();
         let mut control = stream_behaviour.new_control();
         let incoming_streams = control
-            .accept(SYNC_PROTOCOL)
+            .accept(protocol_name.clone())
             .expect("Failed to accept incoming streams for sync protocol");
         Self {
             stream_behaviour,
@@ -178,6 +175,7 @@ impl Behaviour {
             sending_tip_responses: FuturesUnordered::new(),
             waker: None,
             config,
+            protocol_name,
         }
     }
 
@@ -187,10 +185,14 @@ impl Behaviour {
         reply_sender: oneshot::Sender<Result<GetTipResponse, ChainSyncError>>,
     ) -> Result<(), ChainSyncError> {
         let mut control = self.control.clone();
+        let protocol_name = self.protocol_name.clone();
 
         self.sending_tip_requests.push(
-            async move { Downloader::send_tip_request(peer_id, &mut control, reply_sender).await }
-                .boxed(),
+            async move {
+                Downloader::send_tip_request(peer_id, &mut control, protocol_name, reply_sender)
+                    .await
+            }
+            .boxed(),
         );
 
         self.try_notify_waker();
@@ -214,9 +216,17 @@ impl Behaviour {
             latest_immutable_block,
             additional_blocks,
         );
+        let protocol_name = self.protocol_name.clone();
 
         self.sending_block_requests.push(
-            Downloader::send_download_request(peer_id, control, request, reply_sender).boxed(),
+            Downloader::send_download_request(
+                peer_id,
+                control,
+                request,
+                protocol_name,
+                reply_sender,
+            )
+            .boxed(),
         );
 
         self.try_notify_waker();
@@ -514,7 +524,7 @@ mod tests {
 
     use cryptarchia_engine::Slot;
     use futures::StreamExt as _;
-    use libp2p::{Multiaddr, PeerId, Swarm, bytes::Bytes, swarm::SwarmEvent};
+    use libp2p::{Multiaddr, PeerId, StreamProtocol, Swarm, bytes::Bytes, swarm::SwarmEvent};
     use libp2p_swarm_test::SwarmExt as _;
     use nomos_core::header::HeaderId;
     use rand::{Rng, thread_rng};
@@ -949,7 +959,7 @@ mod tests {
             .with_quic()
             .with_dns()
             .unwrap()
-            .with_behaviour(|_| Behaviour::new(config))
+            .with_behaviour(|_| Behaviour::new(StreamProtocol::new("/tests/chain-sync"), config))
             .unwrap()
             .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(10)))
             .build()
