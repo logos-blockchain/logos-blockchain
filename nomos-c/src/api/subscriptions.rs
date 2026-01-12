@@ -1,7 +1,4 @@
-use std::{
-    ffi::{CString, c_char},
-    os::raw::c_void,
-};
+use std::ffi::{CString, c_char};
 
 use chain_service::api::CryptarchiaServiceApi;
 use nomos_api::http::storage::StorageAdapter as _;
@@ -29,9 +26,9 @@ impl From<CoreBlock<SignedMantleTx>> for Block {
     }
 }
 
-pub fn block_subscribe_(
+pub fn subscribe_to_new_blocks_sync(
     node: &NomosNode,
-    mut callback_per_block: Box<dyn FnMut(*const c_char) + Send + Sync>,
+    mut callback_per_block: BoxedCallback<*const c_char>,
 ) {
     let runtime_handler = node.get_runtime_handle();
     let overwatch = node.get_overwatch_handle();
@@ -76,27 +73,26 @@ pub fn block_subscribe_(
     });
 }
 
-type CCallback = unsafe extern "C" fn(user_data: *const c_char);
+type CCallback<T> = unsafe extern "C" fn(data: T);
+type BoxedCallback<T> = Box<dyn FnMut(T) + Send + Sync>;
 
-unsafe extern "C" fn trampoline(callback: *mut c_void, block: *const c_char) {
-    let closure_ptr = callback.cast::<Box<dyn FnMut(*const c_char)>>();
-    let closure = unsafe { &mut *closure_ptr };
-    closure(block);
+fn per_block_wrapper<T: 'static>(callback: CCallback<T>) -> BoxedCallback<T> {
+    Box::new(move |block: T| {
+        // Safety: The callback is declared as unsafe extern "C"
+        unsafe { callback(block) }
+    })
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn block_subscribe(node: *const NomosNode, callback_per_block: CCallback) {
+pub unsafe extern "C" fn subscribe_to_new_blocks(
+    node: *const NomosNode,
+    callback_per_block: CCallback<*const c_char>,
+) {
     if node.is_null() {
         eprintln!("Received a null `node` pointer. Exiting.");
         return;
     }
     let node = unsafe { &*node };
-    let callback_per_block = Box::new(move |block: *const c_char| unsafe {
-        #[expect(
-            clippy::fn_to_numeric_cast_any,
-            reason = "trampoline method need to cast to void types"
-        )]
-        trampoline(callback_per_block as *mut c_void, block);
-    });
-    block_subscribe_(node, callback_per_block);
+    let callback_per_block = per_block_wrapper(callback_per_block);
+    subscribe_to_new_blocks_sync(node, callback_per_block);
 }
