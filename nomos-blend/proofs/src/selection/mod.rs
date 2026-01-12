@@ -15,7 +15,6 @@ pub mod inputs;
 mod tests;
 
 pub const PROOF_OF_SELECTION_SIZE: usize = size_of::<ProofOfSelection>();
-const DOMAIN_SEPARATION_TAG: [u8; 9] = *b"BlendNode";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -57,7 +56,7 @@ impl ProofOfSelection {
         let selection_randomness_bytes = fr_to_bytes(&self.selection_randomness);
         let pseudo_random_output: u64 = {
             let pseudo_random_output_bytes =
-                pseudo_random_sized_bytes::<8>(&DOMAIN_SEPARATION_TAG, &selection_randomness_bytes);
+                pseudo_random_sized_bytes::<8>(b"", &selection_randomness_bytes);
             let pseudo_random_biguint = BigUint::from_bytes_le(&pseudo_random_output_bytes[..]);
             pseudo_random_biguint
                 .try_into()
