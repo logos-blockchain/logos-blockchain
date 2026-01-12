@@ -183,6 +183,8 @@ jobs:
         env:
           POL_PROOF_DEV_MODE: true
           CONSENSUS_SLOT_TIME: 5
+          NOMOS_NODE_BIN: ${{ github.workspace }}/target/debug/nomos-node
+          NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
         with:
           command: test
           # We don't test benches as they take 6h+, leading to a timeout
