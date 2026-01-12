@@ -28,16 +28,6 @@ impl Cipher {
         self.encrypt(data); // encryption and decryption are symmetric.
     }
 
-    /// Creates [`AdvancedCipher`] that advances the cipher by
-    /// `blocks` blocks of pseudo-random bytes before encryption.
-    #[must_use]
-    pub const fn advance(self, blocks: usize) -> AdvancedCipher {
-        AdvancedCipher {
-            cipher: self,
-            blocks_to_advance: blocks,
-        }
-    }
-
     /// XORs two byte slices in-place.
     fn xor_in_place(a: &mut [u8], b: &[u8]) {
         assert_eq!(a.len(), b.len());
@@ -49,25 +39,6 @@ impl Cipher {
         let mut buf = vec![0u8; size];
         self.0.fill_bytes(&mut buf);
         buf
-    }
-}
-
-/// Encrypts data in-place after advancing the cipher by `blocks_to_advance`
-/// blocks of pseudo-random bytes.
-pub struct AdvancedCipher {
-    cipher: Cipher,
-    blocks_to_advance: usize,
-}
-
-impl AdvancedCipher {
-    /// Encrypts data in-place after advancing the cipher, and
-    /// returns the underlying cipher.
-    pub fn encrypt(mut self, data: &mut [u8]) -> Cipher {
-        (0..self.blocks_to_advance).for_each(|_| {
-            self.cipher.next_pseudo_random_bytes(data.len());
-        });
-        self.cipher.encrypt(data);
-        self.cipher
     }
 }
 
@@ -129,28 +100,6 @@ mod tests {
         assert_ne!(&data1, b"hello");
         cipher.decrypt(&mut data2);
         assert_ne!(&data2, b"world");
-    }
-
-    #[test]
-    fn advanced_cipher() {
-        let seed = b"test-seed";
-        let mut dummy = b"dummy".to_vec();
-        let mut data1 = b"hello".to_vec();
-        let mut data2 = b"world".to_vec();
-
-        // Advance by 1 block before encrypting data1
-        let advanced_cipher = Cipher::new(TEST_DOMAIN, seed).advance(1);
-        let mut cipher = advanced_cipher.encrypt(&mut data1);
-        cipher.encrypt(&mut data2);
-
-        // Decrypting in the same order, but without advancing.
-        // The first decrypt will consume the dummy bytes skipped during encryption.
-        let mut cipher = Cipher::new(TEST_DOMAIN, seed);
-        cipher.decrypt(&mut dummy);
-        cipher.decrypt(&mut data1);
-        assert_eq!(&data1, b"hello");
-        cipher.decrypt(&mut data2);
-        assert_eq!(&data2, b"world");
     }
 
     #[test]
