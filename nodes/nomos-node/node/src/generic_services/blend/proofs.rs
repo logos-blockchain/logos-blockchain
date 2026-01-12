@@ -337,20 +337,20 @@ mod core_to_core_tests {
             )
             .unwrap();
 
-        // With the test inputs, `PoSel` will be addressed to node `1`.
+        // With the test inputs, `PoSel` will be addressed to node `0`.
         assert!(matches!(
             verifier.verify_proof_of_selection(
                 proof_of_selection.into_inner(),
                 &VerifyInputs {
-                    expected_node_index: 0,
+                    expected_node_index: 1,
                     key_nullifier: verified_proof_of_quota.key_nullifier(),
                     total_membership_size: MEMBERSHIP_SIZE as u64,
                 }
             ),
             Err(VerifierError::ProofOfSelection(
                 selection::Error::IndexMismatch {
-                    expected: Some(1),
-                    provided: 0
+                    expected: Some(0),
+                    provided: 1
                 }
             ))
         ));
@@ -359,7 +359,7 @@ mod core_to_core_tests {
                 .verify_proof_of_selection(
                     proof_of_selection.into_inner(),
                     &VerifyInputs {
-                        expected_node_index: 1,
+                        expected_node_index: 0,
                         key_nullifier: verified_proof_of_quota.key_nullifier(),
                         total_membership_size: MEMBERSHIP_SIZE as u64,
                     }
@@ -492,15 +492,15 @@ mod core_to_core_tests {
             verifier.verify_proof_of_selection(
                 proof_of_selection.into_inner(),
                 &VerifyInputs {
-                    expected_node_index: 0,
+                    expected_node_index: 1,
                     total_membership_size: (MEMBERSHIP_SIZE + 1) as u64,
                     key_nullifier: ZkHash::ONE
                 }
             ),
             Err(VerifierError::ProofOfSelection(
                 selection::Error::IndexMismatch {
-                    expected: Some(1),
-                    provided: 0
+                    expected: Some(0),
+                    provided: 1
                 }
             ))
         ));
