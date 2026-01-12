@@ -13,21 +13,23 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-axum = { default-features = false, features = ["http1", "http2", "json", "query", "tokio"], version = "0.7.5" }
-governor = { default-features = false, version = "0.6" }
+axum                       = { default-features = false, features = ["http1", "http2", "json", "query", "tokio"], version = "0.7.5" }
+governor                   = { default-features = false, version = "0.6" }
 key-management-system-keys = { workspace = true }
-nomos-core = { workspace = true }
+nomos-core                 = { workspace = true }
+serde                      = { workspace = true, features = ["alloc", "derive"] }
+serde_json                 = { workspace = true }
+serde_with                 = { default-features = false, features = ["macros"], workspace = true }
+tokio                      = { default-features = false, features = ["time"], optional = true, version = "1" }
+tower_governor             = { default-features = false, features = ["axum"], version = "0.3" }
+tracing                    = { default-features = false, optional = true, workspace = true }
+
+[target.'cfg(not(windows))'.dependencies]
 pprof = { default-features = false, features = [
   "criterion",
   "flamegraph",
   "protobuf-codec",
 ], optional = true, version = "0.15" }
-serde = { workspace = true, features = ["alloc", "derive"] }
-serde_json = { workspace = true }
-serde_with = { default-features = false, features = ["macros"], workspace = true }
-tokio = { default-features = false, features = ["time"], optional = true, version = "1" }
-tower_governor = { default-features = false, features = ["axum"], version = "0.3" }
-tracing = { default-features = false, optional = true, workspace = true }
 
 [features]
 profiling = ["pprof", "tokio", "tracing"]

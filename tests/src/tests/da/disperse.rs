@@ -14,6 +14,7 @@ use tests::{
     secret_key_to_peer_id,
     topology::{Topology, TopologyConfig, configs::create_general_configs},
 };
+use tokio::time::interval;
 
 #[ignore = "for manual usage, disseminate_retrieve_reconstruct is preferred for ci"]
 #[tokio::test]
@@ -321,6 +322,24 @@ async fn disseminate_same_data() {
         // Index zero shouldn't be empty, validator replicated both blobs to
         // executor because they both are in the same subnetwork.
         assert!(executor_shares.len() == 2);
+    }
+}
+
+#[ignore = "for local debugging"]
+#[tokio::test]
+#[serial]
+async fn local_testnet_one_node() {
+    let topology = Topology::spawn(TopologyConfig::one_validator()).await;
+    let validator = &topology.validators()[0];
+    let addr = validator.config().http.backend_settings.address;
+    println!("Validator http addr {addr:?}, example test url: http://{addr:?}/cryptarchia/info");
+
+    let mut interval = interval(Duration::from_secs(10));
+    loop {
+        interval.tick().await;
+
+        let info = validator.consensus_info().await;
+        println!("Consensus info: {info:?}");
     }
 }
 
