@@ -7,7 +7,7 @@ fn cargo_metadata() -> serde_json::Value {
         .output()
         .expect("Failed to execute `cargo metadata`");
 
-    serde_json::from_slice(&output.stdout).expect("Failed to parse `cargo metadata` output")
+    serde_json::from_slice(&output.stdout).expect("Failed to parse `cargo metadata` output.")
 }
 
 #[must_use]
@@ -15,7 +15,7 @@ pub fn get_target_directory() -> PathBuf {
     let metadata = cargo_metadata();
     let target_directory = metadata["target_directory"]
         .as_str()
-        .expect("Failed to get target directory");
+        .expect("Failed to get the target directory..");
     PathBuf::from(target_directory)
 }
 
@@ -40,7 +40,7 @@ pub fn get_workspace_root() -> PathBuf {
     let metadata = cargo_metadata();
     let workspace_root = metadata["workspace_root"]
         .as_str()
-        .expect("Failed to get workspace root");
+        .expect("Failed to get the workspace root.");
     PathBuf::from(workspace_root)
 }
 
@@ -63,7 +63,7 @@ pub fn get_target_directory_for_current_profile(target_triple: &str) -> Result<P
         return Ok(profile_directory);
     }
 
-    Err("Could not find target directory for profile.".to_owned())
+    Err("Could not find the target directory for profile.".to_owned())
 }
 
 #[must_use]
@@ -75,13 +75,6 @@ pub fn get_cargo_package_version(package_name: &str) -> String {
     let package = packages
         .iter()
         .find(|package| package["name"].as_str().unwrap() == package_name)
-        .expect("Failed to get package");
-    package["version"].to_string()
-}
-
-#[must_use]
-pub fn get_formatted_cargo_package_version(package_name: &str) -> String {
-    let version = get_cargo_package_version(package_name);
-    let version = version.trim_matches('"');
-    format!("v{version}")
+        .expect("Failed to get the package.");
+    package["version"].to_string().trim_matches('"').to_owned()
 }

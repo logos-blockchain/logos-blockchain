@@ -18,8 +18,8 @@ where
     RuntimeServiceId: Debug + Display + Sync,
 {
     async fn ctrl_c_signal_received(overwatch_handle: &OverwatchHandle<RuntimeServiceId>) {
-        let _ = overwatch_handle.stop_all_services().await;
-        let _ = overwatch_handle.shutdown().await;
+        drop(overwatch_handle.stop_all_services().await);
+        drop(overwatch_handle.shutdown().await);
     }
 }
 

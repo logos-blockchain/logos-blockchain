@@ -1,19 +1,20 @@
 use clap::Parser;
 use color_eyre::eyre::{Result, eyre};
-use nomos_core::mantle::SignedMantleTx;
 use nomos_executor::{
     NomosExecutor, NomosExecutorServiceSettings, RuntimeServiceId, config::Config as ExecutorConfig,
 };
 use nomos_node::{
-    CryptarchiaLeaderArgs, HttpArgs, LogArgs, MANTLE_TOPIC, MempoolAdapterSettings, NetworkArgs,
-    Transaction,
+    CryptarchiaLeaderArgs, HttpArgs, LogArgs, NetworkArgs,
     config::{
-        BlendArgs, blend::ServiceConfig as BlendConfig, network::ServiceConfig as NetworkConfig,
+        BlendArgs, ConfigDeserializationError, TimeArgs, blend::ServiceConfig as BlendConfig,
+        cryptarchia::ServiceConfig as CryptarchiaConfig, deserialize_config_at_path,
+        mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
+        time::ServiceConfig as TimeConfig,
     },
 };
 use nomos_sdp::SdpSettings;
 use overwatch::overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner};
-use tx_service::tx::settings::TxMempoolSettings;
+use tracing::warn;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -38,9 +39,12 @@ struct Args {
     http: HttpArgs,
     #[clap(flatten)]
     cryptarchia_leader: CryptarchiaLeaderArgs,
+    #[clap(flatten)]
+    time: TimeArgs,
 }
 
 #[tokio::main]
+#[expect(clippy::too_many_lines, reason = "Main function for executor binary.")]
 async fn main() -> Result<()> {
     let Args {
         config,
@@ -49,29 +53,65 @@ async fn main() -> Result<()> {
         network: network_args,
         blend: blend_args,
         cryptarchia_leader: cryptarchia_args,
+        time: time_args,
         check_config_only,
     } = Args::parse();
-    let config = serde_yaml::from_reader::<_, ExecutorConfig>(std::fs::File::open(config)?)?
-        .update_from_args(
-            log_args,
-            network_args,
-            blend_args,
-            http_args,
-            cryptarchia_args,
-        )?;
 
-    #[expect(
-        clippy::non_ascii_literal,
-        reason = "Use of green checkmark for better UX."
-    )]
-    if check_config_only {
-        println!("Config file is valid! ✅");
-        return Ok(());
+    let config = match (
+        deserialize_config_at_path::<ExecutorConfig>(&config),
+        check_config_only,
+    ) {
+        (Ok(_), true) => {
+            #[expect(
+                clippy::non_ascii_literal,
+                reason = "Use of green checkmark for better UX."
+            )]
+            {
+                println!("Config file is valid! ✅");
+            };
+            return Ok(());
+        }
+        (Ok(config), false) => Ok(config),
+        (Err(ConfigDeserializationError::UnrecognizedFields { config, fields }), true) => {
+            Err(ConfigDeserializationError::UnrecognizedFields { config, fields })
+        }
+        (Err(ConfigDeserializationError::UnrecognizedFields { config, fields }), false) => {
+            warn!(
+                "The following unrecognized fields were found in the config file: {fields:?}. They won't have any effects on the node."
+            );
+            Ok(config)
+        }
+        (Err(e), _) => Err(e),
+    }?.update_from_args(
+        log_args,
+        network_args,
+        blend_args,
+        http_args,
+        cryptarchia_args,
+        &time_args,
+    )?;
+
+    let time_service_config = TimeConfig {
+        user: config.time,
+        deployment: config.deployment.time,
     }
+    .into_time_service_settings(&config.deployment.cryptarchia);
+
+    let (chain_service_config, chain_network_config, chain_leader_config) = CryptarchiaConfig {
+        user: config.cryptarchia,
+        deployment: config.deployment.cryptarchia,
+    }
+    .into_cryptarchia_services_settings(&config.deployment.blend);
 
     let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
         user: config.blend,
-        deployment: config.deployment.clone().into(),
+        deployment: config.deployment.blend,
+    }
+    .into();
+
+    let mempool_service_config = MempoolConfig {
+        user: config.mempool,
+        deployment: config.deployment.mempool,
     }
     .into();
 
@@ -79,7 +119,7 @@ async fn main() -> Result<()> {
         NomosExecutorServiceSettings {
             network: NetworkConfig {
                 user: config.network,
-                deployment: config.deployment.into(),
+                deployment: config.deployment.network,
             }
             .into(),
             blend: blend_config,
@@ -89,22 +129,15 @@ async fn main() -> Result<()> {
             #[cfg(feature = "tracing")]
             tracing: config.tracing,
             http: config.http,
-            mempool: TxMempoolSettings {
-                pool: (),
-                network_adapter: MempoolAdapterSettings {
-                    topic: String::from(MANTLE_TOPIC),
-                    id: <SignedMantleTx as Transaction>::hash,
-                },
-                recovery_path: config.mempool.pool_recovery_path,
-            },
+            mempool: mempool_service_config,
             da_dispersal: config.da_dispersal,
             da_network: config.da_network,
             da_sampling: config.da_sampling,
             da_verifier: config.da_verifier,
-            cryptarchia: config.cryptarchia,
-            chain_network: config.chain_network,
-            cryptarchia_leader: config.cryptarchia_leader,
-            time: config.time,
+            cryptarchia: chain_service_config,
+            chain_network: chain_network_config,
+            cryptarchia_leader: chain_leader_config,
+            time: time_service_config,
             storage: config.storage,
             system_sig: (),
             sdp: SdpSettings { declaration: None },
@@ -117,10 +150,11 @@ async fn main() -> Result<()> {
     )
     .map_err(|e| eyre!("Error encountered: {}", e))?;
 
-    let _ = app
-        .handle()
-        .start_service_sequence(get_services_to_start(&app).await?)
-        .await;
+    drop(
+        app.handle()
+            .start_service_sequence(get_services_to_start(&app).await?)
+            .await,
+    );
     app.wait_finished().await;
     Ok(())
 }

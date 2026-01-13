@@ -1,10 +1,10 @@
 pub mod mock;
 
+use key_management_system_keys::keys::ZkPublicKey;
 use nomos_core::{
     mantle::{NoteId, SignedMantleTx, tx_builder::MantleTxBuilder},
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
-use zksign::PublicKey;
 
 #[async_trait::async_trait]
 pub trait SdpWalletAdapter {
@@ -23,7 +23,7 @@ pub trait SdpWalletAdapter {
         &self,
         tx_builder: MantleTxBuilder,
         withdrawn_message: WithdrawMessage,
-        zk_id: PublicKey,
+        zk_id: ZkPublicKey,
         locked_note_id: NoteId,
     ) -> Result<SignedMantleTx, Self::Error>;
 
@@ -31,6 +31,6 @@ pub trait SdpWalletAdapter {
         &self,
         tx_builder: MantleTxBuilder,
         active_message: ActiveMessage,
-        zk_id: PublicKey,
+        zk_id: ZkPublicKey,
     ) -> Result<SignedMantleTx, Self::Error>;
 }

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     pin::Pin,
     task::{Context, Poll},
 };
@@ -42,13 +42,19 @@ pub trait SubnetworkConnectionPolicy {
     ) -> SubnetworkDeviation;
 }
 
+#[derive(Clone, Copy)]
+enum ConnectionDirection {
+    Inbound,
+    Outbound,
+}
+
 pub struct DAConnectionBalancer<Membership, Policy> {
     local_peer_id: PeerId,
     membership: Membership,
     policy: Policy,
     interval: Pin<Box<dyn futures::Stream<Item = ()> + Send>>,
     subnetwork_stats: BalancerStats,
-    connected_peers: HashSet<PeerId>,
+    connected_peers: HashMap<PeerId, ConnectionDirection>,
 }
 
 impl<Membership, Policy> DAConnectionBalancer<Membership, Policy>
@@ -68,7 +74,7 @@ where
             policy,
             interval: Box::pin(interval),
             subnetwork_stats: HashMap::new(),
-            connected_peers: HashSet::new(),
+            connected_peers: HashMap::new(),
         }
     }
 
@@ -98,7 +104,7 @@ where
         let candidates = self.membership.members_of(&subnetwork_id);
         candidates
             .into_iter()
-            .filter(|peer| !self.connected_peers.contains(peer) && *peer != self.local_peer_id)
+            .filter(|peer| !self.connected_peers.contains_key(peer) && *peer != self.local_peer_id)
             .choose_multiple(&mut rand::rng(), missing_count)
     }
 }
@@ -113,13 +119,21 @@ where
     fn record_event(&mut self, event: ConnectionEvent) {
         match event {
             ConnectionEvent::OpenInbound(peer) => {
-                self.connected_peers.insert(peer);
+                self.connected_peers
+                    .insert(peer, ConnectionDirection::Inbound);
+                let subnets: Vec<_> = self.membership.membership(&peer).into_iter().collect();
+                tracing::debug!("BALANCER: OpenInbound peer={peer}, subnets={subnets:?}");
+
                 for subnetwork in self.membership.membership(&peer) {
                     self.update_subnetwork_stats(subnetwork, 1, 0);
                 }
             }
             ConnectionEvent::OpenOutbound(peer) => {
-                self.connected_peers.insert(peer);
+                self.connected_peers
+                    .insert(peer, ConnectionDirection::Outbound);
+                let subnets: Vec<_> = self.membership.membership(&peer).into_iter().collect();
+                tracing::debug!("BALANCER: OpenOutbound peer={peer}, subnets={subnets:?}");
+
                 for subnetwork in self.membership.membership(&peer) {
                     self.update_subnetwork_stats(subnetwork, 0, 1);
                 }
@@ -173,6 +187,42 @@ where
         }
     }
 
+    fn refresh_subnet_attributions(&mut self) {
+        tracing::info!(
+            "BALANCER: Refreshing subnet attributions for {} connected peers",
+            self.connected_peers.len()
+        );
+        self.subnetwork_stats.clear();
+
+        // todo: this is a quick fix, rethink to support large connected peers and
+        // membership changes
+        let connected_peers: Vec<_> = self
+            .connected_peers
+            .iter()
+            .map(|(peer_id, direction)| (*peer_id, *direction))
+            .collect();
+
+        for (peer_id, direction) in &connected_peers {
+            let subnets: Vec<_> = self.membership.membership(peer_id).into_iter().collect();
+            tracing::debug!("BALANCER: Re-attributing peer={peer_id}, subnets={subnets:?}");
+            for subnetwork_id in subnets {
+                match direction {
+                    ConnectionDirection::Inbound => {
+                        self.update_subnetwork_stats(subnetwork_id, 1, 0);
+                    }
+                    ConnectionDirection::Outbound => {
+                        self.update_subnetwork_stats(subnetwork_id, 0, 1);
+                    }
+                }
+            }
+        }
+
+        tracing::debug!(
+            "BALANCER: Subnet stats after refresh: {:?}",
+            self.subnetwork_stats
+        );
+    }
+
     fn stats(&self) -> Self::Stats {
         self.subnetwork_stats.clone()
     }
@@ -180,6 +230,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use futures::stream;
     use tokio_stream::StreamExt as _;
 

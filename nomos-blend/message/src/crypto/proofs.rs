@@ -1,6 +1,6 @@
 use core::mem::swap;
 
-use nomos_blend_crypto::keys::Ed25519PublicKey;
+use key_management_system_keys::keys::Ed25519PublicKey;
 use nomos_blend_proofs::{
     quota::{
         self, ProofOfQuota, VerifiedProofOfQuota,
@@ -11,6 +11,7 @@ use nomos_blend_proofs::{
     },
     selection::{self, ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::encap::ProofsVerifier;
@@ -18,7 +19,7 @@ use crate::encap::ProofsVerifier;
 /// The inputs required to verify a Proof of Quota, without the signing key,
 /// which is retrieved from the public header of the message layer being
 /// verified.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PoQVerificationInputsMinusSigningKey {
     pub session: u64,
     pub core: CoreInputs,
@@ -55,7 +56,7 @@ pub enum Error {
 }
 
 /// Verifier that actually verifies the validity of Blend-related proofs.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RealProofsVerifier {
     current_inputs: PoQVerificationInputsMinusSigningKey,
     previous_epoch_inputs: Option<LeaderInputs>,
@@ -102,7 +103,7 @@ impl ProofsVerifier for RealProofsVerifier {
                 core,
                 leader,
                 session,
-                signing_key: *signing_key,
+                signing_key: *signing_key.as_inner(),
             })
             .or_else(|_| {
                 let Some(previous_epoch_inputs) = self.previous_epoch_inputs else {
@@ -113,7 +114,7 @@ impl ProofsVerifier for RealProofsVerifier {
                         core,
                         leader: previous_epoch_inputs,
                         session,
-                        signing_key: *signing_key,
+                        signing_key: *signing_key.as_inner(),
                     })
                     .map_err(Error::ProofOfQuota)
             })

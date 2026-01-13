@@ -270,7 +270,7 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Mock {
                     .entry(topic)
                     .or_default()
                     .push(msg.clone());
-                let _ = self.pubsub_events_tx.send(NetworkEvent::RawMessage(msg));
+                drop(self.pubsub_events_tx.send(NetworkEvent::RawMessage(msg)));
             }
             MockBackendMessage::RelaySubscribe { topic } => {
                 tracing::info!("processed relay subscription for topic: {topic}");
@@ -289,7 +289,7 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Mock {
                     .get(&topic)
                     .cloned()
                     .unwrap_or_default();
-                let _ = tx.send(msgs);
+                drop(tx.send(msgs));
             }
         }
     }

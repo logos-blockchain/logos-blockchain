@@ -412,15 +412,24 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, iter::empty, num::NonZero, sync::Arc};
+    use std::{
+        collections::HashMap,
+        iter::empty,
+        num::{NonZero, NonZeroU64},
+        sync::Arc,
+    };
 
     use cryptarchia_engine::{EpochConfig, Slot};
     use nomos_core::{
         block::Proposal,
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use nomos_ledger::LedgerState;
+    use nomos_ledger::{
+        LedgerState,
+        mantle::sdp::{ServiceRewardsParameters, rewards},
+    };
     use nomos_network::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
+    use nomos_utils::math::NonNegativeF64;
     use overwatch::{
         overwatch::OverwatchHandle,
         services::{ServiceData, relay::OutboundRelay},
@@ -1069,53 +1078,67 @@ mod tests {
     }
 
     fn new_cryptarchia() -> chain_service::Cryptarchia {
+        let ledger_config = ledger_config();
         chain_service::Cryptarchia::from_lib(
             [GENESIS_ID; 32].into(),
-            LedgerState::from_utxos(empty()),
+            LedgerState::from_utxos(empty(), &ledger_config),
             [GENESIS_ID; 32].into(),
-            nomos_ledger::Config {
-                epoch_config: EpochConfig {
-                    epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
-                    epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
-                    epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
-                },
-                consensus_config: cryptarchia_engine::Config {
-                    security_param: NonZero::new(1).unwrap(),
-                    active_slot_coeff: 1.0,
-                },
-                sdp_config: nomos_ledger::mantle::sdp::Config {
-                    service_params: Arc::new(
-                        [
-                            (
-                                ServiceType::BlendNetwork,
-                                ServiceParameters {
-                                    lock_period: 10,
-                                    inactivity_period: 20,
-                                    retention_period: 100,
-                                    timestamp: 0,
-                                    session_duration: 10,
-                                },
-                            ),
-                            (
-                                ServiceType::DataAvailability,
-                                ServiceParameters {
-                                    lock_period: 10,
-                                    inactivity_period: 20,
-                                    retention_period: 100,
-                                    timestamp: 0,
-                                    session_duration: 10,
-                                },
-                            ),
-                        ]
-                        .into(),
-                    ),
-                    min_stake: MinStake {
-                        threshold: 1,
-                        timestamp: 0,
-                    },
-                },
-            },
+            ledger_config,
             cryptarchia_engine::State::Bootstrapping,
         )
+    }
+
+    #[must_use]
+    fn ledger_config() -> nomos_ledger::Config {
+        nomos_ledger::Config {
+            epoch_config: EpochConfig {
+                epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
+                epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
+                epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
+            },
+            consensus_config: cryptarchia_engine::Config {
+                security_param: NonZero::new(1).unwrap(),
+                active_slot_coeff: 1.0,
+            },
+            sdp_config: nomos_ledger::mantle::sdp::Config {
+                service_params: Arc::new(
+                    [
+                        (
+                            ServiceType::BlendNetwork,
+                            ServiceParameters {
+                                lock_period: 10,
+                                inactivity_period: 20,
+                                retention_period: 100,
+                                timestamp: 0,
+                                session_duration: 10,
+                            },
+                        ),
+                        (
+                            ServiceType::DataAvailability,
+                            ServiceParameters {
+                                lock_period: 10,
+                                inactivity_period: 20,
+                                retention_period: 100,
+                                timestamp: 0,
+                                session_duration: 10,
+                            },
+                        ),
+                    ]
+                    .into(),
+                ),
+                service_rewards_params: ServiceRewardsParameters {
+                    blend: rewards::blend::RewardsParameters {
+                        rounds_per_session: NonZeroU64::new(10).unwrap(),
+                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        num_blend_layers: NonZeroU64::new(3).unwrap(),
+                        minimum_network_size: NonZeroU64::new(1).unwrap(),
+                    },
+                },
+                min_stake: MinStake {
+                    threshold: 1,
+                    timestamp: 0,
+                },
+            },
+        }
     }
 }

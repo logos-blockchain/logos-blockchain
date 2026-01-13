@@ -67,7 +67,7 @@ pub fn create_network_configs(
         .map(|(swarm_config, initial_peers)| GeneralNetworkConfig {
             backend: BackendSettings {
                 initial_peers,
-                inner: swarm_config.to_owned(),
+                swarm: swarm_config.to_owned(),
             },
         })
         .collect()

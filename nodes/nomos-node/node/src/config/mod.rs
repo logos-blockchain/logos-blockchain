@@ -3,9 +3,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use ::time::OffsetDateTime;
+use chain_leader::LeaderConfig;
 use clap::{Parser, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use hex::FromHex as _;
+use key_management_system_service::keys::UnsecuredZkKey;
 use nomos_libp2p::{Multiaddr, ed25519::SecretKey};
 use nomos_tracing::logging::{gelf::GelfConfig, local::FileConfig};
 use nomos_tracing_service::{LoggerLayer, Tracing};
@@ -15,20 +18,22 @@ use serde::Deserialize;
 use tracing::Level;
 
 use crate::{
-    ApiService, ChainNetworkService, CryptarchiaLeaderService, CryptarchiaService,
-    DaNetworkService, DaSamplingService, DaVerifierService, KeyManagementService, RuntimeServiceId,
-    StorageService, TimeService,
+    ApiService, CryptarchiaService, DaNetworkService, DaSamplingService, DaVerifierService,
+    KeyManagementService, RuntimeServiceId, StorageService,
     config::{
-        blend::serde::Config as BlendConfig, deployment::Settings as DeploymentSettings,
-        mempool::MempoolConfig, network::serde::Config as NetworkConfig,
+        blend::serde::Config as BlendConfig, cryptarchia::serde::Config as CryptarchiaConfig,
+        deployment::DeploymentSettings, mempool::serde::Config as MempoolConfig,
+        network::serde::Config as NetworkConfig, time::serde::Config as TimeConfig,
     },
     generic_services::{SdpService, WalletService},
 };
 
 pub mod blend;
+pub mod cryptarchia;
 pub mod deployment;
 pub mod mempool;
 pub mod network;
+pub mod time;
 
 #[cfg(test)]
 mod tests;
@@ -58,6 +63,8 @@ pub struct CliArgs {
     cryptarchia_leader: CryptarchiaLeaderArgs,
     #[clap(flatten)]
     da: DaArgs,
+    #[clap(flatten)]
+    time: TimeArgs,
 }
 
 impl CliArgs {
@@ -187,11 +194,33 @@ pub struct CryptarchiaLeaderArgs {
 
 #[derive(Parser, Debug, Clone)]
 pub struct TimeArgs {
-    #[clap(long = "consensus-chain-start", env = "CONSENSUS_CHAIN_START")]
+    #[clap(
+        long = "consensus-chain-start",
+        env = "CONSENSUS_CHAIN_START",
+        group = "start_time"
+    )]
     chain_start_time: Option<i64>,
+    #[clap(long = "dev-mode-reset-chain-clock", group = "start_time")]
+    dev_mode_reset_chain_clock: bool,
+}
 
-    #[clap(long = "consensus-slot-duration", env = "CONSENSUS_SLOT_DURATION")]
-    slot_duration: Option<u64>,
+pub enum ChainStartMode {
+    FromEnv(i64),
+    FromConfig,
+    Now,
+}
+
+impl TimeArgs {
+    #[must_use]
+    pub const fn to_mode(&self) -> ChainStartMode {
+        if self.dev_mode_reset_chain_clock {
+            ChainStartMode::Now
+        } else if let Some(ts) = self.chain_start_time {
+            ChainStartMode::FromEnv(ts)
+        } else {
+            ChainStartMode::FromConfig
+        }
+    }
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -203,22 +232,21 @@ pub struct DaArgs {
 #[derive(Deserialize, Debug, Clone)]
 #[cfg_attr(feature = "testing", derive(serde::Serialize))]
 pub struct Config {
-    pub tracing: <Tracing<RuntimeServiceId> as ServiceData>::Settings,
     pub network: NetworkConfig,
     pub blend: BlendConfig,
     pub deployment: DeploymentSettings,
+    pub cryptarchia: CryptarchiaConfig,
+    pub time: TimeConfig,
+    pub mempool: MempoolConfig,
+
+    pub tracing: <Tracing<RuntimeServiceId> as ServiceData>::Settings,
     pub da_network: <DaNetworkService as ServiceData>::Settings,
     pub da_verifier: <DaVerifierService as ServiceData>::Settings,
     pub sdp: <SdpService<RuntimeServiceId> as ServiceData>::Settings,
     pub da_sampling: <DaSamplingService as ServiceData>::Settings,
     pub http: <ApiService as ServiceData>::Settings,
-    pub cryptarchia: <CryptarchiaService as ServiceData>::Settings,
-    pub chain_network: <ChainNetworkService as ServiceData>::Settings,
-    pub cryptarchia_leader: <CryptarchiaLeaderService as ServiceData>::Settings,
-    pub time: <TimeService as ServiceData>::Settings,
     pub storage: <StorageService as ServiceData>::Settings,
     pub key_management: <KeyManagementService as ServiceData>::Settings,
-    pub mempool: MempoolConfig,
     pub wallet: <WalletService<CryptarchiaService, RuntimeServiceId> as ServiceData>::Settings,
 
     #[cfg(feature = "testing")]
@@ -233,13 +261,15 @@ impl Config {
             network: network_args,
             blend: blend_args,
             cryptarchia_leader: cryptarchia_leader_args,
+            time: time_args,
             ..
         } = args;
         update_tracing(&mut self.tracing, log_args)?;
         update_network(&mut self.network, network_args)?;
         update_blend(&mut self.blend, blend_args)?;
         update_http(&mut self.http, http_args)?;
-        update_cryptarchia_leader_consensus(&mut self.cryptarchia_leader, cryptarchia_leader_args)?;
+        update_cryptarchia_leader_consensus(&mut self.cryptarchia.leader, cryptarchia_leader_args)?;
+        update_time(&mut self.time, &time_args)?;
         Ok(self)
     }
 }
@@ -296,18 +326,18 @@ pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) ->
     } = network_args;
 
     if let Some(IpAddr::V4(h)) = host {
-        network.backend.inner.host = h;
+        network.backend.swarm.host = h;
     } else if host.is_some() {
         return Err(eyre!("Unsupported ip version"));
     }
 
     if let Some(port) = port {
-        network.backend.inner.port = port as u16;
+        network.backend.swarm.port = port as u16;
     }
 
     if let Some(node_key) = node_key {
         let mut key_bytes = hex::decode(node_key)?;
-        network.backend.inner.node_key = SecretKey::try_from_bytes(key_bytes.as_mut_slice())?;
+        network.backend.swarm.node_key = SecretKey::try_from_bytes(key_bytes.as_mut_slice())?;
     }
 
     if let Some(peers) = initial_peers {
@@ -348,7 +378,7 @@ pub fn update_http(
 }
 
 pub fn update_cryptarchia_leader_consensus(
-    leader: &mut <CryptarchiaLeaderService as ServiceData>::Settings,
+    leader: &mut LeaderConfig,
     consensus_args: CryptarchiaLeaderArgs,
 ) -> Result<()> {
     let CryptarchiaLeaderArgs { secret_key } = consensus_args;
@@ -356,30 +386,58 @@ pub fn update_cryptarchia_leader_consensus(
         return Ok(());
     };
 
-    let sk = zksign::SecretKey::from(BigUint::from_bytes_le(&<[u8; 16]>::from_hex(secret_key)?));
+    let sk = UnsecuredZkKey::from(BigUint::from_bytes_le(&<[u8; 16]>::from_hex(secret_key)?));
     let pk = sk.to_public_key();
 
-    leader.leader_config.sk = sk;
-    leader.leader_config.pk = pk;
+    leader.sk = sk;
+    leader.pk = pk;
 
     Ok(())
 }
 
-pub fn update_time(
-    time: &mut <TimeService as ServiceData>::Settings,
-    time_args: &TimeArgs,
-) -> Result<()> {
-    let TimeArgs {
-        chain_start_time,
-        slot_duration,
-    } = *time_args;
-    if let Some(start_time) = chain_start_time {
-        time.backend_settings.slot_config.chain_start_time =
-            time::OffsetDateTime::from_unix_timestamp(start_time)?;
-    }
-
-    if let Some(duration) = slot_duration {
-        time.backend_settings.slot_config.slot_duration = std::time::Duration::from_secs(duration);
+pub fn update_time(time: &mut TimeConfig, time_args: &TimeArgs) -> Result<()> {
+    match time_args.to_mode() {
+        ChainStartMode::Now => {
+            time.chain_start_time = OffsetDateTime::now_utc();
+        }
+        ChainStartMode::FromEnv(ts) => {
+            time.chain_start_time = OffsetDateTime::from_unix_timestamp(ts)?;
+        }
+        ChainStartMode::FromConfig => {}
     }
     Ok(())
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ConfigDeserializationError<Config> {
+    #[error("Unrecognized fields in config: {fields:?}")]
+    UnrecognizedFields { fields: Vec<String>, config: Config },
+    #[error(transparent)]
+    IoError(#[from] std::io::Error),
+    #[error(transparent)]
+    SerdeError(#[from] serde_yaml::Error),
+}
+
+pub fn deserialize_config_at_path<Config>(
+    config_path: &Path,
+) -> Result<Config, ConfigDeserializationError<Config>>
+where
+    Config: for<'de> Deserialize<'de>,
+{
+    let mut ignored_fields = Vec::new();
+    let config = serde_ignored::deserialize::<_, _, Config>(
+        serde_yaml::Deserializer::from_reader(std::fs::File::open(config_path)?),
+        |path| {
+            ignored_fields.push(path.to_string());
+        },
+    )?;
+
+    if ignored_fields.is_empty() {
+        Ok(config)
+    } else {
+        Err(ConfigDeserializationError::UnrecognizedFields {
+            fields: ignored_fields,
+            config,
+        })
+    }
 }

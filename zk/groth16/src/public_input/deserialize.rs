@@ -28,6 +28,10 @@ mod tests {
     #[test]
     fn deserialize() {
         let pi: Vec<InputDeser> = serde_json::from_value(PI.deref().clone()).unwrap();
-        let _: Result<Vec<Input<Bn254>>, _> = pi.into_iter().map(TryInto::try_into).collect();
+        drop(
+            pi.into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<Input<Bn254>>, _>>(),
+        );
     }
 }

@@ -10,8 +10,8 @@ mod test {
         time::Duration,
     };
 
-    use ed25519_dalek::{Signer as _, SigningKey};
     use futures::StreamExt as _;
+    use key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use kzgrs_backend::testutils;
     use libp2p::{
         PeerId, Swarm,
@@ -147,11 +147,13 @@ mod test {
         // 1. Alice is the initiator, Bob forwards to Charlie, message flow: A -> B -> C
         // 2. And then, within the same connections, Charlie is the initiator, Bob
         //    forwards to Alice, message flow: C -> B -> A
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::from_default_env())
-            .compact()
-            .with_writer(TestWriter::default())
-            .try_init();
+        drop(
+            tracing_subscriber::fmt()
+                .with_env_filter(EnvFilter::from_default_env())
+                .compact()
+                .with_writer(TestWriter::default())
+                .try_init(),
+        );
 
         let k1 = Keypair::generate_ed25519();
         let k2 = Keypair::generate_ed25519();
@@ -228,11 +230,13 @@ mod test {
 
     #[tokio::test]
     async fn test_connects_and_receives_replication_messages() {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::from_default_env())
-            .compact()
-            .with_writer(TestWriter::default())
-            .try_init();
+        drop(
+            tracing_subscriber::fmt()
+                .with_env_filter(EnvFilter::from_default_env())
+                .compact()
+                .with_writer(TestWriter::default())
+                .try_init(),
+        );
         let k1 = Keypair::generate_ed25519();
         let k2 = Keypair::generate_ed25519();
         let peer_id2 = PeerId::from_public_key(&k2.public());
@@ -255,7 +259,7 @@ mod test {
         let task_1 = async move {
             wait_for_incoming_connection(&mut swarm_1, peer_id2).await;
             swarm_1
-                .filter_map(|event| async {
+                .filter_map(async |event| {
                     if let SwarmEvent::Behaviour(ReplicationEvent::IncomingMessage {
                         message,
                         ..
@@ -323,7 +327,7 @@ mod test {
         let k1 = Keypair::generate_ed25519();
         let k2 = Keypair::generate_ed25519();
         let peer_id2 = PeerId::from_public_key(&k2.public());
-        let signing_key = SigningKey::from_bytes(
+        let signing_key = Ed25519Key::from_bytes(
             &get_ed25519_bytes(k2.public()).expect("SigningKey should be created from valid bytes"),
         );
 
@@ -339,7 +343,7 @@ mod test {
             blob_size: 0,
             da_storage_gas_price: 0,
             parent: MsgId::root(),
-            signer: signing_key.verifying_key(),
+            signer: signing_key.public_key(),
         });
 
         let base_mantle_tx = MantleTx {
@@ -366,12 +370,12 @@ mod test {
                 unique_mantle_tx.storage_gas_price = i;
 
                 let tx_hash = unique_mantle_tx.hash();
-                let signature = signing_key.sign(&tx_hash.as_signing_bytes());
+                let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
                 let unique_signed_tx = SignedMantleTx::new(
                     unique_mantle_tx,
                     vec![OpProof::Ed25519Sig(signature)],
-                    zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
+                    ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
                 )
                 .expect("Transaction with valid proofs should be valid");
 

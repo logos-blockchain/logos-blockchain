@@ -4,12 +4,13 @@
     Using the `expect` or `allow` macro on top of their usage does not remove the warning"
 )]
 
+use core::num::NonZero;
 use std::{
     fmt::{Debug, Display, Formatter},
     pin::Pin,
 };
 
-use cryptarchia_engine::{Epoch, Slot};
+use cryptarchia_engine::{Epoch, EpochConfig, Slot, time::SlotConfig};
 use futures::{Stream, StreamExt as _};
 use log::error;
 use overwatch::{
@@ -55,7 +56,13 @@ impl Debug for TimeServiceMessage {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub struct TimeServiceSettings<BackendSettings> {
-    pub backend_settings: BackendSettings,
+    /// Slot settings in order to compute proper slot times
+    pub slot_config: SlotConfig,
+    /// Epoch settings in order to compute proper epoch times
+    pub epoch_config: EpochConfig,
+    /// Base period length related to epochs, used to compute epochs as well
+    pub base_period_length: NonZero<u64>,
+    pub backend: BackendSettings,
 }
 
 pub struct TimeService<Backend, RuntimeServiceId>
@@ -88,13 +95,11 @@ where
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
         _initial_state: Self::State,
     ) -> Result<Self, DynError> {
-        let Self::Settings {
-            backend_settings, ..
-        } = service_resources_handle
+        let settings = service_resources_handle
             .settings_handle
             .notifier()
             .get_updated_settings();
-        let backend = Backend::init(backend_settings);
+        let backend = Backend::init(settings);
         Ok(Self {
             service_resources_handle,
             backend,

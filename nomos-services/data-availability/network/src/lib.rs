@@ -17,7 +17,7 @@ use std::{
 
 use async_trait::async_trait;
 use backends::{ConnectionStatus, NetworkBackend};
-use futures::{Stream, stream::select};
+use futures::Stream;
 use kzgrs_backend::common::share::{DaShare, DaSharesCommitments};
 use libp2p::{Multiaddr, PeerId};
 use nomos_core::{
@@ -42,13 +42,12 @@ use services_utils::wait_until_services_are_ready;
 use storage::{MembershipStorage, MembershipStorageAdapter};
 use subnetworks_assignations::{MembershipCreator, MembershipHandler, SubnetworkAssignations};
 use tokio::sync::{
-    mpsc::{self, Sender},
+    broadcast,
+    broadcast::Sender,
+    mpsc::{self},
     oneshot,
 };
-use tokio_stream::{
-    StreamExt as _,
-    wrappers::{IntervalStream, ReceiverStream, UnboundedReceiverStream},
-};
+use tokio_stream::{StreamExt as _, wrappers::UnboundedReceiverStream};
 
 use crate::{
     addressbook::{AddressBook, AddressBookSnapshot},
@@ -99,6 +98,11 @@ where
         block_id: HeaderId,
         blob_ids: HashMap<BlobId, SessionNumber>,
     },
+    RequestHistoricCommitments {
+        block_id: HeaderId,
+        blob_id: BlobId,
+        session: SessionNumber,
+    },
 }
 
 impl<Backend, Commitments, RuntimeServiceId> Debug
@@ -128,6 +132,17 @@ where
                 write!(
                     fmt,
                     "DaNetworkMsg::RequestHistoricSample{{blob_ids: {blob_ids:?}, block_id: {block_id} }}"
+                )
+            }
+            Self::RequestHistoricCommitments {
+                block_id,
+                blob_id,
+                session,
+            } => {
+                write!(
+                    fmt,
+                    "DaNwetworkMsg::RequestHistoricCommitments{{block_id: {block_id}, blob_id: {blob_id:?}, session: {session} }}
+                    "
                 )
             }
         }
@@ -184,6 +199,7 @@ pub struct NetworkService<
     subnet_refresh_sender: Sender<()>,
     balancer_stats_stream: UnboundedReceiverStream<BalancerStats>,
     opinion_stream: UnboundedReceiverStream<OpinionEvent>,
+    subnet_refresh_interval: Duration,
 }
 
 pub struct NetworkState<
@@ -316,13 +332,9 @@ where
             addressbook.clone(),
         );
 
-        // Sampling subnetwork peers need to be updatedd periodically.
+        // Sampling and balancer subnetwork peers need to be updated periodically.
         // They also need to be updated when the assignations change.
-        let (subnet_refresh_sender, refresh_rx) = mpsc::channel(1);
-        let interval = tokio::time::interval(settings.subnet_refresh_interval);
-        let refresh_ticker = IntervalStream::new(interval).map(|_| ());
-        let refresh_signal = ReceiverStream::new(refresh_rx);
-        let subnet_refresh_signal = select(refresh_ticker, refresh_signal);
+        let (subnet_refresh_sender, _) = broadcast::channel(1);
         let (balancer_stats_sender, balancer_stats_receiver) = mpsc::unbounded_channel();
         let balancer_stats_stream = UnboundedReceiverStream::new(balancer_stats_receiver);
         let (opinion_sender, opinion_receiver) = mpsc::unbounded_channel();
@@ -334,7 +346,7 @@ where
                 service_resources_handle.overwatch_handle.clone(),
                 membership.clone(),
                 addressbook.clone(),
-                subnet_refresh_signal,
+                &subnet_refresh_sender,
                 balancer_stats_sender,
                 opinion_sender,
             ),
@@ -345,6 +357,7 @@ where
             subnet_refresh_sender,
             balancer_stats_stream,
             opinion_stream,
+            subnet_refresh_interval: settings.subnet_refresh_interval,
         })
     }
 
@@ -415,6 +428,9 @@ where
             })?;
 
         status_updater.notify_ready();
+
+        let mut refresh_interval = tokio::time::interval(self.subnet_refresh_interval);
+
         tracing::info!(
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
@@ -447,6 +463,9 @@ where
                 }
                 Some(opinion_event) = opinion_stream.next() => {
                     opinion_aggregator.record_opinion(opinion_event);
+                }
+                _ = refresh_interval.tick() => {
+                    let _ = subnet_refresh_sender.send(());
                 }
             }
         }
@@ -596,6 +615,20 @@ where
                 )
                 .await;
             }
+            DaNetworkMsg::RequestHistoricCommitments {
+                block_id,
+                blob_id,
+                session,
+            } => {
+                Self::handle_historic_commitments_request(
+                    backend,
+                    membership_storage,
+                    block_id,
+                    blob_id,
+                    session,
+                )
+                .await;
+            }
         }
     }
 
@@ -618,7 +651,7 @@ where
         .await
         {
             Ok(membership_status) => {
-                let _ = subnet_refresh_sender.send(()).await;
+                let _ = subnet_refresh_sender.send(());
                 backend.update_session_status(membership_status);
             }
             Err(e) => {
@@ -693,6 +726,34 @@ where
         backend
             .start_historic_sampling(block_id, blobs_by_membership)
             .await;
+    }
+
+    async fn handle_historic_commitments_request(
+        backend: &Backend,
+        membership_storage: &MembershipStorage<Arc<StorageAdapter>, Membership, AddressBook>,
+        block_id: HeaderId,
+        blob_id: BlobId,
+        session: SessionNumber,
+    ) {
+        let membership = membership_storage
+            .get_historic_membership(session)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::error!("Failed to get historic membership for session {session}: {e}");
+                None
+            });
+
+        if let Some(membership) = membership {
+            let membership = SharedMembershipHandler::new(membership);
+
+            backend
+                .start_historic_commitments(block_id, blob_id, membership)
+                .await;
+        } else {
+            tracing::error!(
+                "No membership found for session {session}, cannot request historic commitments"
+            );
+        }
     }
 
     async fn handle_opinion_session_change(

@@ -66,8 +66,29 @@ fn failure_on_invalid_index() {
     }) else {
         panic!("posel.verify should fail.");
     };
-    assert_eq!(expected as usize, expected_index);
+    assert_eq!(expected.unwrap() as usize, expected_index);
     assert_eq!(provided, 1 - expected_index as u64);
+}
+
+#[test]
+fn failure_on_expected_index_too_large() {
+    let posel = VerifiedProofOfSelection::new(ZkHash::ZERO).into_inner();
+    let Err(Error::IndexMismatch { expected, .. }) = posel.verify(&VerifyInputs {
+        expected_node_index: 1,
+        total_membership_size: 0,
+        key_nullifier: ZkHash::ONE,
+    }) else {
+        panic!("`posel.verify` should fail.");
+    };
+    assert!(expected.is_none());
+}
+
+#[test]
+fn failure_on_empty_membership() {
+    let posel = VerifiedProofOfSelection::new(ZkHash::ZERO).into_inner();
+    let Err(Error::EmptyMembershipSet) = posel.expected_index(0) else {
+        panic!("`posel.verify` should fail.");
+    };
 }
 
 #[test]

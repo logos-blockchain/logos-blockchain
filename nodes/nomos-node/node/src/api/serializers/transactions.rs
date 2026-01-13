@@ -1,8 +1,8 @@
+use key_management_system_service::keys::ZkSignature;
 use nomos_core::mantle::{
     MantleTx, Op, OpProof, SignedMantleTx, TxHash, gas::Gas, ledger::Tx as LedgerTx,
 };
 use serde::Serialize;
-use zksign::Signature as ZkSignature;
 
 #[derive(Serialize)]
 #[serde(remote = "MantleTx")]

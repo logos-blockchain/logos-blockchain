@@ -1,4 +1,3 @@
-use nomos_blend_message::crypto::key_ext::Ed25519SecretKeyExt as _;
 use nomos_blend_proofs::selection::inputs::VerifyInputs;
 use test_log::test;
 

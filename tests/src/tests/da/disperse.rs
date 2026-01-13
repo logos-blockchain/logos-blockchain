@@ -14,6 +14,7 @@ use tests::{
     secret_key_to_peer_id,
     topology::{Topology, TopologyConfig, configs::create_general_configs},
 };
+use tokio::time::interval;
 
 #[ignore = "for manual usage, disseminate_retrieve_reconstruct is preferred for ci"]
 #[tokio::test]
@@ -62,12 +63,15 @@ async fn disseminate_retrieve_reconstruct() {
     const ITERATIONS: usize = 10;
 
     let topology = Topology::spawn(TopologyConfig::validator_and_executor()).await;
+
+    topology.wait_membership_ready().await;
+    topology.wait_network_ready().await;
+    topology.wait_da_network_ready().await;
+
     let executor = &topology.executors()[0];
     let (channel_id, mut parent_msg_id) = setup_test_channel(executor).await;
     let num_samples = executor.config().da_sampling.sampling_settings.num_samples as usize;
     let data = [1u8; 31 * ITERATIONS];
-
-    topology.wait_membership_ready().await;
 
     for i in 0..ITERATIONS {
         let data_size = 31 * (i + 1);
@@ -114,6 +118,10 @@ async fn disseminate_from_non_membership() {
     const ITERATIONS: usize = 10;
 
     let topology = Topology::spawn(TopologyConfig::validator_and_executor()).await;
+    topology.wait_membership_ready().await;
+    topology.wait_network_ready().await;
+    topology.wait_da_network_ready().await;
+
     let membership_executor = &topology.executors()[0];
     let (channel_id, mut parent_msg_id) = setup_test_channel(membership_executor).await;
     let num_samples = membership_executor
@@ -125,6 +133,7 @@ async fn disseminate_from_non_membership() {
     let StartingState::Genesis { genesis_tx } = membership_executor
         .config()
         .cryptarchia
+        .service
         .starting_state
         .clone()
     else {
@@ -132,13 +141,30 @@ async fn disseminate_from_non_membership() {
     };
 
     let mut lone_general_config = create_general_configs(1).into_iter().next().unwrap();
-    lone_general_config.consensus_config.genesis_tx = genesis_tx;
+    lone_general_config
+        .consensus_config
+        .override_genesis_tx(genesis_tx);
     let lone_executor_config = create_executor_config(lone_general_config);
     let lone_executor = Executor::spawn(lone_executor_config).await;
 
-    let data = [1u8; 31 * ITERATIONS];
+    // Wait for lone_executor to have membership info for session 0
+    // (even though it's not in the membership, it needs to know about the session)
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            if lone_executor
+                .da_get_membership(nomos_core::sdp::SessionNumber::from(0u64))
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("Timed out waiting for lone_executor membership");
 
-    topology.wait_membership_ready().await;
+    let data = [1u8; 31 * ITERATIONS];
 
     for i in 0..ITERATIONS {
         let data_size = 31 * (i + 1);
@@ -267,14 +293,16 @@ async fn disseminate_same_data() {
     const ITERATIONS: usize = 10;
 
     let topology = Topology::spawn(TopologyConfig::validator_and_executor()).await;
+    topology.wait_membership_ready().await;
+    topology.wait_network_ready().await;
+    topology.wait_da_network_ready().await;
+
     let executor = &topology.executors()[0];
     let num_subnets = executor.config().da_network.backend.num_subnets as usize;
 
     let (test_channel_id, mut parent_msg_id) = setup_test_channel(executor).await;
 
     let data = [1u8; 31];
-
-    topology.wait_membership_ready().await;
 
     for _ in 0..ITERATIONS {
         let blob_id = disseminate_with_metadata(executor, test_channel_id, parent_msg_id, &data)
@@ -294,6 +322,24 @@ async fn disseminate_same_data() {
         // Index zero shouldn't be empty, validator replicated both blobs to
         // executor because they both are in the same subnetwork.
         assert!(executor_shares.len() == 2);
+    }
+}
+
+#[ignore = "for local debugging"]
+#[tokio::test]
+#[serial]
+async fn local_testnet_one_node() {
+    let topology = Topology::spawn(TopologyConfig::one_validator()).await;
+    let validator = &topology.validators()[0];
+    let addr = validator.config().http.backend_settings.address;
+    println!("Validator http addr {addr:?}, example test url: http://{addr:?}/cryptarchia/info");
+
+    let mut interval = interval(Duration::from_secs(10));
+    loop {
+        interval.tick().await;
+
+        let info = validator.consensus_info(false).await;
+        println!("Consensus info: {info:?}");
     }
 }
 

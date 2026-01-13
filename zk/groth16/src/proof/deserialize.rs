@@ -53,6 +53,6 @@ pub mod tests {
     use super::*;
     #[test]
     fn deserialize() {
-        let _: ProofJsonDeser = serde_json::from_value(PROOF.deref().clone()).unwrap();
+        drop(serde_json::from_value::<ProofJsonDeser>(PROOF.deref().clone()).unwrap());
     }
 }

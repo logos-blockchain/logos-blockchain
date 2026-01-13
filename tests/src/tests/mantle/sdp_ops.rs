@@ -1,7 +1,7 @@
 use std::{collections::HashSet, time::Duration};
 
 use common_http_client::CommonHttpClient;
-use ed25519_dalek::SigningKey;
+use key_management_system_service::keys::{Ed25519Key, ZkKey};
 use nomos_core::{
     mantle::{Note, NoteId, Transaction as _},
     sdp::{ActiveMessage, Declaration, Locator, ServiceType, SessionNumber, WithdrawMessage},
@@ -18,7 +18,6 @@ use tests::{
     topology::{GenesisNoteSpec, Topology, TopologyConfig},
 };
 use tokio::time::{sleep, timeout};
-use zksign::SecretKey;
 
 /// High-level SDP flow covered by this E2E:
 /// - submit a `Declare` transaction backed by an unused genesis note and wait
@@ -30,7 +29,7 @@ use zksign::SecretKey;
 #[tokio::test]
 #[serial]
 async fn sdp_ops_e2e() {
-    let note_sk = SecretKey::from(BigUint::from(42u64));
+    let note_sk = ZkKey::from(BigUint::from(42u64));
     let spare_note = Note::new(1, note_sk.to_public_key());
     let topology_config =
         TopologyConfig::validator_and_executor().with_extra_genesis_note(GenesisNoteSpec {
@@ -54,7 +53,7 @@ async fn sdp_ops_e2e() {
     let inclusion_timeout = Duration::from_secs(30);
     let state_timeout = Duration::from_secs(45);
 
-    let sdp_config = &validator.config().cryptarchia.config.sdp_config;
+    let sdp_config = validator.config().deployment.cryptarchia.sdp_config.clone();
 
     let validator_url = validator.url();
     let client = CommonHttpClient::new(None);
@@ -73,8 +72,8 @@ async fn sdp_ops_e2e() {
         "Injected note must be unused before submitting declare"
     );
 
-    let provider_signing_key = SigningKey::from_bytes(&[7u8; 32]);
-    let provider_zk_key = SecretKey::from(BigUint::from(7u64));
+    let provider_signing_key = Ed25519Key::from_bytes(&[7u8; 32]);
+    let provider_zk_key = ZkKey::from(BigUint::from(7u64));
     let zk_id = provider_zk_key.to_public_key();
     let locator = Locator(
         "/ip4/127.0.0.1/tcp/9100"
@@ -246,11 +245,24 @@ async fn wait_for_height(
     duration: Duration,
 ) -> Option<()> {
     timeout(duration, async {
+        let mut tick: u8 = 0;
         loop {
-            let info = validator.consensus_info().await;
+            let info = validator.consensus_info(tick == 0).await;
             if info.height >= target_height {
+                println!(
+                    "waiting for height {}... current height is {}",
+                    target_height, info.height
+                );
+                println!("{info:?}");
                 break;
             }
+            if tick.is_multiple_of(10) {
+                println!(
+                    "waiting for height {}... current height is {}",
+                    target_height, info.height
+                );
+            }
+            tick = tick.wrapping_add(1);
 
             sleep(Duration::from_millis(500)).await;
         }

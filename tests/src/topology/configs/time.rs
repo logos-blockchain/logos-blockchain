@@ -1,35 +1,28 @@
 use std::{
     net::{IpAddr, Ipv4Addr},
-    str::FromStr as _,
     time::Duration,
 };
 
+use nomos_node::config::time::serde::Config;
+use nomos_time::backends::{NtpTimeBackendSettings, ntp::async_client::NTPClientSettings};
 use time::OffsetDateTime;
 
-const DEFAULT_SLOT_TIME: u64 = 2;
-const CONSENSUS_SLOT_TIME_VAR: &str = "CONSENSUS_SLOT_TIME";
+pub(crate) const DEFAULT_SLOT_TIME_IN_SECS: u64 = 2;
+pub(crate) const CONSENSUS_SLOT_TIME_VAR: &str = "CONSENSUS_SLOT_TIME";
 
-#[derive(Clone, Debug)]
-pub struct GeneralTimeConfig {
-    pub slot_duration: Duration,
-    pub chain_start_time: OffsetDateTime,
-    pub ntp_server: String,
-    pub timeout: Duration,
-    pub interface: IpAddr,
-    pub update_interval: Duration,
-}
+pub type GeneralTimeConfig = Config;
 
 #[must_use]
 pub fn default_time_config() -> GeneralTimeConfig {
-    let slot_duration = std::env::var(CONSENSUS_SLOT_TIME_VAR)
-        .map(|s| <u64>::from_str(&s).unwrap())
-        .unwrap_or(DEFAULT_SLOT_TIME);
     GeneralTimeConfig {
-        slot_duration: Duration::from_secs(slot_duration),
+        backend: NtpTimeBackendSettings {
+            ntp_client_settings: NTPClientSettings {
+                timeout: Duration::from_secs(5),
+                listening_interface: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            },
+            ntp_server: "pool.ntp.org".to_owned(),
+            update_interval: Duration::from_secs(16),
+        },
         chain_start_time: OffsetDateTime::now_utc(),
-        ntp_server: String::from("pool.ntp.org"),
-        timeout: Duration::from_secs(5),
-        interface: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-        update_interval: Duration::from_secs(16),
     }
 }

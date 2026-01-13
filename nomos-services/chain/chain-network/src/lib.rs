@@ -787,21 +787,13 @@ where
         )));
     }
 
-    // TODO: recover service reward
-    let service_reward = None;
-
     let reconstructed_transactions = mempool_response.into_found();
 
     let header = proposal.header().clone();
     let signature = *proposal.signature();
 
-    let block = Block::reconstruct(
-        header,
-        reconstructed_transactions,
-        service_reward,
-        signature,
-    )
-    .map_err(|e| Error::InvalidBlock(format!("Invalid block: {e}")))?;
+    let block = Block::reconstruct(header, reconstructed_transactions, signature)
+        .map_err(|e| Error::InvalidBlock(format!("Invalid block: {e}")))?;
 
     Ok(block)
 }

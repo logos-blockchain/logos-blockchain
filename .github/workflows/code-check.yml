@@ -20,7 +20,7 @@ jobs:
         uses: actions-rs/toolchain@88dc2356392166efad76775c878094f4e83ff746  # Version 1.0.6
         with:
           # The same version must be used in the `.pre-commit-config.yaml` file
-          toolchain: nightly-2025-09-14
+          toolchain: nightly-2025-10-25
           profile: minimal
           components: rustfmt
           override: true
@@ -45,10 +45,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
       - name: Run `cargo deny`
-        uses: EmbarkStudios/cargo-deny-action@34899fc7ba81ca6268d5947a7a16b4649013fea1 # Version 2.0.11
+        uses: EmbarkStudios/cargo-deny-action@76cd80eb775d7bbbd2d80292136d74d39e1b4918 # Version 2.0.14
         with:
-          # All is set in the config file
-          arguments:
+          arguments: "--locked"
           command-arguments: "--hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings"
 
   features:
@@ -80,7 +79,7 @@ jobs:
       - name: Run cargo-hack
         env:
           RUSTFLAGS: -D warnings
-        run: cargo hack --feature-powerset --no-dev-deps check
+        run: cargo hack check --feature-powerset --keep-going --all-targets
       - name: Update Cargo cache
         if: success() || failure()
         uses: ./.github/actions/update-cargo-cache
@@ -113,7 +112,7 @@ jobs:
         os: [ ubuntu-latest, macos-latest ]
     runs-on: ${{ matrix.os }}
     env:
-          RUSTFLAGS: -D warnings
+      RUSTFLAGS: -D warnings
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
@@ -130,7 +129,7 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: clippy
-          args: --all --all-targets --all-features
+          args: --locked --all --all-targets --all-features
       - name: Update Cargo cache
         if: success() || failure()
         uses: ./.github/actions/update-cargo-cache
@@ -164,30 +163,32 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: run
-          args: -p nomos-node nodes/nomos-node/config.yaml --check-config
+          args: --locked -p nomos-node nodes/nomos-node/config.yaml --check-config
 
       - name: Run the executor binary to check the config file validity
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: run
-          args: -p nomos-executor nodes/nomos-executor/config.yaml --check-config
+          args: --locked -p nomos-executor nodes/nomos-executor/config.yaml --check-config
 
       # This includes testing feature needed for tests
       - name: Build binaries with all features
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
-          args: --all-features
+          args: --locked --all-features
 
       - name: Cargo test
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
           POL_PROOF_DEV_MODE: true
           CONSENSUS_SLOT_TIME: 5
+          NOMOS_NODE_BIN: ${{ github.workspace }}/target/debug/nomos-node
+          NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
         with:
           command: test
           # We don't test benches as they take 6h+, leading to a timeout
-          args: --all --lib --bins --tests --examples --all-features
+          args: --locked --all --lib --bins --tests --examples --all-features
 
       - name: Upload integration tests results
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2

@@ -152,7 +152,7 @@ where
     ) -> Pin<Box<dyn Stream<Item = EncapsulatedMessageWithVerifiedPublicHeader> + Send>> {
         Box::pin(
             BroadcastStream::new(self.incoming_message_sender.subscribe())
-                .filter_map(|event| async { event.ok() }),
+                .filter_map(async |event| event.ok()),
         )
     }
 }

@@ -2,6 +2,7 @@ use std::{
     collections::VecDeque,
     convert::Infallible,
     fmt::Debug,
+    pin::Pin,
     task::{Context, Poll, Waker},
 };
 
@@ -37,6 +38,7 @@ pub trait ConnectionBalancer {
     fn record_event(&mut self, event: ConnectionEvent);
     fn poll(&mut self, cx: &mut Context<'_>) -> Poll<VecDeque<PeerId>>;
     fn stats(&self) -> Self::Stats;
+    fn refresh_subnet_attributions(&mut self);
 }
 
 #[derive(Debug)]
@@ -57,6 +59,7 @@ where
     command_receiver:
         UnboundedReceiver<ConnectionBalancerCommand<<Balancer as ConnectionBalancer>::Stats>>,
     stats_sender: Option<UnboundedSender<<Balancer as ConnectionBalancer>::Stats>>,
+    subnets_refresh_signal: Pin<Box<dyn futures::Stream<Item = ()> + Send>>,
     waker: Option<Waker>,
 }
 
@@ -69,6 +72,7 @@ where
         addressbook: Addressbook,
         balancer: Balancer,
         stats_sender: Option<UnboundedSender<<Balancer as ConnectionBalancer>::Stats>>,
+        subnets_refresh_signal: impl futures::Stream<Item = ()> + Send + 'static,
     ) -> Self {
         let (command_sender, command_receiver) = mpsc::unbounded_channel();
 
@@ -80,6 +84,7 @@ where
             command_receiver,
             stats_sender,
             waker: None,
+            subnets_refresh_signal: Box::pin(subnets_refresh_signal),
         }
     }
 
@@ -159,6 +164,10 @@ where
         libp2p::core::util::unreachable(event)
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: refactor after tests are green"
+    )]
     fn poll(
         &mut self,
         cx: &mut Context<'_>,
@@ -173,6 +182,19 @@ where
                         tracing::error!("Error while sending response to a channel: {err:?}");
                     }
                 }
+            }
+
+            cx.waker().wake_by_ref();
+        }
+
+        if self.subnets_refresh_signal.as_mut().poll_next(cx) == Poll::Ready(Some(())) {
+            tracing::info!("BALANCER: Received subnet refresh signal, re-attributing connections");
+            self.balancer.refresh_subnet_attributions();
+
+            if let Some(stats_sender) = &self.stats_sender
+                && let Err(err) = stats_sender.send(self.balancer.stats())
+            {
+                tracing::error!("Error while sending refreshed stats: {err:?}");
             }
 
             cx.waker().wake_by_ref();
@@ -243,6 +265,8 @@ mod tests {
             }
         }
 
+        fn refresh_subnet_attributions(&mut self) {}
+
         fn stats(&self) {
             unimplemented!()
         }
@@ -257,6 +281,7 @@ mod tests {
                 membership_dialer.clone(),
                 MockBalancer::default(),
                 None,
+                futures::stream::pending(),
             )
         });
 
@@ -265,6 +290,7 @@ mod tests {
                 AllNeighbours::default(),
                 MockBalancer::default(),
                 None,
+                futures::stream::pending(),
             )
         });
 
@@ -329,6 +355,7 @@ mod tests {
                 membership_dialer.clone(),
                 MockBalancer::default(),
                 None,
+                futures::stream::pending(),
             )
         });
 

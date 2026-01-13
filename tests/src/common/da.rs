@@ -2,9 +2,9 @@ use std::{collections::HashSet, time::Duration};
 
 use chain_service::CryptarchiaInfo;
 use common_http_client::Error;
-use ed25519_dalek::{Signer as _, SigningKey};
 use executor_http_client::ExecutorHttpClient;
 use futures::StreamExt as _;
+use key_management_system_service::keys::{Ed25519Key, ZkKey};
 use nomos_core::{
     block::Block,
     da::BlobId,
@@ -36,7 +36,7 @@ pub async fn disseminate_with_metadata(
     let client = ExecutorHttpClient::new(None);
     let exec_url = Url::parse(&format!("http://{backend_address}")).unwrap();
 
-    let signer = SigningKey::from_bytes(&TEST_SIGNING_KEY_BYTES).verifying_key();
+    let signer = Ed25519Key::from_bytes(&TEST_SIGNING_KEY_BYTES).public_key();
 
     client
         .publish_blob(exec_url, channel_id, parent_msg_id, signer, data.to_vec())
@@ -105,8 +105,8 @@ pub async fn setup_test_channel(executor: &Executor) -> (ChannelId, MsgId) {
 /// wallet adapter.
 #[must_use]
 pub fn create_inscription_transaction_with_id(id: ChannelId) -> SignedMantleTx {
-    let signing_key = SigningKey::from_bytes(&TEST_SIGNING_KEY_BYTES);
-    let signer = signing_key.verifying_key();
+    let signing_key = Ed25519Key::from_bytes(&TEST_SIGNING_KEY_BYTES);
+    let signer = signing_key.public_key();
 
     let inscription_op = InscriptionOp {
         channel_id: id,
@@ -123,12 +123,12 @@ pub fn create_inscription_transaction_with_id(id: ChannelId) -> SignedMantleTx {
     };
 
     let tx_hash = mantle_tx.hash();
-    let signature = signing_key.sign(&tx_hash.as_signing_bytes());
+    let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
     SignedMantleTx::new(
         mantle_tx,
         vec![OpProof::Ed25519Sig(signature)],
-        zksign::SecretKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
+        ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
     )
     .unwrap()
 }

@@ -557,6 +557,7 @@ mod tests {
     use cryptarchia_engine::Config;
     use futures::StreamExt as _;
     use groth16::Fr;
+    use key_management_system_keys::keys::Ed25519Key;
     use nomos_core::{
         codec::DeserializeOp as _,
         mantle::{Note, SignedMantleTx, ledger::Utxo},
@@ -817,13 +818,12 @@ mod tests {
             prev_header: HeaderId,
             slot: Slot,
         ) -> Option<Block<SignedMantleTx>> {
-            let dummy_signing_key = ed25519_dalek::SigningKey::from_bytes(&[1u8; 32]);
+            let dummy_signing_key = Ed25519Key::from_bytes(&[1u8; 32]);
             Block::create(
                 prev_header,
                 slot,
                 self.proof.clone(),
                 vec![],
-                None,
                 &dummy_signing_key,
             )
             .ok()
@@ -970,7 +970,7 @@ mod tests {
                 &latest_path,
                 Fr::from(6), // slot secret
                 0,           // starting slot
-                &ed25519_dalek::SigningKey::from_bytes(&[1u8; 32]).verifying_key(),
+                &Ed25519Key::from_bytes(&[1u8; 32]).public_key(),
             );
 
             nomos_core::proofs::leader_proof::Groth16LeaderProof::prove(

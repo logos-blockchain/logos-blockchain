@@ -10,19 +10,15 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-ark-ff            = { default-features = false, version = "0.4" }
 circuits-prover   = { workspace = true }
 circuits-utils    = { workspace = true }
-generic-array     = "1.2.0"
 groth16           = { features = ["deser"], workspace = true }
 num-bigint        = { version = "0.4", default-features = false }
 poseidon2         = { workspace = true }
 serde             = { workspace = true, features = ["derive"] }
 serde_json        = { workspace = true }
 thiserror         = { workspace = true }
-tracing           = { workspace = true }
 witness-generator = { workspace = true }
-zeroize           = { workspace = true }
 
 [dev-dependencies]
 num-bigint = "0.4"

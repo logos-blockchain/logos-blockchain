@@ -29,12 +29,13 @@ use crate::{
     SubnetworkId,
     addressbook::AddressBookHandler,
     protocols::sampling::{
-        errors::HistoricSamplingError,
-        historic::request_behaviour::HistoricRequestSamplingBehaviour, opinions::OpinionEvent,
+        errors::{HistoricCommitmentsError, HistoricSamplingError},
+        historic::request_behaviour::HistoricRequestSamplingBehaviour,
+        opinions::OpinionEvent,
         requests::request_behaviour::RequestSamplingBehaviour,
         responses::response_behaviour::ResponseSamplingBehaviour,
     },
-    swarm::validator::SampleArgs,
+    swarm::validator::{CommitmentsArgs, SampleArgs},
 };
 
 type SampleResponseFutureSuccess = (SessionNumber, PeerId, SampleResponse, SampleStream);
@@ -143,6 +144,11 @@ pub enum SamplingEvent {
         shares: HashMap<BlobId, Vec<DaLightShare>>,
         commitments: HashMap<BlobId, DaSharesCommitments>,
     },
+    HistoricCommitmentsSuccess {
+        block_id: HeaderId,
+        blob_id: BlobId,
+        commitments: DaSharesCommitments,
+    },
     CommitmentsSuccess {
         blob_id: BlobId,
         commitments: Box<DaSharesCommitments>,
@@ -157,6 +163,10 @@ pub enum SamplingEvent {
     HistoricSamplingError {
         block_id: HeaderId,
         error: HistoricSamplingError,
+    },
+    HistoricCommitmentsError {
+        block_id: HeaderId,
+        error: HistoricCommitmentsError,
     },
     Opinion(OpinionEvent),
 }
@@ -198,8 +208,20 @@ impl From<historic::HistoricSamplingEvent> for SamplingEvent {
                 commitments,
                 shares,
             },
+            historic::HistoricSamplingEvent::CommitmentsSuccess {
+                block_id,
+                blob_id,
+                commitments,
+            } => Self::HistoricCommitmentsSuccess {
+                block_id,
+                blob_id,
+                commitments,
+            },
             historic::HistoricSamplingEvent::SamplingError { block_id, error } => {
                 Self::HistoricSamplingError { block_id, error }
+            }
+            historic::HistoricSamplingEvent::CommitmentsError { block_id, error } => {
+                Self::HistoricCommitmentsError { block_id, error }
             }
             historic::HistoricSamplingEvent::Opinion(opinion_event) => Self::Opinion(opinion_event),
         }
@@ -291,6 +313,13 @@ where
     pub fn historical_request_channel(&self) -> UnboundedSender<SampleArgs<HistoricMembership>> {
         self.historical_requests.historic_request_channel()
     }
+
+    pub fn historical_commitments_request_channel(
+        &self,
+    ) -> UnboundedSender<CommitmentsArgs<HistoricMembership>> {
+        self.historical_requests
+            .historic_commitments_request_channel()
+    }
 }
 
 #[cfg(test)]
@@ -378,11 +407,13 @@ mod test {
     async fn test_sampling_two_peers() {
         const MSG_COUNT: usize = 10;
 
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::from_default_env())
-            .compact()
-            .with_writer(TestWriter::default())
-            .try_init();
+        drop(
+            tracing_subscriber::fmt()
+                .with_env_filter(EnvFilter::from_default_env())
+                .compact()
+                .with_writer(TestWriter::default())
+                .try_init(),
+        );
         let k1 = Keypair::generate_ed25519();
         let k2 = Keypair::generate_ed25519();
 

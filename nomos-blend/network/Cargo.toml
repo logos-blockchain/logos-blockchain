@@ -18,7 +18,6 @@ futures                    = { default-features = false, version = "0.3.30" }
 futures-timer              = { version = "3.0.3" }
 key-management-system-keys = { workspace = true }
 libp2p                     = { workspace = true }
-nomos-blend-crypto         = { workspace = true }
 nomos-blend-message        = { workspace = true }
 nomos-blend-proofs         = { workspace = true }
 nomos-blend-scheduling     = { workspace = true }

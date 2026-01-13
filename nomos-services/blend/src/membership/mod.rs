@@ -4,11 +4,11 @@ pub mod service;
 use std::pin::Pin;
 
 use futures::Stream;
-use nomos_blend::{crypto::keys::Ed25519PublicKey, scheduling::membership::Membership};
+use key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
+use nomos_blend::scheduling::membership::Membership;
 use nomos_core::crypto::ZkHash;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use poq::CorePathAndSelectors;
-use zksign::PublicKey;
 
 #[derive(Clone, Debug)]
 pub struct MembershipInfo<NodeId> {
@@ -59,7 +59,7 @@ pub trait Adapter {
     fn new(
         relay: OutboundRelay<ServiceMessage<Self>>,
         signing_public_key: Ed25519PublicKey,
-        zk_public_key: Option<PublicKey>,
+        zk_public_key: Option<ZkPublicKey>,
     ) -> Self;
 
     /// Subscribe to membership updates.

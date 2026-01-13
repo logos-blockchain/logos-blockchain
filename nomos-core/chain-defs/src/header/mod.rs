@@ -1,7 +1,7 @@
 use blake2::Digest as _;
 use cryptarchia_engine::Slot;
-use ed25519_dalek::Signer as _;
 use groth16::fr_to_bytes;
+use key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use serde::{Deserialize, Serialize};
 
 pub const BEDROCK_VERSION: u8 = 1;
@@ -90,12 +90,9 @@ impl Header {
         self.slot
     }
 
-    pub fn sign(
-        &self,
-        signing_key: &ed25519_dalek::SigningKey,
-    ) -> Result<ed25519_dalek::Signature, crate::block::Error> {
+    pub fn sign(&self, signing_key: &Ed25519Key) -> Result<Ed25519Signature, crate::block::Error> {
         let header_bytes = self.to_bytes()?;
-        Ok(signing_key.sign(&header_bytes))
+        Ok(signing_key.sign_payload(&header_bytes))
     }
 
     #[must_use]
@@ -153,6 +150,12 @@ impl TryFrom<&[u8]> for HeaderId {
         let mut id = [0u8; 32];
         id.copy_from_slice(slice);
         Ok(Self::from(id))
+    }
+}
+
+impl AsRef<[u8]> for HeaderId {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
 

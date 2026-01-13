@@ -1,11 +1,12 @@
+use std::path::PathBuf;
+
+use derivative::Derivative;
+use key_management_system_service::keys::UnsecuredEd25519Key;
 use nomos_libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
 
-use crate::config::blend::serde::{
-    common::Config as CommonConfig, core::Config as CoreConfig, edge::Config as EdgeConfig,
-};
+use crate::config::blend::serde::{core::Config as CoreConfig, edge::Config as EdgeConfig};
 
-pub mod common;
 pub mod core;
 pub mod edge;
 
@@ -13,10 +14,14 @@ pub mod edge;
 ///
 /// This includes all values that are not strictly related to any specific
 /// deployment and that users have to specify when starting up the node.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Derivative, Serialize, Deserialize)]
+#[derivative(Debug)]
 pub struct Config {
-    #[serde(flatten)]
-    pub common: CommonConfig,
+    /// The non-ephemeral signing key (NSK) corresponding to the public key
+    /// registered in the membership (SDP).
+    #[derivative(Debug = "ignore")]
+    pub non_ephemeral_signing_key: UnsecuredEd25519Key,
+    pub recovery_path_prefix: PathBuf,
     pub core: CoreConfig,
     pub edge: EdgeConfig,
 }

@@ -2,6 +2,7 @@ use std::sync::LazyLock;
 
 use cryptarchia_engine::{Epoch, Slot};
 use groth16::{Fr, fr_from_bytes};
+use key_management_system_keys::keys::ZkPublicKey;
 use nomos_core::{
     crypto::{ZkDigest, ZkHasher},
     mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value, gas::GasConstants},
@@ -197,7 +198,7 @@ impl LedgerState {
         tx: impl AuthenticatedMantleTx,
     ) -> Result<(Self, Balance), LedgerError<Id>> {
         let mut balance: i128 = 0;
-        let mut pks: Vec<zksign::PublicKey> = vec![];
+        let mut pks: Vec<ZkPublicKey> = vec![];
         let ledger_tx = &tx.mantle_tx().ledger_tx;
         for input in &ledger_tx.inputs {
             if locked_notes.contains(input) {
@@ -214,7 +215,7 @@ impl LedgerState {
             pks.push(utxo.note.pk);
         }
 
-        if !zksign::PublicKey::verify_multi(&pks, &tx.hash().0, tx.ledger_tx_proof()) {
+        if !ZkPublicKey::verify_multi(&pks, &tx.hash().0, tx.ledger_tx_proof()) {
             return Err(LedgerError::InvalidProof);
         }
 
@@ -333,10 +334,11 @@ impl core::fmt::Debug for LedgerState {
 
 #[cfg(test)]
 pub mod tests {
-    use std::num::NonZero;
+    use std::num::{NonZero, NonZeroU64};
 
     use cryptarchia_engine::EpochConfig;
     use groth16::Field as _;
+    use key_management_system_keys::keys::{Ed25519PublicKey, ZkKey};
     use nomos_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
@@ -345,11 +347,16 @@ pub mod tests {
         },
         sdp::ServiceParameters,
     };
+    use nomos_utils::math::NonNegativeF64;
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
 
     use super::*;
-    use crate::{Ledger, leader_proof::LeaderProof};
+    use crate::{
+        Ledger,
+        leader_proof::LeaderProof,
+        mantle::sdp::{ServiceRewardsParameters, rewards},
+    };
 
     type HeaderId = [u8; 32];
 
@@ -359,9 +366,9 @@ pub mod tests {
     }
 
     #[must_use]
-    pub fn utxo_with_sk() -> (zksign::SecretKey, Utxo) {
+    pub fn utxo_with_sk() -> (ZkKey, Utxo) {
         let tx_hash: Fr = BigUint::from(thread_rng().next_u64()).into();
-        let zk_sk = zksign::SecretKey::from(BigUint::from(0u64));
+        let zk_sk = ZkKey::from(BigUint::from(0u64));
         let utxo = Utxo {
             tx_hash: tx_hash.into(),
             output_index: 0,
@@ -373,7 +380,7 @@ pub mod tests {
 
     pub struct DummyProof {
         pub public: LeaderPublic,
-        pub leader_key: ed25519_dalek::VerifyingKey,
+        pub leader_key: Ed25519PublicKey,
         pub voucher_cm: VoucherCm,
     }
 
@@ -391,7 +398,7 @@ pub mod tests {
             Fr::from(0u8)
         }
 
-        fn leader_key(&self) -> &ed25519_dalek::VerifyingKey {
+        fn leader_key(&self) -> &Ed25519PublicKey {
             &self.leader_key
         }
 
@@ -459,7 +466,7 @@ pub mod tests {
                 slot.into(),
                 ledger_state.epoch_state.total_stake,
             ),
-            leader_key: ed25519_dalek::VerifyingKey::from_bytes(&[0u8; 32]).unwrap(),
+            leader_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
         }
     }
@@ -500,6 +507,14 @@ pub mod tests {
             },
             sdp_config: crate::mantle::sdp::Config {
                 service_params: std::sync::Arc::new(service_params),
+                service_rewards_params: ServiceRewardsParameters {
+                    blend: rewards::blend::RewardsParameters {
+                        rounds_per_session: NonZeroU64::new(10).unwrap(),
+                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        num_blend_layers: NonZeroU64::new(3).unwrap(),
+                        minimum_network_size: NonZeroU64::new(1).unwrap(),
+                    },
+                },
                 min_stake: nomos_core::sdp::MinStake {
                     threshold: 1,
                     timestamp: 0,
@@ -534,18 +549,20 @@ pub mod tests {
         }
     }
 
-    fn full_ledger_state(cryptarchia_ledger: LedgerState) -> crate::LedgerState {
+    fn full_ledger_state(cryptarchia_ledger: LedgerState, config: &Config) -> crate::LedgerState {
+        let mantle_ledger =
+            crate::mantle::LedgerState::new(config, cryptarchia_ledger.epoch_state());
         crate::LedgerState {
             block_number: 0,
             cryptarchia_ledger,
-            mantle_ledger: crate::mantle::LedgerState::default(),
+            mantle_ledger,
         }
     }
 
-    fn ledger(utxos: &[Utxo]) -> (Ledger<HeaderId>, HeaderId) {
+    fn ledger(utxos: &[Utxo], config: Config) -> (Ledger<HeaderId>, HeaderId) {
         let genesis_state = genesis_state(utxos);
         (
-            Ledger::new([0; 32], full_ledger_state(genesis_state), config()),
+            Ledger::new([0; 32], full_ledger_state(genesis_state, &config), config),
             [0; 32],
         )
     }
@@ -563,14 +580,16 @@ pub mod tests {
         // manually
         let mut block_state = ledger.states[&id].clone().cryptarchia_ledger;
         block_state.utxos = block_state.utxos.insert(utxo_add.id(), utxo_add).0;
-        ledger.states.insert(id, full_ledger_state(block_state));
+        ledger
+            .states
+            .insert(id, full_ledger_state(block_state, &ledger.config));
         id
     }
 
     #[test]
     fn test_ledger_state_allow_leadership_utxo_reuse() {
         let utxo = utxo();
-        let (mut ledger, genesis) = ledger(&[utxo]);
+        let (mut ledger, genesis) = ledger(&[utxo], config());
 
         let h = update_ledger(&mut ledger, genesis, 1, utxo).unwrap();
 
@@ -581,7 +600,7 @@ pub mod tests {
     #[test]
     fn test_ledger_state_uncommited_utxo() {
         let utxo_1 = utxo();
-        let (mut ledger, genesis) = ledger(&[utxo()]);
+        let (mut ledger, genesis) = ledger(&[utxo()], config());
         assert!(matches!(
             update_ledger(&mut ledger, genesis, 1, utxo_1),
             Err(LedgerError::InvalidProof),
@@ -593,7 +612,7 @@ pub mod tests {
         let utxos = std::iter::repeat_with(utxo).take(4).collect::<Vec<_>>();
         let utxo_4 = utxo();
         let utxo_5 = utxo();
-        let (mut ledger, genesis) = ledger(&utxos);
+        let (mut ledger, genesis) = ledger(&utxos, config());
 
         // An epoch will be 10 slots long, with stake distribution snapshot taken at the
         // start of the epoch and nonce snapshot before slot 7
@@ -644,7 +663,7 @@ pub mod tests {
         let utxo_1 = utxo();
         let utxo = utxo();
 
-        let (mut ledger, genesis) = ledger(&[utxo]);
+        let (mut ledger, genesis) = ledger(&[utxo], config());
 
         // EPOCH 0
         // mint a new utxo to be used for leader elections in upcoming epochs
@@ -674,7 +693,7 @@ pub mod tests {
     #[test]
     fn test_update_epoch_state_with_outdated_slot_error() {
         let utxo = utxo();
-        let (ledger, genesis) = ledger(&[utxo]);
+        let (ledger, genesis) = ledger(&[utxo], config());
 
         let ledger_state = ledger.state(&genesis).unwrap().clone();
         let ledger_config = ledger.config();
@@ -701,7 +720,7 @@ pub mod tests {
     #[test]
     fn test_invalid_aged_root_rejected() {
         let utxo = utxo();
-        let (ledger, genesis) = ledger(&[utxo]);
+        let (ledger, genesis) = ledger(&[utxo], config());
         let ledger_state = ledger.state(&genesis).unwrap().clone().cryptarchia_ledger;
         let slot = Slot::genesis() + 1;
         let proof = DummyProof {
@@ -712,7 +731,7 @@ pub mod tests {
                 slot: slot.into(),
                 total_stake: ledger_state.epoch_state.total_stake,
             },
-            leader_key: ed25519_dalek::VerifyingKey::from_bytes(&[0u8; 32]).unwrap(),
+            leader_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
         };
         let update_err = ledger_state
@@ -725,7 +744,7 @@ pub mod tests {
     #[test]
     fn test_invalid_latest_root_rejected() {
         let utxo = utxo();
-        let (ledger, genesis) = ledger(&[utxo]);
+        let (ledger, genesis) = ledger(&[utxo], config());
         let ledger_state = ledger.state(&genesis).unwrap().clone().cryptarchia_ledger;
         let slot = Slot::genesis() + 1;
         let proof = DummyProof {
@@ -736,7 +755,7 @@ pub mod tests {
                 slot: slot.into(),
                 total_stake: ledger_state.epoch_state.total_stake,
             },
-            leader_key: ed25519_dalek::VerifyingKey::from_bytes(&[0u8; 32]).unwrap(),
+            leader_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
         };
         let update_err = ledger_state
@@ -746,7 +765,7 @@ pub mod tests {
         assert_eq!(Some(LedgerError::InvalidProof), update_err);
     }
 
-    fn create_tx(inputs: &[(&zksign::SecretKey, &Utxo)], outputs: Vec<Note>) -> SignedMantleTx {
+    fn create_tx(inputs: &[(&ZkKey, &Utxo)], outputs: Vec<Note>) -> SignedMantleTx {
         let sks = inputs
             .iter()
             .map(|(sk, _)| (*sk).clone())
@@ -761,16 +780,16 @@ pub mod tests {
         };
         SignedMantleTx {
             ops_proofs: vec![],
-            ledger_tx_proof: zksign::SecretKey::multi_sign(&sks, &mantle_tx.hash().into()).unwrap(),
+            ledger_tx_proof: ZkKey::multi_sign(&sks, &mantle_tx.hash().into()).unwrap(),
             mantle_tx,
         }
     }
 
     #[test]
     fn test_tx_processing_valid_transaction() {
-        let note_sk = zksign::SecretKey::from(BigUint::from(1u8));
-        let output_note1_sk = zksign::SecretKey::from(BigUint::from(2u8));
-        let output_note2_sk = zksign::SecretKey::from(BigUint::from(3u8));
+        let note_sk = ZkKey::from(BigUint::from(1u8));
+        let output_note1_sk = ZkKey::from(BigUint::from(2u8));
+        let output_note2_sk = ZkKey::from(BigUint::from(3u8));
         let input_note = Note::new(11000, note_sk.to_public_key());
         let input_utxo = Utxo {
             tx_hash: Fr::from(BigUint::from(1u8)).into(),
@@ -828,7 +847,7 @@ pub mod tests {
 
     #[test]
     fn test_tx_processing_invalid_input() {
-        let input_sk = zksign::SecretKey::from(BigUint::from(1u8));
+        let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(1000, input_sk.to_public_key());
         let input_utxo = Utxo {
             tx_hash: Fr::from(BigUint::from(1u8)).into(),
@@ -864,7 +883,7 @@ pub mod tests {
 
         let locked_notes = LockedNotes::new();
         for non_existent_utxo in invalid_utxos {
-            let tx = create_tx(&[(&zksign::SecretKey::zero(), &non_existent_utxo)], vec![]);
+            let tx = create_tx(&[(&ZkKey::zero(), &non_existent_utxo)], vec![]);
             let result = ledger_state
                 .clone()
                 .try_apply_tx::<(), MainnetGasConstants>(&locked_notes, tx);
@@ -874,7 +893,7 @@ pub mod tests {
 
     #[test]
     fn test_tx_processing_insufficient_balance() {
-        let input_sk = zksign::SecretKey::from(BigUint::from(1u8));
+        let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(1, input_sk.to_public_key());
         let input_utxo = Utxo {
             tx_hash: Fr::from(BigUint::from(1u8)).into(),
@@ -906,7 +925,7 @@ pub mod tests {
 
     #[test]
     fn test_tx_processing_no_outputs() {
-        let input_sk = zksign::SecretKey::from(BigUint::from(1u8));
+        let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(10000, input_sk.to_public_key());
         let input_utxo = Utxo {
             tx_hash: Fr::from(BigUint::from(1u8)).into(),
@@ -931,7 +950,7 @@ pub mod tests {
 
     #[test]
     fn test_output_not_zero() {
-        let input_sk = zksign::SecretKey::from(BigUint::from(1u8));
+        let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_utxo = Utxo {
             tx_hash: Fr::from(BigUint::from(1u8)).into(),
             output_index: 0,

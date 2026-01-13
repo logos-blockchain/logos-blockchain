@@ -13,7 +13,10 @@ use groth16::fr_to_bytes;
 use key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::preload::PreloadKMSBackend,
-    keys::{Ed25519Key, PayloadEncoding, SignatureEncoding, secured_key::SecuredKey},
+    keys::{
+        Ed25519Key, PayloadEncoding, SignatureEncoding, ZkPublicKey, ZkSignature,
+        secured_key::SecuredKey,
+    },
 };
 use nomos_core::{
     block::Block,
@@ -39,7 +42,6 @@ use services_utils::wait_until_services_are_ready;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, trace};
 use wallet::{Wallet, WalletBlock, WalletError};
-use zksign::PublicKey;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletServiceError {
@@ -78,14 +80,14 @@ pub enum WalletServiceError {
 pub enum WalletMsg {
     GetBalance {
         tip: HeaderId,
-        pk: PublicKey,
+        pk: ZkPublicKey,
         resp_tx: oneshot::Sender<Result<Option<Value>, WalletServiceError>>,
     },
     FundAndSignTx {
         tip: HeaderId,
         tx_builder: MantleTxBuilder,
-        change_pk: PublicKey,
-        funding_pks: Vec<PublicKey>,
+        change_pk: ZkPublicKey,
+        funding_pks: Vec<ZkPublicKey>,
         resp_tx: oneshot::Sender<Result<SignedMantleTx, WalletServiceError>>,
     },
     GetLeaderAgedNotes {
@@ -107,7 +109,7 @@ impl WalletMsg {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WalletServiceSettings {
-    pub known_keys: HashSet<PublicKey>,
+    pub known_keys: HashSet<ZkPublicKey>,
 }
 
 pub struct WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> {
@@ -343,7 +345,7 @@ where
 
     fn handle_get_balance(
         tip: HeaderId,
-        pk: PublicKey,
+        pk: ZkPublicKey,
         resp_tx: oneshot::Sender<Result<Option<u64>, WalletServiceError>>,
         wallet: &Wallet,
     ) {
@@ -375,7 +377,7 @@ where
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<SignedMantleTx, WalletServiceError> {
         // Extract input public keys before building the transaction
-        let input_pks: Vec<PublicKey> = tx_builder
+        let input_pks: Vec<ZkPublicKey> = tx_builder
             .ledger_inputs()
             .iter()
             .map(|utxo| utxo.note.pk)
@@ -501,9 +503,9 @@ where
 
     async fn sign_zksig(
         tx_hash: TxHash,
-        pks: impl IntoIterator<Item = PublicKey>,
+        pks: impl IntoIterator<Item = ZkPublicKey>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<zksign::Signature, WalletServiceError> {
+    ) -> Result<ZkSignature, WalletServiceError> {
         // Use hex-encoded public key as key_id for now
         let key_ids: Vec<_> = pks
             .into_iter()

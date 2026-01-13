@@ -472,7 +472,7 @@ mod tests {
         time::timeout(Duration::from_secs(1), async {
             loop {
                 poll_fn(|cx| {
-                    let _ = behaviour.poll(cx);
+                    drop(behaviour.poll(cx));
                     Poll::Ready(())
                 })
                 .await;
@@ -530,7 +530,7 @@ mod tests {
         time::advance(Duration::from_millis(1700)).await;
 
         poll_fn(|cx| {
-            let _ = behaviour.poll(cx);
+            drop(behaviour.poll(cx));
             Poll::Ready(())
         })
         .await;
@@ -606,7 +606,7 @@ mod tests {
         assert!(result.is_ok());
 
         poll_fn(|cx| {
-            let _ = behaviour.poll(cx);
+            drop(behaviour.poll(cx));
             Poll::Ready(())
         })
         .await;

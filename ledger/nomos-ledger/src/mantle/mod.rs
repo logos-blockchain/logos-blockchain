@@ -4,7 +4,6 @@ pub mod sdp;
 
 use std::collections::HashMap;
 
-use cryptarchia_engine::Epoch;
 use nomos_core::{
     block::BlockNumber,
     mantle::{
@@ -15,7 +14,7 @@ use nomos_core::{
 };
 use sdp::{Error as SdpLedgerError, locked_notes::LockedNotes};
 
-use crate::{Balance, Config, UtxoTree};
+use crate::{Balance, Config, EpochState, UtxoTree};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -33,27 +32,24 @@ pub enum Error {
 
 /// Tracks mantle ops
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct LedgerState {
     channels: channel::Channels,
     sdp: sdp::SdpLedger,
     leaders: leader::LeaderState,
 }
 
-impl Default for LedgerState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl LedgerState {
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(config: &Config, epoch_state: &EpochState) -> Self {
         Self {
             channels: channel::Channels::new(),
             sdp: sdp::SdpLedger::new()
-                .with_service(ServiceType::BlendNetwork)
-                .with_service(ServiceType::DataAvailability),
+                .with_blend_service(
+                    config.sdp_config.service_rewards_params.blend.clone(),
+                    epoch_state,
+                )
+                .with_da_service(),
             leaders: leader::LeaderState::new(),
         }
     }
@@ -62,11 +58,13 @@ impl LedgerState {
         tx: impl GenesisTx,
         config: &Config,
         utxo_tree: &UtxoTree,
+        epoch_state: &EpochState,
     ) -> Result<Self, Error> {
         let channels = channel::Channels::from_genesis(tx.genesis_inscription())?;
         let sdp = sdp::SdpLedger::from_genesis(
             &config.sdp_config,
             utxo_tree,
+            epoch_state,
             tx.hash(),
             tx.sdp_declarations(),
         )?;
@@ -125,12 +123,12 @@ impl LedgerState {
 
     pub fn try_apply_header(
         mut self,
-        epoch: Epoch,
+        epoch_state: &EpochState,
         voucher: VoucherCm,
         config: &Config,
     ) -> Result<(Self, Vec<Utxo>), Error> {
-        self.leaders = self.leaders.try_apply_header(epoch, voucher)?;
-        let (new_sdp, reward_utxos) = self.sdp.try_apply_header(&config.sdp_config)?;
+        self.leaders = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
+        let (new_sdp, reward_utxos) = self.sdp.try_apply_header(&config.sdp_config, epoch_state)?;
         self.sdp = new_sdp;
         Ok((self, reward_utxos))
     }
@@ -212,7 +210,7 @@ impl LedgerState {
 
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
+    use key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey};
     use nomos_core::mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
         gas::MainnetGasConstants,
@@ -225,21 +223,21 @@ mod tests {
     use super::*;
     use crate::cryptarchia::tests::{config, genesis_state, utxo};
 
-    fn create_test_keys() -> (SigningKey, VerifyingKey) {
+    fn create_test_keys() -> (Ed25519Key, Ed25519PublicKey) {
         create_test_keys_with_seed(0)
     }
 
-    fn create_test_keys_with_seed(seed: u8) -> (SigningKey, VerifyingKey) {
-        let signing_key = SigningKey::from_bytes(&[seed; 32]);
-        let verifying_key = signing_key.verifying_key();
+    fn create_test_keys_with_seed(seed: u8) -> (Ed25519Key, Ed25519PublicKey) {
+        let signing_key = Ed25519Key::from_bytes(&[seed; 32]);
+        let verifying_key = signing_key.public_key();
         (signing_key, verifying_key)
     }
 
-    fn create_signed_tx(op: Op, signing_key: &SigningKey) -> SignedMantleTx {
+    fn create_signed_tx(op: Op, signing_key: &Ed25519Key) -> SignedMantleTx {
         create_multi_signed_tx(vec![op], vec![signing_key])
     }
 
-    fn create_multi_signed_tx(ops: Vec<Op>, signing_keys: Vec<&SigningKey>) -> SignedMantleTx {
+    fn create_multi_signed_tx(ops: Vec<Op>, signing_keys: Vec<&Ed25519Key>) -> SignedMantleTx {
         let ledger_tx = LedgerTx::new(vec![], vec![]);
         let mantle_tx = MantleTx {
             ops: ops.clone(),
@@ -252,10 +250,12 @@ mod tests {
         let ops_proofs = signing_keys
             .into_iter()
             .zip(ops)
-            .map(|(key, _)| OpProof::Ed25519Sig(key.sign(tx_hash.as_signing_bytes().as_ref())))
+            .map(|(key, _)| {
+                OpProof::Ed25519Sig(key.sign_payload(tx_hash.as_signing_bytes().as_ref()))
+            })
             .collect();
 
-        let ledger_tx_proof = zksign::SecretKey::multi_sign(&[], &tx_hash.0).unwrap();
+        let ledger_tx_proof = ZkKey::multi_sign(&[], &tx_hash.0).unwrap();
 
         SignedMantleTx::new(mantle_tx, ops_proofs, ledger_tx_proof)
             .expect("Test transaction should have valid signatures")
@@ -265,7 +265,7 @@ mod tests {
     fn test_channel_blob_operation() {
         let cryptarchia_state = genesis_state(&[utxo()]);
         let test_config = config();
-        let ledger_state = LedgerState::new();
+        let ledger_state = LedgerState::new(&test_config, cryptarchia_state.epoch_state());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([1; 32]);
 
@@ -293,7 +293,7 @@ mod tests {
     fn test_channel_inscribe_operation() {
         let cryptarchia_state = genesis_state(&[utxo()]);
         let test_config = config();
-        let ledger_state = LedgerState::new();
+        let ledger_state = LedgerState::new(&test_config, cryptarchia_state.epoch_state());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([2; 32]);
 
@@ -321,7 +321,7 @@ mod tests {
     fn test_channel_set_keys_operation() {
         let cryptarchia_state = genesis_state(&[utxo()]);
         let test_config = config();
-        let ledger_state = LedgerState::new();
+        let ledger_state = LedgerState::new(&test_config, cryptarchia_state.epoch_state());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([3; 32]);
 
@@ -351,7 +351,7 @@ mod tests {
     fn test_invalid_parent_error() {
         let cryptarchia_state = genesis_state(&[utxo()]);
         let test_config = config();
-        let mut ledger_state = LedgerState::new();
+        let mut ledger_state = LedgerState::new(&test_config, cryptarchia_state.epoch_state());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([5; 32]);
 
@@ -430,7 +430,7 @@ mod tests {
     fn test_unauthorized_signer_error() {
         let cryptarchia_state = genesis_state(&[utxo()]);
         let test_config = config();
-        let mut ledger_state = LedgerState::new();
+        let mut ledger_state = LedgerState::new(&test_config, cryptarchia_state.epoch_state());
         let (signing_key, verifying_key) = create_test_keys();
         let (unauthorized_signing_key, unauthorized_verifying_key) = create_test_keys_with_seed(3);
         let channel_id = ChannelId::from([6; 32]);
@@ -486,7 +486,7 @@ mod tests {
     fn test_empty_keys_error() {
         let cryptarchia_state = genesis_state(&[utxo()]);
         let test_config = config();
-        let ledger_state = LedgerState::new();
+        let ledger_state = LedgerState::new(&test_config, cryptarchia_state.epoch_state());
         let (signing_key, _) = create_test_keys();
         let channel_id = ChannelId::from([7; 32]);
 
@@ -516,7 +516,7 @@ mod tests {
         // Create channel 2 by posting an inscription
         // Change the keys for channel 1
         // Post another blob in channel 1
-        let ledger_state = LedgerState::new();
+        let ledger_state = LedgerState::new(&test_config, cryptarchia_state.epoch_state());
         let (sk1, vk1) = create_test_keys_with_seed(1);
         let (sk2, vk2) = create_test_keys_with_seed(2);
         let (_, vk3) = create_test_keys_with_seed(3);
@@ -587,7 +587,7 @@ mod tests {
     // This test needs to be rewritten to use the new SDP ledger API which no longer
     // exposes get_declaration() or uses declaration_id() methods.
     // #[test]
-    // #[expect(clippy::too_many_lines, reason = "Test function.")]
+    // #[expect(clippy::, reason = "Test function.")]
     #[test]
     fn _test_sdp_withdraw_operation() {
         // This test has been disabled pending API updates

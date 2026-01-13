@@ -305,9 +305,11 @@ mod tests {
     fn test_wait_until_services_are_ready_macro() {
         let overwatch = initialize();
         let overwatch_handle = overwatch.handle();
-        let _ = overwatch_handle
-            .runtime()
-            .block_on(overwatch_handle.start_all_services());
+        drop(
+            overwatch_handle
+                .runtime()
+                .block_on(overwatch_handle.start_all_services()),
+        );
 
         // Wait until ServiceC is ready, which depends on ServiceA and ServiceB
         let dependent_service_status = overwatch_handle.runtime().block_on(async {
@@ -327,18 +329,22 @@ mod tests {
             "DependentService should be Ready."
         );
 
-        let _ = overwatch_handle
-            .runtime()
-            .block_on(overwatch_handle.shutdown());
+        drop(
+            overwatch_handle
+                .runtime()
+                .block_on(overwatch_handle.shutdown()),
+        );
     }
 
     #[test]
     fn test_wait_until_services_are_ready_macro_timeout() {
         let overwatch = initialize();
         let overwatch_handle = overwatch.handle();
-        let _ = overwatch_handle
-            .runtime()
-            .block_on(overwatch_handle.start_all_services());
+        drop(
+            overwatch_handle
+                .runtime()
+                .block_on(overwatch_handle.start_all_services()),
+        );
 
         // Wait for a service that will not be ready, expecting a timeout error
         let dependent_service_status = overwatch_handle.runtime().block_on(async {
@@ -359,9 +365,11 @@ mod tests {
         );
 
         // Teardown
-        let _ = overwatch_handle
-            .runtime()
-            .block_on(overwatch_handle.shutdown());
+        drop(
+            overwatch_handle
+                .runtime()
+                .block_on(overwatch_handle.shutdown()),
+        );
         overwatch.blocking_wait_finished();
     }
 }

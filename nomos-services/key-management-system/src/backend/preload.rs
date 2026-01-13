@@ -125,7 +125,6 @@ mod tests {
     };
     use num_bigint::BigUint;
     use rand::rngs::OsRng;
-    use zksign::SecretKey;
 
     use super::*;
 
@@ -169,9 +168,7 @@ mod tests {
     async fn preload_backend() {
         // Initialize a backend with a pre-generated key in the setting
         let key_id = "blend/1".to_owned();
-        let key = Key::Ed25519(Ed25519Key::new(ed25519_dalek::SigningKey::generate(
-            &mut OsRng,
-        )));
+        let key = Key::Ed25519(Ed25519Key::generate(&mut OsRng));
         let mut backend = PreloadKMSBackend::new(PreloadKMSBackendSettings {
             keys: HashMap::from_iter([(key_id.clone(), key.clone())]),
         });
@@ -208,9 +205,7 @@ mod tests {
         });
 
         let key_id = "blend/not_registered".to_owned();
-        let key = Key::Ed25519(Ed25519Key::new(ed25519_dalek::SigningKey::generate(
-            &mut OsRng,
-        )));
+        let key = Key::Ed25519(Ed25519Key::generate(&mut OsRng));
 
         // Fetching public key fails
         assert!(matches!(
@@ -245,15 +240,11 @@ mod tests {
             keys: [
                 (
                     "test1".into(),
-                    Key::Ed25519(Ed25519Key::new(ed25519_dalek::SigningKey::generate(
-                        &mut OsRng,
-                    ))),
+                    Key::Ed25519(Ed25519Key::generate(&mut OsRng)),
                 ),
                 (
                     "test2".into(),
-                    Key::Zk(ZkKey::new(SecretKey::from(BigUint::from_bytes_le(
-                        &[1u8; 32],
-                    )))),
+                    Key::Zk(ZkKey::new(BigUint::from_bytes_le(&[1u8; 32]).into())),
                 ),
             ]
             .into(),

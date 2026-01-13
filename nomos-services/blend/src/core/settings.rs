@@ -2,6 +2,7 @@ use std::{num::NonZeroU64, path::PathBuf};
 
 use key_management_system_service::backend::preload::KeyId;
 use nomos_blend::scheduling::message_blend::crypto::SessionCryptographicProcessorSettings;
+use nomos_core::blend::core_quota;
 use nomos_utils::math::NonNegativeF64;
 use serde::{Deserialize, Serialize};
 use services_utils::overwatch::recovery::backends::FileBackendSettings;
@@ -48,9 +49,7 @@ impl<BackendSettings> FileBackendSettings for BlendConfig<BackendSettings> {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SchedulerSettings {
-    #[serde(flatten)]
     pub cover: CoverTrafficSettings,
-    #[serde(flatten)]
     pub delayer: MessageDelayerSettings,
 }
 
@@ -80,17 +79,12 @@ impl CoverTrafficSettings {
         timings: &TimingSettings,
         membership_size: usize,
     ) -> u64 {
-        // `C`: Expected number of cover messages that are generated during a session by
-        // the core nodes.
-        let expected_number_of_session_messages =
-            timings.rounds_per_session.get() as f64 * self.message_frequency_per_round.get();
-
-        // `Q_c`: Messaging allowance that can be used by a core node during a single
-        // session. We assume `R_c` to be `0` for now, hence `Q_c = ceil(C * (ß_c
-        // + 0 * ß_c)) / N = ceil(C * ß_c) / N`.
-        ((expected_number_of_session_messages * crypto.num_blend_layers.get() as f64)
-            / membership_size as f64)
-            .ceil() as u64
+        core_quota(
+            timings.rounds_per_session,
+            self.message_frequency_per_round,
+            crypto.num_blend_layers,
+            membership_size,
+        )
     }
 }
 

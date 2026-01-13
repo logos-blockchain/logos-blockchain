@@ -1,4 +1,4 @@
-use std::{fs, net::Ipv4Addr, num::NonZero, path::PathBuf, sync::Arc, time::Duration};
+use std::{fs, net::Ipv4Addr, path::PathBuf, sync::Arc, time::Duration};
 
 use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
 use nomos_da_network_core::swarm::{
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use tests::{
     nodes::{executor::create_executor_config, validator::create_validator_config},
-    topology::configs::{consensus::ConsensusParams, da::DaParams},
+    topology::configs::da::DaParams,
 };
 use tokio::sync::oneshot::channel;
 
@@ -25,10 +25,6 @@ pub struct CfgSyncConfig {
     pub port: u16,
     pub n_hosts: usize,
     pub timeout: u64,
-
-    // ConsensusConfig related parameters
-    pub security_param: NonZero<u32>,
-    pub active_slot_coeff: f64,
 
     // DaConfig related parameters
     pub subnetwork_size: usize,
@@ -60,15 +56,6 @@ impl CfgSyncConfig {
             .map_err(|err| format!("Failed to read config file: {err}"))?;
         serde_yaml::from_str(&config_content)
             .map_err(|err| format!("Failed to parse config file: {err}"))
-    }
-
-    #[must_use]
-    pub const fn to_consensus_params(&self) -> ConsensusParams {
-        ConsensusParams {
-            n_participants: self.n_hosts,
-            security_param: self.security_param,
-            active_slot_coeff: self.active_slot_coeff,
-        }
     }
 
     #[must_use]

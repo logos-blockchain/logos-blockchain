@@ -1,4 +1,5 @@
 use cryptarchia_engine::{Epoch, Slot};
+use key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey, ZkPublicKey};
 use nomos_core::{
     mantle::{Utxo, ops::leader_claim::VoucherCm},
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
@@ -6,22 +7,21 @@ use nomos_core::{
 use nomos_ledger::{EpochState, UtxoTree};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch::Sender;
-use zksign::{PublicKey, SecretKey};
 
 #[derive(Clone)]
 pub struct Leader {
-    sk: SecretKey,
+    sk: UnsecuredZkKey,
     config: nomos_ledger::Config,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct LeaderConfig {
-    pub pk: PublicKey,
-    pub sk: SecretKey,
+    pub pk: ZkPublicKey,
+    pub sk: UnsecuredZkKey,
 }
 
 impl Leader {
-    pub const fn new(sk: SecretKey, config: nomos_ledger::Config) -> Self {
+    pub const fn new(sk: UnsecuredZkKey, config: nomos_ledger::Config) -> Self {
         Self { sk, config }
     }
 
@@ -128,8 +128,8 @@ impl Leader {
             .epoch_config
             .starting_slot(&epoch_state.epoch, self.config.base_period_length())
             .into();
-        let leader_signing_key = ed25519_dalek::SigningKey::from_bytes(&[0; 32]);
-        let leader_pk = leader_signing_key.verifying_key(); // TODO: get actual leader public key
+        let leader_signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let leader_pk = leader_signing_key.public_key(); // TODO: get actual leader public key
 
         LeaderPrivate::new(
             public_inputs,
@@ -142,7 +142,7 @@ impl Leader {
         )
     }
 
-    fn slot_secret_key(&self, _slot: Slot) -> SecretKey {
+    fn slot_secret_key(&self, _slot: Slot) -> UnsecuredZkKey {
         self.sk.clone()
     }
 }
@@ -168,7 +168,7 @@ fn public_inputs_for_slot(
 /// notifying all consumers via the provided sender channel.
 pub struct WinningPoLSlotNotifier<'service> {
     leader: &'service Leader,
-    sender: &'service Sender<Option<(LeaderPrivate, SecretKey, Epoch)>>,
+    sender: &'service Sender<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>,
     /// Keeps track of the last processed epoch, if any, and for it the first
     /// winning slot that was pre-computed, if any.
     last_processed_epoch_and_found_first_winning_slot: Option<(Epoch, Option<Slot>)>,
@@ -177,7 +177,7 @@ pub struct WinningPoLSlotNotifier<'service> {
 impl<'service> WinningPoLSlotNotifier<'service> {
     pub(super) const fn new(
         leader: &'service Leader,
-        sender: &'service Sender<Option<(LeaderPrivate, SecretKey, Epoch)>>,
+        sender: &'service Sender<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>,
     ) -> Self {
         Self {
             leader,
@@ -267,7 +267,7 @@ impl<'service> WinningPoLSlotNotifier<'service> {
     pub(super) fn notify_about_winning_slot(
         &self,
         private_inputs: LeaderPrivate,
-        secret_key: SecretKey,
+        secret_key: UnsecuredZkKey,
         epoch: Epoch,
         slot: Slot,
     ) {

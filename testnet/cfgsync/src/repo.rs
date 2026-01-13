@@ -5,7 +5,7 @@ use std::{
 };
 
 use nomos_tracing_service::TracingSettings;
-use tests::topology::configs::{GeneralConfig, consensus::ConsensusParams, da::DaParams};
+use tests::topology::configs::{GeneralConfig, da::DaParams};
 use tokio::{sync::oneshot::Sender, time::timeout};
 
 use crate::{
@@ -21,7 +21,6 @@ pub enum RepoResponse {
 pub struct ConfigRepo {
     waiting_hosts: Mutex<HashMap<Host, Sender<RepoResponse>>>,
     n_hosts: usize,
-    consensus_params: ConsensusParams,
     da_params: DaParams,
     tracing_settings: TracingSettings,
     timeout_duration: Duration,
@@ -29,13 +28,11 @@ pub struct ConfigRepo {
 
 impl From<CfgSyncConfig> for Arc<ConfigRepo> {
     fn from(config: CfgSyncConfig) -> Self {
-        let consensus_params = config.to_consensus_params();
         let da_params = config.to_da_params();
         let tracing_settings = config.to_tracing_settings();
 
         ConfigRepo::new(
             config.n_hosts,
-            consensus_params,
             da_params,
             tracing_settings,
             Duration::from_secs(config.timeout),
@@ -47,7 +44,6 @@ impl ConfigRepo {
     #[must_use]
     pub fn new(
         n_hosts: usize,
-        consensus_params: ConsensusParams,
         da_params: DaParams,
         tracing_settings: TracingSettings,
         timeout_duration: Duration,
@@ -55,7 +51,6 @@ impl ConfigRepo {
         let repo = Arc::new(Self {
             waiting_hosts: Mutex::new(HashMap::new()),
             n_hosts,
-            consensus_params,
             da_params,
             tracing_settings,
             timeout_duration,
@@ -83,23 +78,18 @@ impl ConfigRepo {
             let mut waiting_hosts = self.waiting_hosts.lock().unwrap();
             let hosts = waiting_hosts.keys().cloned().collect();
 
-            let configs = create_node_configs(
-                &self.consensus_params,
-                &self.da_params,
-                &self.tracing_settings,
-                hosts,
-            );
+            let configs = create_node_configs(&self.da_params, &self.tracing_settings, hosts);
 
             for (host, sender) in waiting_hosts.drain() {
                 let config = configs.get(&host).expect("host should have a config");
-                let _ = sender.send(RepoResponse::Config(Box::new(config.to_owned())));
+                drop(sender.send(RepoResponse::Config(Box::new(config.to_owned()))));
             }
         } else {
             println!("Timeout: Not all hosts announced within the time limit");
 
             let mut waiting_hosts = self.waiting_hosts.lock().unwrap();
             for (_, sender) in waiting_hosts.drain() {
-                let _ = sender.send(RepoResponse::Timeout);
+                drop(sender.send(RepoResponse::Timeout));
             }
         }
     }

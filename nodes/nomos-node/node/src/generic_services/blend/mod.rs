@@ -27,7 +27,7 @@ use tokio::sync::oneshot::channel;
 use tokio_stream::wrappers::WatchStream;
 
 use crate::generic_services::{
-    CryptarchiaLeaderService, CryptarchiaService, WalletService,
+    CryptarchiaLeaderService, CryptarchiaService, SdpService, WalletService,
     blend::proofs::{BlendProofsVerifier, CoreProofsGenerator, EdgeProofsGenerator},
 };
 
@@ -41,6 +41,7 @@ pub type BlendCoreService<SamplingAdapter, RuntimeServiceId> =
         PeerId,
         nomos_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
         BlendMembershipAdapter<RuntimeServiceId>,
+        SdpService<RuntimeServiceId>,
         CoreProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>,
         BlendProofsVerifier,
         NtpTimeBackend,

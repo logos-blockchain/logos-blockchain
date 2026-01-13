@@ -82,22 +82,12 @@ impl AsyncNTPClient {
 
 #[cfg(test)]
 mod tests {
-    // This test is disabled macOS because NTP v4 requests fail on Github's
-    // non-self-hosted runners, and our test runners are `self-hosted` (where it
-    // works) and `macos-latest`. The request seems to be sent successfully, but
-    // the test timeouts when receiving the response.
-    // Responses only come through when querying `time.windows.com`, which runs NTP
-    // v3. The library we're using, [`sntpc`], requires NTP v4.
-    #[cfg(not(target_os = "macos"))]
+    use std::net::Ipv4Addr;
+
+    use super::*;
+
     #[tokio::test]
-    async fn real_ntp_request() -> Result<(), crate::backends::ntp::async_client::Error> {
-        use std::{
-            net::{IpAddr, Ipv4Addr},
-            time::Duration,
-        };
-
-        use super::*;
-
+    async fn real_ntp_request() -> Result<(), Error> {
         let ntp_server_ip = "pool.ntp.org";
         let ntp_server_address = format!("{ntp_server_ip}:123");
 

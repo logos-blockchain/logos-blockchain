@@ -1,11 +1,14 @@
 mod serde {
     use std::collections::HashSet;
 
-    use nomos_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
+    use nomos_blend::message::{
+        encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
+        reward::{OldSessionBlendingTokenCollector, SessionBlendingTokenCollector},
+    };
     use serde::{Deserialize, Serialize};
 
     use crate::{
-        core::state::{recovery_state::RecoveryServiceState, service::ServiceState},
+        core::state::{error, recovery_state::RecoveryServiceState, service::ServiceState},
         message::ProcessedMessage,
     };
 
@@ -21,23 +24,31 @@ mod serde {
         ))]
         unsent_processed_messages: HashSet<ProcessedMessage<BroadcastSettings>>,
         unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
+        current_session_token_collector: SessionBlendingTokenCollector,
+        old_session_token_collector: Option<OldSessionBlendingTokenCollector>,
     }
 
     impl<BroadcastSettings> SerializableServiceState<BroadcastSettings> {
         /// Consume the serializable state to create an actual state object, by
         /// passing it an Overwatch
         /// [`overwatch::services::state::StateUpdater`].
-        pub fn into_state_with_state_updater<BackendSettings>(
+        pub fn try_into_state_with_state_updater<BackendSettings>(
             self,
             state_updater: overwatch::services::state::StateUpdater<
                 Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
             >,
-        ) -> ServiceState<BackendSettings, BroadcastSettings> {
+        ) -> Result<ServiceState<BackendSettings, BroadcastSettings>, error::SessionMismatch>
+        where
+            BackendSettings: Clone,
+            BroadcastSettings: Clone,
+        {
             ServiceState::new(
                 self.last_seen_session,
                 self.spent_core_quota,
                 self.unsent_processed_messages,
                 self.unsent_data_messages,
+                self.current_session_token_collector,
+                self.old_session_token_collector,
                 state_updater,
             )
         }
@@ -52,6 +63,8 @@ mod serde {
                 spent_core_quota,
                 unsent_processed_messages,
                 unsent_data_messages,
+                current_session_token_collector,
+                old_session_token_collector,
                 _,
             ) = value.into_components();
             Self {
@@ -59,6 +72,8 @@ mod serde {
                 spent_core_quota,
                 unsent_processed_messages,
                 unsent_data_messages,
+                current_session_token_collector,
+                old_session_token_collector,
             }
         }
     }
@@ -72,10 +87,13 @@ mod service {
     };
     use std::collections::HashSet;
 
-    use nomos_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
+    use nomos_blend::message::{
+        encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
+        reward::{BlendingToken, OldSessionBlendingTokenCollector, SessionBlendingTokenCollector},
+    };
 
     use crate::{
-        core::state::{recovery_state::RecoveryServiceState, state_updater::StateUpdater},
+        core::state::{error, recovery_state::RecoveryServiceState, state_updater::StateUpdater},
         message::ProcessedMessage,
     };
 
@@ -89,6 +107,8 @@ mod service {
         spent_core_quota: u64,
         unsent_processed_messages: HashSet<ProcessedMessage<BroadcastSettings>>,
         unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
+        current_session_token_collector: SessionBlendingTokenCollector,
+        old_session_token_collector: Option<OldSessionBlendingTokenCollector>,
         state_updater: overwatch::services::state::StateUpdater<
             Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
         >,
@@ -104,43 +124,103 @@ mod service {
                 .field("spent_core_quota", &self.spent_core_quota)
                 .field("unsent_processed_messages", &self.unsent_processed_messages)
                 .field("unsent_data_messages", &self.unsent_data_messages)
+                .field(
+                    "current_session_token_collector",
+                    &self.current_session_token_collector,
+                )
+                .field(
+                    "old_session_token_collector",
+                    &self.old_session_token_collector,
+                )
                 .finish_non_exhaustive()
         }
     }
 
-    impl<BackendSettings, BroadcastSettings> ServiceState<BackendSettings, BroadcastSettings> {
-        pub(super) const fn new(
+    impl<BackendSettings, BroadcastSettings> ServiceState<BackendSettings, BroadcastSettings>
+    where
+        BackendSettings: Clone,
+        BroadcastSettings: Clone,
+    {
+        // Creates a new instance with the provided fields, and saves it using
+        // `state_updater`.
+        pub(super) fn new(
             last_seen_session: u64,
             spent_core_quota: u64,
             unsent_processed_messages: HashSet<ProcessedMessage<BroadcastSettings>>,
             unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
+            current_session_token_collector: SessionBlendingTokenCollector,
+            old_session_token_collector: Option<OldSessionBlendingTokenCollector>,
             state_updater: overwatch::services::state::StateUpdater<
                 Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
             >,
-        ) -> Self {
-            Self {
+        ) -> Result<Self, error::SessionMismatch> {
+            // Check if `current_session_token_collector` has the correct session number.
+            let provided_current_session = current_session_token_collector.session_number();
+            if provided_current_session != last_seen_session {
+                return Err(error::SessionMismatch {
+                    last_seen: last_seen_session,
+                    provided: provided_current_session,
+                });
+            }
+
+            // Check if `old_session_token_collector` has the correct session number.
+            if let Some(old_session_token_collector) = &old_session_token_collector {
+                let provided_current_session = old_session_token_collector
+                    .session_number()
+                    .saturating_add(1);
+                if provided_current_session != last_seen_session {
+                    return Err(error::SessionMismatch {
+                        last_seen: last_seen_session,
+                        provided: provided_current_session,
+                    });
+                }
+            }
+
+            let this = Self {
                 last_seen_session,
                 spent_core_quota,
                 unsent_processed_messages,
                 unsent_data_messages,
+                current_session_token_collector,
+                old_session_token_collector,
                 state_updater,
-            }
+            };
+            this.save();
+            Ok(this)
         }
 
         /// Create a new instance with the provided session, and empty state for
         /// the rest.
         ///
+        /// The new instance is saved immediately using `state_updater`.
+        ///
         /// This is typically used on session rotations or when no previous
         /// state was recovered.
         pub fn with_session(
             session: u64,
+            current_session_token_collector: SessionBlendingTokenCollector,
+            old_session_token_collector: Option<OldSessionBlendingTokenCollector>,
             state_updater: overwatch::services::state::StateUpdater<
                 Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
             >,
-        ) -> Self {
-            Self::new(session, 0, HashSet::new(), HashSet::new(), state_updater)
+        ) -> Result<Self, error::SessionMismatch> {
+            Self::new(
+                session,
+                0,
+                HashSet::new(),
+                HashSet::new(),
+                current_session_token_collector,
+                old_session_token_collector,
+                state_updater,
+            )
         }
 
+        pub(super) fn save(&self) {
+            self.state_updater.update(Some(self.clone().into()));
+        }
+    }
+
+    impl<BackendSettings, BroadcastSettings> ServiceState<BackendSettings, BroadcastSettings> {
         /// Consume `self` to return a [`StateUpdater`], which can be used to
         /// batch changes before they are stored using the underlying
         /// [`overwatch::services::state::StateUpdater`].
@@ -163,6 +243,43 @@ mod service {
             self.spent_core_quota
         }
 
+        pub(super) fn collect_current_session_tokens(
+            &mut self,
+            tokens: impl Iterator<Item = BlendingToken>,
+        ) {
+            for token in tokens {
+                self.current_session_token_collector.collect(token);
+            }
+        }
+
+        pub(super) fn collect_old_session_tokens(
+            &mut self,
+            tokens: impl Iterator<Item = BlendingToken>,
+        ) -> Result<(), error::OldSessionTokenCollectorNotExist> {
+            self.old_session_token_collector.as_mut().map_or(
+                Err(error::OldSessionTokenCollectorNotExist),
+                |collector| {
+                    for token in tokens {
+                        collector.collect(token);
+                    }
+                    Ok(())
+                },
+            )
+        }
+
+        pub(super) const fn clear_old_session_token_collector(
+            &mut self,
+        ) -> Option<OldSessionBlendingTokenCollector> {
+            self.old_session_token_collector.take()
+        }
+
+        #[cfg(test)]
+        pub(crate) const fn current_session_token_collector(
+            &self,
+        ) -> &SessionBlendingTokenCollector {
+            &self.current_session_token_collector
+        }
+
         #[expect(
             clippy::type_complexity,
             reason = "Just a tuple over the struct's fields."
@@ -174,6 +291,8 @@ mod service {
             u64,
             HashSet<ProcessedMessage<BroadcastSettings>>,
             HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
+            SessionBlendingTokenCollector,
+            Option<OldSessionBlendingTokenCollector>,
             overwatch::services::state::StateUpdater<
                 Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
             >,
@@ -183,16 +302,10 @@ mod service {
                 self.spent_core_quota,
                 self.unsent_processed_messages,
                 self.unsent_data_messages,
+                self.current_session_token_collector,
+                self.old_session_token_collector,
                 self.state_updater,
             )
-        }
-
-        pub(super) const fn state_updater(
-            &self,
-        ) -> &overwatch::services::state::StateUpdater<
-            Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
-        > {
-            &self.state_updater
         }
     }
 
@@ -263,9 +376,15 @@ pub use self::state_updater::StateUpdater;
 mod state_updater {
     use core::hash::Hash;
 
-    use nomos_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
+    use nomos_blend::message::{
+        encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
+        reward::{BlendingToken, OldSessionBlendingTokenCollector},
+    };
 
-    use crate::{core::state::service::ServiceState, message::ProcessedMessage};
+    use crate::{
+        core::state::{error, service::ServiceState},
+        message::ProcessedMessage,
+    };
 
     /// A state updater which gathers changes to the underlying [`ServiceState`]
     /// before committing them via the underlying
@@ -308,6 +427,29 @@ mod state_updater {
         ) -> ServiceState<BackendSettings, BroadcastSettings> {
             self.inner
         }
+
+        pub fn collect_current_session_tokens(
+            &mut self,
+            tokens: impl Iterator<Item = BlendingToken>,
+        ) {
+            self.changed = true;
+            self.inner.collect_current_session_tokens(tokens);
+        }
+
+        pub fn collect_old_session_tokens(
+            &mut self,
+            tokens: impl Iterator<Item = BlendingToken>,
+        ) -> Result<(), error::OldSessionTokenCollectorNotExist> {
+            self.changed = true;
+            self.inner.collect_old_session_tokens(tokens)
+        }
+
+        pub const fn clear_old_session_token_collector(
+            &mut self,
+        ) -> Option<OldSessionBlendingTokenCollector> {
+            self.changed = true;
+            self.inner.clear_old_session_token_collector()
+        }
     }
 
     impl<BackendSettings, BroadcastSettings> StateUpdater<BackendSettings, BroadcastSettings>
@@ -320,9 +462,7 @@ mod state_updater {
         /// [`ServiceState`].
         pub fn commit_changes(self) -> ServiceState<BackendSettings, BroadcastSettings> {
             if self.changed {
-                self.inner
-                    .state_updater()
-                    .update(Some(self.inner.clone().into()));
+                self.inner.save();
             }
             self.inner
         }
@@ -440,4 +580,17 @@ mod recovery_state {
             })
         }
     }
+}
+
+pub mod error {
+    use nomos_core::sdp::SessionNumber;
+
+    #[derive(Debug)]
+    pub struct SessionMismatch {
+        pub last_seen: SessionNumber,
+        pub provided: SessionNumber,
+    }
+
+    #[derive(Debug)]
+    pub struct OldSessionTokenCollectorNotExist;
 }

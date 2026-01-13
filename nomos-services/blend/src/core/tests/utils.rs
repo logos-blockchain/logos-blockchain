@@ -3,9 +3,8 @@ use std::{num::NonZeroU64, pin::Pin, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use futures::Stream;
 use groth16::Field as _;
-use key_management_system_service::keys::UnsecuredEd25519Key;
+use key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use nomos_blend::{
-    crypto::keys::Ed25519PublicKey,
     message::{
         crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
         encap::{
@@ -38,6 +37,7 @@ use nomos_blend::{
 };
 use nomos_core::{crypto::ZkHash, sdp::SessionNumber};
 use nomos_network::{NetworkService, backends::NetworkBackend};
+use nomos_sdp::SdpMessage;
 use overwatch::{
     overwatch::{OverwatchHandle, commands::OverwatchCommand},
     services::{ServiceData, relay::OutboundRelay, state::StateUpdater},
@@ -319,20 +319,25 @@ pub fn new_crypto_processor<CorePoQGenerator>(
     .expect("crypto processor must be created successfully")
 }
 
-pub fn new_public_info(session: u64, membership: Membership<NodeId>) -> PublicInfo<NodeId> {
+pub fn new_public_info<BackendSettings>(
+    session: u64,
+    membership: Membership<NodeId>,
+    settings: &BlendConfig<BackendSettings>,
+) -> PublicInfo<NodeId> {
+    let core_quota = settings.session_quota(membership.size());
     PublicInfo {
         session: SessionInfo {
             session_number: session,
             membership,
             core_public_inputs: CoreInputs {
                 zk_root: ZkHash::ZERO,
-                quota: 10,
+                quota: core_quota,
             },
         },
         epoch: LeaderInputs {
             pol_ledger_aged: ZkHash::ZERO,
             pol_epoch_nonce: ZkHash::ZERO,
-            message_quota: 10,
+            message_quota: settings.crypto.num_blend_layers.get(),
             total_stake: 10,
         },
     }
@@ -439,7 +444,7 @@ fn session_based_dummy_proofs(session: SessionNumber) -> BlendLayerProof {
             bytes[..session_bytes.len()].copy_from_slice(&session_bytes);
             bytes
         }),
-        ephemeral_signing_key: UnsecuredEd25519Key::generate(),
+        ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
     }
 }
 
@@ -462,4 +467,9 @@ impl<RuntimeServiceId> KmsPoQAdapter<RuntimeServiceId> for MockKmsAdapter {
         _core_path_and_selectors: Box<CorePathAndSelectors>,
     ) -> Self::CorePoQGenerator {
     }
+}
+
+pub fn sdp_relay() -> (OutboundRelay<SdpMessage>, mpsc::Receiver<SdpMessage>) {
+    let (sender, receiver) = mpsc::channel(10);
+    (OutboundRelay::new(sender), receiver)
 }

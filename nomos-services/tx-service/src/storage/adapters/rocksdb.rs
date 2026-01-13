@@ -92,8 +92,7 @@ where
             MempoolError::DynamicPoolError("Failed to receive transactions response".into())
         })?;
 
-        let item_stream =
-            tx_stream.filter_map(|bytes| async move { Self::Item::from_bytes(&bytes).ok() });
+        let item_stream = tx_stream.filter_map(async |bytes| Self::Item::from_bytes(&bytes).ok());
 
         Ok(Box::pin(item_stream))
     }

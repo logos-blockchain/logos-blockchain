@@ -1,4 +1,3 @@
-pub mod ed25519_serde;
 pub mod merkle;
 pub mod select;
 

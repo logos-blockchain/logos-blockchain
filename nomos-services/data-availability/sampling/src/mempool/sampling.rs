@@ -72,7 +72,7 @@ where
 
         // Filter and map to extract blob IDs from DA blob operations
         let blob_stream = tokio_stream::wrappers::BroadcastStream::new(rx)
-            .filter_map(|result| async move { result.ok() })
+            .filter_map(async |result| result.ok())
             .flat_map(|tx: Self::Tx| {
                 let blob_ids_iter = tx.mantle_tx.ops.into_iter().filter_map(|op| {
                     if let Op::ChannelBlob(blob_op) = op {

@@ -7,9 +7,10 @@ tracing:
   level: DEBUG
 network:
   backend:
-    host: 0.0.0.0
-    port: 3000
-    node_key: ea1e1dcc31612bd20987f017f0ca435cd2a59a4bd9fd6e14883b4803ae3b803d
+    swarm:
+      host: 0.0.0.0
+      port: 3000
+      node_key: ea1e1dcc31612bd20987f017f0ca435cd2a59a4bd9fd6e14883b4803ae3b803d
     initial_peers: [ ]
 blend:
   non_ephemeral_signing_key: 32e4b52b78e0e8273f31e2ae0826d09b0348d4c66824af4f51ec4ef338082211
@@ -64,9 +65,6 @@ da_network:
   membership:
     subnetwork_size: 2
     replication_factor: 2
-    addressbook:
-      12D3KooWA5LkQcuefjUBTktxCXUQ4rx4PcqRY1tgbSpV9eZDHWir: /ip4/127.0.0.1/udp/8717/quic-v1/p2p/12D3KooWA5LkQcuefjUBTktxCXUQ4rx4PcqRY1tgbSpV9eZDHWir
-      12D3KooWKD62Q1nAAMHeV2Cx3rNNMzjgHkTT2edFMzHZ5ur7sGnh: /ip4/127.0.0.1/udp/8716/quic-v1/p2p/12D3KooWKD62Q1nAAMHeV2Cx3rNNMzjgHkTT2edFMzHZ5ur7sGnh
   api_adapter_settings:
     api_port: 8722
     is_secure: false
@@ -84,15 +82,8 @@ da_dispersal:
     dispersal_timeout: [ 20, 0 ]
     retry_cooldown: [ 5, 0 ]
     retry_limit: 2
-da_indexer:
-  storage:
-    blob_storage_directory: ./
 da_verifier:
   share_verifier_settings:
-    sk: 67cee9fdc9c5160671b40da60b17153558496a12fb57804c1e64ef51f5a29dca
-    index:
-      - 1
-      - 0
     global_params_path: ./tests/kzgrs/kzgrs_test_params
     domain_size: 2
   tx_verifier_settings: null
@@ -106,10 +97,6 @@ da_verifier:
     prune_interval: [ 5, 0 ]
 da_sampling:
   share_verifier_settings:
-    sk: 67cee9fdc9c5160671b40da60b17153558496a12fb57804c1e64ef51f5a29dca
-    index:
-      - 1
-      - 0
     global_params_path: ./tests/kzgrs/kzgrs_test_params
     domain_size: 2
   sampling_settings:
@@ -121,9 +108,6 @@ da_sampling:
     blobs_validity_duration:
       secs: 18446744073709551615
       nanos: 0
-  network_adapter_settings: null
-  storage_adapter_settings:
-    blob_storage_directory: ./
   commitments_wait_duration:
     secs: 2
     nanos: 0
@@ -135,163 +119,71 @@ http:
     address: 127.0.0.1:8722
     cors_origins: [ ]
 time:
-  backend_settings:
-    slot_config:
-      slot_duration: "2.0"
-      chain_start_time: [ 2025, 41, 9, 38, 29, 993653000, 0, 0, 0 ]
-    epoch_config:
-      epoch_stake_distribution_stabilization: 3
-      epoch_period_nonce_buffer: 3
-      epoch_period_nonce_stabilization: 4
-    base_period_length: 11
+  chain_start_time: [ 2025, 41, 9, 38, 29, 993653000, 0, 0, 0 ]
+  backend:
     update_interval: [ 16, 0 ]
     ntp_server: pool.ntp.org
     ntp_client_settings:
       timeout: [ 5, 0 ]
-      listening_interface: 0.0.0.0
+      listening_interface: 0.0.0.0   
 cryptarchia:
-  config:
-    epoch_config:
-      epoch_stake_distribution_stabilization: 3
-      epoch_period_nonce_buffer: 3
-      epoch_period_nonce_stabilization: 4
-    consensus_config:
-      security_param: 10
-      active_slot_coeff: 0.9
-    sdp_config:
-      service_params:
-        BN:
-          lock_period: 10
-          inactivity_period: 20
-          retention_period: 100
-          timestamp: 0
-          session_duration: 1000
-        DA:
-          lock_period: 10
-          inactivity_period: 20
-          retention_period: 100
-          timestamp: 0
-          session_duration: 1000
-      min_stake:
-        threshold: 1
-        timestamp: 0
-  starting_state: !Genesis
-    genesis_tx:
-      mantle_tx:
-        ops:
-          - opcode: 0
-            payload:
-              channel_id: "0000000000000000000000000000000000000000000000000000000000000000"
-              inscription: [ 103, 101, 110, 101, 115, 105, 115 ]  # "genesis" in bytes
-              parent: "0000000000000000000000000000000000000000000000000000000000000000"
-              signer: "0000000000000000000000000000000000000000000000000000000000000000"
-        ledger_tx:
-          inputs: []
-          outputs:
-            - value: 1
-              pk: d204000000000000000000000000000000000000000000000000000000000000
-        execution_gas_price: 0
-        storage_gas_price: 0
-      ops_proofs: [NoProof]
-      ledger_tx_proof:
-        pi_a: [
-          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-        ]
-        pi_b: [
-          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-        ]
-        pi_c: [
-          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-        ]
-  recovery_file: ./recovery/cryptarchia.json
-  bootstrap:
-    prolonged_bootstrap_period: [ 86400, 0 ]
-    force_bootstrap: false
-    offline_grace_period:
-      grace_period: [ 1200, 0 ]
-      state_recording_interval: [ 60, 0 ]
-chain_network:
-  config:
-    epoch_config:
-      epoch_stake_distribution_stabilization: 3
-      epoch_period_nonce_buffer: 3
-      epoch_period_nonce_stabilization: 4
-    consensus_config:
-      security_param: 10
-      active_slot_coeff: 0.9
-    sdp_config:
-      service_params:
-        BN:
-          lock_period: 10
-          inactivity_period: 20
-          retention_period: 100
-          timestamp: 0
-          session_duration: 1000
-        DA:
-          lock_period: 10
-          inactivity_period: 20
-          retention_period: 100
-          timestamp: 0
-          session_duration: 1000
-      min_stake:
-        threshold: 1
-        timestamp: 0
-  network_adapter_settings:
-    topic: /cryptarchia/proto
-  bootstrap:
-    ibd:
-      peers: [ ]
-  sync:
-    orphan:
-      max_orphan_cache_size: 5
-cryptarchia_leader:
-  transaction_selector_settings: null
-  config:
-    epoch_config:
-      epoch_stake_distribution_stabilization: 3
-      epoch_period_nonce_buffer: 3
-      epoch_period_nonce_stabilization: 4
-    consensus_config:
-      security_param: 10
-      active_slot_coeff: 0.9
-    sdp_config:
-      service_params:
-        BN:
-          lock_period: 10
-          inactivity_period: 20
-          retention_period: 100
-          timestamp: 0
-          session_duration: 1000
-        DA:
-          lock_period: 10
-          inactivity_period: 20
-          retention_period: 100
-          timestamp: 0
-          session_duration: 1000
-      min_stake:
-        threshold: 1
-        timestamp: 0
-  leader_config:
+  service:
+    starting_state: !Genesis
+      genesis_tx:
+        mantle_tx:
+          ops:
+            - opcode: 0
+              payload:
+                channel_id: "0000000000000000000000000000000000000000000000000000000000000000"
+                inscription: [ 103, 101, 110, 101, 115, 105, 115 ]  # "genesis" in bytes
+                parent: "0000000000000000000000000000000000000000000000000000000000000000"
+                signer: "0000000000000000000000000000000000000000000000000000000000000000"
+          ledger_tx:
+            inputs: []
+            outputs:
+              - value: 1
+                pk: d204000000000000000000000000000000000000000000000000000000000000
+          execution_gas_price: 0
+          storage_gas_price: 0
+        ops_proofs: [NoProof]
+        ledger_tx_proof:
+          pi_a: [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+          ]
+          pi_b: [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+          ]
+          pi_c: [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+          ]
+    recovery_file: ./recovery/cryptarchia.json
+    bootstrap:
+      prolonged_bootstrap_period: [ 86400, 0 ]
+      force_bootstrap: false
+      offline_grace_period:
+        grace_period: [ 1200, 0 ]
+        state_recording_interval: [ 60, 0 ]
+  network:
+    bootstrap:
+      ibd:
+        peers: [ ]
+    sync:
+      orphan:
+        max_orphan_cache_size: 5
+  leader:
     pk: "0000000000000000000000000000000000000000000000000000000000000000"
     sk: 3cf3335017304dcfce45124a0633829f00000000000000000000000000000000
-  blend_broadcast_settings:
-    topic: /cryptarchia/proto
 storage:
   db_path: nomos_db
   read_only: false
   column_family: blocks
 mempool:
-  pool_recovery_path: ./recovery/mempool.json
-membership:
-  backend:
-    session_sizes:
-      DA: 4320  # DataAvailability - 4320 blocks per session
-    session_zero_providers: { }
+  recovery_path: ./recovery/mempool.json
 sdp:
 wallet:
   known_keys:

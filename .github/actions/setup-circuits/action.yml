@@ -12,6 +12,7 @@ runs:
   steps:
     - name: Setup nomos-circuits
       shell: bash
+      working-directory: ${{ github.workspace }}
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
-      run: "${{ github.workspace }}/scripts/setup-nomos-circuits.sh"
+      run: "./scripts/setup-nomos-circuits.sh"

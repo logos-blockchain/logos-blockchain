@@ -7,7 +7,7 @@ use std::{
 use axum::{
     Json,
     body::Body,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse as _, Response},
 };
@@ -19,7 +19,7 @@ use nomos_api::http::{
     storage::StorageAdapter,
 };
 use nomos_core::{
-    da::{DaVerifier as CoreDaVerifier, blob::Share},
+    da::{BlobId, DaVerifier as CoreDaVerifier, blob::Share},
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction},
     sdp::SessionNumber,
@@ -33,14 +33,22 @@ use nomos_da_network_service::{
 };
 use nomos_da_sampling::{DaSamplingService, backend::DaSamplingServiceBackend};
 use nomos_da_verifier::{backend::VerifierBackend, mempool::DaMempoolAdapter};
-use nomos_http_api_common::paths;
+use nomos_http_api_common::{
+    bodies::wallet::{
+        balance::WalletBalanceResponseBody,
+        transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+    },
+    paths,
+};
 use nomos_libp2p::PeerId;
 use nomos_network::backends::libp2p::Libp2p as Libp2pNetworkBackend;
 use nomos_sdp::adapters::mempool::SdpMempoolAdapter;
 use nomos_storage::{StorageService, api::da::DaConverter, backends::rocksdb::RocksBackend};
+use nomos_wallet::api::{WalletApi, WalletServiceData};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use subnetworks_assignations::MembershipHandler;
+use tracing::error;
 use tx_service::{
     TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
@@ -58,7 +66,7 @@ use {
     tokio_stream::StreamExt as _,
 };
 
-use crate::api::{backend::DaStorageBackend, responses};
+use crate::api::{backend::DaStorageBackend, responses, responses::overwatch::get_relay_or_500};
 
 #[macro_export]
 macro_rules! make_request_and_return_response {
@@ -188,6 +196,7 @@ where
         RuntimeServiceId,
     >(&handle, items))
 }
+
 #[derive(Deserialize)]
 pub struct CryptarchiaInfoQuery {
     from: Option<HeaderId>,
@@ -509,9 +518,9 @@ where
     RuntimeServiceId:
         AsServiceId<StorageService<RocksBackend, RuntimeServiceId>> + Debug + Sync + Display,
 {
-    let relay = match handle.relay().await {
+    let relay = match get_relay_or_500(&handle).await {
         Ok(relay) => relay,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(error_response) => return error_response,
     };
     make_request_and_return_response!(HttpStorageAdapter::get_block::<SignedMantleTx>(relay, id))
 }
@@ -598,9 +607,9 @@ where
         + Display
         + 'static,
 {
-    let relay = match handle.relay().await {
+    let relay = match get_relay_or_500(&handle).await {
         Ok(relay) => relay,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(error_response) => return error_response,
     };
     make_request_and_return_response!(HttpStorageAdapter::get_shared_commitments::<
         DaStorageConverter,
@@ -633,9 +642,9 @@ where
         + Display
         + 'static,
 {
-    let relay = match handle.relay().await {
+    let relay = match get_relay_or_500(&handle).await {
         Ok(relay) => relay,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(error_response) => return error_response,
     };
     make_request_and_return_response!(HttpStorageAdapter::get_light_share::<
         DaStorageConverter,
@@ -668,9 +677,9 @@ where
         + 'static
         + AsServiceId<StorageService<RocksBackend, RuntimeServiceId>>,
 {
-    let relay = match handle.relay().await {
+    let relay = match get_relay_or_500(&handle).await {
         Ok(relay) => relay,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(error_response) => return error_response,
     };
     match HttpStorageAdapter::get_shares::<DaStorageConverter, DaShare>(
         relay,
@@ -1010,5 +1019,192 @@ where
     match stream {
         Ok(stream) => responses::ndjson::from_stream(stream),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+pub mod wallet {
+    use key_management_system_service::keys::ZkPublicKey;
+
+    use super::*;
+
+    #[derive(Deserialize)]
+    pub struct TipQuery {
+        tip: Option<HeaderId>,
+    }
+
+    #[utoipa::path(
+    get,
+    path = paths::wallet::BALANCE,
+    responses(
+        (status = 200, description = "Get wallet balance"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+    )]
+    pub async fn get_balance<
+        WalletService,
+        SamplingBackend,
+        SamplingNetworkAdapter,
+        SamplingStorage,
+        MempoolStorageAdapter,
+        TimeBackend,
+        RuntimeServiceId,
+    >(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Path(address): Path<ZkPublicKey>,
+        Query(query): Query<TipQuery>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData + 'static,
+        SamplingBackend: DaSamplingServiceBackend<BlobId = BlobId> + Send,
+        SamplingBackend::Settings: Clone,
+        SamplingBackend::Share: Debug + 'static,
+        SamplingBackend::BlobId: Debug + 'static,
+        SamplingNetworkAdapter: nomos_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
+        SamplingStorage: nomos_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
+        MempoolStorageAdapter: tx_service::storage::MempoolStorageAdapter<
+                RuntimeServiceId,
+                Key = <SignedMantleTx as Transaction>::Hash,
+                Item = SignedMantleTx,
+            > + Clone
+            + 'static,
+        MempoolStorageAdapter::Error: Debug,
+        TimeBackend: nomos_time::backends::TimeBackend,
+        TimeBackend::Settings: Clone + Send + Sync,
+        RuntimeServiceId: Debug
+            + Send
+            + Sync
+            + Display
+            + 'static
+            + AsServiceId<WalletService>
+            + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+    {
+        let wallet_api = {
+            let wallet_relay = match get_relay_or_500::<WalletService, _>(&handle).await {
+                Ok(relay) => relay,
+                Err(error_response) => return error_response,
+            };
+            WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay)
+        };
+        let tip = {
+            if let Some(tip) = query.tip {
+                tip
+            } else if let Ok(info) = consensus::cryptarchia_info(&handle).await {
+                info.tip
+            } else {
+                error!(
+                    "Failed to get cryptarchia info: It wasn't provided in the query and couldn't be retrieved from the consensus service."
+                );
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    String::from("Couldn't retrieve a valid tip"),
+                )
+                    .into_response();
+            }
+        };
+
+        let balance = wallet_api.get_balance(tip, address).await;
+        match balance {
+            Ok(Some(balance)) => WalletBalanceResponseBody {
+                tip,
+                balance,
+                address,
+            }
+            .into_response(),
+            Ok(None) => (
+                StatusCode::NOT_FOUND,
+                "The requested address could not be found in the wallet.",
+            )
+                .into_response(),
+            Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+        }
+    }
+
+    #[utoipa::path(
+    post,
+    path = paths::wallet::TRANSACTIONS_TRANSFER_FUNDS,
+    responses(
+        (status = 200, description = "Make transfer"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+    )]
+    pub async fn post_transactions_transfer_funds<
+        WalletService,
+        StorageBackend,
+        SamplingBackend,
+        SamplingNetworkAdapter,
+        SamplingStorage,
+        MempoolStorageAdapter,
+        TimeBackend,
+        RuntimeServiceId,
+    >(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Json(body): Json<WalletTransferFundsRequestBody>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData + 'static,
+        StorageBackend: nomos_storage::backends::StorageBackend + Send + Sync + 'static,
+        SamplingBackend: DaSamplingServiceBackend<BlobId = BlobId> + Send,
+        SamplingBackend::Settings: Clone,
+        SamplingBackend::Share: Debug + 'static,
+        SamplingBackend::BlobId: Debug + 'static,
+        SamplingNetworkAdapter: nomos_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
+        SamplingStorage: nomos_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
+        MempoolStorageAdapter: tx_service::storage::MempoolStorageAdapter<
+                RuntimeServiceId,
+                Key = <SignedMantleTx as Transaction>::Hash,
+                Item = SignedMantleTx,
+            > + Clone
+            + 'static,
+        MempoolStorageAdapter::Error: Debug,
+        TimeBackend: nomos_time::backends::TimeBackend,
+        TimeBackend::Settings: Clone + Send + Sync,
+        RuntimeServiceId: Debug
+            + Send
+            + Sync
+            + Display
+            + 'static
+            + AsServiceId<WalletService>
+            + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+            + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+    {
+        let wallet_api = {
+            let wallet_relay = match get_relay_or_500::<WalletService, _>(&handle).await {
+                Ok(relay) => relay,
+                Err(error_response) => return error_response,
+            };
+            WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay)
+        };
+
+        let tip = {
+            if let Some(tip) = body.tip {
+                tip
+            } else if let Ok(info) = consensus::cryptarchia_info(&handle).await {
+                info.tip
+            } else {
+                error!(
+                    "Failed to get cryptarchia info: It wasn't provided in the query and couldn't be retrieved from the consensus service."
+                );
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    String::from("Couldn't retrieve a valid tip"),
+                )
+                    .into_response();
+            }
+        };
+
+        let transfer_funds = wallet_api
+            .transfer_funds(
+                tip,
+                body.change_public_key,
+                body.funding_public_keys,
+                body.recipient_public_key,
+                body.amount,
+            )
+            .await;
+
+        match transfer_funds {
+            Ok(transaction) => WalletTransferFundsResponseBody::from(transaction).into_response(),
+            Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+        }
     }
 }

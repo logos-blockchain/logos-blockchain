@@ -67,7 +67,7 @@ impl StorageChainApi for RocksBackend {
             db.write(batch)?;
             Ok(None)
         });
-        let _ = self.execute(db_transaction).await?;
+        drop(self.execute(db_transaction).await?);
 
         Ok(())
     }
@@ -165,7 +165,7 @@ impl StorageChainApi for RocksBackend {
             Ok(None)
         });
 
-        let _ = self.execute(db_transaction).await?;
+        drop(self.execute(db_transaction).await?);
         Ok(())
     }
 }

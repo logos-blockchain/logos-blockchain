@@ -2,11 +2,9 @@ use core::convert::Infallible;
 
 use async_trait::async_trait;
 use futures::future::ready;
-use key_management_system_keys::keys::UnsecuredEd25519Key;
-use nomos_blend_crypto::keys::Ed25519PublicKey;
+use key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use nomos_blend_message::{
-    crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
-    encap::ProofsVerifier,
+    crypto::proofs::PoQVerificationInputsMinusSigningKey, encap::ProofsVerifier,
 };
 use nomos_blend_proofs::{
     quota::{
@@ -54,7 +52,7 @@ impl LeaderProofsGenerator for TestEpochChangeLeaderProofsGenerator {
         BlendLayerProof {
             proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
             proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
-            ephemeral_signing_key: UnsecuredEd25519Key::from_bytes([0; _]),
+            ephemeral_signing_key: UnsecuredEd25519Key::from_bytes(&[0; _]),
         }
     }
 }

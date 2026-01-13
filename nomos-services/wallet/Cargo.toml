@@ -28,7 +28,6 @@ nomos-storage                 = { features = ["mock"], workspace = true }
 overwatch                     = { workspace = true }
 services-utils                = { workspace = true }
 wallet                        = { workspace = true }
-zksign                        = { workspace = true }
 
 [lints]
 workspace = true

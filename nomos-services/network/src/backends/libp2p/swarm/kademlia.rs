@@ -67,12 +67,12 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                     .map(|peer_info| peer_info.peer_id)
                     .collect::<HashSet<_>>();
 
-                let _ = reply.send(discovered_peers);
+                drop(reply.send(discovered_peers));
             }
             DiscoveryCommand::DumpRoutingTable { reply } => {
                 let result = self.swarm.kademlia_routing_table_dump();
                 tracing::debug!("Routing table dump: {result:?}");
-                let _ = reply.send(result);
+                drop(reply.send(result));
             }
         }
     }
@@ -113,7 +113,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                     if step.last
                         && let Some(query_data) = self.pending_queries.remove(&id)
                     {
-                        let _ = query_data.sender.send(query_data.accumulated_results);
+                        drop(query_data.sender.send(query_data.accumulated_results));
                     }
                 }
             }
@@ -121,7 +121,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 tracing::warn!("Failed to find closest peers: {:?}", err);
                 // For errors, we should probably just send what we have so far
                 if let Some(query_data) = self.pending_queries.remove(&id) {
-                    let _ = query_data.sender.send(query_data.accumulated_results);
+                    drop(query_data.sender.send(query_data.accumulated_results));
                 }
             }
             _ => {

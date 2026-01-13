@@ -892,7 +892,7 @@ where
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
     ) -> Vec<Block<Tx>> {
         // Due to the blocks traversal order, this yields `to..from` order
-        let blocks = futures::stream::unfold(to, |header_id| async move {
+        let blocks = futures::stream::unfold(to, async |header_id| {
             if header_id == from {
                 None
             } else {

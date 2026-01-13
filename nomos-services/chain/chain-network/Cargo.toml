@@ -39,6 +39,7 @@ tx-service         = { workspace = true }
 [dev-dependencies]
 nomos-core    = { features = ["mock"], workspace = true }
 nomos-network = { features = ["mock"], workspace = true }
+nomos-utils   = { workspace = true }
 
 [features]
 default      = []

@@ -500,7 +500,7 @@ where
             adapter.send(item_for_broadcast).await;
         });
 
-        let _ = tx_broadcast.send(broadcast_clone);
+        drop(tx_broadcast.send(broadcast_clone));
 
         if let Err(e) = reply_channel.send(Ok(())) {
             tracing::debug!("Failed to send add reply: {:?}", e);
@@ -532,7 +532,7 @@ where
             return;
         }
 
-        let _ = tx_broadcast.send(item);
+        drop(tx_broadcast.send(item));
 
         tracing::info!(counter.tx_mempool_pending_items = pool.pending_item_count());
 

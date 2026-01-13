@@ -1,8 +1,10 @@
 use std::time::Duration;
 
+use futures::StreamExt as _;
 use libp2p::{PeerId, identity::Keypair, swarm::NetworkBehaviour};
 use subnetworks_assignations::MembershipHandler;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::{broadcast, mpsc::UnboundedSender};
+use tokio_stream::wrappers::BroadcastStream;
 
 use crate::{
     addressbook::AddressBookHandler,
@@ -62,7 +64,7 @@ where
         redial_cooldown: Duration,
         replication_config: ReplicationConfig,
         subnets_config: SubnetsConfig,
-        refresh_signal: impl futures::Stream<Item = ()> + Send + 'static,
+        refresh_sender: &broadcast::Sender<()>,
         balancer_stats_sender: UnboundedSender<<Balancer as ConnectionBalancer>::Stats>,
     ) -> Self {
         let peer_id = PeerId::from_public_key(&key.public());
@@ -72,7 +74,7 @@ where
                 membership.clone(),
                 addressbook.clone(),
                 subnets_config,
-                refresh_signal,
+                BroadcastStream::new(refresh_sender.subscribe()).filter_map(async |r| r.ok()),
             ),
             dispersal: DispersalValidatorBehaviour::new(peer_id, membership.clone()),
             replication: ReplicationBehaviour::new(replication_config, peer_id, membership),
@@ -80,6 +82,7 @@ where
                 addressbook,
                 balancer,
                 Some(balancer_stats_sender),
+                BroadcastStream::new(refresh_sender.subscribe()).filter_map(async |r| r.ok()),
             ),
             monitor: ConnectionMonitorBehaviour::new(monitor, redial_cooldown),
         }

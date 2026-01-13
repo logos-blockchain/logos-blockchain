@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 async-trait              = "0.1"
 bytes                    = { workspace = true }
+either                   = { default-features = false, version = "1.15.0" }
 futures                  = { default-features = false, version = "0.3" }
 hex                      = { default-features = false, version = "0.4.3" }
 kzgrs-backend            = { workspace = true }

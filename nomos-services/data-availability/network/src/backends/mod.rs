@@ -16,7 +16,7 @@ use nomos_da_network_core::{
 };
 use overwatch::{overwatch::handle::OverwatchHandle, services::state::ServiceState};
 use subnetworks_assignations::MembershipHandler;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::{broadcast, mpsc::UnboundedSender};
 
 use crate::SessionStatus;
 
@@ -49,7 +49,7 @@ pub trait NetworkBackend<RuntimeServiceId> {
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         membership: Self::Membership,
         addressbook: Self::Addressbook,
-        subnet_refresh_signal: impl Stream<Item = ()> + Send + 'static,
+        subnet_refresh_sender: &broadcast::Sender<()>,
         blancer_stats_sender: UnboundedSender<BalancerStats>,
         opinion_sender: UnboundedSender<OpinionEvent>,
     ) -> Self;
@@ -65,6 +65,12 @@ pub trait NetworkBackend<RuntimeServiceId> {
         &self,
         block_id: HeaderId,
         blob_ids: HashMap<Self::HistoricMembership, HashSet<BlobId>>,
+    );
+    async fn start_historic_commitments(
+        &self,
+        block_id: HeaderId,
+        blob_id: BlobId,
+        session: Self::HistoricMembership,
     );
 
     fn local_peer_id(&self) -> (PeerId, ProviderId);

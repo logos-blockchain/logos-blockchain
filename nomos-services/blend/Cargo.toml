@@ -28,12 +28,12 @@ nomos-core                    = { workspace = true }
 nomos-ledger                  = { workspace = true }
 nomos-libp2p                  = { optional = true, workspace = true }
 nomos-network                 = { workspace = true }
+nomos-sdp                     = { workspace = true }
 nomos-time                    = { workspace = true }
 nomos-utils                   = { features = ["serde"], workspace = true }
 overwatch                     = { workspace = true }
 poq                           = { workspace = true }
 rand                          = { workspace = true }
-rs-merkle-tree                = { default-features = false, version = "0.1.0", features = ["memory_store"] }
 serde                         = { workspace = true }
 serde_with                    = { workspace = true }
 services-utils                = { workspace = true }
@@ -41,13 +41,11 @@ thiserror                     = { default-features = false, version = "1" }
 tokio                         = { default-features = false, version = "1" }
 tokio-stream                  = { default-features = false, version = "0.1" }
 tracing                       = { workspace = true }
-zksign                        = { workspace = true }
 
 [dev-dependencies]
 libp2p            = { default-features = false, features = ["plaintext", "tcp", "yamux"], workspace = true }
 libp2p-swarm-test = { default-features = false, version = "0.5.0" }
 nomos-blend       = { features = ["unsafe-test-functions"], workspace = true }
-num-bigint        = { default-features = false, version = "0.4" }
 tempfile          = { workspace = true }
 test-log          = { default-features = false, version = "0.2.18", features = ["trace"] }
 

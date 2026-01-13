@@ -238,7 +238,7 @@ mod tests {
         trigger.record(BLOB_ID, ShareEvent::Share);
 
         let later = now.checked_add(Duration::from_secs(6)).unwrap();
-        let _ = trigger.prune(later);
+        drop(trigger.prune(later));
 
         assert_eq!(
             trigger.record(BLOB_ID, ShareEvent::Share),

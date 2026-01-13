@@ -1,0 +1,21 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "wallet-http-client"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+common-http-client         = { workspace = true }
+hex                        = { workspace = true }
+key-management-system-keys = { workspace = true }
+nomos-core                 = { workspace = true }
+nomos-http-api-common      = { workspace = true }
+url                        = "2.5.7"

@@ -92,7 +92,7 @@ mod tests {
                     value: "Hello".to_owned(),
                 }));
 
-            let _ = service_resources_handle.overwatch_handle.shutdown().await;
+            drop(service_resources_handle.overwatch_handle.shutdown().await);
             Ok(())
         }
     }
@@ -115,10 +115,11 @@ mod tests {
             recovery: recovery_settings,
         };
         let app = OverwatchRunner::<RecoveryTest>::run(service_settings, None).unwrap();
-        let _ = app
-            .runtime()
-            .handle()
-            .block_on(app.handle().start_all_services());
+        drop(
+            app.runtime()
+                .handle()
+                .block_on(app.handle().start_all_services()),
+        );
         app.blocking_wait_finished();
 
         // Read the content of the recovery file

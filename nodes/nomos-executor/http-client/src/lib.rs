@@ -6,7 +6,7 @@ use nomos_core::{
     da::{BlobId, blob::Share},
     mantle::ops::channel::{ChannelId, Ed25519PublicKey, MsgId},
 };
-use nomos_http_api_common::{paths, types::DispersalRequest};
+use nomos_http_api_common::{bodies::dispersal::DispersalRequestBody, paths};
 use reqwest::Url;
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -32,7 +32,7 @@ impl ExecutorHttpClient {
         signer: Ed25519PublicKey,
         data: Vec<u8>,
     ) -> Result<BlobId, Error> {
-        let req = DispersalRequest {
+        let req = DispersalRequestBody {
             channel_id,
             parent_msg_id,
             signer,
@@ -42,7 +42,7 @@ impl ExecutorHttpClient {
         let request_url = base_url.join(path).map_err(Error::Url)?;
 
         self.client
-            .post::<DispersalRequest, BlobId>(request_url, &req)
+            .post::<DispersalRequestBody, BlobId>(request_url, &req)
             .await
     }
 

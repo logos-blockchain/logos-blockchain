@@ -19,7 +19,7 @@ use tokio::time::{MissedTickBehavior, interval};
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
-    EpochSlotTickStream, SlotTick,
+    EpochSlotTickStream, SlotTick, TimeServiceSettings,
     backends::{
         TimeBackend,
         common::slot_timer,
@@ -38,35 +38,29 @@ pub struct NtpTimeBackendSettings {
     /// Interval for the backend to contact the ntp server and update its time
     #[cfg_attr(feature = "serde", serde_as(as = "MinimalBoundedDuration<1, NANO>"))]
     pub update_interval: Duration,
-    /// Slot settings in order to compute proper slot times
-    pub slot_config: SlotConfig,
-    /// Epoch settings in order to compute proper epoch times
-    pub epoch_config: EpochConfig,
-    /// Base period length related to epochs, used to compute epochs as well
-    pub base_period_length: NonZero<u64>,
 }
 
 #[derive(Clone, Debug)]
 pub struct NtpTimeBackend {
-    settings: NtpTimeBackendSettings,
+    settings: TimeServiceSettings<NtpTimeBackendSettings>,
     client: AsyncNTPClient,
 }
 
 impl TimeBackend for NtpTimeBackend {
     type Settings = NtpTimeBackendSettings;
 
-    fn init(settings: Self::Settings) -> Self {
-        let client = AsyncNTPClient::new(settings.ntp_client_settings);
+    fn init(settings: TimeServiceSettings<Self::Settings>) -> Self {
+        let client = AsyncNTPClient::new(settings.backend.ntp_client_settings);
         Self { settings, client }
     }
 
     fn tick_stream(self) -> (SlotTick, EpochSlotTickStream) {
         let Self { settings, client } = self;
-        let mut update_interval = interval(settings.update_interval);
+        let mut update_interval = interval(settings.backend.update_interval);
         // if we miss a tick just try next one
         update_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         // contact the ntp server for first time sync right now
-        let ntp_server = settings.ntp_server.clone();
+        let ntp_server = settings.backend.ntp_server.clone();
         let interval: NtpResultStream = Pin::new(Box::new(
             IntervalStream::new(update_interval)
                 .zip(futures::stream::repeat((client, ntp_server)))

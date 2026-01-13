@@ -9,8 +9,11 @@ use serde::Deserialize;
 use zeroize::ZeroizeOnDrop;
 
 pub use crate::keys::{
-    ed25519::{Ed25519Key, KEY_SIZE as ED25519_SECRET_KEY_SIZE, UnsecuredEd25519Key},
-    zk::ZkKey,
+    ed25519::{
+        ED25519_PUBLIC_KEY_SIZE, ED25519_SECRET_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519Key,
+        PublicKey as Ed25519PublicKey, Signature as Ed25519Signature, UnsecuredEd25519Key,
+    },
+    zk::{PublicKey as ZkPublicKey, Signature as ZkSignature, UnsecuredZkKey, ZkKey},
 };
 
 /// Entity that gathers all keys provided by the KMS crate.

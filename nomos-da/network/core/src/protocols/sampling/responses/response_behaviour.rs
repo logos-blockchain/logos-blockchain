@@ -3,7 +3,6 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use either::Either;
 use futures::{
     AsyncWriteExt as _, FutureExt as _, StreamExt as _,
     channel::{
@@ -184,10 +183,7 @@ impl ResponseSamplingBehaviour {
 }
 
 impl NetworkBehaviour for ResponseSamplingBehaviour {
-    type ConnectionHandler = Either<
-        <libp2p_stream::Behaviour as NetworkBehaviour>::ConnectionHandler,
-        libp2p::swarm::dummy::ConnectionHandler,
-    >;
+    type ConnectionHandler = <libp2p_stream::Behaviour as NetworkBehaviour>::ConnectionHandler;
     type ToSwarm = SamplingEvent;
 
     fn handle_established_inbound_connection(
@@ -197,9 +193,12 @@ impl NetworkBehaviour for ResponseSamplingBehaviour {
         local_addr: &Multiaddr,
         remote_addr: &Multiaddr,
     ) -> Result<THandler<Self>, ConnectionDenied> {
-        self.stream_behaviour
-            .handle_established_inbound_connection(connection_id, peer, local_addr, remote_addr)
-            .map(Either::Left)
+        self.stream_behaviour.handle_established_inbound_connection(
+            connection_id,
+            peer,
+            local_addr,
+            remote_addr,
+        )
     }
 
     fn handle_established_outbound_connection(
@@ -219,7 +218,6 @@ impl NetworkBehaviour for ResponseSamplingBehaviour {
                 role_override,
                 port_use,
             )
-            .map(Either::Left)
     }
 
     fn on_swarm_event(&mut self, event: FromSwarm) {
@@ -239,7 +237,6 @@ impl NetworkBehaviour for ResponseSamplingBehaviour {
         connection_id: ConnectionId,
         event: THandlerOutEvent<Self>,
     ) {
-        let Either::Left(event) = event;
         self.stream_behaviour
             .on_connection_handler_event(peer_id, connection_id, event);
     }

@@ -144,20 +144,23 @@ impl<'de> Deserialize<'de> for GenesisTx {
 
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::VerifyingKey;
+    use key_management_system_keys::keys::{ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
-    use zksign::PublicKey;
 
     use super::*;
     use crate::{
         mantle::{
             ledger::{Note, Tx as LedgerTx, Utxo, Value},
-            ops::channel::blob::BlobOp,
+            ops::channel::{Ed25519PublicKey, blob::BlobOp},
         },
         sdp::{ProviderId, ServiceType},
     };
 
-    fn inscription_op(channel_id: ChannelId, parent: MsgId, signer: VerifyingKey) -> InscriptionOp {
+    fn inscription_op(
+        channel_id: ChannelId,
+        parent: MsgId,
+        signer: Ed25519PublicKey,
+    ) -> InscriptionOp {
         InscriptionOp {
             channel_id,
             inscription: vec![1, 2, 3, 4],
@@ -169,18 +172,18 @@ mod tests {
     fn sdp_declare_op(
         utxo_to_use: Utxo,
         zk_id_value: u8,
-        verifying_key: VerifyingKey,
+        verifying_key: Ed25519PublicKey,
     ) -> SDPDeclareOp {
         SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
             locked_note_id: utxo_to_use.id(),
-            zk_id: PublicKey::new(BigUint::from(zk_id_value).into()),
+            zk_id: ZkPublicKey::new(BigUint::from(zk_id_value).into()),
             provider_id: ProviderId(verifying_key),
             locators: [].into(),
         }
     }
 
-    fn blob_op(channel_id: ChannelId, verifying_key: VerifyingKey) -> BlobOp {
+    fn blob_op(channel_id: ChannelId, verifying_key: Ed25519PublicKey) -> BlobOp {
         BlobOp {
             channel: channel_id,
             session: 0u64,
@@ -194,7 +197,7 @@ mod tests {
 
     // Helper function to create a test note
     fn create_test_note(value: Value) -> Note {
-        Note::new(value, PublicKey::from(BigUint::from(123u64)))
+        Note::new(value, ZkPublicKey::from(BigUint::from(123u64)))
     }
 
     // Helper function to create a basic signed transaction
@@ -210,7 +213,7 @@ mod tests {
         SignedMantleTx {
             mantle_tx: mantle_tx.clone(),
             ops_proofs,
-            ledger_tx_proof: zksign::SecretKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap(),
+            ledger_tx_proof: ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap(),
         }
     }
 
@@ -221,7 +224,7 @@ mod tests {
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([1; 32]),
                 MsgId::root(),
-                VerifyingKey::from_bytes(&[0; 32]).unwrap(),
+                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
             vec![OpProof::NoProof],
         );
@@ -235,7 +238,7 @@ mod tests {
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
                 MsgId::from([1; 32]),
-                VerifyingKey::from_bytes(&[0; 32]).unwrap(),
+                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
             vec![OpProof::NoProof],
         );
@@ -249,7 +252,7 @@ mod tests {
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
                 MsgId::root(),
-                VerifyingKey::from_bytes(&[1; 32]).unwrap(),
+                Ed25519PublicKey::from_bytes(&[1; 32]).unwrap(),
             ))],
             vec![OpProof::NoProof],
         );
@@ -263,7 +266,7 @@ mod tests {
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
                 MsgId::root(),
-                VerifyingKey::from_bytes(&[0; 32]).unwrap(),
+                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
             vec![OpProof::NoProof],
         );
@@ -276,13 +279,13 @@ mod tests {
             inscription_op(
                 ChannelId::from([0; 32]),
                 MsgId::root(),
-                VerifyingKey::from_bytes(&[0; 32]).unwrap(),
+                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             )
         };
         let blob_op = || {
             blob_op(
                 ChannelId::from([0; 32]),
-                VerifyingKey::from_bytes(&[0; 32]).unwrap(),
+                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             )
         };
 
@@ -332,10 +335,10 @@ mod tests {
             inscription_op(
                 ChannelId::from([0; 32]),
                 MsgId::root(),
-                VerifyingKey::from_bytes(&[0; 32]).unwrap(),
+                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             )
         };
-        let verifying_key = VerifyingKey::from_bytes(&[0; 32]).unwrap();
+        let verifying_key = Ed25519PublicKey::from_bytes(&[0; 32]).unwrap();
         let utxo1 = Utxo::new(TxHash::from(Fr::from(0u64)), 0, create_test_note(1000));
         let utxo2 = Utxo::new(TxHash::from(Fr::from(1u64)), 1, create_test_note(2000));
         let sdp_declare_op_helper = |utxo_to_use: Utxo, zk_id_value: u8| {
@@ -344,7 +347,7 @@ mod tests {
         let blob_op = || {
             blob_op(
                 ChannelId::from([0; 32]),
-                VerifyingKey::from_bytes(&[0; 32]).unwrap(),
+                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             )
         };
 
@@ -403,7 +406,7 @@ mod tests {
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
                 MsgId::root(),
-                VerifyingKey::from_bytes(&[0; 32]).unwrap(),
+                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
             vec![OpProof::NoProof],
         );
@@ -434,7 +437,7 @@ mod tests {
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
                 MsgId::root(),
-                VerifyingKey::from_bytes(&[0; 32]).unwrap(),
+                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
             vec![OpProof::NoProof],
         );

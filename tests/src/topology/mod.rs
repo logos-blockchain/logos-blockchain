@@ -21,13 +21,12 @@ use nomos_core::{
     mantle::{GenesisTx as _, Note, NoteId},
     sdp::{Locator, ServiceType, SessionNumber},
 };
-use nomos_da_network_core::swarm::DAConnectionPolicySettings;
+use nomos_da_network_core::swarm::{BalancerStats, DAConnectionPolicySettings};
 use nomos_da_network_service::MembershipResponse;
 use nomos_network::backends::libp2p::Libp2pInfo;
 use nomos_utils::net::get_available_udp_port;
 use rand::{Rng as _, thread_rng};
 use tokio::time::{sleep, timeout};
-use zksign::SecretKey;
 
 use crate::{
     adjust_timeout,
@@ -39,17 +38,16 @@ use crate::{
     topology::configs::{
         api::create_api_configs,
         blend::{GeneralBlendConfig, create_blend_configs},
-        bootstrap::{SHORT_PROLONGED_BOOTSTRAP_PERIOD, create_bootstrap_configs},
-        consensus::{ConsensusParams, create_consensus_configs},
+        consensus::{SHORT_PROLONGED_BOOTSTRAP_PERIOD, create_consensus_configs},
         da::GeneralDaConfig,
         time::default_time_config,
     },
+    verify_pol_proof_dev_mode,
 };
 
 pub struct TopologyConfig {
     pub n_validators: usize,
     pub n_executors: usize,
-    pub consensus_params: ConsensusParams,
     pub da_params: DaParams,
     pub network_params: NetworkParams,
     pub extra_genesis_notes: Vec<GenesisNoteSpec>,
@@ -57,11 +55,21 @@ pub struct TopologyConfig {
 
 impl TopologyConfig {
     #[must_use]
+    pub fn one_validator() -> Self {
+        Self {
+            n_validators: 1,
+            n_executors: 0,
+            da_params: DaParams::default(),
+            network_params: NetworkParams::default(),
+            extra_genesis_notes: Vec::new(),
+        }
+    }
+
+    #[must_use]
     pub fn two_validators() -> Self {
         Self {
             n_validators: 2,
             n_executors: 0,
-            consensus_params: ConsensusParams::default_for_participants(2),
             da_params: DaParams::default(),
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
@@ -73,7 +81,6 @@ impl TopologyConfig {
         Self {
             n_validators: 1,
             n_executors: 1,
-            consensus_params: ConsensusParams::default_for_participants(2),
             da_params: DaParams {
                 dispersal_factor: 2,
                 subnetwork_size: 2,
@@ -103,7 +110,6 @@ impl TopologyConfig {
         Self {
             n_validators: num_validators,
             n_executors: 1,
-            consensus_params: ConsensusParams::default_for_participants(num_validators + 1),
             da_params: DaParams {
                 dispersal_factor,
                 subnetwork_size: num_subnets,
@@ -134,7 +140,7 @@ impl TopologyConfig {
 #[derive(Clone)]
 pub struct GenesisNoteSpec {
     pub note: Note,
-    pub note_sk: SecretKey,
+    pub note_sk: ZkKey,
 }
 
 #[derive(Clone)]
@@ -151,6 +157,8 @@ pub struct Topology {
 
 impl Topology {
     pub async fn spawn(config: TopologyConfig) -> Self {
+        verify_pol_proof_dev_mode();
+
         let n_participants = config.n_validators + config.n_executors;
 
         // we use the same random bytes for:
@@ -167,8 +175,8 @@ impl Topology {
             blend_ports.push(get_available_udp_port().unwrap());
         }
 
-        let mut consensus_configs = create_consensus_configs(&ids, &config.consensus_params);
-        let bootstrapping_config = create_bootstrap_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+        let mut consensus_configs =
+            create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
         let da_configs = create_da_configs(&ids, &config.da_params, &da_ports);
         let network_configs = create_network_configs(&ids, &config.network_params);
         let blend_configs = create_blend_configs(&ids, &blend_ports);
@@ -178,7 +186,7 @@ impl Topology {
 
         // Setup genesis TX with Blend and DA service declarations.
         let base_ledger_tx = consensus_configs[0]
-            .genesis_tx
+            .genesis_tx()
             .mantle_tx()
             .ledger_tx
             .clone();
@@ -201,7 +209,7 @@ impl Topology {
         providers.extend(blend_configs.iter().enumerate().map(
             |(i, (blend_conf, zk_secret_key))| ProviderInfo {
                 service_type: ServiceType::BlendNetwork,
-                provider_sk: blend_conf.common.non_ephemeral_signing_key.clone().into(),
+                provider_sk: blend_conf.non_ephemeral_signing_key.clone().into(),
                 zk_sk: zk_secret_key.clone(),
                 locator: Locator(blend_conf.core.backend.listening_address.clone()),
                 note: consensus_configs[0].blend_notes[i].clone(),
@@ -226,7 +234,7 @@ impl Topology {
             .collect::<Vec<_>>();
 
         for c in &mut consensus_configs {
-            c.genesis_tx = genesis_tx.clone();
+            c.override_genesis_tx(genesis_tx.clone());
         }
 
         // Set Blend and DA keys in KMS of each node config.
@@ -237,7 +245,6 @@ impl Topology {
         for i in 0..n_participants {
             node_configs.push(GeneralConfig {
                 consensus_config: consensus_configs[i].clone(),
-                bootstrapping_config: bootstrapping_config[i].clone(),
                 da_config: da_configs[i].clone(),
                 network_config: network_configs[i].clone(),
                 blend_config: blend_configs[i].clone(),
@@ -270,8 +277,7 @@ impl Topology {
     ) -> Self {
         let n_participants = config.n_validators + config.n_executors;
 
-        let consensus_configs = create_consensus_configs(ids, &config.consensus_params);
-        let bootstrapping_config = create_bootstrap_configs(ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+        let consensus_configs = create_consensus_configs(ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
         let da_configs = create_da_configs(ids, &config.da_params, da_ports);
         let network_configs = create_network_configs(ids, &config.network_params);
         let blend_configs = create_blend_configs(ids, blend_ports);
@@ -289,7 +295,6 @@ impl Topology {
         for i in 0..n_participants {
             node_configs.push(GeneralConfig {
                 consensus_config: consensus_configs[i].clone(),
-                bootstrapping_config: bootstrapping_config[i].clone(),
                 da_config: da_configs[i].clone(),
                 network_config: network_configs[i].clone(),
                 blend_config: blend_configs[i].clone(),
@@ -380,6 +385,39 @@ impl Topology {
         check.wait().await;
     }
 
+    pub async fn wait_da_network_ready(&self) {
+        let total_nodes = self.validators.len() + self.executors.len();
+
+        if total_nodes == 0 {
+            return;
+        }
+
+        // Get num_subnets from first executor's config (all nodes have same num_subnets
+        // in tests)
+        let expected_subnets = if let Some(executor) = self.executors.first() {
+            executor.config().da_network.backend.num_subnets as usize
+        } else if let Some(validator) = self.validators.first() {
+            validator
+                .config()
+                .da_network
+                .backend
+                .subnets_settings
+                .num_of_subnets
+        } else {
+            return;
+        };
+
+        let labels = self.node_labels();
+
+        let check = DANetworkReadiness {
+            topology: self,
+            labels: &labels,
+            expected_subnets,
+        };
+
+        check.wait().await;
+    }
+
     pub async fn wait_membership_ready(&self) {
         self.wait_membership_ready_for_session(SessionNumber::from(0u64))
             .await;
@@ -415,11 +453,11 @@ impl Topology {
     fn node_listen_ports(&self) -> Vec<u16> {
         self.validators
             .iter()
-            .map(|node| node.config().network.backend.inner.port)
+            .map(|node| node.config().network.backend.swarm.port)
             .chain(
                 self.executors
                     .iter()
-                    .map(|node| node.config().network.backend.inner.port),
+                    .map(|node| node.config().network.backend.swarm.port),
             )
             .collect()
     }
@@ -455,13 +493,13 @@ impl Topology {
             .map(|(idx, node)| {
                 format!(
                     "validator#{idx}@{}",
-                    node.config().network.backend.inner.port
+                    node.config().network.backend.swarm.port
                 )
             })
             .chain(self.executors.iter().enumerate().map(|(idx, node)| {
                 format!(
                     "executor#{idx}@{}",
-                    node.config().network.backend.inner.port
+                    node.config().network.backend.swarm.port
                 )
             }))
             .collect()
@@ -534,6 +572,74 @@ impl<'a> ReadinessCheck<'a> for NetworkReadiness<'a> {
     fn timeout_message(&self, data: Self::Data) -> String {
         let summary = build_timeout_summary(self.labels, data, self.expected_peer_counts);
         format!("timed out waiting for network readiness: {summary}")
+    }
+}
+
+struct DANetworkReadiness<'a> {
+    topology: &'a Topology,
+    labels: &'a [String],
+    expected_subnets: usize,
+}
+
+#[async_trait::async_trait]
+impl<'a> ReadinessCheck<'a> for DANetworkReadiness<'a> {
+    type Data = Vec<BalancerStats>;
+
+    async fn collect(&'a self) -> Self::Data {
+        let (validator_stats, executor_stats) = tokio::join!(
+            join_all(
+                self.topology
+                    .validators
+                    .iter()
+                    .map(Validator::balancer_stats)
+            ),
+            join_all(self.topology.executors.iter().map(Executor::balancer_stats))
+        );
+        validator_stats.into_iter().chain(executor_stats).collect()
+    }
+
+    fn is_ready(&self, data: &Self::Data) -> bool {
+        data.iter().all(|stats| {
+            let connected_subnets = stats
+                .values()
+                .filter(|subnet_stats| subnet_stats.inbound > 0 || subnet_stats.outbound > 0)
+                .count();
+
+            // Check that enough subnets are connected (matches subnet_threshold check in
+            // lib.rs)
+            connected_subnets >= self.expected_subnets
+        })
+    }
+
+    fn timeout_message(&self, data: Self::Data) -> String {
+        let mut details = Vec::new();
+
+        for (label, stats) in self.labels.iter().zip(data.iter()) {
+            let connected_subnets = stats
+                .values()
+                .filter(|s| s.inbound > 0 || s.outbound > 0)
+                .count();
+
+            let subnet_details: Vec<String> = stats
+                .iter()
+                .map(|(subnet_id, s)| {
+                    format!("subnet_{}: in={}, out={}", subnet_id, s.inbound, s.outbound)
+                })
+                .collect();
+
+            details.push(format!(
+                "{}: {}/{} subnets connected\n  Details: [{}]",
+                label,
+                connected_subnets,
+                self.expected_subnets,
+                subnet_details.join(", ")
+            ));
+        }
+
+        format!(
+            "timed out waiting for DA network connections:\n{}",
+            details.join("\n")
+        )
     }
 }
 
@@ -687,27 +793,21 @@ pub fn create_kms_configs(
                 keys: [
                     (
                         key_id_for_preload_backend(
-                            &Ed25519Key::from(blend_conf.common.non_ephemeral_signing_key.clone())
-                                .into(),
+                            &Ed25519Key::from(blend_conf.non_ephemeral_signing_key.clone()).into(),
                         ),
-                        Ed25519Key::from(blend_conf.common.non_ephemeral_signing_key.clone())
-                            .into(),
+                        Ed25519Key::from(blend_conf.non_ephemeral_signing_key.clone()).into(),
                     ),
                     (
                         blend_conf.core.zk.secret_key_kms_id.clone(),
-                        ZkKey::new(zk_secret_key.clone()).into(),
+                        zk_secret_key.clone().into(),
                     ),
                     (
-                        key_id_for_preload_backend(
-                            &Ed25519Key::from(da_conf.signer.clone()).into(),
-                        ),
-                        Ed25519Key::from(da_conf.signer.clone()).into(),
+                        key_id_for_preload_backend(&da_conf.signer.clone().into()),
+                        da_conf.signer.clone().into(),
                     ),
                     (
-                        key_id_for_preload_backend(
-                            &ZkKey::new(da_conf.secret_zk_key.clone()).into(),
-                        ),
-                        ZkKey::new(da_conf.secret_zk_key.clone()).into(),
+                        key_id_for_preload_backend(&zk_secret_key.clone().into()),
+                        zk_secret_key.clone().into(),
                     ),
                 ]
                 .into(),

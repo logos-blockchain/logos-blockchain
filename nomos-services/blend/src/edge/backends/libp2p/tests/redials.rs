@@ -31,7 +31,7 @@ async fn edge_redial_same_peer() {
         EdgeSwarmBuilder::new(Membership::new_without_local(from_ref(&Node {
             address: empty_multiaddr.clone(),
             id: random_peer_id,
-            public_key: UnsecuredEd25519Key::generate().public_key(),
+            public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
         })))
         .build();
     let message = TestEncapsulatedMessage::new(b"test-payload");
@@ -136,7 +136,7 @@ async fn edge_redial_different_peer_after_redial_limit() {
         Node {
             address: empty_multiaddr,
             id: random_peer_id,
-            public_key: UnsecuredEd25519Key::generate().public_key(),
+            public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
         },
     ]);
     let EdgeTestSwarm {

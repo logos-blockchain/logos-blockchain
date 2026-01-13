@@ -23,10 +23,9 @@ use tests::{
 async fn test_get_share_data() {
     let topology = Topology::spawn(TopologyConfig::validator_and_executor()).await;
 
+    topology.wait_membership_ready().await;
     topology.wait_network_ready().await;
-    topology
-        .wait_membership_ready_for_session(SessionNumber::from(0u64))
-        .await;
+    topology.wait_da_network_ready().await;
 
     let executor = &topology.executors()[0];
     let (channel_id, parent_msg_id) = setup_test_channel(executor).await;
@@ -154,10 +153,9 @@ async fn test_block_peer() {
 #[serial]
 async fn test_get_shares() {
     let topology = Topology::spawn(TopologyConfig::validator_and_executor()).await;
+    topology.wait_membership_ready().await;
     topology.wait_network_ready().await;
-    topology
-        .wait_membership_ready_for_session(SessionNumber::from(0u64))
-        .await;
+    topology.wait_da_network_ready().await;
 
     let executor = &topology.executors()[0];
     let (channel_id, parent_msg_id) = setup_test_channel(executor).await;

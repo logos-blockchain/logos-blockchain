@@ -13,10 +13,9 @@ use tests::topology::{
         GeneralConfig,
         api::GeneralApiConfig,
         blend::{GeneralBlendConfig, create_blend_configs},
-        bootstrap::{SHORT_PROLONGED_BOOTSTRAP_PERIOD, create_bootstrap_configs},
         consensus::{
-            ConsensusParams, GeneralConsensusConfig, ProviderInfo, create_consensus_configs,
-            create_genesis_tx_with_declarations,
+            GeneralConsensusConfig, ProviderInfo, SHORT_PROLONGED_BOOTSTRAP_PERIOD,
+            create_consensus_configs, create_genesis_tx_with_declarations,
         },
         da::{DaParams, GeneralDaConfig, create_da_configs},
         network::{NetworkParams, create_network_configs},
@@ -75,20 +74,18 @@ impl Host {
 
 #[must_use]
 pub fn create_node_configs(
-    consensus_params: &ConsensusParams,
     da_params: &DaParams,
     tracing_settings: &TracingSettings,
     hosts: Vec<Host>,
 ) -> HashMap<Host, GeneralConfig> {
-    let mut ids = vec![[0; 32]; consensus_params.n_participants];
+    let mut ids = vec![[0; 32]; hosts.len()];
     let mut ports = vec![];
     for id in &mut ids {
         thread_rng().fill(id);
         ports.push(get_available_udp_port().unwrap());
     }
 
-    let mut consensus_configs = create_consensus_configs(&ids, consensus_params);
-    let bootstrap_configs = create_bootstrap_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+    let mut consensus_configs = create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
     let da_configs = create_da_configs(&ids, da_params, &ports);
     let network_configs = create_network_configs(&ids, &NetworkParams::default());
     let blend_configs = create_blend_configs(
@@ -114,13 +111,13 @@ pub fn create_node_configs(
 
     // Update genesis TX to contain Blend and DA providers.
     let ledger_tx = consensus_configs[0]
-        .genesis_tx
+        .genesis_tx()
         .mantle_tx()
         .ledger_tx
         .clone();
     let genesis_tx = create_genesis_tx_with_declarations(ledger_tx, providers);
     for c in &mut consensus_configs {
-        c.genesis_tx = genesis_tx.clone();
+        c.override_genesis_tx(genesis_tx.clone());
     }
 
     // Set Blend and DA keys in KMS of each node config.
@@ -143,13 +140,13 @@ pub fn create_node_configs(
 
         // Libp2p network config.
         let mut network_config = network_configs[i].clone();
-        network_config.backend.inner.host = Ipv4Addr::from_str("0.0.0.0").unwrap();
-        network_config.backend.inner.port = host.network_port;
+        network_config.backend.swarm.host = Ipv4Addr::from_str("0.0.0.0").unwrap();
+        network_config.backend.swarm.port = host.network_port;
         network_config
             .backend
             .initial_peers
             .clone_from(&host_network_init_peers);
-        network_config.backend.inner.nat_config = nomos_libp2p::NatSettings::Static {
+        network_config.backend.swarm.nat_config = nomos_libp2p::NatSettings::Static {
             external_address: Multiaddr::from_str(&format!(
                 "/ip4/{}/udp/{}/quic-v1",
                 host.ip, host.network_port
@@ -168,7 +165,6 @@ pub fn create_node_configs(
             host.clone(),
             GeneralConfig {
                 consensus_config,
-                bootstrapping_config: bootstrap_configs[i].clone(),
                 da_config,
                 network_config,
                 blend_config: blend_configs[i].clone(),
@@ -212,7 +208,7 @@ fn create_providers(
             .enumerate()
             .map(|(i, (blend_conf, secret_zk_key))| ProviderInfo {
                 service_type: ServiceType::BlendNetwork,
-                provider_sk: blend_conf.common.non_ephemeral_signing_key.clone().into(),
+                provider_sk: blend_conf.non_ephemeral_signing_key.clone().into(),
                 zk_sk: secret_zk_key.clone(),
                 locator: Locator(
                     Multiaddr::from_str(&format!(
@@ -271,7 +267,7 @@ fn update_tracing_identifier(
 
 #[cfg(test)]
 mod cfgsync_tests {
-    use std::{net::Ipv4Addr, num::NonZero, str::FromStr as _, time::Duration};
+    use std::{net::Ipv4Addr, str::FromStr as _, time::Duration};
 
     use nomos_da_network_core::swarm::{
         DAConnectionMonitorSettings, DAConnectionPolicySettings, ReplicationConfig,
@@ -280,7 +276,7 @@ mod cfgsync_tests {
     use nomos_tracing_service::{
         ConsoleLayer, FilterLayer, LoggerLayer, MetricsLayer, TracingLayer, TracingSettings,
     };
-    use tests::topology::configs::{consensus::ConsensusParams, da::DaParams};
+    use tests::topology::configs::da::DaParams;
     use tracing::Level;
 
     use super::{Host, HostKind, create_node_configs};
@@ -299,11 +295,6 @@ mod cfgsync_tests {
             .collect();
 
         let configs = create_node_configs(
-            &ConsensusParams {
-                n_participants: 10,
-                security_param: NonZero::new(10).unwrap(),
-                active_slot_coeff: 0.9,
-            },
             &DaParams {
                 subnetwork_size: 2,
                 dispersal_factor: 1,
@@ -336,7 +327,7 @@ mod cfgsync_tests {
         );
 
         for (host, config) in &configs {
-            let network_port = config.network_config.backend.inner.port;
+            let network_port = config.network_config.backend.swarm.port;
             let da_network_port = extract_port(&config.da_config.listening_address);
             let blend_port = extract_port(&config.blend_config.0.core.backend.listening_address);
 

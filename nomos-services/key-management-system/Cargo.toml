@@ -24,13 +24,11 @@ tracing                    = { default-features = false, version = "0.1" }
 
 [dev-dependencies]
 bytes                      = { workspace = true }
-ed25519-dalek              = { default-features = false, version = "2" }
 key-management-system-keys = { workspace = true, features = ["unsafe"] }
 num-bigint                 = { default-features = false, version = "0.4" }
 rand                       = { features = ["getrandom"], workspace = true }
 serde                      = { workspace = true, features = ["std"] }
 serde_yaml                 = "0.9"
-zksign                     = { workspace = true }
 
 [features]
 unsafe = ["key-management-system-keys/unsafe"]

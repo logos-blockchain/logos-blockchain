@@ -68,7 +68,7 @@ struct MockPoolNode {
 
 fn run_with_recovery_teardown(recovery_path: &Path, run: impl Fn()) {
     run();
-    let _ = std::fs::remove_file(recovery_path);
+    drop(std::fs::remove_file(recovery_path));
 }
 
 fn get_test_random_path() -> PathBuf {
@@ -156,10 +156,11 @@ fn test_mock_mempool() {
             .map_err(|e| eprintln!("Error encountered: {e}"))
             .unwrap();
         let overwatch_handle = app.handle().clone();
-        let _ = app
-            .runtime()
-            .handle()
-            .block_on(app.handle().start_all_services());
+        drop(
+            app.runtime()
+                .handle()
+                .block_on(app.handle().start_all_services()),
+        );
 
         app.spawn(async move {
             let network_outbound = overwatch_handle
@@ -222,7 +223,7 @@ fn test_mock_mempool() {
         assert_eq!(recovered_state.pool().unwrap().in_block_items.len(), 0);
         assert!(recovered_state.pool().unwrap().last_item_timestamp > 0);
 
-        let _ = app.runtime().handle().block_on(app.handle().shutdown());
+        drop(app.runtime().handle().block_on(app.handle().shutdown()));
         app.blocking_wait_finished();
     });
 }

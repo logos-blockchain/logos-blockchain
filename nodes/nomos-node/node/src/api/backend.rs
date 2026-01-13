@@ -67,9 +67,12 @@ use super::handlers::{
     add_share, add_tx, balancer_stats, blacklisted_peers, block, block_peer, cryptarchia_headers,
     cryptarchia_info, cryptarchia_lib_stream, da_get_commitments, da_get_light_share,
     da_get_shares, da_get_storage_commitments, libp2p_info, mantle_metrics, mantle_status,
-    monitor_stats, unblock_peer,
+    monitor_stats, unblock_peer, wallet,
 };
-use crate::api::handlers::{post_activity, post_declaration, post_withdrawal};
+use crate::{
+    WalletService,
+    api::handlers::{post_activity, post_declaration, post_withdrawal},
+};
 
 pub(crate) type DaStorageBackend = RocksBackend;
 type DaStorageService<RuntimeServiceId> = StorageService<DaStorageBackend, RuntimeServiceId>;
@@ -297,7 +300,8 @@ where
                 RuntimeServiceId,
             >,
         >
-        + AsServiceId<nomos_sdp::SdpService<SdpMempool, RuntimeServiceId>>,
+        + AsServiceId<nomos_sdp::SdpService<SdpMempool, RuntimeServiceId>>
+        + AsServiceId<WalletService>,
 {
     type Error = std::io::Error;
     type Settings = AxumBackendSettings;
@@ -532,6 +536,35 @@ where
             .route(
                 paths::SDP_POST_WITHDRAWAL,
                 routing::post(post_withdrawal::<SdpMempool, RuntimeServiceId>),
+            )
+            .route(
+                paths::wallet::BALANCE,
+                routing::get(
+                    wallet::get_balance::<
+                        WalletService,
+                        SamplingBackend,
+                        SamplingNetworkAdapter,
+                        SamplingStorage,
+                        MempoolStorageAdapter,
+                        TimeBackend,
+                        _,
+                    >,
+                ),
+            )
+            .route(
+                paths::wallet::TRANSACTIONS_TRANSFER_FUNDS,
+                routing::post(
+                    wallet::post_transactions_transfer_funds::<
+                        WalletService,
+                        DaStorageBackend,
+                        SamplingBackend,
+                        SamplingNetworkAdapter,
+                        SamplingStorage,
+                        MempoolStorageAdapter,
+                        TimeBackend,
+                        _,
+                    >,
+                ),
             );
 
         #[cfg(feature = "block-explorer")]

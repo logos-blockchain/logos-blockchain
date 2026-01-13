@@ -60,7 +60,11 @@ fn compute_parallel_fk20_proofs_for_size(bencher: Bencher, size: usize) {
         .input_counter(move |_| ItemsCount::new(size * thread_count))
         .bench_refs(|poly| {
             (0..thread_count).into_par_iter().for_each(|_| {
-                let _ = fk20_batch_generate_elements_proofs(poly, &PROVING_KEY, None);
+                drop(fk20_batch_generate_elements_proofs(
+                    poly,
+                    &PROVING_KEY,
+                    None,
+                ));
             });
             black_box(());
         });
@@ -107,7 +111,11 @@ fn compute_parallel_fk20_proofs_for_size_with_cache(bencher: Bencher, size: usiz
         .input_counter(move |_| ItemsCount::new(size * thread_count))
         .bench_refs(|(poly, cache)| {
             (0..thread_count).into_par_iter().for_each(|_| {
-                let _ = fk20_batch_generate_elements_proofs(poly, &PROVING_KEY, Some(cache));
+                drop(fk20_batch_generate_elements_proofs(
+                    poly,
+                    &PROVING_KEY,
+                    Some(cache),
+                ));
             });
             black_box(());
         });

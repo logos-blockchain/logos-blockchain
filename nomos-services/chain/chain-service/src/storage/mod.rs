@@ -60,7 +60,7 @@ pub trait StorageAdapter<RuntimeServiceId> {
     where
         Headers: Iterator<Item = HeaderId> + Send,
     {
-        join_all(header_ids.map(|header_id| async move { self.remove_block(header_id).await }))
+        join_all(header_ids.map(async |header_id| self.remove_block(header_id).await))
             .await
             .into_iter()
     }

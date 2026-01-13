@@ -13,24 +13,22 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait              = "0.1"
-broadcast-service        = { workspace = true }
-ed25519                  = { default-features = false, version = "2.2.3" }
-ed25519-dalek            = { default-features = false, version = "2.2.0" }
-futures                  = { default-features = false, version = "0.3" }
-kzgrs-backend            = { workspace = true }
-nomos-core               = { workspace = true }
-nomos-da-network-core    = { workspace = true }
-nomos-da-network-service = { workspace = true }
-nomos-tracing            = { workspace = true }
-nomos-utils              = { workspace = true }
-overwatch                = { workspace = true }
-serde                    = { workspace = true }
-serde_with               = { workspace = true }
-services-utils           = { workspace = true }
-subnetworks-assignations = { workspace = true }
-thiserror                = { workspace = true }
-tokio                    = "1"
-tokio-stream             = { default-features = false, version = "0.1.15" }
-tracing                  = { workspace = true }
-zksign                   = { workspace = true }
+async-trait                = "0.1"
+broadcast-service          = { workspace = true }
+futures                    = { default-features = false, version = "0.3" }
+key-management-system-keys = { workspace = true }
+kzgrs-backend              = { workspace = true }
+nomos-core                 = { workspace = true }
+nomos-da-network-core      = { workspace = true }
+nomos-da-network-service   = { workspace = true }
+nomos-tracing              = { workspace = true }
+nomos-utils                = { workspace = true }
+overwatch                  = { workspace = true }
+serde                      = { workspace = true }
+serde_with                 = { workspace = true }
+services-utils             = { workspace = true }
+subnetworks-assignations   = { workspace = true }
+thiserror                  = { workspace = true }
+tokio                      = "1"
+tokio-stream               = { default-features = false, version = "0.1.15" }
+tracing                    = { workspace = true }

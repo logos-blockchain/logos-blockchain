@@ -12,7 +12,7 @@ use tests::{
     nodes::validator::{Validator, create_validator_config},
     secret_key_to_peer_id,
     topology::configs::{
-        GeneralConfig, create_general_configs_with_blend_core_subset,
+        create_general_configs_with_blend_core_subset,
         network::{Libp2pNetworkLayout, NetworkParams},
     },
 };
@@ -43,7 +43,7 @@ async fn test_ibd_behind_nodes() {
     let initial_peer_ids: HashSet<PeerId> = general_configs
         .iter()
         .take(n_initial_validators)
-        .map(|config| secret_key_to_peer_id(config.network_config.backend.inner.node_key.clone()))
+        .map(|config| secret_key_to_peer_id(config.network_config.backend.swarm.node_key.clone()))
         .collect();
 
     let minimum_height = 10;
@@ -61,20 +61,29 @@ async fn test_ibd_behind_nodes() {
     println!("Starting a behind node with IBD peers...");
 
     let mut config = create_validator_config(general_configs[n_initial_validators].clone());
-    config.chain_network.bootstrap.ibd.peers = initial_peer_ids.clone();
+    config.cryptarchia.network.bootstrap.ibd.peers = initial_peer_ids.clone();
     // Shorten the delay to quickly catching up with peers that grow during IBD.
     // e.g. We start a download only for peer1 because two peers have the same tip
     //      at the moment. But, the peer2 may grow faster than peer1 before IBD is
     // done.      So, we want to check peer1's progress frequently with a very
     // short delay.
-    config.chain_network.bootstrap.ibd.delay_before_new_download = Duration::from_millis(10);
+    config
+        .cryptarchia
+        .network
+        .bootstrap
+        .ibd
+        .delay_before_new_download = Duration::from_millis(10);
     // Disable the prolonged bootstrap period for the behind node
     // because we want to check the height of the behind node
     // as soon as it finishes IBD.
     // Currently, checking the mode is only one way to check if IBD is done.
-    config.cryptarchia.bootstrap.prolonged_bootstrap_period = Duration::ZERO;
+    config
+        .cryptarchia
+        .service
+        .bootstrap
+        .prolonged_bootstrap_period = Duration::ZERO;
 
-    let behind_node = Validator::spawn(config)
+    let behind_node = Validator::spawn(config.clone())
         .await
         .expect("Behind node should start successfully");
 
@@ -89,7 +98,7 @@ async fn test_ibd_behind_nodes() {
     // Check if the behind node has caught up to the highest initial validator.
     let height_check_timestamp = Instant::now();
     let heights = stream::iter(&initial_validators)
-        .then(|n| async move { n.consensus_info().await.height })
+        .then(async |n| n.consensus_info(false).await.height)
         .collect::<Vec<_>>()
         .await;
     println!("initial validator heights: {heights:?}");
@@ -99,14 +108,19 @@ async fn test_ibd_behind_nodes() {
         .max()
         .expect("There should be at least one initial validator");
 
-    let behind_node_info = behind_node.consensus_info().await;
+    let behind_node_info = behind_node.consensus_info(true).await;
     println!("behind node info: {behind_node_info:?}");
 
     // We spent some time for checking the heights of nodes
     // after the behind node finishes IBD.
     // So, calculate an acceptable height margin for safe comparison.
     let height_margin = acceptable_height_margin(
-        general_configs.first().unwrap(),
+        config.deployment.time.slot_duration,
+        config
+            .deployment
+            .cryptarchia
+            .consensus_config
+            .active_slot_coeff,
         height_check_timestamp.elapsed(),
     );
 
@@ -119,8 +133,12 @@ async fn test_ibd_behind_nodes() {
     );
 }
 
-fn acceptable_height_margin(general_config: &GeneralConfig, duration: Duration) -> u64 {
-    let block_time = calculate_block_time(general_config);
+fn acceptable_height_margin(
+    slot_duration: Duration,
+    active_slot_coeff: f64,
+    duration: Duration,
+) -> u64 {
+    let block_time = calculate_block_time(slot_duration, active_slot_coeff);
     let margin = duration.div_duration_f64(block_time).ceil() as u64;
     println!(
         "Acceptable height margin:{margin} for duration {duration:?} with block time {block_time:?}"
@@ -128,13 +146,7 @@ fn acceptable_height_margin(general_config: &GeneralConfig, duration: Duration) 
     margin
 }
 
-fn calculate_block_time(general_config: &GeneralConfig) -> Duration {
-    let slot_duration = general_config.time_config.slot_duration;
-    let active_slot_coeff = general_config
-        .consensus_config
-        .ledger_config
-        .consensus_config
-        .active_slot_coeff;
+fn calculate_block_time(slot_duration: Duration, active_slot_coeff: f64) -> Duration {
     println!("slot_duration:{slot_duration:?}, active_slot_coeff:{active_slot_coeff:?}");
     slot_duration.div_f64(active_slot_coeff)
 }

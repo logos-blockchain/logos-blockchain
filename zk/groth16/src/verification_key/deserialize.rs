@@ -163,6 +163,6 @@ mod tests {
     });
     #[test]
     fn test_deserialize() {
-        let _: VerificationKeyJsonDeser = serde_json::from_value(VK.deref().clone()).unwrap();
+        drop(serde_json::from_value::<VerificationKeyJsonDeser>(VK.deref().clone()).unwrap());
     }
 }

@@ -18,7 +18,6 @@ broadcast-service  = { workspace = true }
 bytes              = { workspace = true }
 cryptarchia-engine = { features = ["serde"], workspace = true }
 cryptarchia-sync   = { workspace = true }
-ed25519-dalek      = { default-features = false, features = ["serde"], version = "2.2.0" }
 futures            = { default-features = false, version = "0.3" }
 groth16            = { workspace = true }
 nomos-core         = { workspace = true }
@@ -39,11 +38,11 @@ tracing-futures    = { default-features = false, features = ["std-future"], vers
 utoipa             = { optional = true, workspace = true }
 
 [dev-dependencies]
-ed25519-dalek = { default-features = false, features = ["serde"], version = "2.2.0" }
-nomos-core    = { features = ["mock"], workspace = true }
-nomos-network = { features = ["mock"], workspace = true }
-nomos-storage = { features = ["rocksdb-backend"], workspace = true }
-tempfile      = { default-features = false, version = "3" }
+key-management-system-keys = { workspace = true }
+nomos-core                 = { features = ["mock"], workspace = true }
+nomos-network              = { features = ["mock"], workspace = true }
+nomos-storage              = { features = ["rocksdb-backend"], workspace = true }
+tempfile                   = { default-features = false, version = "3" }
 
 [features]
 default      = []

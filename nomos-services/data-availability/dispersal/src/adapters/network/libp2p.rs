@@ -196,20 +196,18 @@ where
             .await
             .map_err(|e| Box::new(e) as DynError)
             .map(|stream| {
-                Box::pin(stream.filter_map(|event| async {
-                    match event {
-                        DaNetworkEvent::Sampling(_)
-                        | DaNetworkEvent::Commitments(_)
-                        | DaNetworkEvent::Verifying(_)
-                        | DaNetworkEvent::HistoricSampling(_) => None,
-                        DaNetworkEvent::Dispersal(DispersalExecutorEvent::DispersalError {
-                            error,
-                        }) => Some(Err(Box::new(error) as DynError)),
-                        DaNetworkEvent::Dispersal(DispersalExecutorEvent::DispersalSuccess {
-                            blob_id,
-                            subnetwork_id,
-                        }) => Some(Ok((blob_id, subnetwork_id))),
+                Box::pin(stream.filter_map(async |event| match event {
+                    DaNetworkEvent::Sampling(_)
+                    | DaNetworkEvent::Commitments(_)
+                    | DaNetworkEvent::Verifying(_)
+                    | DaNetworkEvent::HistoricSampling(_) => None,
+                    DaNetworkEvent::Dispersal(DispersalExecutorEvent::DispersalError { error }) => {
+                        Some(Err(Box::new(error) as DynError))
                     }
+                    DaNetworkEvent::Dispersal(DispersalExecutorEvent::DispersalSuccess {
+                        blob_id,
+                        subnetwork_id,
+                    }) => Some(Ok((blob_id, subnetwork_id))),
                 }))
                     as BoxStream<'static, Result<(BlobId, Self::SubnetworkId), DynError>>
             })

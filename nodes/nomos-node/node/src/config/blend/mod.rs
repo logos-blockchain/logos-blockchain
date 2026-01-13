@@ -40,11 +40,11 @@ impl From<ServiceConfig>
         > {
             common: CommonSettings {
                 crypto: SessionCryptographicProcessorSettings {
-                    non_ephemeral_signing_key: config.user.common.non_ephemeral_signing_key,
+                    non_ephemeral_signing_key: config.user.non_ephemeral_signing_key,
                     num_blend_layers: config.deployment.common.num_blend_layers,
                 },
                 minimum_network_size: config.deployment.common.minimum_network_size,
-                recovery_path_prefix: config.user.common.recovery_path_prefix,
+                recovery_path_prefix: config.user.recovery_path_prefix,
                 time: config.deployment.common.timing,
             },
             core: CoreSettings {

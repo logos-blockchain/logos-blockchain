@@ -181,8 +181,8 @@ where
             .await
             .map_err(|_| "Failed to receive transactions stream from storage")?;
 
-        let mapped_stream = storage_stream
-            .filter_map(|storage_tx| async move { Tx::from_bytes(storage_tx.as_ref()).ok() });
+        let mapped_stream =
+            storage_stream.filter_map(async |storage_tx| Tx::from_bytes(storage_tx.as_ref()).ok());
 
         Ok(Box::pin(mapped_stream))
     }

@@ -16,7 +16,10 @@ use nomos_core::{da::BlobId, mantle::SignedMantleTx, sdp::SessionNumber};
 use nomos_da_messages::replication::ReplicationRequest;
 use subnetworks_assignations::MembershipHandler;
 use tokio::{
-    sync::mpsc::{UnboundedSender, unbounded_channel},
+    sync::{
+        broadcast,
+        mpsc::{UnboundedSender, unbounded_channel},
+    },
     time::interval,
 };
 use tokio_stream::wrappers::{IntervalStream, UnboundedReceiverStream};
@@ -45,7 +48,7 @@ use crate::{
             monitor::MonitorEvent,
             policy::DAConnectionPolicy,
         },
-        validator::{SampleArgs, SwarmSettings, ValidatorEventsStream},
+        validator::{CommitmentsArgs, SampleArgs, SwarmSettings, ValidatorEventsStream},
     },
 };
 
@@ -105,7 +108,7 @@ where
             replication_settings: replication_config,
             subnets_settings: subnets_config,
         }: SwarmSettings,
-        refresh_signal: impl futures::Stream<Item = ()> + Send + 'static,
+        refresh_sender: &broadcast::Sender<()>,
         balancer_stats_sender: UnboundedSender<<ConnectionBalancer<Membership> as Balancer>::Stats>,
     ) -> (Self, ExecutorEventsStream) {
         let (sampling_events_sender, sampling_events_receiver) = unbounded_channel();
@@ -144,7 +147,7 @@ where
                     redial_cooldown,
                     replication_config,
                     subnets_config,
-                    refresh_signal,
+                    refresh_sender,
                     balancer_stats_sender,
                 ),
                 sampling_events_sender,
@@ -171,7 +174,7 @@ where
         redial_cooldown: Duration,
         replication_config: ReplicationConfig,
         subnets_config: SubnetsConfig,
-        refresh_signal: impl futures::Stream<Item = ()> + Send + 'static,
+        refresh_sender: &broadcast::Sender<()>,
         balancer_stats_sender: UnboundedSender<<ConnectionBalancer<Membership> as Balancer>::Stats>,
     ) -> ExecutorSwarmType<Membership, HistoricMembership, Addressbook> {
         SwarmBuilder::with_existing_identity(key)
@@ -187,7 +190,7 @@ where
                     redial_cooldown,
                     replication_config,
                     subnets_config,
-                    refresh_signal,
+                    refresh_sender,
                     balancer_stats_sender,
                 )
             })
@@ -224,6 +227,15 @@ where
             .behaviour()
             .sampling_behaviour()
             .historical_request_channel()
+    }
+
+    pub fn historic_commitments_request_channel(
+        &mut self,
+    ) -> UnboundedSender<CommitmentsArgs<HistoricMembership>> {
+        self.swarm
+            .behaviour()
+            .sampling_behaviour()
+            .historical_commitments_request_channel()
     }
 
     pub fn commitments_request_channel(&mut self) -> UnboundedSender<(BlobId, SessionNumber)> {

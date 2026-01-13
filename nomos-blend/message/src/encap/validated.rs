@@ -1,14 +1,11 @@
 use key_management_system_keys::keys::UnsecuredEd25519Key;
-use nomos_blend_crypto::{
-    keys::{Ed25519PublicKeyExt as _, X25519PrivateKey},
-    random_sized_bytes,
-};
+use nomos_blend_crypto::{keys::X25519PrivateKey, random_sized_bytes};
 use nomos_blend_proofs::{quota::VerifiedProofOfQuota, selection::inputs::VerifyInputs};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     Error, MessageIdentifier, PaddedPayloadBody, PayloadType,
-    crypto::key_ext::Ed25519SecretKeyExt as _,
+    crypto::key_ext::{Ed25519PublicKeyExt as _, Ed25519SecretKeyExt as _},
     encap::{
         ProofsVerifier,
         decapsulated::{DecapsulatedMessage, DecapsulationOutput, PartDecapsulationOutput},
@@ -57,7 +54,7 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
                 // Start with an initialized encapsulated part,
                 // a random signing key, and proof of quota.
                 EncapsulatedPart::initialize(inputs, payload_type, payload_body),
-                UnsecuredEd25519Key::generate(),
+                UnsecuredEd25519Key::generate_with_blake_rng(),
                 VerifiedProofOfQuota::from_bytes_unchecked(random_sized_bytes()),
             ),
             |(part, signing_key, proof_of_quota), (i, input)| {
@@ -154,8 +151,11 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
                 public_header,
                 verified_proof_of_selection,
             } => {
-                let blending_token =
-                    BlendingToken::new(verified_proof_of_quota, verified_proof_of_selection);
+                let blending_token = BlendingToken::new(
+                    signing_key,
+                    verified_proof_of_quota,
+                    verified_proof_of_selection,
+                );
                 Ok(DecapsulationOutput::Incompleted {
                     remaining_encapsulated_message: Box::new(EncapsulatedMessage::from_components(
                         *public_header,
@@ -169,8 +169,11 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
                 verified_proof_of_selection,
             } => {
                 let (payload_type, payload_body) = payload.try_into_components()?;
-                let blending_token =
-                    BlendingToken::new(verified_proof_of_quota, verified_proof_of_selection);
+                let blending_token = BlendingToken::new(
+                    signing_key,
+                    verified_proof_of_quota,
+                    verified_proof_of_selection,
+                );
                 Ok(DecapsulationOutput::Completed {
                     fully_decapsulated_message: (DecapsulatedMessage::new(
                         payload_type,

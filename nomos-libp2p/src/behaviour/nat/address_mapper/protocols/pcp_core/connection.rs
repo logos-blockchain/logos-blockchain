@@ -54,7 +54,7 @@ impl PcpConnection {
             self.config.max_retries,
         );
 
-        (|| async {
+        (async || {
             self.socket.send(request.as_bytes()).await?;
 
             let mut buffer = vec![0u8; BUFFER_SIZE];

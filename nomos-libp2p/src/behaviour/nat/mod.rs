@@ -235,11 +235,13 @@ mod tests {
     #[tokio::test]
     async fn test_external_address_is_confirmed_by_autonat_server() {
         const _500MS: Duration = Duration::from_millis(500);
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::from_default_env())
-            .compact()
-            .with_writer(TestWriter::default())
-            .try_init();
+        drop(
+            tracing_subscriber::fmt()
+                .with_env_filter(EnvFilter::from_default_env())
+                .compact()
+                .with_writer(TestWriter::default())
+                .try_init(),
+        );
 
         let (mut client, client_addr) = new_swarm_with_tcp(Client::new).await;
         let (mut server, server_addr) = new_swarm_with_tcp(Server::new).await;

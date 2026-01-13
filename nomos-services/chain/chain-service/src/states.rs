@@ -101,10 +101,15 @@ pub struct LastEngineState {
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZero, sync::Arc};
+    use std::{
+        num::{NonZero, NonZeroU64},
+        sync::Arc,
+    };
 
     use cryptarchia_engine::State::Bootstrapping;
     use nomos_core::sdp::{MinStake, ServiceParameters, ServiceType};
+    use nomos_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
+    use nomos_utils::math::NonNegativeF64;
 
     use super::*;
 
@@ -151,6 +156,14 @@ mod tests {
                     ]
                     .into(),
                 ),
+                service_rewards_params: ServiceRewardsParameters {
+                    blend: rewards::blend::RewardsParameters {
+                        rounds_per_session: NonZeroU64::new(10).unwrap(),
+                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        num_blend_layers: NonZeroU64::new(3).unwrap(),
+                        minimum_network_size: NonZeroU64::new(1).unwrap(),
+                    },
+                },
                 min_stake: MinStake {
                     threshold: 1,
                     timestamp: 0,
@@ -215,7 +228,7 @@ mod tests {
         // Empty ledger state.
         let ledger_state = nomos_ledger::Ledger::new(
             cryptarchia_engine.lib(),
-            LedgerState::from_utxos([]),
+            LedgerState::from_utxos([], &ledger_config),
             ledger_config,
         );
 

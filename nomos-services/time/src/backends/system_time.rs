@@ -1,29 +1,19 @@
-use std::num::NonZero;
-
-use cryptarchia_engine::{EpochConfig, Slot, time::SlotConfig};
+use cryptarchia_engine::Slot;
 use time::OffsetDateTime;
 
 use crate::{
-    EpochSlotTickStream, SlotTick,
+    EpochSlotTickStream, SlotTick, TimeServiceSettings,
     backends::{TimeBackend, common::slot_timer},
 };
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug)]
-pub struct SystemTimeBackendSettings {
-    pub slot_config: SlotConfig,
-    pub epoch_config: EpochConfig,
-    pub base_period_length: NonZero<u64>,
-}
-
 pub struct SystemTimeBackend {
-    settings: SystemTimeBackendSettings,
+    settings: TimeServiceSettings<()>,
 }
 
 impl TimeBackend for SystemTimeBackend {
-    type Settings = SystemTimeBackendSettings;
+    type Settings = ();
 
-    fn init(settings: Self::Settings) -> Self {
+    fn init(settings: TimeServiceSettings<Self::Settings>) -> Self {
         Self { settings }
     }
 
@@ -49,9 +39,9 @@ mod test {
     use futures::StreamExt as _;
     use time::OffsetDateTime;
 
-    use crate::backends::{
-        TimeBackend as _,
-        system_time::{SystemTimeBackend, SystemTimeBackendSettings},
+    use crate::{
+        TimeServiceSettings,
+        backends::{TimeBackend as _, system_time::SystemTimeBackend},
     };
 
     #[tokio::test]
@@ -59,7 +49,7 @@ mod test {
         const SAMPLE_SIZE: u64 = 5;
         // The initial slot is 0 but we expect the stream starts from the next slot (1).
         let expected: Vec<_> = (1..=SAMPLE_SIZE).map(Slot::from).collect();
-        let settings = SystemTimeBackendSettings {
+        let settings = TimeServiceSettings {
             slot_config: SlotConfig {
                 slot_duration: Duration::from_secs(1),
                 chain_start_time: OffsetDateTime::now_utc(),
@@ -70,6 +60,7 @@ mod test {
                 epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
             },
             base_period_length: NonZero::new(10).unwrap(),
+            backend: (),
         };
         let backend = SystemTimeBackend::init(settings);
         let (current_slot_tick, stream) = backend.tick_stream();

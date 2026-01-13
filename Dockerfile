@@ -8,7 +8,7 @@ ARG VERSION=v0.2.0
 # BUILD IMAGE
 # ===========================
 
-FROM rust:1.91.0-slim-bookworm AS builder
+FROM rust:1.92.0-slim-bookworm AS builder
 
 ARG VERSION
 
@@ -28,7 +28,7 @@ RUN chmod +x scripts/setup-nomos-circuits.sh && \
 
 ENV NOMOS_CIRCUITS=/opt/circuits
 
-RUN cargo build --release -p nomos-node
+RUN cargo build --locked --release -p nomos-node
 
 # ===========================
 # NODE IMAGE

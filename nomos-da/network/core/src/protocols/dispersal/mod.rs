@@ -24,11 +24,13 @@ pub mod test {
 
     #[tokio::test]
     async fn test_dispersal_single_node() {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::from_default_env())
-            .compact()
-            .with_writer(TestWriter::default())
-            .try_init();
+        drop(
+            tracing_subscriber::fmt()
+                .with_env_filter(EnvFilter::from_default_env())
+                .compact()
+                .with_writer(TestWriter::default())
+                .try_init(),
+        );
 
         let neighbours = AllNeighbours::default();
 

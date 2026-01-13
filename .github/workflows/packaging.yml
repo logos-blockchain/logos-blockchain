@@ -34,10 +34,11 @@ jobs:
           fi
           
           # Export the version to be used in the following jobs.
+          VERSION="${VERSION:1}" # Remove the leading 'v' character
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
   bundle:
-    name: "Bundling for ${{ matrix.platform.arch }}-${{ matrix.platform.os }}"
+    name: "Bundling for ${{ matrix.platform.os-display }} (${{ matrix.platform.arch }})"
     needs: setup
     env:
       VERSION: ${{ needs.setup.outputs.version }}
@@ -46,41 +47,40 @@ jobs:
       matrix:
         platform:
           - os: linux
-            arch: amd64
+            os-display: Linux
+            arch: x86_64
             builder: ubuntu-24.04
             target_triple: x86_64-unknown-linux-gnu
-          - os: linux
-            arch: i686
-            builder: ubuntu-24.04
-            target_triple: i686-unknown-linux-gnu
           - os: macos
+            os-display: MacOS
             arch: aarch64
             builder: macos-14
             target_triple: aarch64-apple-darwin
-          # # `rzup` not available for this platform yet.
-          # - os: macos
-          #   arch: amd64
-          #   builder: macos-13
-          #   target_triple: x86_64-apple-darwin
-          # - os: windows
-          #   arch: amd64
-          #   builder: windows-2022
-          #   target_triple: x86_64-pc-windows-msvc
+          - os: windows
+            os-display: Windows
+            arch: x86_64
+            builder: windows-2022
+            target_triple: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.platform.builder }}
     steps:
       - name: Checkout
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
-      - run: rustup target add ${{ matrix.platform.target_triple }}
-        name: Install Rust toolchain
+      - name: Add the target toolchain
+        run: rustup target add ${{ matrix.platform.target_triple }}
 
       - name: Install dependencies
-        uses: ./.github/actions/install-dependencies
+        uses: ./.github/actions/install-bundling-dependencies
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           os: ${{ matrix.platform.os }}
           target_triple: ${{ matrix.platform.target_triple }}
+
+      - name: Setup Circuits
+        uses: ./.github/actions/setup-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         name: Build Nomos Node
@@ -95,6 +95,9 @@ jobs:
           args: --bin bundle-nomos-node --release --target ${{ matrix.platform.target_triple }}
 
       - name: Bundle
+        shell: bash
+        env:
+          RUST_LOG: info
         run: |
           # Define version parameter for the binary
           PARAMETER="-v ${{ env.VERSION }}"
@@ -103,51 +106,85 @@ jobs:
             echo "This workflow is on debug mode: the bundle command's `-v` parameter will be removed for debugging." 
             PARAMETER=""
           fi
+          
+          if [ "${{ matrix.platform.os }}" = "windows" ]; then
+            EXTENSION=".exe"
+          else
+            EXTENSION=""
+          fi
+  
+          "target/${{ matrix.platform.target_triple }}/release/bundle-nomos-node$EXTENSION" $PARAMETER
 
-          ./target/${{ matrix.platform.target_triple }}/release/bundle-nomos-node $PARAMETER
+      - name: Flatten Linux bundles
+        if: matrix.platform.os == 'linux'
+        run: |
+          mv target/${{ matrix.platform.target_triple }}/release/bundle/rpm/nomos-node-${{ env.VERSION }}-1.x86_64.rpm nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.rpm
+          mv target/${{ matrix.platform.target_triple }}/release/bundle/deb/nomos-node_${{ env.VERSION }}_amd64.deb nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.deb
+          mv target/${{ matrix.platform.target_triple }}/release/bundle/appimage/nomos-node_${{ env.VERSION }}_amd64.AppImage nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.AppImage
 
-      - name: Upload RPM
+      - name: Upload RPM (${{ matrix.platform.arch }})
         if: matrix.platform.os == 'linux'
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
-          name: "${{ matrix.platform.arch }}_rpm"
-          path: "target/${{ matrix.platform.target_triple }}/release/bundle/rpm/nomos-node-${{ env.VERSION }}-.x86_64.rpm"
+          name: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.rpm
+          path: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.rpm
           if-no-files-found: error
 
-      - name: Upload DEB
+      - name: Upload DEB (${{ matrix.platform.arch }})
         if: matrix.platform.os == 'linux'
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
-          name: "${{ matrix.platform.arch }}_deb"
-          path: "target/${{ matrix.platform.target_triple }}/release/bundle/deb/nomos-node_${{ env.VERSION }}_amd64.deb"
+          name: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.deb
+          path: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.deb
           if-no-files-found: error
 
-      - name: Upload AppImage
+      - name: Upload AppImage (${{ matrix.platform.arch }})
         if: matrix.platform.os == 'linux'
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
-          name: "${{ matrix.platform.arch }}_appimage"
-          path: "target/${{ matrix.platform.target_triple }}/release/bundle/appimage/nomos-node_${{ env.VERSION }}_amd64.AppImage"
+          name: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.AppImage
+          path: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.AppImage
           if-no-files-found: error
 
-      - name: Upload DMG
+      - name: Flatten MacOS bundles
+        if: matrix.platform.os == 'macos'
+        run: |
+          mv target/${{ matrix.platform.target_triple }}/release/bundle/dmg/nomos-node_${{ env.VERSION }}_${{ matrix.platform.arch }}.dmg nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.dmg
+
+      - name: Upload DMG (${{ matrix.platform.arch }})
         if: matrix.platform.os == 'macos'
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
-          name: "${{ matrix.platform.arch }}_dmg"
-          path: "target/${{ matrix.platform.target_triple }}/release/bundle/dmg/nomos-node_${{ env.VERSION }}_${{ matrix.platform.arch }}.dmg"
+          name: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.dmg
+          path: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.dmg
           if-no-files-found: error
 
-      - name: Upload MSI
+      - name: Flatten Windows bundles
+        if: matrix.platform.os == 'windows'
+        run: |
+          mv target/${{ matrix.platform.target_triple }}/release/bundle/msi/nomos-node_${{ env.VERSION }}_x64_en-US.msi nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.msi
+          mv target/${{ matrix.platform.target_triple }}/release/bundle/nsis/nomos-node_${{ env.VERSION }}_x64-setup.exe nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.exe
+
+      - name: Upload MSI (${{ matrix.platform.arch }})
         if: matrix.platform.os == 'windows'
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
-          name: "${{ matrix.platform.arch }}_msi"
-          path: "target/${{ matrix.platform.target_triple }}/release/bundle/msi/nomos-node_${{ env.VERSION }}_amd64.msi"
+          name: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.msi
+          path: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.msi
+          if-no-files-found: error
+
+      - name: Upload EXE (${{ matrix.platform.arch }})
+        if: matrix.platform.os == 'windows'
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
+        with:
+          name: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.exe
+          path: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.exe
           if-no-files-found: error
 
   create-release:
     name: "Create release"
+    # Only run this job for tags or manual trigger, not for PRs
+    # if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     needs:
       - setup
       - bundle
@@ -181,104 +218,58 @@ jobs:
           draft: true
           prerelease: true
 
-  upload-assets:
-    name: "Upload assets to release"
+  upload-artifacts:
+    name: "Upload Artifacts to release"
     needs:
       - setup
       - create-release
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform:
+          - os: linux
+            arch: x86_64
+            extension: deb
+            extension-display: DEB
+          - os: linux
+            arch: x86_64
+            extension: rpm
+            extension-display: RPM
+          - os: linux
+            arch: x86_64
+            extension: AppImage
+            extension-display: AppImage
+          - os: macos
+            arch: aarch64
+            extension: dmg
+            extension-display: DMG
+          - os: windows
+            arch: x86_64
+            extension: msi
+            extension-display: MSI
+          - os: windows
+            arch: x86_64
+            extension: exe
+            extension-display: EXE
+
     env:
-      VERSION: ${{ needs.setup.outputs.version }}
       UPLOAD_URL: ${{ needs.create-release.outputs.upload_url }}
+      BINARY_NAME: nomos_node-${{ needs.setup.outputs.version }}-${{ matrix.platform.arch }}.${{ matrix.platform.extension }}
+      DOWNLOAD_DIRECTORY: artifacts
     steps:
-      - name: Download artifacts
+      - name: Download Artifact
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # Version 4.2.1
+        with:
+          name: ${{ env.BINARY_NAME }}
+          path: ${{ env.DOWNLOAD_DIRECTORY }}
+          merge-multiple: 'true'
 
-      - name: Upload RPM asset (amd64)
+      - name: Upload ${{ matrix.platform.extension-display }} (${{ matrix.platform.arch }})
         uses: actions/upload-release-asset@ef2adfe8cb8ebfa540930c452c576b3819990faa  # Version 1.0.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BINARY_NAME: nomos-node_${{ env.VERSION }}_amd64.rpm
         with:
           upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: ${{ github.workspace }}/amd64_rpm/nomos-node-${{ env.VERSION }}-.x86_64.rpm
+          asset_path: ${{ env.DOWNLOAD_DIRECTORY }}/${{ env.BINARY_NAME }}
           asset_name: ${{ env.BINARY_NAME }}
           asset_content_type: application/octet-stream
-
-      - name: Upload RPM asset (i686)
-        uses: actions/upload-release-asset@ef2adfe8cb8ebfa540930c452c576b3819990faa  # Version 1.0.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BINARY_NAME: nomos-node_${{ env.VERSION }}_i686.rpm
-        with:
-          upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: ${{ github.workspace }}/i686_rpm/nomos-node-${{ env.VERSION }}-.x86_64.rpm
-          asset_name: ${{ env.BINARY_NAME }}
-          asset_content_type: application/octet-stream
-
-      - name: Upload DEB asset (amd64)
-        uses: actions/upload-release-asset@ef2adfe8cb8ebfa540930c452c576b3819990faa  # Version 1.0.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BINARY_NAME: nomos-node_${{ env.VERSION }}_amd64.deb
-        with:
-          upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: ${{ github.workspace }}/amd64_deb/nomos-node_${{ env.VERSION }}_amd64.deb
-          asset_name: ${{ env.BINARY_NAME }}
-          asset_content_type: application/octet-stream
-
-      - name: Upload DEB asset (i686)
-        uses: actions/upload-release-asset@ef2adfe8cb8ebfa540930c452c576b3819990faa  # Version 1.0.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BINARY_NAME: nomos-node_${{ env.VERSION }}_i686.deb
-        with:
-          upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: ${{ github.workspace }}/i686_deb/nomos-node_${{ env.VERSION }}_amd64.deb
-          asset_name: ${{ env.BINARY_NAME }}
-          asset_content_type: application/octet-stream
-
-      - name: Upload AppImage asset (amd64)
-        uses: actions/upload-release-asset@ef2adfe8cb8ebfa540930c452c576b3819990faa  # Version 1.0.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BINARY_NAME: nomos-node_${{ env.VERSION }}_amd64.AppImage
-        with:
-          upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: ${{ github.workspace }}/amd64_appimage/nomos-node_${{ env.VERSION }}_amd64.AppImage
-          asset_name: ${{ env.BINARY_NAME }}
-          asset_content_type: application/octet-stream
-
-      - name: Upload AppImage asset (i686)
-        uses: actions/upload-release-asset@ef2adfe8cb8ebfa540930c452c576b3819990faa  # Version 1.0.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BINARY_NAME: nomos-node_${{ env.VERSION }}_i686.AppImage
-        with:
-          upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: ${{ github.workspace }}/i686_appimage/nomos-node_${{ env.VERSION }}_amd64.AppImage
-          asset_name: ${{ env.BINARY_NAME }}
-          asset_content_type: application/octet-stream
-
-      - name: Upload DMG asset
-        uses: actions/upload-release-asset@ef2adfe8cb8ebfa540930c452c576b3819990faa  # Version 1.0.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BINARY_NAME: nomos-node_${{ env.VERSION }}_aarch64.dmg
-        with:
-          upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: ${{ github.workspace }}/aarch64_dmg/nomos-node_${{ env.VERSION }}_aarch64.dmg
-          asset_name: ${{ env.BINARY_NAME }}
-          asset_content_type: application/octet-stream
-
-      # Not available yet
-      # - name: Upload MSI asset
-      #   uses: actions/upload-release-asset@ef2adfe8cb8ebfa540930c452c576b3819990faa  # Version 1.0.2
-      #   env:
-      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      #     BINARY_NAME: nomos-node_${{ env.VERSION }}_amd64.msi
-      #   with:
-      #     upload_url: ${{ env.UPLOAD_URL }}
-      #     asset_path: ${{ github.workspace }}/amd64_msi/nomos-node_${{ env.VERSION }}_amd64.msi
-      #     asset_name: ${{ env.BINARY_NAME }}
-      #     asset_content_type: application/octet-stream

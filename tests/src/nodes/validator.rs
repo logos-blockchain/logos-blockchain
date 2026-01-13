@@ -1,19 +1,14 @@
 use std::{
     collections::HashSet,
     net::SocketAddr,
-    num::NonZeroUsize,
-    path::PathBuf,
     process::{Child, Command, Stdio},
     str::FromStr as _,
     time::Duration,
 };
 
 use broadcast_service::BlockInfo;
-use chain_leader::LeaderSettings;
-use chain_network::ChainNetworkSettings;
-use chain_service::{CryptarchiaInfo, CryptarchiaSettings, StartingState};
+use chain_service::CryptarchiaInfo;
 use common_http_client::CommonHttpClient;
-use cryptarchia_engine::time::SlotConfig;
 use futures::Stream;
 use kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
 use nomos_core::{
@@ -51,13 +46,9 @@ use nomos_node::{
         backend::AxumBackendSettings, handlers::GetCommitmentsRequest,
         testing::handlers::HistoricSamplingRequest,
     },
-    config::mempool::MempoolConfig,
+    config::mempool::serde::Config as MempoolConfig,
 };
 use nomos_sdp::SdpSettings;
-use nomos_time::{
-    TimeServiceSettings,
-    backends::{NtpTimeBackendSettings, ntp::async_client::NTPClientSettings},
-};
 use nomos_tracing::logging::local::FileConfig;
 use nomos_tracing_service::LoggerLayer;
 use nomos_utils::{math::NonNegativeF64, net::get_available_tcp_port};
@@ -67,14 +58,15 @@ use tempfile::NamedTempFile;
 use tokio::time::error::Elapsed;
 use tx_service::MempoolMetrics;
 
-use super::{CLIENT, create_tempdir, persist_tempdir};
+use super::{CLIENT, create_tempdir, get_exe_path, persist_tempdir};
 use crate::{
     IS_DEBUG_TRACING, adjust_timeout,
     nodes::LOGS_PREFIX,
     topology::configs::{GeneralConfig, deployment::default_e2e_deployment_settings},
 };
 
-const BIN_PATH: &str = "../target/debug/nomos-node";
+const BIN_PATH_DEBUG: &str = "../target/debug/nomos-node";
+const BIN_PATH_RELEASE: &str = "../target/release/nomos-node";
 
 pub enum Pool {
     Da,
@@ -150,7 +142,8 @@ impl Validator {
         );
 
         serde_yaml::to_writer(&mut file, &config).unwrap();
-        let child = Command::new(std::env::current_dir().unwrap().join(BIN_PATH))
+        let exe_path = get_exe_path(BIN_PATH_DEBUG, BIN_PATH_RELEASE);
+        let child = Command::new(exe_path)
             .arg(&config_path)
             .current_dir(dir.path())
             .stdout(Stdio::inherit())
@@ -308,7 +301,12 @@ impl Validator {
         &self.config
     }
 
-    pub async fn get_headers(&self, from: Option<HeaderId>, to: Option<HeaderId>) -> Vec<HeaderId> {
+    pub async fn get_headers(
+        &self,
+        from: Option<HeaderId>,
+        to: Option<HeaderId>,
+        print: bool,
+    ) -> Vec<HeaderId> {
         let mut req = CLIENT.get(format!("http://{}{}", self.addr, CRYPTARCHIA_HEADERS));
 
         if let Some(from) = from {
@@ -321,14 +319,18 @@ impl Validator {
 
         let res = req.send().await;
 
-        println!("res: {res:?}");
+        if print {
+            println!("res: {res:?}");
+        }
 
         res.unwrap().json::<Vec<HeaderId>>().await.unwrap()
     }
 
-    pub async fn consensus_info(&self) -> CryptarchiaInfo {
+    pub async fn consensus_info(&self, print: bool) -> CryptarchiaInfo {
         let res = self.get(CRYPTARCHIA_INFO).await;
-        println!("{res:?}");
+        if print {
+            println!("{res:?}");
+        }
         res.unwrap().json().await.unwrap()
     }
 
@@ -417,9 +419,10 @@ impl Validator {
     ) -> Vec<Option<HeaderId>> {
         let mut results = vec![None; tx_hashes.len()];
 
+        let mut tick = 0u8;
         let _ = tokio::time::timeout(timeout, async {
             loop {
-                let headers = self.get_headers(None, None).await;
+                let headers = self.get_headers(None, None, tick == 0).await;
 
                 for header_id in headers.iter().take(10) {
                     if let Some(block) = self.get_block(*header_id).await {
@@ -433,11 +436,17 @@ impl Validator {
                     }
                 }
 
+                println!(
+                    "waiting for transactions ... {} of {}",
+                    results.iter().filter(|x| x.is_some()).count(),
+                    tx_hashes.len()
+                );
                 if results.iter().all(Option::is_some) {
                     return;
                 }
 
                 tokio::time::sleep(Duration::from_millis(500)).await;
+                tick = tick.wrapping_add(1);
             }
         })
         .await;
@@ -452,55 +461,19 @@ pub fn create_validator_config(config: GeneralConfig) -> Config {
     let testing_http_address = format!("127.0.0.1:{}", get_available_tcp_port().unwrap())
         .parse()
         .unwrap();
+    let custom_deployment_config = default_e2e_deployment_settings();
 
     let da_policy_settings = config.da_config.policy_settings;
     Config {
         network: config.network_config,
         blend: config.blend_config.0,
-        deployment: default_e2e_deployment_settings(),
-        cryptarchia: CryptarchiaSettings {
-            config: config.consensus_config.ledger_config.clone(),
-            starting_state: StartingState::Genesis {
-                genesis_tx: config.consensus_config.genesis_tx,
-            },
-            recovery_file: PathBuf::from("./recovery/cryptarchia.json"),
-            bootstrap: chain_service::BootstrapConfig {
-                prolonged_bootstrap_period: config.bootstrapping_config.prolonged_bootstrap_period,
-                force_bootstrap: false,
-                offline_grace_period: chain_service::OfflineGracePeriodConfig {
-                    grace_period: Duration::from_secs(20 * 60),
-                    state_recording_interval: Duration::from_secs(60),
-                },
-            },
+        deployment: custom_deployment_config,
+        time: config.time_config,
+        cryptarchia: config.consensus_config.user_config().clone(),
+        mempool: MempoolConfig {
+            recovery_path: "./recovery/mempool.json".into(),
         },
-        chain_network: ChainNetworkSettings {
-            config: config.consensus_config.ledger_config.clone(),
-            network_adapter_settings:
-                chain_network::network::adapters::libp2p::LibP2pAdapterSettings {
-                    topic: String::from(nomos_node::CONSENSUS_TOPIC),
-                },
-            bootstrap: chain_network::BootstrapConfig {
-                ibd: chain_network::IbdConfig {
-                    peers: HashSet::new(),
-                    delay_before_new_download: Duration::from_secs(10),
-                },
-            },
-            sync: chain_network::SyncConfig {
-                orphan: chain_network::OrphanConfig {
-                    max_orphan_cache_size: NonZeroUsize::new(5)
-                        .expect("Max orphan cache size must be non-zero"),
-                },
-            },
-        },
-        cryptarchia_leader: LeaderSettings {
-            transaction_selector_settings: (),
-            config: config.consensus_config.ledger_config.clone(),
-            leader_config: config.consensus_config.leader_config.clone(),
-            blend_broadcast_settings:
-                nomos_blend_service::core::network::libp2p::Libp2pBroadcastSettings {
-                    topic: String::from(nomos_node::CONSENSUS_TOPIC),
-                },
-        },
+
         da_network: DaNetworkConfig {
             backend: DaNetworkBackendSettings {
                 node_key: config.da_config.node_key,
@@ -578,29 +551,9 @@ pub fn create_validator_config(config: GeneralConfig) -> Config {
             read_only: false,
             column_family: Some("blocks".into()),
         },
-        // TODO from
-        time: TimeServiceSettings {
-            backend_settings: NtpTimeBackendSettings {
-                ntp_server: config.time_config.ntp_server,
-                ntp_client_settings: NTPClientSettings {
-                    timeout: config.time_config.timeout,
-                    listening_interface: config.time_config.interface,
-                },
-                update_interval: config.time_config.update_interval,
-                slot_config: SlotConfig {
-                    slot_duration: config.time_config.slot_duration,
-                    chain_start_time: config.time_config.chain_start_time,
-                },
-                epoch_config: config.consensus_config.ledger_config.epoch_config,
-                base_period_length: config.consensus_config.ledger_config.base_period_length(),
-            },
-        },
-        mempool: MempoolConfig {
-            pool_recovery_path: "./recovery/mempool.json".into(),
-        },
         sdp: SdpSettings { declaration: None },
         wallet: WalletServiceSettings {
-            known_keys: HashSet::from_iter([config.consensus_config.leader_config.pk]),
+            known_keys: HashSet::from_iter([config.consensus_config.user_config().leader.pk]),
         },
         key_management: config.kms_config,
         testing_http: nomos_api::ApiServiceSettings {

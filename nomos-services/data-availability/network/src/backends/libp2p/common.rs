@@ -20,14 +20,14 @@ use nomos_da_network_core::{
         dispersal::validator::behaviour::DispersalEvent,
         sampling::{
             self, BehaviourSampleReq, BehaviourSampleRes, SubnetsConfig,
-            errors::{HistoricSamplingError, SamplingError},
+            errors::{HistoricCommitmentsError, HistoricSamplingError, SamplingError},
             opinions::OpinionEvent,
         },
     },
     swarm::{
         DAConnectionMonitorSettings, DAConnectionPolicySettings, DispersalValidationError,
         DispersalValidationResult, DispersalValidatorEvent, ReplicationConfig,
-        validator::{SampleArgs, ValidatorEventsStream},
+        validator::{CommitmentsArgs, SampleArgs, ValidatorEventsStream},
     },
 };
 use nomos_libp2p::{Multiaddr, ed25519, secret_key_serde};
@@ -123,14 +123,23 @@ impl CommitmentsEvent {
 
 #[derive(Debug, Clone)]
 pub enum HistoricSamplingEvent {
-    HistoricSamplingSuccess {
+    SamplingSuccess {
         block_id: HeaderId,
         shares: HashMap<BlobId, Vec<DaLightShare>>,
         commitments: HashMap<BlobId, DaSharesCommitments>,
     },
-    HistoricSamplingError {
+    SamplingError {
         block_id: HeaderId,
         error: HistoricSamplingError,
+    },
+    CommitmentsSuccess {
+        block_id: HeaderId,
+        blob_id: BlobId,
+        commitments: DaSharesCommitments,
+    },
+    CommitmentsError {
+        block_id: HeaderId,
+        error: HistoricCommitmentsError,
     },
 }
 
@@ -196,7 +205,7 @@ pub(crate) async fn handle_validator_events_stream(
         // safe set: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
         tokio::select! {
             Some(sampling_event) = StreamExt::next(&mut sampling_events_receiver) => {
-                handle_sampling_event(&sampling_broadcast_sender, &commitments_broadcast_sender, &historic_sample_broadcast_sender,&opinion_sender, sampling_event).await;
+                handle_sampling_event(&sampling_broadcast_sender, &commitments_broadcast_sender, &historic_sample_broadcast_sender, &historic_sample_broadcast_sender, &opinion_sender, sampling_event).await;
             }
             Some(dispersal_event) = StreamExt::next(&mut validation_events_receiver) => {
                 handle_dispersal_event(&validation_broadcast_sender, dispersal_event).await;
@@ -311,6 +320,7 @@ async fn handle_sampling_event(
     sampling_broadcast_sender: &broadcast::Sender<SamplingEvent>,
     commitments_broadcast_sender: &broadcast::Sender<CommitmentsEvent>,
     historic_sample_broadcast_sender: &broadcast::Sender<HistoricSamplingEvent>,
+    historic_commitments_broadcast_sender: &broadcast::Sender<HistoricSamplingEvent>,
     opinion_sender: &UnboundedSender<OpinionEvent>,
     sampling_event: sampling::SamplingEvent,
 ) {
@@ -375,6 +385,52 @@ async fn handle_sampling_event(
         sampling::SamplingEvent::Opinion(opinion_event) => {
             handle_opinion_event(opinion_sender, opinion_event);
         }
+        sampling::SamplingEvent::HistoricCommitmentsSuccess {
+            block_id,
+            blob_id,
+            commitments,
+        } => handle_historic_commitments_success(
+            block_id,
+            blob_id,
+            commitments,
+            historic_commitments_broadcast_sender,
+        ),
+        sampling::SamplingEvent::HistoricCommitmentsError { block_id, error } => {
+            handle_historic_commitments_error(
+                block_id,
+                error,
+                historic_commitments_broadcast_sender,
+            );
+        }
+    }
+}
+
+fn handle_historic_commitments_success(
+    block_id: HeaderId,
+    blob_id: BlobId,
+    commitments: DaSharesCommitments,
+    historic_commitments_broadcast_sender: &broadcast::Sender<HistoricSamplingEvent>,
+) {
+    if let Err(e) =
+        historic_commitments_broadcast_sender.send(HistoricSamplingEvent::CommitmentsSuccess {
+            block_id,
+            blob_id,
+            commitments,
+        })
+    {
+        error!("Error in internal broadcast of historic commitments success: {e:?}");
+    }
+}
+
+fn handle_historic_commitments_error(
+    block_id: HeaderId,
+    error: HistoricCommitmentsError,
+    historic_commitments_broadcast_sender: &broadcast::Sender<HistoricSamplingEvent>,
+) {
+    if let Err(e) = historic_commitments_broadcast_sender
+        .send(HistoricSamplingEvent::CommitmentsError { block_id, error })
+    {
+        error!("Error in internal broadcast of historic commitments error: {e:?}");
     }
 }
 
@@ -393,13 +449,11 @@ fn handle_historic_sample_success(
     commitments: HashMap<BlobId, DaSharesCommitments>,
     historic_sample_broadcast_sender: &broadcast::Sender<HistoricSamplingEvent>,
 ) {
-    if let Err(e) =
-        historic_sample_broadcast_sender.send(HistoricSamplingEvent::HistoricSamplingSuccess {
-            block_id,
-            shares,
-            commitments,
-        })
-    {
+    if let Err(e) = historic_sample_broadcast_sender.send(HistoricSamplingEvent::SamplingSuccess {
+        block_id,
+        shares,
+        commitments,
+    }) {
         error!("Error in internal broadcast of historic sampling success: {e:?}");
     }
 }
@@ -410,7 +464,7 @@ fn handle_historic_sample_error(
     historic_sample_broadcast_sender: &broadcast::Sender<HistoricSamplingEvent>,
 ) {
     if let Err(e) = historic_sample_broadcast_sender
-        .send(HistoricSamplingEvent::HistoricSamplingError { block_id, error })
+        .send(HistoricSamplingEvent::SamplingError { block_id, error })
     {
         error!("Error in internal broadcast of historic sampling error: {e:?}");
     }
@@ -562,6 +616,19 @@ pub(crate) async fn handle_historic_sample_request<Membership>(
         historic_sample_request_channel.send((block_id, blob_ids))
     {
         error!("Error requesting historic sample for block_id: {block_id:?}");
+    }
+}
+
+pub(crate) async fn handle_historic_commitments_request<Membership>(
+    historic_commitments_request_channel: &UnboundedSender<CommitmentsArgs<Membership>>,
+    block_id: HeaderId,
+    blob_id: BlobId,
+    session: Membership,
+) {
+    if let Err(SendError((block_id, _, _))) =
+        historic_commitments_request_channel.send((block_id, session, blob_id))
+    {
+        error!("Error requesting historic commitments for block_id: {block_id:?}");
     }
 }
 

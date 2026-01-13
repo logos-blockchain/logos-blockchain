@@ -1,6 +1,7 @@
 use std::{collections::HashSet, time::Duration};
 
 use common_http_client::CommonHttpClient;
+use key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use nomos_core::mantle::{
     MantleTx, Note, SignedMantleTx, Transaction as _, TxHash, ledger::Tx as LedgerTx,
     ops::channel::ChannelId,
@@ -14,7 +15,6 @@ use tests::{
     topology::{Topology, TopologyConfig},
 };
 use tokio::time::timeout;
-use zksign::PublicKey;
 
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -88,7 +88,7 @@ async fn wait_for_transactions_processing(
     let mut scanned_blocks = HashSet::new();
 
     loop {
-        let info = validator.consensus_info().await;
+        let info = validator.consensus_info(false).await;
         let _: Option<()> = scan_chain_until(
             info.tip,
             &mut scanned_blocks,
@@ -109,6 +109,11 @@ async fn wait_for_transactions_processing(
         .await;
 
         if found_valid_txs.len() == valid_tx_hashes.len() {
+            println!(
+                "Found {}/{} valid transactions",
+                found_valid_txs.len(),
+                valid_tx_hashes.len()
+            );
             break;
         }
 
@@ -134,7 +139,10 @@ async fn wait_for_transactions_processing(
 }
 
 fn create_invalid_transaction_with_id(id: usize) -> SignedMantleTx {
-    let output_note = Note::new(1000 + id as u64, PublicKey::new(BigUint::from(1u8).into()));
+    let output_note = Note::new(
+        1000 + id as u64,
+        ZkPublicKey::new(BigUint::from(1u8).into()),
+    );
 
     let mantle_tx = MantleTx {
         ops: Vec::new(),
@@ -145,7 +153,7 @@ fn create_invalid_transaction_with_id(id: usize) -> SignedMantleTx {
 
     SignedMantleTx {
         ops_proofs: Vec::new(),
-        ledger_tx_proof: zksign::SecretKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap(),
+        ledger_tx_proof: ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap(),
         mantle_tx,
     }
 }

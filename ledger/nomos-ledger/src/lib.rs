@@ -136,7 +136,7 @@ where
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LedgerState {
     block_number: BlockNumber,
     cryptarchia_ledger: CryptarchiaLedger,
@@ -176,9 +176,11 @@ impl LedgerState {
         let mut cryptarchia_ledger = self
             .cryptarchia_ledger
             .try_apply_header::<LeaderProof, Id>(slot, proof, config)?;
-        let (mantle_ledger, reward_utxos) =
-            self.mantle_ledger
-                .try_apply_header(config.epoch(slot), voucher, config)?;
+        let (mantle_ledger, reward_utxos) = self.mantle_ledger.try_apply_header(
+            cryptarchia_ledger.epoch_state(),
+            voucher,
+            config,
+        )?;
 
         // Insert reward UTXOs into the cryptarchia ledger
         for utxo in reward_utxos {
@@ -228,11 +230,13 @@ impl LedgerState {
         Ok(self)
     }
 
-    pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>) -> Self {
+    pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config) -> Self {
+        let cryptarchia_ledger = CryptarchiaLedger::from_utxos(utxos, Fr::ZERO);
+        let mantle_ledger = MantleLedger::new(config, cryptarchia_ledger.epoch_state());
         Self {
             block_number: 0,
-            cryptarchia_ledger: CryptarchiaLedger::from_utxos(utxos, Fr::ZERO),
-            mantle_ledger: MantleLedger::default(),
+            cryptarchia_ledger,
+            mantle_ledger,
         }
     }
 
@@ -242,8 +246,12 @@ impl LedgerState {
         epoch_nonce: Fr,
     ) -> Result<Self, LedgerError<Id>> {
         let cryptarchia_ledger = CryptarchiaLedger::from_genesis_tx(&tx, epoch_nonce)?;
-        let mantle_ledger =
-            MantleLedger::from_genesis_tx(tx, config, cryptarchia_ledger.latest_utxos())?;
+        let mantle_ledger = MantleLedger::from_genesis_tx(
+            tx,
+            config,
+            cryptarchia_ledger.latest_utxos(),
+            cryptarchia_ledger.epoch_state(),
+        )?;
         Ok(Self {
             block_number: 0,
             cryptarchia_ledger,
@@ -303,22 +311,18 @@ impl LedgerState {
 #[cfg(test)]
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
+    use key_management_system_keys::keys::{ZkKey, ZkPublicKey};
     use nomos_core::mantle::{
         GasCost as _, MantleTx, Note, SignedMantleTx, Transaction as _, gas::MainnetGasConstants,
         ledger::Tx as LedgerTx,
     };
     use num_bigint::BigUint;
-    use zksign::PublicKey;
 
     use super::*;
 
     type HeaderId = [u8; 32];
 
-    fn create_tx(
-        inputs: Vec<NoteId>,
-        outputs: Vec<Note>,
-        sks: &[zksign::SecretKey],
-    ) -> SignedMantleTx {
+    fn create_tx(inputs: Vec<NoteId>, outputs: Vec<Note>, sks: &[ZkKey]) -> SignedMantleTx {
         let ledger_tx = LedgerTx::new(inputs, outputs);
         let mantle_tx = MantleTx {
             ops: vec![],
@@ -328,15 +332,16 @@ mod tests {
         };
         SignedMantleTx {
             ops_proofs: vec![],
-            ledger_tx_proof: zksign::SecretKey::multi_sign(sks, mantle_tx.hash().as_ref()).unwrap(),
+            ledger_tx_proof: ZkKey::multi_sign(sks, mantle_tx.hash().as_ref()).unwrap(),
             mantle_tx,
         }
     }
 
     pub fn create_test_ledger() -> (Ledger<HeaderId>, HeaderId, Utxo) {
+        let config = config();
         let utxo = utxo();
-        let genesis_state = LedgerState::from_utxos([utxo]);
-        let ledger = Ledger::new([0; 32], genesis_state, config());
+        let genesis_state = LedgerState::from_utxos([utxo], &config);
+        let ledger = Ledger::new([0; 32], genesis_state, config);
         (ledger, [0; 32], utxo)
     }
 
@@ -352,8 +357,8 @@ mod tests {
     #[test]
     fn test_ledger_try_update_with_transaction() {
         let (ledger, genesis_id, utxo) = create_test_ledger();
-        let mut output_note = Note::new(1, PublicKey::new(BigUint::from(1u8).into()));
-        let sk = zksign::SecretKey::from(BigUint::from(0u8));
+        let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(1u8).into()));
+        let sk = ZkKey::from(BigUint::from(0u8));
         // determine fees
         let tx = create_tx(
             vec![utxo.id()],

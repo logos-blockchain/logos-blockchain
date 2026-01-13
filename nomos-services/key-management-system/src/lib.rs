@@ -151,9 +151,9 @@ where
                 }
             }
             KMSMessage::Execute { key_id, operator } => {
-                let _ = backend.execute(&key_id, operator).await.inspect_err(|e| {
+                drop(backend.execute(&key_id, operator).await.inspect_err(|e| {
                     error!("Failed to execute operator with key ID {key_id:?}. Error: {e:?}");
-                });
+                }));
             }
         }
     }

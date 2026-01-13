@@ -5,7 +5,6 @@ use std::{
     task::{Context, Poll},
 };
 
-use either::Either;
 use futures::{
     AsyncWriteExt as _, FutureExt as _, StreamExt as _,
     future::BoxFuture,
@@ -38,12 +37,12 @@ use crate::{
     protocol::SAMPLING_PROTOCOL,
     protocols::sampling::{
         SubnetsConfig,
-        errors::{HistoricSamplingError, SamplingError},
+        errors::{HistoricCommitmentsError, HistoricSamplingError, SamplingError},
         historic::HistoricSamplingEvent,
         opinions::{Opinion, OpinionEvent},
         streams::{self, SampleStream},
     },
-    swarm::validator::SampleArgs,
+    swarm::validator::{CommitmentsArgs, SampleArgs},
 };
 
 const MAX_PEER_RETRIES: usize = 5;
@@ -70,6 +69,13 @@ type HistoricFutureError = (HeaderId, HistoricSamplingError);
 type HistoricSamplingResponseFuture =
     BoxFuture<'static, Result<HistoricSamplingResponseSuccess, HistoricFutureError>>;
 
+type HistoricCommitmentsResponseSuccess = (HeaderId, BlobId, DaSharesCommitments, OpinionEvent);
+
+type HistoricCommitmentsResponseFuture = BoxFuture<
+    'static,
+    Result<HistoricCommitmentsResponseSuccess, (HeaderId, HistoricCommitmentsError)>,
+>;
+
 /// Historic sampling protocol that uses membership snapshots
 /// Takes care of sending sampling requests using provided historic membership
 pub struct HistoricRequestSamplingBehaviour<Membership, Addressbook>
@@ -85,12 +91,18 @@ where
     control: Control,
     /// Pending sampling stream tasks with their context
     historic_request_tasks: FuturesUnordered<HistoricSamplingResponseFuture>,
+    /// Pending commitments stream tasks with their context
+    historic_commitments_tasks: FuturesUnordered<HistoricCommitmentsResponseFuture>,
     /// Addressbook used for getting addresses of peers
     addressbook: Addressbook,
     /// Pending samples for historic requests sender
     historic_request_sender: UnboundedSender<SampleArgs<Membership>>,
     /// Pending samples for historic requests stream
     historic_request_stream: BoxStream<'static, SampleArgs<Membership>>,
+    /// Pending historic commitments requests sender
+    historic_commitments_request_sender: UnboundedSender<CommitmentsArgs<Membership>>,
+    /// Pending historic commitments for historic requests stream
+    historic_commitments_request_stream: BoxStream<'static, CommitmentsArgs<Membership>>,
     /// Subnets sampling config that is used when picking new subnetwork peers
     subnets_config: SubnetsConfig,
     /// Broadcast channel for notifying about established connections
@@ -114,9 +126,14 @@ where
         let control = stream_behaviour.new_control();
 
         let stream_tasks = FuturesUnordered::new();
+        let commitments_tasks = FuturesUnordered::new();
 
         let (historic_request_sender, receiver) = mpsc::unbounded_channel();
         let historic_request_stream = UnboundedReceiverStream::new(receiver).boxed();
+
+        let (historic_commitments_request_sender, commitments_receiver) = mpsc::unbounded_channel();
+        let historic_commitments_request_stream =
+            UnboundedReceiverStream::new(commitments_receiver).boxed();
 
         let (connection_broadcast_sender, _) = tokio::sync::broadcast::channel(1024);
         let opinion_events = VecDeque::new();
@@ -126,9 +143,12 @@ where
             stream_behaviour,
             control,
             historic_request_tasks: stream_tasks,
+            historic_commitments_tasks: commitments_tasks,
             addressbook,
             historic_request_sender,
             historic_request_stream,
+            historic_commitments_request_sender,
+            historic_commitments_request_stream,
             subnets_config,
             connection_broadcast_sender,
             opinion_events,
@@ -178,6 +198,13 @@ where
     /// Get a hook to the sender channel for historic sampling requests
     pub fn historic_request_channel(&self) -> UnboundedSender<SampleArgs<Membership>> {
         self.historic_request_sender.clone()
+    }
+
+    /// Get a hook to the sender channel for historic commitments requests
+    pub fn historic_commitments_request_channel(
+        &self,
+    ) -> UnboundedSender<CommitmentsArgs<Membership>> {
+        self.historic_commitments_request_sender.clone()
     }
 }
 
@@ -278,6 +305,49 @@ where
         self.historic_request_tasks.push(request_future);
     }
 
+    fn sample_commitments_only(&self, commitments_args: CommitmentsArgs<Membership>) {
+        let (block_id, membership, blob_id) = commitments_args;
+        let control = self.control.clone();
+        let local_peer_id = self.local_peer_id;
+        let connection_broadcast_sender = self.connection_broadcast_sender.clone();
+        let num_of_subnets = self.subnets_config.num_of_subnets;
+
+        let request_future = async move {
+            let subnets: Vec<SubnetworkId> = {
+                let mut rng = rand::rng();
+                (0..membership.last_subnetwork_id()).choose_multiple(&mut rng, num_of_subnets)
+            };
+
+            let blob_ids = HashSet::from([blob_id]); // Convert single blob to HashSet for reuse
+
+            let (commitments_map, opinion_event) = Self::sample_all_commitments(
+                &membership,
+                &subnets,
+                &local_peer_id,
+                &blob_ids,
+                &control,
+                connection_broadcast_sender.subscribe(),
+            )
+            .await
+            .map_err(|err| (block_id, err.into()))?;
+
+            // Extract the single commitment from the map
+            let commitment = commitments_map
+                .get(&blob_id)
+                .ok_or_else(|| {
+                    (
+                        block_id,
+                        HistoricCommitmentsError::CommitmentsFailed(opinion_event.clone()),
+                    )
+                })?
+                .clone();
+
+            Ok((block_id, blob_id, commitment, opinion_event))
+        }
+        .boxed();
+
+        self.historic_commitments_tasks.push(request_future);
+    }
     async fn sample_all_shares(
         subnets: &[SubnetworkId],
         membership: &Membership,
@@ -374,7 +444,7 @@ where
                             Err(()) => continue 'peers_loop,
                         }
                     }
-                    let _ = stream.stream.close().await;
+                    drop(stream.stream.close().await);
                 }
                 Err(err) => {
                     log::error!("Failed to open stream to peer {peer_id}: {err}");
@@ -461,7 +531,7 @@ where
                             Err(()) => continue 'peers_loop,
                         }
                     }
-                    let _ = stream.stream.close().await;
+                    drop(stream.stream.close().await);
                 }
                 Err(err) => {
                     log::error!("Failed to open stream to peer {peer_id}: {err}");
@@ -506,7 +576,7 @@ where
                         peer_id,
                         session_id,
                     });
-                    let _ = new_stream.stream.close().await;
+                    drop(new_stream.stream.close().await);
                     Err(())
                 }
             }
@@ -517,7 +587,7 @@ where
                     opinions.push(opinion);
                 }
                 if let Some(mut s) = maybe_stream {
-                    let _ = s.stream.close().await;
+                    drop(s.stream.close().await);
                 }
                 Err(())
             }
@@ -547,7 +617,9 @@ where
                 peer_id,
                 session_id,
             }),
-            SamplingError::NoSubnetworkPeers { .. } | SamplingError::MismatchSession { .. } => None,
+            SamplingError::NoSubnetworkPeers { .. }
+            | SamplingError::MismatchSession { .. }
+            | SamplingError::CommitmentsMismatchSession { .. } => None,
         }
     }
 
@@ -609,6 +681,41 @@ where
         None
     }
 
+    fn poll_historic_commitments_tasks(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Option<Poll<ToSwarm<<Self as NetworkBehaviour>::ToSwarm, THandlerInEvent<Self>>>> {
+        if let Poll::Ready(Some(future_result)) =
+            self.historic_commitments_tasks.poll_next_unpin(cx)
+        {
+            cx.waker().wake_by_ref();
+            match future_result {
+                Ok((block_id, blob_id, commitments, opinion_event)) => {
+                    if !opinion_event.opinions.is_empty() {
+                        self.opinion_events.push_back(opinion_event);
+                    }
+                    return Some(Poll::Ready(ToSwarm::GenerateEvent(
+                        HistoricSamplingEvent::CommitmentsSuccess {
+                            block_id,
+                            blob_id,
+                            commitments,
+                        },
+                    )));
+                }
+                Err((block_id, commitments_error)) => {
+                    if let HistoricCommitmentsError::CommitmentsFailed(opinion_event) =
+                        &commitments_error
+                        && !opinion_event.opinions.is_empty()
+                    {
+                        self.opinion_events.push_back(opinion_event.clone());
+                    }
+                    return Some(Self::handle_commitments_error(block_id, commitments_error));
+                }
+            }
+        }
+        None
+    }
+
     const fn handle_historic_success(
         block_id: HeaderId,
         shares: HashMap<BlobId, Vec<DaLightShare>>,
@@ -637,6 +744,21 @@ where
             )),
         }
     }
+
+    const fn handle_commitments_error(
+        block_id: HeaderId,
+        sampling_error: HistoricCommitmentsError,
+    ) -> Poll<ToSwarm<<Self as NetworkBehaviour>::ToSwarm, THandlerInEvent<Self>>> {
+        match sampling_error {
+            HistoricCommitmentsError::CommitmentsFailed(_)
+            | HistoricCommitmentsError::InternalServerError(_) => Poll::Ready(
+                ToSwarm::GenerateEvent(HistoricSamplingEvent::CommitmentsError {
+                    block_id,
+                    error: sampling_error,
+                }),
+            ),
+        }
+    }
 }
 
 impl<Membership, Addressbook> NetworkBehaviour
@@ -646,10 +768,7 @@ where
         MembershipHandler<Id = PeerId, NetworkId = SubnetworkId> + Clone + Send + Sync + 'static,
     Addressbook: AddressBookHandler<Id = PeerId> + Send + Sync + 'static,
 {
-    type ConnectionHandler = Either<
-        <libp2p_stream::Behaviour as NetworkBehaviour>::ConnectionHandler,
-        libp2p::swarm::dummy::ConnectionHandler,
-    >;
+    type ConnectionHandler = <libp2p_stream::Behaviour as NetworkBehaviour>::ConnectionHandler;
     type ToSwarm = HistoricSamplingEvent;
 
     fn handle_established_inbound_connection(
@@ -661,9 +780,12 @@ where
     ) -> Result<THandler<Self>, ConnectionDenied> {
         let _ = self.connection_broadcast_sender.send(peer);
 
-        self.stream_behaviour
-            .handle_established_inbound_connection(connection_id, peer, local_addr, remote_addr)
-            .map(Either::Left)
+        self.stream_behaviour.handle_established_inbound_connection(
+            connection_id,
+            peer,
+            local_addr,
+            remote_addr,
+        )
     }
 
     fn handle_established_outbound_connection(
@@ -684,7 +806,6 @@ where
                 role_override,
                 port_use,
             )
-            .map(Either::Left)
     }
 
     fn on_swarm_event(&mut self, event: FromSwarm) {
@@ -697,7 +818,6 @@ where
         connection_id: ConnectionId,
         event: THandlerOutEvent<Self>,
     ) {
-        let Either::Left(event) = event;
         self.stream_behaviour
             .on_connection_handler_event(peer_id, connection_id, event);
     }
@@ -719,8 +839,20 @@ where
             self.sample_historic(sample_args);
         }
 
+        // Poll pending historic commitments-only requests
+        if let Poll::Ready(Some(commitments_args)) =
+            self.historic_commitments_request_stream.poll_next_unpin(cx)
+        {
+            self.sample_commitments_only(commitments_args);
+        }
+
         // poll stream tasks
         if let Some(result) = self.poll_historic_tasks(cx) {
+            return result;
+        }
+
+        // Poll commitments-only tasks
+        if let Some(result) = self.poll_historic_commitments_tasks(cx) {
             return result;
         }
 

@@ -273,11 +273,11 @@ where
                 }
                 ConnectionMonitorCommand::BlacklistedPeers(response) => {
                     let blacklisted_peers = self.malicious_peers.iter().copied().collect();
-                    let _ = response.send(blacklisted_peers);
+                    drop(response.send(blacklisted_peers));
                 }
                 ConnectionMonitorCommand::Stats(response) => {
                     let stats = self.monitor.stats();
-                    let _ = response.send(stats);
+                    drop(response.send(stats));
                 }
             }
 
@@ -443,7 +443,7 @@ mod tests {
                     () = tokio::time::sleep(Duration::from_millis(10)) => {
                         let waker = futures::task::noop_waker();
                         let mut cx = Context::from_waker(&waker);
-                        let _ = dialer_clone.lock().unwrap().behaviour_mut().poll(&mut cx);
+                        drop(dialer_clone.lock().unwrap().behaviour_mut().poll(&mut cx));
                     }
                     _ = &mut shutdown_rx => {
                         break;

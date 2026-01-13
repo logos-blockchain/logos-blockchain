@@ -62,15 +62,17 @@ pub use tx_service::{
 pub use crate::config::{Config, CryptarchiaLeaderArgs, HttpArgs, LogArgs, NetworkArgs};
 use crate::{
     api::backend::AxumBackend,
-    config::{blend::ServiceConfig as BlendConfig, network::ServiceConfig as NetworkConfig},
+    config::{
+        blend::ServiceConfig as BlendConfig, cryptarchia::ServiceConfig as CryptarchiaConfig,
+        mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
+        time::ServiceConfig as TimeConfig,
+    },
     generic_services::{
         DaMembershipAdapter, DaMembershipStorageGeneric, SdpMempoolAdapterGeneric, SdpService,
         SdpServiceAdapterGeneric,
     },
 };
 
-pub const CONSENSUS_TOPIC: &str = "/cryptarchia/proto";
-pub const MANTLE_TOPIC: &str = "mantle";
 pub const DA_TOPIC: &str = "da";
 pub const MB16: usize = 1024 * 1024 * 16;
 
@@ -235,9 +237,27 @@ pub struct Nomos {
 }
 
 pub fn run_node_from_config(config: Config) -> Result<Overwatch<RuntimeServiceId>, DynError> {
+    let time_service_config = TimeConfig {
+        user: config.time,
+        deployment: config.deployment.time,
+    }
+    .into_time_service_settings(&config.deployment.cryptarchia);
+
+    let (chain_service_config, chain_network_config, chain_leader_config) = CryptarchiaConfig {
+        user: config.cryptarchia,
+        deployment: config.deployment.cryptarchia,
+    }
+    .into_cryptarchia_services_settings(&config.deployment.blend);
+
     let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
         user: config.blend,
-        deployment: config.deployment.clone().into(),
+        deployment: config.deployment.blend,
+    }
+    .into();
+
+    let mempool_service_config = MempoolConfig {
+        user: config.mempool,
+        deployment: config.deployment.mempool,
     }
     .into();
 
@@ -245,7 +265,7 @@ pub fn run_node_from_config(config: Config) -> Result<Overwatch<RuntimeServiceId
         NomosServiceSettings {
             network: NetworkConfig {
                 user: config.network,
-                deployment: config.deployment.into(),
+                deployment: config.deployment.network,
             }
             .into(),
             blend: blend_config,
@@ -255,21 +275,14 @@ pub fn run_node_from_config(config: Config) -> Result<Overwatch<RuntimeServiceId
             #[cfg(feature = "tracing")]
             tracing: config.tracing,
             http: config.http,
-            mempool: TxMempoolSettings {
-                pool: (),
-                network_adapter: AdapterSettings {
-                    topic: String::from(MANTLE_TOPIC),
-                    id: <SignedMantleTx as Transaction>::hash,
-                },
-                recovery_path: config.mempool.pool_recovery_path,
-            },
+            mempool: mempool_service_config,
             da_network: config.da_network,
             da_sampling: config.da_sampling,
             da_verifier: config.da_verifier,
-            cryptarchia: config.cryptarchia,
-            chain_network: config.chain_network,
-            cryptarchia_leader: config.cryptarchia_leader,
-            time: config.time,
+            cryptarchia: chain_service_config,
+            chain_network: chain_network_config,
+            cryptarchia_leader: chain_leader_config,
+            time: time_service_config,
             storage: config.storage,
             system_sig: (),
             key_management: config.key_management,

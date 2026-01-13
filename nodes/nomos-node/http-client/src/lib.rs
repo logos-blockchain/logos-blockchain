@@ -1,14 +1,15 @@
 use std::{collections::HashSet, fmt::Debug, hash::Hash, sync::Arc};
 
 use broadcast_service::BlockInfo;
+use chain_service::CryptarchiaInfo;
 use futures::{Stream, StreamExt as _};
-use nomos_core::da::blob::Share;
+use nomos_core::{block::Block, da::blob::Share, header::HeaderId, mantle::SignedMantleTx};
 use nomos_da_messages::http::da::{
     DASharesCommitmentsRequest, DaSamplingRequest, GetSharesRequest,
 };
 use nomos_http_api_common::paths::{
-    CRYPTARCHIA_LIB_STREAM, DA_GET_LIGHT_SHARE, DA_GET_SHARES, DA_GET_STORAGE_SHARES_COMMITMENTS,
-    MEMPOOL_ADD_TX,
+    CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, DA_GET_LIGHT_SHARE, DA_GET_SHARES,
+    DA_GET_STORAGE_SHARES_COMMITMENTS, MEMPOOL_ADD_TX, STORAGE_BLOCK,
 };
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
 use serde::{Serialize, de::DeserializeOwned};
@@ -17,6 +18,8 @@ use serde::{Serialize, de::DeserializeOwned};
 pub enum Error {
     #[error("Internal server error: {0}")]
     Server(String),
+    #[error("Failed to execute request: {0}")]
+    Client(String),
     #[error(transparent)]
     Request(#[from] reqwest::Error),
     #[error(transparent)]
@@ -71,12 +74,19 @@ impl CommonHttpClient {
         self.execute_request::<Res>(request).await
     }
 
-    pub async fn get<Req, Res>(&self, request_url: Url, request_body: &Req) -> Result<Res, Error>
+    pub async fn get<Req, Res>(
+        &self,
+        request_url: Url,
+        request_body: Option<&Req>,
+    ) -> Result<Res, Error>
     where
         Req: Serialize + ?Sized + Send + Sync,
         Res: DeserializeOwned + Send + Sync,
     {
-        let request = self.client.get(request_url).json(request_body);
+        let mut request = self.client.get(request_url);
+        if let Some(request_body) = request_body {
+            request = request.json(request_body);
+        }
         self.execute_request::<Res>(request).await
     }
 
@@ -118,7 +128,7 @@ impl CommonHttpClient {
         let response = request.send().await.map_err(Error::Request)?;
         let status = response.status();
 
-        let lib_stream = response.bytes_stream().filter_map(|item| async move {
+        let lib_stream = response.bytes_stream().filter_map(async |item| {
             let bytes = item.ok()?;
             serde_json::from_slice::<BlockInfo>(&bytes).ok()
         });
@@ -127,6 +137,20 @@ impl CommonHttpClient {
             StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server("Error".to_owned())),
             _ => Err(Error::Server(format!("Unexpected response [{status}]",))),
         }
+    }
+
+    pub async fn get_block_by_id<HeaderId>(
+        &self,
+        base_url: Url,
+        header_id: HeaderId,
+    ) -> Result<Option<Block<SignedMantleTx>>, Error>
+    where
+        HeaderId: Serialize + Send + Sync,
+    {
+        let request_url = base_url
+            .join(STORAGE_BLOCK.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.post(request_url, &header_id).await
     }
 
     /// Get the commitments for a Blob
@@ -143,7 +167,7 @@ impl CommonHttpClient {
         let request: DASharesCommitmentsRequest<S> = DASharesCommitmentsRequest { blob_id };
         let path = DA_GET_STORAGE_SHARES_COMMITMENTS.trim_start_matches('/');
         let request_url = base_url.join(path).map_err(Error::Url)?;
-        self.get(request_url, &request).await
+        self.get(request_url, Some(&request)).await
     }
 
     /// Get blob by blob id and column index
@@ -162,7 +186,7 @@ impl CommonHttpClient {
         let request: DaSamplingRequest<S> = DaSamplingRequest { blob_id, share_idx };
         let path = DA_GET_LIGHT_SHARE.trim_start_matches('/');
         let request_url = base_url.join(path).map_err(Error::Url)?;
-        self.get(request_url, &request).await
+        self.get(request_url, Some(&request)).await
     }
 
     pub async fn get_shares<B>(
@@ -197,7 +221,7 @@ impl CommonHttpClient {
         let response = request.send().await.map_err(Error::Request)?;
         let status = response.status();
 
-        let shares_stream = response.bytes_stream().filter_map(|item| async move {
+        let shares_stream = response.bytes_stream().filter_map(async |item| {
             let bytes = item.ok()?;
             serde_json::from_slice::<B::LightShare>(&bytes).ok()
         });
@@ -216,5 +240,25 @@ impl CommonHttpClient {
             .join(MEMPOOL_ADD_TX.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.post(request_url, &transaction).await
+    }
+
+    /// Get consensus info (tip, height, etc.)
+    pub async fn consensus_info(&self, base_url: Url) -> Result<CryptarchiaInfo, Error> {
+        let request_url = base_url
+            .join(CRYPTARCHIA_INFO.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.get::<(), CryptarchiaInfo>(request_url, None).await
+    }
+
+    /// Get a block by its header ID
+    pub async fn get_block(
+        &self,
+        base_url: Url,
+        header_id: HeaderId,
+    ) -> Result<Option<Block<SignedMantleTx>>, Error> {
+        let request_url = base_url
+            .join(STORAGE_BLOCK.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.post(request_url, &header_id).await
     }
 }
