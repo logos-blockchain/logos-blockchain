@@ -1,7 +1,9 @@
 use core::convert::Infallible;
 
-use key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
-use nomos_blend_crypto::keys::X25519PrivateKey;
+use key_management_system_keys::{
+    keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key},
+    operators::ed25519::derive_x25519::X25519PrivateKey,
+};
 use nomos_blend_proofs::{
     quota::{ProofOfQuota, VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},

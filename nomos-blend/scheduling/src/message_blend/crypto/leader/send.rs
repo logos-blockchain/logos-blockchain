@@ -139,13 +139,9 @@ mod test {
     use std::num::NonZeroU64;
 
     use groth16::Field as _;
-    use key_management_system_keys::keys::{
-        ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, UnsecuredEd25519Key,
-    };
+    use key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
     use libp2p::{Multiaddr, PeerId};
-    use nomos_blend_message::crypto::{
-        key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
-    };
+    use nomos_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
     use nomos_blend_proofs::quota::inputs::prove::{
         private::ProofOfLeadershipQuotaInputs,
         public::{CoreInputs, LeaderInputs},
@@ -165,7 +161,7 @@ mod test {
         let mut processor =
             SessionCryptographicProcessor::<_, TestEpochChangeLeaderProofsGenerator>::new(
                 &SessionCryptographicProcessorSettings {
-                    non_ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
+                    non_ephemeral_encryption_key: [0; _].into(),
                     num_blend_layers: NonZeroU64::new(1).unwrap(),
                 },
                 Membership::new_without_local(&[Node {

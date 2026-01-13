@@ -5,7 +5,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use subtle::ConstantTimeEq as _;
 use zeroize::ZeroizeOnDrop;
 
-use crate::keys::{Ed25519PublicKey, Ed25519Signature};
+use crate::{
+    keys::{Ed25519PublicKey, Ed25519Signature},
+    operators::ed25519::derive_x25519::X25519PrivateKey,
+};
 
 pub const KEY_SIZE: usize = SECRET_KEY_LENGTH;
 
@@ -48,6 +51,11 @@ impl UnsecuredEd25519Key {
     #[must_use]
     pub const fn as_inner(&self) -> &SigningKey {
         &self.0
+    }
+
+    #[must_use]
+    pub fn derive_x25519(&self) -> X25519PrivateKey {
+        self.as_inner().to_scalar_bytes().into()
     }
 }
 

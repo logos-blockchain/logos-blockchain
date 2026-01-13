@@ -1,13 +1,17 @@
+use core::convert::Infallible;
+
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq as _;
+use tokio::sync::oneshot;
+use tracing::error;
 use x25519_dalek::StaticSecret;
 use zeroize::ZeroizeOnDrop;
 
-use crate::cipher::Cipher;
+use crate::keys::{Ed25519Key, secured_key::SecureKeyOperator};
 
 pub const X25519_SECRET_KEY_LENGTH: usize = 32;
 
-#[derive(Clone, ZeroizeOnDrop)]
+#[derive(Clone, ZeroizeOnDrop, Deserialize)]
 pub struct X25519PrivateKey(StaticSecret);
 
 impl X25519PrivateKey {
@@ -23,6 +27,7 @@ impl From<[u8; X25519_SECRET_KEY_LENGTH]> for X25519PrivateKey {
     }
 }
 
+#[cfg(feature = "unsafe")]
 impl From<X25519PrivateKey> for [u8; X25519_SECRET_KEY_LENGTH] {
     fn from(key: X25519PrivateKey) -> Self {
         key.0.to_bytes()
@@ -64,11 +69,6 @@ impl SharedKey {
     pub const fn as_slice(&self) -> &[u8] {
         &self.0
     }
-
-    #[must_use]
-    pub fn cipher(&self, domain: &[u8]) -> Cipher {
-        Cipher::new(domain, &self.0)
-    }
 }
 
 impl PartialEq for SharedKey {
@@ -78,3 +78,22 @@ impl PartialEq for SharedKey {
 }
 
 impl Eq for SharedKey {}
+
+pub struct DeriveX25519Operator {
+    response_channel: oneshot::Sender<X25519PrivateKey>,
+}
+
+#[async_trait::async_trait]
+impl SecureKeyOperator for DeriveX25519Operator {
+    type Key = Ed25519Key;
+    type Error = Infallible;
+
+    async fn execute(mut self: Box<Self>, key: &Self::Key) -> Result<(), Self::Error> {
+        let x25519_secret_key = key.derive_x25519();
+        let _ = self
+            .response_channel
+            .send(x25519_secret_key)
+            .map_err(|_| error!("Error sending X25519 secret key."));
+        Ok(())
+    }
+}

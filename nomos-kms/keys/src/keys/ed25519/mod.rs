@@ -6,7 +6,10 @@ use rand_core::CryptoRngCore;
 use serde::Deserialize;
 use zeroize::ZeroizeOnDrop;
 
-use crate::keys::{errors::KeyError, secured_key::SecuredKey};
+use crate::{
+    keys::{errors::KeyError, secured_key::SecuredKey},
+    operators::ed25519::derive_x25519::X25519PrivateKey,
+};
 
 mod private;
 pub use self::private::{KEY_SIZE as ED25519_SECRET_KEY_SIZE, UnsecuredEd25519Key};
@@ -50,6 +53,15 @@ impl Ed25519Key {
     #[must_use]
     pub fn sign_payload(&self, payload: &[u8]) -> Signature {
         self.0.sign_payload(payload)
+    }
+
+    #[must_use]
+    pub fn derive_x25519(&self) -> X25519PrivateKey {
+        self.as_inner().derive_x25519()
+    }
+
+    pub(crate) const fn as_inner(&self) -> &UnsecuredEd25519Key {
+        &self.0
     }
 }
 
