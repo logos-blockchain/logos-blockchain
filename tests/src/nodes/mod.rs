@@ -1,8 +1,7 @@
 pub mod executor;
 pub mod validator;
 
-use std::path::PathBuf;
-use std::sync::LazyLock;
+use std::{path::PathBuf, sync::LazyLock};
 
 use reqwest::Client;
 use tempfile::TempDir;

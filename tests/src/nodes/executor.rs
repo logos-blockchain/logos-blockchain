@@ -1,3 +1,11 @@
+use std::{
+    collections::HashSet,
+    net::SocketAddr,
+    process::{Child, Command, Stdio},
+    str::FromStr as _,
+    time::Duration,
+};
+
 use broadcast_service::BlockInfo;
 use chain_service::CryptarchiaInfo;
 use common_http_client::CommonHttpClient;
@@ -47,13 +55,6 @@ use nomos_tracing::logging::local::FileConfig;
 use nomos_tracing_service::LoggerLayer;
 use nomos_utils::{math::NonNegativeF64, net::get_available_tcp_port};
 use reqwest::Url;
-use std::{
-    collections::HashSet,
-    net::SocketAddr,
-    process::{Child, Command, Stdio},
-    str::FromStr as _,
-    time::Duration,
-};
 use tempfile::NamedTempFile;
 
 use super::{CLIENT, create_tempdir, get_exe_path, persist_tempdir};

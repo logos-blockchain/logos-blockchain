@@ -3,9 +3,10 @@ pub mod common;
 pub mod nodes;
 pub mod topology;
 
+use std::{env, ops::Mul as _, sync::LazyLock, time::Duration};
+
 use nomos_core::proofs::leader_proof::POL_PROOF_DEV_MODE;
 use nomos_libp2p::{Multiaddr, PeerId, multiaddr};
-use std::{env, ops::Mul as _, sync::LazyLock, time::Duration};
 
 static IS_SLOW_TEST_ENV: LazyLock<bool> =
     LazyLock::new(|| env::var("SLOW_TEST_ENV").is_ok_and(|s| s == "true"));
