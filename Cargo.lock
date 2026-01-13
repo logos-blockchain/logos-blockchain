@@ -2233,7 +2233,6 @@ dependencies = [
  "chain-service 0.1.0",
  "futures",
  "nomos-core 0.1.0",
- "nomos-da-messages 0.1.0",
  "nomos-http-api-common 0.1.0",
  "reqwest 0.12.28",
  "serde",
@@ -3620,18 +3619,6 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener 5.4.1",
  "pin-project-lite",
-]
-
-[[package]]
-name = "executor-http-client"
-version = "0.1.0"
-dependencies = [
- "common-http-client 0.1.0",
- "futures",
- "nomos-core 0.1.0",
- "nomos-http-api-common 0.1.0",
- "reqwest 0.12.28",
- "serde",
 ]
 
 [[package]]
@@ -5295,6 +5282,7 @@ dependencies = [
  "tracing",
  "zeroize",
  "zksign 0.1.0",
+ "zksign-types",
 ]
 
 [[package]]
@@ -7063,7 +7051,6 @@ name = "nomos-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
- "executor-http-client 0.1.0",
  "hex",
  "kzgrs-backend 0.1.0",
  "nomos-core 0.1.0",
@@ -11950,7 +11937,7 @@ source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?b
 dependencies = [
  "async-trait",
  "chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
- "executor-http-client 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
+ "executor-http-client",
  "futures",
  "key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "nomos-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
@@ -11978,7 +11965,6 @@ dependencies = [
  "cryptarchia-sync 0.1.0",
  "cucumber",
  "cucumber_ext",
- "executor-http-client 0.1.0",
  "futures",
  "futures-util",
  "groth16 0.1.0",
@@ -14287,6 +14273,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "witness-generator 0.1.0",
+ "zksign-types",
 ]
 
 [[package]]
@@ -14303,6 +14290,15 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "witness-generator 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
+]
+
+[[package]]
+name = "zksign-types"
+version = "0.1.0"
+dependencies = [
+ "groth16 0.1.0",
+ "serde",
+ "thiserror 2.0.17",
 ]
 
 [[package]]

@@ -10,7 +10,7 @@ use num_bigint::BigUint;
 use reqwest::Url;
 use serial_test::serial;
 use tests::{
-    common::{chain::scan_chain_until, da::create_inscription_transaction_with_id},
+    common::{chain::scan_chain_until, channel::create_inscription_transaction_with_id},
     nodes::validator::Validator,
     topology::{Topology, TopologyConfig},
 };

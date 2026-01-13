@@ -17,7 +17,6 @@ broadcast-service     = { workspace = true }
 chain-service         = { workspace = true }
 futures               = { default-features = false, version = "0.3.31" }
 nomos-core            = { workspace = true }
-nomos-da-messages     = { workspace = true }
 nomos-http-api-common = { workspace = true }
 reqwest               = { features = ["json", "rustls-tls", "stream"], workspace = true }
 serde                 = { workspace = true }

@@ -1,0 +1,18 @@
+[package]
+categories.workspace  = true
+description.workspace = true
+edition.workspace     = true
+keywords.workspace    = true
+license.workspace     = true
+name                  = "zksign-types"
+readme.workspace      = true
+repository.workspace  = true
+version.workspace     = true
+
+[dependencies]
+groth16   = { features = ["deser"], workspace = true }
+serde     = { features = ["derive"], workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

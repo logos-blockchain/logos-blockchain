@@ -6,7 +6,7 @@ use poseidon2::{Digest, Poseidon2Bn254Hasher};
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq as _;
 use zeroize::ZeroizeOnDrop;
-use zksign::{ZkSignError, ZkSignPrivateKeysData, ZkSignWitnessInputs};
+use zksign_types::{ZkSignError, ZkSignPrivateKeysData, ZkSignWitnessInputs};
 
 use crate::keys::zk::{public::PublicKey, signature::Signature};
 

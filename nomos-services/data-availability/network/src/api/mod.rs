@@ -1,6 +1,4 @@
 use async_trait::async_trait;
-use overwatch::DynError;
-use tokio::sync::oneshot;
 
 pub mod http;
 
@@ -19,9 +17,4 @@ pub trait ApiAdapter {
         membership: Self::Membership,
         addressbook: Self::Addressbook,
     ) -> Self;
-    async fn request_commitments(
-        &self,
-        request: Self::BlobId,
-        reply_channel: oneshot::Sender<Option<Self::Commitments>>,
-    ) -> Result<(), DynError>;
 }

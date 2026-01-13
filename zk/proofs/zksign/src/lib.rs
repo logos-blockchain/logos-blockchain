@@ -1,7 +1,4 @@
-mod inputs;
-mod private;
 mod proving_key;
-mod public;
 mod verification_key;
 mod witness;
 
@@ -10,22 +7,12 @@ use std::error::Error;
 use groth16::{
     CompressedGroth16Proof, Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser,
 };
-pub use inputs::ZkSignWitnessInputs;
-pub use private::ZkSignPrivateKeysData;
-pub use public::ZkSignVerifierInputs;
-
-use crate::{
-    proving_key::ZKSIGN_PROVING_KEY_PATH,
+use zksign_types::{
+    ZkSignProof, ZkSignVerifierInputs, ZkSignWitnessInputs,
     public::{ZkSignVerifierInputsJson, ZkSignVerifierInputsJsonTryFromError},
 };
 
-pub type ZkSignProof = CompressedGroth16Proof;
-
-#[derive(Debug, PartialEq, Eq, thiserror::Error, Clone)]
-pub enum ZkSignError {
-    #[error("ZkSign supports up to 32 keys: got {0}")]
-    TooManyKeys(usize),
-}
+use crate::proving_key::ZKSIGN_PROVING_KEY_PATH;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProveError {
@@ -124,6 +111,7 @@ mod tests {
     use num_bigint::BigUint;
     use poseidon2::{Digest as _, Poseidon2Bn254Hasher};
     use rand::RngCore as _;
+    use zksign_types::ZkSignPrivateKeysData;
 
     use super::*;
 

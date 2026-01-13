@@ -10,7 +10,7 @@ use broadcast_service::BlockInfo;
 use chain_service::CryptarchiaInfo;
 use common_http_client::CommonHttpClient;
 use futures::Stream;
-use kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
+use kzgrs_backend::common::share::DaSharesCommitments;
 use nomos_core::{
     block::Block,
     da::BlobId,
@@ -360,36 +360,6 @@ impl Validator {
 
     pub async fn network_info(&self) -> Libp2pInfo {
         self.get(NETWORK_INFO).await.unwrap().json().await.unwrap()
-    }
-
-    pub async fn get_shares(
-        &self,
-        blob_id: BlobId,
-        requested_shares: HashSet<[u8; 2]>,
-        filter_shares: HashSet<[u8; 2]>,
-        return_available: bool,
-    ) -> Result<impl Stream<Item = DaLightShare>, common_http_client::Error> {
-        self.http_client
-            .get_shares::<DaShare>(
-                Url::from_str(&format!("http://{}", self.addr))?,
-                blob_id,
-                requested_shares,
-                filter_shares,
-                return_available,
-            )
-            .await
-    }
-
-    pub async fn get_storage_commitments(
-        &self,
-        blob_id: BlobId,
-    ) -> Result<Option<DaSharesCommitments>, common_http_client::Error> {
-        self.http_client
-            .get_storage_commitments::<DaShare>(
-                Url::from_str(&format!("http://{}", self.addr))?,
-                blob_id,
-            )
-            .await
     }
 
     pub async fn get_lib_stream(

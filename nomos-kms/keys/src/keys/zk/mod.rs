@@ -4,7 +4,7 @@ use groth16::Fr;
 use num_bigint::BigUint;
 use serde::Deserialize;
 use zeroize::ZeroizeOnDrop;
-use zksign::ZkSignError;
+use zksign_types::ZkSignError;
 
 use crate::keys::{errors::KeyError, secured_key::SecuredKey};
 

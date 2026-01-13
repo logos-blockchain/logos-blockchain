@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::LazyLock};
 
-use crate::inputs::{ZkSignWitnessInputs, ZkSignWitnessInputsJson};
+use zksign_types::inputs::{ZkSignWitnessInputs, ZkSignWitnessInputsJson};
 
 const CIRCUIT_NAME: &str = "zksign";
 

@@ -7,11 +7,9 @@ use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 use nomos_core::da::BlobId;
 use nomos_da_network_core::{SubnetworkId, addressbook::AddressBookHandler};
-use overwatch::DynError;
 use rand::prelude::IteratorRandom as _;
 use serde::{Deserialize, Serialize};
 use subnetworks_assignations::MembershipHandler;
-use tokio::sync::oneshot;
 use tracing::error;
 use url::Url;
 
@@ -42,6 +40,7 @@ where
         + 'static,
     Addressbook: AddressBookHandler<Id = PeerId> + Clone + Debug + Send + Sync + 'static,
 {
+    #[expect(dead_code, reason = "deprecated, will be removed soon")]
     fn random_peer_address(&self) -> Option<Url> {
         let peer_address = self
             .membership
@@ -91,39 +90,6 @@ where
                 "http".to_owned()
             },
         }
-    }
-
-    async fn request_commitments(
-        &self,
-        blob_id: Self::BlobId,
-        reply_channel: oneshot::Sender<Option<Self::Commitments>>,
-    ) -> Result<(), DynError> {
-        let Some(address) = self.random_peer_address() else {
-            error!("No clients available");
-            if reply_channel.send(None).is_err() {
-                error!("Failed to send commitments reply");
-            }
-            return Ok(());
-        };
-        match self
-            .client
-            .get_storage_commitments::<Self::Share>(address, blob_id)
-            .await
-        {
-            Ok(commitments) => {
-                if reply_channel.send(commitments).is_err() {
-                    error!("Failed to send commitments reply");
-                }
-            }
-            Err(e) => {
-                error!("Failed to get commitments: {}", e);
-                if reply_channel.send(None).is_err() {
-                    error!("Failed to send commitments reply");
-                }
-            }
-        }
-
-        Ok(())
     }
 }
 

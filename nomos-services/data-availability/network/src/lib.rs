@@ -531,7 +531,7 @@ where
         msg: DaNetworkMsg<Backend, DaSharesCommitments, RuntimeServiceId>,
         backend: &mut Backend,
         membership_storage: &MembershipStorage<Arc<StorageAdapter>, Membership, DaAddressbook>,
-        api_adapter: &ApiAdapter,
+        _api_adapter: &ApiAdapter,
         addressbook: &DaAddressbook,
     ) {
         match msg {
@@ -592,10 +592,8 @@ where
                             });
                 }
             }
-            DaNetworkMsg::GetCommitments { blob_id, sender } => {
-                if let Err(e) = api_adapter.request_commitments(blob_id, sender).await {
-                    tracing::error!("Failed to request commitments: {e}");
-                }
+            DaNetworkMsg::GetCommitments { .. } => {
+                unimplemented!("will be removed completely")
             }
             DaNetworkMsg::RequestHistoricSampling { blob_ids, block_id } => {
                 Self::handle_historic_sample_request(

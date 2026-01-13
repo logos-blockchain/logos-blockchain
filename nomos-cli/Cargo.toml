@@ -15,7 +15,6 @@ workspace = true
 
 [dependencies]
 clap                 = { default-features = false, features = ["derive", "std"], version = "4" }
-executor-http-client = { workspace = true }
 hex                  = { default-features = false, version = "0.4.3" }
 kzgrs-backend        = { workspace = true }
 nomos-core           = { workspace = true }

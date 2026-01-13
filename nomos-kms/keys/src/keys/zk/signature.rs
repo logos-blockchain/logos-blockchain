@@ -3,10 +3,10 @@ use generic_array::{
     typenum::{U32, U64},
 };
 use serde::{Deserialize, Serialize};
-use zksign::ZkSignProof;
+use zksign_types::ZkSignProof;
 
 #[derive(Serialize, Deserialize)]
-#[serde(remote = "zksign::ZkSignProof")]
+#[serde(remote = "zksign_types::ZkSignProof")]
 struct SignatureSerde {
     pi_a: GenericArray<u8, U32>,
     pi_b: GenericArray<u8, U64>,

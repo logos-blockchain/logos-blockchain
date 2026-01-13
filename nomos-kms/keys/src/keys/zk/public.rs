@@ -2,7 +2,7 @@ use groth16::{Field as _, Fr, Groth16Input};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use tracing::error;
-use zksign::{ZkSignError, ZkSignVerifierInputs};
+use zksign_types::{ZkSignError, ZkSignVerifierInputs};
 
 use crate::keys::zk::{private::SecretKey, signature::Signature};
 

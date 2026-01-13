@@ -17,7 +17,6 @@ members = [
   "mmr",
   "nodes/api-common",
   "nodes/nomos-executor/executor",
-  "nodes/nomos-executor/http-client",
   "nodes/nomos-node/http-client",
   "nodes/nomos-node/node",
   "nomos-blend/core",
@@ -78,6 +77,7 @@ members = [
   "zk/proofs/pol",
   "zk/proofs/poq",
   "zk/proofs/zksign",
+  "zk/proofs/zksign-types",
 ]
 resolver = "2"
 
@@ -98,7 +98,6 @@ common-http-client            = { default-features = false, path = "./nodes/nomo
 cryptarchia-engine            = { default-features = false, path = "./consensus/cryptarchia-engine" }
 cryptarchia-sync              = { default-features = false, path = "./consensus/cryptarchia-sync" }
 demo-sequencer                = { default-features = false, path = "./testnet/l2-sequencer-archival-demo/sequencer" }
-executor-http-client          = { default-features = false, path = "./nodes/nomos-executor/http-client" }
 groth16                       = { default-features = false, path = "./zk/groth16" }
 key-management-system-keys    = { default-features = false, path = "./nomos-kms/keys" }
 key-management-system-macros  = { default-features = false, path = "./nomos-kms/macros" }
@@ -150,6 +149,7 @@ wallet                        = { default-features = false, path = "./wallet" }
 wallet-http-client            = { default-features = false, path = "./wallet-http-client" }
 witness-generator             = { default-features = false, path = "zk/circuits/witness-generator" }
 zksign                        = { default-features = false, path = "./zk/proofs/zksign" }
+zksign-types                  = { default-features = false, path = "./zk/proofs/zksign-types" }
 
 # External
 blake2            = { default-features = false, version = "0.10" }

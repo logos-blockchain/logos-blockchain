@@ -10,7 +10,6 @@ use broadcast_service::BlockInfo;
 use chain_service::CryptarchiaInfo;
 use common_http_client::CommonHttpClient;
 use futures::Stream;
-use kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
 use nomos_core::{
     block::Block, da::BlobId, header::HeaderId, mantle::SignedMantleTx, sdp::SessionNumber,
 };
@@ -41,13 +40,12 @@ use nomos_da_verifier::{
 use nomos_executor::{api::backend::AxumBackendSettings, config::Config};
 use nomos_http_api_common::paths::{
     CRYPTARCHIA_INFO, DA_BALANCER_STATS, DA_BLACKLISTED_PEERS, DA_BLOCK_PEER, DA_GET_MEMBERSHIP,
-    DA_GET_SHARES_COMMITMENTS, DA_HISTORIC_SAMPLING, DA_MONITOR_STATS, DA_UNBLOCK_PEER,
-    MANTLE_METRICS, NETWORK_INFO, STORAGE_BLOCK,
+    DA_HISTORIC_SAMPLING, DA_MONITOR_STATS, DA_UNBLOCK_PEER, MANTLE_METRICS, NETWORK_INFO,
+    STORAGE_BLOCK,
 };
 use nomos_network::backends::libp2p::Libp2pInfo;
 use nomos_node::{
-    RocksBackendSettings,
-    api::{handlers::GetCommitmentsRequest, testing::handlers::HistoricSamplingRequest},
+    RocksBackendSettings, api::testing::handlers::HistoricSamplingRequest,
     config::mempool::serde::Config as MempoolConfig,
 };
 use nomos_sdp::SdpSettings;
@@ -236,55 +234,6 @@ impl Executor {
             .json::<Option<Block<SignedMantleTx>>>()
             .await
             .unwrap()
-    }
-
-    pub async fn get_shares(
-        &self,
-        blob_id: BlobId,
-        requested_shares: HashSet<[u8; 2]>,
-        filter_shares: HashSet<[u8; 2]>,
-        return_available: bool,
-    ) -> Result<impl Stream<Item = DaLightShare>, common_http_client::Error> {
-        self.http_client
-            .get_shares::<DaShare>(
-                Url::from_str(&format!("http://{}", self.addr))?,
-                blob_id,
-                requested_shares,
-                filter_shares,
-                return_available,
-            )
-            .await
-    }
-
-    pub async fn get_commitments(
-        &self,
-        blob_id: BlobId,
-        session: SessionNumber,
-    ) -> Option<DaSharesCommitments> {
-        let request = GetCommitmentsRequest { blob_id, session };
-
-        CLIENT
-            .post(format!("http://{}{}", self.addr, DA_GET_SHARES_COMMITMENTS))
-            .header("Content-Type", "application/json")
-            .body(serde_json::to_string(&request).unwrap())
-            .send()
-            .await
-            .unwrap()
-            .json::<Option<DaSharesCommitments>>()
-            .await
-            .unwrap()
-    }
-
-    pub async fn get_storage_commitments(
-        &self,
-        blob_id: BlobId,
-    ) -> Result<Option<DaSharesCommitments>, common_http_client::Error> {
-        self.http_client
-            .get_storage_commitments::<DaShare>(
-                Url::from_str(&format!("http://{}", self.addr))?,
-                blob_id,
-            )
-            .await
     }
 
     pub async fn da_get_membership(
