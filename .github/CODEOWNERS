@@ -1,9 +1,9 @@
 # Consensus
-/consensus/ @zeegomo @youngjoon-lee @davidrusu
-/nomos-services/chain @zeegomo @youngjoon-lee @danielSanchezQ
+/consensus/ @youngjoon-lee @danielSanchezQ
+/nomos-services/chain @youngjoon-lee @danielSanchezQ
 
 # Mantle
-/ledger/ @zeegomo @danielSanchezQ @davidrusu @bacv
+/ledger/ @danielSanchezQ @youngjoon-lee @bacv
 
 # Blend
 /nomos-blend/  @youngjoon-lee @ntn-x2 @danielSanchezQ
@@ -16,3 +16,6 @@
 # SDP
 /nomos-sdp/ @bacv @pradovic @danielSanchezQ
 /nomos-services/sdp @bacv @pradovic @danielSanchezQ
+
+# This file
+/.github/CODEOWNERS @danielSanchezQ
