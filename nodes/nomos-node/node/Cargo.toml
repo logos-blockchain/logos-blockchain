@@ -58,8 +58,6 @@ nomos-utils                   = { workspace = true, features = ["serde"] }
 nomos-wallet                  = { workspace = true }
 num-bigint                    = { default-features = false, version = "0.4" }
 overwatch                     = { workspace = true }
-pol                           = { workspace = true }
-poq                           = { workspace = true }
 serde                         = { workspace = true }
 serde_ignored                 = { workspace = true }
 serde_json                    = { workspace = true }
@@ -72,6 +70,12 @@ tokio                         = "1"
 tokio-stream                  = { default-features = false, version = "0.1" }
 tracing                       = { workspace = true }
 tx-service                    = { features = ["rocksdb-backend"], workspace = true }
+
+# Zk (use default features to include verifier key when building)
+poc    = { features = ["default"], workspace = true }
+pol    = { features = ["default"], workspace = true }
+poq    = { features = ["default"], workspace = true }
+zksign = { features = ["default"], workspace = true }
 
 # openapi related dependencies
 utoipa = { workspace = true }

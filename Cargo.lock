@@ -7753,6 +7753,7 @@ dependencies = [
  "nomos-wallet 0.1.0",
  "num-bigint",
  "overwatch",
+ "poc",
  "pol 0.1.0",
  "poq 0.1.0",
  "serde",
@@ -7773,6 +7774,7 @@ dependencies = [
  "tx-service 0.1.0",
  "utoipa",
  "utoipa-swagger-ui",
+ "zksign 0.1.0",
 ]
 
 [[package]]
