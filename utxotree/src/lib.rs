@@ -6,6 +6,7 @@ pub mod test_fr;
 use std::collections::BTreeMap;
 
 use merkle::DynamicMerkleTree;
+use nomos_core::utils::merkle::MerklePath;
 use poseidon2::{Digest, Fr};
 use rpds::HashTrieMapSync;
 use thiserror::Error;
@@ -102,6 +103,11 @@ where
 
     pub fn witness(&self, key: &Key) -> Option<()> {
         self.items.contains_key(key).then_some(())
+    }
+
+    pub fn path(&self, key: &Key) -> Option<MerklePath<Fr>> {
+        let (_, pos) = self.items.get(key)?;
+        self.merkle.path(*pos)
     }
 
     #[must_use]

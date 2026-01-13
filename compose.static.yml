@@ -125,3 +125,40 @@ services:
       - "4317:4317"  # otlp grpc
     depends_on:
       - tempo-init
+
+  # L2 Sequencer Demo Services
+  l2-nginx:
+    container_name: l2_nginx
+    image: ghcr.io/logos-blockchain/logos-blockchain:testnet
+    ports:
+      - "8200:80"
+    depends_on:
+      - l2-sequencer
+      - l2-archiver
+    entrypoint: ["nginx", "-g", "daemon off;"]
+
+  l2-sequencer:
+    container_name: l2_sequencer
+    image: ghcr.io/logos-blockchain/logos-blockchain:testnet
+    environment:
+      - SEQUENCER_LISTEN_ADDR=0.0.0.0:8080
+      - SEQUENCER_NODE_ENDPOINT=http://nomos-node-0:18080
+      - SEQUENCER_DB_PATH=/data/sequencer.db
+      - SEQUENCER_SIGNING_KEY_PATH=/data/sequencer.key
+      - SEQUENCER_CHANNEL_ID=6d656d636f696e00000000000000000000000000000000000000000000000001
+      - SEQUENCER_INITIAL_BALANCE=1000
+    volumes:
+      - l2-sequencer-data:/data
+    entrypoint: ["/usr/bin/demo-sequencer"]
+
+  l2-archiver:
+    container_name: l2_archiver
+    image: ghcr.io/logos-blockchain/logos-blockchain:testnet
+    environment:
+      - TESTNET_ENDPOINT=http://nomos-node-1:18080
+      - CHANNEL_ID=6d656d636f696e00000000000000000000000000000000000000000000000001
+      - TOKEN_NAME=MEM
+    entrypoint: ["/usr/bin/logos-blockchain-archiver"]
+
+volumes:
+  l2-sequencer-data:

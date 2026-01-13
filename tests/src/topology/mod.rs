@@ -54,6 +54,17 @@ pub struct TopologyConfig {
 
 impl TopologyConfig {
     #[must_use]
+    pub fn one_validator() -> Self {
+        Self {
+            n_validators: 1,
+            n_executors: 0,
+            da_params: DaParams::default(),
+            network_params: NetworkParams::default(),
+            extra_genesis_notes: Vec::new(),
+        }
+    }
+
+    #[must_use]
     pub fn two_validators() -> Self {
         Self {
             n_validators: 2,

@@ -1,0 +1,878 @@
+network:
+  backend:
+    swarm:
+      host: 0.0.0.0
+      port: 58072
+      node_key: 639c9a4a96b667ceee5fb8e871822f5de870734d55a7b30ff023cf1e84663a35
+      gossipsub_config:
+        history_length: 5
+        history_gossip: 3
+        mesh_n: 6
+        mesh_n_low: 5
+        mesh_n_high: 12
+        retain_scores: 4
+        gossip_lazy: 6
+        gossip_factor: 0.25
+        heartbeat_initial_delay:
+          secs: 5
+          nanos: 0
+        heartbeat_interval:
+          secs: 1
+          nanos: 0
+        fanout_ttl:
+          secs: 60
+          nanos: 0
+        check_explicit_peers_ticks: 300
+        duplicate_cache_time:
+          secs: 60
+          nanos: 0
+        validate_messages: false
+        allow_self_origin: false
+        do_px: false
+        prune_peers: 0
+        prune_backoff:
+          secs: 60
+          nanos: 0
+        unsubscribe_backoff:
+          secs: 10
+          nanos: 0
+        backoff_slack: 1
+        flood_publish: true
+        graft_flood_threshold:
+          secs: 10
+          nanos: 0
+        mesh_outbound_min: 2
+        opportunistic_graft_ticks: 60
+        opportunistic_graft_peers: 2
+        gossip_retransimission: 3
+        max_messages_per_rpc: null
+        max_ihave_length: 5000
+        max_ihave_messages: 10
+        iwant_followup_time:
+          secs: 3
+          nanos: 0
+        published_message_ids_cache_time:
+          secs: 10
+          nanos: 0
+      kademlia_config:
+        client_mode: false
+      identify_config: {}
+      chain_sync_config:
+        peer_response_timeout: 60000
+      nat_config:
+        type: traversal
+        autonat:
+          retest_successful_external_addresses_interval:
+            secs: 0
+            nanos: 0
+        mapping:
+          timeout: '1.000000000'
+          lease_duration:
+            secs: 7200
+            nanos: 0
+          max_retries: 3
+          renewal_delay_fraction: 0.8
+          retry_interval:
+            secs: 30
+            nanos: 0
+        gateway_monitor:
+          check_interval:
+            secs: 300
+            nanos: 0
+    initial_peers: []
+blend:
+  non_ephemeral_signing_key: 639c9a4a96b667ceee5fb8e871822f5de870734d55a7b30ff023cf1e84663a35
+  recovery_path_prefix: ./recovery/blend
+  core:
+    backend:
+      listening_address: /ip4/127.0.0.1/udp/64135/quic-v1
+      core_peering_degree:
+        start: 1
+        end: 3
+      edge_node_connection_timeout:
+        secs: 1
+        nanos: 0
+      max_edge_node_incoming_connections: 300
+      max_dial_attempts_per_peer: 3
+    zk:
+      secret_key_kms_id: 187359ffb6702225bc14949af2a6b1bf510658b30617dcc21c9724632667fb1f
+  edge:
+    backend:
+      max_dial_attempts_per_peer_per_message: 1
+      replication_factor: 1
+deployment:
+  blend:
+    common:
+      num_blend_layers: 3
+      timing:
+        rounds_per_session: 648000
+        rounds_per_interval: 30
+        round_duration: '1.000000000'
+        rounds_per_observation_window: 30
+        rounds_per_session_transition_period: 30
+        epoch_transition_period_in_slots: 2600
+      minimum_network_size: 30
+      protocol_name: /blend/integration-tests
+    core:
+      scheduler:
+        cover:
+          message_frequency_per_round: 1.0
+          intervals_for_safety_buffer: 100
+        delayer:
+          maximum_release_delay_in_rounds: 3
+      minimum_messages_coefficient: 1
+      normalization_constant: 1.03
+  network:
+    kademlia_protocol_name: /integration/nomos/kad/1.0.0
+    identify_protocol_name: /integration/nomos/identify/1.0.0
+  cryptarchia:
+    epoch_config:
+      epoch_stake_distribution_stabilization: 3
+      epoch_period_nonce_buffer: 3
+      epoch_period_nonce_stabilization: 4
+    consensus_config:
+      security_param: 10
+      active_slot_coeff: 0.9
+    sdp_config:
+      service_params:
+        DA:
+          lock_period: 10
+          inactivity_period: 20
+          retention_period: 100
+          timestamp: 0
+          session_duration: 1000
+        BN:
+          lock_period: 10
+          inactivity_period: 20
+          retention_period: 100
+          timestamp: 0
+          session_duration: 21600
+      min_stake:
+        threshold: 1
+        timestamp: 0
+    gossipsub_protocol: /integration/nomos/cryptarchia/proto/1.0.0
+  time:
+    slot_duration:
+      secs: 5
+      nanos: 0
+  mempool:
+    pubsub_topic: mantle_e2e_tests
+cryptarchia:
+  service:
+    starting_state: !Genesis
+      genesis_tx:
+        mantle_tx:
+          ops:
+          - opcode: 0
+            payload:
+              channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
+              inscription:
+              - 103
+              - 101
+              - 110
+              - 101
+              - 115
+              - 105
+              - 115
+              parent: '0000000000000000000000000000000000000000000000000000000000000000'
+              signer: '0000000000000000000000000000000000000000000000000000000000000000'
+          - opcode: 32
+            payload:
+              service_type: DA
+              locators:
+              - /ip4/127.0.0.1/udp/63880/quic-v1
+              provider_id: cf1b3d4fd373987b1f155f65eaa1ef4fb48297a67166026a3730d98fca054da0
+              zk_id: 187359ffb6702225bc14949af2a6b1bf510658b30617dcc21c9724632667fb1f
+              locked_note_id: 9a693e5f4a167ef57fddc711cd7e4b35e5ac801b704009b3bfa8811db254480d
+          - opcode: 32
+            payload:
+              service_type: BN
+              locators:
+              - /ip4/127.0.0.1/udp/64135/quic-v1
+              provider_id: cf1b3d4fd373987b1f155f65eaa1ef4fb48297a67166026a3730d98fca054da0
+              zk_id: 187359ffb6702225bc14949af2a6b1bf510658b30617dcc21c9724632667fb1f
+              locked_note_id: bb5f20211bc7590788201247aecea43751ad3e20606353c86a0436e6b2363d23
+          ledger_tx:
+            inputs: []
+            outputs:
+            - value: 1000
+              pk: ccb73728a6f1363670aec7daf9500f95f90e2fdcf21932492ac806e887f89c09
+            - value: 1
+              pk: 2d7bef13193a84ce9b248efec1f868c08224fc970a5f2e827daa44e90d83ce05
+            - value: 1
+              pk: 8b8043be4358c82e84e9c1231036cffa540a9ba964011a4a9b41c85cbc00e921
+          execution_gas_price: 0
+          storage_gas_price: 0
+        ops_proofs:
+        - NoProof
+        - !ZkAndEd25519Sigs
+          zk_sig:
+            pi_a:
+            - 208
+            - 120
+            - 255
+            - 250
+            - 129
+            - 44
+            - 148
+            - 105
+            - 7
+            - 125
+            - 60
+            - 132
+            - 35
+            - 200
+            - 134
+            - 88
+            - 224
+            - 90
+            - 120
+            - 70
+            - 14
+            - 208
+            - 181
+            - 25
+            - 204
+            - 110
+            - 234
+            - 148
+            - 163
+            - 80
+            - 230
+            - 140
+            pi_b:
+            - 171
+            - 204
+            - 24
+            - 84
+            - 202
+            - 115
+            - 12
+            - 237
+            - 199
+            - 157
+            - 70
+            - 144
+            - 188
+            - 50
+            - 211
+            - 160
+            - 246
+            - 251
+            - 212
+            - 150
+            - 42
+            - 243
+            - 215
+            - 169
+            - 14
+            - 130
+            - 128
+            - 72
+            - 51
+            - 204
+            - 96
+            - 6
+            - 118
+            - 146
+            - 78
+            - 100
+            - 118
+            - 216
+            - 20
+            - 33
+            - 183
+            - 195
+            - 41
+            - 128
+            - 37
+            - 73
+            - 122
+            - 117
+            - 124
+            - 141
+            - 19
+            - 162
+            - 77
+            - 209
+            - 206
+            - 143
+            - 88
+            - 173
+            - 99
+            - 42
+            - 176
+            - 231
+            - 242
+            - 46
+            pi_c:
+            - 33
+            - 127
+            - 164
+            - 125
+            - 28
+            - 38
+            - 39
+            - 69
+            - 146
+            - 241
+            - 222
+            - 165
+            - 244
+            - 155
+            - 129
+            - 26
+            - 100
+            - 151
+            - 183
+            - 95
+            - 189
+            - 68
+            - 105
+            - 34
+            - 72
+            - 159
+            - 177
+            - 89
+            - 172
+            - 202
+            - 86
+            - 158
+          ed25519_sig:
+          - 194
+          - 70
+          - 182
+          - 96
+          - 178
+          - 186
+          - 164
+          - 152
+          - 159
+          - 193
+          - 40
+          - 20
+          - 22
+          - 124
+          - 57
+          - 242
+          - 194
+          - 31
+          - 122
+          - 3
+          - 33
+          - 11
+          - 87
+          - 37
+          - 104
+          - 22
+          - 233
+          - 144
+          - 180
+          - 156
+          - 119
+          - 84
+          - 79
+          - 48
+          - 195
+          - 13
+          - 163
+          - 17
+          - 2
+          - 134
+          - 190
+          - 94
+          - 45
+          - 74
+          - 242
+          - 201
+          - 167
+          - 101
+          - 137
+          - 229
+          - 219
+          - 92
+          - 19
+          - 255
+          - 18
+          - 119
+          - 186
+          - 83
+          - 225
+          - 12
+          - 142
+          - 190
+          - 29
+          - 11
+        - !ZkAndEd25519Sigs
+          zk_sig:
+            pi_a:
+            - 236
+            - 191
+            - 122
+            - 138
+            - 210
+            - 107
+            - 238
+            - 120
+            - 99
+            - 200
+            - 203
+            - 165
+            - 215
+            - 224
+            - 33
+            - 31
+            - 110
+            - 35
+            - 206
+            - 134
+            - 64
+            - 134
+            - 225
+            - 254
+            - 20
+            - 124
+            - 138
+            - 33
+            - 121
+            - 180
+            - 212
+            - 23
+            pi_b:
+            - 152
+            - 0
+            - 131
+            - 249
+            - 42
+            - 58
+            - 172
+            - 237
+            - 67
+            - 162
+            - 128
+            - 160
+            - 255
+            - 144
+            - 39
+            - 107
+            - 113
+            - 8
+            - 206
+            - 103
+            - 190
+            - 86
+            - 86
+            - 43
+            - 109
+            - 151
+            - 104
+            - 69
+            - 232
+            - 213
+            - 193
+            - 22
+            - 85
+            - 143
+            - 125
+            - 132
+            - 185
+            - 158
+            - 7
+            - 148
+            - 42
+            - 57
+            - 186
+            - 98
+            - 111
+            - 99
+            - 209
+            - 220
+            - 104
+            - 81
+            - 208
+            - 145
+            - 63
+            - 36
+            - 52
+            - 127
+            - 14
+            - 146
+            - 29
+            - 130
+            - 19
+            - 91
+            - 63
+            - 139
+            pi_c:
+            - 211
+            - 88
+            - 60
+            - 36
+            - 195
+            - 202
+            - 180
+            - 102
+            - 32
+            - 185
+            - 64
+            - 170
+            - 76
+            - 239
+            - 99
+            - 144
+            - 40
+            - 72
+            - 108
+            - 163
+            - 177
+            - 101
+            - 174
+            - 172
+            - 54
+            - 120
+            - 67
+            - 21
+            - 69
+            - 219
+            - 187
+            - 152
+          ed25519_sig:
+          - 194
+          - 70
+          - 182
+          - 96
+          - 178
+          - 186
+          - 164
+          - 152
+          - 159
+          - 193
+          - 40
+          - 20
+          - 22
+          - 124
+          - 57
+          - 242
+          - 194
+          - 31
+          - 122
+          - 3
+          - 33
+          - 11
+          - 87
+          - 37
+          - 104
+          - 22
+          - 233
+          - 144
+          - 180
+          - 156
+          - 119
+          - 84
+          - 79
+          - 48
+          - 195
+          - 13
+          - 163
+          - 17
+          - 2
+          - 134
+          - 190
+          - 94
+          - 45
+          - 74
+          - 242
+          - 201
+          - 167
+          - 101
+          - 137
+          - 229
+          - 219
+          - 92
+          - 19
+          - 255
+          - 18
+          - 119
+          - 186
+          - 83
+          - 225
+          - 12
+          - 142
+          - 190
+          - 29
+          - 11
+        ledger_tx_proof:
+          pi_a:
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          pi_b:
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          pi_c:
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+          - 0
+    recovery_file: ./recovery/cryptarchia.json
+    bootstrap:
+      prolonged_bootstrap_period: '1.000000000'
+      force_bootstrap: false
+      offline_grace_period:
+        grace_period: '1200.000000000'
+        state_recording_interval: '60.000000000'
+  network:
+    bootstrap:
+      ibd:
+        peers: []
+        delay_before_new_download:
+          secs: 10
+          nanos: 0
+    sync:
+      orphan:
+        max_orphan_cache_size: 5
+  leader:
+    pk: ccb73728a6f1363670aec7daf9500f95f90e2fdcf21932492ac806e887f89c09
+    sk: 6c64639c9a4a96b667ceee5fb8e8718200000000000000000000000000000000
+time:
+  backend:
+    ntp_server: pool.ntp.org
+    ntp_client_settings:
+      timeout: '5.000000000'
+      listening_interface: 0.0.0.0
+    update_interval: '16.000000000'
+  chain_start_time: 2026-01-06 20:01:25.569111 +00:00:00
+mempool:
+  recovery_path: ./recovery/mempool.json
+tracing:
+  logger: !Stdout
+  tracing: None
+  filter: None
+  metrics: None
+  console: None
+  level: DEBUG
+da_network:
+  backend:
+    node_key: 639c9a4a96b667ceee5fb8e871822f5de870734d55a7b30ff023cf1e84663a35
+    listening_address: /ip4/127.0.0.1/udp/63880/quic-v1
+    policy_settings:
+      min_dispersal_peers: 0
+      min_replication_peers: 1
+      max_dispersal_failures: 0
+      max_sampling_failures: 0
+      max_replication_failures: 0
+      malicious_threshold: 0
+    monitor_settings:
+      failure_time_window: '5.000000000'
+      time_decay_factor: '0'
+    balancer_interval:
+      secs: 1
+      nanos: 0
+    redial_cooldown:
+      secs: 0
+      nanos: 0
+    replication_settings:
+      seen_message_cache_size: 1000
+      seen_message_ttl: '3600.000000000'
+    subnets_settings:
+      num_of_subnets: 1
+      shares_retry_limit: 1
+      commitments_retry_limit: 1
+  membership:
+    subnetwork_size: 2
+    replication_factor: 1
+    session_id: 0
+  api_adapter_settings:
+    api_port: 50896
+    is_secure: false
+  subnet_refresh_interval:
+    secs: 30
+    nanos: 0
+  subnet_threshold: 2
+  min_session_members: 2
+da_verifier:
+  share_verifier_settings:
+    global_params_path: ./tests/kzgrs/kzgrs_test_params
+    domain_size: 2
+  tx_verifier_settings: null
+  network_adapter_settings: null
+  storage_adapter_settings:
+    blob_storage_directory: ./
+  mempool_trigger_settings:
+    publish_threshold: 0.8
+    share_duration: '5.000000000'
+    prune_duration: '30.000000000'
+    prune_interval: '5.000000000'
+sdp:
+  declaration: null
+da_sampling:
+  sampling_settings:
+    num_samples: 1
+    num_subnets: 2
+    old_blobs_check_interval:
+      secs: 5
+      nanos: 0
+    blobs_validity_duration:
+      secs: 60
+      nanos: 0
+  share_verifier_settings:
+    global_params_path: ./tests/kzgrs/kzgrs_test_params
+    domain_size: 2
+  commitments_wait_duration:
+    secs: 1
+    nanos: 0
+  sdp_blob_trigger_sampling_delay:
+    secs: 5
+    nanos: 0
+http:
+  backend_settings:
+    address: 127.0.0.1:8080
+    cors_origins: []
+    timeout:
+      secs: 30
+      nanos: 0
+    max_body_size: 10485760
+    max_concurrent_requests: 1000
+    rate_limit_per_second: 10000
+    rate_limit_burst: 10000
+storage:
+  db_path: ./db
+  read_only: false
+  column_family: blocks
+key_management:
+  keys:
+    187359ffb6702225bc14949af2a6b1bf510658b30617dcc21c9724632667fb1f: !Zk cc1b3d7f1793f2af6bc332f810e953d79c7913224e951141ba4f44ec711a200f
+    cf1b3d4fd373987b1f155f65eaa1ef4fb48297a67166026a3730d98fca054da0: !Ed25519 639c9a4a96b667ceee5fb8e871822f5de870734d55a7b30ff023cf1e84663a35
+wallet:
+  known_keys:
+  - ccb73728a6f1363670aec7daf9500f95f90e2fdcf21932492ac806e887f89c09
+testing_http:
+  backend_settings:
+    address: 127.0.0.1:50897
+    cors_origins: []
+    timeout:
+      secs: 30
+      nanos: 0
+    max_body_size: 10485760
+    max_concurrent_requests: 1000
+    rate_limit_per_second: 10000
+    rate_limit_burst: 10000

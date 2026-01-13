@@ -1,0 +1,47 @@
+# NOTE: This docker-compose only works on x86_64 (AMD64) architecture.
+# The ZK prover will panic when running under ARM emulation.
+# For ARM machines (e.g., Apple Silicon), run the binaries directly instead.
+
+services:
+  l2-nginx:
+    container_name: l2_nginx
+    image: l2-demo-local
+    ports:
+      - "8200:80"
+    depends_on:
+      - l2-sequencer
+      - l2-archiver
+    entrypoint: ["nginx", "-g", "daemon off;"]
+
+  l2-sequencer:
+    container_name: l2_sequencer
+    image: l2-demo-local
+    environment:
+      - SEQUENCER_LISTEN_ADDR=0.0.0.0:8080
+      - SEQUENCER_NODE_ENDPOINT=${SEQUENCER_NODE_ENDPOINT}
+      - SEQUENCER_DB_PATH=/data/sequencer.db
+      - SEQUENCER_SIGNING_KEY_PATH=/data/sequencer.key
+      - SEQUENCER_CHANNEL_ID=${CHANNEL_ID}
+      - SEQUENCER_INITIAL_BALANCE=1000
+      - SEQUENCER_NODE_AUTH_USERNAME=${SEQUENCER_NODE_USERNAME}
+      - SEQUENCER_NODE_AUTH_PASSWORD=${SEQUENCER_NODE_PASSWORD}
+    volumes:
+      - l2-sequencer-data:/data
+    entrypoint: ["/usr/bin/demo-sequencer"]
+
+  l2-archiver:
+    container_name: l2_archiver
+    image: l2-demo-local
+    environment:
+      - TESTNET_ENDPOINT=${ARCHIVER_NODE_ENDPOINT}
+      - TESTNET_USERNAME=${ARCHIVER_NODE_USERNAME}
+      - TESTNET_PASSWORD=${ARCHIVER_NODE_PASSWORD}
+      - CHANNEL_ID=${CHANNEL_ID}
+      - TOKEN_NAME=${TOKEN_NAME:-MEM}
+    volumes:
+      - l2-archiver-data:/data
+    entrypoint: ["/usr/bin/logos-blockchain-archiver"]
+
+volumes:
+  l2-sequencer-data:
+  l2-archiver-data:

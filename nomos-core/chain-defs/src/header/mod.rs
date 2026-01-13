@@ -153,6 +153,12 @@ impl TryFrom<&[u8]> for HeaderId {
     }
 }
 
+impl AsRef<[u8]> for HeaderId {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl From<[u8; 32]> for ContentId {
     fn from(id: [u8; 32]) -> Self {
         Self(id)
