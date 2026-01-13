@@ -57,7 +57,7 @@ async fn test_orphan_handling() {
     tokio::time::timeout(adjust_timeout(Duration::from_secs(300)), async {
         loop {
             let initial_nodes_info: Vec<_> = stream::iter(&validators)
-                .then(async |n| n.consensus_info().await)
+                .then(async |n| n.consensus_info(false).await)
                 .collect()
                 .await;
             println!(
@@ -73,7 +73,7 @@ async fn test_orphan_handling() {
                 .min()
                 .unwrap();
 
-            let behind_node_info = behind_node[0].consensus_info().await;
+            let behind_node_info = behind_node[0].consensus_info(true).await;
             println!(
                 "Behind node: {:?}",
                 format_cryptarhica_info(slice::from_ref(&behind_node_info))

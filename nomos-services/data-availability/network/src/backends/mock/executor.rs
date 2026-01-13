@@ -152,6 +152,15 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for MockExecutorBackend 
         todo!()
     }
 
+    async fn start_historic_commitments(
+        &self,
+        _block_id: HeaderId,
+        _blob_id: BlobId,
+        _session: Self::HistoricMembership,
+    ) {
+        todo!()
+    }
+
     fn local_peer_id(&self) -> (PeerId, ProviderId) {
         todo!()
     }

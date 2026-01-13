@@ -1147,7 +1147,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
 dependencies = [
  "async-trait",
- "axum-core",
+ "axum-core 0.4.5",
  "bytes",
  "futures-util",
  "http 1.4.0",
@@ -1156,7 +1156,7 @@ dependencies = [
  "hyper 1.8.1",
  "hyper-util",
  "itoa",
- "matchit",
+ "matchit 0.7.3",
  "memchr",
  "mime",
  "percent-encoding",
@@ -1172,6 +1172,36 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "axum"
+version = "0.8.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b52af3cb4058c895d37317bb27508dccc8e5f2d39454016b297bf4a400597b8"
+dependencies = [
+ "axum-core 0.5.6",
+ "bytes",
+ "futures-util",
+ "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "hyper 1.8.1",
+ "hyper-util",
+ "itoa",
+ "matchit 0.8.4",
+ "memchr",
+ "mime",
+ "percent-encoding",
+ "pin-project-lite",
+ "serde_core",
+ "serde_json",
+ "serde_path_to_error",
+ "sync_wrapper 1.0.2",
+ "tokio",
+ "tower 0.5.2",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]
@@ -1193,6 +1223,24 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "axum-core"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08c78f31d7b1291f7ee735c1c6780ccde7785daae9a9206026862dab7d8792d1"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "mime",
+ "pin-project-lite",
+ "sync_wrapper 1.0.2",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]
@@ -1263,9 +1311,9 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "base64ct"
-version = "1.8.2"
+version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d809780667f4410e7c41b07f52439b94d2bdf8528eeedc287fa38d3b7f95d82"
+checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bcder"
@@ -1639,7 +1687,7 @@ checksum = "befbfd072a8e81c02f8c507aefce431fe5e7d051f83d48a23ffc9b9fe5a11799"
 dependencies = [
  "clap",
  "heck 0.5.0",
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "log",
  "proc-macro2",
  "quote",
@@ -1647,14 +1695,14 @@ dependencies = [
  "serde_json",
  "syn 2.0.114",
  "tempfile",
- "toml 0.9.10+spec-1.1.0",
+ "toml 0.9.11+spec-1.1.0",
 ]
 
 [[package]]
 name = "cc"
-version = "1.2.51"
+version = "1.2.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a0aeaff4ff1a90589618835a598e545176939b97874f7abc7851caa0618f203"
+checksum = "cd4932aefd12402b36c60956a4fe0035421f544799057659ff86f923657aada3"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1724,7 +1772,7 @@ dependencies = [
 name = "cfgsync"
 version = "0.1.0"
 dependencies = [
- "axum",
+ "axum 0.7.9",
  "clap",
  "nomos-core 0.1.0",
  "nomos-da-network-core 0.1.0",
@@ -1748,10 +1796,10 @@ dependencies = [
 [[package]]
 name = "cfgsync"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#0576f58a19c0629d49124d91d0589bf69ba24910"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#1b336c2c080715b0873bdb5b36bd526dd0e74baf"
 dependencies = [
  "anyhow",
- "axum",
+ "axum 0.7.9",
  "clap",
  "groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "hex",
@@ -2182,6 +2230,7 @@ name = "common-http-client"
 version = "0.1.0"
 dependencies = [
  "broadcast-service 0.1.0",
+ "chain-service 0.1.0",
  "futures",
  "nomos-core 0.1.0",
  "nomos-da-messages 0.1.0",
@@ -2677,6 +2726,7 @@ dependencies = [
  "humantime",
  "inventory",
  "itertools 0.14.0",
+ "junit-report",
  "linked-hash-map",
  "pin-project",
  "ref-cast",
@@ -2718,7 +2768,7 @@ dependencies = [
 [[package]]
 name = "cucumber_ext"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#0576f58a19c0629d49124d91d0589bf69ba24910"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#1b336c2c080715b0873bdb5b36bd526dd0e74baf"
 dependencies = [
  "cucumber",
  "testing-framework-core",
@@ -2842,15 +2892,15 @@ dependencies = [
 
 [[package]]
 name = "data-encoding"
-version = "2.9.0"
+version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
+checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
 
 [[package]]
 name = "data-encoding-macro"
-version = "0.1.18"
+version = "0.1.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47ce6c96ea0102f01122a185683611bd5ac8d99e62bc59dd12e6bda344ee673d"
+checksum = "8142a83c17aa9461d637e649271eae18bf2edd00e91f2e105df36c3c16355bdb"
 dependencies = [
  "data-encoding",
  "data-encoding-macro-internal",
@@ -2858,9 +2908,9 @@ dependencies = [
 
 [[package]]
 name = "data-encoding-macro-internal"
-version = "0.1.16"
+version = "0.1.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d162beedaa69905488a8da94f5ac3edb4dd4788b732fadb7bd120b2625c1976"
+checksum = "7ab67060fc6b8ef687992d439ca0fa36e7ed17e9a0b16b25b601e8757df720de"
 dependencies = [
  "data-encoding",
  "syn 2.0.114",
@@ -2899,6 +2949,29 @@ dependencies = [
  "once_cell",
  "system-configuration 0.5.1",
  "windows 0.32.0",
+]
+
+[[package]]
+name = "demo-sequencer"
+version = "0.1.0"
+dependencies = [
+ "axum 0.7.9",
+ "common-http-client 0.1.0",
+ "hex",
+ "key-management-system-service 0.1.0",
+ "nomos-core 0.1.0",
+ "owo-colors",
+ "rand 0.8.5",
+ "redb 2.6.3",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-util",
+ "tower-http 0.6.8",
+ "tracing",
+ "tracing-subscriber 0.3.22",
 ]
 
 [[package]]
@@ -2941,6 +3014,17 @@ name = "derivative"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fcc3dd5e9e9c0b295d6e1e4d811fb6f157d5ffd784b8d202fc62eac8035a770b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "derive-getters"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a2c35ab6e03642397cdda1dd58abbc05d418aef8e36297f336d5aba060fe8df"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3675,9 +3759,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.6"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "645cbb3a84e60b7531617d5ae4e57f7e27308f6445f5abf653209ea76dec8dff"
+checksum = "f449e6c6c08c865631d4890cfacf252b3d396c9bcc83adb6623cdb02a8336c41"
 
 [[package]]
 name = "findshlibs"
@@ -3931,9 +4015,9 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
-version = "0.2.16"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "335ff9f135e4384c8150d6f27c6daed433577f86b4750418338c01a1a2528592"
+checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
  "js-sys",
@@ -4142,7 +4226,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "http 0.2.12",
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "slab",
  "tokio",
  "tokio-util",
@@ -4161,7 +4245,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "http 1.4.0",
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "slab",
  "tokio",
  "tokio-util",
@@ -4878,9 +4962,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.12.1"
+version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ad4bb2b565bca0645f4d68c5c9af97fba094e9791da685bf83cb5f3ce74acf2"
+checksum = "7714e70437a7dc3ac8eb7e6f8df75fd8eb422675fc7678aff7364301092b1017"
 dependencies = [
  "equivalent",
  "hashbrown 0.16.1",
@@ -4904,7 +4988,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "232929e1d75fe899576a3d5c7416ad0d88dbfbb3c3d6aa00873a7408a50ddb88"
 dependencies = [
  "ahash",
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "is-terminal",
  "itoa",
  "log",
@@ -5146,6 +5230,18 @@ checksum = "5dea2b27dd239b2556ed7a25ba842fe47fd602e7fc7433c2a8d6106d4d9edd70"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "junit-report"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06c3a3342e6720a82d7d179f380e9841b73a1dd49344e33959fdfe571ce56b55"
+dependencies = [
+ "derive-getters",
+ "quick-xml 0.31.0",
+ "strip-ansi-escapes",
+ "time",
 ]
 
 [[package]]
@@ -5397,9 +5493,9 @@ checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 
 [[package]]
 name = "libc"
-version = "0.2.179"
+version = "0.2.180"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5a2d376baa530d1238d133232d15e239abad80d05838b4b59354e5268af431f"
+checksum = "bcc35a38544a891a5f7c865aca548a982ccb3b8650a5b06d0fd33a10283c56fc"
 
 [[package]]
 name = "libfuzzer-sys"
@@ -5437,7 +5533,7 @@ dependencies = [
  "either",
  "futures",
  "futures-timer",
- "getrandom 0.2.16",
+ "getrandom 0.2.17",
  "libp2p-allow-block-list",
  "libp2p-autonat",
  "libp2p-connection-limits",
@@ -5564,7 +5660,7 @@ dependencies = [
  "fnv",
  "futures",
  "futures-timer",
- "getrandom 0.2.16",
+ "getrandom 0.2.17",
  "hashlink",
  "hex_fmt",
  "libp2p-core",
@@ -5974,6 +6070,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-archiver"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "axum 0.8.8",
+ "broadcast-service 0.1.0",
+ "clap",
+ "common-http-client 0.1.0",
+ "demo-sequencer",
+ "futures",
+ "hex",
+ "nomos-core 0.1.0",
+ "owo-colors",
+ "redb 3.1.0",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tower-http 0.6.8",
+ "url",
+]
+
+[[package]]
 name = "loki-api"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6049,6 +6171,12 @@ name = "matchit"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
+
+[[package]]
+name = "matchit"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "matrixmultiply"
@@ -6550,7 +6678,7 @@ name = "nomos-api"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "axum",
+ "axum 0.7.9",
  "broadcast-service 0.1.0",
  "bytes",
  "chain-service 0.1.0",
@@ -7092,7 +7220,7 @@ dependencies = [
  "cached",
  "fixed",
  "futures",
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "key-management-system-keys 0.1.0",
  "kzgrs 0.1.0",
  "kzgrs-backend 0.1.0",
@@ -7123,7 +7251,7 @@ dependencies = [
  "cached",
  "fixed",
  "futures",
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "kzgrs-backend 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "libp2p",
  "libp2p-stream",
@@ -7222,6 +7350,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "either",
  "futures",
  "hex",
  "kzgrs 0.1.0",
@@ -7330,7 +7459,7 @@ name = "nomos-executor"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "axum",
+ "axum 0.7.9",
  "broadcast-service 0.1.0",
  "clap",
  "color-eyre",
@@ -7369,7 +7498,7 @@ version = "0.1.0"
 source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
 dependencies = [
  "async-trait",
- "axum",
+ "axum 0.7.9",
  "broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "clap",
  "color-eyre",
@@ -7406,7 +7535,7 @@ dependencies = [
 name = "nomos-http-api-common"
 version = "0.1.0"
 dependencies = [
- "axum",
+ "axum 0.7.9",
  "governor",
  "key-management-system-keys 0.1.0",
  "nomos-core 0.1.0",
@@ -7424,7 +7553,7 @@ name = "nomos-http-api-common"
 version = "0.1.0"
 source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
 dependencies = [
- "axum",
+ "axum 0.7.9",
  "governor",
  "key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "nomos-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
@@ -7586,7 +7715,7 @@ name = "nomos-node"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "axum",
+ "axum 0.7.9",
  "broadcast-service 0.1.0",
  "chain-leader 0.1.0",
  "chain-network 0.1.0",
@@ -7652,7 +7781,7 @@ version = "0.1.0"
 source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
 dependencies = [
  "async-trait",
- "axum",
+ "axum 0.7.9",
  "broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "chain-leader 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "chain-network 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
@@ -8222,7 +8351,7 @@ dependencies = [
  "crc32fast",
  "flate2",
  "hashbrown 0.14.5",
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "memchr",
  "ruzstd",
 ]
@@ -8492,7 +8621,7 @@ dependencies = [
  "cbc",
  "cipher",
  "des",
- "getrandom 0.2.16",
+ "getrandom 0.2.17",
  "hmac",
  "lazy_static",
  "rc2",
@@ -8919,7 +9048,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "740ebea15c5d1428f910cd1a5f52cebf8d25006245ed8ade92702f4943d91e07"
 dependencies = [
  "base64 0.22.1",
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "quick-xml 0.38.4",
  "serde",
  "time",
@@ -9400,7 +9529,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4aeaa1f2460f1d348eeaeed86aea999ce98c1bded6f089ff8514c9d9dbdc973"
 dependencies = [
  "anyhow",
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "log",
  "protobuf",
  "protobuf-support",
@@ -9484,6 +9613,15 @@ name = "quick-xml"
 version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f50b1c63b38611e7d4d7f68b82d3ad0cc71a2ad2e7f61fc10f1328d917c93cd"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1004a344b30a54e2ee58d66a71b32d2db2feb0a31f9a2d302bf0536f15de2a33"
 dependencies = [
  "memchr",
 ]
@@ -9647,7 +9785,7 @@ version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
- "getrandom 0.2.16",
+ "getrandom 0.2.17",
 ]
 
 [[package]]
@@ -9824,6 +9962,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "redb"
+version = "2.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8eca1e9d98d5a7e9002d0013e18d5a9b000aee942eb134883a82f06ebffb6c01"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "redb"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae323eb086579a3769daa2c753bb96deb95993c534711e0dbe881b5192906a06"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9847,7 +10003,7 @@ version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba009ff324d1fc1b900bd1fdb31564febe58a8ccc8a6fdbb93b543d33b13ca43"
 dependencies = [
- "getrandom 0.2.16",
+ "getrandom 0.2.17",
  "libredox",
  "thiserror 1.0.69",
 ]
@@ -9858,7 +10014,7 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
 dependencies = [
- "getrandom 0.2.16",
+ "getrandom 0.2.17",
  "libredox",
  "thiserror 2.0.17",
 ]
@@ -10044,7 +10200,7 @@ checksum = "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7"
 dependencies = [
  "cc",
  "cfg-if",
- "getrandom 0.2.16",
+ "getrandom 0.2.17",
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
@@ -10794,7 +10950,7 @@ dependencies = [
  "chrono",
  "hex",
  "indexmap 1.9.3",
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "schemars 0.9.0",
  "schemars 1.2.0",
  "serde_core",
@@ -10821,7 +10977,7 @@ version = "0.9.34+deprecated"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
 dependencies = [
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "itoa",
  "ryu",
  "serde",
@@ -11224,6 +11380,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe895eb47f22e2ddd4dabc02bce419d2e643c8e3b585c78158b349195bc24d82"
 
 [[package]]
+name = "strip-ansi-escapes"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a8f8038e7e7969abb3f1b7c2a811225e9296da208539e0f79c5251d6cac0025"
+dependencies = [
+ "vte",
+]
+
+[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11577,7 +11742,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "thiserror 2.0.17",
- "toml 0.9.10+spec-1.1.0",
+ "toml 0.9.11+spec-1.1.0",
  "url",
  "urlpattern",
  "uuid",
@@ -11662,7 +11827,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-config"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#0576f58a19c0629d49124d91d0589bf69ba24910"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#1b336c2c080715b0873bdb5b36bd526dd0e74baf"
 dependencies = [
  "blst",
  "chain-leader 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
@@ -11704,7 +11869,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#0576f58a19c0629d49124d91d0589bf69ba24910"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#1b336c2c080715b0873bdb5b36bd526dd0e74baf"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11743,12 +11908,12 @@ dependencies = [
 [[package]]
 name = "testing-framework-env"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#0576f58a19c0629d49124d91d0589bf69ba24910"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#1b336c2c080715b0873bdb5b36bd526dd0e74baf"
 
 [[package]]
 name = "testing-framework-runner-compose"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#0576f58a19c0629d49124d91d0589bf69ba24910"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#1b336c2c080715b0873bdb5b36bd526dd0e74baf"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11771,7 +11936,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-local"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#0576f58a19c0629d49124d91d0589bf69ba24910"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#1b336c2c080715b0873bdb5b36bd526dd0e74baf"
 dependencies = [
  "async-trait",
  "testing-framework-core",
@@ -11782,7 +11947,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-workflows"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#0576f58a19c0629d49124d91d0589bf69ba24910"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#1b336c2c080715b0873bdb5b36bd526dd0e74baf"
 dependencies = [
  "async-trait",
  "chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
@@ -12114,11 +12279,11 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.9.10+spec-1.1.0"
+version = "0.9.11+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0825052159284a1a8b4d6c0c86cbc801f2da5afd2b225fa548c72f2e74002f48"
+checksum = "f3afc9a848309fe1aaffaed6e1546a7a14de1f935dc9d89d32afd9a44bab7c46"
 dependencies = [
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "serde_core",
  "serde_spanned 1.0.4",
  "toml_datetime 0.7.5+spec-1.1.0",
@@ -12151,7 +12316,7 @@ version = "0.22.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41fe8c660ae4257887cf66394862d21dbca4a6ddd26f04a3560410406a2f819a"
 dependencies = [
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "serde",
  "serde_spanned 0.6.9",
  "toml_datetime 0.6.11",
@@ -12165,7 +12330,7 @@ version = "0.23.10+spec-1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "84c8b9f757e028cee9fa244aea147aab2a9ec09d5325a9b01e0a49730c2b5269"
 dependencies = [
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "toml_datetime 0.7.5+spec-1.1.0",
  "toml_parser",
  "winnow",
@@ -12200,7 +12365,7 @@ checksum = "877c5b330756d856ffcc4553ab34a5684481ade925ecc54bcd1bf02b1d0d4d52"
 dependencies = [
  "async-stream",
  "async-trait",
- "axum",
+ "axum 0.7.9",
  "base64 0.22.1",
  "bytes",
  "h2 0.4.13",
@@ -12312,7 +12477,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3790eac6ad3fb8d9d96c2b040ae06e2517aa24b067545d1078b96ae72f7bb9a7"
 dependencies = [
- "axum",
+ "axum 0.7.9",
  "forwarded-header-value",
  "governor",
  "http 1.4.0",
@@ -12872,7 +13037,7 @@ version = "4.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c5afb1a60e207dca502682537fefcfd9921e71d0b83e9576060f09abc6efab23"
 dependencies = [
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "serde",
  "serde_json",
  "utoipa-gen",
@@ -12896,7 +13061,7 @@ version = "7.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "943e0ff606c6d57d410fd5663a4d7c074ab2c5f14ab903b9514565e59fa1189e"
 dependencies = [
- "axum",
+ "axum 0.7.9",
  "mime_guess",
  "regex",
  "reqwest 0.12.28",
@@ -12992,6 +13157,15 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vte"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "231fdcd7ef3037e8330d8e17e61011a2c244126acc0a982f4040ac3f9f0bc077"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "walkdir"
@@ -13955,18 +14129,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.32"
+version = "0.8.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fabae64378cb18147bb18bca364e63bdbe72a0ffe4adf0addfec8aa166b2c56"
+checksum = "668f5168d10b9ee831de31933dc111a459c97ec93225beb307aed970d1372dfd"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.32"
+version = "0.8.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9c2d862265a8bb4471d87e033e730f536e2a285cc7cb05dbce09a2a97075f90"
+checksum = "2c7962b26b0a8685668b671ee4b54d007a67d4eaf05fda79ac0ecf41e32270f1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -14070,7 +14244,7 @@ dependencies = [
  "crossbeam-utils",
  "displaydoc",
  "flate2",
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "num_enum",
  "thiserror 1.0.69",
 ]
@@ -14084,7 +14258,7 @@ dependencies = [
  "arbitrary",
  "crc32fast",
  "flate2",
- "indexmap 2.12.1",
+ "indexmap 2.13.0",
  "memchr",
  "zopfli",
 ]
@@ -14140,9 +14314,9 @@ checksum = "40990edd51aae2c2b6907af74ffb635029d5788228222c4bb811e9351c0caad3"
 
 [[package]]
 name = "zmij"
-version = "1.0.12"
+version = "1.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fc5a66a20078bf1251bde995aa2fdcc4b800c70b5d92dd2c62abc5c60f679f8"
+checksum = "ac93432f5b761b22864c774aac244fa5c0fd877678a4c37ebf6cf42208f9c9ec"
 
 [[package]]
 name = "zopfli"

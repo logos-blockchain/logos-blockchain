@@ -27,7 +27,7 @@ use nomos_da_network_core::{
     swarm::{
         BalancerStats, MonitorStats,
         executor::ExecutorSwarm,
-        validator::{SampleArgs, SwarmSettings},
+        validator::{CommitmentsArgs, SampleArgs, SwarmSettings},
     },
 };
 use nomos_libp2p::ed25519;
@@ -48,8 +48,9 @@ use crate::{
         ConnectionStatus, NetworkBackend, ProcessingError,
         libp2p::common::{
             BROADCAST_CHANNEL_SIZE, DaNetworkBackendSettings, HistoricSamplingEvent, SamplingEvent,
-            handle_balancer_command, handle_historic_sample_request, handle_monitor_command,
-            handle_sample_request, handle_validator_events_stream,
+            handle_balancer_command, handle_historic_commitments_request,
+            handle_historic_sample_request, handle_monitor_command, handle_sample_request,
+            handle_validator_events_stream,
         },
     },
     membership::handler::{DaMembershipHandler, SharedMembershipHandler},
@@ -123,6 +124,8 @@ where
     shares_request_channel: UnboundedSender<(BlobId, SessionNumber)>,
     historic_sample_request_channel:
         UnboundedSender<SampleArgs<SharedMembershipHandler<Membership>>>,
+    historic_commitments_request_channel:
+        UnboundedSender<CommitmentsArgs<SharedMembershipHandler<Membership>>>,
     commitments_request_channel: UnboundedSender<(BlobId, SessionNumber)>,
     sampling_broadcast_receiver: broadcast::Receiver<SamplingEvent>,
     commitments_broadcast_receiver: broadcast::Receiver<CommitmentsEvent>,
@@ -203,6 +206,8 @@ where
 
         let shares_request_channel = executor_swarm.shares_request_channel();
         let historic_sample_request_channel = executor_swarm.historic_sample_request_channel();
+        let historic_commitments_request_channel =
+            executor_swarm.historic_commitments_request_channel();
         let commitments_request_channel = executor_swarm.commitments_request_channel();
         let dispersal_shares_sender = executor_swarm.dispersal_shares_channel();
         let dispersal_tx_sender = executor_swarm.dispersal_tx_channel();
@@ -259,6 +264,7 @@ where
             executor_replies_task_abort_handle,
             shares_request_channel,
             historic_sample_request_channel,
+            historic_commitments_request_channel,
             commitments_request_channel,
             sampling_broadcast_receiver,
             commitments_broadcast_receiver,
@@ -410,6 +416,21 @@ where
     ) {
         handle_historic_sample_request(&self.historic_sample_request_channel, block_id, blob_ids)
             .await;
+    }
+
+    async fn start_historic_commitments(
+        &self,
+        block_id: HeaderId,
+        blob_id: BlobId,
+        session: Self::HistoricMembership,
+    ) {
+        handle_historic_commitments_request(
+            &self.historic_commitments_request_channel,
+            block_id,
+            blob_id,
+            session,
+        )
+        .await;
     }
 
     fn local_peer_id(&self) -> (PeerId, ProviderId) {

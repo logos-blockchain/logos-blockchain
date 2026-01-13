@@ -27,7 +27,7 @@ async fn test_historical_sampling_across_sessions() {
     // Wait for propagation
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    test_sampling_scenarios(executor, &blob_ids).await;
+    test_sampling_scenarios(executor, &blob_ids, 0).await;
 }
 
 async fn disseminate_blobs_in_session_zero(executor: &Executor) -> Vec<BlobId> {
@@ -52,13 +52,12 @@ async fn disseminate_blobs_in_session_zero(executor: &Executor) -> Vec<BlobId> {
     blob_ids
 }
 
-async fn test_sampling_scenarios(executor: &Executor, blob_ids: &[BlobId]) {
+async fn test_sampling_scenarios(executor: &Executor, blob_ids: &[BlobId], session: SessionNumber) {
     let block_id = [0u8; 32];
 
-    // Test 1: Valid blobs - all from session 0
     let valid_future = async {
         let blob_ids_map: Vec<(BlobId, SessionNumber)> =
-            blob_ids.iter().map(|&blob_id| (blob_id, 0)).collect();
+            blob_ids.iter().map(|&blob_id| (blob_id, session)).collect();
 
         let result = executor
             .da_historic_sampling(block_id.into(), blob_ids_map)

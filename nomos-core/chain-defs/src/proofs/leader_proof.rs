@@ -6,7 +6,7 @@ use poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-const POL_PROOF_DEV_MODE: &str = "POL_PROOF_DEV_MODE";
+pub const POL_PROOF_DEV_MODE: &str = "POL_PROOF_DEV_MODE";
 
 use crate::{
     mantle::{

@@ -28,3 +28,7 @@ zk/**/bin/*
 
 # C headers
 nomos-c/libnomos.h
+
+# Demo sequencer related ignores
+node_modules
+*.database

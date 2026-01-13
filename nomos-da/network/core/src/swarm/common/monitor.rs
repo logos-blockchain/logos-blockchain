@@ -98,6 +98,8 @@ impl From<&SamplingEvent> for MonitorEvent {
             | SamplingEvent::CommitmentsSuccess { .. }
             | SamplingEvent::HistoricSamplingSuccess { .. }
             | SamplingEvent::HistoricSamplingError { .. }
+            | SamplingEvent::HistoricCommitmentsSuccess { .. }
+            | SamplingEvent::HistoricCommitmentsError { .. }
             | SamplingEvent::Opinion(_) => Self::Noop,
         }
     }

@@ -94,6 +94,11 @@ where
         block_id: HeaderId,
         blob_ids: HashMap<BlobId, SessionNumber>,
     },
+    RequestHistoricCommitments {
+        block_id: HeaderId,
+        blob_id: BlobId,
+        session: SessionNumber,
+    },
 }
 
 impl<Backend, Commitments, RuntimeServiceId> Debug
@@ -123,6 +128,17 @@ where
                 write!(
                     fmt,
                     "DaNetworkMsg::RequestHistoricSample{{blob_ids: {blob_ids:?}, block_id: {block_id} }}"
+                )
+            }
+            Self::RequestHistoricCommitments {
+                block_id,
+                blob_id,
+                session,
+            } => {
+                write!(
+                    fmt,
+                    "DaNwetworkMsg::RequestHistoricCommitments{{block_id: {block_id}, blob_id: {blob_id:?}, session: {session} }}
+                    "
                 )
             }
         }
@@ -606,6 +622,20 @@ where
                 )
                 .await;
             }
+            DaNetworkMsg::RequestHistoricCommitments {
+                block_id,
+                blob_id,
+                session,
+            } => {
+                Self::handle_historic_commitments_request(
+                    backend,
+                    membership_storage,
+                    block_id,
+                    blob_id,
+                    session,
+                )
+                .await;
+            }
         }
     }
 
@@ -663,6 +693,34 @@ where
         backend
             .start_historic_sampling(block_id, blobs_by_membership)
             .await;
+    }
+
+    async fn handle_historic_commitments_request(
+        backend: &Backend,
+        membership_storage: &MembershipStorage<Arc<StorageAdapter>, Membership, AddressBook>,
+        block_id: HeaderId,
+        blob_id: BlobId,
+        session: SessionNumber,
+    ) {
+        let membership = membership_storage
+            .get_historic_membership(session)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::error!("Failed to get historic membership for session {session}: {e}");
+                None
+            });
+
+        if let Some(membership) = membership {
+            let membership = SharedMembershipHandler::new(membership);
+
+            backend
+                .start_historic_commitments(block_id, blob_id, membership)
+                .await;
+        } else {
+            tracing::error!(
+                "No membership found for session {session}, cannot request historic commitments"
+            );
+        }
     }
 
     async fn handle_opinion_session_change(

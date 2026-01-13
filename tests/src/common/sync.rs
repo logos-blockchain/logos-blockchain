@@ -15,7 +15,7 @@ pub async fn wait_for_validators_mode_and_height(
     timeout(timeout_duration, async {
         loop {
             let infos: Vec<_> = stream::iter(validators)
-                .then(async |n| { n.consensus_info().await })
+                .then(async |n| { n.consensus_info(false).await })
                 .collect()
                 .await;
             print_validators_info(&infos);
@@ -46,7 +46,7 @@ pub async fn wait_for_validators_mode(
     timeout(timeout_duration, async {
         loop {
             let infos: Vec<_> = stream::iter(validators)
-                .then(async |n| n.consensus_info().await)
+                .then(async |n| n.consensus_info(false).await)
                 .collect()
                 .await;
             print_validators_info(&infos);

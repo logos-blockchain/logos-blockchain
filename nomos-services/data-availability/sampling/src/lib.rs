@@ -12,6 +12,7 @@ use std::{
 };
 
 use backend::{DaSamplingServiceBackend, SamplingState};
+use either::Either;
 use futures::{FutureExt as _, Stream, future::BoxFuture, stream::FuturesUnordered};
 use kzgrs_backend::common::{
     ShareIndex,
@@ -50,13 +51,15 @@ type HistoricFallbackResult = (BlobId, Option<(Vec<DaLightShare>, DaSharesCommit
 type LongTask = BoxFuture<'static, ()>;
 type HistoricSamplingFallbackTask = BoxFuture<'static, HistoricFallbackResult>;
 type SamplingContinuationTask = BoxFuture<'static, (Blob, Option<DaSharesCommitments>)>;
+type HistoricCommitmentsFallbackResult = (BlobId, Option<DaSharesCommitments>);
+type HistoricCommitmentsFallbackTask = BoxFuture<'static, HistoricCommitmentsFallbackResult>;
 
 struct PendingTasks<'a> {
     long_tasks: &'a mut FuturesUnordered<BoxFuture<'static, ()>>,
     sampling_continuations: &'a mut FuturesUnordered<SamplingContinuationTask>,
     delayed_sdp_sampling_triggers: &'a mut FuturesUnordered<BoxFuture<'static, Blob>>,
-    historic_fallback_continuations:
-        &'a mut FuturesUnordered<BoxFuture<'static, HistoricFallbackResult>>,
+    historic_fallback_continuations: &'a mut FuturesUnordered<HistoricSamplingFallbackTask>,
+    historic_commitments_continuations: &'a mut FuturesUnordered<HistoricCommitmentsFallbackTask>,
 }
 
 pub type DaSamplingService<
@@ -302,7 +305,10 @@ where
         storage_adapter: &SamplingStorage,
         verifier: &ShareVerifier,
         network_adapter: &SamplingNetwork,
-    ) -> Option<(LongTask, HistoricSamplingFallbackTask)> {
+    ) -> Option<(
+        LongTask,
+        Either<HistoricSamplingFallbackTask, HistoricCommitmentsFallbackTask>,
+    )> {
         match event {
             SamplingEvent::SamplingSuccess {
                 blob_id,
@@ -355,7 +361,10 @@ where
         sampler: &mut SamplingBackend,
         network_adapter: &SamplingNetwork,
         verifier: &ShareVerifier,
-    ) -> Option<(LongTask, HistoricSamplingFallbackTask)> {
+    ) -> Option<(
+        LongTask,
+        Either<HistoricSamplingFallbackTask, HistoricCommitmentsFallbackTask>,
+    )> {
         let Some(blob_id) = error.blob_id() else {
             error!("Error while sampling: {error}");
             return None;
@@ -368,14 +377,24 @@ where
                 sampler.handle_sampling_error(*blob_id).await;
             }
             SamplingError::MismatchSession { blob_id, session } => {
-                return Self::handle_session_mismatch(
+                return Self::handle_sampling_session_mismatch(
                     blob_id,
                     session,
                     sampler,
                     network_adapter,
                     verifier,
                 )
-                .await;
+                .await
+                .map(|(task, continuation)| (task, Either::Left(continuation)));
+            }
+            SamplingError::CommitmentsMismatchSession { session, blob_id } => {
+                return Self::handle_commitments_session_mismatch(
+                    blob_id,
+                    session,
+                    network_adapter,
+                )
+                .await
+                .map(|(task, continuation)| (task, Either::Right(continuation)));
             }
             _ => {
                 error!("Error while sampling: {error}");
@@ -385,7 +404,35 @@ where
         None
     }
 
-    async fn handle_session_mismatch(
+    async fn handle_commitments_session_mismatch(
+        blob_id: BlobId,
+        session: SessionNumber,
+        network_adapter: &SamplingNetwork,
+    ) -> Option<(LongTask, HistoricCommitmentsFallbackTask)> {
+        tracing::warn!("Commitments session mismatch for {blob_id:?}, falling back to historic");
+
+        let (tx, rx) = oneshot::channel();
+
+        let future = (Self::request_historic_commitments_fallback(
+            network_adapter,
+            HeaderId::from(blob_id),
+            blob_id,
+            session,
+            tx,
+            HISTORICAL_SAMPLING_TIMEOUT,
+        )
+        .await)?;
+
+        let continuation = async move {
+            let result = rx.await.unwrap_or(None);
+            (blob_id, result)
+        }
+        .boxed();
+
+        Some((future, continuation))
+    }
+
+    async fn handle_sampling_session_mismatch(
         blob_id: BlobId,
         session: SessionNumber,
         sampler: &mut SamplingBackend,
@@ -499,7 +546,15 @@ where
         session: SessionNumber,
         result_sender: oneshot::Sender<Option<DaSharesCommitments>>,
     ) -> Option<LongTask> {
-        let Ok(stream) = network_adapter.listen_to_commitments_messages().await else {
+        let Ok(commitments_stream) = network_adapter.listen_to_commitments_messages().await else {
+            tracing::error!("Error subscribing to commitments stream");
+            drop(result_sender.send(None));
+            return None;
+        };
+
+        let Ok(historic_commitments_stream) =
+            network_adapter.listen_to_historic_sampling_messages().await
+        else {
             tracing::error!("Error subscribing to commitments stream");
             drop(result_sender.send(None));
             return None;
@@ -515,22 +570,43 @@ where
         }
 
         let future = async move {
-            let _ = tokio::time::timeout(wait_duration, async move {
-                let mut stream = stream;
-                while let Some(message) = stream.next().await {
-                    if let CommitmentsEvent::CommitmentsSuccess {
-                        blob_id: received_blob_id,
-                        commitments,
-                    } = message
-                        && received_blob_id == blob_id
-                    {
-                        drop(result_sender.send(Some(*commitments)));
-                        return;
+            let result = tokio::time::timeout(wait_duration, async move {
+                let mut commits_stream = commitments_stream;
+                let mut historic_stream = historic_commitments_stream;
+                loop {
+                    tokio::select! {
+                        Some(message) = commits_stream.next() => {
+                            if let CommitmentsEvent::CommitmentsSuccess {
+                                blob_id: received_blob_id,
+                                commitments,
+                            } = message
+                                && received_blob_id == blob_id
+                            {
+                                return Some(*commitments);
+                            }
+                        }
+                        Some(event) = historic_stream.next() => {
+                            if let HistoricSamplingEvent::CommitmentsSuccess {
+                                blob_id: received_blob_id,
+                                commitments,
+                                ..
+                            } = event
+                                && received_blob_id == blob_id
+                            {
+                                return Some(commitments);
+                            }
+                        }
+                        else => break,
                     }
                 }
-                drop(result_sender.send(None));
+                None // streams closed without finding match
             })
             .await;
+
+            // result is Result<Option<Commitments>, Elapsed>
+            // Ok(Some(...)) = found, Ok(None) = streams closed, Err(_) = timeout
+            let commitments = result.ok().flatten();
+            drop(result_sender.send(commitments));
         }
         .boxed();
 
@@ -573,7 +649,7 @@ where
         tokio::time::timeout(timeout, async move {
             while let Some(event) = stream.next().await {
                 match event {
-                    HistoricSamplingEvent::HistoricSamplingSuccess {
+                    HistoricSamplingEvent::SamplingSuccess {
                         block_id,
                         shares,
                         commitments,
@@ -588,7 +664,7 @@ where
                         }
                         return None;
                     }
-                    HistoricSamplingEvent::HistoricSamplingError { block_id, .. }
+                    HistoricSamplingEvent::SamplingError { block_id, .. }
                         if block_id == target_block_id =>
                     {
                         return None;
@@ -650,6 +726,68 @@ where
                     let blob_commitments = commitments.get(&blob_id)?.clone();
                     Some((blob_shares, blob_commitments))
                 });
+
+                drop(result_sender.send(result));
+            }
+            .boxed(),
+        )
+    }
+
+    async fn request_historic_commitments_fallback(
+        network_adapter: &SamplingNetwork,
+        block_id: HeaderId,
+        blob_id: BlobId,
+        session: SessionNumber,
+        result_sender: oneshot::Sender<Option<DaSharesCommitments>>,
+        timeout: Duration,
+    ) -> Option<LongTask> {
+        // Get the historic commitments stream
+        let Ok(historic_commitments_stream) =
+            network_adapter.listen_to_historic_sampling_messages().await
+        else {
+            drop(result_sender.send(None));
+            return None;
+        };
+
+        if let Err(error) = network_adapter
+            .request_historic_commitments(block_id, blob_id, session)
+            .await
+        {
+            drop(result_sender.send(None));
+            error_with_id!(
+                blob_id,
+                "Request historic commitments fallback failed: {error}"
+            );
+            return None;
+        }
+
+        Some(
+            async move {
+                let result = tokio::time::timeout(timeout, async move {
+                    let mut stream = historic_commitments_stream;
+                    while let Some(event) = stream.next().await {
+                        match event {
+                            HistoricSamplingEvent::CommitmentsSuccess {
+                                block_id: received_block_id,
+                                blob_id: received_blob_id,
+                                commitments,
+                            } if received_block_id == block_id => {
+                                if received_blob_id == blob_id {
+                                    return Some(commitments);
+                                }
+                                error_with_id!(
+                                    blob_id,
+                                    "Historic Commitments: received wrong blob_id: {received_block_id}"
+                                );
+                                return None;
+                            }
+                            _ => {}
+                        }
+                    }
+                    None
+                })
+                .await
+                .unwrap_or(None);
 
                 drop(result_sender.send(result));
             }
@@ -899,101 +1037,115 @@ where
             FuturesUnordered::new();
         let mut historic_fallback_continuations: FuturesUnordered<HistoricSamplingFallbackTask> =
             FuturesUnordered::new();
+        let mut historic_commitments_fallback_continuations: FuturesUnordered<
+            HistoricCommitmentsFallbackTask,
+        > = FuturesUnordered::new();
 
         let pending_tasks = &mut PendingTasks {
             long_tasks: &mut long_tasks,
             sampling_continuations: &mut sampling_continuations,
             delayed_sdp_sampling_triggers: &mut delayed_sdp_sampling_triggers,
             historic_fallback_continuations: &mut historic_fallback_continuations,
+            historic_commitments_continuations: &mut historic_commitments_fallback_continuations,
         };
 
         loop {
             tokio::select! {
-                    Some(service_message) = service_resources_handle.inbound_relay.recv() => {
-                        Self::handle_service_message(
-                            service_message,
-                            &mut network_adapter,
-                            &storage_adapter,
-                            &mut sampler,
-                            commitments_wait_duration,
-                            &share_verifier,
-                            pending_tasks,
-                        ).await;
-                    }
-                    Some(sampling_message) = sampling_message_stream.next() => {
-                            if let Some((future, continuation)) = Self::handle_sampling_message(
-                                sampling_message,
-                                &mut sampler,
+                        Some(service_message) = service_resources_handle.inbound_relay.recv() => {
+                            Self::handle_service_message(
+                                service_message,
+                                &mut network_adapter,
                                 &storage_adapter,
+                                &mut sampler,
+                                commitments_wait_duration,
                                 &share_verifier,
-                                &network_adapter,
-                            ).await {
-                                pending_tasks.long_tasks.push(future);
-                                pending_tasks.historic_fallback_continuations.push(continuation);
-                            }
+                                pending_tasks,
+                            ).await;
                         }
-                    Some(commitments_message) = commitments_message_stream.next() => {
-                        Self::handle_commitments_message(
-                            &storage_adapter,
-                            commitments_message
-                        ).await;
-                    }
-                    // Handle completed sampling continuations
-                    Some((blob, commitments)) = pending_tasks.sampling_continuations.next() => {
-                        if let Some(commitments) = commitments {
-                            info_with_id!(blob.blob_id, "Got commitments for triggered sampling");
-                            sampler.add_commitments(&blob.blob_id, commitments);
+                        Some(sampling_message) = sampling_message_stream.next() => {
+                                if let Some((future, continuation)) = Self::handle_sampling_message(
+                                    sampling_message,
+                                    &mut sampler,
+                                    &storage_adapter,
+                                    &share_verifier,
+                                    &network_adapter,
+                                ).await {
+                                    pending_tasks.long_tasks.push(future);
+                                    continuation.either(
+                                            |sampling| pending_tasks.historic_fallback_continuations.push(sampling),
+                                            |commitments| pending_tasks.historic_commitments_continuations.push(commitments),
+            );
+                                }
+                            }
+                        Some(commitments_message) = commitments_message_stream.next() => {
+                            Self::handle_commitments_message(
+                                &storage_adapter,
+                                commitments_message
+                            ).await;
+                        }
+                        // Handle completed sampling continuations
+                        Some((blob, commitments)) = pending_tasks.sampling_continuations.next() => {
+                            if let Some(commitments) = commitments {
+                                info_with_id!(blob.blob_id, "Got commitments for triggered sampling");
+                                sampler.add_commitments(&blob.blob_id, commitments);
 
-                            if let Err(e) = network_adapter.start_sampling(blob.blob_id, blob.session).await {
+                                if let Err(e) = network_adapter.start_sampling(blob.blob_id, blob.session).await {
+                                    sampler.handle_sampling_error(blob.blob_id).await;
+                                    error_with_id!(blob.blob_id, "Error starting sampling: {e}");
+                                }
+                            } else {
+                                error_with_id!(blob.blob_id, "Failed to get commitments for triggered sampling");
                                 sampler.handle_sampling_error(blob.blob_id).await;
-                                error_with_id!(blob.blob_id, "Error starting sampling: {e}");
                             }
-                        } else {
-                            error_with_id!(blob.blob_id, "Failed to get commitments for triggered sampling");
-                            sampler.handle_sampling_error(blob.blob_id).await;
                         }
-                    }
 
-                    Some(blob) = blob_stream.next() => {
-                        Self::handle_incoming_blob(
-                            blob,
-                            sdp_blob_trigger_sampling_delay,
-                            pending_tasks,
-                        );
-                    }
-                    Some(blob) = pending_tasks.delayed_sdp_sampling_triggers.next() => {
-                        Self::handle_service_message(
-                            DaSamplingServiceMsg::TriggerSampling { blob_id: blob.blob_id, session: blob.session },
-                            &mut network_adapter,
-                            &storage_adapter,
-                            &mut sampler,
-                            commitments_wait_duration,
-                            &share_verifier,
-                            pending_tasks,
-                        ).await;
-                    }
-                    // Process completed long tasks (they just run to completion)
-                    Some(()) = pending_tasks.long_tasks.next() => {}
+                        Some(blob) = blob_stream.next() => {
+                            Self::handle_incoming_blob(
+                                blob,
+                                sdp_blob_trigger_sampling_delay,
+                                pending_tasks,
+                            );
+                        }
+                        Some(blob) = pending_tasks.delayed_sdp_sampling_triggers.next() => {
+                            Self::handle_service_message(
+                                DaSamplingServiceMsg::TriggerSampling { blob_id: blob.blob_id, session: blob.session },
+                                &mut network_adapter,
+                                &storage_adapter,
+                                &mut sampler,
+                                commitments_wait_duration,
+                                &share_verifier,
+                                pending_tasks,
+                            ).await;
+                        }
+                        // Process completed long tasks (they just run to completion)
+                        Some(()) = pending_tasks.long_tasks.next() => {}
 
-                    Some((blob_id, maybe_result)) = pending_tasks.historic_fallback_continuations.next() => {
-                        if let Some((shares, commitments)) = maybe_result {
-                            info_with_id!(blob_id, "Historic sampling fallback succeeded");
-                            sampler.add_commitments(&blob_id, commitments);
+                        Some((blob_id, maybe_result)) = pending_tasks.historic_fallback_continuations.next() => {
+                            if let Some((shares, commitments)) = maybe_result {
+                                info_with_id!(blob_id, "Historic sampling fallback succeeded");
+                                sampler.add_commitments(&blob_id, commitments);
 
-                            for share in shares {
-                                sampler.handle_sampling_success(blob_id, share.share_idx).await;
+                                for share in shares {
+                                    sampler.handle_sampling_success(blob_id, share.share_idx).await;
+                                }
+                            } else {
+                                error_with_id!(blob_id, "Historic sampling fallback failed");
+                                sampler.handle_sampling_error(blob_id).await;
                             }
-                        } else {
-                            error_with_id!(blob_id, "Historic sampling fallback failed");
-                            sampler.handle_sampling_error(blob_id).await;
                         }
-                    }
 
-                    // cleanup not on time samples
-                    _ = next_prune_tick.tick() => {
-                        sampler.prune();
-                    }
-            }
+                        Some((blob_id, maybe_commitments)) = pending_tasks.historic_commitments_continuations.next() => {
+                            if let Some(commitments) = maybe_commitments {
+                                info_with_id!(blob_id, "Historic commitments fallback succeeded");
+                                sampler.add_commitments(&blob_id, commitments);
+                            }
+                        }
+
+                        // cleanup not on time samples
+                        _ = next_prune_tick.tick() => {
+                            sampler.prune();
+                        }
+                }
         }
     }
 }

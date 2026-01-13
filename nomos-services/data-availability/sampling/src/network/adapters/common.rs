@@ -83,6 +83,23 @@ macro_rules! adapter_for {
                 Ok(())
             }
 
+            async fn request_historic_commitments(
+                &self,
+                block_id: HeaderId,
+                blob_id: BlobId,
+                session: SessionNumber,
+            ) -> Result<(), DynError> {
+                self.network_relay
+                    .send(DaNetworkMsg::RequestHistoricCommitments{
+                        block_id,
+                        blob_id,
+                        session,
+                    })
+                    .await
+                    .expect("RequestHistoricCommitments message should have been sent");
+                Ok(())
+            }
+
             async fn listen_to_sampling_messages(
                 &self,
             ) -> Result<Pin<Box<dyn Stream<Item = SamplingEvent> + Send>>, DynError> {

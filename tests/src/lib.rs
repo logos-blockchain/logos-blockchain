@@ -5,6 +5,7 @@ pub mod topology;
 
 use std::{env, ops::Mul as _, sync::LazyLock, time::Duration};
 
+use nomos_core::proofs::leader_proof::POL_PROOF_DEV_MODE;
 use nomos_libp2p::{Multiaddr, PeerId, multiaddr};
 
 static IS_SLOW_TEST_ENV: LazyLock<bool> =
@@ -56,4 +57,11 @@ pub fn secret_key_to_provider_id(
             .to_bytes(),
     )
     .unwrap()
+}
+
+pub fn verify_pol_proof_dev_mode() {
+    assert!(
+        env::var(POL_PROOF_DEV_MODE).is_ok(),
+        "\nError! `POL_PROOF_DEV_MODE` runtime environment variable is required for these tests.\n"
+    );
 }
