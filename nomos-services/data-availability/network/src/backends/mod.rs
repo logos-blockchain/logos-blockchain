@@ -66,6 +66,12 @@ pub trait NetworkBackend<RuntimeServiceId> {
         block_id: HeaderId,
         blob_ids: HashMap<Self::HistoricMembership, HashSet<BlobId>>,
     );
+    async fn start_historic_commitments(
+        &self,
+        block_id: HeaderId,
+        blob_id: BlobId,
+        session: Self::HistoricMembership,
+    );
 
     fn local_peer_id(&self) -> (PeerId, ProviderId);
 }

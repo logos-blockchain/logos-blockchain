@@ -18,7 +18,7 @@ ark-serialize = { default-features = false, version = "0.4.2" }
 generic-array = { default-features = false, version = "1.2" }
 hex           = { default-features = false, features = ["alloc"], optional = true, version = "0.4" }
 num-bigint    = { default-features = false, version = "0.4" }
-serde         = { workspace = true, features = ["derive"], optional = true }
+serde         = { features = ["derive"], optional = true, workspace = true }
 serde_json    = { default-features = false, features = ["alloc"], optional = true, version = "1.0" }
 thiserror     = { default-features = false, version = "2.0" }
 

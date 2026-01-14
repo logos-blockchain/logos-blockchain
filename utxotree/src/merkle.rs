@@ -197,21 +197,14 @@ impl<Item: AsRef<Fr>> Node<Item> {
     }
 
     /// Computes the Merkle path for the item at the given index.
-    ///
-    /// Returns a tuple of:
-    /// - The Merkle path from this node's children to the leaf
-    /// - The value of this node, so the caller (parent) can wrap it with the
-    ///   correct orientation.
-    ///
+    /// The path is ordered from leaf to root (excluded).
     /// Returns `None` if the index does not exist or has been removed.
-    fn path<Hash>(self: &Arc<Self>, index: usize) -> Option<(MerklePath<Fr>, Fr)>
+    fn path<Hash>(self: &Arc<Self>, index: usize) -> Option<MerklePath<Fr>>
     where
         Hash: Digest,
     {
         match self.as_ref() {
-            Self::Inner {
-                left, right, value, ..
-            } => {
+            Self::Inner { left, right, .. } => {
                 assert!(
                     index < self.capacity(),
                     "Index {} out of bounds for node with height {}",
@@ -219,24 +212,34 @@ impl<Item: AsRef<Fr>> Node<Item> {
                     self.height()
                 );
 
-                let mut path = MerklePath::new();
-
                 if index < left.capacity() {
-                    let (child_path, child_value) = left.path::<Hash>(index)?;
-                    assert!(child_path.len() < PATH_LENGTH, "Path length exceeded");
-                    path.push(MerkleNode::Left(child_value));
-                    path.extend(child_path);
+                    // Going down left subtree, store right sibling hash
+                    let mut path = left.path::<Hash>(index)?;
+                    assert!(path.len() < PATH_LENGTH, "Path length exceeded");
+                    path.push(MerkleNode::Right(right.value::<Hash>()));
+                    Some(path)
                 } else {
-                    let (child_path, child_value) = right.path::<Hash>(index - left.capacity())?;
-                    assert!(child_path.len() < PATH_LENGTH, "Path length exceeded");
-                    path.push(MerkleNode::Right(child_value));
-                    path.extend(child_path);
+                    // Going down right subtree, store left sibling hash
+                    let mut path = right.path::<Hash>(index - left.capacity())?;
+                    assert!(path.len() < PATH_LENGTH, "Path length exceeded");
+                    path.push(MerkleNode::Left(left.value::<Hash>()));
+                    Some(path)
                 }
-
-                Some((path, *value))
             }
-            Self::Leaf { item: Some(item) } => Some((MerklePath::new(), *item.as_ref())),
+            Self::Leaf { item: Some(_) } => Some(MerklePath::new()),
             Self::Leaf { item: None } | Self::Empty { .. } => None,
+        }
+    }
+
+    fn value<Hash>(&self) -> Fr
+    where
+        Hash: Digest,
+    {
+        match self {
+            Self::Inner { value, .. } => *value,
+            Self::Leaf { item: Some(item) } => *item.as_ref(),
+            Self::Leaf { item: None } => EMPTY_VALUE,
+            Self::Empty { height } => empty_subtree_root::<Hash>(*height),
         }
     }
 }
@@ -315,20 +318,16 @@ impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
     }
 
     /// Computes the Merkle path for the item at the given index.
-    ///
-    /// The returned path excludes the root and contains nodes from the root's
-    /// children down to the leaf.
-    ///
+    /// The path is ordered from leaf to root (excluded).
     /// Returns `None` if the index does not exist or has been removed.
     pub(crate) fn path(&self, index: usize) -> Option<MerklePath<Fr>> {
-        self.root.path::<Hash>(index).map(|(path, _)| {
+        self.root.path::<Hash>(index).inspect(|path| {
             assert_eq!(
                 path.len(),
                 PATH_LENGTH,
                 "Path length({}) must be {PATH_LENGTH}",
                 path.len()
             );
-            path
         })
     }
 
@@ -644,22 +643,18 @@ mod tests {
         let (tree, idx) = tree.insert(item);
 
         let path = tree.path(idx).unwrap();
-        // Should have path from root down to leaf
         assert_eq!(path.len(), PATH_LENGTH);
 
-        // Check that all should be Left nodes with expected hashes
-        // by traversing the path backward from the leaf.
-        let mut expected_hash = *item.as_ref(); // init with the leaf value
-        for (height, node) in path.iter().rev().enumerate() {
-            assert!(matches!(node, MerkleNode::Left(_)));
-            assert_eq!(*node.item(), expected_hash);
+        // Verify the path can reconstruct the root
+        verify_path(item, &path, tree.root());
 
-            // Update expected_hash
+        // For a single item at index 0, we go down the left subtree at every level
+        // So all siblings should be Right nodes with empty subtree hashes
+        for (height, node) in path.iter().enumerate() {
+            assert!(matches!(node, MerkleNode::Right(_)));
             let sibling_hash = empty_subtree_root::<TestHash>(height);
-            expected_hash = <TestHash as Digest>::compress(&[expected_hash, sibling_hash]);
+            assert_eq!(*node.item(), sibling_hash);
         }
-        // The computed hash should match the tree root
-        assert_eq!(expected_hash, tree.root());
     }
 
     #[test]
@@ -686,38 +681,42 @@ mod tests {
         let (tree, idx1) = tree.insert(item1);
         let (tree, idx2) = tree.insert(item2);
 
-        // Test path for idx0
-        let path = tree.path(idx0).unwrap();
-        assert_eq!(path.len(), PATH_LENGTH);
-        for node in &path {
-            assert!(matches!(node, MerkleNode::Left(_)));
-        }
-        // Verify the leaf value
-        assert_eq!(*path.last().unwrap().item(), *item0.as_ref());
+        // Test path for idx0 (leftmost item)
+        let path0 = tree.path(idx0).unwrap();
+        assert_eq!(path0.len(), PATH_LENGTH);
+        verify_path(item0, &path0, tree.root());
 
-        // Test path for idx1
-        let path = tree.path(idx1).unwrap();
-        assert_eq!(path.len(), PATH_LENGTH);
-        let mut iter = path.iter();
-        for _ in 0..(path.len() - 1) {
-            assert!(matches!(iter.next().unwrap(), MerkleNode::Left(_)));
-        }
-        // Verify the leaf node
-        let last_node = iter.next().unwrap();
-        assert!(matches!(last_node, MerkleNode::Right(_)));
-        assert_eq!(*last_node.item(), *item1.as_ref());
+        // Test path for idx1 (second item, right sibling of idx0 at the leaf level)
+        let path1 = tree.path(idx1).unwrap();
+        assert_eq!(path1.len(), PATH_LENGTH);
+        verify_path(item1, &path1, tree.root());
+        // For idx1, the first sibling (at leaf level) should be idx0 (left sibling)
+        assert!(matches!(path1.first().unwrap(), MerkleNode::Left(_)));
+        assert_eq!(*path1.first().unwrap().item(), *item0.as_ref());
 
-        // Test path for idx2
-        let path = tree.path(idx2).unwrap();
-        assert_eq!(path.len(), PATH_LENGTH);
-        let mut iter = path.iter();
-        for _ in 0..(path.len() - 2) {
-            assert!(matches!(iter.next().unwrap(), MerkleNode::Left(_)));
+        // Test path for idx2 (third item)
+        let path2 = tree.path(idx2).unwrap();
+        assert_eq!(path2.len(), PATH_LENGTH);
+        verify_path(item2, &path2, tree.root());
+    }
+
+    /// Verifies a Merkle path by recomputing the root hash from the leaf value
+    /// and path. The path is expected to be ordered from leaf to root.
+    fn verify_path(item: TestFr, path: &MerklePath<Fr>, expected_root: Fr) {
+        let mut current_hash = *item.as_ref();
+        for node in path {
+            current_hash = match node {
+                MerkleNode::Left(sibling) => {
+                    <TestHash as Digest>::compress(&[*sibling, current_hash])
+                }
+                MerkleNode::Right(sibling) => {
+                    <TestHash as Digest>::compress(&[current_hash, *sibling])
+                }
+            };
         }
-        assert!(matches!(iter.next().unwrap(), MerkleNode::Right(_)));
-        // Verify the leaf node
-        let last_node = iter.next().unwrap();
-        assert!(matches!(last_node, MerkleNode::Left(_)));
-        assert_eq!(*last_node.item(), *item2.as_ref());
+        assert_eq!(
+            current_hash, expected_root,
+            "Computed root from path doesn't match expected root"
+        );
     }
 }

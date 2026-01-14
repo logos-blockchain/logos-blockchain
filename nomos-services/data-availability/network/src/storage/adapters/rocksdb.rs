@@ -98,7 +98,12 @@ where
         reply_rx.await.map_err(DynError::from)
     }
 
-    async fn prune(&self) {
-        todo!()
+    async fn prune(&self, cutoff_session: SessionNumber) -> Result<(), DynError> {
+        let prune_msg = StorageMsg::prune_assignations_request(cutoff_session);
+        self.storage_relay
+            .send(prune_msg)
+            .await
+            .map_err(|(e, _)| DynError::from(e))?;
+        Ok(())
     }
 }

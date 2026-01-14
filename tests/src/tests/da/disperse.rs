@@ -338,7 +338,7 @@ async fn local_testnet_one_node() {
     loop {
         interval.tick().await;
 
-        let info = validator.consensus_info().await;
+        let info = validator.consensus_info(false).await;
         println!("Consensus info: {info:?}");
     }
 }

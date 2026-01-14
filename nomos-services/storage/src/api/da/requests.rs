@@ -60,6 +60,9 @@ pub enum DaApiRequest<Backend: StorageBackend> {
         session_id: SessionNumber,
         assignations: AssignationsMap<Backend>,
     },
+    PruneAssignations {
+        cutoff_session: SessionNumber,
+    },
     GetProviderId {
         id: Backend::Id,
         response_tx: Sender<Option<ProviderId>>,
@@ -122,6 +125,9 @@ where
                 session_id,
                 assignations,
             } => handle_store_assignations(backend, session_id, assignations).await,
+            Self::PruneAssignations { cutoff_session } => {
+                handle_prune_assignations(backend, cutoff_session).await
+            }
             Self::StoreProviderMappings { mappings } => {
                 handle_store_providerid_mappings(backend, mappings).await
             }
@@ -253,6 +259,16 @@ async fn handle_store_assignations<Backend: StorageBackend>(
 ) -> Result<(), StorageServiceError> {
     backend
         .store_assignations(session_id, assignations)
+        .await
+        .map_err(|e| StorageServiceError::BackendError(e.into()))
+}
+
+async fn handle_prune_assignations<Backend: StorageBackend>(
+    backend: &mut Backend,
+    cutoff_session: SessionNumber,
+) -> Result<(), StorageServiceError> {
+    backend
+        .prune_assignations(cutoff_session)
         .await
         .map_err(|e| StorageServiceError::BackendError(e.into()))
 }
@@ -476,6 +492,13 @@ impl<Backend: StorageBackend> StorageMsg<Backend> {
                 session_id,
                 assignations,
             }),
+        }
+    }
+
+    #[must_use]
+    pub const fn prune_assignations_request(cutoff_session: SessionNumber) -> Self {
+        Self::Api {
+            request: StorageApiRequest::Da(DaApiRequest::PruneAssignations { cutoff_session }),
         }
     }
 

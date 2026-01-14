@@ -245,11 +245,24 @@ async fn wait_for_height(
     duration: Duration,
 ) -> Option<()> {
     timeout(duration, async {
+        let mut tick: u8 = 0;
         loop {
-            let info = validator.consensus_info().await;
+            let info = validator.consensus_info(tick == 0).await;
             if info.height >= target_height {
+                println!(
+                    "waiting for height {}... current height is {}",
+                    target_height, info.height
+                );
+                println!("{info:?}");
                 break;
             }
+            if tick.is_multiple_of(10) {
+                println!(
+                    "waiting for height {}... current height is {}",
+                    target_height, info.height
+                );
+            }
+            tick = tick.wrapping_add(1);
 
             sleep(Duration::from_millis(500)).await;
         }

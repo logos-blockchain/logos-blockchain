@@ -1,0 +1,32 @@
+[package]
+categories  = { workspace = true }
+description = "Simple sequencer for demo - receives HTTP transactions and submits to Nomos node"
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "demo-sequencer"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+axum                          = { default-features = false, features = ["http1", "http2", "json", "tokio"], version = "0.7.5" }
+common-http-client            = { workspace = true }
+hex                           = "0.4"
+key-management-system-service = { workspace = true }
+nomos-core                    = { workspace = true }
+owo-colors                    = { default-features = false, version = "4.2.3" }
+rand                          = { workspace = true }
+redb                          = "2.2"
+reqwest                       = { features = ["json", "rustls-tls"], workspace = true }
+serde                         = { features = ["derive"], workspace = true }
+serde_json                    = { workspace = true }
+thiserror                     = { workspace = true }
+tokio                         = { default-features = false, features = ["macros", "net", "rt-multi-thread", "signal", "sync"], version = "1" }
+tokio-util                    = { version = "0.7" }
+tower-http                    = { version = "0.6.8", features = ["cors"] }
+tracing                       = { workspace = true }
+tracing-subscriber            = { version = "0.3", features = ["env-filter"] }

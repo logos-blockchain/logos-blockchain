@@ -55,6 +55,13 @@ pub trait NetworkAdapter<RuntimeServiceId> {
         blob_ids: HashMap<BlobId, SessionNumber>,
     ) -> Result<(), DynError>;
 
+    async fn request_historic_commitments(
+        &self,
+        block_id: HeaderId,
+        blob_id: BlobId,
+        session: SessionNumber,
+    ) -> Result<(), DynError>;
+
     async fn listen_to_sampling_messages(
         &self,
     ) -> Result<Pin<Box<dyn Stream<Item = SamplingEvent> + Send>>, DynError>;

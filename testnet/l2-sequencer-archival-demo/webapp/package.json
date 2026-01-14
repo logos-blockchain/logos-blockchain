@@ -1,0 +1,37 @@
+{
+  "name": "inkaguco",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --mode dev",
+    "build": "vite build",
+    "build:dev": "vite build --mode dev",
+    "build:testnet": "vite build --mode testnet",
+    "preview": "vite preview",
+    "lint": "eslint --fix src/"
+  },
+  "dependencies": {
+    "@headlessui/vue": "^1.7.16",
+    "@tailwindcss/vite": "^4.1.18",
+    "heroicons": "^2.1.1",
+    "pinia": "^2.1.7",
+    "vue": "^3.3.11",
+    "vue-router": "^4.2.5"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@vitejs/plugin-vue": "^4.5.2",
+    "autoprefixer": "latest",
+    "eslint": "^8.56.0",
+    "eslint-config-airbnb-base": "^15.0.0",
+    "eslint-plugin-import": "^2.29.1",
+    "eslint-plugin-vue": "^9.19.2",
+    "tailwindcss": "latest",
+    "vite": "^5.0.10"
+  },
+  "module": "index.ts",
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

@@ -174,6 +174,28 @@ impl StorageDaApi for RocksBackend {
         }
     }
 
+    async fn prune_assignations(
+        &mut self,
+        cutoff_session: SessionNumber,
+    ) -> Result<(), Self::Error> {
+        let txn = self.txn(move |db| {
+            let mut batch = rocksdb::WriteBatch::default();
+
+            for session in 0..cutoff_session {
+                let key = key_bytes(DA_ASSIGNATIONS_PREFIX, session.to_le_bytes());
+                batch.delete(&key);
+            }
+
+            db.write(batch)?;
+            Ok(None)
+        });
+
+        self.execute(txn).await??;
+        debug!("Pruned assignations older than session {}", cutoff_session);
+
+        Ok(())
+    }
+
     async fn get_assignations(
         &mut self,
         sesion_id: SessionNumber,

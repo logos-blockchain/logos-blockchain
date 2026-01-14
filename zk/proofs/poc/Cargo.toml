@@ -14,7 +14,7 @@ circuits-prover   = { workspace = true }
 circuits-utils    = { workspace = true }
 groth16           = { features = ["deser"], workspace = true }
 num-bigint        = "0.4"
-serde             = { workspace = true, features = ["derive", "std"] }
+serde             = { features = ["derive", "std"], workspace = true }
 serde_json        = { version = "1.0" }
 thiserror         = "2.0"
 witness-generator = { workspace = true }
@@ -26,3 +26,7 @@ circuits-utils = { workspace = true }
 
 [lints]
 workspace = true
+
+[features]
+build-verification-key = []
+default                = ["build-verification-key"]

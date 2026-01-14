@@ -58,14 +58,15 @@ use tempfile::NamedTempFile;
 use tokio::time::error::Elapsed;
 use tx_service::MempoolMetrics;
 
-use super::{CLIENT, create_tempdir, persist_tempdir};
+use super::{CLIENT, create_tempdir, get_exe_path, persist_tempdir};
 use crate::{
     IS_DEBUG_TRACING, adjust_timeout,
     nodes::LOGS_PREFIX,
     topology::configs::{GeneralConfig, deployment::default_e2e_deployment_settings},
 };
 
-const BIN_PATH: &str = "../target/debug/nomos-node";
+const BIN_PATH_DEBUG: &str = "../target/debug/nomos-node";
+const BIN_PATH_RELEASE: &str = "../target/release/nomos-node";
 
 pub enum Pool {
     Da,
@@ -141,7 +142,8 @@ impl Validator {
         );
 
         serde_yaml::to_writer(&mut file, &config).unwrap();
-        let child = Command::new(std::env::current_dir().unwrap().join(BIN_PATH))
+        let exe_path = get_exe_path(BIN_PATH_DEBUG, BIN_PATH_RELEASE);
+        let child = Command::new(exe_path)
             .arg(&config_path)
             .current_dir(dir.path())
             .stdout(Stdio::inherit())
@@ -299,7 +301,12 @@ impl Validator {
         &self.config
     }
 
-    pub async fn get_headers(&self, from: Option<HeaderId>, to: Option<HeaderId>) -> Vec<HeaderId> {
+    pub async fn get_headers(
+        &self,
+        from: Option<HeaderId>,
+        to: Option<HeaderId>,
+        print: bool,
+    ) -> Vec<HeaderId> {
         let mut req = CLIENT.get(format!("http://{}{}", self.addr, CRYPTARCHIA_HEADERS));
 
         if let Some(from) = from {
@@ -312,14 +319,18 @@ impl Validator {
 
         let res = req.send().await;
 
-        println!("res: {res:?}");
+        if print {
+            println!("res: {res:?}");
+        }
 
         res.unwrap().json::<Vec<HeaderId>>().await.unwrap()
     }
 
-    pub async fn consensus_info(&self) -> CryptarchiaInfo {
+    pub async fn consensus_info(&self, print: bool) -> CryptarchiaInfo {
         let res = self.get(CRYPTARCHIA_INFO).await;
-        println!("{res:?}");
+        if print {
+            println!("{res:?}");
+        }
         res.unwrap().json().await.unwrap()
     }
 
@@ -408,9 +419,10 @@ impl Validator {
     ) -> Vec<Option<HeaderId>> {
         let mut results = vec![None; tx_hashes.len()];
 
+        let mut tick = 0u8;
         let _ = tokio::time::timeout(timeout, async {
             loop {
-                let headers = self.get_headers(None, None).await;
+                let headers = self.get_headers(None, None, tick == 0).await;
 
                 for header_id in headers.iter().take(10) {
                     if let Some(block) = self.get_block(*header_id).await {
@@ -424,11 +436,17 @@ impl Validator {
                     }
                 }
 
+                println!(
+                    "waiting for transactions ... {} of {}",
+                    results.iter().filter(|x| x.is_some()).count(),
+                    tx_hashes.len()
+                );
                 if results.iter().all(Option::is_some) {
                     return;
                 }
 
                 tokio::time::sleep(Duration::from_millis(500)).await;
+                tick = tick.wrapping_add(1);
             }
         })
         .await;
