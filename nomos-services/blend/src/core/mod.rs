@@ -623,7 +623,7 @@ where
     >::try_new_with_core_condition_check(
         current_membership_info.public.membership.clone(),
         blend_config.minimum_network_size,
-        &blend_config.crypto,
+        blend_config.crypto,
         current_public_info.clone().into(),
         current_membership_info.core_poq_generator,
     )

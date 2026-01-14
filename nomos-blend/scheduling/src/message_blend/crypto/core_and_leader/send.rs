@@ -215,13 +215,9 @@ mod test {
     use std::num::NonZeroU64;
 
     use groth16::Field as _;
-    use key_management_system_keys::keys::{
-        ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, UnsecuredEd25519Key,
-    };
+    use key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
     use multiaddr::{Multiaddr, PeerId};
-    use nomos_blend_message::crypto::{
-        key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
-    };
+    use nomos_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
     use nomos_blend_proofs::quota::inputs::prove::{
         private::ProofOfLeadershipQuotaInputs,
         public::{CoreInputs, LeaderInputs},

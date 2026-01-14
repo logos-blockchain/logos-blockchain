@@ -6,7 +6,7 @@ use nomos_utils::math::NonNegativeF64;
 use serde::{Deserialize, Serialize};
 use services_utils::overwatch::recovery::backends::FileBackendSettings;
 
-use crate::settings::{SessionCryptographicProcessorSettings, TimingSettings};
+use crate::settings::{TimingSettings};
 
 #[derive(Clone, Debug)]
 pub struct BlendConfig<BackendSettings> {

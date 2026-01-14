@@ -7,6 +7,11 @@ use std::{
 
 use async_trait::async_trait;
 use futures::StreamExt as _;
+use key_management_system_service::{
+    api::{KmsServiceApi, KmsServiceData},
+    backend::preload::PreloadKMSBackend,
+    keys::PublicKeyEncoding,
+};
 pub use nomos_blend::message::{crypto::proofs::RealProofsVerifier, encap::ProofsVerifier};
 use nomos_blend::scheduling::session::UninitializedSessionEventStream;
 use nomos_network::NetworkService;
@@ -52,17 +57,17 @@ mod test_utils;
 
 const LOG_TARGET: &str = "blend::service";
 
-pub struct BlendService<CoreService, EdgeService, RuntimeServiceId>
+pub struct BlendService<CoreService, EdgeService, KmsService, RuntimeServiceId>
 where
     CoreService: ServiceData + CoreServiceComponents<RuntimeServiceId>,
     EdgeService: EdgeServiceComponents,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    _phantom: PhantomData<(CoreService, EdgeService)>,
+    _phantom: PhantomData<(CoreService, EdgeService, KmsService)>,
 }
 
-impl<CoreService, EdgeService, RuntimeServiceId> ServiceData
-    for BlendService<CoreService, EdgeService, RuntimeServiceId>
+impl<CoreService, EdgeService, KmsService, RuntimeServiceId> ServiceData
+    for BlendService<CoreService, EdgeService, KmsService, RuntimeServiceId>
 where
     CoreService: ServiceData + CoreServiceComponents<RuntimeServiceId>,
     EdgeService: EdgeServiceComponents,
@@ -77,8 +82,8 @@ where
 }
 
 #[async_trait]
-impl<CoreService, EdgeService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for BlendService<CoreService, EdgeService, RuntimeServiceId>
+impl<CoreService, EdgeService, KmsService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for BlendService<CoreService, EdgeService, KmsService, RuntimeServiceId>
 where
     CoreService: ServiceData<Message: MessageComponents<Payload: Into<Vec<u8>>> + Send + Sync + 'static>
         + CoreServiceComponents<
@@ -102,10 +107,12 @@ where
     EdgeService::MembershipAdapter:
         membership::Adapter<NodeId = CoreService::NodeId, Error: Send + Sync + 'static> + Send,
     membership::ServiceMessage<EdgeService::MembershipAdapter>: Send + Sync + 'static,
+    KmsService: KmsServiceData<Backend = PreloadKMSBackend> + Send + Sync,
     RuntimeServiceId: AsServiceId<Self>
         + AsServiceId<CoreService>
         + AsServiceId<EdgeService>
         + AsServiceId<MembershipService<EdgeService>>
+        + AsServiceId<KmsService>
         + AsServiceId<
             NetworkService<
                 NetworkBackendOfService<CoreService, RuntimeServiceId>,
@@ -147,19 +154,28 @@ where
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_secs(60)),
-            MembershipService<EdgeService>
+            MembershipService<EdgeService>,
+            KmsService
         )
         .await?;
+
+        let kms = KmsServiceApi::<KmsService, RuntimeServiceId>::new(
+            overwatch_handle.relay::<KmsService>().await?,
+        );
+
+        let PublicKeyEncoding::Ed25519(non_ephemeral_signing_public_key) = kms
+            .public_key(settings.common.crypto.non_ephemeral_signing_key_id)
+            .await
+            .expect("Failed to retrieve the specified signing key from the KMS module.")
+        else {
+            panic!("Key with specified ID is not an Ed25519 key.");
+        };
 
         let membership_stream = <MembershipAdapter<EdgeService> as membership::Adapter>::new(
             overwatch_handle
                 .relay::<MembershipService<EdgeService>>()
                 .await?,
-            settings
-                .common
-                .crypto
-                .non_ephemeral_signing_key
-                .public_key(),
+            non_ephemeral_signing_public_key,
             // We don't need to generate secret zk info in the proxy service, so we ignore the
             // secret key at this level.
             None,

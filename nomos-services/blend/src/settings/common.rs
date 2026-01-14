@@ -16,7 +16,7 @@ pub struct CommonSettings {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SessionCryptographicProcessorSettings {
-    /// The non-ephemeral signing key (NSK) corresponding to the public key
+    /// The non-ephemeral signing key (NSK) ID corresponding to the public key
     /// registered in the membership (SDP).
     pub non_ephemeral_signing_key_id: KeyId,
     /// `ß_c`: number of blending operations for each locally generated message.
