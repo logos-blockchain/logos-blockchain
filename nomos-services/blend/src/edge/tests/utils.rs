@@ -140,7 +140,7 @@ pub fn settings(
             epoch_transition_period_in_slots: NonZeroU64::new(1).unwrap(),
         },
         crypto: SessionCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: key(local_id).0,
+            non_ephemeral_signing_key: key(local_id).0,
             num_blend_layers: NonZeroU64::new(1).unwrap(),
         },
         backend: msg_sender,

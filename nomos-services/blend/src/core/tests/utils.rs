@@ -94,7 +94,7 @@ pub fn settings<BackendSettings>(
     let settings = BlendConfig {
         backend: backend_settings,
         crypto: SessionCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: local_private_key,
+            non_ephemeral_signing_key: local_private_key,
             num_blend_layers: NonZeroU64::try_from(1).unwrap(),
         },
         scheduler: SchedulerSettings {

@@ -6,9 +6,10 @@ use std::{
 };
 
 use futures::{AsyncWriteExt as _, StreamExt as _};
+#[cfg(test)]
+use libp2p::identity::Keypair;
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
-    identity::Keypair,
     swarm::{ConnectionId, dial_opts::PeerCondition},
 };
 use libp2p_stream::OpenStreamError;
@@ -26,7 +27,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, trace, warn};
 
 use super::settings::Libp2pBlendBackendSettings;
-use crate::edge::backends::libp2p::LOG_TARGET;
+use crate::edge::{backends::libp2p::LOG_TARGET, settings::BlendConfig};
 
 #[derive(Debug)]
 pub struct DialAttempt {
@@ -78,12 +79,13 @@ where
     Rng: RngCore + 'static,
 {
     pub(super) fn new(
-        settings: Libp2pBlendBackendSettings,
+        settings: &BlendConfig<Libp2pBlendBackendSettings>,
         membership: Membership<PeerId>,
         rng: Rng,
         command_receiver: mpsc::Receiver<Command>,
-        keypair: Keypair,
+        protocol_name: StreamProtocol,
     ) -> Self {
+        let keypair = settings.keypair();
         let swarm = SwarmBuilder::with_existing_identity(keypair)
             .with_tokio()
             .with_quic()
@@ -97,7 +99,8 @@ where
             .build();
         let stream_control = swarm.behaviour().new_control();
 
-        let replication_factor: NonZeroUsize = settings.replication_factor.try_into().unwrap();
+        let replication_factor: NonZeroUsize =
+            settings.backend.replication_factor.try_into().unwrap();
         let membership_size = membership.size();
 
         if membership_size < replication_factor.get() {
@@ -111,8 +114,10 @@ where
             membership,
             rng,
             pending_dials: HashMap::new(),
-            max_dial_attempts_per_connection: settings.max_dial_attempts_per_peer_per_message,
-            protocol_name: settings.protocol_name.into_inner(),
+            max_dial_attempts_per_connection: settings
+                .backend
+                .max_dial_attempts_per_peer_per_message,
+            protocol_name,
             replication_factor,
         }
     }

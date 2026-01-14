@@ -47,11 +47,6 @@ impl UnsecuredEd25519Key {
         self.0.as_bytes()
     }
 
-    #[must_use]
-    pub fn to_bytes(&self) -> [u8; SECRET_KEY_LENGTH] {
-        self.0.to_bytes()
-    }
-
     /// Return a reference to the inner secret key.
     #[must_use]
     pub const fn as_inner(&self) -> &SigningKey {

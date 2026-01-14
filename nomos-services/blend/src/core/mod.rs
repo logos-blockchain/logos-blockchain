@@ -331,10 +331,7 @@ where
                 .relay::<<MembershipAdapter as membership::Adapter>::Service>()
                 .await
                 .expect("Failed to get relay channel with membership service."),
-            blend_config
-                .crypto
-                .non_ephemeral_encryption_key
-                .public_key(),
+            blend_config.crypto.non_ephemeral_signing_key.public_key(),
             Some(zk_public_key),
         )
         .subscribe()
@@ -623,7 +620,7 @@ where
     >::try_new_with_core_condition_check(
         current_membership_info.public.membership.clone(),
         blend_config.minimum_network_size,
-        blend_config.crypto,
+        &blend_config.crypto,
         current_public_info.clone().into(),
         current_membership_info.core_poq_generator,
     )

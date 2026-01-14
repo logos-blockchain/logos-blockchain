@@ -70,7 +70,7 @@ where
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     ) -> Self {
         let cryptographic_processor = SessionCryptographicProcessor::new(
-            settings.crypto.num_blend_layers,
+            &settings.crypto,
             membership.clone(),
             public_info,
             private_info,

@@ -1,10 +1,11 @@
-use key_management_system_service::keys::Ed25519Key;
 use nomos_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     scheduling::membership::Membership,
 };
 use overwatch::overwatch::handle::OverwatchHandle;
 use rand::RngCore;
+
+use crate::edge::settings::BlendConfig;
 
 #[cfg(feature = "libp2p")]
 pub mod libp2p;
@@ -18,11 +19,10 @@ where
     type Settings: Clone + Send + Sync + 'static;
 
     fn new<Rng>(
-        settings: Self::Settings,
+        settings: BlendConfig<Self::Settings>,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         membership: Membership<NodeId>,
         rng: Rng,
-        membership_key: Ed25519Key,
     ) -> Self
     where
         Rng: RngCore + Send + 'static;

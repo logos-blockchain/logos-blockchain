@@ -334,7 +334,7 @@ async fn test_handle_session_event() {
     let public_info = new_public_info(session, membership.clone(), &settings);
     let crypto_processor = new_crypto_processor(
         &SessionCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: local_private_key,
+            non_ephemeral_signing_key: local_private_key,
             num_blend_layers: NonZeroU64::try_from(1).unwrap(),
         },
         &public_info,

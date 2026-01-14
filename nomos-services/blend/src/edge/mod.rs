@@ -202,7 +202,7 @@ where
                 .relay::<<MembershipAdapter as membership::Adapter>::Service>()
                 .await
                 .expect("Failed to get relay channel with membership service."),
-            settings.crypto.non_ephemeral_encryption_key.public_key(),
+            settings.crypto.non_ephemeral_signing_key.public_key(),
             // No ZK stuff needs to be computed by edge nodes, so no ZK key is specified here.
             None,
         )

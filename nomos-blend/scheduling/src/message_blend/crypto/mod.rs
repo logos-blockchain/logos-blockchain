@@ -24,8 +24,8 @@ mod test_utils;
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
 pub struct SessionCryptographicProcessorSettings {
-    /// The non-ephemeral encryption key (NEK) corresponding to the public key
-    /// registered in the membership (SDP).
+    /// The non-ephemeral encryption key (NEK) derived from the secret key
+    /// corresponding to the public key registered in the membership (SDP).
     #[derivative(Debug = "ignore")]
     pub non_ephemeral_encryption_key: X25519PrivateKey,
     /// `ß_c`: number of blending operations for each locally generated message.

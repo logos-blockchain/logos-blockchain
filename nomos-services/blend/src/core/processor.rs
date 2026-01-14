@@ -475,7 +475,7 @@ mod tests {
 
     fn settings(local_id: NodeId) -> SessionCryptographicProcessorSettings {
         SessionCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: key(local_id).0,
+            non_ephemeral_signing_key: key(local_id).0,
             num_blend_layers: NonZeroU64::new(1).unwrap(),
         }
     }

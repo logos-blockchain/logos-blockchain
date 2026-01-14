@@ -1,9 +1,8 @@
 use core::num::NonZeroU64;
 
-use crate::{
-    core::settings::CoverTrafficSettings,
-    settings::{SessionCryptographicProcessorSettings, TimingSettings},
-};
+use nomos_blend::scheduling::message_blend::crypto::SessionCryptographicProcessorSettings;
+
+use crate::{core::settings::CoverTrafficSettings, settings::TimingSettings};
 
 #[derive(Clone, Debug)]
 pub struct BlendConfig<BackendSettings> {
