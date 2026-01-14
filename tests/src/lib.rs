@@ -1,5 +1,6 @@
 pub mod benchmarks;
 pub mod common;
+pub mod cucumber;
 pub mod nodes;
 pub mod topology;
 

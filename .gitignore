@@ -32,3 +32,4 @@ nomos-c/libnomos.h
 # Demo sequencer related ignores
 node_modules
 *.database
+/tests/cucumber_tests/temp/

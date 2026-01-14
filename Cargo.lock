@@ -1794,9 +1794,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "cfgsync"
+name = "cfgsync_tf"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#1b336c2c080715b0873bdb5b36bd526dd0e74baf"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -2763,19 +2762,6 @@ dependencies = [
  "nom_locate",
  "regex",
  "regex-syntax",
-]
-
-[[package]]
-name = "cucumber_ext"
-version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#1b336c2c080715b0873bdb5b36bd526dd0e74baf"
-dependencies = [
- "cucumber",
- "testing-framework-core",
- "testing-framework-runner-compose",
- "testing-framework-runner-local",
- "testing-framework-workflows",
- "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -11827,7 +11813,6 @@ dependencies = [
 [[package]]
 name = "testing-framework-config"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#1b336c2c080715b0873bdb5b36bd526dd0e74baf"
 dependencies = [
  "blst",
  "chain-leader 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
@@ -11869,7 +11854,6 @@ dependencies = [
 [[package]]
 name = "testing-framework-core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#1b336c2c080715b0873bdb5b36bd526dd0e74baf"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11908,22 +11892,21 @@ dependencies = [
 [[package]]
 name = "testing-framework-env"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#1b336c2c080715b0873bdb5b36bd526dd0e74baf"
 
 [[package]]
 name = "testing-framework-runner-compose"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#1b336c2c080715b0873bdb5b36bd526dd0e74baf"
 dependencies = [
  "anyhow",
  "async-trait",
- "cfgsync 0.1.0 (git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master)",
+ "cfgsync_tf",
  "nomos-tracing 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "nomos-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "reqwest 0.12.28",
  "serde",
  "tempfile",
  "tera",
+ "testing-framework-config",
  "testing-framework-core",
  "testing-framework-env",
  "thiserror 2.0.17",
@@ -11936,7 +11919,6 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-local"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#1b336c2c080715b0873bdb5b36bd526dd0e74baf"
 dependencies = [
  "async-trait",
  "testing-framework-core",
@@ -11947,7 +11929,6 @@ dependencies = [
 [[package]]
 name = "testing-framework-workflows"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#1b336c2c080715b0873bdb5b36bd526dd0e74baf"
 dependencies = [
  "async-trait",
  "chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
@@ -11978,7 +11959,6 @@ dependencies = [
  "cryptarchia-engine 0.1.0",
  "cryptarchia-sync 0.1.0",
  "cucumber",
- "cucumber_ext",
  "executor-http-client 0.1.0",
  "futures",
  "futures-util",
@@ -12014,8 +11994,10 @@ dependencies = [
  "subnetworks-assignations 0.1.0",
  "tempfile",
  "testing-framework-core",
+ "testing-framework-runner-compose",
  "testing-framework-runner-local",
  "testing-framework-workflows",
+ "thiserror 2.0.17",
  "time",
  "tokio",
  "tracing",

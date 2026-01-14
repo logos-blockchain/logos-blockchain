@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 use cucumber::World as _;
-use cucumber_ext::TestingFrameworkWorld;
+use tests::cucumber::{
+    defaults::{init_logging_defaults, init_node_log_dir_defaults, init_tracing},
+    world::{CucumberWorld, DeployerKind},
+};
 
 #[tokio::test]
 async fn cucumber_local_idle_smoke() {
@@ -13,14 +16,17 @@ async fn cucumber_local_idle_smoke() {
     // - `NOMOS_EXECUTOR_BIN=...` (optional; only needed when the scenario uses
     //   executors)
     // - `RUST_LOG=info` (optional; better visibility)
+
+    init_logging_defaults();
+    init_node_log_dir_defaults(DeployerKind::Local);
+    init_tracing();
+
     let _init_result = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();
 
     let feature_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("features/testing_framework/local_idle_smoke.feature");
+        .join("cucumber_tests/features/local_idle_smoke.feature");
 
-    TestingFrameworkWorld::cucumber()
-        .run_and_exit(feature_path)
-        .await;
+    CucumberWorld::cucumber().run_and_exit(feature_path).await;
 }
