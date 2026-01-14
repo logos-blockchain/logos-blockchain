@@ -1,13 +1,12 @@
 use std::{num::NonZeroU64, path::PathBuf};
 
 use key_management_system_service::backend::preload::KeyId;
-use nomos_blend::scheduling::message_blend::crypto::SessionCryptographicProcessorSettings;
 use nomos_core::blend::core_quota;
 use nomos_utils::math::NonNegativeF64;
 use serde::{Deserialize, Serialize};
 use services_utils::overwatch::recovery::backends::FileBackendSettings;
 
-use crate::settings::TimingSettings;
+use crate::settings::{SessionCryptographicProcessorSettings, TimingSettings};
 
 #[derive(Clone, Debug)]
 pub struct BlendConfig<BackendSettings> {
