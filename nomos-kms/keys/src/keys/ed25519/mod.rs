@@ -63,6 +63,10 @@ impl Ed25519Key {
     pub(crate) const fn as_inner(&self) -> &UnsecuredEd25519Key {
         &self.0
     }
+
+    pub(crate) fn into_unsecured(self) -> UnsecuredEd25519Key {
+        self.0.clone()
+    }
 }
 
 impl From<SigningKey> for Ed25519Key {

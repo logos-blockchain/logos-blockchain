@@ -1,4 +1,3 @@
-use nomos_blend::scheduling::message_blend::crypto::SessionCryptographicProcessorSettings;
 use nomos_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pCoreBlendBackendSettings,
@@ -8,7 +7,10 @@ use nomos_blend_service::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pEdgeBlendBackendSettings,
         settings::BlendConfig as BlendEdgeSettings,
     },
-    settings::{CommonSettings, CoreSettings, EdgeSettings, Settings as BlendSettings},
+    settings::{
+        CommonSettings, CoreSettings, EdgeSettings, SessionCryptographicProcessorSettings,
+        Settings as BlendSettings,
+    },
 };
 
 use crate::config::blend::{deployment::Settings as DeploymentSettings, serde::Config};
@@ -40,7 +42,7 @@ impl From<ServiceConfig>
         > {
             common: CommonSettings {
                 crypto: SessionCryptographicProcessorSettings {
-                    non_ephemeral_signing_key: config.user.non_ephemeral_signing_key,
+                    non_ephemeral_signing_key_id: config.user.non_ephemeral_signing_key_id,
                     num_blend_layers: config.deployment.common.num_blend_layers,
                 },
                 minimum_network_size: config.deployment.common.minimum_network_size,

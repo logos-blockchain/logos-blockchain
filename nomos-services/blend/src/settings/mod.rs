@@ -8,7 +8,10 @@ use crate::{
 };
 
 mod common;
-pub use self::common::{CommonSettings, SessionCryptographicProcessorSettings};
+pub use self::common::{
+    CommonSettings, InitializedSessionCryptographicProcessorSettings,
+    SessionCryptographicProcessorSettings,
+};
 mod core;
 pub use self::core::CoreSettings;
 mod edge;

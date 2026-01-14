@@ -20,7 +20,7 @@ cryptarchia-engine            = { workspace = true }
 fork_stream                   = { workspace = true }
 futures                       = { default-features = false, version = "0.3" }
 groth16                       = { default-features = false, workspace = true }
-key-management-system-service = { workspace = true }
+key-management-system-service = { workspace = true, features = ["unsafe"] }
 libp2p                        = { optional = true, workspace = true }
 libp2p-stream                 = { optional = true, workspace = true }
 nomos-blend                   = { workspace = true }

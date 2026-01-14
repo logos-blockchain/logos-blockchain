@@ -57,13 +57,13 @@ use crate::{
         network::NetworkAdapter,
         processor::CoreCryptographicProcessor,
         settings::{
-            BlendConfig, CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings,
-            ZkSettings,
+            CoverTrafficSettings, InitializedBlendConfig, MessageDelayerSettings,
+            SchedulerSettings, ZkSettings,
         },
         state::RecoveryServiceState,
         tests::RuntimeServiceId,
     },
-    settings::TimingSettings,
+    settings::{InitializedSessionCryptographicProcessorSettings, TimingSettings},
     test_utils,
 };
 
@@ -89,11 +89,11 @@ pub fn settings<BackendSettings>(
     local_private_key: UnsecuredEd25519Key,
     minimum_network_size: NonZeroU64,
     backend_settings: BackendSettings,
-) -> (BlendConfig<BackendSettings>, NamedTempFile) {
+) -> (InitializedBlendConfig<BackendSettings>, NamedTempFile) {
     let recovery_file = NamedTempFile::new().unwrap();
-    let settings = BlendConfig {
+    let settings = InitializedBlendConfig {
         backend: backend_settings,
-        crypto: SessionCryptographicProcessorSettings {
+        crypto: InitializedSessionCryptographicProcessorSettings {
             non_ephemeral_signing_key: local_private_key,
             num_blend_layers: NonZeroU64::try_from(1).unwrap(),
         },
@@ -162,7 +162,7 @@ where
     type Settings = ();
 
     fn new(
-        _service_config: BlendConfig<Self::Settings>,
+        _service_config: InitializedBlendConfig<Self::Settings>,
         _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         _current_public_info: PublicInfo<NodeId>,
         _rng: Rng,
@@ -292,7 +292,7 @@ pub fn dummy_overwatch_resources<BackendSettings, BroadcastSettings, RuntimeServ
 }
 
 pub fn new_crypto_processor<CorePoQGenerator>(
-    settings: &SessionCryptographicProcessorSettings,
+    settings: SessionCryptographicProcessorSettings,
     public_info: &PublicInfo<NodeId>,
     core_poq_generator: CorePoQGenerator,
 ) -> CoreCryptographicProcessor<
@@ -322,7 +322,7 @@ pub fn new_crypto_processor<CorePoQGenerator>(
 pub fn new_public_info<BackendSettings>(
     session: u64,
     membership: Membership<NodeId>,
-    settings: &BlendConfig<BackendSettings>,
+    settings: &InitializedBlendConfig<BackendSettings>,
 ) -> PublicInfo<NodeId> {
     let core_quota = settings.session_quota(membership.size());
     PublicInfo {

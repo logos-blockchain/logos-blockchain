@@ -6,14 +6,14 @@ use std::{
 
 use async_trait::async_trait;
 use futures::{StreamExt as _, future::ready, stream::once};
+use key_management_system_service::keys::UnsecuredEd25519Key;
 use nomos_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     proofs::quota::inputs::prove::{private::ProofOfLeadershipQuotaInputs, public::LeaderInputs},
     scheduling::{
         membership::Membership,
-        message_blend::{
-            crypto::SessionCryptographicProcessorSettings,
-            provers::{BlendLayerProof, ProofsGeneratorSettings, leader::LeaderProofsGenerator},
+        message_blend::provers::{
+            BlendLayerProof, ProofsGeneratorSettings, leader::LeaderProofsGenerator,
         },
         session::UninitializedSessionEventStream,
         stream::UninitializedFirstReadyStream,
@@ -27,10 +27,13 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     core::settings::CoverTrafficSettings,
-    edge::{backends::BlendBackend, handlers::Error, run, settings::BlendConfig},
+    edge::{backends::BlendBackend, handlers::Error, run, settings::InitializedBlendConfig},
     epoch_info::EpochHandler,
     membership::MembershipInfo,
-    settings::{FIRST_STREAM_ITEM_READY_TIMEOUT, TimingSettings},
+    settings::{
+        FIRST_STREAM_ITEM_READY_TIMEOUT, InitializedSessionCryptographicProcessorSettings,
+        TimingSettings,
+    },
     test_utils::{
         crypto::mock_blend_proof,
         epoch::{OncePolStreamProvider, TestChainService},
@@ -109,7 +112,7 @@ pub async fn spawn_run(
             ),
             ReceiverStream::new(msg_receiver),
             EpochHandler::new(TestChainService, 1.try_into().unwrap()),
-            &settings,
+            settings,
             &overwatch_handle(),
             || {},
         ))
@@ -129,8 +132,8 @@ pub fn settings(
     local_id: NodeId,
     minimum_network_size: u64,
     msg_sender: NodeIdSender,
-) -> BlendConfig<NodeIdSender> {
-    BlendConfig {
+) -> InitializedBlendConfig<NodeIdSender> {
+    InitializedBlendConfig {
         time: TimingSettings {
             rounds_per_session: NonZeroU64::new(1).unwrap(),
             rounds_per_interval: NonZeroU64::new(1).unwrap(),
@@ -139,7 +142,7 @@ pub fn settings(
             rounds_per_session_transition_period: NonZeroU64::new(1).unwrap(),
             epoch_transition_period_in_slots: NonZeroU64::new(1).unwrap(),
         },
-        crypto: SessionCryptographicProcessorSettings {
+        crypto: InitializedSessionCryptographicProcessorSettings {
             non_ephemeral_signing_key: key(local_id).0,
             num_blend_layers: NonZeroU64::new(1).unwrap(),
         },
@@ -165,17 +168,18 @@ where
     type Settings = NodeIdSender;
 
     fn new<Rng>(
-        settings: BlendConfig<Self::Settings>,
+        settings: Self::Settings,
         _: OverwatchHandle<RuntimeServiceId>,
         membership: Membership<NodeId>,
         _: Rng,
+        _: UnsecuredEd25519Key,
     ) -> Self
     where
         Rng: RngCore + Send + 'static,
     {
         Self {
             membership,
-            sender: settings.backend,
+            sender: settings,
         }
     }
 

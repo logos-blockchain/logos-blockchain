@@ -7,11 +7,7 @@ use std::{
 
 use async_trait::async_trait;
 use futures::StreamExt as _;
-use key_management_system_service::{
-    api::{KmsServiceApi, KmsServiceData},
-    backend::preload::PreloadKMSBackend,
-    keys::PublicKeyEncoding,
-};
+use key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
 pub use nomos_blend::message::{crypto::proofs::RealProofsVerifier, encap::ProofsVerifier};
 use nomos_blend::scheduling::session::UninitializedSessionEventStream;
 use nomos_network::NetworkService;
@@ -35,6 +31,7 @@ use crate::{
     },
     edge::service_components::ServiceComponents as EdgeServiceComponents,
     instance::{Instance, Mode},
+    kms::PreloadKmsService,
     membership::{Adapter as _, MembershipInfo},
     settings::{FIRST_STREAM_ITEM_READY_TIMEOUT, Settings},
 };
@@ -48,6 +45,7 @@ pub mod session;
 pub mod settings;
 
 mod instance;
+mod kms;
 mod modes;
 mod service_components;
 pub use self::service_components::ServiceComponents;
@@ -57,17 +55,17 @@ mod test_utils;
 
 const LOG_TARGET: &str = "blend::service";
 
-pub struct BlendService<CoreService, EdgeService, KmsService, RuntimeServiceId>
+pub struct BlendService<CoreService, EdgeService, RuntimeServiceId>
 where
     CoreService: ServiceData + CoreServiceComponents<RuntimeServiceId>,
     EdgeService: EdgeServiceComponents,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    _phantom: PhantomData<(CoreService, EdgeService, KmsService)>,
+    _phantom: PhantomData<(CoreService, EdgeService)>,
 }
 
-impl<CoreService, EdgeService, KmsService, RuntimeServiceId> ServiceData
-    for BlendService<CoreService, EdgeService, KmsService, RuntimeServiceId>
+impl<CoreService, EdgeService, RuntimeServiceId> ServiceData
+    for BlendService<CoreService, EdgeService, RuntimeServiceId>
 where
     CoreService: ServiceData + CoreServiceComponents<RuntimeServiceId>,
     EdgeService: EdgeServiceComponents,
@@ -82,8 +80,8 @@ where
 }
 
 #[async_trait]
-impl<CoreService, EdgeService, KmsService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for BlendService<CoreService, EdgeService, KmsService, RuntimeServiceId>
+impl<CoreService, EdgeService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for BlendService<CoreService, EdgeService, RuntimeServiceId>
 where
     CoreService: ServiceData<Message: MessageComponents<Payload: Into<Vec<u8>>> + Send + Sync + 'static>
         + CoreServiceComponents<
@@ -107,12 +105,11 @@ where
     EdgeService::MembershipAdapter:
         membership::Adapter<NodeId = CoreService::NodeId, Error: Send + Sync + 'static> + Send,
     membership::ServiceMessage<EdgeService::MembershipAdapter>: Send + Sync + 'static,
-    KmsService: KmsServiceData<Backend = PreloadKMSBackend> + Send + Sync,
     RuntimeServiceId: AsServiceId<Self>
         + AsServiceId<CoreService>
         + AsServiceId<EdgeService>
         + AsServiceId<MembershipService<EdgeService>>
-        + AsServiceId<KmsService>
+        + AsServiceId<PreloadKmsService<RuntimeServiceId>>
         + AsServiceId<
             NetworkService<
                 NetworkBackendOfService<CoreService, RuntimeServiceId>,
@@ -155,12 +152,12 @@ where
             &overwatch_handle,
             Some(Duration::from_secs(60)),
             MembershipService<EdgeService>,
-            KmsService
+            PreloadKmsService<_>
         )
         .await?;
 
-        let kms = KmsServiceApi::<KmsService, RuntimeServiceId>::new(
-            overwatch_handle.relay::<KmsService>().await?,
+        let kms = KmsServiceApi::<PreloadKmsService<_>, RuntimeServiceId>::new(
+            overwatch_handle.relay::<PreloadKmsService<_>>().await?,
         );
 
         let PublicKeyEncoding::Ed25519(non_ephemeral_signing_key_public) = kms

@@ -1,7 +1,5 @@
 mod utils;
 
-use std::num::NonZeroU64;
-
 use groth16::Field as _;
 use key_management_system_service::keys::Ed25519Key;
 use nomos_blend::{
@@ -61,7 +59,14 @@ async fn test_handle_incoming_blend_message() {
         (),
     );
     let public_info = new_public_info(session, membership.clone(), &settings);
-    let mut processor = new_crypto_processor(&settings.crypto, &public_info, ());
+    let mut processor = new_crypto_processor(
+        SessionCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.crypto.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.crypto.num_blend_layers,
+        },
+        &public_info,
+        (),
+    );
     let payload = NetworkMessage {
         message: vec![],
         broadcast_settings: (),
@@ -109,7 +114,14 @@ async fn test_handle_incoming_blend_message() {
     // number.
     session += 1;
     let public_info = new_public_info(session, membership.clone(), &settings);
-    let mut new_processor = new_crypto_processor(&settings.crypto, &public_info, ());
+    let mut new_processor = new_crypto_processor(
+        SessionCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.crypto.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.crypto.num_blend_layers,
+        },
+        &public_info,
+        (),
+    );
     let (mut new_scheduler, mut scheduler) =
         scheduler.rotate_session(scheduler_session_info(&public_info), scheduler_settings);
     let (_, _, _, _, current_token_collector, _, state_updater) =
@@ -200,7 +212,10 @@ async fn test_handle_incoming_blend_message() {
     // decapsulated by either processor, and thus not scheduled.
     session += 1;
     let mut future_processor = new_crypto_processor(
-        &settings.crypto,
+        SessionCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.crypto.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.crypto.num_blend_layers,
+        },
         &new_public_info(session, membership, &settings),
         (),
     );
@@ -333,9 +348,9 @@ async fn test_handle_session_event() {
     );
     let public_info = new_public_info(session, membership.clone(), &settings);
     let crypto_processor = new_crypto_processor(
-        &SessionCryptographicProcessorSettings {
-            non_ephemeral_signing_key: local_private_key,
-            num_blend_layers: NonZeroU64::try_from(1).unwrap(),
+        SessionCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.crypto.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.crypto.num_blend_layers,
         },
         &public_info,
         (),

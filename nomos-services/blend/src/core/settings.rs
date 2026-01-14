@@ -6,7 +6,10 @@ use nomos_utils::math::NonNegativeF64;
 use serde::{Deserialize, Serialize};
 use services_utils::overwatch::recovery::backends::FileBackendSettings;
 
-use crate::settings::{SessionCryptographicProcessorSettings, TimingSettings};
+use crate::settings::{
+    InitializedSessionCryptographicProcessorSettings, SessionCryptographicProcessorSettings,
+    TimingSettings,
+};
 
 #[derive(Clone, Debug)]
 pub struct BlendConfig<BackendSettings> {
@@ -19,11 +22,24 @@ pub struct BlendConfig<BackendSettings> {
     pub recovery_path: PathBuf,
 }
 
-impl<BackendSettings> BlendConfig<BackendSettings> {
+#[derive(Clone)]
+pub struct InitializedBlendConfig<BackendSettings> {
+    pub backend: BackendSettings,
+    pub crypto: InitializedSessionCryptographicProcessorSettings,
+    pub scheduler: SchedulerSettings,
+    pub time: TimingSettings,
+    pub zk: ZkSettings,
+    pub minimum_network_size: NonZeroU64,
+    pub recovery_path: PathBuf,
+}
+
+impl<BackendSettings> InitializedBlendConfig<BackendSettings> {
     pub fn session_quota(&self, membership_size: usize) -> u64 {
-        self.scheduler
-            .cover
-            .session_quota(&self.crypto, &self.time, membership_size)
+        self.scheduler.cover.session_quota(
+            self.crypto.num_blend_layers,
+            &self.time,
+            membership_size,
+        )
     }
 
     pub(super) fn scheduler_settings(
@@ -37,6 +53,22 @@ impl<BackendSettings> BlendConfig<BackendSettings> {
             rounds_per_interval: self.time.rounds_per_interval,
             num_blend_layers: self.crypto.num_blend_layers,
         }
+    }
+}
+
+impl<BackendSettings> FileBackendSettings for InitializedBlendConfig<BackendSettings> {
+    fn recovery_file(&self) -> &PathBuf {
+        &self.recovery_path
+    }
+}
+
+impl<BackendSettings> BlendConfig<BackendSettings> {
+    pub fn session_quota(&self, membership_size: usize) -> u64 {
+        self.scheduler.cover.session_quota(
+            self.crypto.num_blend_layers,
+            &self.time,
+            membership_size,
+        )
     }
 }
 
@@ -74,14 +106,14 @@ impl CoverTrafficSettings {
     #[must_use]
     pub(crate) fn session_quota(
         &self,
-        crypto: &SessionCryptographicProcessorSettings,
+        num_blend_layers: NonZeroU64,
         timings: &TimingSettings,
         membership_size: usize,
     ) -> u64 {
         core_quota(
             timings.rounds_per_session,
             self.message_frequency_per_round,
-            crypto.num_blend_layers,
+            num_blend_layers,
             membership_size,
         )
     }

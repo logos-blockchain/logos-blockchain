@@ -12,9 +12,7 @@ use nomos_blend_proofs::quota::inputs::prove::{
 use crate::{
     membership::Membership,
     message_blend::{
-        crypto::{
-            EncapsulatedMessageWithVerifiedPublicHeader, SessionCryptographicProcessorSettings,
-        },
+        crypto::EncapsulatedMessageWithVerifiedPublicHeader,
         provers::{ProofsGeneratorSettings, leader::LeaderProofsGenerator},
     },
     serialize_encapsulated_message,
@@ -39,7 +37,7 @@ where
 {
     #[must_use]
     pub fn new(
-        settings: &SessionCryptographicProcessorSettings,
+        num_blend_layers: NonZeroU64,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
         private_info: ProofOfLeadershipQuotaInputs,
@@ -50,7 +48,7 @@ where
             public_inputs: public_info,
         };
         Self {
-            num_blend_layers: settings.num_blend_layers,
+            num_blend_layers,
             membership,
             proofs_generator: ProofsGenerator::new(generator_settings, private_info),
         }
@@ -151,19 +149,14 @@ mod test {
     use super::SessionCryptographicProcessor;
     use crate::{
         membership::{Membership, Node},
-        message_blend::crypto::{
-            SessionCryptographicProcessorSettings, test_utils::TestEpochChangeLeaderProofsGenerator,
-        },
+        message_blend::crypto::test_utils::TestEpochChangeLeaderProofsGenerator,
     };
 
     #[test]
     fn epoch_rotation() {
         let mut processor =
             SessionCryptographicProcessor::<_, TestEpochChangeLeaderProofsGenerator>::new(
-                &SessionCryptographicProcessorSettings {
-                    non_ephemeral_encryption_key: [0; _].into(),
-                    num_blend_layers: NonZeroU64::new(1).unwrap(),
-                },
+                NonZeroU64::new(1).unwrap(),
                 Membership::new_without_local(&[Node {
                     address: Multiaddr::empty(),
                     id: PeerId::random(),
