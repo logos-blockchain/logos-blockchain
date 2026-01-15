@@ -449,8 +449,11 @@ where
                                 Ok(block) => {
                                     // Process our own block first to ensure it's valid
                                     match cryptarchia_api.apply_block(block.clone()).await {
-                                        Ok(_) => {
-                                            // Block successfully processed, now publish it to the network
+                                        Ok(tip) => {
+                                            // Block successfully processed, now remove included txs from mempool and publish it to the network.
+                                            // Assert that the proposed block is added to the honest chain.
+                                            assert!(tip == block.header().id());
+                                            Self::remove_txs_in_block_from_mempool(&block, &relays).await;
                                             let proposal = block.to_proposal();
                                             blend_adapter.publish_proposal(proposal).await;
                                         }
@@ -657,6 +660,34 @@ where
         );
 
         Ok(block)
+    }
+
+    async fn remove_txs_in_block_from_mempool(
+        block: &Block<Mempool::Item>,
+        relays: &CryptarchiaConsensusRelays<
+            BlendService,
+            Mempool,
+            MempoolNetAdapter,
+            MempoolDaAdapter,
+            SamplingBackend,
+            RuntimeServiceId,
+        >,
+    ) {
+        if let Err(e) = relays
+            .mempool_adapter()
+            .remove_transactions(
+                &block
+                    .transactions()
+                    .map(Transaction::hash)
+                    .collect::<Vec<_>>(),
+            )
+            .await
+        {
+            error!(
+                "failed to remove txs included in block {:?} from mempool: {e:?}",
+                block.header().id()
+            );
+        }
     }
 }
 
