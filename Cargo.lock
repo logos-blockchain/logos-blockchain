@@ -6769,11 +6769,7 @@ dependencies = [
  "poq 0.1.0",
  "poseidon2 0.1.0",
  "rs-merkle-tree",
- "serde",
- "subtle",
  "thiserror 1.0.69",
- "x25519-dalek",
- "zeroize",
 ]
 
 [[package]]
@@ -6924,7 +6920,6 @@ dependencies = [
  "key-management-system-keys 0.1.0",
  "libp2p",
  "multiaddr",
- "nomos-blend-crypto 0.1.0",
  "nomos-blend-message 0.1.0",
  "nomos-blend-proofs 0.1.0",
  "nomos-core 0.1.0",
