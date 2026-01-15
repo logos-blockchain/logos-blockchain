@@ -127,7 +127,7 @@ where
         Some(Box::new(
             WatchStream::new(pol_winning_slot_receiver)
                 .filter_map(ready)
-                .map(|(leader_private, _secret_key, _)| {
+                .map(|(leader_private, _)| {
                     let PolWitnessInputsData {
                         wallet:
                             PolWalletInputsData {
