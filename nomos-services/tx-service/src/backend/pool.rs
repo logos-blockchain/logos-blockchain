@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::BTreeSet,
     fmt::Debug,
     hash::Hash,
     pin::Pin,
@@ -17,24 +17,19 @@ use crate::{
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PoolRecoveryState<BlockId, Key>
+pub struct PoolRecoveryState<Key>
 where
     Key: Hash + Eq + Ord,
-    BlockId: Hash + Eq,
 {
     pub pending_items: BTreeSet<Key>,
-    pub in_block_items: HashMap<BlockId, Vec<Key>>,
-    pub in_block_items_by_id: HashMap<Key, BlockId>,
     pub last_item_timestamp: u64,
 }
 
 pub struct Mempool<BlockId, Item, Key, Storage, RuntimeServiceId> {
     pending_items: BTreeSet<Key>,
-    in_block_items: HashMap<BlockId, Vec<Key>>,
-    in_block_items_by_id: HashMap<Key, BlockId>,
     last_item_timestamp: u64,
     storage_adapter: Storage,
-    _phantom: std::marker::PhantomData<(Item, RuntimeServiceId)>,
+    _phantom: std::marker::PhantomData<(BlockId, Item, RuntimeServiceId)>,
 }
 
 impl<BlockId, Item, Key, Storage, RuntimeServiceId> Debug
@@ -47,8 +42,6 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Mempool")
             .field("pending_items", &self.pending_items)
-            .field("in_block_items", &self.in_block_items)
-            .field("in_block_items_by_id", &self.in_block_items_by_id)
             .field("last_item_timestamp", &self.last_item_timestamp)
             .field("storage_adapter", &"<StorageAdapter>")
             .finish()
@@ -76,8 +69,6 @@ where
     fn new(_settings: Self::Settings, storage: Self::Storage) -> Self {
         Self {
             pending_items: BTreeSet::new(),
-            in_block_items: HashMap::new(),
-            in_block_items_by_id: HashMap::new(),
             last_item_timestamp: 0,
             storage_adapter: storage,
             _phantom: std::marker::PhantomData,
@@ -89,7 +80,7 @@ where
         key: Self::Key,
         item: I,
     ) -> Result<(), MempoolError> {
-        if self.pending_items.contains(&key) || self.in_block_items_by_id.contains_key(&key) {
+        if self.pending_items.contains(&key) {
             return Err(MempoolError::ExistingItem);
         }
 
@@ -134,31 +125,13 @@ where
             .map_err(|e| MempoolError::StorageError(format!("{e:?}")))
     }
 
-    fn mark_in_block(&mut self, keys: &[Self::Key], block: BlockId) {
-        let keys_in_block: Vec<_> = keys
-            .iter()
-            .filter(|&key| self.pending_items.remove(key))
-            .map(|key| {
-                self.in_block_items_by_id.insert(key.clone(), block);
-                key.clone()
-            })
-            .collect();
-
-        if !keys_in_block.is_empty() {
-            self.in_block_items
-                .entry(block)
-                .or_default()
-                .extend(keys_in_block);
-        }
-    }
-
-    async fn prune(&mut self, keys: &[Self::Key]) {
+    async fn remove(&mut self, keys: &[Self::Key]) {
         for key in keys {
             self.pending_items.remove(key);
         }
 
         if let Err(e) = self.storage_adapter.remove_items(keys).await {
-            tracing::warn!("Failed to remove items from storage during prune: {:?}", e);
+            tracing::warn!("Failed to remove items from storage: {e:?}");
         }
     }
 
@@ -170,14 +143,12 @@ where
         self.last_item_timestamp
     }
 
-    fn status(&self, items: &[Self::Key]) -> Vec<Status<BlockId>> {
+    fn status(&self, items: &[Self::Key]) -> Vec<Status> {
         items
             .iter()
             .map(|key| {
                 if self.pending_items.contains(key) {
                     Status::Pending
-                } else if let Some(block) = self.in_block_items_by_id.get(key) {
-                    Status::InBlock { block: *block }
                 } else {
                     Status::Unknown
                 }
@@ -197,13 +168,11 @@ where
     Storage::Error: Debug,
     RuntimeServiceId: Send + Sync,
 {
-    type RecoveryState = PoolRecoveryState<BlockId, Key>;
+    type RecoveryState = PoolRecoveryState<Key>;
 
     fn save(&self) -> Self::RecoveryState {
         PoolRecoveryState {
             pending_items: self.pending_items.clone(),
-            in_block_items: self.in_block_items.clone(),
-            in_block_items_by_id: self.in_block_items_by_id.clone(),
             last_item_timestamp: self.last_item_timestamp,
         }
     }
@@ -215,8 +184,6 @@ where
     ) -> Self {
         Self {
             pending_items: state.pending_items,
-            in_block_items: state.in_block_items,
-            in_block_items_by_id: state.in_block_items_by_id,
             last_item_timestamp: state.last_item_timestamp,
             storage_adapter: storage,
             _phantom: std::marker::PhantomData,

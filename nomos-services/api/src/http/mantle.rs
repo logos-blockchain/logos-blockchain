@@ -82,7 +82,7 @@ where
 pub async fn mantle_mempool_status<StorageAdapter, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     items: Vec<<SignedMantleTx as Transaction>::Hash>,
-) -> Result<Vec<Status<HeaderId>>, super::DynError>
+) -> Result<Vec<Status>, super::DynError>
 where
     StorageAdapter: tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,

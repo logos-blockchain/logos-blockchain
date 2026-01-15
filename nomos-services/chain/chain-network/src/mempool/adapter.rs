@@ -31,18 +31,11 @@ where
     Payload: Send + Sync,
     Tx: Send + Sync + 'static,
 {
-    async fn mark_transactions_in_block(
-        &self,
-        ids: &[TxHash],
-        block: HeaderId,
-    ) -> Result<(), overwatch::DynError> {
+    async fn remove_transactions(&self, ids: &[TxHash]) -> Result<(), overwatch::DynError> {
         self.mempool_relay
-            .send(MempoolMsg::MarkInBlock {
-                ids: ids.to_vec(),
-                block,
-            })
+            .send(MempoolMsg::Remove { ids: ids.to_vec() })
             .await
-            .map_err(|(e, _)| format!("Could not mark transactions in block: {e}"))?;
+            .map_err(|(e, _)| format!("Could not remove transactions from mempool: {e}"))?;
 
         Ok(())
     }
