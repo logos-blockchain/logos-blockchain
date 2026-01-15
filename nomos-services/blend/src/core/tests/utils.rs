@@ -57,13 +57,13 @@ use crate::{
         network::NetworkAdapter,
         processor::CoreCryptographicProcessor,
         settings::{
-            CoverTrafficSettings, InitializedBlendConfig, MessageDelayerSettings,
-            SchedulerSettings, ZkSettings,
+            CoverTrafficSettings, MessageDelayerSettings, RunningBlendConfig, SchedulerSettings,
+            ZkSettings,
         },
         state::RecoveryServiceState,
         tests::RuntimeServiceId,
     },
-    settings::{InitializedSessionCryptographicProcessorSettings, TimingSettings},
+    settings::TimingSettings,
     test_utils,
 };
 
@@ -89,14 +89,10 @@ pub fn settings<BackendSettings>(
     local_private_key: UnsecuredEd25519Key,
     minimum_network_size: NonZeroU64,
     backend_settings: BackendSettings,
-) -> (InitializedBlendConfig<BackendSettings>, NamedTempFile) {
+) -> (RunningBlendConfig<BackendSettings>, NamedTempFile) {
     let recovery_file = NamedTempFile::new().unwrap();
-    let settings = InitializedBlendConfig {
+    let settings = RunningBlendConfig {
         backend: backend_settings,
-        crypto: InitializedSessionCryptographicProcessorSettings {
-            non_ephemeral_signing_key: local_private_key,
-            num_blend_layers: NonZeroU64::try_from(1).unwrap(),
-        },
         scheduler: SchedulerSettings {
             cover: CoverTrafficSettings {
                 message_frequency_per_round: 1.0.try_into().unwrap(),
@@ -110,6 +106,8 @@ pub fn settings<BackendSettings>(
         zk: ZkSettings {
             secret_key_kms_id: "test-key".to_owned(),
         },
+        non_ephemeral_signing_key: local_private_key,
+        num_blend_layers: NonZeroU64::try_from(1).unwrap(),
         minimum_network_size,
         recovery_path: recovery_file.path().to_path_buf(),
     };
@@ -162,7 +160,7 @@ where
     type Settings = ();
 
     fn new(
-        _service_config: InitializedBlendConfig<Self::Settings>,
+        _service_config: RunningBlendConfig<Self::Settings>,
         _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         _current_public_info: PublicInfo<NodeId>,
         _rng: Rng,
@@ -322,7 +320,7 @@ pub fn new_crypto_processor<CorePoQGenerator>(
 pub fn new_public_info<BackendSettings>(
     session: u64,
     membership: Membership<NodeId>,
-    settings: &InitializedBlendConfig<BackendSettings>,
+    settings: &RunningBlendConfig<BackendSettings>,
 ) -> PublicInfo<NodeId> {
     let core_quota = settings.session_quota(membership.size());
     PublicInfo {
@@ -337,7 +335,7 @@ pub fn new_public_info<BackendSettings>(
         epoch: LeaderInputs {
             pol_ledger_aged: ZkHash::ZERO,
             pol_epoch_nonce: ZkHash::ZERO,
-            message_quota: settings.crypto.num_blend_layers.get(),
+            message_quota: settings.num_blend_layers.get(),
             total_stake: 10,
         },
     }

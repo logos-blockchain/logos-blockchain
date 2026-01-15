@@ -52,15 +52,9 @@ impl UnsecuredEd25519Key {
         self.0.to_bytes()
     }
 
-    /// Return a reference to the inner secret key.
-    #[must_use]
-    pub const fn as_inner(&self) -> &SigningKey {
-        &self.0
-    }
-
     #[must_use]
     pub fn derive_x25519(&self) -> X25519PrivateKey {
-        self.as_inner().to_scalar_bytes().into()
+        self.0.to_scalar_bytes().into()
     }
 }
 

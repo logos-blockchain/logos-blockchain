@@ -17,7 +17,6 @@ where
 {
     type Settings: Clone + Send + Sync + 'static;
 
-    // Change to InitializedBlendConfig as well.
     fn new<Rng>(
         settings: Self::Settings,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,

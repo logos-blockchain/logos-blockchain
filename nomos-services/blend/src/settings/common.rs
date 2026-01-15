@@ -1,30 +1,19 @@
 use core::num::NonZeroU64;
 use std::path::PathBuf;
 
-use key_management_system_service::{backend::preload::KeyId, keys::UnsecuredEd25519Key};
+use key_management_system_service::backend::preload::KeyId;
 use serde::{Deserialize, Serialize};
 
 use crate::settings::timing::TimingSettings;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CommonSettings {
-    pub crypto: SessionCryptographicProcessorSettings,
-    pub time: TimingSettings,
-    pub minimum_network_size: NonZeroU64,
-    pub recovery_path_prefix: PathBuf,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct SessionCryptographicProcessorSettings {
     /// The non-ephemeral signing key (NSK) corresponding to the public key
     /// registered in the membership (SDP).
     pub non_ephemeral_signing_key_id: KeyId,
     /// `ß_c`: number of blending operations for each locally generated message.
     pub num_blend_layers: NonZeroU64,
-}
-
-#[derive(Clone)]
-pub struct InitializedSessionCryptographicProcessorSettings {
-    pub non_ephemeral_signing_key: UnsecuredEd25519Key,
-    pub num_blend_layers: NonZeroU64,
+    pub time: TimingSettings,
+    pub minimum_network_size: NonZeroU64,
+    pub recovery_path_prefix: PathBuf,
 }

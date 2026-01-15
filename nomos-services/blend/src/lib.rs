@@ -161,7 +161,7 @@ where
         );
 
         let PublicKeyEncoding::Ed25519(non_ephemeral_signing_key_public) = kms
-            .public_key(settings.common.crypto.non_ephemeral_signing_key_id)
+            .public_key(settings.common.non_ephemeral_signing_key_id)
             .await
             .expect("KMS does not have key with the specified ID.")
         else {

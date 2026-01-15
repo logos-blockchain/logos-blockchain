@@ -16,6 +16,8 @@ pub mod edge;
 /// deployment and that users have to specify when starting up the node.
 #[derive(Clone, Debug, Derivative, Serialize, Deserialize)]
 pub struct Config {
+    /// The non-ephemeral signing key (NSK) ID corresponding to the public key
+    /// registered in the membership (SDP).
     pub non_ephemeral_signing_key_id: KeyId,
     pub recovery_path_prefix: PathBuf,
     pub core: CoreConfig,

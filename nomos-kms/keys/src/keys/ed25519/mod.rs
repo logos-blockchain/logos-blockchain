@@ -57,11 +57,7 @@ impl Ed25519Key {
 
     #[must_use]
     pub fn derive_x25519(&self) -> X25519PrivateKey {
-        self.as_inner().derive_x25519()
-    }
-
-    pub(crate) const fn as_inner(&self) -> &UnsecuredEd25519Key {
-        &self.0
+        self.0.derive_x25519()
     }
 
     pub(crate) fn into_unsecured(self) -> UnsecuredEd25519Key {

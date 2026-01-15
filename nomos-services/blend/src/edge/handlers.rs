@@ -15,7 +15,7 @@ use nomos_utils::blake_rng::BlakeRng;
 use overwatch::overwatch::OverwatchHandle;
 use rand::SeedableRng as _;
 
-use crate::edge::{InitializedSettings, LOG_TARGET, backends::BlendBackend};
+use crate::edge::{LOG_TARGET, RunningSettings, backends::BlendBackend};
 
 pub struct MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId> {
     cryptographic_processor: SessionCryptographicProcessor<NodeId, ProofsGenerator>,
@@ -37,7 +37,7 @@ where
     /// 1. The membership size is at least `settings.minimum_network_size`.
     /// 2. The local node is not a core node.
     pub fn try_new_with_edge_condition_check(
-        settings: InitializedSettings<Backend, NodeId, RuntimeServiceId>,
+        settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
         private_info: ProofOfLeadershipQuotaInputs,
@@ -63,14 +63,14 @@ where
     }
 
     fn new(
-        settings: InitializedSettings<Backend, NodeId, RuntimeServiceId>,
+        settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
         private_info: ProofOfLeadershipQuotaInputs,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     ) -> Self {
         let cryptographic_processor = SessionCryptographicProcessor::new(
-            settings.crypto.num_blend_layers,
+            settings.num_blend_layers,
             membership.clone(),
             public_info,
             private_info,
@@ -80,7 +80,7 @@ where
             overwatch_handle,
             membership,
             BlakeRng::from_entropy(),
-            settings.crypto.non_ephemeral_signing_key,
+            settings.non_ephemeral_signing_key,
         );
         Self {
             cryptographic_processor,

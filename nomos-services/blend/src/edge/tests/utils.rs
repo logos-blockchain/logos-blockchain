@@ -27,13 +27,10 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     core::settings::CoverTrafficSettings,
-    edge::{backends::BlendBackend, handlers::Error, run, settings::InitializedBlendConfig},
+    edge::{backends::BlendBackend, handlers::Error, run, settings::RunningBlendConfig},
     epoch_info::EpochHandler,
     membership::MembershipInfo,
-    settings::{
-        FIRST_STREAM_ITEM_READY_TIMEOUT, InitializedSessionCryptographicProcessorSettings,
-        TimingSettings,
-    },
+    settings::{FIRST_STREAM_ITEM_READY_TIMEOUT, TimingSettings},
     test_utils::{
         crypto::mock_blend_proof,
         epoch::{OncePolStreamProvider, TestChainService},
@@ -132,8 +129,8 @@ pub fn settings(
     local_id: NodeId,
     minimum_network_size: u64,
     msg_sender: NodeIdSender,
-) -> InitializedBlendConfig<NodeIdSender> {
-    InitializedBlendConfig {
+) -> RunningBlendConfig<NodeIdSender> {
+    RunningBlendConfig {
         time: TimingSettings {
             rounds_per_session: NonZeroU64::new(1).unwrap(),
             rounds_per_interval: NonZeroU64::new(1).unwrap(),
@@ -142,10 +139,8 @@ pub fn settings(
             rounds_per_session_transition_period: NonZeroU64::new(1).unwrap(),
             epoch_transition_period_in_slots: NonZeroU64::new(1).unwrap(),
         },
-        crypto: InitializedSessionCryptographicProcessorSettings {
-            non_ephemeral_signing_key: key(local_id).0,
-            num_blend_layers: NonZeroU64::new(1).unwrap(),
-        },
+        non_ephemeral_signing_key: key(local_id).0,
+        num_blend_layers: NonZeroU64::new(1).unwrap(),
         backend: msg_sender,
         minimum_network_size: NonZeroU64::new(minimum_network_size).unwrap(),
         cover: CoverTrafficSettings::default(),

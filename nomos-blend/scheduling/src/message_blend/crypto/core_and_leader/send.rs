@@ -66,8 +66,6 @@ where
         public_info: PoQVerificationInputsMinusSigningKey,
         core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self {
-        // Derive the non-ephemeral encryption key
-        // from the non-ephemeral signing key.
         let generator_settings = ProofsGeneratorSettings {
             local_node_index: membership.local_index(),
             membership_size: membership.size(),

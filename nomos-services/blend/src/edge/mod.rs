@@ -46,14 +46,14 @@ use overwatch::{
 use serde::{Serialize, de::DeserializeOwned};
 pub(crate) use service_components::ServiceComponents;
 use services_utils::wait_until_services_are_ready;
-use settings::BlendConfig;
+use settings::StartingBlendConfig;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 
 use crate::{
     edge::{
         handlers::{Error, MessageHandler},
-        settings::InitializedBlendConfig,
+        settings::RunningBlendConfig,
     },
     epoch_info::{
         ChainApi, EpochEvent, EpochHandler, LeaderInputsMinusQuota, PolEpochInfo,
@@ -62,13 +62,13 @@ use crate::{
     kms::PreloadKmsService,
     membership::{self, MembershipInfo, ZkInfo},
     message::{NetworkMessage, ServiceMessage},
-    settings::{FIRST_STREAM_ITEM_READY_TIMEOUT, InitializedSessionCryptographicProcessorSettings},
+    settings::FIRST_STREAM_ITEM_READY_TIMEOUT,
 };
 
 const LOG_TARGET: &str = "blend::service::edge";
 
-type InitializedSettings<Backend, NodeId, RuntimeServiceId> =
-    InitializedBlendConfig<<Backend as BlendBackend<NodeId, RuntimeServiceId>>::Settings>;
+type RunningSettings<Backend, NodeId, RuntimeServiceId> =
+    RunningBlendConfig<<Backend as BlendBackend<NodeId, RuntimeServiceId>>::Settings>;
 
 pub struct BlendService<
     Backend,
@@ -120,7 +120,7 @@ where
     Backend: BlendBackend<NodeId, RuntimeServiceId>,
     NodeId: Clone,
 {
-    type Settings = BlendConfig<Backend::Settings>;
+    type Settings = StartingBlendConfig<Backend::Settings>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
     type Message = ServiceMessage<BroadcastSettings>;
@@ -216,7 +216,7 @@ where
         let non_ephemeral_signing_key = async {
             let (sender, receiver) = oneshot::channel();
             kms.execute(
-                settings.crypto.non_ephemeral_signing_key_id,
+                settings.non_ephemeral_signing_key_id,
                 KeyOperators::Ed25519(Box::new(ExfiltrateSecretKeyOperator::new(sender))),
             )
             .await
@@ -287,13 +287,11 @@ where
             UninitializedFirstReadyStream::new(clock_stream, FIRST_STREAM_ITEM_READY_TIMEOUT),
             messages_to_blend_stream,
             epoch_handler,
-            InitializedSettings::<Backend, _, _> {
+            RunningSettings::<Backend, _, _> {
                 backend: settings.backend,
                 cover: settings.cover,
-                crypto: InitializedSessionCryptographicProcessorSettings {
-                    non_ephemeral_signing_key,
-                    num_blend_layers: settings.crypto.num_blend_layers,
-                },
+                non_ephemeral_signing_key,
+                num_blend_layers: settings.num_blend_layers,
                 minimum_network_size: settings.minimum_network_size,
                 time: settings.time,
             },
@@ -338,7 +336,7 @@ async fn run<Backend, NodeId, ProofsGenerator, ChainService, PolInfoProvider, Ru
     clock_stream: UninitializedFirstReadyStream<impl Stream<Item = SlotTick> + Unpin>,
     mut incoming_message_stream: impl Stream<Item = Vec<u8>> + Send + Unpin,
     mut epoch_handler: EpochHandler<ChainService, RuntimeServiceId>,
-    settings: InitializedSettings<Backend, NodeId, RuntimeServiceId>,
+    settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     notify_ready: impl Fn(),
 ) -> Result<(), Error>
@@ -374,7 +372,7 @@ where
         };
         (
             LeaderInputs {
-                message_quota: settings.crypto.num_blend_layers.into(),
+                message_quota: settings.num_blend_layers.into(),
                 pol_epoch_nonce,
                 pol_ledger_aged,
                 total_stake,
@@ -420,7 +418,7 @@ where
         core: CoreInputs {
             zk_root: current_membership_info.zk.root,
             quota: settings.cover.session_quota(
-                settings.crypto.num_blend_layers,
+                settings.num_blend_layers,
                 &settings.time,
                 current_membership_info.membership.size(),
             ),
@@ -480,7 +478,7 @@ fn handle_new_session<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
             root: new_zk_root, ..
         },
     }: MembershipInfo<NodeId>,
-    settings: InitializedSettings<Backend, NodeId, RuntimeServiceId>,
+    settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
     current_epoch_private_info: ProofOfLeadershipQuotaInputs,
     overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     current_public_inputs: PoQVerificationInputsMinusSigningKey,
@@ -505,7 +503,7 @@ where
         session: new_session_number,
         core: CoreInputs {
             quota: settings.cover.session_quota(
-                settings.crypto.num_blend_layers,
+                settings.num_blend_layers,
                 &settings.time,
                 new_membership.size(),
             ),
@@ -541,7 +539,7 @@ where
 /// info is received.
 async fn handle_clock_event<Backend, NodeId, ProofsGenerator, ChainService, RuntimeServiceId>(
     slot_tick: SlotTick,
-    settings: InitializedSettings<Backend, NodeId, RuntimeServiceId>,
+    settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
     PolEpochInfo {
         nonce: current_secret_inputs_nonce,
         poq_private_inputs: current_secret_inputs,
@@ -577,7 +575,7 @@ where
             pol_ledger_aged,
             total_stake,
         }) => LeaderInputs {
-            message_quota: settings.crypto.num_blend_layers.into(),
+            message_quota: settings.num_blend_layers.into(),
             pol_epoch_nonce,
             pol_ledger_aged,
             total_stake,
@@ -618,7 +616,7 @@ where
 /// returned, that builds on the new epoch's public and private inputs.
 fn handle_new_secret_epoch_info<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
     new_pol_info: PolEpochInfo,
-    settings: InitializedSettings<Backend, NodeId, RuntimeServiceId>,
+    settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
     current_public_inputs: &PoQVerificationInputsMinusSigningKey,
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     current_membership: &Membership<NodeId>,

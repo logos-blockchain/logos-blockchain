@@ -61,8 +61,8 @@ async fn test_handle_incoming_blend_message() {
     let public_info = new_public_info(session, membership.clone(), &settings);
     let mut processor = new_crypto_processor(
         SessionCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.crypto.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.crypto.num_blend_layers,
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
         },
         &public_info,
         (),
@@ -79,8 +79,7 @@ async fn test_handle_incoming_blend_message() {
         .expect("encapsulation must succeed");
 
     // Check that the message is successfully decapsulated and scheduled.
-    let scheduler_settings =
-        scheduler_settings(&timing_settings(), settings.crypto.num_blend_layers);
+    let scheduler_settings = scheduler_settings(&timing_settings(), settings.num_blend_layers);
     let mut scheduler = SessionMessageScheduler::new(
         scheduler_session_info(&public_info),
         BlakeRng::from_entropy(),
@@ -116,8 +115,8 @@ async fn test_handle_incoming_blend_message() {
     let public_info = new_public_info(session, membership.clone(), &settings);
     let mut new_processor = new_crypto_processor(
         SessionCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.crypto.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.crypto.num_blend_layers,
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
         },
         &public_info,
         (),
@@ -213,8 +212,8 @@ async fn test_handle_incoming_blend_message() {
     session += 1;
     let mut future_processor = new_crypto_processor(
         SessionCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.crypto.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.crypto.num_blend_layers,
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
         },
         &new_public_info(session, membership, &settings),
         (),
@@ -349,8 +348,8 @@ async fn test_handle_session_event() {
     let public_info = new_public_info(session, membership.clone(), &settings);
     let crypto_processor = new_crypto_processor(
         SessionCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.crypto.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.crypto.num_blend_layers,
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
         },
         &public_info,
         (),
@@ -358,7 +357,7 @@ async fn test_handle_session_event() {
     let scheduler = SessionMessageScheduler::new(
         scheduler_session_info(&public_info),
         BlakeRng::from_entropy(),
-        scheduler_settings(&settings.time, settings.crypto.num_blend_layers),
+        scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, MockProofsVerifier, _>>::new(
