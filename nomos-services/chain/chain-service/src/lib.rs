@@ -119,9 +119,10 @@ pub enum ConsensusMsg<Tx> {
         slot: Slot,
         tx: oneshot::Sender<Option<EpochState>>,
     },
+    /// Apply a block to the chain and return the tip if successful.
     ApplyBlock {
         block: Box<Block<Tx>>,
-        tx: oneshot::Sender<Result<(), Error>>,
+        tx: oneshot::Sender<Result<HeaderId, Error>>,
     },
     /// Forward chain sync events from the network to chain-service.
     /// Chain-service will handle these directly and respond via the embedded
@@ -556,7 +557,7 @@ where
                                     Ok((new_cryptarchia, new_storage_blocks_to_remove)) => {
                                         cryptarchia = new_cryptarchia;
                                         storage_blocks_to_remove = new_storage_blocks_to_remove;
-                                        tx.send(Ok(())).unwrap_or_else(|_| {
+                                        tx.send(Ok(cryptarchia.tip())).unwrap_or_else(|_| {
                                             error!("Could not send process block result through channel");
                                         });
                                     }

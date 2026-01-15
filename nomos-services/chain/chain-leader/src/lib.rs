@@ -449,7 +449,7 @@ where
                                 Ok(block) => {
                                     // Process our own block first to ensure it's valid
                                     match cryptarchia_api.apply_block(block.clone()).await {
-                                        Ok(()) => {
+                                        Ok(_) => {
                                             // Block successfully processed, now publish it to the network
                                             let proposal = block.to_proposal();
                                             blend_adapter.publish_proposal(proposal).await;

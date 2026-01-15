@@ -716,18 +716,22 @@ where
         blob_validation.validate(&block).await?;
     }
 
-    cryptarchia.apply_block(block.clone()).await?;
+    let tip = cryptarchia.apply_block(block.clone()).await?;
 
-    // remove included content from mempool
-    mempool_adapter
-        .remove_transactions(
-            &block
-                .transactions()
-                .map(Transaction::hash)
-                .collect::<Vec<_>>(),
-        )
-        .await
-        .unwrap_or_else(|e| error!("Could not mark transactions in block: {e}"));
+    // Remove included content from mempool if the block was applied to the honest
+    // chain. Otherwise, we keep them in mempool, so they can be included to the
+    // honest chain later when this node proposes blocks.
+    if tip == block.header().id() {
+        mempool_adapter
+            .remove_transactions(
+                &block
+                    .transactions()
+                    .map(Transaction::hash)
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .unwrap_or_else(|e| error!("Could not mark transactions in block: {e}"));
+    }
 
     let blob_ids: Vec<da::BlobId> = block
         .transactions()
