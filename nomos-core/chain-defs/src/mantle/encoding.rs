@@ -743,7 +743,6 @@ mod tests {
 
     use super::*;
     use crate::{mantle::Transaction as _, sdp::da::ActivityProof};
-    use crate::codec::SerializeOp;
 
     fn dbg_test_vector(actual: &str, expected: &str) {
         println!("{:32} {:32}", "actual", "expected");
