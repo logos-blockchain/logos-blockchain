@@ -12,9 +12,7 @@ pub struct PolWalletInputs {
     aged_selector: Vec<Groth16Input>,
     latest_path: Vec<Groth16Input>,
     latest_selector: Vec<Groth16Input>,
-    slot_secret: Groth16Input,
-    slot_secret_path: Vec<Groth16Input>,
-    starting_slot: Groth16Input,
+    secret_key: Groth16Input,
 }
 
 /// Private inputs of the POL cirmcom circuit to be provided by the wallet.
@@ -27,9 +25,7 @@ pub struct PolWalletInputsData {
     pub aged_selector: Vec<bool>,
     pub latest_path: Vec<Fr>,
     pub latest_selector: Vec<bool>,
-    pub slot_secret: Fr,
-    pub slot_secret_path: Vec<Fr>,
-    pub starting_slot: u64,
+    pub secret_key: Fr,
 }
 
 #[derive(Serialize)]
@@ -48,9 +44,7 @@ pub struct PolWalletInputsJson {
     latest_path: Vec<Groth16InputDeser>,
     #[serde(rename = "noteid_latest_selectors")]
     latest_selector: Vec<Groth16InputDeser>,
-    slot_secret: Groth16InputDeser,
-    slot_secret_path: Vec<Groth16InputDeser>,
-    starting_slot: Groth16InputDeser,
+    secret_key: Groth16InputDeser,
 }
 impl From<&PolWalletInputs> for PolWalletInputsJson {
     fn from(
@@ -62,9 +56,7 @@ impl From<&PolWalletInputs> for PolWalletInputsJson {
             aged_selector,
             latest_path,
             latest_selector,
-            slot_secret,
-            slot_secret_path,
-            starting_slot,
+            secret_key,
         }: &PolWalletInputs,
     ) -> Self {
         Self {
@@ -75,9 +67,7 @@ impl From<&PolWalletInputs> for PolWalletInputsJson {
             aged_selector: aged_selector.iter().map(Into::into).collect(),
             latest_path: latest_path.iter().map(Into::into).collect(),
             latest_selector: latest_selector.iter().map(Into::into).collect(),
-            slot_secret: slot_secret.into(),
-            slot_secret_path: slot_secret_path.iter().map(Into::into).collect(),
-            starting_slot: starting_slot.into(),
+            secret_key: secret_key.into(),
         }
     }
 }
@@ -92,9 +82,7 @@ impl From<PolWalletInputsData> for PolWalletInputs {
             aged_selector,
             latest_path,
             latest_selector,
-            slot_secret,
-            slot_secret_path,
-            starting_slot,
+            secret_key,
         }: PolWalletInputsData,
     ) -> Self {
         Self {
@@ -111,9 +99,7 @@ impl From<PolWalletInputsData> for PolWalletInputs {
                 .into_iter()
                 .map(|value: bool| Groth16Input::new(if value { Fr::ONE } else { Fr::ZERO }))
                 .collect(),
-            slot_secret: slot_secret.into(),
-            slot_secret_path: slot_secret_path.into_iter().map(Into::into).collect(),
-            starting_slot: Groth16Input::new(Fr::from(BigUint::from(starting_slot))),
+            secret_key: secret_key.into(),
         }
     }
 }

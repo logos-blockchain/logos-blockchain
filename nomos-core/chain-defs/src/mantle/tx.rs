@@ -184,9 +184,8 @@ impl MantleTx {
     }
 }
 
-static NOMOS_MANTLE_TXHASH_V1_FR: LazyLock<Fr> = LazyLock::new(|| {
-    fr_from_bytes(b"NOMOS_MANTLE_TXHASH_V1").expect("Constant should be valid Fr")
-});
+static MANTLE_TXHASH_V1_FR: LazyLock<Fr> =
+    LazyLock::new(|| fr_from_bytes(b"MANTLE_TXHASH_V1").expect("Constant should be valid Fr"));
 
 impl Transaction for MantleTx {
     const HASHER: TransactionHasher<Self> =
@@ -202,9 +201,7 @@ impl Transaction for MantleTx {
             .chunks(GROTH16_SAFE_BYTES_SIZE)
             // safety: Any 31 bytes fits into a groth16 Fr, there is no need to check for ranges
             .map(fr_from_bytes_unchecked);
-        std::iter::once(*NOMOS_MANTLE_TXHASH_V1_FR)
-            .chain(frs)
-            .collect()
+        std::iter::once(*MANTLE_TXHASH_V1_FR).chain(frs).collect()
     }
 }
 

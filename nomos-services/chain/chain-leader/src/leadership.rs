@@ -46,7 +46,7 @@ impl Leader {
             let public_inputs = public_inputs_for_slot(epoch_state, slot, latest_tree);
 
             let note_id = utxo.id().0;
-            let secret_key = self.slot_secret_key(slot);
+            let secret_key = self.secret_key();
 
             #[cfg(feature = "pol-dev-mode")]
             let winning = public_inputs.check_winning_dev(
@@ -114,7 +114,7 @@ impl Leader {
         &self,
         utxo: &Utxo,
         // TODO: Use aged tree to compute `aged_path`
-        epoch_state: &EpochState,
+        _epoch_state: &EpochState,
         public_inputs: LeaderPublic,
         // TODO: Use latest tree to compute `latest_path`
         _latest_tree: &UtxoTree,
@@ -122,12 +122,7 @@ impl Leader {
         // TODO: Get the actual witness paths and leader key
         let aged_path = Vec::new(); // Placeholder for aged path, aged UTXO tree is included in `EpochState`.
         let latest_path = Vec::new();
-        let slot_secret = *self.sk.as_fr();
-        let starting_slot = self
-            .config
-            .epoch_config
-            .starting_slot(&epoch_state.epoch, self.config.base_period_length())
-            .into();
+        let secret_key = *self.sk.as_fr();
         let leader_signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let leader_pk = leader_signing_key.public_key(); // TODO: get actual leader public key
 
@@ -136,13 +131,12 @@ impl Leader {
             *utxo,
             &aged_path,
             &latest_path,
-            slot_secret,
-            starting_slot,
+            secret_key,
             &leader_pk,
         )
     }
 
-    fn slot_secret_key(&self, _slot: Slot) -> UnsecuredZkKey {
+    fn secret_key(&self) -> UnsecuredZkKey {
         self.sk.clone()
     }
 }
@@ -226,7 +220,7 @@ impl<'service> WinningPoLSlotNotifier<'service> {
                 let slot = epoch_starting_slot
                     .checked_add(offset)
                     .expect("Slot calculation overflow.");
-                let secret_key = self.leader.slot_secret_key(slot.into());
+                let secret_key = self.leader.secret_key();
 
                 let public_inputs = public_inputs_for_slot(epoch_state, slot.into(), &latest_tree);
                 if !public_inputs.check_winning(utxo.note.value, note_id, *secret_key.as_fr()) {
