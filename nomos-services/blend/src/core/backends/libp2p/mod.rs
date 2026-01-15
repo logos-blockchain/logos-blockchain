@@ -26,7 +26,7 @@ use crate::core::{
             tokio_provider::ObservationWindowTokioIntervalProvider,
         },
     },
-    settings::RunningBlendConfig,
+    settings::RunningBlendConfig as BlendConfig,
 };
 
 const LOG_TARGET: &str = "blend::backend::libp2p";
@@ -61,7 +61,7 @@ where
     type Settings = Libp2pBlendBackendSettings;
 
     fn new(
-        config: RunningBlendConfig<Self::Settings>,
+        config: BlendConfig<Self::Settings>,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         current_public_info: PublicInfo<PeerId>,
         rng: Rng,

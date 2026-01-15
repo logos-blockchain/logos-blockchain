@@ -14,7 +14,7 @@ use nomos_blend::{
 };
 use overwatch::overwatch::handle::OverwatchHandle;
 
-use crate::core::settings::RunningBlendConfig;
+use crate::core::settings::RunningBlendConfig as BlendConfig;
 
 #[cfg(feature = "libp2p")]
 pub mod libp2p;
@@ -124,7 +124,7 @@ pub trait BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId> {
     type Settings: Clone + Debug + Send + Sync + 'static;
 
     fn new(
-        service_config: RunningBlendConfig<Self::Settings>,
+        service_config: BlendConfig<Self::Settings>,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         current_public_info: PublicInfo<NodeId>,
         rng: Rng,

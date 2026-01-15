@@ -27,7 +27,9 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     core::settings::CoverTrafficSettings,
-    edge::{backends::BlendBackend, handlers::Error, run, settings::RunningBlendConfig},
+    edge::{
+        backends::BlendBackend, handlers::Error, run, settings::RunningBlendConfig as BlendConfig,
+    },
     epoch_info::EpochHandler,
     membership::MembershipInfo,
     settings::{FIRST_STREAM_ITEM_READY_TIMEOUT, TimingSettings},
@@ -129,8 +131,8 @@ pub fn settings(
     local_id: NodeId,
     minimum_network_size: u64,
     msg_sender: NodeIdSender,
-) -> RunningBlendConfig<NodeIdSender> {
-    RunningBlendConfig {
+) -> BlendConfig<NodeIdSender> {
+    BlendConfig {
         time: TimingSettings {
             rounds_per_session: NonZeroU64::new(1).unwrap(),
             rounds_per_interval: NonZeroU64::new(1).unwrap(),

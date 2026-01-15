@@ -8,7 +8,9 @@ use nomos_blend::{
 use nomos_utils::math::NonNegativeF64;
 use tokio_stream::wrappers::IntervalStream;
 
-use crate::core::{backends::libp2p::Libp2pBlendBackendSettings, settings::RunningBlendConfig};
+use crate::core::{
+    backends::libp2p::Libp2pBlendBackendSettings, settings::RunningBlendConfig as BlendConfig,
+};
 
 #[derive(Clone)]
 /// Provider of a stream of observation windows used by the Blend connection
@@ -57,7 +59,7 @@ impl IntervalStreamProvider for ObservationWindowTokioIntervalProvider {
 
 impl<NodeId>
     From<(
-        &RunningBlendConfig<Libp2pBlendBackendSettings>,
+        &BlendConfig<Libp2pBlendBackendSettings>,
         &Membership<NodeId>,
     )> for ObservationWindowTokioIntervalProvider
 where
@@ -65,7 +67,7 @@ where
 {
     fn from(
         (config, membership): (
-            &RunningBlendConfig<Libp2pBlendBackendSettings>,
+            &BlendConfig<Libp2pBlendBackendSettings>,
             &Membership<NodeId>,
         ),
     ) -> Self {

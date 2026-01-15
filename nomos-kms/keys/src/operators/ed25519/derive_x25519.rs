@@ -1,4 +1,4 @@
-use core::convert::Infallible;
+use core::fmt::{self, Debug, Formatter};
 
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq as _;
@@ -7,11 +7,11 @@ use tracing::error;
 use x25519_dalek::StaticSecret;
 use zeroize::ZeroizeOnDrop;
 
-use crate::keys::{Ed25519Key, secured_key::SecureKeyOperator};
+use crate::keys::{Ed25519Key, errors::KeyError, secured_key::SecureKeyOperator};
 
 pub const X25519_SECRET_KEY_LENGTH: usize = 32;
 
-#[derive(Clone, ZeroizeOnDrop, Deserialize)]
+#[derive(Clone, ZeroizeOnDrop, Deserialize, Serialize)]
 pub struct X25519PrivateKey(StaticSecret);
 
 impl X25519PrivateKey {
@@ -27,7 +27,6 @@ impl From<[u8; X25519_SECRET_KEY_LENGTH]> for X25519PrivateKey {
     }
 }
 
-#[cfg(feature = "unsafe")]
 impl From<X25519PrivateKey> for [u8; X25519_SECRET_KEY_LENGTH] {
     fn from(key: X25519PrivateKey) -> Self {
         key.0.to_bytes()
@@ -83,10 +82,16 @@ pub struct DeriveX25519Operator {
     response_channel: oneshot::Sender<X25519PrivateKey>,
 }
 
+impl Debug for DeriveX25519Operator {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "DeriveX25519Operator")
+    }
+}
+
 #[async_trait::async_trait]
 impl SecureKeyOperator for DeriveX25519Operator {
     type Key = Ed25519Key;
-    type Error = Infallible;
+    type Error = KeyError;
 
     async fn execute(mut self: Box<Self>, key: &Self::Key) -> Result<(), Self::Error> {
         let x25519_secret_key = key.derive_x25519();

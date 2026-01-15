@@ -15,7 +15,7 @@ use nomos_utils::blake_rng::BlakeRng;
 use overwatch::overwatch::OverwatchHandle;
 use rand::SeedableRng as _;
 
-use crate::edge::{LOG_TARGET, RunningSettings, backends::BlendBackend};
+use crate::edge::{LOG_TARGET, RunningSettings as Settings, backends::BlendBackend};
 
 pub struct MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId> {
     cryptographic_processor: SessionCryptographicProcessor<NodeId, ProofsGenerator>,
@@ -37,7 +37,7 @@ where
     /// 1. The membership size is at least `settings.minimum_network_size`.
     /// 2. The local node is not a core node.
     pub fn try_new_with_edge_condition_check(
-        settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
+        settings: Settings<Backend, NodeId, RuntimeServiceId>,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
         private_info: ProofOfLeadershipQuotaInputs,
@@ -63,7 +63,7 @@ where
     }
 
     fn new(
-        settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
+        settings: Settings<Backend, NodeId, RuntimeServiceId>,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
         private_info: ProofOfLeadershipQuotaInputs,

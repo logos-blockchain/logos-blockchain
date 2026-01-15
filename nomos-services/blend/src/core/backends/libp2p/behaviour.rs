@@ -2,7 +2,9 @@ use libp2p::{PeerId, allow_block_list::BlockedPeers, connection_limits::Connecti
 use nomos_blend::scheduling::membership::Membership;
 use nomos_libp2p::NetworkBehaviour;
 
-use crate::core::{backends::libp2p::Libp2pBlendBackendSettings, settings::RunningBlendConfig};
+use crate::core::{
+    backends::libp2p::Libp2pBlendBackendSettings, settings::RunningBlendConfig as BlendConfig,
+};
 
 #[derive(NetworkBehaviour)]
 pub struct BlendBehaviour<ProofsVerifier, ObservationWindowProvider> {
@@ -17,12 +19,12 @@ impl<ProofsVerifier, ObservationWindowProvider>
 where
     ProofsVerifier: Clone,
     ObservationWindowProvider: for<'c> From<(
-        &'c RunningBlendConfig<Libp2pBlendBackendSettings>,
+        &'c BlendConfig<Libp2pBlendBackendSettings>,
         &'c Membership<PeerId>,
     )>,
 {
     pub fn new(
-        config: &RunningBlendConfig<Libp2pBlendBackendSettings>,
+        config: &BlendConfig<Libp2pBlendBackendSettings>,
         current_membership: Membership<PeerId>,
         poq_verifier: ProofsVerifier,
     ) -> Self {

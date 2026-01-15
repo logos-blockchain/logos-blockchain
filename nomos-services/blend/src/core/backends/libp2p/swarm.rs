@@ -39,7 +39,7 @@ use crate::core::{
             behaviour::{BlendBehaviour, BlendBehaviourEvent},
         },
     },
-    settings::RunningBlendConfig,
+    settings::RunningBlendConfig as BlendConfig,
 };
 
 #[derive(Debug)]
@@ -86,7 +86,7 @@ where
 }
 
 pub struct SwarmParams<'config, Rng> {
-    pub config: &'config RunningBlendConfig<Libp2pBlendBackendSettings>,
+    pub config: &'config BlendConfig<Libp2pBlendBackendSettings>,
     pub current_public_info: PublicInfo<PeerId>,
     pub rng: Rng,
     pub swarm_message_receiver: mpsc::Receiver<BlendSwarmMessage>,
@@ -101,7 +101,7 @@ where
     ProofsVerifier: ProofsVerifierTrait + Clone,
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + for<'c> From<(
-            &'c RunningBlendConfig<Libp2pBlendBackendSettings>,
+            &'c BlendConfig<Libp2pBlendBackendSettings>,
             &'c Membership<PeerId>,
         )> + 'static,
 {

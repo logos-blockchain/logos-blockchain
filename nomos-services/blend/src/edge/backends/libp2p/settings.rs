@@ -4,7 +4,7 @@ use libp2p::identity::Keypair;
 use nomos_libp2p::protocol_name::StreamProtocol;
 use serde::{Deserialize, Serialize};
 
-use crate::edge::settings::RunningBlendConfig;
+use crate::edge::settings::RunningBlendConfig as BlendConfig;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde_with::serde_as]
@@ -16,7 +16,7 @@ pub struct Libp2pBlendBackendSettings {
     pub replication_factor: NonZeroU64,
 }
 
-impl RunningBlendConfig<Libp2pBlendBackendSettings> {
+impl BlendConfig<Libp2pBlendBackendSettings> {
     #[must_use]
     pub fn keypair(&self) -> Keypair {
         let mut secret_key_bytes = *self.non_ephemeral_signing_key.as_bytes();

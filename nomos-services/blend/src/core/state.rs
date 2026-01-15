@@ -535,7 +535,7 @@ mod recovery_state {
     use serde::{Deserialize, Serialize};
 
     use crate::core::{
-        settings::StartingBlendConfig,
+        settings::StartingBlendConfig as BlendConfig,
         state::{ServiceState, serde::SerializableServiceState},
     };
 
@@ -571,7 +571,7 @@ mod recovery_state {
         for RecoveryServiceState<BackendSettings, BroadcastSettings>
     {
         type Error = Infallible;
-        type Settings = StartingBlendConfig<BackendSettings>;
+        type Settings = BlendConfig<BackendSettings>;
 
         fn from_settings(_: &Self::Settings) -> Result<Self, Self::Error> {
             Ok(Self {

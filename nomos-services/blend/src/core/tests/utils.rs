@@ -57,8 +57,8 @@ use crate::{
         network::NetworkAdapter,
         processor::CoreCryptographicProcessor,
         settings::{
-            CoverTrafficSettings, MessageDelayerSettings, RunningBlendConfig, SchedulerSettings,
-            ZkSettings,
+            CoverTrafficSettings, MessageDelayerSettings, RunningBlendConfig as BlendConfig,
+            SchedulerSettings, ZkSettings,
         },
         state::RecoveryServiceState,
         tests::RuntimeServiceId,
@@ -89,9 +89,9 @@ pub fn settings<BackendSettings>(
     local_private_key: UnsecuredEd25519Key,
     minimum_network_size: NonZeroU64,
     backend_settings: BackendSettings,
-) -> (RunningBlendConfig<BackendSettings>, NamedTempFile) {
+) -> (BlendConfig<BackendSettings>, NamedTempFile) {
     let recovery_file = NamedTempFile::new().unwrap();
-    let settings = RunningBlendConfig {
+    let settings = BlendConfig {
         backend: backend_settings,
         scheduler: SchedulerSettings {
             cover: CoverTrafficSettings {
@@ -160,7 +160,7 @@ where
     type Settings = ();
 
     fn new(
-        _service_config: RunningBlendConfig<Self::Settings>,
+        _service_config: BlendConfig<Self::Settings>,
         _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         _current_public_info: PublicInfo<NodeId>,
         _rng: Rng,
@@ -320,7 +320,7 @@ pub fn new_crypto_processor<CorePoQGenerator>(
 pub fn new_public_info<BackendSettings>(
     session: u64,
     membership: Membership<NodeId>,
-    settings: &RunningBlendConfig<BackendSettings>,
+    settings: &BlendConfig<BackendSettings>,
 ) -> PublicInfo<NodeId> {
     let core_quota = settings.session_quota(membership.size());
     PublicInfo {
