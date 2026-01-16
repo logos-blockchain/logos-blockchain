@@ -2,6 +2,9 @@ name: Docker Build
 
 on:
   workflow_dispatch:
+  # TODO: Remove
+  push:
+    branches: aa/nomos-to-logos
 
 concurrency:
   group: ${{ github.workflow }}@${{ github.ref }}

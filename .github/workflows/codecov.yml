@@ -3,6 +3,9 @@ on:
     - cron: '0 3 * * *'
 
   workflow_dispatch:
+  # TODO: Remove
+  push:
+    branches: aa/nomos-to-logos
 
 name: Codecov
 
