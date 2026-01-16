@@ -11,36 +11,36 @@ use chain_service::CryptarchiaInfo;
 use common_http_client::CommonHttpClient;
 use futures::Stream;
 use kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
-use nomos_core::{
+use logos_blockchain_core::{
     block::Block,
     da::BlobId,
     mantle::{SignedMantleTx, Transaction as _, TxHash},
     sdp::{Declaration, SessionNumber},
 };
-use nomos_da_network_core::{
+use logos_blockchain_da_network_core::{
     protocols::sampling::SubnetsConfig,
     swarm::{BalancerStats, DAConnectionPolicySettings, MonitorStats},
 };
-use nomos_da_network_service::{
+use logos_blockchain_da_network_service::{
     MembershipResponse, NetworkConfig as DaNetworkConfig, api::http::ApiAdapterSettings,
     backends::libp2p::common::DaNetworkBackendSettings,
 };
-use nomos_da_sampling::{
+use logos_blockchain_da_sampling::{
     DaSamplingServiceSettings, backend::kzgrs::KzgrsSamplingBackendSettings,
     verifier::kzgrs::KzgrsDaVerifierSettings as SamplingVerifierSettings,
 };
-use nomos_da_verifier::{
+use logos_blockchain_da_verifier::{
     DaVerifierServiceSettings,
     backend::{kzgrs::KzgrsDaVerifierSettings, trigger::MempoolPublishTriggerConfig},
     storage::adapters::rocksdb::RocksAdapterSettings as VerifierStorageAdapterSettings,
 };
-use nomos_http_api_common::paths::{
+use logos_blockchain_http_api_common::paths::{
     CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, DA_BALANCER_STATS, DA_GET_MEMBERSHIP,
     DA_GET_SHARES_COMMITMENTS, DA_HISTORIC_SAMPLING, DA_MONITOR_STATS, MANTLE_SDP_DECLARATIONS,
     NETWORK_INFO, STORAGE_BLOCK,
 };
-use nomos_network::backends::libp2p::Libp2pInfo;
-use nomos_node::{
+use logos_blockchain_network::backends::libp2p::Libp2pInfo;
+use logos_blockchain_node::{
     Config, HeaderId, RocksBackendSettings,
     api::{
         backend::AxumBackendSettings, handlers::GetCommitmentsRequest,
@@ -48,11 +48,11 @@ use nomos_node::{
     },
     config::mempool::serde::Config as MempoolConfig,
 };
-use nomos_sdp::SdpSettings;
-use nomos_tracing::logging::local::FileConfig;
-use nomos_tracing_service::LoggerLayer;
-use nomos_utils::{math::NonNegativeF64, net::get_available_tcp_port};
-use nomos_wallet::WalletServiceSettings;
+use logos_blockchain_sdp::SdpSettings;
+use logos_blockchain_tracing::logging::local::FileConfig;
+use logos_blockchain_tracing_service::LoggerLayer;
+use logos_blockchain_utils::{math::NonNegativeF64, net::get_available_tcp_port};
+use logos_blockchain_wallet::WalletServiceSettings;
 use reqwest::Url;
 use tempfile::NamedTempFile;
 use tokio::time::error::Elapsed;
@@ -65,8 +65,8 @@ use crate::{
     topology::configs::{GeneralConfig, deployment::default_e2e_deployment_settings},
 };
 
-const BIN_PATH_DEBUG: &str = "../target/debug/nomos-node";
-const BIN_PATH_RELEASE: &str = "../target/release/nomos-node";
+const BIN_PATH_DEBUG: &str = "../target/debug/logos-blockchain-node";
+const BIN_PATH_RELEASE: &str = "../target/release/logos-blockchain-node";
 
 pub enum Pool {
     Da,
@@ -85,7 +85,7 @@ pub struct Validator {
 impl Drop for Validator {
     fn drop(&mut self) {
         if std::thread::panicking()
-            && let Err(e) = persist_tempdir(&mut self.tempdir, "nomos-node")
+            && let Err(e) = persist_tempdir(&mut self.tempdir, "logos-blockchain-node")
         {
             println!("failed to persist tempdir: {e}");
         }
@@ -523,7 +523,7 @@ pub fn create_validator_config(config: GeneralConfig) -> Config {
             },
         },
         tracing: config.tracing_config.tracing_settings,
-        http: nomos_api::ApiServiceSettings {
+        http: logos_blockchain_api::ApiServiceSettings {
             backend_settings: AxumBackendSettings {
                 address: config.api_config.address,
                 rate_limit_per_second: 10000,
@@ -556,7 +556,7 @@ pub fn create_validator_config(config: GeneralConfig) -> Config {
             known_keys: HashSet::from_iter([config.consensus_config.user_config().leader.pk]),
         },
         key_management: config.kms_config,
-        testing_http: nomos_api::ApiServiceSettings {
+        testing_http: logos_blockchain_api::ApiServiceSettings {
             backend_settings: AxumBackendSettings {
                 address: testing_http_address,
                 rate_limit_per_second: 10000,

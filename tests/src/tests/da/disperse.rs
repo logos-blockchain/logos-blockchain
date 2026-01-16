@@ -152,7 +152,7 @@ async fn disseminate_from_non_membership() {
     tokio::time::timeout(Duration::from_secs(60), async {
         loop {
             if lone_executor
-                .da_get_membership(nomos_core::sdp::SessionNumber::from(0u64))
+                .da_get_membership(logos_blockchain_core::sdp::SessionNumber::from(0u64))
                 .await
                 .is_ok()
             {

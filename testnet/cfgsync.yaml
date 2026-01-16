@@ -41,7 +41,7 @@ tracing_settings:
     service_name: node
   filter: !EnvFilter
     filters:
-      nomos: debug
+      logos-blockchain: debug
   metrics: !Otlp
     endpoint: http://prometheus:9090/api/v1/otlp/v1/metrics
     host_identifier: node

@@ -5,8 +5,8 @@ pub mod topology;
 
 use std::{env, ops::Mul as _, sync::LazyLock, time::Duration};
 
-use nomos_core::proofs::leader_proof::POL_PROOF_DEV_MODE;
-use nomos_libp2p::{Multiaddr, PeerId, multiaddr};
+use logos_blockchain_core::proofs::leader_proof::POL_PROOF_DEV_MODE;
+use logos_blockchain_libp2p::{Multiaddr, PeerId, multiaddr};
 
 static IS_SLOW_TEST_ENV: LazyLock<bool> =
     LazyLock::new(|| env::var("SLOW_TEST_ENV").is_ok_and(|s| s == "true"));
@@ -25,7 +25,7 @@ pub static GLOBAL_PARAMS_PATH: LazyLock<String> = LazyLock::new(|| {
 /// Global flag indicating whether debug tracing configuration is enabled to
 /// send traces to local grafana stack.
 pub static IS_DEBUG_TRACING: LazyLock<bool> = LazyLock::new(|| {
-    env::var("NOMOS_TESTS_TRACING").is_ok_and(|val| val.eq_ignore_ascii_case("true"))
+    env::var("LOGOS_BLOCKCHAIN_TESTS_TRACING").is_ok_and(|val| val.eq_ignore_ascii_case("true"))
 });
 
 /// In slow test environments like Codecov, use 2x timeout.
@@ -39,9 +39,9 @@ fn node_address_from_port(port: u16) -> Multiaddr {
 }
 
 #[must_use]
-pub fn secret_key_to_peer_id(node_key: nomos_libp2p::ed25519::SecretKey) -> PeerId {
+pub fn secret_key_to_peer_id(node_key: logos_blockchain_libp2p::ed25519::SecretKey) -> PeerId {
     PeerId::from_public_key(
-        &nomos_libp2p::ed25519::Keypair::from(node_key)
+        &logos_blockchain_libp2p::ed25519::Keypair::from(node_key)
             .public()
             .into(),
     )
@@ -49,10 +49,10 @@ pub fn secret_key_to_peer_id(node_key: nomos_libp2p::ed25519::SecretKey) -> Peer
 
 #[must_use]
 pub fn secret_key_to_provider_id(
-    node_key: nomos_libp2p::ed25519::SecretKey,
-) -> nomos_core::sdp::ProviderId {
-    nomos_core::sdp::ProviderId::try_from(
-        nomos_libp2p::ed25519::Keypair::from(node_key)
+    node_key: logos_blockchain_libp2p::ed25519::SecretKey,
+) -> logos_blockchain_core::sdp::ProviderId {
+    logos_blockchain_core::sdp::ProviderId::try_from(
+        logos_blockchain_libp2p::ed25519::Keypair::from(node_key)
             .public()
             .to_bytes(),
     )

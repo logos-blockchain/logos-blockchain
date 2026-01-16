@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use nomos_tracing_service::TracingSettings;
+use logos_blockchain_tracing_service::TracingSettings;
 use tests::topology::configs::{GeneralConfig, da::DaParams};
 use tokio::{sync::oneshot::Sender, time::timeout};
 

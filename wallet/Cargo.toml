@@ -14,16 +14,16 @@ workspace = true
 
 [dependencies]
 key-management-system-keys = { workspace = true }
-nomos-core                 = { workspace = true }
-nomos-ledger               = { workspace = true }
+logos-blockchain-core      = { workspace = true }
+logos-blockchain-ledger    = { workspace = true }
 num-bigint                 = { default-features = false, version = "0.4" }
 rpds                       = { default-features = false, version = "1.1.1" }
 thiserror                  = { workspace = true }
 tracing                    = { workspace = true }
 
 [dev-dependencies]
-cryptarchia-engine = { workspace = true }
-nomos-utils        = { workspace = true }
+cryptarchia-engine     = { workspace = true }
+logos-blockchain-utils = { workspace = true }
 
 [features]
 default = []

@@ -20,8 +20,8 @@
 #   ./run-local.sh all --env-file ~/Eng/offsite-sequencer-env/.env-local --clean
 #
 # Required env vars:
-#   SEQUENCER_NODE_ENDPOINT      - Nomos node HTTP endpoint for sequencer
-#   ARCHIVER_NODE_ENDPOINT       - Nomos node HTTP endpoint for archiver
+#   SEQUENCER_NODE_ENDPOINT      - Logos blockchain node HTTP endpoint for sequencer
+#   ARCHIVER_NODE_ENDPOINT       - Logos blockchain node HTTP endpoint for archiver
 #   TOKEN_NAME                   - Token name (e.g., "MEM")
 
 set -e

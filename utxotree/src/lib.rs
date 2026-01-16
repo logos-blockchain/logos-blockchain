@@ -6,7 +6,7 @@ pub mod test_fr;
 use std::collections::BTreeMap;
 
 use merkle::DynamicMerkleTree;
-use nomos_core::utils::merkle::MerklePath;
+use logos_blockchain_core::utils::merkle::MerklePath;
 use poseidon2::{Digest, Fr};
 use rpds::HashTrieMapSync;
 use thiserror::Error;

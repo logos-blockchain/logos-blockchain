@@ -3,11 +3,11 @@ use std::{
 };
 
 use key_management_system_service::keys::{Ed25519Key, ZkKey};
-use nomos_da_network_core::swarm::{
+use logos_blockchain_da_network_core::swarm::{
     DAConnectionMonitorSettings, DAConnectionPolicySettings, ReplicationConfig,
 };
-use nomos_libp2p::{Multiaddr, PeerId, ed25519};
-use nomos_node::NomosDaMembership;
+use logos_blockchain_libp2p::{Multiaddr, PeerId, ed25519};
+use logos_blockchain_node::LogosBlockchainDaMembership;
 use num_bigint::BigUint;
 use subnetworks_assignations::MembershipHandler as _;
 
@@ -83,7 +83,7 @@ pub struct GeneralDaConfig {
     pub node_key: ed25519::SecretKey,
     pub signer: Ed25519Key,
     pub peer_id: PeerId,
-    pub membership: NomosDaMembership,
+    pub membership: LogosBlockchainDaMembership,
     pub listening_address: Multiaddr,
     pub blob_storage_directory: PathBuf,
     pub global_params_path: String,
@@ -130,7 +130,7 @@ pub fn create_da_configs(
     }
 
     let membership =
-        NomosDaMembership::new(0, da_params.subnetwork_size, da_params.dispersal_factor);
+        LogosBlockchainDaMembership::new(0, da_params.subnetwork_size, da_params.dispersal_factor);
 
     ids.iter()
         .zip(node_keys)

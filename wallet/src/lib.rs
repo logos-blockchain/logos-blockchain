@@ -8,7 +8,7 @@ use std::{
 
 pub use error::WalletError;
 use key_management_system_keys::keys::ZkPublicKey;
-use nomos_core::{
+use logos_blockchain_core::{
     block::Block,
     header::HeaderId,
     mantle::{
@@ -16,7 +16,7 @@ use nomos_core::{
         tx_builder::MantleTxBuilder,
     },
 };
-use nomos_ledger::LedgerState;
+use logos_blockchain_ledger::LedgerState;
 
 pub struct WalletBlock {
     pub id: HeaderId,
@@ -274,12 +274,12 @@ mod tests {
     };
 
     use cryptarchia_engine::EpochConfig;
-    use nomos_core::{
+    use logos_blockchain_core::{
         mantle::{Note, TxHash, gas::MainnetGasConstants as Gas},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use nomos_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
-    use nomos_utils::math::NonNegativeF64;
+    use logos_blockchain_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
+    use logos_blockchain_utils::math::NonNegativeF64;
     use num_bigint::BigUint;
 
     use super::*;
@@ -582,8 +582,8 @@ mod tests {
     }
 
     #[must_use]
-    fn ledger_config() -> nomos_ledger::Config {
-        nomos_ledger::Config {
+    fn ledger_config() -> logos_blockchain_ledger::Config {
+        logos_blockchain_ledger::Config {
             epoch_config: EpochConfig {
                 epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
                 epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
@@ -593,7 +593,7 @@ mod tests {
                 security_param: NonZero::new(1).unwrap(),
                 active_slot_coeff: 1.0,
             },
-            sdp_config: nomos_ledger::mantle::sdp::Config {
+            sdp_config: logos_blockchain_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [
                         (

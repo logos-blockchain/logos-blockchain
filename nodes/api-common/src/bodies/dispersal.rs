@@ -1,4 +1,4 @@
-use nomos_core::mantle::ops::channel::{ChannelId, Ed25519PublicKey, MsgId};
+use logos_blockchain_core::mantle::ops::channel::{ChannelId, Ed25519PublicKey, MsgId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]

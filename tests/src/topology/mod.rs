@@ -17,14 +17,14 @@ use key_management_system_service::{
     backend::preload::PreloadKMSBackendSettings,
     keys::{Ed25519Key, ZkKey},
 };
-use nomos_core::{
+use logos_blockchain_core::{
     mantle::{GenesisTx as _, Note, NoteId},
     sdp::{Locator, ServiceType, SessionNumber},
 };
-use nomos_da_network_core::swarm::{BalancerStats, DAConnectionPolicySettings};
-use nomos_da_network_service::MembershipResponse;
-use nomos_network::backends::libp2p::Libp2pInfo;
-use nomos_utils::net::get_available_udp_port;
+use logos_blockchain_da_network_core::swarm::{BalancerStats, DAConnectionPolicySettings};
+use logos_blockchain_da_network_service::MembershipResponse;
+use logos_blockchain_network::backends::libp2p::Libp2pInfo;
+use logos_blockchain_utils::net::get_available_udp_port;
 use rand::{Rng as _, thread_rng};
 use tokio::time::{sleep, timeout};
 
@@ -745,10 +745,10 @@ fn build_membership_summary(labels: &[String], statuses: &[bool], description: &
         .join(", ")
 }
 
-fn multiaddr_port(addr: &nomos_libp2p::Multiaddr) -> Option<u16> {
+fn multiaddr_port(addr: &logos_blockchain_libp2p::Multiaddr) -> Option<u16> {
     for protocol in addr {
         match protocol {
-            nomos_libp2p::Protocol::Udp(port) | nomos_libp2p::Protocol::Tcp(port) => {
+            logos_blockchain_libp2p::Protocol::Udp(port) | logos_blockchain_libp2p::Protocol::Tcp(port) => {
                 return Some(port);
             }
             _ => {}

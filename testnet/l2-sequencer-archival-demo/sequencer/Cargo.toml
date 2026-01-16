@@ -1,6 +1,6 @@
 [package]
 categories  = { workspace = true }
-description = "Simple sequencer for demo - receives HTTP transactions and submits to Nomos node"
+description = "Simple sequencer for demo - receives HTTP transactions and submits to Logos blockchain node"
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
@@ -17,7 +17,7 @@ axum                          = { default-features = false, features = ["http1",
 common-http-client            = { workspace = true }
 hex                           = "0.4"
 key-management-system-service = { workspace = true }
-nomos-core                    = { workspace = true }
+logos-blockchain-core         = { workspace = true }
 owo-colors                    = { default-features = false, version = "4.2.3" }
 rand                          = { workspace = true }
 redb                          = "2.2"

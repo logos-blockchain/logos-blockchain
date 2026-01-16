@@ -24,4 +24,4 @@ pub use libp2p::{
     behaviour::{Behaviour, BoxedStream, Event},
     errors::{ChainSyncError, ChainSyncErrorKind},
 };
-pub use nomos_core::header::HeaderId;
+pub use logos_blockchain_core::header::HeaderId;

@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use nomos_libp2p::{
+use logos_blockchain_libp2p::{
     IdentifySettings, KademliaSettings, Multiaddr, NatSettings, ed25519, gossipsub,
 };
-use nomos_node::config::network::serde::{BackendSettings, Config, SwarmConfig};
-use nomos_utils::net::get_available_udp_port;
+use logos_blockchain_node::config::network::serde::{BackendSettings, Config, SwarmConfig};
+use logos_blockchain_utils::net::get_available_udp_port;
 
 use crate::node_address_from_port;
 

@@ -4,7 +4,7 @@ use std::{
 };
 
 use futures::stream::{self, StreamExt as _};
-use nomos_libp2p::PeerId;
+use logos_blockchain_libp2p::PeerId;
 use serial_test::serial;
 use tests::{
     adjust_timeout,

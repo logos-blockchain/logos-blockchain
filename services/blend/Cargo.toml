@@ -1,0 +1,54 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-blend-service"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait                   = "0.1"
+broadcast-service             = { workspace = true }
+chain-service                 = { workspace = true }
+cryptarchia-engine            = { workspace = true }
+fork_stream                   = { workspace = true }
+futures                       = { default-features = false, version = "0.3" }
+groth16                       = { default-features = false, workspace = true }
+key-management-system-service = { workspace = true }
+libp2p                        = { optional = true, workspace = true }
+libp2p-stream                 = { optional = true, workspace = true }
+logos-blockchain-blend        = { workspace = true }
+logos-blockchain-core         = { workspace = true }
+logos-blockchain-ledger       = { workspace = true }
+logos-blockchain-libp2p       = { optional = true, workspace = true }
+logos-blockchain-network      = { workspace = true }
+logos-blockchain-sdp          = { workspace = true }
+logos-blockchain-time         = { workspace = true }
+logos-blockchain-utils        = { features = ["serde"], workspace = true }
+overwatch                     = { workspace = true }
+poq                           = { workspace = true }
+rand                          = { workspace = true }
+serde                         = { workspace = true }
+serde_with                    = { workspace = true }
+services-utils                = { workspace = true }
+thiserror                     = { default-features = false, version = "1" }
+tokio                         = { default-features = false, version = "1" }
+tokio-stream                  = { default-features = false, version = "0.1" }
+tracing                       = { workspace = true }
+
+[dev-dependencies]
+libp2p                 = { default-features = false, features = ["plaintext", "tcp", "yamux"], workspace = true }
+libp2p-swarm-test      = { default-features = false, version = "0.5.0" }
+logos-blockchain-blend = { features = ["unsafe-test-functions"], workspace = true }
+tempfile               = { workspace = true }
+test-log               = { default-features = false, version = "0.2.18", features = ["trace"] }
+
+[features]
+default = []
+libp2p  = ["dep:libp2p", "dep:libp2p-stream", "dep:logos-blockchain-libp2p", "logos-blockchain-network/libp2p"]

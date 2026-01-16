@@ -1,7 +1,7 @@
 use common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
 use key_management_system_keys::keys::ZkPublicKey;
-use nomos_core::{codec::SerializeOp as _, header::HeaderId};
-use nomos_http_api_common::{
+use logos_blockchain_core::{codec::SerializeOp as _, header::HeaderId};
+use logos_blockchain_http_api_common::{
     bodies::{
         NoopBody,
         wallet::{
@@ -75,7 +75,7 @@ impl WalletHttpClient {
 
 #[cfg(test)]
 mod tests {
-    use nomos_core::codec::DeserializeOp as _;
+    use logos_blockchain_core::codec::DeserializeOp as _;
 
     use super::*;
 

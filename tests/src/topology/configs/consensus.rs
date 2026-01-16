@@ -6,7 +6,7 @@ use chain_network::{IbdConfig, OrphanConfig, SyncConfig};
 use chain_service::{OfflineGracePeriodConfig, StartingState};
 use groth16::CompressedGroth16Proof;
 use key_management_system_service::keys::{Ed25519Key, ZkKey, ZkPublicKey, ZkSignature};
-use nomos_core::{
+use logos_blockchain_core::{
     mantle::{
         MantleTx, Note, OpProof, Utxo,
         genesis_tx::GenesisTx,
@@ -18,7 +18,7 @@ use nomos_core::{
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
-use nomos_node::{
+use logos_blockchain_node::{
     SignedMantleTx, Transaction as _,
     config::cryptarchia::serde::{Config, NetworkConfig, ServiceConfig},
 };

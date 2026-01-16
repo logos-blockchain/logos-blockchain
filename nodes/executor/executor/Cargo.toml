@@ -1,0 +1,70 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-executor"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[package.metadata.cargo-machete]
+# False positives.
+ignored = [
+  # Required by Overwatch's `#[derive_services]` macro.
+  "tracing",
+  # Required by `wait_until_services_are_ready` macro.
+  "futures",
+]
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait                         = "0.1"
+axum                                = { default-features = false, features = ["http1", "http2", "json", "query", "tokio"], version = "0.7.5" }
+broadcast-service                   = { workspace = true }
+clap                                = { default-features = false, features = ["derive"], version = "4.5.13" }
+color-eyre                          = { default-features = false, version = "0.6.0" }
+futures                             = { default-features = false, version = "0.3" }
+kzgrs-backend                       = { workspace = true }
+logos-blockchain-api                = { workspace = true }
+logos-blockchain-core               = { workspace = true }
+logos-blockchain-da-dispersal       = { workspace = true }
+logos-blockchain-da-network-core    = { workspace = true }
+logos-blockchain-da-network-service = { workspace = true }
+logos-blockchain-da-sampling        = { workspace = true }
+logos-blockchain-da-verifier        = { workspace = true }
+logos-blockchain-http-api-common    = { workspace = true }
+logos-blockchain-libp2p             = { workspace = true }
+logos-blockchain-network            = { workspace = true }
+logos-blockchain-node               = { workspace = true }
+logos-blockchain-sdp                = { workspace = true }
+logos-blockchain-storage            = { workspace = true }
+logos-blockchain-time               = { workspace = true }
+overwatch                           = { workspace = true }
+serde                               = { workspace = true }
+services-utils                      = { workspace = true }
+subnetworks-assignations            = { workspace = true }
+tokio                               = { features = ["net"], version = "1" }
+tower                               = { default-features = false, features = ["limit"], version = "0.4" }
+tower-http                          = { default-features = false, features = ["cors", "limit", "timeout", "trace"], version = "0.5" }
+tracing                             = { workspace = true }
+tx-service                          = { workspace = true }
+utoipa                              = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# XCompiling from Unix has issues downloading assets. Use vendored instead.
+# This happens locally but might not on CI.
+utoipa-swagger-ui = { workspace = true, features = ["axum", "vendored"] }
+
+[target.'cfg(not(windows))'.dependencies]
+utoipa-swagger-ui = { workspace = true, features = ["axum"] }
+
+[features]
+default         = ["tracing"]
+instrumentation = ["logos-blockchain-node/instrumentation"]
+profiling       = ["logos-blockchain-http-api-common/profiling", "logos-blockchain-node/profiling"]
+testing         = ["logos-blockchain-node/testing"]
+tracing         = ["logos-blockchain-node/tracing"]

@@ -1,11 +1,11 @@
 use std::{fs, net::Ipv4Addr, path::PathBuf, sync::Arc, time::Duration};
 
 use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
-use nomos_da_network_core::swarm::{
+use logos_blockchain_da_network_core::swarm::{
     DAConnectionMonitorSettings, DAConnectionPolicySettings, ReplicationConfig,
 };
-use nomos_tracing_service::TracingSettings;
-use nomos_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
+use logos_blockchain_tracing_service::TracingSettings;
+use logos_blockchain_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use tests::{

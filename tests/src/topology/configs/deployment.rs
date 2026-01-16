@@ -4,13 +4,13 @@ use core::{
 };
 use std::sync::Arc;
 
-use nomos_blend_service::{
+use logos_blockchain_blend_service::{
     core::settings::{CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings},
     settings::TimingSettings,
 };
-use nomos_core::sdp::{ServiceParameters, ServiceType};
-use nomos_libp2p::protocol_name::StreamProtocol;
-use nomos_node::config::{
+use logos_blockchain_core::sdp::{ServiceParameters, ServiceType};
+use logos_blockchain_libp2p::protocol_name::StreamProtocol;
+use logos_blockchain_node::config::{
     blend::deployment::{
         CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
         Settings as BlendDeploymentSettings,
@@ -21,7 +21,7 @@ use nomos_node::config::{
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
-use nomos_utils::math::NonNegativeF64;
+use logos_blockchain_utils::math::NonNegativeF64;
 
 use crate::topology::configs::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
@@ -74,11 +74,11 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
             },
         },
         NetworkDeploymentSettings {
-            identify_protocol_name: StreamProtocol::new("/integration/nomos/identify/1.0.0"),
-            kademlia_protocol_name: StreamProtocol::new("/integration/nomos/kad/1.0.0"),
+            identify_protocol_name: StreamProtocol::new("/integration/logos-blockchain/identify/1.0.0"),
+            kademlia_protocol_name: StreamProtocol::new("/integration/logos-blockchain/kad/1.0.0"),
         },
         CryptarchiaDeploymentSettings {
-            gossipsub_protocol: "/integration/nomos/cryptarchia/proto/1.0.0".to_owned(),
+            gossipsub_protocol: "/integration/logos-blockchain/cryptarchia/proto/1.0.0".to_owned(),
             consensus_config: cryptarchia_engine::Config {
                 // a block should be produced (on average) every slot
                 active_slot_coeff: 0.9,
@@ -94,7 +94,7 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
             },
-            sdp_config: nomos_node::config::cryptarchia::deployment::SdpConfig {
+            sdp_config: logos_blockchain_node::config::cryptarchia::deployment::SdpConfig {
                 service_params: Arc::new(
                     [
                         (
@@ -120,7 +120,7 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
                     ]
                     .into(),
                 ),
-                min_stake: nomos_core::sdp::MinStake {
+                min_stake: logos_blockchain_core::sdp::MinStake {
                     threshold: 1,
                     timestamp: 0,
                 },

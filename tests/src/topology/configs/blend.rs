@@ -2,9 +2,9 @@ use core::time::Duration;
 use std::{num::NonZeroU64, str::FromStr as _};
 
 use key_management_system_service::keys::{UnsecuredEd25519Key, ZkKey};
-use nomos_blend_service::core::settings::ZkSettings;
-use nomos_libp2p::Multiaddr;
-use nomos_node::config::blend::serde::{
+use logos_blockchain_blend_service::core::settings::ZkSettings;
+use logos_blockchain_libp2p::Multiaddr;
+use logos_blockchain_node::config::blend::serde::{
     Config,
     core::{BackendConfig as CoreBackendConfig, Config as CoreConfig},
     edge::{BackendConfig as EdgeBackendConfig, Config as EdgeConfig},

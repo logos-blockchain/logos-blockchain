@@ -1,6 +1,6 @@
 use futures::StreamExt as _;
-use nomos_core::{da::BlobId, sdp::SessionNumber};
-use nomos_utils::net::get_available_udp_port;
+use logos_blockchain_core::{da::BlobId, sdp::SessionNumber};
+use logos_blockchain_utils::net::get_available_udp_port;
 use rand::{Rng as _, thread_rng};
 use serial_test::serial;
 use tests::{

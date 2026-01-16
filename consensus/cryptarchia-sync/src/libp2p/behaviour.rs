@@ -14,7 +14,7 @@ use libp2p::{
     },
 };
 use libp2p_stream::{Behaviour as StreamBehaviour, Control, IncomingStreams};
-use nomos_core::header::HeaderId;
+use logos_blockchain_core::header::HeaderId;
 use tokio::sync::{mpsc, mpsc::Sender, oneshot};
 use tracing::{debug, error};
 
@@ -31,7 +31,7 @@ use crate::{
 };
 
 /// Cryptarchia networking protocol for synchronizing blocks.
-const SYNC_PROTOCOL_ID: &str = "/nomos/cryptarchia/sync/1.0.0";
+const SYNC_PROTOCOL_ID: &str = "/logos-blockchain/cryptarchia/sync/1.0.0";
 
 pub const SYNC_PROTOCOL: StreamProtocol = StreamProtocol::new(SYNC_PROTOCOL_ID);
 
@@ -516,7 +516,7 @@ mod tests {
     use futures::StreamExt as _;
     use libp2p::{Multiaddr, PeerId, Swarm, bytes::Bytes, swarm::SwarmEvent};
     use libp2p_swarm_test::SwarmExt as _;
-    use nomos_core::header::HeaderId;
+    use logos_blockchain_core::header::HeaderId;
     use rand::{Rng, thread_rng};
     use tokio::sync::oneshot;
 

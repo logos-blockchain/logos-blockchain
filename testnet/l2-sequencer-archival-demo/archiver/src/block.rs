@@ -3,7 +3,7 @@ use broadcast_service::BlockInfo;
 use common_http_client::CommonHttpClient;
 use demo_sequencer::{BlockData, db::AccountDb};
 use futures::{Stream, StreamExt as _};
-use nomos_core::{
+use logos_blockchain_core::{
     header::HeaderId,
     mantle::{
         Op, SignedMantleTx, Transaction as _, TxHash,

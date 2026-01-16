@@ -1,9 +1,9 @@
 use bytes::Bytes;
 use cryptarchia_engine::Slot;
-use nomos_core::header::HeaderId;
+use logos_blockchain_core::header::HeaderId;
 use serde::{Deserialize, Serialize};
 
-/// Blocks are serialized using nomos-core's wire format.
+/// Blocks are serialized using logos-blockchain-core's wire format.
 pub type SerialisedBlock = Bytes;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

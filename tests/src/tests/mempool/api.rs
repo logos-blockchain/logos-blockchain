@@ -1,6 +1,6 @@
 use common_http_client::CommonHttpClient;
 use key_management_system_service::keys::ZkKey;
-use nomos_core::mantle::{MantleTx, SignedMantleTx, Transaction as _, ledger::Tx as LedgerTx};
+use logos_blockchain_core::mantle::{MantleTx, SignedMantleTx, Transaction as _, ledger::Tx as LedgerTx};
 use reqwest::Url;
 use serial_test::serial;
 use tests::topology::{Topology, TopologyConfig};

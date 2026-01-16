@@ -14,11 +14,11 @@ use key_management_system_service::{
     backend::preload::PreloadKMSBackendSettings, keys::Ed25519Key,
 };
 use network::GeneralNetworkConfig;
-use nomos_core::{
+use logos_blockchain_core::{
     mantle::GenesisTx as _,
     sdp::{Locator, ServiceType},
 };
-use nomos_utils::net::get_available_udp_port;
+use logos_blockchain_utils::net::get_available_udp_port;
 use rand::{Rng as _, thread_rng};
 use tracing::GeneralTracingConfig;
 
@@ -59,7 +59,7 @@ pub fn create_general_configs_with_network(
 pub fn create_general_configs_with_blend_core_subset(
     n_nodes: usize,
     // TODO: Instead of this, define a config struct for each node.
-    // That would be also useful for non-even token distributions: https://github.com/logos-co/nomos/issues/1888
+    // That would be also useful for non-even token distributions: https://github.com/logos-blockchain/logos-blockchain/issues/1888
     n_blend_core_nodes: usize,
     network_params: &NetworkParams,
 ) -> Vec<GeneralConfig> {

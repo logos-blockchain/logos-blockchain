@@ -6,7 +6,7 @@ use demo_sequencer::{
     db::{AccountDb, DbError},
 };
 use key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
-use nomos_core::{
+use logos_blockchain_core::{
     header::HeaderId,
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
@@ -212,7 +212,7 @@ impl Sequencer {
     }
 
     fn block_contains_inscription(
-        block: &nomos_core::block::Block<SignedMantleTx>,
+        block: &logos_blockchain_core::block::Block<SignedMantleTx>,
         expected: &InscriptionOp,
         block_id: HeaderId,
     ) -> bool {

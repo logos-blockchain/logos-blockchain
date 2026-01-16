@@ -46,7 +46,7 @@ pub fn get_exe_path(debug_binary: &str, release_binary: &str) -> PathBuf {
                 debug_binary
             } else {
                 panic!(
-                    "\nCould not find nomos binary in debug path '{}'\n",
+                    "\nCould not find logos-blockchain binary in debug path '{}'\n",
                     debug_binary.display()
                 );
             }
@@ -56,7 +56,7 @@ pub fn get_exe_path(debug_binary: &str, release_binary: &str) -> PathBuf {
                 release_binary
             } else {
                 panic!(
-                    "\nCould not find nomos binary in release path '{}'\n",
+                    "\nCould not find logos-blockchain binary in release path '{}'\n",
                     release_binary.display()
                 );
             }
@@ -68,7 +68,7 @@ pub fn get_exe_path(debug_binary: &str, release_binary: &str) -> PathBuf {
                 release_binary
             } else {
                 panic!(
-                    "\nCould not find nomos binary in debug '{}' or release path '{}'\n",
+                    "\nCould not find logos-blockchain binary in debug '{}' or release path '{}'\n",
                     debug_binary.display(),
                     release_binary.display()
                 );

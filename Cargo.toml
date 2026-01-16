@@ -1,11 +1,11 @@
 [workspace.package]
 categories  = ["cryptography", "cryptography::cryptocurrencies", "security"]
-description = "Nomos blockchain workspace crates. For more information please visit https://nomos.tech/."
+description = "Logos blockchain workspace crates. For more information please visit https://logos.co/."
 edition     = "2024"
 keywords    = ["blockchain", "privacy"]
 license     = "MIT or Apache-2.0"
 readme      = "README.md"
-repository  = "https://github.com/logos-co/nomos"
+repository  = "https://github.com/logos-blockchain/logos-blockchain"
 version     = "0.1.0"
 
 [workspace]
@@ -13,54 +13,54 @@ version     = "0.1.0"
 members = [
   "consensus/cryptarchia-engine",
   "consensus/cryptarchia-sync",
-  "ledger/nomos-ledger",
+  "ledger/logos-blockchain-ledger",
+  "logos-blockchain-blend/core",
+  "logos-blockchain-blend/crypto",
+  "logos-blockchain-blend/message",
+  "logos-blockchain-blend/network",
+  "logos-blockchain-blend/proofs",
+  "logos-blockchain-blend/scheduling",
+  "logos-blockchain-bundler",
+  "logos-blockchain-c",
+  "logos-blockchain-cli",
+  "logos-blockchain-core/chain-defs",
+  "logos-blockchain-da/kzgrs",
+  "logos-blockchain-da/kzgrs-backend",
+  "logos-blockchain-da/network/core",
+  "logos-blockchain-da/network/messages",
+  "logos-blockchain-da/network/subnetworks-assignations",
+  "logos-blockchain-kms/keys",
+  "logos-blockchain-kms/macros",
+  "logos-blockchain-libp2p",
+  "logos-blockchain-services/api",
+  "logos-blockchain-services/blend",
+  "logos-blockchain-services/chain/broadcast-service",
+  "logos-blockchain-services/chain/chain-common",
+  "logos-blockchain-services/chain/chain-leader",
+  "logos-blockchain-services/chain/chain-network",
+  "logos-blockchain-services/chain/chain-service",
+  "logos-blockchain-services/data-availability/dispersal",
+  "logos-blockchain-services/data-availability/network",
+  "logos-blockchain-services/data-availability/sampling",
+  "logos-blockchain-services/data-availability/verifier",
+  "logos-blockchain-services/key-management-system",
+  "logos-blockchain-services/network",
+  "logos-blockchain-services/sdp",
+  "logos-blockchain-services/storage",
+  "logos-blockchain-services/system-sig",
+  "logos-blockchain-services/time",
+  "logos-blockchain-services/tracing",
+  "logos-blockchain-services/tx-service",
+  "logos-blockchain-services/utils",
+  "logos-blockchain-services/wallet",
+  "logos-blockchain-tracing",
+  "logos-blockchain-utils",
   "mmr",
   "nodes/api-common",
-  "nodes/nomos-executor/executor",
-  "nodes/nomos-executor/http-client",
-  "nodes/nomos-node/http-client",
-  "nodes/nomos-node/node",
-  "nomos-blend/core",
-  "nomos-blend/crypto",
-  "nomos-blend/message",
-  "nomos-blend/network",
-  "nomos-blend/proofs",
-  "nomos-blend/scheduling",
-  "nomos-bundler",
-  "nomos-c",
-  "nomos-cli",
-  "nomos-core/chain-defs",
-  "nomos-da/kzgrs",
-  "nomos-da/kzgrs-backend",
-  "nomos-da/network/core",
-  "nomos-da/network/messages",
-  "nomos-da/network/subnetworks-assignations",
-  "nomos-kms/keys",
-  "nomos-kms/macros",
-  "nomos-libp2p",
-  "nomos-services/api",
-  "nomos-services/blend",
-  "nomos-services/chain/broadcast-service",
-  "nomos-services/chain/chain-common",
-  "nomos-services/chain/chain-leader",
-  "nomos-services/chain/chain-network",
-  "nomos-services/chain/chain-service",
-  "nomos-services/data-availability/dispersal",
-  "nomos-services/data-availability/network",
-  "nomos-services/data-availability/sampling",
-  "nomos-services/data-availability/verifier",
-  "nomos-services/key-management-system",
-  "nomos-services/network",
-  "nomos-services/sdp",
-  "nomos-services/storage",
-  "nomos-services/system-sig",
-  "nomos-services/time",
-  "nomos-services/tracing",
-  "nomos-services/tx-service",
-  "nomos-services/utils",
-  "nomos-services/wallet",
-  "nomos-tracing",
-  "nomos-utils",
+  "nodes/logos-blockchain-executor/executor",
+  "nodes/logos-blockchain-executor/http-client",
+  "nodes/logos-blockchain-node/http-client",
+  "nodes/logos-blockchain-node/node",
   "testnet/cfgsync",
   "testnet/l2-sequencer-archival-demo/archiver",
   "testnet/l2-sequencer-archival-demo/sequencer",
@@ -83,73 +83,73 @@ resolver = "2"
 
 [workspace.dependencies]
 # Internal
-archiver                      = { default-features = false, path = "./testnet/l2-sequencer-archival-demo/archiver" }
-broadcast-service             = { default-features = false, path = "./nomos-services/chain/broadcast-service" }
-bundler                       = { default-features = false, path = "./nomos-bundler" }
-cfgsync                       = { default-features = false, path = "./testnet/cfgsync" }
-chain-common                  = { default-features = false, path = "./nomos-services/chain/chain-common" }
-chain-leader                  = { default-features = false, path = "./nomos-services/chain/chain-leader" }
-chain-network                 = { default-features = false, path = "./nomos-services/chain/chain-network" }
-chain-service                 = { default-features = false, path = "./nomos-services/chain/chain-service" }
-circuits-prover               = { default-features = false, path = "./zk/circuits/prover" }
-circuits-utils                = { default-features = false, path = "./zk/circuits/utils" }
-circuits-verifier             = { default-features = false, path = "./zk/circuits/verifier" }
-common-http-client            = { default-features = false, path = "./nodes/nomos-node/http-client" }
-cryptarchia-engine            = { default-features = false, path = "./consensus/cryptarchia-engine" }
-cryptarchia-sync              = { default-features = false, path = "./consensus/cryptarchia-sync" }
-demo-sequencer                = { default-features = false, path = "./testnet/l2-sequencer-archival-demo/sequencer" }
-executor-http-client          = { default-features = false, path = "./nodes/nomos-executor/http-client" }
-groth16                       = { default-features = false, path = "./zk/groth16" }
-key-management-system-keys    = { default-features = false, path = "./nomos-kms/keys" }
-key-management-system-macros  = { default-features = false, path = "./nomos-kms/macros" }
-key-management-system-service = { default-features = false, path = "./nomos-services/key-management-system" }
-kzgrs                         = { default-features = false, path = "./nomos-da/kzgrs" }
-kzgrs-backend                 = { default-features = false, path = "./nomos-da/kzgrs-backend" }
-mmr                           = { default-features = false, path = "./mmr" }
-nomos-api                     = { default-features = false, path = "./nomos-services/api" }
-nomos-blend                   = { default-features = false, path = "./nomos-blend/core" }
-nomos-blend-crypto            = { default-features = false, path = "./nomos-blend/crypto" }
-nomos-blend-message           = { default-features = false, path = "./nomos-blend/message" }
-nomos-blend-network           = { default-features = false, path = "./nomos-blend/network" }
-nomos-blend-proofs            = { default-features = false, path = "./nomos-blend/proofs" }
-nomos-blend-scheduling        = { default-features = false, path = "./nomos-blend/scheduling" }
-nomos-blend-service           = { default-features = false, path = "./nomos-services/blend" }
-nomos-cli                     = { default-features = false, path = "./nomos-cli" }
-nomos-core                    = { default-features = false, path = "./nomos-core/chain-defs" }
-nomos-da-dispersal            = { default-features = false, path = "./nomos-services/data-availability/dispersal" }
-nomos-da-messages             = { default-features = false, path = "./nomos-da/network/messages" }
-nomos-da-network-core         = { default-features = false, path = "./nomos-da/network/core" }
-nomos-da-network-service      = { default-features = false, path = "./nomos-services/data-availability/network" }
-nomos-da-sampling             = { default-features = false, path = "./nomos-services/data-availability/sampling" }
-nomos-da-verifier             = { default-features = false, path = "./nomos-services/data-availability/verifier" }
-nomos-executor                = { default-features = false, path = "./nodes/nomos-executor/executor" }
-nomos-http-api-common         = { default-features = false, path = "./nodes/api-common" }
-nomos-ledger                  = { default-features = false, path = "./ledger/nomos-ledger" }
-nomos-libp2p                  = { default-features = false, path = "./nomos-libp2p" }
-nomos-mantle-core             = { default-features = false, path = "./nomos-mantle" }
-nomos-network                 = { default-features = false, path = "./nomos-services/network" }
-nomos-node                    = { default-features = false, path = "./nodes/nomos-node/node" }
-nomos-sdp                     = { default-features = false, path = "./nomos-services/sdp" }
-nomos-storage                 = { default-features = false, path = "./nomos-services/storage" }
-nomos-system-sig              = { default-features = false, path = "./nomos-services/system-sig" }
-nomos-time                    = { default-features = false, path = "./nomos-services/time" }
-nomos-tracing                 = { default-features = false, path = "./nomos-tracing" }
-nomos-tracing-service         = { default-features = false, path = "./nomos-services/tracing" }
-nomos-utils                   = { default-features = false, path = "./nomos-utils" }
-nomos-wallet                  = { default-features = false, path = "./nomos-services/wallet" }
-poc                           = { default-features = false, path = "./zk/proofs/poc" }
-pol                           = { default-features = false, path = "./zk/proofs/pol" }
-poq                           = { default-features = false, path = "zk/proofs/poq" }
-poseidon2                     = { default-features = false, path = "./zk/poseidon2" }
-services-utils                = { default-features = false, path = "./nomos-services/utils" }
-subnetworks-assignations      = { default-features = false, path = "./nomos-da/network/subnetworks-assignations" }
-tests                         = { default-features = false, path = "./tests" }
-tx-service                    = { default-features = false, path = "./nomos-services/tx-service" }
-utxotree                      = { default-features = false, path = "./utxotree" }
-wallet                        = { default-features = false, path = "./wallet" }
-wallet-http-client            = { default-features = false, path = "./wallet-http-client" }
-witness-generator             = { default-features = false, path = "zk/circuits/witness-generator" }
-zksign                        = { default-features = false, path = "./zk/proofs/zksign" }
+archiver                            = { default-features = false, path = "./testnet/l2-sequencer-archival-demo/archiver" }
+broadcast-service                   = { default-features = false, path = "./logos-blockchain-services/chain/broadcast-service" }
+bundler                             = { default-features = false, path = "./logos-blockchain-bundler" }
+cfgsync                             = { default-features = false, path = "./testnet/cfgsync" }
+chain-common                        = { default-features = false, path = "./logos-blockchain-services/chain/chain-common" }
+chain-leader                        = { default-features = false, path = "./logos-blockchain-services/chain/chain-leader" }
+chain-network                       = { default-features = false, path = "./logos-blockchain-services/chain/chain-network" }
+chain-service                       = { default-features = false, path = "./logos-blockchain-services/chain/chain-service" }
+circuits-prover                     = { default-features = false, path = "./zk/circuits/prover" }
+circuits-utils                      = { default-features = false, path = "./zk/circuits/utils" }
+circuits-verifier                   = { default-features = false, path = "./zk/circuits/verifier" }
+common-http-client                  = { default-features = false, path = "./nodes/logos-blockchain-node/http-client" }
+cryptarchia-engine                  = { default-features = false, path = "./consensus/cryptarchia-engine" }
+cryptarchia-sync                    = { default-features = false, path = "./consensus/cryptarchia-sync" }
+demo-sequencer                      = { default-features = false, path = "./testnet/l2-sequencer-archival-demo/sequencer" }
+executor-http-client                = { default-features = false, path = "./nodes/logos-blockchain-executor/http-client" }
+groth16                             = { default-features = false, path = "./zk/groth16" }
+key-management-system-keys          = { default-features = false, path = "./logos-blockchain-kms/keys" }
+key-management-system-macros        = { default-features = false, path = "./logos-blockchain-kms/macros" }
+key-management-system-service       = { default-features = false, path = "./logos-blockchain-services/key-management-system" }
+kzgrs                               = { default-features = false, path = "./logos-blockchain-da/kzgrs" }
+kzgrs-backend                       = { default-features = false, path = "./logos-blockchain-da/kzgrs-backend" }
+logos-blockchain-api                = { default-features = false, path = "./logos-blockchain-services/api" }
+logos-blockchain-blend              = { default-features = false, path = "./logos-blockchain-blend/core" }
+logos-blockchain-blend-crypto       = { default-features = false, path = "./logos-blockchain-blend/crypto" }
+logos-blockchain-blend-message      = { default-features = false, path = "./logos-blockchain-blend/message" }
+logos-blockchain-blend-network      = { default-features = false, path = "./logos-blockchain-blend/network" }
+logos-blockchain-blend-proofs       = { default-features = false, path = "./logos-blockchain-blend/proofs" }
+logos-blockchain-blend-scheduling   = { default-features = false, path = "./logos-blockchain-blend/scheduling" }
+logos-blockchain-blend-service      = { default-features = false, path = "./logos-blockchain-services/blend" }
+logos-blockchain-cli                = { default-features = false, path = "./logos-blockchain-cli" }
+logos-blockchain-core               = { default-features = false, path = "./logos-blockchain-core/chain-defs" }
+logos-blockchain-da-dispersal       = { default-features = false, path = "./logos-blockchain-services/data-availability/dispersal" }
+logos-blockchain-da-messages        = { default-features = false, path = "./logos-blockchain-da/network/messages" }
+logos-blockchain-da-network-core    = { default-features = false, path = "./logos-blockchain-da/network/core" }
+logos-blockchain-da-network-service = { default-features = false, path = "./logos-blockchain-services/data-availability/network" }
+logos-blockchain-da-sampling        = { default-features = false, path = "./logos-blockchain-services/data-availability/sampling" }
+logos-blockchain-da-verifier        = { default-features = false, path = "./logos-blockchain-services/data-availability/verifier" }
+logos-blockchain-executor           = { default-features = false, path = "./nodes/logos-blockchain-executor/executor" }
+logos-blockchain-http-api-common    = { default-features = false, path = "./nodes/api-common" }
+logos-blockchain-ledger             = { default-features = false, path = "./ledger/logos-blockchain-ledger" }
+logos-blockchain-libp2p             = { default-features = false, path = "./logos-blockchain-libp2p" }
+logos-blockchain-mantle-core        = { default-features = false, path = "./logos-blockchain-mantle" }
+logos-blockchain-network            = { default-features = false, path = "./logos-blockchain-services/network" }
+logos-blockchain-node               = { default-features = false, path = "./nodes/logos-blockchain-node/node" }
+logos-blockchain-sdp                = { default-features = false, path = "./logos-blockchain-services/sdp" }
+logos-blockchain-storage            = { default-features = false, path = "./logos-blockchain-services/storage" }
+logos-blockchain-system-sig         = { default-features = false, path = "./logos-blockchain-services/system-sig" }
+logos-blockchain-time               = { default-features = false, path = "./logos-blockchain-services/time" }
+logos-blockchain-tracing            = { default-features = false, path = "./logos-blockchain-tracing" }
+logos-blockchain-tracing-service    = { default-features = false, path = "./logos-blockchain-services/tracing" }
+logos-blockchain-utils              = { default-features = false, path = "./logos-blockchain-utils" }
+logos-blockchain-wallet             = { default-features = false, path = "./logos-blockchain-services/wallet" }
+mmr                                 = { default-features = false, path = "./mmr" }
+poc                                 = { default-features = false, path = "./zk/proofs/poc" }
+pol                                 = { default-features = false, path = "./zk/proofs/pol" }
+poq                                 = { default-features = false, path = "zk/proofs/poq" }
+poseidon2                           = { default-features = false, path = "./zk/poseidon2" }
+services-utils                      = { default-features = false, path = "./logos-blockchain-services/utils" }
+subnetworks-assignations            = { default-features = false, path = "./logos-blockchain-da/network/subnetworks-assignations" }
+tests                               = { default-features = false, path = "./tests" }
+tx-service                          = { default-features = false, path = "./logos-blockchain-services/tx-service" }
+utxotree                            = { default-features = false, path = "./utxotree" }
+wallet                              = { default-features = false, path = "./wallet" }
+wallet-http-client                  = { default-features = false, path = "./wallet-http-client" }
+witness-generator                   = { default-features = false, path = "zk/circuits/witness-generator" }
+zksign                              = { default-features = false, path = "./zk/proofs/zksign" }
 
 # External
 blake2            = { default-features = false, version = "0.10" }

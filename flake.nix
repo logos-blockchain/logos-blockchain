@@ -1,5 +1,5 @@
 {
-  description = "Development environment for Nomos.";
+  description = "Development environment for Logos blockchain node.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/02c80fc5421018016669d79765b40a18aaf3bd8d";

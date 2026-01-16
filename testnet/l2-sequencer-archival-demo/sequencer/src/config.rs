@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     /// HTTP server listen address (e.g., "0.0.0.0:8080")
     pub listen_addr: SocketAddr,
-    /// Nomos node HTTP endpoint to submit transactions to (e.g., "<http://localhost:18080>")
+    /// Logos blockchain node HTTP endpoint to submit transactions to (e.g., "<http://localhost:18080>")
     pub node_endpoint: String,
     /// Path to the redb database file
     pub db_path: String,

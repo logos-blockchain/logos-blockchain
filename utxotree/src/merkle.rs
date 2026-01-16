@@ -6,7 +6,7 @@ use std::{
 use ark_ff::Field;
 #[cfg(feature = "serde")]
 use groth16::serde::serde_fr;
-use nomos_core::utils::merkle::{MerkleNode, MerklePath};
+use logos_blockchain_core::utils::merkle::{MerkleNode, MerklePath};
 use poseidon2::{Digest, Fr};
 use rpds::RedBlackTreeSetSync;
 

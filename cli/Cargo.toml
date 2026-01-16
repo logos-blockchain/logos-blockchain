@@ -1,0 +1,27 @@
+[package]
+categories  = { workspace = true }
+default-run = "logos-blockchain-cli"
+description = "Cli app to interact with Logos blockchain nodes and perform various tasks"
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-cli"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+clap                     = { default-features = false, features = ["derive", "std"], version = "4" }
+executor-http-client     = { workspace = true }
+hex                      = { default-features = false, version = "0.4.3" }
+kzgrs-backend            = { workspace = true }
+logos-blockchain-core    = { workspace = true }
+logos-blockchain-tracing = { workspace = true }
+reqwest                  = { workspace = true }
+serde_json               = { default-features = false, version = "1" }
+tokio                    = { default-features = false, version = "1" }
+tracing                  = { workspace = true }
+tracing-subscriber       = { default-features = false, version = "0.3" }

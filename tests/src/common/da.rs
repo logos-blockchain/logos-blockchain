@@ -5,7 +5,7 @@ use common_http_client::Error;
 use executor_http_client::ExecutorHttpClient;
 use futures::StreamExt as _;
 use key_management_system_service::keys::{Ed25519Key, ZkKey};
-use nomos_core::{
+use logos_blockchain_core::{
     block::Block,
     da::BlobId,
     mantle::{

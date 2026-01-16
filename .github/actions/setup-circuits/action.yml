@@ -1,6 +1,6 @@
 name: Setup Circuits
 
-description: Set up Circom Circuits, Rapidsnark prover and Rapidsnark verifier using the setup-nomos-circuits.sh script.
+description: Set up Circom Circuits, Rapidsnark prover and Rapidsnark verifier using the setup-logos-blockchain-circuits.sh script.
 
 inputs:
   github-token:
@@ -10,9 +10,9 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Setup nomos-circuits
+    - name: Setup logos-blockchain-circuits
       shell: bash
       working-directory: ${{ github.workspace }}
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
-      run: "./scripts/setup-nomos-circuits.sh"
+      run: "./scripts/setup-logos-blockchain-circuits.sh"

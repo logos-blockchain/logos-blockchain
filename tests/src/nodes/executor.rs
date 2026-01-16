@@ -11,49 +11,49 @@ use chain_service::CryptarchiaInfo;
 use common_http_client::CommonHttpClient;
 use futures::Stream;
 use kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
-use nomos_core::{
+use logos_blockchain_core::{
     block::Block, da::BlobId, header::HeaderId, mantle::SignedMantleTx, sdp::SessionNumber,
 };
-use nomos_da_dispersal::{
+use logos_blockchain_da_dispersal::{
     DispersalServiceSettings,
     backend::kzgrs::{DispersalKZGRSBackendSettings, EncoderSettings},
 };
-use nomos_da_network_core::{
+use logos_blockchain_da_network_core::{
     protocols::sampling::SubnetsConfig,
     swarm::{BalancerStats, MonitorStats},
 };
-use nomos_da_network_service::{
+use logos_blockchain_da_network_service::{
     MembershipResponse, NetworkConfig as DaNetworkConfig,
     api::http::ApiAdapterSettings,
     backends::libp2p::{
         common::DaNetworkBackendSettings, executor::DaNetworkExecutorBackendSettings,
     },
 };
-use nomos_da_sampling::{
+use logos_blockchain_da_sampling::{
     DaSamplingServiceSettings, backend::kzgrs::KzgrsSamplingBackendSettings,
     verifier::kzgrs::KzgrsDaVerifierSettings as SamplingVerifierSettings,
 };
-use nomos_da_verifier::{
+use logos_blockchain_da_verifier::{
     DaVerifierServiceSettings,
     backend::{kzgrs::KzgrsDaVerifierSettings, trigger::MempoolPublishTriggerConfig},
     storage::adapters::rocksdb::RocksAdapterSettings as VerifierStorageAdapterSettings,
 };
-use nomos_executor::{api::backend::AxumBackendSettings, config::Config};
-use nomos_http_api_common::paths::{
+use logos_blockchain_executor::{api::backend::AxumBackendSettings, config::Config};
+use logos_blockchain_http_api_common::paths::{
     CRYPTARCHIA_INFO, DA_BALANCER_STATS, DA_BLACKLISTED_PEERS, DA_BLOCK_PEER, DA_GET_MEMBERSHIP,
     DA_GET_SHARES_COMMITMENTS, DA_HISTORIC_SAMPLING, DA_MONITOR_STATS, DA_UNBLOCK_PEER,
     MANTLE_METRICS, NETWORK_INFO, STORAGE_BLOCK,
 };
-use nomos_network::backends::libp2p::Libp2pInfo;
-use nomos_node::{
+use logos_blockchain_network::backends::libp2p::Libp2pInfo;
+use logos_blockchain_node::{
     RocksBackendSettings,
     api::{handlers::GetCommitmentsRequest, testing::handlers::HistoricSamplingRequest},
     config::mempool::serde::Config as MempoolConfig,
 };
-use nomos_sdp::SdpSettings;
-use nomos_tracing::logging::local::FileConfig;
-use nomos_tracing_service::LoggerLayer;
-use nomos_utils::{math::NonNegativeF64, net::get_available_tcp_port};
+use logos_blockchain_sdp::SdpSettings;
+use logos_blockchain_tracing::logging::local::FileConfig;
+use logos_blockchain_tracing_service::LoggerLayer;
+use logos_blockchain_utils::{math::NonNegativeF64, net::get_available_tcp_port};
 use reqwest::Url;
 use tempfile::NamedTempFile;
 
@@ -64,8 +64,8 @@ use crate::{
     topology::configs::{GeneralConfig, deployment::default_e2e_deployment_settings},
 };
 
-const BIN_PATH_DEBUG: &str = "../target/debug/nomos-executor";
-const BIN_PATH_RELEASE: &str = "../target/release/nomos-executor";
+const BIN_PATH_DEBUG: &str = "../target/debug/logos-blockchain-executor";
+const BIN_PATH_RELEASE: &str = "../target/release/logos-blockchain-executor";
 
 pub struct Executor {
     addr: SocketAddr,
@@ -79,7 +79,7 @@ pub struct Executor {
 impl Drop for Executor {
     fn drop(&mut self) {
         if std::thread::panicking()
-            && let Err(e) = persist_tempdir(&mut self.tempdir, "nomos-executor")
+            && let Err(e) = persist_tempdir(&mut self.tempdir, "logos-blockchain-executor")
         {
             println!("failed to persist tempdir: {e}");
         }
@@ -345,7 +345,7 @@ impl Executor {
             .post(format!(
                 "http://{}{}",
                 self.addr,
-                nomos_http_api_common::paths::MEMPOOL_ADD_TX
+                logos_blockchain_http_api_common::paths::MEMPOOL_ADD_TX
             ))
             .header("Content-Type", "application/json")
             .body(serde_json::to_string(&tx).unwrap())
@@ -419,7 +419,7 @@ pub fn create_executor_config(config: GeneralConfig) -> Config {
             },
         },
         tracing: config.tracing_config.tracing_settings,
-        http: nomos_api::ApiServiceSettings {
+        http: logos_blockchain_api::ApiServiceSettings {
             backend_settings: AxumBackendSettings {
                 address: config.api_config.address,
                 rate_limit_per_second: 10000,
@@ -460,12 +460,12 @@ pub fn create_executor_config(config: GeneralConfig) -> Config {
             },
         },
         sdp: SdpSettings { declaration: None },
-        wallet: nomos_wallet::WalletServiceSettings {
+        wallet: logos_blockchain_wallet::WalletServiceSettings {
             known_keys: HashSet::from_iter([config.consensus_config.user_config().leader.pk]),
         },
         key_management: config.kms_config,
 
-        testing_http: nomos_api::ApiServiceSettings {
+        testing_http: logos_blockchain_api::ApiServiceSettings {
             backend_settings: AxumBackendSettings {
                 address: testing_http_address,
                 rate_limit_per_second: 10000,

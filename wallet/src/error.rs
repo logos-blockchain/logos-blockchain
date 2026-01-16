@@ -1,4 +1,4 @@
-use nomos_core::header::HeaderId;
+use logos_blockchain_core::header::HeaderId;
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq, Eq)]

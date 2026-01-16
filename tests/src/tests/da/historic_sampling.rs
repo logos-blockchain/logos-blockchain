@@ -1,5 +1,5 @@
 use futures::StreamExt as _;
-use nomos_core::{da::BlobId, sdp::SessionNumber};
+use logos_blockchain_core::{da::BlobId, sdp::SessionNumber};
 use tests::{
     common::da::{disseminate_with_metadata, setup_test_channel, wait_for_blob_onchain},
     nodes::executor::Executor,

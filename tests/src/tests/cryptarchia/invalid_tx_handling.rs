@@ -2,7 +2,7 @@ use std::{collections::HashSet, time::Duration};
 
 use common_http_client::CommonHttpClient;
 use key_management_system_service::keys::{ZkKey, ZkPublicKey};
-use nomos_core::mantle::{
+use logos_blockchain_core::mantle::{
     MantleTx, Note, SignedMantleTx, Transaction as _, TxHash, ledger::Tx as LedgerTx,
     ops::channel::ChannelId,
 };
@@ -95,7 +95,7 @@ async fn wait_for_transactions_processing(
             |header_id| validator.get_block(header_id),
             |block| {
                 for tx in block.transactions() {
-                    let hash = nomos_core::mantle::Transaction::hash(tx);
+                    let hash = logos_blockchain_core::mantle::Transaction::hash(tx);
                     if valid_tx_hashes.contains(&hash) {
                         found_valid_txs.insert(hash);
                     }

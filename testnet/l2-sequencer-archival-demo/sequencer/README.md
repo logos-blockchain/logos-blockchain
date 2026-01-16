@@ -24,13 +24,13 @@ cargo build --release -p demo-sequencer
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `SEQUENCER_LISTEN_ADDR` | HTTP server listen address | `0.0.0.0:8080` |
-| `SEQUENCER_NODE_ENDPOINT` | Nomos node HTTP endpoint | `http://localhost:18080` |
+| `SEQUENCER_NODE_ENDPOINT` | Logos blockchain node HTTP endpoint | `http://localhost:18080` |
 | `SEQUENCER_DB_PATH` | Path to redb database file | `sequencer.redb` |
 | `SEQUENCER_SIGNING_KEY_PATH` | Path to signing key file (created if missing) | `sequencer.key` |
 | `SEQUENCER_CHANNEL_ID` | Channel ID for inscriptions (64 hex chars) | **Required** |
 | `SEQUENCER_INITIAL_BALANCE` | Initial token balance for new accounts | `1000` |
-| `SEQUENCER_NODE_AUTH_USERNAME` | Basic auth username for Nomos node (optional) | - |
-| `SEQUENCER_NODE_AUTH_PASSWORD` | Basic auth password for Nomos node (optional) | - |
+| `SEQUENCER_NODE_AUTH_USERNAME` | Basic auth username for Logos blockchain node (optional) | - |
+| `SEQUENCER_NODE_AUTH_PASSWORD` | Basic auth password for Logos blockchain node (optional) | - |
 
 ### Example
 
