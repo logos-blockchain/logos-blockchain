@@ -8,7 +8,7 @@ use futures::{
     StreamExt,
     channel::oneshot::{Receiver, Sender},
 };
-use kzgrs_backend::common::{
+use logos_blockchain_kzgrs_backend::common::{
     ShareIndex,
     share::{DaLightShare, DaShare, DaSharesCommitments},
 };

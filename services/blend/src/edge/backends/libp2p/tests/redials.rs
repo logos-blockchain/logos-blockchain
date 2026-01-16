@@ -1,6 +1,6 @@
 use core::slice::from_ref;
 
-use key_management_system_service::keys::UnsecuredEd25519Key;
+use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
 use libp2p::{Multiaddr, PeerId};
 use logos_blockchain_blend::{
     message::crypto::key_ext::Ed25519SecretKeyExt as _,

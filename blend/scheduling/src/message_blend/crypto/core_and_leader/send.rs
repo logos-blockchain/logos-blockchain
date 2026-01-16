@@ -216,8 +216,8 @@ where
 mod test {
     use std::num::NonZeroU64;
 
-    use groth16::Field as _;
-    use key_management_system_keys::keys::{
+    use logos_blockchain_groth16::Field as _;
+    use logos_blockchain_key_management_system_keys::keys::{
         ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, UnsecuredEd25519Key,
     };
     use multiaddr::{Multiaddr, PeerId};

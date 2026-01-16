@@ -30,7 +30,7 @@ divan         = { default-features = false, version = "0.1" }
 
 [features]
 default   = []
-parallel  = ["dep:rayon", "kzgrs/parallel"]
+parallel  = ["dep:rayon", "logos-blockchain-kzgrs/parallel"]
 single    = []
 testutils = []
 

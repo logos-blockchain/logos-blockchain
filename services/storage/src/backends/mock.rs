@@ -6,7 +6,7 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use cryptarchia_engine::Slot;
+use logos_blockchain_cryptarchia_engine::Slot;
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 use logos_blockchain_core::{

@@ -2,7 +2,7 @@
 mod tests {
     use std::{fs::read_to_string, io::Write as _, path::PathBuf, sync::LazyLock};
 
-    use circuits_utils::witness_generator_path;
+    use logos_blockchain_circuits_utils::witness_generator_path;
     use tempfile::NamedTempFile;
 
     use crate::{generate_witness, generate_witness_from_paths};

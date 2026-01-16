@@ -1,5 +1,5 @@
 use num_bigint::BigUint;
-use poseidon2::Fr;
+use logos_blockchain_poseidon2::Fr;
 use rand::RngCore;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]

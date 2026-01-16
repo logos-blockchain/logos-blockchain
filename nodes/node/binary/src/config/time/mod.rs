@@ -1,4 +1,4 @@
-use cryptarchia_engine::time::SlotConfig;
+use logos_blockchain_cryptarchia_engine::time::SlotConfig;
 use logos_blockchain_time::{TimeServiceSettings, backends::NtpTimeBackendSettings};
 
 use crate::config::{

@@ -1,6 +1,6 @@
 use std::{env::set_var, path::PathBuf};
 
-use bundler::utils::{
+use logos_blockchain_bundler::utils::{
     get_cargo_package_version, get_project_identifier, get_target_directory_for_current_profile,
     get_workspace_root,
 };

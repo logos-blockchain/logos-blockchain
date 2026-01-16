@@ -1,5 +1,5 @@
-use cryptarchia_engine::{Epoch, Slot};
-use key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey, ZkPublicKey};
+use logos_blockchain_cryptarchia_engine::{Epoch, Slot};
+use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey, ZkPublicKey};
 use logos_blockchain_core::{
     mantle::{Utxo, ops::leader_claim::VoucherCm},
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},

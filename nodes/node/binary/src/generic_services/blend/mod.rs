@@ -6,7 +6,7 @@ use core::{
 };
 
 use async_trait::async_trait;
-use broadcast_service::BlockBroadcastService;
+use logos_blockchain_broadcast_service::BlockBroadcastService;
 use chain_leader::LeaderMsg;
 use futures::{Stream, StreamExt as _};
 use logos_blockchain_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
@@ -20,8 +20,8 @@ use logos_blockchain_da_sampling::network::NetworkAdapter;
 use logos_blockchain_libp2p::PeerId;
 use logos_blockchain_time::backends::NtpTimeBackend;
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
-use pol::{PolChainInputsData, PolWalletInputsData, PolWitnessInputsData};
-use poq::AGED_NOTE_MERKLE_TREE_HEIGHT;
+use logos_blockchain_pol::{PolChainInputsData, PolWalletInputsData, PolWitnessInputsData};
+use logos_blockchain_poq::AGED_NOTE_MERKLE_TREE_HEIGHT;
 use services_utils::wait_until_services_are_ready;
 use tokio::sync::oneshot::channel;
 use tokio_stream::wrappers::WatchStream;
@@ -93,7 +93,7 @@ where
     async fn subscribe(
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     ) -> Option<Self::Stream> {
-        use groth16::Field as _;
+        use logos_blockchain_groth16::Field as _;
 
         wait_until_services_are_ready!(
             overwatch_handle,

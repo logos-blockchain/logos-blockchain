@@ -3,7 +3,7 @@ pub mod balance {
         http::StatusCode,
         response::{IntoResponse, Response},
     };
-    use key_management_system_keys::keys::ZkPublicKey;
+    use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
     use logos_blockchain_core::{header::HeaderId, mantle::Value};
     use serde::{Deserialize, Serialize};
 
@@ -26,7 +26,7 @@ pub mod transfer_funds {
         http::StatusCode,
         response::{IntoResponse, Response},
     };
-    use key_management_system_keys::keys::ZkPublicKey;
+    use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
     use logos_blockchain_core::{
         header::HeaderId,
         mantle::{SignedMantleTx, Transaction as _, Value},

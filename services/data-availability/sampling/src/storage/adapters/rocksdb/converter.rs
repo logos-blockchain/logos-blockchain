@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
+use logos_blockchain_kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
 use logos_blockchain_core::{
     codec::{DeserializeOp as _, SerializeOp as _},
     da::{BlobId, blob::Share},

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use kzgrs_backend::common::share::{DaLightShare, DaSharesCommitments};
+use logos_blockchain_kzgrs_backend::common::share::{DaLightShare, DaSharesCommitments};
 use logos_blockchain_core::{da::BlobId, header::HeaderId};
 
 use crate::protocols::sampling::{

@@ -6,7 +6,7 @@ use core::{
 };
 use std::time::Duration;
 
-use key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
+use logos_blockchain_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
 use libp2p::{
     PeerId, StreamProtocol, Swarm, Transport as _, core::transport::MemoryTransport,
     identity::PublicKey, plaintext, swarm, tcp, yamux,

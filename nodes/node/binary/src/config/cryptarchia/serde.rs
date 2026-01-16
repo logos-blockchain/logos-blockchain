@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use chain_leader::LeaderConfig;
 use chain_network::SyncConfig;
-use chain_service::StartingState;
+use logos_blockchain_chain_service::StartingState;
 use logos_blockchain_libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +17,7 @@ pub struct Config {
 pub struct ServiceConfig {
     pub starting_state: StartingState,
     pub recovery_file: PathBuf,
-    pub bootstrap: chain_service::BootstrapConfig,
+    pub bootstrap: logos_blockchain_chain_service::BootstrapConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

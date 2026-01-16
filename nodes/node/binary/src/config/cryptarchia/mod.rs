@@ -22,7 +22,7 @@ impl ServiceConfig {
         self,
         blend_deployment: &BlendDeploymentSettings,
     ) -> (
-        chain_service::CryptarchiaSettings,
+        logos_blockchain_chain_service::CryptarchiaSettings,
         chain_network::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
         chain_leader::LeaderSettings<(), Libp2pBroadcastSettings>,
     ) {
@@ -47,7 +47,7 @@ impl ServiceConfig {
             },
         };
 
-        let chain_service_settings = chain_service::CryptarchiaSettings {
+        let chain_service_settings = logos_blockchain_chain_service::CryptarchiaSettings {
             bootstrap: self.user.service.bootstrap,
             config: ledger_config.clone(),
             recovery_file: self.user.service.recovery_file,

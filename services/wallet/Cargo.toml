@@ -19,15 +19,15 @@ thiserror   = "1.0"
 tokio       = { features = ["sync"], version = "1" }
 tracing     = { workspace = true }
 
-chain-service                      = { workspace = true }
-groth16                            = { workspace = true }
-key-management-system-service      = { workspace = true }
-logos-blockchain-blockchain-ledger = { workspace = true }
-logos-blockchain-core              = { workspace = true }
-logos-blockchain-storage           = { features = ["mock"], workspace = true }
-overwatch                          = { workspace = true }
-services-utils                     = { workspace = true }
-wallet                             = { workspace = true }
+logos-blockchain-chain-service                 = { workspace = true }
+logos-blockchain-core                          = { workspace = true }
+logos-blockchain-groth16                       = { workspace = true }
+logos-blockchain-key-management-system-service = { workspace = true }
+logos-blockchain-ledger                        = { workspace = true }
+logos-blockchain-services-utils                = { workspace = true }
+logos-blockchain-storage-service               = { features = ["mock"], workspace = true }
+logos-blockchain-wallet                        = { workspace = true }
+overwatch                                      = { workspace = true }
 
 [lints]
 workspace = true

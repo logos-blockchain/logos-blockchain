@@ -1,5 +1,5 @@
-use groth16::Fr;
-use poseidon2::Digest;
+use logos_blockchain_groth16::Fr;
+use logos_blockchain_poseidon2::Digest;
 use serde::{Deserialize, Serialize};
 
 use super::{OpProof, SignedMantleTx, ops::sdp::SDPDeclareOp};
@@ -144,7 +144,7 @@ impl<'de> Deserialize<'de> for GenesisTx {
 
 #[cfg(test)]
 mod tests {
-    use key_management_system_keys::keys::{ZkKey, ZkPublicKey};
+    use logos_blockchain_key_management_system_keys::keys::{ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
 
     use super::*;

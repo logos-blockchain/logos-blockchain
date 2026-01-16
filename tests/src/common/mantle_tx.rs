@@ -1,4 +1,4 @@
-use key_management_system_service::keys::{
+use logos_blockchain_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
 use logos_blockchain_core::{

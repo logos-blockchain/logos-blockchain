@@ -11,8 +11,8 @@ mod test {
     };
 
     use futures::StreamExt as _;
-    use key_management_system_keys::keys::{Ed25519Key, ZkKey};
-    use kzgrs_backend::testutils;
+    use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use logos_blockchain_kzgrs_backend::testutils;
     use libp2p::{
         PeerId, Swarm,
         identity::{Keypair, PublicKey},

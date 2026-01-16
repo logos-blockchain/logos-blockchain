@@ -1,13 +1,13 @@
 use std::sync::LazyLock;
 
 use bytes::Bytes;
-use groth16::{
+use logos_blockchain_groth16::{
     Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes,
     serde::serde_fr,
 };
-use key_management_system_keys::keys::ZkSignature;
+use logos_blockchain_key_management_system_keys::keys::ZkSignature;
 use num_bigint::BigUint;
-use poseidon2::{Digest, ZkHash};
+use logos_blockchain_poseidon2::{Digest, ZkHash};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
@@ -395,7 +395,7 @@ impl<'de> Deserialize<'de> for SignedMantleTx {
 
 #[cfg(test)]
 mod tests {
-    use key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 
     use super::*;
     use crate::mantle::{

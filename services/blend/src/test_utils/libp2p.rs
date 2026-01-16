@@ -4,7 +4,7 @@ use core::{
     time::Duration,
 };
 
-use key_management_system_service::keys::UnsecuredEd25519Key;
+use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
 use libp2p::{
     PeerId, StreamProtocol, Swarm, Transport as _, core::transport::MemoryTransport,
     identity::Keypair, plaintext, swarm, tcp, yamux,

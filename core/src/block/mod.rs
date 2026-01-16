@@ -2,8 +2,8 @@ use core::fmt::Debug;
 
 use ::serde::{Deserialize, Serialize, de::DeserializeOwned};
 use bytes::Bytes;
-use cryptarchia_engine::Slot;
-use key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
+use logos_blockchain_cryptarchia_engine::Slot;
+use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 
 use crate::{
     codec::{DeserializeOp as _, SerializeOp as _},
@@ -218,7 +218,7 @@ impl<Tx: Clone + Eq + Serialize + DeserializeOwned> TryFrom<Block<Tx>> for Bytes
 mod tests {
     use std::iter;
 
-    use groth16::Fr;
+    use logos_blockchain_groth16::Fr;
     use num_bigint::BigUint;
 
     use super::*;

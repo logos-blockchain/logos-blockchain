@@ -4,7 +4,7 @@ pub mod secured_key;
 mod ed25519;
 mod zk;
 
-use key_management_system_macros::KmsEnumKey;
+use logos_blockchain_key_management_system_macros::KmsEnumKey;
 use serde::Deserialize;
 use zeroize::ZeroizeOnDrop;
 

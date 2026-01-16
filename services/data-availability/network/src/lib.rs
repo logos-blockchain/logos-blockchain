@@ -18,7 +18,7 @@ use std::{
 use async_trait::async_trait;
 use backends::{ConnectionStatus, NetworkBackend};
 use futures::Stream;
-use kzgrs_backend::common::share::{DaShare, DaSharesCommitments};
+use logos_blockchain_kzgrs_backend::common::share::{DaShare, DaSharesCommitments};
 use libp2p::{Multiaddr, PeerId};
 use logos_blockchain_core::{
     da::BlobId,
@@ -29,7 +29,7 @@ use logos_blockchain_da_network_core::{
     SubnetworkId, addressbook::AddressBookHandler as _,
     protocols::sampling::opinions::OpinionEvent, swarm::BalancerStats,
 };
-use logos_blockchain_libp2p::cryptarchia_sync::DynError;
+use logos_blockchain_libp2p::logos_blockchain_cryptarchia_sync::DynError;
 use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{
@@ -40,7 +40,7 @@ use overwatch::{
 use serde::{Deserialize, Serialize};
 use services_utils::wait_until_services_are_ready;
 use storage::{MembershipStorage, MembershipStorageAdapter};
-use subnetworks_assignations::{MembershipCreator, MembershipHandler, SubnetworkAssignations};
+use logos_blockchain_subnetworks_assignations::{MembershipCreator, MembershipHandler, SubnetworkAssignations};
 use tokio::sync::{
     broadcast,
     broadcast::Sender,

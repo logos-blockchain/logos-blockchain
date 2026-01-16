@@ -5,10 +5,10 @@ use std::{
     pin::Pin,
 };
 
-use cryptarchia_engine::Slot;
+use logos_blockchain_cryptarchia_engine::Slot;
 use futures::{Stream, future::join_all};
 use logos_blockchain_core::{header::HeaderId, mantle::TxHash};
-use logos_blockchain_storage::{StorageService, backends::StorageBackend};
+use logos_blockchain_storage_service::{StorageService, backends::StorageBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 
 #[async_trait::async_trait]

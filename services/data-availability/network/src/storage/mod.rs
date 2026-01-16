@@ -14,7 +14,7 @@ use overwatch::{
     services::{ServiceData, relay::OutboundRelay},
 };
 use rand::SeedableRng as _;
-use subnetworks_assignations::{MembershipCreator, MembershipHandler, SubnetworkAssignations};
+use logos_blockchain_subnetworks_assignations::{MembershipCreator, MembershipHandler, SubnetworkAssignations};
 
 use crate::{
     SessionStatus,

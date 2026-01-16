@@ -14,7 +14,7 @@ pub enum KeyError {
     #[error("Multisignature support only {0} keys, got {1}")]
     UnsupportedMultisignatureSize(usize, usize),
     #[error(transparent)]
-    ZkSignError(#[from] zksign::ZkSignError),
+    ZkSignError(#[from] logos_blockchain_zksign::ZkSignError),
     #[error("Unsupported operator `{operator}` for key type `{key}`")]
     UnsupportedKeyOperator { operator: String, key: String },
     #[error(transparent)]

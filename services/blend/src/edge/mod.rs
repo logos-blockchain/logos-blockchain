@@ -13,7 +13,7 @@ use std::{
 };
 
 use backends::BlendBackend;
-use chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use logos_blockchain_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use futures::{Stream, StreamExt as _};
 use logos_blockchain_blend::{
     message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
@@ -148,7 +148,7 @@ where
     MembershipAdapter: membership::Adapter<NodeId = NodeId, Error: Send + Sync + 'static> + Send,
     membership::ServiceMessage<MembershipAdapter>: Send + Sync + 'static,
     ProofsGenerator: LeaderProofsGenerator + Send,
-    TimeBackend: logos_blockchain_time::backends::TimeBackend + Send,
+    TimeBackend: logos_blockchain_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
     RuntimeServiceId: AsServiceId<<MembershipAdapter as membership::Adapter>::Service>

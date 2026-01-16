@@ -1,7 +1,7 @@
 use std::{collections::HashSet, time::Duration};
 
-use common_http_client::CommonHttpClient;
-use key_management_system_service::keys::{ZkKey, ZkPublicKey};
+use logos_blockchain_common_http_client::CommonHttpClient;
+use logos_blockchain_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use logos_blockchain_core::mantle::{
     MantleTx, Note, SignedMantleTx, Transaction as _, TxHash, ledger::Tx as LedgerTx,
     ops::channel::ChannelId,

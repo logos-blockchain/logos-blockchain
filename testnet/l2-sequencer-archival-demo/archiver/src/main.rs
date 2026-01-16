@@ -3,7 +3,7 @@
 use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use clap::Parser as _;
-use common_http_client::{BasicAuthCredentials, CommonHttpClient};
+use logos_blockchain_common_http_client::{BasicAuthCredentials, CommonHttpClient};
 use demo_sequencer::db::AccountDb;
 use futures::StreamExt as _;
 use owo_colors::OwoColorize as _;

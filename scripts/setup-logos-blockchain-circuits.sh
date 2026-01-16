@@ -101,7 +101,8 @@ check_existing_installation() {
 # Download and extract the release
 download_release() {
     local platform="$1"
-    local artifact="logos-blockchain-circuits-${VERSION}-${platform}.tar.gz"
+    # TODO: Rename these artifacts to `logos-blockchain-circuits-...`
+    local artifact="nomos-circuits-${VERSION}-${platform}.tar.gz"
     local url="https://github.com/${REPO}/releases/download/${VERSION}/${artifact}"
     local temp_dir=$(mktemp -d)
 

@@ -222,7 +222,7 @@ pub enum Error {
 mod tests {
     use core::num::NonZeroU64;
 
-    use key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+    use logos_blockchain_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
     use logos_blockchain_blend::{
         message::{
             Error as InnerError, PayloadType,
@@ -252,7 +252,7 @@ mod tests {
     };
 
     fn mock_verification_inputs() -> PoQVerificationInputsMinusSigningKey {
-        use groth16::Field as _;
+        use logos_blockchain_groth16::Field as _;
 
         PoQVerificationInputsMinusSigningKey {
             session: 1,

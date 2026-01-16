@@ -10,14 +10,14 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-ark-ff                = { default-features = false, version = "0.4" }
-groth16               = { features = ["deser"], workspace = true }
-logos-blockchain-core = { workspace = true }
-num-bigint            = { default-features = false, version = "0.4" }
-poseidon2             = { workspace = true }
-rpds                  = { default-features = false, features = ["serde"], version = "1" }
-serde                 = { workspace = true, features = ["alloc", "derive", "rc"], optional = true }
-thiserror             = "1.0"
+ark-ff                     = { default-features = false, version = "0.4" }
+logos-blockchain-core      = { workspace = true }
+logos-blockchain-groth16   = { features = ["deser"], workspace = true }
+logos-blockchain-poseidon2 = { workspace = true }
+num-bigint                 = { default-features = false, version = "0.4" }
+rpds                       = { default-features = false, features = ["serde"], version = "1" }
+serde                      = { workspace = true, features = ["alloc", "derive", "rc"], optional = true }
+thiserror                  = "1.0"
 
 [dev-dependencies]
 quickcheck        = { default-features = false, version = "1.0" }

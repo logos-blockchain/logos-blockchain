@@ -302,10 +302,10 @@ impl Mode {
 mod tests {
     use std::time::Duration;
 
-    use key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+    use logos_blockchain_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
     use libp2p::Multiaddr;
     use logos_blockchain_blend::scheduling::membership::Node;
-    use logos_blockchain_network::config::NetworkConfig;
+    use logos_blockchain_network_servicew::config::NetworkConfig;
     use overwatch::{
         DynError, OpaqueServiceResourcesHandle,
         overwatch::OverwatchRunner,

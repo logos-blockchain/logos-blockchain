@@ -210,7 +210,7 @@ impl LedgerState {
 
 #[cfg(test)]
 mod tests {
-    use key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey};
+    use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey};
     use logos_blockchain_core::mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
         gas::MainnetGasConstants,

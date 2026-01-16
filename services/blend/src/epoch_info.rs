@@ -1,8 +1,8 @@
 use core::{fmt::Debug, marker::PhantomData, num::NonZeroU64, ops::Deref};
 
 use async_trait::async_trait;
-use chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
-use cryptarchia_engine::{Epoch, Slot};
+use logos_blockchain_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use logos_blockchain_cryptarchia_engine::{Epoch, Slot};
 use futures::Stream;
 use logos_blockchain_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use logos_blockchain_core::crypto::ZkHash;
@@ -327,7 +327,7 @@ where
 #[cfg(test)]
 mod tests {
 
-    use logos_blockchain_time::SlotTick;
+    use logos_blockchain_time_service::SlotTick;
     use test_log::test;
 
     use crate::{

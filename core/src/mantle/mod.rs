@@ -1,7 +1,7 @@
 use std::{hash::Hash, pin::Pin};
 
 use futures::Stream;
-use key_management_system_keys::keys::ZkSignature;
+use logos_blockchain_key_management_system_keys::keys::ZkSignature;
 use thiserror::Error;
 
 pub mod encoding;
@@ -16,7 +16,7 @@ pub mod tx;
 pub mod tx_builder;
 
 pub use gas::{GasConstants, GasCost};
-use groth16::Fr;
+use logos_blockchain_groth16::Fr;
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
 use ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp};

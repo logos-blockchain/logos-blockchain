@@ -11,7 +11,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse as _, Response},
 };
-use broadcast_service::BlockBroadcastService;
+use logos_blockchain_broadcast_service::BlockBroadcastService;
 use logos_blockchain_api::http::{
     consensus::{self, Cryptarchia},
     da::{self, BalancerMessageFactory, DaVerifier, MonitorMessageFactory},
@@ -47,7 +47,7 @@ use logos_blockchain_storage::{StorageService, api::da::DaConverter, backends::r
 use logos_blockchain_wallet::api::{WalletApi, WalletServiceData};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use tracing::error;
 use tx_service::{
     TxMempoolService, backend::Mempool,
@@ -56,7 +56,7 @@ use tx_service::{
 #[cfg(feature = "block-explorer")]
 use {
     crate::api::{queries::BlockRangeQuery, serializers::blocks::ApiBlock},
-    chain_service::ConsensusMsg,
+    logos_blockchain_chain_service::ConsensusMsg,
     futures::FutureExt as _,
     logos_blockchain_api::http::DynError,
     logos_blockchain_core::block::Block,
@@ -1023,7 +1023,7 @@ where
 }
 
 pub mod wallet {
-    use key_management_system_service::keys::ZkPublicKey;
+    use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 
     use super::*;
 

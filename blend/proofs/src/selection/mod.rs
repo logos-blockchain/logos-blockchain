@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 use std::sync::LazyLock;
 
-use groth16::{fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes};
+use logos_blockchain_groth16::{fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes};
 use logos_blockchain_blend_crypto::pseudo_random_sized_bytes;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
@@ -42,7 +42,7 @@ pub enum Error {
 /// A Proof of Selection as described in the Blend v1 spec: <https://www.notion.so/nomos-tech/Blend-Protocol-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81d6bb3febd62b598138>.
 #[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ProofOfSelection {
-    #[serde(with = "groth16::serde::serde_fr")]
+    #[serde(with = "logos_blockchain_groth16::serde::serde_fr")]
     selection_randomness: ZkHash,
 }
 

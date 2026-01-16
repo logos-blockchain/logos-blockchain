@@ -1,4 +1,4 @@
-use chain_service::Slot;
+use logos_blockchain_chain_service::Slot;
 use logos_blockchain_core::{
     block::Block,
     header::{ContentId, Header, HeaderId},

@@ -1,4 +1,4 @@
-use key_management_system_keys::keys::secured_key::{SecureKeyOperator, SecuredKey};
+use logos_blockchain_key_management_system_keys::keys::secured_key::{SecureKeyOperator, SecuredKey};
 
 pub mod preload;
 

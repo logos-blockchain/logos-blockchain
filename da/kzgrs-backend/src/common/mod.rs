@@ -7,7 +7,7 @@ use blake2::{
     Blake2b, Digest,
     digest::{Update as _, VariableOutput as _, consts::U32},
 };
-use kzgrs::Commitment;
+use logos_blockchain_kzgrs::Commitment;
 #[cfg(feature = "parallel")]
 use rayon::iter::{IntoParallelRefIterator as _, ParallelIterator};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeSeq as _};

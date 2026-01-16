@@ -1,7 +1,7 @@
 use async_stream::stream;
-use broadcast_service::BlockInfo;
-use common_http_client::CommonHttpClient;
-use demo_sequencer::{BlockData, db::AccountDb};
+use logos_blockchain_broadcast_service::BlockInfo;
+use logos_blockchain_common_http_client::CommonHttpClient;
+use logos_blockchain_demo_sequencer::{BlockData, db::AccountDb};
 use futures::{Stream, StreamExt as _};
 use logos_blockchain_core::{
     header::HeaderId,

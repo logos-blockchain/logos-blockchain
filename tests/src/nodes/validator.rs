@@ -6,11 +6,11 @@ use std::{
     time::Duration,
 };
 
-use broadcast_service::BlockInfo;
-use chain_service::CryptarchiaInfo;
-use common_http_client::CommonHttpClient;
+use logos_blockchain_broadcast_service::BlockInfo;
+use logos_blockchain_chain_service::CryptarchiaInfo;
+use logos_blockchain_common_http_client::CommonHttpClient;
 use futures::Stream;
-use kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
+use logos_blockchain_kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
 use logos_blockchain_core::{
     block::Block,
     da::BlobId,

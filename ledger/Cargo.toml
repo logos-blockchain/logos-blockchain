@@ -13,25 +13,31 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-cryptarchia-engine             = { workspace = true }
-groth16                        = { workspace = true }
-key-management-system-keys     = { workspace = true }
-logos-blockchain-blend-crypto  = { workspace = true }
-logos-blockchain-blend-message = { workspace = true }
-logos-blockchain-blend-proofs  = { workspace = true }
-logos-blockchain-core          = { workspace = true }
-logos-blockchain-utils         = { workspace = true }
-mmr                            = { features = ["serde"], workspace = true }
-num-bigint                     = { default-features = false, version = "0.4" }
-rand                           = { workspace = true }
-rpds                           = { default-features = false, version = "1.1.1" }
-serde                          = { default-features = false, features = ["derive"], optional = true, version = "1.0" }
-thiserror                      = "1"
-tracing                        = { workspace = true }
-utxotree                       = { workspace = true }
+logos-blockchain-blend-crypto               = { workspace = true }
+logos-blockchain-blend-message              = { workspace = true }
+logos-blockchain-blend-proofs               = { workspace = true }
+logos-blockchain-core                       = { workspace = true }
+logos-blockchain-cryptarchia-engine         = { workspace = true }
+logos-blockchain-groth16                    = { workspace = true }
+logos-blockchain-key-management-system-keys = { workspace = true }
+logos-blockchain-mmr                        = { features = ["serde"], workspace = true }
+logos-blockchain-utils                      = { workspace = true }
+logos-blockchain-utxotree                   = { workspace = true }
+num-bigint                                  = { default-features = false, version = "0.4" }
+rand                                        = { workspace = true }
+rpds                                        = { default-features = false, version = "1.1.1" }
+serde                                       = { default-features = false, features = ["derive"], optional = true, version = "1.0" }
+thiserror                                   = "1"
+tracing                                     = { workspace = true }
 
 [dev-dependencies]
 rand = { features = ["std", "std_rng"], workspace = true }
 
 [features]
-serde = ["cryptarchia-engine/serde", "dep:serde", "groth16/deser", "logos-blockchain-utils/serde", "utxotree/serde"]
+serde = [
+    "dep:serde",
+    "logos-blockchain-cryptarchia-engine/serde",
+    "logos-blockchain-groth16/deser",
+    "logos-blockchain-utils/serde",
+    "logos-blockchain-utxotree/serde",
+]

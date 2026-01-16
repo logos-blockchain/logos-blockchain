@@ -15,7 +15,7 @@ use logos_blockchain_da_network_core::{
     swarm::BalancerStats,
 };
 use overwatch::{overwatch::handle::OverwatchHandle, services::state::ServiceState};
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use tokio::sync::{broadcast, mpsc::UnboundedSender};
 
 use crate::SessionStatus;

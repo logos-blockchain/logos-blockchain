@@ -1,7 +1,7 @@
 use async_trait::async_trait;
-use chain_service::Slot;
+use logos_blockchain_chain_service::Slot;
 use futures::{Stream, future::ready, stream::once};
-use groth16::Field as _;
+use logos_blockchain_groth16::Field as _;
 use logos_blockchain_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use logos_blockchain_core::crypto::ZkHash;
 use logos_blockchain_ledger::EpochState;

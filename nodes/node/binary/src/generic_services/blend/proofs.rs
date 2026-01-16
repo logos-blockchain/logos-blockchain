@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use groth16::{Field as _, fr_to_bytes};
-use key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+use logos_blockchain_groth16::{Field as _, fr_to_bytes};
+use logos_blockchain_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use logos_blockchain_blend::{
     crypto::random_sized_bytes,
     message::crypto::{
@@ -26,7 +26,7 @@ use logos_blockchain_blend::{
 };
 use logos_blockchain_blend_service::{ProofsVerifier, RealProofsVerifier};
 use logos_blockchain_core::{codec::DeserializeOp as _, crypto::ZkHash};
-use poq::PoQProof;
+use logos_blockchain_poq::PoQProof;
 
 const LOG_TARGET: &str = "node::blend::proofs";
 const DUMMY_POQ_ZK_NULLIFIER: ZkHash = ZkHash::ZERO;
@@ -192,8 +192,8 @@ impl ProofsVerifier for BlendProofsVerifier {
 #[cfg(test)]
 mod core_to_core_tests {
     use futures::future::ready;
-    use groth16::Field as _;
-    use key_management_system_service::keys::{UnsecuredEd25519Key, UnsecuredZkKey};
+    use logos_blockchain_groth16::Field as _;
+    use logos_blockchain_key_management_system_service::keys::{UnsecuredEd25519Key, UnsecuredZkKey};
     use logos_blockchain_blend::{
         crypto::merkle::MerkleTree,
         message::crypto::{

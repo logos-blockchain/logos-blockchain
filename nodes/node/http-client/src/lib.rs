@@ -1,7 +1,7 @@
 use std::{collections::HashSet, fmt::Debug, hash::Hash, sync::Arc};
 
-use broadcast_service::BlockInfo;
-use chain_service::CryptarchiaInfo;
+use logos_blockchain_chain_broadcast_service::BlockInfo;
+use logos_blockchain_chain_service::CryptarchiaInfo;
 use futures::{Stream, StreamExt as _};
 use logos_blockchain_core::{block::Block, da::blob::Share, header::HeaderId, mantle::SignedMantleTx};
 use logos_blockchain_da_messages::http::da::{

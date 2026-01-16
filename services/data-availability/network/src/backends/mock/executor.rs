@@ -4,7 +4,7 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
-use kzgrs_backend::common::{build_blob_id, share::DaShare};
+use logos_blockchain_kzgrs_backend::common::{build_blob_id, share::DaShare};
 use libp2p::PeerId;
 use logos_blockchain_core::{
     da::BlobId,
@@ -16,7 +16,7 @@ use logos_blockchain_da_network_core::{
 };
 use overwatch::{overwatch::handle::OverwatchHandle, services::state::NoState};
 use serde::{Deserialize, Serialize};
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use tokio::sync::{
     broadcast::{self},
     mpsc::{self, UnboundedSender},
@@ -196,7 +196,7 @@ impl MembershipHandler for MockMembership {
 
     fn subnetworks(
         &self,
-    ) -> subnetworks_assignations::SubnetworkAssignations<Self::NetworkId, Self::Id> {
+    ) -> logos_blockchain_subnetworks_assignations::SubnetworkAssignations<Self::NetworkId, Self::Id> {
         todo!()
     }
 

@@ -3,7 +3,7 @@ pub mod rewards;
 
 use std::collections::HashMap;
 
-use key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
+use logos_blockchain_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
 use locked_notes::LockedNotes;
 use logos_blockchain_blend_message::crypto::proofs::RealProofsVerifier;
 use logos_blockchain_core::{
@@ -672,8 +672,8 @@ impl SdpLedger {
 mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
-    use groth16::{Field as _, Fr};
-    use key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use logos_blockchain_groth16::{Field as _, Fr};
+    use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use logos_blockchain_core::crypto::ZkHash;
     use logos_blockchain_utils::math::NonNegativeF64;
     use num_bigint::BigUint;

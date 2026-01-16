@@ -4,7 +4,7 @@ pub mod da;
 use std::hash::Hash;
 
 use blake2::{Blake2b, Digest as _};
-use key_management_system_keys::keys::ZkPublicKey;
+use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
 use multiaddr::Multiaddr;
 use nom::{IResult, Parser as _, bytes::complete::take};
 use serde::{Deserialize, Serialize};

@@ -1,10 +1,10 @@
 use std::{collections::HashSet, fmt::Debug, hash::Hash, marker::PhantomData};
 
-use chain_service::{
+use logos_blockchain_chain_service::{
     CryptarchiaInfo,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
-use cryptarchia_sync::GetTipResponse;
+use logos_blockchain_cryptarchia_sync::GetTipResponse;
 use futures::StreamExt as _;
 use logos_blockchain_core::{
     block::Block,
@@ -401,7 +401,7 @@ where
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Cryptarchia(#[from] chain_service::api::ApiError),
+    Cryptarchia(#[from] logos_blockchain_chain_service::api::ApiError),
     #[error("Block provider error: {0}")]
     BlockProvider(DynError),
     #[error("All peers failed")]
@@ -419,7 +419,7 @@ mod tests {
         sync::Arc,
     };
 
-    use cryptarchia_engine::{EpochConfig, Slot};
+    use logos_blockchain_cryptarchia_engine::{EpochConfig, Slot};
     use logos_blockchain_core::{
         block::Proposal,
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -827,7 +827,7 @@ mod tests {
     }
 
     struct MockBlockProcessor {
-        cryptarchia: chain_service::Cryptarchia,
+        cryptarchia: logos_blockchain_chain_service::Cryptarchia,
     }
 
     impl MockBlockProcessor {
@@ -1077,14 +1077,14 @@ mod tests {
         }
     }
 
-    fn new_cryptarchia() -> chain_service::Cryptarchia {
+    fn new_cryptarchia() -> logos_blockchain_chain_service::Cryptarchia {
         let ledger_config = ledger_config();
-        chain_service::Cryptarchia::from_lib(
+        logos_blockchain_chain_service::Cryptarchia::from_lib(
             [GENESIS_ID; 32].into(),
             LedgerState::from_utxos(empty(), &ledger_config),
             [GENESIS_ID; 32].into(),
             ledger_config,
-            cryptarchia_engine::State::Bootstrapping,
+            logos_blockchain_cryptarchia_engine::State::Bootstrapping,
         )
     }
 
@@ -1096,7 +1096,7 @@ mod tests {
                 epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
             },
-            consensus_config: cryptarchia_engine::Config {
+            consensus_config: logos_blockchain_cryptarchia_engine::Config {
                 security_param: NonZero::new(1).unwrap(),
                 active_slot_coeff: 1.0,
             },

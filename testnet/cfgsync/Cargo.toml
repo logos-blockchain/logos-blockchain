@@ -20,6 +20,7 @@ logos-blockchain-da-network-core = { workspace = true }
 logos-blockchain-executor        = { workspace = true }
 logos-blockchain-libp2p          = { workspace = true }
 logos-blockchain-node            = { workspace = true }
+logos-blockchain-tests           = { workspace = true }
 logos-blockchain-tracing-service = { workspace = true }
 logos-blockchain-utils           = { workspace = true }
 rand                             = { workspace = true }
@@ -29,6 +30,5 @@ serde_json                       = { default-features = false, version = "1.0" }
 serde_path_to_error              = "0.1"
 serde_with                       = { workspace = true }
 serde_yaml                       = "0.9"
-tests                            = { workspace = true }
 tokio                            = { default-features = false, features = ["macros", "net", "rt-multi-thread"], version = "1" }
 tracing                          = { workspace = true }

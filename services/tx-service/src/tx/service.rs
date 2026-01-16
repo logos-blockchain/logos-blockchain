@@ -14,13 +14,13 @@ use std::{
 
 use futures::StreamExt as _;
 use logos_blockchain_core::mantle::Transaction;
-use logos_blockchain_network::{NetworkService, message::BackendNetworkMsg};
-use logos_blockchain_storage::StorageService;
+use logos_blockchain_network_service::{NetworkService, message::BackendNetworkMsg};
+use logos_blockchain_storage_service::StorageService;
 use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
 };
-use services_utils::{
+use logos_blockchain_services_utils::{
     overwatch::{
         JsonFileBackend, RecoveryOperator,
         recovery::operators::RecoveryBackend as RecoveryBackendTrait,

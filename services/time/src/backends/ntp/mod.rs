@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use cryptarchia_engine::{EpochConfig, Slot, time::SlotConfig};
+use logos_blockchain_cryptarchia_engine::{EpochConfig, Slot, time::SlotConfig};
 use futures::{Stream, StreamExt as _};
 #[cfg(feature = "serde")]
 use logos_blockchain_utils::bounded_duration::{MinimalBoundedDuration, NANO};

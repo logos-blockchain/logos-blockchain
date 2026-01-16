@@ -1,6 +1,6 @@
 use std::ops::{Add as _, Deref};
 
-use groth16::fr_to_bytes;
+use logos_blockchain_groth16::fr_to_bytes;
 use logos_blockchain_blend_crypto::blake2b512;
 use logos_blockchain_core::{crypto::ZkHash, sdp::SessionNumber};
 use logos_blockchain_utils::math::{F64Ge1, NonNegativeF64};
@@ -147,7 +147,7 @@ pub fn activity_threshold(
 
 #[cfg(test)]
 mod tests {
-    use key_management_system_keys::keys::Ed25519Key;
+    use logos_blockchain_key_management_system_keys::keys::Ed25519Key;
     use logos_blockchain_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 
     use super::*;

@@ -1,6 +1,6 @@
 use core::fmt;
 
-use kzgrs_backend::{
+use logos_blockchain_kzgrs_backend::{
     common::share::DaShare,
     kzg_keys::{proving_key_from_file, verification_key_proving_key},
     verifier::DaVerifier as LogosBlockchainKzgrsVerifier,

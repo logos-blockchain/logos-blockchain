@@ -1,6 +1,6 @@
 use std::{collections::HashSet, hash::Hash};
 
-pub use common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
+pub use logos_blockchain_common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
 use futures::Stream;
 use logos_blockchain_core::{
     da::{BlobId, blob::Share},

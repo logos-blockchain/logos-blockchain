@@ -3,7 +3,7 @@ use std::iter::repeat_with;
 
 use async_trait::async_trait;
 use futures::StreamExt as _;
-use key_management_system_service::keys::UnsecuredEd25519Key;
+use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
 use libp2p::{
     Multiaddr, PeerId, Swarm, allow_block_list, connection_limits, core::transport::ListenerId,
     identity::Keypair,

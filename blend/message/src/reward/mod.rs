@@ -113,7 +113,7 @@ pub const fn evaluate_hamming_distance(distance: u64, activity_threshold: u64) -
 
 #[cfg(test)]
 mod tests {
-    use key_management_system_keys::keys::Ed25519Key;
+    use logos_blockchain_key_management_system_keys::keys::Ed25519Key;
     use logos_blockchain_blend_proofs::{
         quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
         selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},

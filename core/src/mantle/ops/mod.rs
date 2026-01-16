@@ -9,7 +9,7 @@ use channel::{
     inscribe::InscriptionOp,
     set_keys::SetKeysOp,
 };
-use key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
+use logos_blockchain_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{

@@ -4,7 +4,7 @@ use std::{
     marker::PhantomData,
 };
 
-use chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use logos_blockchain_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use logos_blockchain_core::{
     da,
     header::HeaderId,

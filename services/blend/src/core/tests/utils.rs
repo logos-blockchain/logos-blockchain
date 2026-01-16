@@ -2,8 +2,8 @@ use std::{num::NonZeroU64, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use futures::Stream;
-use groth16::Field as _;
-use key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+use logos_blockchain_groth16::Field as _;
+use logos_blockchain_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use logos_blockchain_blend::{
     message::{
         crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
@@ -36,13 +36,13 @@ use logos_blockchain_blend::{
     },
 };
 use logos_blockchain_core::{crypto::ZkHash, sdp::SessionNumber};
-use logos_blockchain_network::{NetworkService, backends::NetworkBackend};
-use logos_blockchain_sdp::SdpMessage;
+use logos_blockchain_network_service::{NetworkService, backends::NetworkBackend};
+use logos_blockchain_sdp_service::SdpMessage;
 use overwatch::{
     overwatch::{OverwatchHandle, commands::OverwatchCommand},
     services::{ServiceData, relay::OutboundRelay, state::StateUpdater},
 };
-use poq::CorePathAndSelectors;
+use logos_blockchain_poq::CorePathAndSelectors;
 use tempfile::NamedTempFile;
 use tokio::sync::{
     broadcast::{self},

@@ -13,9 +13,9 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-common-http-client               = { workspace = true }
-hex                              = { workspace = true }
-key-management-system-keys       = { workspace = true }
-logos-blockchain-core            = { workspace = true }
-logos-blockchain-http-api-common = { workspace = true }
-url                              = "2.5.7"
+hex                                         = { workspace = true }
+logos-blockchain-common-http-client         = { workspace = true }
+logos-blockchain-core                       = { workspace = true }
+logos-blockchain-http-api-common            = { workspace = true }
+logos-blockchain-key-management-system-keys = { workspace = true }
+url                                         = "2.5.7"

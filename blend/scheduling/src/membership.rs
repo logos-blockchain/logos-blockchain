@@ -3,7 +3,7 @@ use std::{
     hash::Hash,
 };
 
-use key_management_system_keys::keys::Ed25519PublicKey;
+use logos_blockchain_key_management_system_keys::keys::Ed25519PublicKey;
 use multiaddr::Multiaddr;
 use rand::{Rng, seq::IteratorRandom as _};
 use serde::{Deserialize, Serialize};
@@ -63,7 +63,7 @@ where
     #[cfg(any(test, feature = "unsafe-test-functions"))]
     #[must_use]
     pub fn new_without_local(nodes: &[Node<NodeId>]) -> Self {
-        use key_management_system_keys::keys::ED25519_PUBLIC_KEY_SIZE;
+        use logos_blockchain_key_management_system_keys::keys::ED25519_PUBLIC_KEY_SIZE;
 
         Self::new(
             nodes,
@@ -140,7 +140,7 @@ impl<NodeId> Membership<NodeId> {
 
 #[cfg(test)]
 mod tests {
-    use key_management_system_keys::keys::UnsecuredEd25519Key;
+    use logos_blockchain_key_management_system_keys::keys::UnsecuredEd25519Key;
     use rand::rngs::OsRng;
 
     use super::*;

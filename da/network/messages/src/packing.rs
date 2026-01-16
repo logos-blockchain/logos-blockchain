@@ -85,7 +85,7 @@ where
 #[cfg(test)]
 mod tests {
     use futures::io::BufReader;
-    use kzgrs_backend::testutils::get_da_share;
+    use logos_blockchain_kzgrs_backend::testutils::get_da_share;
     use logos_blockchain_core::da::BlobId;
 
     use super::*;

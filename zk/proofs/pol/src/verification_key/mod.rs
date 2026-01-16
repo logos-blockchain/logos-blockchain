@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use groth16::{
+use logos_blockchain_groth16::{
     Groth16PreparedVerificationKey, Groth16VerificationKey, Groth16VerificationKeyJsonDeser,
 };
 

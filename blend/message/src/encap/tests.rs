@@ -1,6 +1,6 @@
 use core::convert::Infallible;
 
-use key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
+use logos_blockchain_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
 use logos_blockchain_blend_crypto::keys::X25519PrivateKey;
 use logos_blockchain_blend_proofs::{
     quota::{ProofOfQuota, VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},

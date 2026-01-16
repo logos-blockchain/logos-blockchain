@@ -55,7 +55,7 @@ use logos_blockchain_storage::{StorageService, api::da};
 use overwatch::{DynError, overwatch::handle::OverwatchHandle, services::AsServiceId};
 use serde::{Serialize, de::DeserializeOwned};
 use services_utils::wait_until_services_are_ready;
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::{

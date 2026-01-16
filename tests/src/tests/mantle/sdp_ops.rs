@@ -1,7 +1,7 @@
 use std::{collections::HashSet, time::Duration};
 
-use common_http_client::CommonHttpClient;
-use key_management_system_service::keys::{Ed25519Key, ZkKey};
+use logos_blockchain_common_http_client::CommonHttpClient;
+use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkKey};
 use logos_blockchain_core::{
     mantle::{Note, NoteId, Transaction as _},
     sdp::{ActiveMessage, Declaration, Locator, ServiceType, SessionNumber, WithdrawMessage},

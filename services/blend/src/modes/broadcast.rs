@@ -73,7 +73,7 @@ where
 #[cfg(test)]
 pub mod tests {
     use futures::StreamExt as _;
-    use logos_blockchain_network::{NetworkService, backends::NetworkBackend, message::NetworkMsg};
+    use logos_blockchain_network_service::{NetworkService, backends::NetworkBackend, message::NetworkMsg};
     use overwatch::{
         DynError, OpaqueServiceResourcesHandle,
         overwatch::OverwatchRunner,

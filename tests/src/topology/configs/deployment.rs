@@ -79,7 +79,7 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
         },
         CryptarchiaDeploymentSettings {
             gossipsub_protocol: "/integration/logos-blockchain/cryptarchia/proto/1.0.0".to_owned(),
-            consensus_config: cryptarchia_engine::Config {
+            consensus_config: logos_blockchain_cryptarchia_engine::Config {
                 // a block should be produced (on average) every slot
                 active_slot_coeff: 0.9,
                 // by setting the slot coeff to 1, we also increase the probability of multiple
@@ -89,7 +89,7 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
                 // longest chain.
                 security_param: NonZero::new(10).unwrap(),
             },
-            epoch_config: cryptarchia_engine::EpochConfig {
+            epoch_config: logos_blockchain_cryptarchia_engine::EpochConfig {
                 epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),

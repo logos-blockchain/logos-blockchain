@@ -1,5 +1,5 @@
-use groth16::{CompressedGroth16Proof, Fr, fr_from_bytes};
-use key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
+use logos_blockchain_groth16::{CompressedGroth16Proof, Fr, fr_from_bytes};
+use logos_blockchain_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
 use nom::{
     IResult, Parser as _,
     bytes::complete::take,
@@ -430,7 +430,7 @@ fn decode_byte(input: &[u8]) -> IResult<&[u8], u8> {
 // Binary Encoders
 // ==============================================================================
 
-use groth16::fr_to_bytes;
+use logos_blockchain_groth16::fr_to_bytes;
 
 use super::ops::opcode;
 
@@ -738,7 +738,7 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx) -> usize {
 #[cfg(test)]
 mod tests {
     use ark_ff::Field as _;
-    use key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use num_bigint::BigUint;
 
     use super::*;

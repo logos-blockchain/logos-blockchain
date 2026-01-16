@@ -6,8 +6,8 @@ use std::{
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _, select};
-use groth16::Field as _;
-use key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+use logos_blockchain_groth16::Field as _;
+use logos_blockchain_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use libp2p::{
     Multiaddr, PeerId, Swarm,
     identity::{PublicKey, ed25519},

@@ -6,7 +6,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use subnetworks_assignations::{MembershipHandler, SubnetworkAssignations};
+use logos_blockchain_subnetworks_assignations::{MembershipHandler, SubnetworkAssignations};
 
 #[derive(Debug, Clone)]
 pub struct DaMembershipHandler<Membership> {

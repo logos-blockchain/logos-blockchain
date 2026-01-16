@@ -1,4 +1,4 @@
-use key_management_system_service::keys::ZkPublicKey;
+use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 use logos_blockchain_core::{
     header::HeaderId,
     mantle::{Note, Utxo, Value, tx_builder::MantleTxBuilder},

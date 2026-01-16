@@ -1,4 +1,4 @@
-use kzgrs_backend::common::share::{DaLightShare, DaShare};
+use logos_blockchain_kzgrs_backend::common::share::{DaLightShare, DaShare};
 use logos_blockchain_core::da::BlobId;
 use serde::{Deserialize, Serialize};
 

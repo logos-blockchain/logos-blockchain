@@ -4,13 +4,13 @@ use std::{collections::HashSet, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use chain_service::{
+use logos_blockchain_chain_service::{
     LibUpdate,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
     storage::{StorageAdapter as _, adapters::storage::StorageAdapter},
 };
-use groth16::fr_to_bytes;
-use key_management_system_service::{
+use logos_blockchain_groth16::fr_to_bytes;
+use logos_blockchain_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::preload::PreloadKMSBackend,
     keys::{
@@ -29,7 +29,7 @@ use logos_blockchain_core::{
     },
 };
 use logos_blockchain_ledger::LedgerState;
-use logos_blockchain_storage::{api::chain::StorageChainApi, backends::StorageBackend};
+use logos_blockchain_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -38,10 +38,10 @@ use overwatch::{
     },
 };
 use serde::{Serialize, de::DeserializeOwned};
-use services_utils::wait_until_services_are_ready;
+use logos_blockchain_services_utils::wait_until_services_are_ready;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, trace};
-use wallet::{Wallet, WalletBlock, WalletError};
+use logos_blockchain_wallet::{Wallet, WalletBlock, WalletError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletServiceError {
@@ -64,7 +64,7 @@ pub enum WalletServiceError {
     KmsApi(DynError),
 
     #[error("Cryptarchia API error: {0}")]
-    CryptarchiaApi(#[from] chain_service::api::ApiError),
+    CryptarchiaApi(#[from] logos_blockchain_chain_service::api::ApiError),
 
     #[error("Channel {0:?} is missing state in ledger")]
     MissingChannelState(ChannelId),

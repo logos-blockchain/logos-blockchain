@@ -10,7 +10,7 @@ use libp2p::{
     identity::Keypair,
     swarm::NetworkBehaviour,
 };
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 
 use crate::{SubnetworkId, addressbook::AddressBookHandler};
 

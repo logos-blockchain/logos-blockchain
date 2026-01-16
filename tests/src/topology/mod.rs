@@ -13,7 +13,7 @@ use configs::{
     tracing::create_tracing_configs,
 };
 use futures::future::join_all;
-use key_management_system_service::{
+use logos_blockchain_key_management_system_service::{
     backend::preload::PreloadKMSBackendSettings,
     keys::{Ed25519Key, ZkKey},
 };

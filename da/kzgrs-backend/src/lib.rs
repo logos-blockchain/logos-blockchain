@@ -7,4 +7,4 @@ pub mod reconstruction;
 pub mod testutils;
 pub mod verifier;
 
-pub use kzgrs::KzgRsError;
+pub use logos_blockchain_kzgrs::KzgRsError;

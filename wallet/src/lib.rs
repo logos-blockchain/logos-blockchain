@@ -7,7 +7,7 @@ use std::{
 };
 
 pub use error::WalletError;
-use key_management_system_keys::keys::ZkPublicKey;
+use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
 use logos_blockchain_core::{
     block::Block,
     header::HeaderId,
@@ -273,7 +273,7 @@ mod tests {
         sync::Arc,
     };
 
-    use cryptarchia_engine::EpochConfig;
+    use logos_blockchain_cryptarchia_engine::EpochConfig;
     use logos_blockchain_core::{
         mantle::{Note, TxHash, gas::MainnetGasConstants as Gas},
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -589,7 +589,7 @@ mod tests {
                 epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
             },
-            consensus_config: cryptarchia_engine::Config {
+            consensus_config: logos_blockchain_cryptarchia_engine::Config {
                 security_param: NonZero::new(1).unwrap(),
                 active_slot_coeff: 1.0,
             },

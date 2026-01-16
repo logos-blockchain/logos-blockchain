@@ -1,5 +1,5 @@
-use common_http_client::CommonHttpClient;
-use key_management_system_service::keys::ZkKey;
+use logos_blockchain_common_http_client::CommonHttpClient;
+use logos_blockchain_key_management_system_service::keys::ZkKey;
 use logos_blockchain_core::mantle::{MantleTx, SignedMantleTx, Transaction as _, ledger::Tx as LedgerTx};
 use reqwest::Url;
 use serial_test::serial;

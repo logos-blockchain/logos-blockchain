@@ -37,7 +37,7 @@ where
     NodeId: Clone + core::hash::Hash + Eq,
 {
     fn default() -> Self {
-        use groth16::Field as _;
+        use logos_blockchain_groth16::Field as _;
         use logos_blockchain_core::crypto::ZkHash;
 
         Self {
@@ -62,7 +62,7 @@ where
 #[cfg(test)]
 impl<NodeId> From<Membership<NodeId>> for PublicInfo<NodeId> {
     fn from(value: Membership<NodeId>) -> Self {
-        use groth16::Field as _;
+        use logos_blockchain_groth16::Field as _;
         use logos_blockchain_core::crypto::ZkHash;
 
         Self {

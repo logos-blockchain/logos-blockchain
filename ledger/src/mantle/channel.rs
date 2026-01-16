@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use key_management_system_keys::keys::Ed25519Signature;
+use logos_blockchain_key_management_system_keys::keys::Ed25519Signature;
 use logos_blockchain_core::mantle::{
     TxHash,
     ops::channel::{

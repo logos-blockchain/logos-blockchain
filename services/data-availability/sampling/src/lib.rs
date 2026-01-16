@@ -14,7 +14,7 @@ use std::{
 use backend::{DaSamplingServiceBackend, SamplingState};
 use either::Either;
 use futures::{FutureExt as _, Stream, future::BoxFuture, stream::FuturesUnordered};
-use kzgrs_backend::common::{
+use logos_blockchain_kzgrs_backend::common::{
     ShareIndex,
     share::{DaLightShare, DaShare, DaSharesCommitments},
 };
@@ -37,11 +37,11 @@ use overwatch::{
 use serde::{Deserialize, Serialize};
 use services_utils::wait_until_services_are_ready;
 use storage::DaStorageAdapter;
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::StreamExt as _;
 use tracing::{error, instrument};
-use verifier::{VerifierBackend, kzgrs::KzgrsDaVerifier};
+use verifier::{VerifierBackend, logos_blockchain_kzgrs::KzgrsDaVerifier};
 
 use crate::mempool::{Blob, DaMempoolAdapter};
 

@@ -2,7 +2,7 @@
 use std::{hint::black_box, ops::Deref as _, sync::LazyLock};
 
 #[cfg(all(target_arch = "x86_64", feature = "deser"))]
-use groth16::{
+use logos_blockchain_groth16::{
     Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser, Groth16VerificationKey,
     Groth16VerificationKeyJsonDeser, groth16_verify,
 };

@@ -13,29 +13,29 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                    = { default-features = false, version = "0.1" }
-derivative                     = "2"
-fork_stream                    = { workspace = true }
-futures                        = { default-features = false, version = "0.3" }
-key-management-system-keys     = { workspace = true }
-logos-blockchain-blend-crypto  = { workspace = true }
-logos-blockchain-blend-message = { workspace = true }
-logos-blockchain-blend-proofs  = { workspace = true }
-logos-blockchain-core          = { workspace = true }
-logos-blockchain-utils         = { workspace = true, features = ["rng"] }
-multiaddr                      = { default-features = false, version = "0.18" }
-rand                           = { features = ["alloc"], workspace = true }
-serde                          = { workspace = true }
-thiserror                      = { default-features = false, version = "1" }
-tokio                          = { default-features = false, version = "1" }
-tokio-stream                   = { default-features = false, version = "0.1" }
-tracing                        = { workspace = true }
+async-trait                                 = { default-features = false, version = "0.1" }
+derivative                                  = "2"
+fork_stream                                 = { workspace = true }
+futures                                     = { default-features = false, version = "0.3" }
+logos-blockchain-blend-crypto               = { workspace = true }
+logos-blockchain-blend-message              = { workspace = true }
+logos-blockchain-blend-proofs               = { workspace = true }
+logos-blockchain-core                       = { workspace = true }
+logos-blockchain-key-management-system-keys = { workspace = true }
+logos-blockchain-utils                      = { workspace = true, features = ["rng"] }
+multiaddr                                   = { default-features = false, version = "0.18" }
+rand                                        = { features = ["alloc"], workspace = true }
+serde                                       = { workspace = true }
+thiserror                                   = { default-features = false, version = "1" }
+tokio                                       = { default-features = false, version = "1" }
+tokio-stream                                = { default-features = false, version = "0.1" }
+tracing                                     = { workspace = true }
 
 [dev-dependencies]
-groth16                        = { workspace = true }
 libp2p                         = { workspace = true }
 logos-blockchain-blend-message = { workspace = true, features = ["unsafe-test-functions"] }
 logos-blockchain-blend-proofs  = { workspace = true, features = ["unsafe-test-functions"] }
+logos-blockchain-groth16       = { workspace = true }
 test-log                       = { default-features = false, version = "0.2.18", features = ["trace"] }
 
 [features]

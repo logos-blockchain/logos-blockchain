@@ -1,5 +1,5 @@
 use futures::future::ready;
-use key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
+use logos_blockchain_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
 use logos_blockchain_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
 use logos_blockchain_blend_proofs::quota::{
     self, VerifiedProofOfQuota,

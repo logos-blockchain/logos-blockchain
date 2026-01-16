@@ -4,7 +4,7 @@ use std::{
     sync::LazyLock,
 };
 
-use circuits_utils::logos_blockchain_circuits_dir;
+use logos_blockchain_circuits_utils::logos_blockchain_circuits_dir;
 use tempfile::NamedTempFile;
 
 const BINARY_NAME: &str = "verifier";

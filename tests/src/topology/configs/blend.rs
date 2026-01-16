@@ -1,7 +1,7 @@
 use core::time::Duration;
 use std::{num::NonZeroU64, str::FromStr as _};
 
-use key_management_system_service::keys::{UnsecuredEd25519Key, ZkKey};
+use logos_blockchain_key_management_system_service::keys::{UnsecuredEd25519Key, ZkKey};
 use logos_blockchain_blend_service::core::settings::ZkSettings;
 use logos_blockchain_libp2p::Multiaddr;
 use logos_blockchain_node::config::blend::serde::{

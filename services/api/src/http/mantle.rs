@@ -1,8 +1,8 @@
 use core::fmt::Debug;
 use std::fmt::Display;
 
-use broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
-use chain_service::ConsensusMsg;
+use logos_blockchain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
+use logos_blockchain_chain_service::ConsensusMsg;
 use futures::{Stream, StreamExt as _};
 use logos_blockchain_core::{
     header::HeaderId,
@@ -20,9 +20,9 @@ use tx_service::{
 #[cfg(feature = "block-explorer")]
 use {
     bytes::Bytes,
-    chain_service::Slot,
-    chain_service::storage::StorageAdapter as _,
-    chain_service::storage::adapters::StorageAdapter,
+    logos_blockchain_chain_service::Slot,
+    logos_blockchain_chain_service::storage::StorageAdapter as _,
+    logos_blockchain_chain_service::storage::adapters::StorageAdapter,
     futures::future::join_all,
     logos_blockchain_core::{block::Block, mantle::TxHash},
     logos_blockchain_storage::{

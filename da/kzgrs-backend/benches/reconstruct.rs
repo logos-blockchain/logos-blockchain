@@ -3,8 +3,8 @@ use std::{collections::HashSet, hint::black_box};
 use ark_bls12_381::Fr;
 use ark_poly::{EvaluationDomain as _, GeneralEvaluationDomain};
 use divan::{Bencher, counter::BytesCount};
-use kzgrs::{common::field_element_from_bytes_le, decode_unchecked, rs::points_to_bytes};
-use kzgrs_backend::{
+use logos_blockchain_kzgrs::{common::field_element_from_bytes_le, decode_unchecked, rs::points_to_bytes};
+use logos_blockchain_kzgrs_backend::{
     encoder::{DaEncoder, DaEncoderParams},
     kzg_keys::PROVING_KEY,
 };

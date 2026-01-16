@@ -13,13 +13,13 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-blake2                = "0.10"
-futures               = { default-features = false, version = "0.3.31" }
-kzgrs-backend         = { workspace = true }
-logos-blockchain-core = { workspace = true }
-serde                 = { workspace = true }
-tokio                 = "1"
+blake2                         = "0.10"
+futures                        = { default-features = false, version = "0.3.31" }
+logos-blockchain-core          = { workspace = true }
+logos-blockchain-kzgrs-backend = { workspace = true }
+serde                          = { workspace = true }
+tokio                          = "1"
 
 [dev-dependencies]
-kzgrs-backend = { features = ["testutils"], workspace = true }
-tokio         = { default-features = false, version = "1" }
+logos-blockchain-kzgrs-backend = { features = ["testutils"], workspace = true }
+tokio                          = { default-features = false, version = "1" }

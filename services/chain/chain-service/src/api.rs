@@ -1,5 +1,5 @@
 use logos_blockchain_core::{block::Block, header::HeaderId};
-use logos_blockchain_network::message::ChainSyncEvent;
+use logos_blockchain_network_service::message::ChainSyncEvent;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
@@ -167,7 +167,7 @@ where
     /// Get the epoch state for a given slot
     pub async fn get_epoch_state(
         &self,
-        slot: cryptarchia_engine::Slot,
+        slot: logos_blockchain_cryptarchia_engine::Slot,
     ) -> Result<Option<logos_blockchain_ledger::EpochState>, ApiError> {
         let (tx, rx) = oneshot::channel();
 

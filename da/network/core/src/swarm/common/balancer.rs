@@ -7,7 +7,7 @@ use std::{
 use libp2p::PeerId;
 use rand::seq::IteratorRandom as _;
 use serde::{Deserialize, Serialize};
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 
 use crate::{
     SubnetworkId,

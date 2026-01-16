@@ -7,7 +7,7 @@ pub use config::{
     AutonatClientSettings, GatewaySettings, IdentifySettings, KademliaSettings, NatMappingSettings,
     NatSettings, SwarmConfig, TraversalSettings, secret_key_serde,
 };
-pub use cryptarchia_sync::{self, Event};
+pub use logos_blockchain_cryptarchia_sync::{self, Event};
 pub use libp2p::{
     self, PeerId, SwarmBuilder, Transport,
     core::upgrade,

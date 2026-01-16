@@ -1,4 +1,4 @@
-use key_management_system_keys::keys::{
+use logos_blockchain_key_management_system_keys::keys::{
     ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
     UnsecuredEd25519Key,
 };

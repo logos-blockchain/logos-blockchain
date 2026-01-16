@@ -1,5 +1,5 @@
 use itertools::Itertools as _;
-use key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
+use logos_blockchain_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
 use logos_blockchain_blend_crypto::{cipher::Cipher, keys::SharedKey};
 use logos_blockchain_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},

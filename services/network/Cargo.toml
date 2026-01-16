@@ -13,19 +13,19 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait             = "0.1"
-cryptarchia-sync        = { workspace = true }
-futures                 = { default-features = false, version = "0.3" }
-logos-blockchain-core   = { workspace = true }
-logos-blockchain-libp2p = { optional = true, workspace = true }
-overwatch               = { workspace = true }
-rand                    = { features = ["std"], optional = true, workspace = true }
-rand_chacha             = { default-features = false, optional = true, version = "0.3" }
-serde                   = { workspace = true, features = ["derive"] }
-tokio                   = { default-features = false, features = ["macros", "sync"], version = "1" }
-tokio-stream            = { default-features = false, version = "0.1" }
-tracing                 = { workspace = true }
-utoipa                  = { optional = true, workspace = true }
+async-trait                       = "0.1"
+futures                           = { default-features = false, version = "0.3" }
+logos-blockchain-core             = { workspace = true }
+logos-blockchain-cryptarchia-sync = { workspace = true }
+logos-blockchain-libp2p           = { optional = true, workspace = true }
+overwatch                         = { workspace = true }
+rand                              = { features = ["std"], optional = true, workspace = true }
+rand_chacha                       = { default-features = false, optional = true, version = "0.3" }
+serde                             = { workspace = true, features = ["derive"] }
+tokio                             = { default-features = false, features = ["macros", "sync"], version = "1" }
+tokio-stream                      = { default-features = false, version = "0.1" }
+tracing                           = { workspace = true }
+utoipa                            = { optional = true, workspace = true }
 
 [dev-dependencies]
 chrono                 = { default-features = false, features = ["now"], version = "0.4" }
@@ -35,6 +35,6 @@ tracing-subscriber     = { default-features = false, features = ["env-filter", "
 
 [features]
 default = []
-libp2p  = ["cryptarchia-sync/libp2p", "dep:logos-blockchain-libp2p", "dep:rand", "dep:rand_chacha"]
+libp2p  = ["dep:logos-blockchain-libp2p", "dep:rand", "dep:rand_chacha", "logos-blockchain-cryptarchia-sync/libp2p"]
 mock    = ["dep:rand", "dep:rand_chacha"]
 openapi = ["dep:utoipa"]

@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
 
-use chain_service::api::CryptarchiaServiceData;
+use logos_blockchain_chain_service::api::CryptarchiaServiceData;
 use logos_blockchain_core::{
     da,
     header::HeaderId,

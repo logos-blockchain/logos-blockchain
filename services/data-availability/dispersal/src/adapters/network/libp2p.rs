@@ -1,7 +1,7 @@
 use std::{collections::HashSet, fmt::Debug, marker::PhantomData, pin::Pin, time::Duration};
 
 use futures::{Stream, StreamExt as _, stream::BoxStream};
-use kzgrs_backend::common::share::{DaShare, DaSharesCommitments};
+use logos_blockchain_kzgrs_backend::common::share::{DaShare, DaSharesCommitments};
 use logos_blockchain_core::{da::BlobId, mantle::SignedMantleTx, sdp::SessionNumber};
 use logos_blockchain_da_network_core::{
     PeerId, SubnetworkId,
@@ -25,7 +25,7 @@ use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
 };
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use tokio::sync::oneshot;
 
 use crate::adapters::network::DispersalNetworkAdapter;

@@ -50,7 +50,7 @@ pub struct SwarmConfig {
 
     /// Chain sync config
     #[serde(default)]
-    pub chain_sync_config: cryptarchia_sync::Config,
+    pub chain_sync_config: logos_blockchain_cryptarchia_sync::Config,
 
     /// Nat config
     #[serde(default)]

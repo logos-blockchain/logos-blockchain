@@ -1,6 +1,6 @@
 use std::{num::NonZeroU64, path::PathBuf};
 
-use key_management_system_service::backend::preload::KeyId;
+use logos_blockchain_key_management_system_service::backend::preload::KeyId;
 use logos_blockchain_blend::scheduling::message_blend::crypto::SessionCryptographicProcessorSettings;
 use logos_blockchain_core::blend::core_quota;
 use logos_blockchain_utils::math::NonNegativeF64;

@@ -17,7 +17,7 @@ use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
 };
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 
 #[async_trait::async_trait]
 pub trait NetworkAdapter<RuntimeServiceId> {

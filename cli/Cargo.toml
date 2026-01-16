@@ -14,14 +14,14 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-clap                     = { default-features = false, features = ["derive", "std"], version = "4" }
-executor-http-client     = { workspace = true }
-hex                      = { default-features = false, version = "0.4.3" }
-kzgrs-backend            = { workspace = true }
-logos-blockchain-core    = { workspace = true }
-logos-blockchain-tracing = { workspace = true }
-reqwest                  = { workspace = true }
-serde_json               = { default-features = false, version = "1" }
-tokio                    = { default-features = false, version = "1" }
-tracing                  = { workspace = true }
-tracing-subscriber       = { default-features = false, version = "0.3" }
+clap                                  = { default-features = false, features = ["derive", "std"], version = "4" }
+hex                                   = { default-features = false, version = "0.4.3" }
+logos-blockchain-core                 = { workspace = true }
+logos-blockchain-executor-http-client = { workspace = true }
+logos-blockchain-kzgrs-backend        = { workspace = true }
+logos-blockchain-tracing              = { workspace = true }
+reqwest                               = { workspace = true }
+serde_json                            = { default-features = false, version = "1" }
+tokio                                 = { default-features = false, version = "1" }
+tracing                               = { workspace = true }
+tracing-subscriber                    = { default-features = false, version = "0.3" }

@@ -2,7 +2,7 @@ use blake2::{
     Blake2bVar,
     digest::{Update as _, VariableOutput as _},
 };
-use key_management_system_keys::keys::Ed25519PublicKey;
+use logos_blockchain_key_management_system_keys::keys::Ed25519PublicKey;
 use logos_blockchain_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 use logos_blockchain_core::codec::SerializeOp as _;
 use serde::{Deserialize, Serialize};
@@ -105,7 +105,7 @@ impl From<u64> for HammingDistance {
 
 #[cfg(test)]
 mod tests {
-    use key_management_system_keys::keys::Ed25519Key;
+    use logos_blockchain_key_management_system_keys::keys::Ed25519Key;
     use logos_blockchain_blend_proofs::{quota::PROOF_OF_QUOTA_SIZE, selection::PROOF_OF_SELECTION_SIZE};
 
     use super::*;

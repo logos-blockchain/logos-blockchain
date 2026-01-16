@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use cryptarchia_engine::{Config as ConsensusConfig, EpochConfig};
+use logos_blockchain_cryptarchia_engine::{Config as ConsensusConfig, EpochConfig};
 use logos_blockchain_core::sdp::{MinStake, ServiceParameters, ServiceType};
 use serde::{Deserialize, Serialize};
 

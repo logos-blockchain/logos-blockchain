@@ -1,7 +1,7 @@
 use std::{error::Error, path::PathBuf};
 
 use clap::Args;
-use kzgrs_backend::{
+use logos_blockchain_kzgrs_backend::{
     common::share::DaShare, dispersal::Index, reconstruction::reconstruct_without_missing_data,
 };
 

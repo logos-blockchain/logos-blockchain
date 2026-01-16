@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use futures::StreamExt as _;
 use libp2p::{PeerId, identity::Keypair, swarm::NetworkBehaviour};
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use tokio::sync::{broadcast, mpsc::UnboundedSender};
 use tokio_stream::wrappers::BroadcastStream;
 

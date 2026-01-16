@@ -1,7 +1,7 @@
 use std::{collections::HashSet, fmt::Debug, hash::Hash, marker::PhantomData};
 
 use chain_common::NetworkMessage;
-use cryptarchia_sync::GetTipResponse;
+use logos_blockchain_cryptarchia_sync::GetTipResponse;
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok};
 use logos_blockchain_core::{
     block::{Block, Proposal},

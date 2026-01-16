@@ -28,7 +28,7 @@ use logos_blockchain_libp2p::ed25519;
 use logos_blockchain_tracing::info_with_id;
 use overwatch::{overwatch::handle::OverwatchHandle, services::state::NoState};
 use serde::Serialize;
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use tokio::sync::{broadcast, mpsc::UnboundedSender, oneshot};
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::instrument;

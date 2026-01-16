@@ -13,26 +13,26 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-either                            = { default-features = false, version = "1.15.0" }
-futures                           = { default-features = false, version = "0.3.30" }
-futures-timer                     = { version = "3.0.3" }
-key-management-system-keys        = { workspace = true }
-libp2p                            = { workspace = true }
-logos-blockchain-blend-message    = { workspace = true }
-logos-blockchain-blend-proofs     = { workspace = true }
-logos-blockchain-blend-scheduling = { workspace = true }
-logos-blockchain-core             = { workspace = true }
-logos-blockchain-libp2p           = { workspace = true }
-tracing                           = { workspace = true }
+either                                      = { default-features = false, version = "1.15.0" }
+futures                                     = { default-features = false, version = "0.3.30" }
+futures-timer                               = { version = "3.0.3" }
+libp2p                                      = { workspace = true }
+logos-blockchain-blend-message              = { workspace = true }
+logos-blockchain-blend-proofs               = { workspace = true }
+logos-blockchain-blend-scheduling           = { workspace = true }
+logos-blockchain-core                       = { workspace = true }
+logos-blockchain-key-management-system-keys = { workspace = true }
+logos-blockchain-libp2p                     = { workspace = true }
+tracing                                     = { workspace = true }
 
 [dev-dependencies]
 async-trait                       = { version = "0.1" }
-groth16                           = { default-features = false, workspace = true }
 libp2p                            = { default-features = false, workspace = true, features = ["plaintext", "tcp", "yamux"] }
 libp2p-stream                     = { workspace = true }
 libp2p-swarm-test                 = { default-features = false, features = ["tokio"], version = "0.5.0" }
 logos-blockchain-blend-message    = { features = ["unsafe-test-functions"], workspace = true }
 logos-blockchain-blend-scheduling = { features = ["unsafe-test-functions"], workspace = true }
+logos-blockchain-groth16          = { default-features = false, workspace = true }
 test-log                          = { default-features = false, version = "0.2.18" }
 tokio                             = { default-features = false, version = "1" }
 tokio-stream                      = { default-features = false, version = "0.1" }

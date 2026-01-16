@@ -1,8 +1,8 @@
 use std::{collections::HashSet, time::Duration};
 
-use common_http_client::CommonHttpClient;
+use logos_blockchain_common_http_client::CommonHttpClient;
 use futures_util::stream::StreamExt as _;
-use kzgrs_backend::common::share::DaShare;
+use logos_blockchain_kzgrs_backend::common::share::DaShare;
 use logos_blockchain_core::{da::blob::LightShare as _, sdp::SessionNumber};
 use logos_blockchain_libp2p::ed25519;
 use rand::{RngCore as _, rngs::OsRng};

@@ -8,7 +8,7 @@ use chain_leader::LeaderConfig;
 use clap::{Parser, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use hex::FromHex as _;
-use key_management_system_service::keys::UnsecuredZkKey;
+use logos_blockchain_key_management_system_service::keys::UnsecuredZkKey;
 use logos_blockchain_libp2p::{Multiaddr, ed25519::SecretKey};
 use logos_blockchain_tracing::logging::{gelf::GelfConfig, local::FileConfig};
 use logos_blockchain_tracing_service::{LoggerLayer, Tracing};

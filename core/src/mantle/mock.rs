@@ -4,7 +4,7 @@ use blake2::{
     Blake2bVar,
     digest::{Update as _, VariableOutput as _},
 };
-use groth16::Fr;
+use logos_blockchain_groth16::Fr;
 use num_bigint::BigUint;
 use serde::{Serialize, de::DeserializeOwned};
 

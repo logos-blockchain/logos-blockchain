@@ -1,8 +1,8 @@
 use std::{hash::Hash, marker::PhantomData};
 
-use broadcast_service::{BlockBroadcastMsg, SessionSubscription, SessionUpdate};
+use logos_blockchain_broadcast_service::{BlockBroadcastMsg, SessionSubscription, SessionUpdate};
 use futures::StreamExt as _;
-use key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
+use logos_blockchain_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
 use logos_blockchain_blend::{
     crypto::merkle::sort_nodes_and_build_merkle_tree,
     scheduling::membership::{Membership, Node},

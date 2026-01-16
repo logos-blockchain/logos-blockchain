@@ -29,7 +29,7 @@ use logos_blockchain_da_messages::{
 use logos_blockchain_utils::bounded_duration::{MINUTE, MinimalBoundedDuration};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;

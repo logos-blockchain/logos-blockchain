@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, fmt::Debug, marker::PhantomData, num::NonZero};
 
-use cryptarchia_engine::Slot;
+use logos_blockchain_cryptarchia_engine::Slot;
 use logos_blockchain_core::{
     block::Block,
     da,

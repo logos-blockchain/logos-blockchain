@@ -1,4 +1,4 @@
-use groth16::{Fr, Groth16Input, Groth16InputDeser};
+use logos_blockchain_groth16::{Fr, Groth16Input, Groth16InputDeser};
 use serde::{Deserialize, Serialize};
 
 use crate::{

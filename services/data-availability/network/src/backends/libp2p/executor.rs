@@ -9,7 +9,7 @@ use futures::{
     Stream, StreamExt as _,
     stream::{AbortHandle, Abortable},
 };
-use kzgrs_backend::common::share::DaShare;
+use logos_blockchain_kzgrs_backend::common::share::DaShare;
 use libp2p::PeerId;
 use log::error;
 use logos_blockchain_core::{
@@ -34,7 +34,7 @@ use logos_blockchain_libp2p::ed25519;
 use logos_blockchain_tracing::info_with_id;
 use overwatch::{overwatch::handle::OverwatchHandle, services::state::NoState};
 use serde::{Deserialize, Serialize};
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use tokio::sync::{broadcast, mpsc::UnboundedSender, oneshot};
 use tokio_stream::wrappers::{
     BroadcastStream, UnboundedReceiverStream, errors::BroadcastStreamRecvError,

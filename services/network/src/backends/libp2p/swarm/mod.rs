@@ -320,7 +320,7 @@ mod tests {
             kad_protocol_name: StreamProtocol::new("/kademlia/test"),
             identify_protocol_name: StreamProtocol::new("/identify/test"),
             identify_config: logos_blockchain_libp2p::IdentifySettings::default(),
-            chain_sync_config: cryptarchia_sync::Config::default(),
+            chain_sync_config: logos_blockchain_cryptarchia_sync::Config::default(),
             nat_config: logos_blockchain_libp2p::NatSettings::Traversal(logos_blockchain_libp2p::TraversalSettings {
                 autonat: logos_blockchain_libp2p::AutonatClientSettings {
                     probe_interval_millisecs: Some(1000),

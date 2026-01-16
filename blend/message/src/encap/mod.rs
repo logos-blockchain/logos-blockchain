@@ -1,4 +1,4 @@
-use key_management_system_keys::keys::Ed25519PublicKey;
+use logos_blockchain_key_management_system_keys::keys::Ed25519PublicKey;
 use logos_blockchain_blend_proofs::{
     quota::{ProofOfQuota, VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},

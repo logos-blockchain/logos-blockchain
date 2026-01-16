@@ -1,5 +1,5 @@
-use cryptarchia_engine::Epoch;
-use key_management_system_keys::keys::ZkPublicKey;
+use logos_blockchain_cryptarchia_engine::Epoch;
+use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
 use logos_blockchain_blend_crypto::merkle::sort_nodes_and_build_merkle_tree;
 use logos_blockchain_blend_message::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey,

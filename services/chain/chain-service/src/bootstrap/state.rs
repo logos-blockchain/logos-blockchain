@@ -12,9 +12,9 @@ pub fn choose_engine_state(
     genesis_id: HeaderId,
     config: &BootstrapConfig,
     last_engine_state: Option<&LastEngineState>,
-) -> cryptarchia_engine::State {
+) -> logos_blockchain_cryptarchia_engine::State {
     if lib_id == genesis_id || config.force_bootstrap {
-        return cryptarchia_engine::State::Bootstrapping;
+        return logos_blockchain_cryptarchia_engine::State::Bootstrapping;
     }
 
     if let Some(last_state) = last_engine_state {
@@ -23,19 +23,19 @@ pub fn choose_engine_state(
 
     // TODO: Implement other criteria for bootstrapping
     //       - Checkpoint: https://github.com/logos-blockchain/logos-blockchain/issues/1454
-    cryptarchia_engine::State::Online
+    logos_blockchain_cryptarchia_engine::State::Online
 }
 
 fn check_offline_grace_period(
     last_state: &LastEngineState,
     config: &OfflineGracePeriodConfig,
-) -> cryptarchia_engine::State {
+) -> logos_blockchain_cryptarchia_engine::State {
     let now = SystemTime::now();
     match now.duration_since(last_state.timestamp) {
         Ok(elapsed) => {
             if elapsed > config.grace_period {
                 // Node has been offline longer than grace period, force bootstrap
-                cryptarchia_engine::State::Bootstrapping
+                logos_blockchain_cryptarchia_engine::State::Bootstrapping
             } else {
                 // Within grace period, use the last known state
                 last_state.state
@@ -47,7 +47,7 @@ fn check_offline_grace_period(
                 "Offline duration measurement failed. Be conservative and bootstrap: now:{now:?}, last_state_timestamp:{:?}, error:{e:?}",
                 last_state.timestamp,
             );
-            cryptarchia_engine::State::Bootstrapping
+            logos_blockchain_cryptarchia_engine::State::Bootstrapping
         }
     }
 }
@@ -61,26 +61,26 @@ mod tests {
     #[test]
     fn with_genesis_lib() {
         let state = choose_engine_state([0u8; 32].into(), [0u8; 32].into(), &config(false), None);
-        assert_eq!(state, cryptarchia_engine::State::Bootstrapping);
+        assert_eq!(state, logos_blockchain_cryptarchia_engine::State::Bootstrapping);
     }
 
     #[test]
     fn with_non_genesis_lib() {
         let state = choose_engine_state([3u8; 32].into(), [0u8; 32].into(), &config(false), None);
-        assert_eq!(state, cryptarchia_engine::State::Online);
+        assert_eq!(state, logos_blockchain_cryptarchia_engine::State::Online);
     }
 
     #[test]
     fn with_force_bootstrap() {
         let state = choose_engine_state([3u8; 32].into(), [0u8; 32].into(), &config(true), None);
-        assert_eq!(state, cryptarchia_engine::State::Bootstrapping);
+        assert_eq!(state, logos_blockchain_cryptarchia_engine::State::Bootstrapping);
     }
 
     #[test]
     fn with_offline_grace_period_exceeded() {
         let last_state = LastEngineState {
             timestamp: SystemTime::now() - Duration::from_secs(30 * 60), // 30 minutes ago
-            state: cryptarchia_engine::State::Online,
+            state: logos_blockchain_cryptarchia_engine::State::Online,
         };
         let state = choose_engine_state(
             [3u8; 32].into(),
@@ -88,14 +88,14 @@ mod tests {
             &config(false),
             Some(&last_state),
         );
-        assert_eq!(state, cryptarchia_engine::State::Bootstrapping);
+        assert_eq!(state, logos_blockchain_cryptarchia_engine::State::Bootstrapping);
     }
 
     #[test]
     fn with_offline_grace_period_not_exceeded() {
         let last_state = LastEngineState {
             timestamp: SystemTime::now() - Duration::from_secs(10 * 60), // 10 minutes ago
-            state: cryptarchia_engine::State::Online,
+            state: logos_blockchain_cryptarchia_engine::State::Online,
         };
         let state = choose_engine_state(
             [3u8; 32].into(),
@@ -103,14 +103,14 @@ mod tests {
             &config(false),
             Some(&last_state),
         );
-        assert_eq!(state, cryptarchia_engine::State::Online);
+        assert_eq!(state, logos_blockchain_cryptarchia_engine::State::Online);
     }
 
     #[test]
     fn with_last_state_bootstrapping() {
         let last_state = LastEngineState {
             timestamp: SystemTime::now() - Duration::from_secs(5 * 60), // 5 minutes ago
-            state: cryptarchia_engine::State::Bootstrapping,
+            state: logos_blockchain_cryptarchia_engine::State::Bootstrapping,
         };
         let state = choose_engine_state(
             [3u8; 32].into(),
@@ -118,7 +118,7 @@ mod tests {
             &config(false),
             Some(&last_state),
         );
-        assert_eq!(state, cryptarchia_engine::State::Bootstrapping);
+        assert_eq!(state, logos_blockchain_cryptarchia_engine::State::Bootstrapping);
     }
 
     fn config(force_bootstrap: bool) -> BootstrapConfig {

@@ -8,7 +8,7 @@ use axum::{
     },
     routing::{get, post},
 };
-use kzgrs_backend::common::share::DaShare;
+use logos_blockchain_kzgrs_backend::common::share::DaShare;
 use logos_blockchain_api::Backend;
 use logos_blockchain_da_network_service::backends::libp2p::validator::DaNetworkValidatorBackend;
 use logos_blockchain_da_sampling::{

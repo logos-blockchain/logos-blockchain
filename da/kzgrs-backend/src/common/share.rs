@@ -1,5 +1,5 @@
 use blake2::{Blake2b, Digest as _, digest::consts::U32};
-use kzgrs::Proof;
+use logos_blockchain_kzgrs::Proof;
 use logos_blockchain_core::da::{BlobId, blob};
 use serde::{Deserialize, Serialize};
 

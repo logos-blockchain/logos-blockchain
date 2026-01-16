@@ -5,7 +5,7 @@ use std::{
     hash::Hash,
 };
 
-use kzgrs_backend::common::share::DaSharesCommitments;
+use logos_blockchain_kzgrs_backend::common::share::DaSharesCommitments;
 use logos_blockchain_core::{
     da::{DaVerifier as CoreDaVerifier, blob::Share},
     header::HeaderId,
@@ -42,7 +42,7 @@ use logos_blockchain_libp2p::PeerId;
 use logos_blockchain_storage::{api::da::DaConverter, backends::rocksdb::RocksBackend};
 use overwatch::{DynError, overwatch::handle::OverwatchHandle, services::AsServiceId};
 use serde::{Serialize, de::DeserializeOwned};
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use tokio::sync::oneshot;
 
 pub type DaVerifier<

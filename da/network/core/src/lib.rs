@@ -16,4 +16,4 @@ pub mod swarm;
 pub mod test_utils;
 
 pub use libp2p::PeerId;
-pub use subnetworks_assignations::SubnetworkId;
+pub use logos_blockchain_subnetworks_assignations::SubnetworkId;

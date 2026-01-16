@@ -1,8 +1,8 @@
 use core::fmt::{self, Debug, Formatter};
 use std::collections::HashMap;
 
-use groth16::{fr_from_bytes_unchecked, fr_to_bytes};
-use poq::{CORE_MERKLE_TREE_HEIGHT, CorePathAndSelectors};
+use logos_blockchain_groth16::{fr_from_bytes_unchecked, fr_to_bytes};
+use logos_blockchain_poq::{CORE_MERKLE_TREE_HEIGHT, CorePathAndSelectors};
 use rs_merkle_tree::{Node, stores::MemoryStore, tree::MerkleProof};
 use thiserror::Error;
 
@@ -227,7 +227,7 @@ pub fn sort_nodes_and_build_merkle_tree<Node>(
 mod tests {
     use core::iter::repeat_n;
 
-    use groth16::{Field as _, fr_from_bytes_unchecked};
+    use logos_blockchain_groth16::{Field as _, fr_from_bytes_unchecked};
     use num_bigint::BigUint;
 
     use crate::{

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use cryptarchia_sync::{BoxedStream, ChainSyncError, GetTipResponse, HeaderId, SerialisedBlock};
+use logos_blockchain_cryptarchia_sync::{BoxedStream, ChainSyncError, GetTipResponse, HeaderId, SerialisedBlock};
 use libp2p::PeerId;
 use rand::RngCore;
 use tokio::sync::oneshot;

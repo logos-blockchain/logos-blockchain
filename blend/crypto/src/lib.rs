@@ -5,8 +5,8 @@ pub mod cipher;
 pub mod keys;
 pub mod merkle;
 
-pub type ZkHash = groth16::Fr;
-pub type ZkHasher = poseidon2::Poseidon2Bn254Hasher;
+pub type ZkHash = logos_blockchain_groth16::Fr;
+pub type ZkHasher = logos_blockchain_poseidon2::Poseidon2Bn254Hasher;
 
 /// Generates random bytes of the constant size using [`BlakeRng`].
 #[must_use]

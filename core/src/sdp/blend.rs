@@ -1,4 +1,4 @@
-use key_management_system_keys::keys::ED25519_PUBLIC_KEY_SIZE;
+use logos_blockchain_key_management_system_keys::keys::ED25519_PUBLIC_KEY_SIZE;
 use nom::{IResult, Parser as _, bytes::complete::take, number::complete::u8 as nom_u8};
 use logos_blockchain_blend_proofs::{
     quota::{PROOF_OF_QUOTA_SIZE, ProofOfQuota},
@@ -112,7 +112,7 @@ fn parse_const_size_bytes<const N: usize>(input: &[u8]) -> IResult<&[u8], [u8; N
 
 #[cfg(test)]
 mod tests {
-    use key_management_system_keys::keys::Ed25519Key;
+    use logos_blockchain_key_management_system_keys::keys::Ed25519Key;
     use logos_blockchain_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 
     use super::*;

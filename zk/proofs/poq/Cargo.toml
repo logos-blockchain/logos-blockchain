@@ -10,20 +10,20 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-circuits-prover   = { workspace = true }
-circuits-utils    = { workspace = true }
-groth16           = { features = ["deser"], workspace = true }
-num-bigint        = "0.4"
-pol               = { workspace = true }
-serde             = { features = ["derive"], workspace = true }
-serde_json        = { version = "1.0" }
-thiserror         = "2.0"
-witness-generator = { workspace = true }
+logos-blockchain-circuits-prover   = { workspace = true }
+logos-blockchain-circuits-utils    = { workspace = true }
+logos-blockchain-groth16           = { features = ["deser"], workspace = true }
+logos-blockchain-pol               = { workspace = true }
+logos-blockchain-witness-generator = { workspace = true }
+num-bigint                         = "0.4"
+serde                              = { features = ["derive"], workspace = true }
+serde_json                         = { version = "1.0" }
+thiserror                          = "2.0"
 
 [dev-dependencies]
 
 [build-dependencies]
-circuits-utils = { workspace = true }
+logos-blockchain-circuits-utils = { workspace = true }
 
 [lints]
 workspace = true

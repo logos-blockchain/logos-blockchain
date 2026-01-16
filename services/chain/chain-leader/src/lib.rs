@@ -6,10 +6,10 @@ mod relays;
 use core::fmt::Debug;
 use std::{collections::BTreeSet, fmt::Display, iter, pin::Pin, time::Duration};
 
-use chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
-use cryptarchia_engine::{Epoch, Slot};
+use logos_blockchain_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use logos_blockchain_cryptarchia_engine::{Epoch, Slot};
 use futures::{StreamExt as _, future, stream};
-use key_management_system_keys::keys::Ed25519Key;
+use logos_blockchain_key_management_system_keys::keys::Ed25519Key;
 pub use leadership::LeaderConfig;
 use logos_blockchain_core::{
     block::{Block, Error as BlockError, MAX_TRANSACTIONS},
@@ -62,7 +62,7 @@ pub enum Error {
     #[error("Ledger error: {0}")]
     Ledger(#[from] logos_blockchain_ledger::LedgerError<HeaderId>),
     #[error("Consensus error: {0}")]
-    Consensus(#[from] cryptarchia_engine::Error<HeaderId>),
+    Consensus(#[from] logos_blockchain_cryptarchia_engine::Error<HeaderId>),
     #[error("Storage error: {0}")]
     Storage(String),
     #[error("Could not fetch block transactions: {0}")]

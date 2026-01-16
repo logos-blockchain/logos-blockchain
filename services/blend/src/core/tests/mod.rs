@@ -2,8 +2,8 @@ mod utils;
 
 use std::num::NonZeroU64;
 
-use groth16::Field as _;
-use key_management_system_service::keys::Ed25519Key;
+use logos_blockchain_groth16::Field as _;
+use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_blend::{
     message::reward::{ActivityProof, BlendingToken, SessionBlendingTokenCollector},
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
@@ -13,9 +13,9 @@ use logos_blockchain_blend::{
     },
 };
 use logos_blockchain_core::{codec::SerializeOp as _, crypto::ZkHash, sdp::ActivityMetadata};
-use logos_blockchain_time::SlotTick;
+use logos_blockchain_time_service::SlotTick;
 use logos_blockchain_utils::blake_rng::BlakeRng;
-use poq::CORE_MERKLE_TREE_HEIGHT;
+use logos_blockchain_poq::CORE_MERKLE_TREE_HEIGHT;
 use rand::SeedableRng as _;
 
 use crate::{

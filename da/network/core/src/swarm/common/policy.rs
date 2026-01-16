@@ -1,6 +1,6 @@
 use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 
 use super::balancer::{
     ConnectionDeviation, SubnetworkConnectionPolicy, SubnetworkDeviation, SubnetworkStats,

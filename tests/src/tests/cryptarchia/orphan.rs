@@ -38,7 +38,7 @@ async fn test_orphan_handling() {
     // but only one of them would be eligible for leadership.
     wait_for_validators_mode_and_height(
         &validators,
-        cryptarchia_engine::State::Online,
+        logos_blockchain_cryptarchia_engine::State::Online,
         min_height,
         Duration::from_secs(500),
     )

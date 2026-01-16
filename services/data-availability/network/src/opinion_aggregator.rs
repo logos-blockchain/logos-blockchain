@@ -385,9 +385,9 @@ fn bitvec_to_bytes(bv: &OpinionsBitVec) -> Vec<u8> {
 mod tests {
     use std::sync::Arc;
 
-    use key_management_system_keys::keys::Ed25519Key;
+    use logos_blockchain_key_management_system_keys::keys::Ed25519Key;
     use rand::{RngCore, SeedableRng as _, rngs::SmallRng};
-    use subnetworks_assignations::{
+    use logos_blockchain_subnetworks_assignations::{
         MembershipCreator as _, MembershipHandler as _,
         versions::history_aware_refill::HistoryAware,
     };

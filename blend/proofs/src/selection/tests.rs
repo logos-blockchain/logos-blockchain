@@ -1,5 +1,5 @@
 use const_hex::FromHex as _;
-use groth16::{Field as _, fr_from_bytes_unchecked};
+use logos_blockchain_groth16::{Field as _, fr_from_bytes_unchecked};
 use logos_blockchain_core::codec::{DeserializeOp as _, SerializeOp as _};
 
 use crate::{

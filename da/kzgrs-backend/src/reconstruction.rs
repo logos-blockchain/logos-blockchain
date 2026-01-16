@@ -1,4 +1,4 @@
-use kzgrs::BYTES_PER_FIELD_ELEMENT;
+use logos_blockchain_kzgrs::BYTES_PER_FIELD_ELEMENT;
 
 use crate::common::{Chunk, share::DaShare};
 
@@ -32,7 +32,7 @@ pub fn reconstruct_without_missing_data(shares: &[DaShare]) -> Vec<u8> {
 
 #[cfg(test)]
 mod test {
-    use kzgrs::Proof;
+    use logos_blockchain_kzgrs::Proof;
     use logos_blockchain_core::da::DaEncoder as _;
 
     use crate::{

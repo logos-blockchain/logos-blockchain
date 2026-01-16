@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use chain_service::StartingState;
+use logos_blockchain_chain_service::StartingState;
 use futures::StreamExt as _;
-use kzgrs_backend::{common::share::DaShare, reconstruction::reconstruct_without_missing_data};
+use logos_blockchain_kzgrs_backend::{common::share::DaShare, reconstruction::reconstruct_without_missing_data};
 use serial_test::serial;
-use subnetworks_assignations::MembershipHandler as _;
+use logos_blockchain_subnetworks_assignations::MembershipHandler as _;
 use tests::{
     common::da::{
         disseminate_with_metadata, setup_test_channel, wait_for_blob_onchain,

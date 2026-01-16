@@ -11,8 +11,8 @@ use std::{cmp::Ordering, collections::HashMap, hash::Hash};
 pub use config::Config;
 use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use cryptarchia::{EpochState, UtxoTree};
-use cryptarchia_engine::Slot;
-use groth16::{Field as _, Fr};
+use logos_blockchain_cryptarchia_engine::Slot;
+use logos_blockchain_groth16::{Field as _, Fr};
 use mantle::LedgerState as MantleLedger;
 use logos_blockchain_core::{
     block::BlockNumber,
@@ -311,7 +311,7 @@ impl LedgerState {
 #[cfg(test)]
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
-    use key_management_system_keys::keys::{ZkKey, ZkPublicKey};
+    use logos_blockchain_key_management_system_keys::keys::{ZkKey, ZkPublicKey};
     use logos_blockchain_core::mantle::{
         GasCost as _, MantleTx, Note, SignedMantleTx, Transaction as _, gas::MainnetGasConstants,
         ledger::Tx as LedgerTx,

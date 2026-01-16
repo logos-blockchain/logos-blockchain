@@ -10,7 +10,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use cryptarchia_engine::Slot;
+use logos_blockchain_cryptarchia_engine::Slot;
 use futures::Stream;
 use logos_blockchain_core::{header::HeaderId, mantle::TxHash};
 

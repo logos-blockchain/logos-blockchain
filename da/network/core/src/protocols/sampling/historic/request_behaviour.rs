@@ -10,7 +10,7 @@ use futures::{
     future::BoxFuture,
     stream::{BoxStream, FuturesUnordered},
 };
-use kzgrs_backend::common::share::{DaLightShare, DaSharesCommitments};
+use logos_blockchain_kzgrs_backend::common::share::{DaLightShare, DaSharesCommitments};
 use libp2p::{
     Multiaddr, PeerId,
     core::{Endpoint, transport::PortUse},
@@ -23,7 +23,7 @@ use libp2p_stream::{Control, OpenStreamError};
 use logos_blockchain_core::{da::BlobId, header::HeaderId, sdp::SessionNumber};
 use logos_blockchain_da_messages::sampling::{self, SampleResponse};
 use rand::{rngs::ThreadRng, seq::IteratorRandom as _};
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use thiserror::Error;
 use tokio::{
     sync::mpsc::{self, UnboundedSender},

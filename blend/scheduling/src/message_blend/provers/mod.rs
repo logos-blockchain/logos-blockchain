@@ -1,4 +1,4 @@
-use key_management_system_keys::keys::UnsecuredEd25519Key;
+use logos_blockchain_key_management_system_keys::keys::UnsecuredEd25519Key;
 use logos_blockchain_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
 use logos_blockchain_blend_proofs::{
     quota::{VerifiedProofOfQuota, inputs::prove::public::CoreInputs},

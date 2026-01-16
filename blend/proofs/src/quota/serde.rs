@@ -1,10 +1,10 @@
 pub(super) mod proof {
     use generic_array::GenericArray;
-    use groth16::CompressSize;
+    use logos_blockchain_groth16::CompressSize;
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize)]
-    #[serde(remote = "groth16::CompressedProof")]
+    #[serde(remote = "logos_blockchain_groth16::CompressedProof")]
     pub struct SerializablePoQProof<E: CompressSize> {
         pub pi_a: GenericArray<u8, E::G1CompressedSize>,
         pub pi_b: GenericArray<u8, E::G2CompressedSize>,

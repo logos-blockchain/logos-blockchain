@@ -1,4 +1,4 @@
-use groth16::{Fr, Groth16Input, Groth16InputDeser};
+use logos_blockchain_groth16::{Fr, Groth16Input, Groth16InputDeser};
 use serde::Serialize;
 
 use crate::private::{ZkSignPrivateKeysData, ZkSignPrivateKeysInputs, ZkSignPrivateKeysInputsJson};

@@ -15,7 +15,7 @@ use logos_blockchain_da_sampling::{
 };
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use serde::{Deserialize, Serialize};
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 
 use super::backend::TestHttpCryptarchiaService;
 use crate::{

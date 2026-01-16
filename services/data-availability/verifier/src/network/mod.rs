@@ -8,7 +8,7 @@ use logos_blockchain_da_network_service::{
     sdp::SdpAdapter,
 };
 use overwatch::services::{ServiceData, relay::OutboundRelay};
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 
 pub struct ValidationRequest<T> {
     pub item: T,

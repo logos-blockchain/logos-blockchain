@@ -10,7 +10,7 @@ pub mod tracing;
 use blend::GeneralBlendConfig;
 use consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_tx_with_declarations};
 use da::GeneralDaConfig;
-use key_management_system_service::{
+use logos_blockchain_key_management_system_service::{
     backend::preload::PreloadKMSBackendSettings, keys::Ed25519Key,
 };
 use network::GeneralNetworkConfig;

@@ -2,7 +2,7 @@ pub mod api;
 pub mod config;
 
 use api::backend::AxumBackend;
-use kzgrs_backend::common::share::DaShare;
+use logos_blockchain_kzgrs_backend::common::share::DaShare;
 use logos_blockchain_core::mantle::{SignedMantleTx, TxHash};
 use logos_blockchain_da_dispersal::{
     DispersalService,
@@ -51,7 +51,7 @@ pub(crate) type BlendEdgeService =
 pub(crate) type BlendService =
     logos_blockchain_node::generic_services::blend::BlendService<DaNetworkAdapter, RuntimeServiceId>;
 
-pub(crate) type BlockBroadcastService = broadcast_service::BlockBroadcastService<RuntimeServiceId>;
+pub(crate) type BlockBroadcastService = logos_blockchain_broadcast_service::BlockBroadcastService<RuntimeServiceId>;
 
 pub(crate) type DaDispersalService = DispersalService<
     DispersalKZGRSBackend<
@@ -176,7 +176,7 @@ pub(crate) type ApiService = logos_blockchain_api::ApiService<
             SdpServiceAdapterGeneric<RuntimeServiceId>,
             RuntimeServiceId,
         >,
-        kzgrs_backend::dispersal::Metadata,
+        logos_blockchain_kzgrs_backend::dispersal::Metadata,
         KzgrsSamplingBackend,
         DaNetworkAdapter,
         SamplingMempoolAdapter<RuntimeServiceId>,

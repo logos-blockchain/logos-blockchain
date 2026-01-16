@@ -19,7 +19,7 @@ use logos_blockchain_blend::{
         stream::UninitializedFirstReadyStream,
     },
 };
-use logos_blockchain_time::SlotTick;
+use logos_blockchain_time_service::SlotTick;
 use overwatch::overwatch::{OverwatchHandle, commands::OverwatchCommand};
 use rand::{RngCore, rngs::OsRng};
 use tokio::{sync::mpsc, task::JoinHandle};

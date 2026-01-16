@@ -20,7 +20,7 @@ use libp2p_stream::Control;
 use logos_blockchain_core::{da::BlobId, sdp::SessionNumber};
 use logos_blockchain_da_messages::{sampling, sampling::SampleResponse};
 use rand::{rngs::ThreadRng, seq::IteratorRandom as _};
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;

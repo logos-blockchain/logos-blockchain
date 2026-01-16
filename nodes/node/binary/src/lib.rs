@@ -4,8 +4,8 @@ pub mod generic_services;
 
 use color_eyre::eyre::{Result, eyre};
 use generic_services::{SamplingMempoolAdapter, VerifierMempoolAdapter};
-use kzgrs_backend::common::share::DaShare;
-pub use kzgrs_backend::dispersal::BlobInfo;
+use logos_blockchain_kzgrs_backend::common::share::DaShare;
+pub use logos_blockchain_kzgrs_backend::dispersal::BlobInfo;
 pub use logos_blockchain_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackend as BlendBackend,
@@ -49,7 +49,7 @@ use overwatch::{
     DynError, derive_services,
     overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
 };
-use subnetworks_assignations::versions::history_aware_refill::HistoryAware;
+use logos_blockchain_subnetworks_assignations::versions::history_aware_refill::HistoryAware;
 use tx_service::storage::adapters::RocksStorageAdapter;
 pub use tx_service::{
     network::adapters::libp2p::{
@@ -102,7 +102,7 @@ pub(crate) type BlendEdgeService =
 pub(crate) type BlendService =
     generic_services::blend::BlendService<DaSamplingAdapter, RuntimeServiceId>;
 
-pub(crate) type BlockBroadcastService = broadcast_service::BlockBroadcastService<RuntimeServiceId>;
+pub(crate) type BlockBroadcastService = logos_blockchain_broadcast_service::BlockBroadcastService<RuntimeServiceId>;
 pub(crate) type DaVerifierService = generic_services::DaVerifierService<
     VerifierNetworkAdapter<
         LogosBlockchainDaMembership,

@@ -7,13 +7,13 @@ use std::{
 
 use async_trait::async_trait;
 use backends::BlendBackend;
-use chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use logos_blockchain_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use fork_stream::StreamExt as _;
 use futures::{
     FutureExt as _, Stream, StreamExt as _,
     future::{BoxFuture, join_all},
 };
-use key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
+use logos_blockchain_key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
 use network::NetworkAdapter;
 use logos_blockchain_blend::{
     crypto::random_sized_bytes,
@@ -222,7 +222,7 @@ where
         CoreAndLeaderProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>> + Send,
     SdpService: ServiceData<Message = SdpMessage> + Send,
     ProofsVerifier: ProofsVerifierTrait + Clone + Send,
-    TimeBackend: logos_blockchain_time::backends::TimeBackend + Send,
+    TimeBackend: logos_blockchain_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
     RuntimeServiceId: AsServiceId<NetworkService<Network::Backend, RuntimeServiceId>>

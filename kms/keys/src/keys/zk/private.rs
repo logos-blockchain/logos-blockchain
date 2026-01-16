@@ -1,12 +1,12 @@
 use std::sync::LazyLock;
 
-use groth16::{Field as _, Fr, fr_from_bytes_unchecked};
+use logos_blockchain_groth16::{Field as _, Fr, fr_from_bytes_unchecked};
 use num_bigint::BigUint;
-use poseidon2::{Digest, Poseidon2Bn254Hasher};
+use logos_blockchain_poseidon2::{Digest, Poseidon2Bn254Hasher};
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq as _;
 use zeroize::ZeroizeOnDrop;
-use zksign::{ZkSignError, ZkSignPrivateKeysData, ZkSignWitnessInputs};
+use logos_blockchain_zksign::{ZkSignError, ZkSignPrivateKeysData, ZkSignWitnessInputs};
 
 use crate::keys::zk::{public::PublicKey, signature::Signature};
 
@@ -18,7 +18,7 @@ static KDF: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"KDF"));
 /// possible to go through the KMS roundtrip of executing operators.
 #[derive(ZeroizeOnDrop, Clone, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct SecretKey(#[serde(with = "groth16::serde::serde_fr")] Fr);
+pub struct SecretKey(#[serde(with = "logos_blockchain_groth16::serde::serde_fr")] Fr);
 
 impl SecretKey {
     #[must_use]
@@ -54,7 +54,7 @@ impl SecretKey {
         let sk_inputs = try_from_secret_keys(keys)?;
         let inputs = ZkSignWitnessInputs::from_witness_data_and_message_hash(sk_inputs, *data);
 
-        let (signature, _) = zksign::prove(&inputs).expect("Signature should succeed");
+        let (signature, _) = logos_blockchain_zksign::prove(&inputs).expect("Signature should succeed");
         Ok(Signature::new(signature))
     }
 

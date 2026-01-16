@@ -512,7 +512,7 @@ impl NetworkBehaviour for Behaviour {
 mod tests {
     use std::{collections::HashSet, iter, time::Duration};
 
-    use cryptarchia_engine::Slot;
+    use logos_blockchain_cryptarchia_engine::Slot;
     use futures::StreamExt as _;
     use libp2p::{Multiaddr, PeerId, Swarm, bytes::Bytes, swarm::SwarmEvent};
     use libp2p_swarm_test::SwarmExt as _;

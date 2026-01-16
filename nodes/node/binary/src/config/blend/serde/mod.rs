@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use derivative::Derivative;
-use key_management_system_service::keys::UnsecuredEd25519Key;
+use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
 use logos_blockchain_libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
 

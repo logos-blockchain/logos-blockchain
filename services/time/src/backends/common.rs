@@ -1,6 +1,6 @@
 use std::{num::NonZero, pin::Pin};
 
-use cryptarchia_engine::{
+use logos_blockchain_cryptarchia_engine::{
     EpochConfig, Slot,
     time::{SlotConfig, SlotTimer},
 };

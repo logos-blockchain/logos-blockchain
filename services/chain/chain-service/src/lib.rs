@@ -13,11 +13,11 @@ use std::{
     time::Duration,
 };
 
-use broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo, SessionUpdate};
+use logos_blockchain_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo, SessionUpdate};
 use bytes::Bytes;
-use cryptarchia_engine::PrunedBlocks;
-pub use cryptarchia_engine::{Epoch, Slot};
-use cryptarchia_sync::{GetTipResponse, ProviderResponse};
+use logos_blockchain_cryptarchia_engine::PrunedBlocks;
+pub use logos_blockchain_cryptarchia_engine::{Epoch, Slot};
+use logos_blockchain_cryptarchia_sync::{GetTipResponse, ProviderResponse};
 use futures::{FutureExt as _, StreamExt as _};
 use logos_blockchain_core::{
     block::Block,
@@ -30,8 +30,8 @@ use logos_blockchain_core::{
 };
 pub use logos_blockchain_ledger::EpochState;
 use logos_blockchain_ledger::LedgerState;
-use logos_blockchain_network::message::ChainSyncEvent;
-use logos_blockchain_storage::{StorageService, api::chain::StorageChainApi, backends::StorageBackend};
+use logos_blockchain_network_service::message::ChainSyncEvent;
+use logos_blockchain_storage_service::{StorageService, api::chain::StorageChainApi, backends::StorageBackend};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData, state::StateUpdater},
@@ -39,7 +39,7 @@ use overwatch::{
 use relays::BroadcastRelay;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_with::serde_as;
-use services_utils::{
+use logos_blockchain_services_utils::{
     overwatch::{JsonFileBackend, RecoveryOperator, recovery::backends::FileBackendSettings},
     wait_until_services_are_ready,
 };
@@ -77,7 +77,7 @@ pub enum Error {
     #[error("Ledger error: {0}")]
     Ledger(#[from] logos_blockchain_ledger::LedgerError<HeaderId>),
     #[error("Consensus error: {0}")]
-    Consensus(#[from] cryptarchia_engine::Error<HeaderId>),
+    Consensus(#[from] logos_blockchain_cryptarchia_engine::Error<HeaderId>),
     #[error("Serialization error: {0}")]
     Serialisation(#[from] logos_blockchain_core::codec::Error),
     #[error("Invalid block: {0}")]
@@ -141,7 +141,7 @@ pub struct CryptarchiaInfo {
     pub tip: HeaderId,
     pub slot: Slot,
     pub height: u64,
-    pub mode: cryptarchia_engine::State,
+    pub mode: logos_blockchain_cryptarchia_engine::State,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -171,7 +171,7 @@ impl PrunedBlocksInfo {
 #[derive(Clone)]
 pub struct Cryptarchia {
     pub ledger: logos_blockchain_ledger::Ledger<HeaderId>,
-    pub consensus: cryptarchia_engine::Cryptarchia<HeaderId>,
+    pub consensus: logos_blockchain_cryptarchia_engine::Cryptarchia<HeaderId>,
     pub genesis_id: HeaderId,
 }
 
@@ -183,10 +183,10 @@ impl Cryptarchia {
         lib_ledger_state: LedgerState,
         genesis_id: HeaderId,
         ledger_config: logos_blockchain_ledger::Config,
-        state: cryptarchia_engine::State,
+        state: logos_blockchain_cryptarchia_engine::State,
     ) -> Self {
         Self {
-            consensus: <cryptarchia_engine::Cryptarchia<_>>::from_lib(
+            consensus: <logos_blockchain_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib_id,
                 ledger_config.consensus_config,
                 state,
@@ -258,7 +258,7 @@ impl Cryptarchia {
             self.consensus
                 .receive_block(id, parent, slot)
                 .map_err(|err| match err {
-                    cryptarchia_engine::Error::ParentMissing(parent) => Error::ParentMissing {
+                    logos_blockchain_cryptarchia_engine::Error::ParentMissing(parent) => Error::ParentMissing {
                         parent,
                         info: self.info(),
                     },
@@ -290,10 +290,10 @@ impl Cryptarchia {
     }
 
     /// Remove the ledger states associated with blocks that have been pruned by
-    /// the [`cryptarchia_engine::Cryptarchia`].
+    /// the [`logos_blockchain_cryptarchia_engine::Cryptarchia`].
     ///
     /// Details on which blocks are pruned can be found in the
-    /// [`cryptarchia_engine::Cryptarchia::receive_block`].
+    /// [`logos_blockchain_cryptarchia_engine::Cryptarchia::receive_block`].
     fn prune_ledger_states<'a>(&'a mut self, blocks: impl Iterator<Item = &'a HeaderId>) {
         let mut pruned_states_count = 0usize;
         for block in blocks {
@@ -326,7 +326,7 @@ impl Cryptarchia {
         self.consensus.state().is_bootstrapping()
     }
 
-    const fn state(&self) -> &cryptarchia_engine::State {
+    const fn state(&self) -> &logos_blockchain_cryptarchia_engine::State {
         self.consensus.state()
     }
 

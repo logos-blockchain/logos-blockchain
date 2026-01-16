@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use cryptarchia_engine::Slot;
+use logos_blockchain_cryptarchia_engine::Slot;
 use logos_blockchain_core::header::HeaderId;
 use serde::{Deserialize, Serialize};
 

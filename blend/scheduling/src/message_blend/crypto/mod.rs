@@ -1,7 +1,7 @@
 use std::num::NonZeroU64;
 
 use derivative::Derivative;
-use key_management_system_keys::keys::UnsecuredEd25519Key;
+use logos_blockchain_key_management_system_keys::keys::UnsecuredEd25519Key;
 use logos_blockchain_blend_message::{
     Error,
     encap::{

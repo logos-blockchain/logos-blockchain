@@ -9,8 +9,8 @@ use core::fmt::Debug;
 use std::{fmt::Display, hash::Hash, time::Duration};
 
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
-use chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
-pub use cryptarchia_engine::{Epoch, Slot};
+use logos_blockchain_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+pub use logos_blockchain_cryptarchia_engine::{Epoch, Slot};
 use futures::StreamExt as _;
 use network::NetworkAdapter;
 use logos_blockchain_core::{
@@ -67,7 +67,7 @@ pub(crate) const LOG_TARGET: &str = "cryptarchia::service";
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
-    Cryptarchia(#[from] chain_service::api::ApiError),
+    Cryptarchia(#[from] logos_blockchain_chain_service::api::ApiError),
     #[error("Serialization error: {0}")]
     Serialisation(#[from] logos_blockchain_core::codec::Error),
     #[error("Invalid block: {0}")]
@@ -580,7 +580,7 @@ where
         RuntimeServiceId: Send + Sync + 'static,
     {
         match err {
-            Error::Cryptarchia(chain_service::api::ApiError::ParentMissing { parent, info }) => {
+            Error::Cryptarchia(logos_blockchain_chain_service::api::ApiError::ParentMissing { parent, info }) => {
                 orphan_downloader.enqueue_orphan(block_id, info.tip, info.lib);
 
                 error!(

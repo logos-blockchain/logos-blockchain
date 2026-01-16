@@ -271,8 +271,8 @@ impl RewardsParameters {
 mod tests {
     use std::{collections::HashMap, convert::Infallible};
 
-    use groth16::Field as _;
-    use key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
+    use logos_blockchain_groth16::Field as _;
+    use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
     use logos_blockchain_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
     use logos_blockchain_blend_proofs::{
         quota::{ProofOfQuota, VerifiedProofOfQuota},

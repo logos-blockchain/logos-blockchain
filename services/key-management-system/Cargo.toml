@@ -13,22 +13,22 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                = "0.1"
-key-management-system-keys = { workspace = true }
-log                        = "0.4.22"
-overwatch                  = { workspace = true }
-serde                      = { workspace = true, features = ["derive"] }
-thiserror                  = { default-features = false, version = "2" }
-tokio                      = { default-features = false, version = "1", features = ["rt"] }
-tracing                    = { default-features = false, version = "0.1" }
+async-trait                                 = "0.1"
+log                                         = "0.4.22"
+logos-blockchain-key-management-system-keys = { workspace = true }
+overwatch                                   = { workspace = true }
+serde                                       = { workspace = true, features = ["derive"] }
+thiserror                                   = { default-features = false, version = "2" }
+tokio                                       = { default-features = false, version = "1", features = ["rt"] }
+tracing                                     = { default-features = false, version = "0.1" }
 
 [dev-dependencies]
-bytes                      = { workspace = true }
-key-management-system-keys = { workspace = true, features = ["unsafe"] }
-num-bigint                 = { default-features = false, version = "0.4" }
-rand                       = { features = ["getrandom"], workspace = true }
-serde                      = { workspace = true, features = ["std"] }
-serde_yaml                 = "0.9"
+bytes                                       = { workspace = true }
+logos-blockchain-key-management-system-keys = { workspace = true, features = ["unsafe"] }
+num-bigint                                  = { default-features = false, version = "0.4" }
+rand                                        = { features = ["getrandom"], workspace = true }
+serde                                       = { workspace = true, features = ["std"] }
+serde_yaml                                  = "0.9"
 
 [features]
-unsafe = ["key-management-system-keys/unsafe"]
+unsafe = ["logos-blockchain-key-management-system-keys/unsafe"]

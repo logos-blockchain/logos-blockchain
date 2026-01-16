@@ -19,7 +19,7 @@ use logos_blockchain_da_messages::{
     dispersal,
     packing::{pack_to_writer, unpack_from_reader},
 };
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use thiserror::Error;
 
 use crate::{SubnetworkId, protocol::DISPERSAL_PROTOCOL};

@@ -17,7 +17,7 @@ use libp2p::{
 };
 use logos_blockchain_core::{da::BlobId, header::HeaderId, sdp::SessionNumber};
 use logos_blockchain_da_messages::replication::ReplicationRequest;
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use tokio::{
     sync::{
         broadcast,

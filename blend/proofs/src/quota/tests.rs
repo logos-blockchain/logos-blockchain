@@ -1,6 +1,6 @@
 use const_hex::FromHex as _;
-use groth16::{Field as _, fr_from_bytes_unchecked};
-use key_management_system_keys::keys::UnsecuredZkKey;
+use logos_blockchain_groth16::{Field as _, fr_from_bytes_unchecked};
+use logos_blockchain_key_management_system_keys::keys::UnsecuredZkKey;
 use logos_blockchain_blend_crypto::{ZkHash, merkle::MerkleTree};
 
 use crate::{

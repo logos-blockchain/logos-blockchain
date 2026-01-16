@@ -88,9 +88,10 @@ function Download-And-Extract {
         [string]$InstallDir
     )
 
+    # TODO: Rename these artifacts to `logos-blockchain-circuits-...`
     $artifacts = @(
-        "logos-blockchain-circuits-$Version-$Platform.tar.gz",
-        "logos-blockchain-circuits-$Version-$Platform.zip"
+        "nomos-circuits-$Version-$Platform.tar.gz",
+        "nomos-circuits-$Version-$Platform.zip"
     )
 
     $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())

@@ -5,7 +5,7 @@
 
 use std::error::Error;
 
-use cryptarchia_sync::ChainSyncError;
+use logos_blockchain_cryptarchia_sync::ChainSyncError;
 use libp2p::{PeerId, StreamProtocol, autonat, identify, identity, kad, swarm::NetworkBehaviour};
 use rand::RngCore;
 use thiserror::Error;
@@ -29,7 +29,7 @@ pub(crate) struct BehaviourConfig {
     pub kad_protocol_name: StreamProtocol,
     pub identify_protocol_name: StreamProtocol,
     pub public_key: identity::PublicKey,
-    pub chain_sync_config: cryptarchia_sync::Config,
+    pub chain_sync_config: logos_blockchain_cryptarchia_sync::Config,
 }
 
 #[derive(Debug, Error)]
@@ -46,7 +46,7 @@ pub struct Behaviour<Rng: Clone + Send + RngCore + 'static> {
     // todo: support persistent store if needed
     pub(crate) kademlia: kad::Behaviour<kad::store::MemoryStore>,
     pub(crate) identify: identify::Behaviour,
-    pub(crate) chain_sync: cryptarchia_sync::Behaviour,
+    pub(crate) chain_sync: logos_blockchain_cryptarchia_sync::Behaviour,
     // The spec makes it mandatory to run an autonat server for a public node.
     pub(crate) autonat_server: autonat::v2::server::Behaviour<Rng>,
     pub(crate) nat: nat::Behaviour<Rng>,
@@ -89,7 +89,7 @@ impl<Rng: Clone + Send + RngCore + 'static> Behaviour<Rng> {
         let autonat_server = autonat::v2::server::Behaviour::new(rng.clone());
         let nat = nat::Behaviour::new(rng, &nat_config);
 
-        let chain_sync = cryptarchia_sync::Behaviour::new(chain_sync_config);
+        let chain_sync = logos_blockchain_cryptarchia_sync::Behaviour::new(chain_sync_config);
 
         Ok(Self {
             gossipsub,

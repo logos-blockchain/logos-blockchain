@@ -20,40 +20,58 @@ ignored = [
 workspace = true
 
 [dependencies]
-logos-blockchain-da-sampling = { features = [
-logos-blockchain-p2p",
-  "rocksdb-backend",
-], workspace = true }
-logos-blockchain-blockchain-blockchain-blockchain-core = { workspace = true }
-logos-blockchain-da-verifier = { features = ["libp2p"], workspace = true }
-logos-blockchain-http-api-common = { workspace = true }
-logos-blockchain-ledger = { workspace = true }
-logos-blockchain-libp2p = { workspace = true }
-logos-blockchain-network = { workspace = true }
-logos-blockchain-sdp = { workspace = true }
-logos-blockchain-storage = { workspace = true }
-logos-blockchain-system-sig = { workspace = true }
-logos-blockchain-time = { features = ["ntp", "serde"], workspace = true }
-logos-blockchain-tracing = { workspace = true }
-logos-blockchain-tracing-service = { workspace = true }
-logos-blockchain-utils = { workspace = true, features = ["serde"] }
-logos-blockchain-wallet = { workspace = true }
-num-bigint = { default-features = false, version = "0.4" }
-overwatch = { workspace = true }
-pol = { workspace = true }
-poq = { workspace = true }
-logos-blockchain-blockchain-= { workspace = true }
-serde_ignored = { workspace = true }
-serde_json = { workspace = true }
-serde_with = { default-features = false, version = "3.14.0" }
-serde_yaml = { workspace = true }
-services-utils = { workspace = true }
-subnetworks-assignations = { workspace = true }
-thiserror = { workspace = true }
-tokio = "1"
-tokio-stream = { default-features = false, version = "0.1" }
-tracing = { workspace = true }
-tx-service = { features = ["rocksdb-backend"], workspace = true }
+async-trait                                    = "0.1"
+clap                                           = { default-features = false, features = ["derive", "env", "std"], version = "4" }
+color-eyre                                     = { default-features = false, version = "0.6.0" }
+derivative                                     = { version = "2", default-features = false }
+futures                                        = { default-features = false, version = "0.3" }
+hex                                            = { default-features = false, version = "0.4.3" }
+http                                           = "1.3"
+logos-blockchain-api-service                   = { workspace = true }
+logos-blockchain-blend                         = { workspace = true }
+logos-blockchain-blend-service                 = { features = ["libp2p"], workspace = true }
+logos-blockchain-chain-broadcast-service       = { workspace = true }
+logos-blockchain-chain-leader-service          = { workspace = true }
+logos-blockchain-chain-network-service         = { workspace = true, features = ["libp2p"] }
+logos-blockchain-chain-service                 = { workspace = true }
+logos-blockchain-core                          = { workspace = true }
+logos-blockchain-cryptarchia-engine            = { workspace = true }
+logos-blockchain-da-messages                   = { workspace = true }
+logos-blockchain-da-network-core               = { workspace = true }
+logos-blockchain-da-network-service            = { workspace = true }
+logos-blockchain-da-sampling-service           = { features = ["libp2p", "rocksdb-backend"], workspace = true }
+logos-blockchain-da-verifier-service           = { features = ["libp2p"], workspace = true }
+logos-blockchain-groth16                       = { workspace = true }
+logos-blockchain-http-api-common               = { workspace = true }
+logos-blockchain-key-management-system-service = { workspace = true }
+logos-blockchain-kzgrs-backend                 = { workspace = true }
+logos-blockchain-ledger                        = { workspace = true }
+logos-blockchain-libp2p                        = { workspace = true }
+logos-blockchain-network-service               = { workspace = true }
+logos-blockchain-pol                           = { workspace = true }
+logos-blockchain-poq                           = { workspace = true }
+logos-blockchain-sdp-service                   = { workspace = true }
+logos-blockchain-services-utils                = { workspace = true }
+logos-blockchain-storage-service               = { workspace = true }
+logos-blockchain-subnetworks-assignations      = { workspace = true }
+logos-blockchain-system-sig-service            = { workspace = true }
+logos-blockchain-time-service                  = { features = ["ntp", "serde"], workspace = true }
+logos-blockchain-tracing                       = { workspace = true }
+logos-blockchain-tracing-service               = { workspace = true }
+logos-blockchain-tx-service                    = { features = ["rocksdb-backend"], workspace = true }
+logos-blockchain-utils                         = { workspace = true, features = ["serde"] }
+logos-blockchain-wallet                        = { workspace = true }
+num-bigint                                     = { default-features = false, version = "0.4" }
+overwatch                                      = { workspace = true }
+serde                                          = { workspace = true }
+serde_ignored                                  = { workspace = true }
+serde_json                                     = { workspace = true }
+serde_with                                     = { default-features = false, version = "3.14.0" }
+serde_yaml                                     = { workspace = true }
+thiserror                                      = { workspace = true }
+tokio                                          = "1"
+tokio-stream                                   = { default-features = false, version = "0.1" }
+tracing                                        = { workspace = true }
 
 # openapi related dependencies
 utoipa = { workspace = true }
@@ -77,29 +95,9 @@ utoipa-swagger-ui = { workspace = true, features = ["axum"] }
 test-log = { default-features = false, version = "0.2.18", features = ["trace"] }
 
 [features]
-block-explorer  = ["logos-blockchain-api/block-explorer"]
+block-explorer  = ["logos-blockchain-api-service/block-explorer"]
 default         = ["tracing"]
 instrumentation = []
 profiling       = ["logos-blockchain-http-api-common/profiling", "logos-blockchain-tracing-service/profiling"]
-testing         = ["key-management-system-service/unsafe"]
-tracing         = []async-trait                                                                     = "0.1"
-broadcast-service                                                               = { workspace = true }
-chain-leader                                                                    = { workspace = true }
-chain-network                                                                   = { workspace = true, features = ["libp2p"] }
-chain-service                                                                   = { workspace = true }
-clap                                                                            = { default-features = false, features = ["derive", "env", "std"], version = "4" }
-color-eyre                                                                      = { default-features = false, version = "0.6.0" }
-cryptarchia-engine                                                              = { workspace = true }
-derivative                                                                      = { version = "2", default-features = false }
-futures                                                                         = { default-features = false, version = "0.3" }
-groth16                                                                         = { workspace = true }
-hex                                                                             = { default-features = false, version = "0.4.3" }
-http                                                                            = "1.3"
-key-management-system-service                                                   = { workspace = true }
-kzgrs-backend                                                                   = { workspace = true }
-logos-blockchain-api                                                            = { workspace = true }
-logos-blockchain-blend-service                                                  = { features = ["libp2p"], workspace = true }
-logos-blockchain-blockchain-blockchain-blend                                    = { workspace = true }
-logos-blockchain-blockchain-blockchain-blockchain-blockchain-da-messages        = { workspace = true }
-logos-blockchain-blockchain-blockchain-blockchain-blockchain-da-network-core    = { workspace = true }
-logos-blockchain-blockchain-blockchain-blockchain-blockchain-da-network-service = { workspace = true }
+testing         = ["logos-blockchain-key-management-system-service/unsafe"]
+tracing         = []

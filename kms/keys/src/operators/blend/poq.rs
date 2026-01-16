@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use groth16::Fr;
+use logos_blockchain_groth16::Fr;
 use logos_blockchain_blend_proofs::{
     CorePathAndSelectors,
     quota::{

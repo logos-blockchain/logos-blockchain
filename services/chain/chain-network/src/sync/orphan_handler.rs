@@ -316,7 +316,7 @@ mod tests {
         time::Duration,
     };
 
-    use cryptarchia_sync::GetTipResponse;
+    use logos_blockchain_cryptarchia_sync::GetTipResponse;
     use futures::stream;
     use logos_blockchain_network::{NetworkService, backends::mock::Mock, message::ChainSyncEvent};
     use overwatch::services::{ServiceData, relay::OutboundRelay};

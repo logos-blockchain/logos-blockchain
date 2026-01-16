@@ -3,9 +3,9 @@ use std::collections::HashSet;
 
 use chain_leader::LeaderConfig;
 use chain_network::{IbdConfig, OrphanConfig, SyncConfig};
-use chain_service::{OfflineGracePeriodConfig, StartingState};
-use groth16::CompressedGroth16Proof;
-use key_management_system_service::keys::{Ed25519Key, ZkKey, ZkPublicKey, ZkSignature};
+use logos_blockchain_chain_service::{OfflineGracePeriodConfig, StartingState};
+use logos_blockchain_groth16::CompressedGroth16Proof;
+use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkKey, ZkPublicKey, ZkSignature};
 use logos_blockchain_core::{
     mantle::{
         MantleTx, Note, OpProof, Utxo,
@@ -159,7 +159,7 @@ pub fn create_consensus_configs(
                     },
                 },
                 service: ServiceConfig {
-                    bootstrap: chain_service::BootstrapConfig {
+                    bootstrap: logos_blockchain_chain_service::BootstrapConfig {
                         force_bootstrap: false,
                         offline_grace_period: OfflineGracePeriodConfig {
                             grace_period: Duration::from_secs(20 * 60),

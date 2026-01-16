@@ -14,59 +14,59 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                         = "0.1"
-blst                                = { version = "0.3.11" }
-broadcast-service                   = { workspace = true }
-chain-leader                        = { workspace = true }
-chain-network                       = { workspace = true }
-chain-service                       = { workspace = true }
-common-http-client                  = { workspace = true }
-cryptarchia-engine                  = { features = ["serde"], workspace = true }
-cryptarchia-sync                    = { workspace = true }
-cucumber                            = "=0.22.0"
-cucumber_ext                        = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
-executor-http-client                = { workspace = true }
-futures                             = { default-features = false, version = "0.3" }
-futures-util                        = { default-features = false, version = "0.3.31" }
-groth16                             = { workspace = true }
-hex                                 = { default-features = false, version = "0.4.3" }
-key-management-system-service       = { workspace = true }
-kzgrs-backend                       = { workspace = true }
-logos-blockchain-api                = { workspace = true }
-logos-blockchain-blend-service      = { features = ["libp2p"], workspace = true }
-logos-blockchain-core               = { workspace = true }
-logos-blockchain-da-dispersal       = { workspace = true }
-logos-blockchain-da-network-core    = { workspace = true }
-logos-blockchain-da-network-service = { workspace = true }
-logos-blockchain-da-sampling        = { workspace = true }
-logos-blockchain-da-verifier        = { workspace = true }
-logos-blockchain-executor           = { default-features = false, features = ["testing", "tracing"], workspace = true }
-logos-blockchain-http-api-common    = { workspace = true }
-logos-blockchain-libp2p             = { workspace = true }
-logos-blockchain-network            = { features = ["libp2p"], workspace = true }
-logos-blockchain-node               = { default-features = false, features = ["testing"], workspace = true }
-logos-blockchain-sdp                = { workspace = true }
-logos-blockchain-time               = { workspace = true }
-logos-blockchain-tracing            = { workspace = true }
-logos-blockchain-tracing-service    = { workspace = true }
-logos-blockchain-utils              = { workspace = true }
-logos-blockchain-wallet             = { workspace = true }
-num-bigint                          = { default-features = false, version = "0.4" }
-rand                                = { workspace = true }
-reqwest                             = { features = ["json"], workspace = true }
-serde_json                          = "1.0"
-serde_yaml                          = "0.9"
-serial_test                         = "3.1.1"
-subnetworks-assignations            = { workspace = true }
-tempfile                            = { workspace = true }
-testing-framework-core              = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
-testing-framework-runner-local      = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
-testing-framework-workflows         = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
-time                                = { default-features = false, version = "0.3" }
-tokio                               = "1"
-tracing                             = { workspace = true }
-tracing-subscriber                  = { version = "0.3", features = ["env-filter", "fmt"] }
-tx-service                          = { features = ["libp2p", "mock"], workspace = true }
+async-trait                                    = "0.1"
+blst                                           = { version = "0.3.11" }
+cucumber                                       = "=0.22.0"
+cucumber_ext                                   = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
+futures                                        = { default-features = false, version = "0.3" }
+futures-util                                   = { default-features = false, version = "0.3.31" }
+hex                                            = { default-features = false, version = "0.4.3" }
+logos-blockchain-api-service                   = { workspace = true }
+logos-blockchain-blend-service                 = { features = ["libp2p"], workspace = true }
+logos-blockchain-chain-broadcast-service       = { workspace = true }
+logos-blockchain-chain-leader-service          = { workspace = true }
+logos-blockchain-chain-network-service         = { workspace = true }
+logos-blockchain-chain-service                 = { workspace = true }
+logos-blockchain-common-http-client            = { workspace = true }
+logos-blockchain-core                          = { workspace = true }
+logos-blockchain-cryptarchia-engine            = { features = ["serde"], workspace = true }
+logos-blockchain-cryptarchia-sync              = { workspace = true }
+logos-blockchain-da-dispersal-service          = { workspace = true }
+logos-blockchain-da-network-core               = { workspace = true }
+logos-blockchain-da-network-service            = { workspace = true }
+logos-blockchain-da-sampling-service           = { workspace = true }
+logos-blockchain-da-verifier-service           = { workspace = true }
+logos-blockchain-executor                      = { default-features = false, features = ["testing", "tracing"], workspace = true }
+logos-blockchain-executor-http-client          = { workspace = true }
+logos-blockchain-groth16                       = { workspace = true }
+logos-blockchain-http-api-common               = { workspace = true }
+logos-blockchain-key-management-system-service = { workspace = true }
+logos-blockchain-kzgrs-backend                 = { workspace = true }
+logos-blockchain-libp2p                        = { workspace = true }
+logos-blockchain-network-service               = { features = ["libp2p"], workspace = true }
+logos-blockchain-node                          = { default-features = false, features = ["testing"], workspace = true }
+logos-blockchain-sdp-service                   = { workspace = true }
+logos-blockchain-subnetworks-assignations      = { workspace = true }
+logos-blockchain-time-service                  = { workspace = true }
+logos-blockchain-tracing                       = { workspace = true }
+logos-blockchain-tracing-service               = { workspace = true }
+logos-blockchain-tx-service                    = { features = ["libp2p", "mock"], workspace = true }
+logos-blockchain-utils                         = { workspace = true }
+logos-blockchain-wallet                        = { workspace = true }
+num-bigint                                     = { default-features = false, version = "0.4" }
+rand                                           = { workspace = true }
+reqwest                                        = { features = ["json"], workspace = true }
+serde_json                                     = "1.0"
+serde_yaml                                     = "0.9"
+serial_test                                    = "3.1.1"
+tempfile                                       = { workspace = true }
+testing-framework-core                         = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
+testing-framework-runner-local                 = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
+testing-framework-workflows                    = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
+time                                           = { default-features = false, version = "0.3" }
+tokio                                          = "1"
+tracing                                        = { workspace = true }
+tracing-subscriber                             = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [[test]]
 name = "test_cryptarchia_happy_path"

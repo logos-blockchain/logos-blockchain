@@ -1,4 +1,4 @@
-use key_management_system_keys::keys::secured_key::SecuredKey;
+use logos_blockchain_key_management_system_keys::keys::secured_key::SecuredKey;
 use tokio::sync::oneshot;
 
 use crate::backend::KMSBackend;

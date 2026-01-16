@@ -1,8 +1,8 @@
 use std::{fmt::Debug, net::IpAddr};
 
 use async_trait::async_trait;
-use common_http_client::CommonHttpClient;
-use kzgrs_backend::common::share::{DaShare, DaSharesCommitments};
+use logos_blockchain_common_http_client::CommonHttpClient;
+use logos_blockchain_kzgrs_backend::common::share::{DaShare, DaSharesCommitments};
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 use logos_blockchain_core::da::BlobId;
@@ -10,7 +10,7 @@ use logos_blockchain_da_network_core::{SubnetworkId, addressbook::AddressBookHan
 use overwatch::DynError;
 use rand::prelude::IteratorRandom as _;
 use serde::{Deserialize, Serialize};
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use tokio::sync::oneshot;
 use tracing::error;
 use url::Url;

@@ -1,11 +1,11 @@
 use std::{collections::HashSet, fs, io, path::Path, time::Duration};
 
-use common_http_client::CommonHttpClient;
+use logos_blockchain_common_http_client::CommonHttpClient;
 use demo_sequencer::{
     BlockData, Transaction, TransferRequest, TransferResponse,
     db::{AccountDb, DbError},
 };
-use key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
+use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use logos_blockchain_core::{
     header::HeaderId,
     mantle::{

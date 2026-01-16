@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
-use cryptarchia_engine::Epoch;
-use mmr::MerkleMountainRange;
+use logos_blockchain_cryptarchia_engine::Epoch;
+use logos_blockchain_mmr::MerkleMountainRange;
 use logos_blockchain_core::mantle::{
     Value,
     ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier},
@@ -129,7 +129,7 @@ impl LeaderState {
 
 #[cfg(test)]
 mod tests {
-    use groth16::{Field as _, Fr};
+    use logos_blockchain_groth16::{Field as _, Fr};
     use logos_blockchain_core::mantle::TxHash;
 
     use super::*;

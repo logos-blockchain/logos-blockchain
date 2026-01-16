@@ -1,6 +1,6 @@
 use std::{collections::HashSet, fmt::Debug};
 
-use cryptarchia_sync::{BlocksResponse, TipResponse};
+use logos_blockchain_cryptarchia_sync::{BlocksResponse, TipResponse};
 use logos_blockchain_core::header::HeaderId;
 use tokio::sync::{mpsc::Sender, oneshot};
 use tokio_stream::wrappers::BroadcastStream;

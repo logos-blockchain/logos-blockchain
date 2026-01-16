@@ -10,11 +10,11 @@ pub enum State {
     Online = 0x1,
 }
 
-impl From<cryptarchia_engine::State> for State {
-    fn from(value: cryptarchia_engine::State) -> Self {
+impl From<logos_blockchain_cryptarchia_engine::State> for State {
+    fn from(value: logos_blockchain_cryptarchia_engine::State) -> Self {
         match value {
-            cryptarchia_engine::State::Bootstrapping => Self::Bootstrapping,
-            cryptarchia_engine::State::Online => Self::Online,
+            logos_blockchain_cryptarchia_engine::State::Bootstrapping => Self::Bootstrapping,
+            logos_blockchain_cryptarchia_engine::State::Online => Self::Online,
         }
     }
 }
@@ -31,8 +31,8 @@ pub struct CryptarchiaInfo {
     pub mode: State,
 }
 
-impl From<chain_service::CryptarchiaInfo> for CryptarchiaInfo {
-    fn from(value: chain_service::CryptarchiaInfo) -> Self {
+impl From<logos_blockchain_chain_service::CryptarchiaInfo> for CryptarchiaInfo {
+    fn from(value: logos_blockchain_chain_service::CryptarchiaInfo) -> Self {
         Self {
             lib: value.lib.into(),
             tip: value.tip.into(),
@@ -58,7 +58,7 @@ impl From<chain_service::CryptarchiaInfo> for CryptarchiaInfo {
 /// [`OperationStatus`] error on failure.
 pub(crate) fn get_cryptarchia_info_sync(
     node: &LogosBlockchainNode,
-) -> Result<chain_service::CryptarchiaInfo, OperationStatus> {
+) -> Result<logos_blockchain_chain_service::CryptarchiaInfo, OperationStatus> {
     let Ok(runtime) = tokio::runtime::Runtime::new() else {
         eprintln!("[get_cryptarchia_info_sync] Failed to create tokio runtime. Aborting.");
         return Err(OperationStatus::RuntimeError);

@@ -4,8 +4,8 @@ pub mod validator;
 #[cfg(test)]
 pub mod test {
     use futures::StreamExt as _;
-    use kzgrs::Proof;
-    use kzgrs_backend::common::{Column, share::DaShare};
+    use logos_blockchain_kzgrs::Proof;
+    use logos_blockchain_kzgrs_backend::common::{Column, share::DaShare};
     use libp2p::{
         PeerId, Swarm,
         swarm::{SwarmEvent, dial_opts::DialOpts},

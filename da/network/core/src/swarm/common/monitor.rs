@@ -378,7 +378,7 @@ fn compute_failure_rate(
 
 #[cfg(test)]
 mod tests {
-    use subnetworks_assignations::versions::v1::FillFromNodeList;
+    use logos_blockchain_subnetworks_assignations::versions::v1::FillFromNodeList;
 
     use super::*;
     use crate::swarm::{DAConnectionPolicySettings, common::policy::DAConnectionPolicy};

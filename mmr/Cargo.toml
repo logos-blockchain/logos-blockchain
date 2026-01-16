@@ -10,11 +10,11 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-ark-ff    = { default-features = false, features = ["std"], version = "0.4" }
-groth16   = { workspace = true }
-poseidon2 = { workspace = true }
-rpds      = { default-features = false, version = "1.1.1" }
-serde     = { workspace = true, features = ["derive"], optional = true }
+ark-ff                     = { default-features = false, features = ["std"], version = "0.4" }
+logos-blockchain-groth16   = { workspace = true }
+logos-blockchain-poseidon2 = { workspace = true }
+rpds                       = { default-features = false, version = "1.1.1" }
+serde                      = { workspace = true, features = ["derive"], optional = true }
 
 [dev-dependencies]
 proptest       = { default-features = false, features = ["std"], version = "1.0" }
@@ -24,7 +24,7 @@ proptest-macro = "0.2"
 workspace = true
 
 [features]
-serde = ["dep:serde", "groth16/deser", "rpds/serde"]
+serde = ["dep:serde", "logos-blockchain-groth16/deser", "rpds/serde"]
 
 [package.metadata.cargo-machete]
 # False positives.

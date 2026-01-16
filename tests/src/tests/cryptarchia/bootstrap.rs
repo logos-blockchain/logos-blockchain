@@ -52,7 +52,7 @@ async fn test_ibd_behind_nodes() {
     );
     wait_for_validators_mode_and_height(
         &initial_validators,
-        cryptarchia_engine::State::Online,
+        logos_blockchain_cryptarchia_engine::State::Online,
         minimum_height,
         adjust_timeout(Duration::from_secs(300)),
     )
@@ -90,7 +90,7 @@ async fn test_ibd_behind_nodes() {
     println!("Behind node started, waiting for it to finish IBD and switch to online mode...");
     wait_for_validators_mode(
         &[&behind_node],
-        cryptarchia_engine::State::Online,
+        logos_blockchain_cryptarchia_engine::State::Online,
         adjust_timeout(Duration::from_secs(10)),
     )
     .await;

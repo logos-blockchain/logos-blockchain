@@ -9,7 +9,7 @@ use logos_blockchain_libp2p::PeerId;
 use logos_blockchain_node::make_request_and_return_response;
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use serde::Serialize;
-use subnetworks_assignations::MembershipHandler;
+use logos_blockchain_subnetworks_assignations::MembershipHandler;
 
 #[utoipa::path(
     post,

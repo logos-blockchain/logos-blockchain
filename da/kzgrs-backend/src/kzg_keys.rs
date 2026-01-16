@@ -1,7 +1,7 @@
 use std::sync::LazyLock;
 
 // Reexport global parameters loading from file.
-pub use kzgrs::{
+pub use logos_blockchain_kzgrs::{
     ProvingKey, VerificationKey, proving_key_from_file, proving_key_from_randomness,
     verification_key_proving_key,
 };
@@ -23,7 +23,7 @@ mod tests {
     use std::fs::File;
 
     use ark_serialize::{CanonicalSerialize as _, Write as _};
-    use kzgrs::proving_key_from_randomness;
+    use logos_blockchain_kzgrs::proving_key_from_randomness;
 
     #[test]
     #[ignore = "for testing purposes only"]

@@ -28,7 +28,7 @@ impl Default for Inputs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(Default))]
 pub struct CoreInputs {
-    #[serde(with = "groth16::serde::serde_fr")]
+    #[serde(with = "logos_blockchain_groth16::serde::serde_fr")]
     pub zk_root: ZkHash,
     pub quota: u64,
 }
@@ -36,9 +36,9 @@ pub struct CoreInputs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(Default))]
 pub struct LeaderInputs {
-    #[serde(with = "groth16::serde::serde_fr")]
+    #[serde(with = "logos_blockchain_groth16::serde::serde_fr")]
     pub pol_ledger_aged: ZkHash,
-    #[serde(with = "groth16::serde::serde_fr")]
+    #[serde(with = "logos_blockchain_groth16::serde::serde_fr")]
     pub pol_epoch_nonce: ZkHash,
     pub message_quota: u64,
     pub total_stake: u64,

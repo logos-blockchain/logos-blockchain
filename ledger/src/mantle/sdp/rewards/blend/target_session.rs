@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, collections::HashMap, iter::once};
 
-use key_management_system_keys::keys::ZkPublicKey;
+use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
 use logos_blockchain_blend_message::{
     encap::ProofsVerifier as ProofsVerifierTrait,
     reward::{BlendingTokenEvaluation, HammingDistance},

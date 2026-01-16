@@ -5,7 +5,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use cryptarchia_engine::Slot;
+use logos_blockchain_cryptarchia_engine::Slot;
 use futures::{Stream, StreamExt as _};
 use logos_blockchain_core::{
     block::Block,
@@ -13,7 +13,7 @@ use logos_blockchain_core::{
     header::HeaderId,
     mantle::{Transaction, TxHash},
 };
-use logos_blockchain_storage::{
+use logos_blockchain_storage_service::{
     StorageMsg, StorageService, api::chain::StorageChainApi, backends::StorageBackend,
 };
 use overwatch::services::{ServiceData, relay::OutboundRelay};

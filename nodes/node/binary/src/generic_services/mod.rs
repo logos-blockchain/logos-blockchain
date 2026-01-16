@@ -1,8 +1,8 @@
 use chain_leader::CryptarchiaLeader;
 use chain_network::network::adapters::libp2p::LibP2pAdapter;
-use chain_service::CryptarchiaConsensus;
-use key_management_system_service::backend::preload::PreloadKMSBackend;
-use kzgrs_backend::common::share::DaShare;
+use logos_blockchain_chain_service::CryptarchiaConsensus;
+use logos_blockchain_key_management_system_service::backend::preload::PreloadKMSBackend;
+use logos_blockchain_kzgrs_backend::common::share::DaShare;
 use logos_blockchain_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction, TxHash},

@@ -2,7 +2,7 @@ use core::convert::Infallible;
 
 use async_trait::async_trait;
 use futures::future::ready;
-use key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+use logos_blockchain_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use logos_blockchain_blend_message::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey, encap::ProofsVerifier,
 };
@@ -66,7 +66,7 @@ impl CoreProofOfQuotaGenerator for MockCorePoQGenerator {
         _key_index: u64,
     ) -> impl Future<Output = Result<(VerifiedProofOfQuota, ZkHash), quota::Error>> + Send + Sync
     {
-        use groth16::Field as _;
+        use logos_blockchain_groth16::Field as _;
 
         ready(Ok((
             VerifiedProofOfQuota::from_bytes_unchecked([0; _]),

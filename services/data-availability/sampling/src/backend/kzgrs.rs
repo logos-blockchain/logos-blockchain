@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use kzgrs_backend::common::{
+use logos_blockchain_kzgrs_backend::common::{
     ShareIndex,
     share::{DaShare, DaSharesCommitments},
 };
@@ -156,8 +156,8 @@ impl DaSamplingServiceBackend for KzgrsSamplingBackend {
 mod test {
     use std::collections::HashSet;
 
-    use kzgrs::Proof;
-    use kzgrs_backend::common::{Column, share::DaShare};
+    use logos_blockchain_kzgrs::Proof;
+    use logos_blockchain_kzgrs_backend::common::{Column, share::DaShare};
     use logos_blockchain_core::da::BlobId;
     use rand::prelude::*;
     use tokio::time::Duration;
