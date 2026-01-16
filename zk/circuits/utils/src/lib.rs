@@ -5,8 +5,8 @@ const LOGOS_BLOCKCHAIN_CIRCUITS_DEFAULT_DIR: &str = ".logos-blockchain-circuits"
 
 /// Get the logos-blockchain-circuits base directory.
 ///
-/// This function checks the `LOGOS_BLOCKCHAIN_CIRCUITS` environment variable first,
-/// and falls back to `~/.logos-blockchain-circuits/` if not set.
+/// This function checks the `LOGOS_BLOCKCHAIN_CIRCUITS` environment variable
+/// first, and falls back to `~/.logos-blockchain-circuits/` if not set.
 ///
 /// # Panics
 ///

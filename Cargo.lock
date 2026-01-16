@@ -1491,22 +1491,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "broadcast-service"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "derivative",
- "futures",
- "nomos-core",
- "overwatch",
- "serde",
- "tokio",
- "tokio-stream",
- "tracing",
-]
-
-[[package]]
 name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1741,133 +1725,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cfgsync"
-version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#416ec051a531d4ec2eb026d836577677eedd44af"
-dependencies = [
- "anyhow",
- "axum 0.7.9",
- "clap",
- "groth16",
- "hex",
- "key-management-system-service",
- "nomos-core",
- "nomos-da-network-core",
- "nomos-executor",
- "nomos-libp2p",
- "nomos-node",
- "nomos-tracing-service",
- "nomos-utils",
- "rand 0.8.5",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "serde_with",
- "serde_yaml",
- "subnetworks-assignations",
- "testing-framework-config",
- "testing-framework-core",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "chain-common"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "nomos-core",
- "serde",
-]
-
-[[package]]
-name = "chain-leader"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "chain-common",
- "chain-service",
- "cryptarchia-engine",
- "futures",
- "key-management-system-keys",
- "nomos-blend-service",
- "nomos-core",
- "nomos-da-sampling",
- "nomos-ledger",
- "nomos-time",
- "nomos-wallet",
- "overwatch",
- "serde",
- "services-utils",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "tracing-futures",
- "tx-service",
-]
-
-[[package]]
-name = "chain-network"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "chain-common",
- "chain-service",
- "cryptarchia-engine",
- "cryptarchia-sync",
- "futures",
- "nomos-core",
- "nomos-da-sampling",
- "nomos-ledger",
- "nomos-network",
- "nomos-time",
- "overwatch",
- "rand 0.8.5",
- "serde",
- "serde_with",
- "services-utils",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
- "tracing-futures",
- "tx-service",
-]
-
-[[package]]
-name = "chain-service"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "broadcast-service",
- "bytes",
- "cryptarchia-engine",
- "cryptarchia-sync",
- "futures",
- "groth16",
- "nomos-core",
- "nomos-ledger",
- "nomos-network",
- "nomos-storage",
- "nomos-utils",
- "num-bigint",
- "overwatch",
- "serde",
- "serde_with",
- "services-utils",
- "strum",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "tracing-futures",
-]
-
-[[package]]
 name = "chrono"
 version = "0.4.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1879,28 +1736,6 @@ dependencies = [
  "serde",
  "wasm-bindgen",
  "windows-link 0.2.1",
-]
-
-[[package]]
-name = "chrono-tz"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93698b29de5e97ad0ae26447b344c482a7284c737d9ddc5f9e52b74a336671bb"
-dependencies = [
- "chrono",
- "chrono-tz-build",
- "phf",
-]
-
-[[package]]
-name = "chrono-tz-build"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c088aee841df9c3041febbb73934cfc39708749bf96dc827e3359cd39ef11b1"
-dependencies = [
- "parse-zoneinfo",
- "phf",
- "phf_codegen",
 ]
 
 [[package]]
@@ -1938,23 +1773,6 @@ checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
 dependencies = [
  "crypto-common",
  "inout",
-]
-
-[[package]]
-name = "circuits-prover"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "circuits-utils",
- "tempfile",
-]
-
-[[package]]
-name = "circuits-utils"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "dirs 6.0.0",
 ]
 
 [[package]]
@@ -2053,23 +1871,6 @@ checksum = "ba5a308b75df32fe02788e748662718f03fde005016435c444eea572398219fd"
 dependencies = [
  "bytes",
  "memchr",
-]
-
-[[package]]
-name = "common-http-client"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "broadcast-service",
- "futures",
- "nomos-core",
- "nomos-da-messages",
- "nomos-http-api-common",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "url",
 ]
 
 [[package]]
@@ -2384,40 +2185,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
-name = "cryptarchia-engine"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "cfg_eval",
- "nomos-utils",
- "serde",
- "serde_with",
- "thiserror 1.0.69",
- "time",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "cryptarchia-sync"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "bytes",
- "cryptarchia-engine",
- "futures",
- "libp2p",
- "libp2p-stream",
- "nomos-core",
- "rand 0.8.5",
- "serde",
- "serde_with",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "crypto-bigint"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2506,7 +2273,6 @@ dependencies = [
  "humantime",
  "inventory",
  "itertools 0.14.0",
- "junit-report",
  "linked-hash-map",
  "pin-project",
  "ref-cast",
@@ -2543,19 +2309,6 @@ dependencies = [
  "nom_locate",
  "regex",
  "regex-syntax",
-]
-
-[[package]]
-name = "cucumber_ext"
-version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#416ec051a531d4ec2eb026d836577677eedd44af"
-dependencies = [
- "cucumber",
- "testing-framework-core",
- "testing-framework-runner-compose",
- "testing-framework-runner-local",
- "testing-framework-workflows",
- "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -2778,17 +2531,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "derive-getters"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a2c35ab6e03642397cdda1dd58abbc05d418aef8e36297f336d5aba060fe8df"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
 name = "derive_arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2893,12 +2635,6 @@ checksum = "ffdd80ce8ce993de27e9f063a444a4d53ce8e8db4c1f00cc03af5ad5a9867a1e"
 dependencies = [
  "cipher",
 ]
-
-[[package]]
-name = "deunicode"
-version = "1.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
 
 [[package]]
 name = "dialoguer"
@@ -3380,21 +3116,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "executor-http-client"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "common-http-client",
- "futures",
- "nomos-core",
- "nomos-http-api-common",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tracing",
-]
-
-[[package]]
 name = "exr"
 version = "1.74.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3555,21 +3276,6 @@ name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
-
-[[package]]
-name = "foreign-types"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6f339eb8adc052cd2ca78910fda869aefa38d22d5cb648e6485e4d3fc06f3b1"
-dependencies = [
- "foreign-types-shared",
-]
-
-[[package]]
-name = "foreign-types-shared"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
 name = "fork_stream"
@@ -3913,24 +3619,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "groth16"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "ark-bn254 0.4.0",
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-groth16",
- "ark-serialize 0.4.2",
- "generic-array 1.3.5",
- "hex",
- "num-bigint",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
-]
-
-[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4252,15 +3940,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
-name = "humansize"
-version = "2.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cb51c9a029ddc91b07a787f1d86b53ccfa49b0e86688c946ebe8d3555685dd7"
-dependencies = [
- "libm",
-]
-
-[[package]]
 name = "humantime"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4354,22 +4033,6 @@ dependencies = [
  "hyper-util",
  "pin-project-lite",
  "tokio",
- "tower-service",
-]
-
-[[package]]
-name = "hyper-tls"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70206fc6890eaca9fde8a0bf71caa2ddfc9fe045ac9e5c70df101a7dbde866e0"
-dependencies = [
- "bytes",
- "http-body-util",
- "hyper 1.8.1",
- "hyper-util",
- "native-tls",
- "tokio",
- "tokio-native-tls",
  "tower-service",
 ]
 
@@ -4960,18 +4623,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "junit-report"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06c3a3342e6720a82d7d179f380e9841b73a1dd49344e33959fdfe571ce56b55"
-dependencies = [
- "derive-getters",
- "quick-xml 0.31.0",
- "strip-ansi-escapes",
- "time",
-]
-
-[[package]]
 name = "jzon"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5001,56 +4652,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "key-management-system-keys"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "bytes",
- "ed25519-dalek",
- "generic-array 1.3.5",
- "groth16",
- "key-management-system-macros",
- "nomos-blend-proofs",
- "nomos-utils",
- "num-bigint",
- "poseidon2",
- "rand_core 0.6.4",
- "serde",
- "subtle",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
- "zeroize",
- "zksign",
-]
-
-[[package]]
-name = "key-management-system-macros"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
-]
-
-[[package]]
-name = "key-management-system-service"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "key-management-system-keys",
- "log",
- "overwatch",
- "serde",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "konst"
 version = "0.3.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5077,41 +4678,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0de8b303297635ad57c9f5059fd9cee7a47f8e8daa09df0fcd07dd39fb22977f"
 dependencies = [
  "log",
-]
-
-[[package]]
-name = "kzgrs"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "ark-bls12-381",
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-poly 0.4.2",
- "ark-poly-commit",
- "ark-serialize 0.4.2",
- "blake2",
- "blst",
- "num-bigint",
- "num-traits",
- "rand 0.8.5",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "kzgrs-backend"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "ark-ff 0.4.2",
- "ark-poly 0.4.2",
- "ark-serialize 0.4.2",
- "blake2",
- "itertools 0.12.1",
- "kzgrs",
- "nomos-core",
- "rand 0.8.5",
- "serde",
 ]
 
 [[package]]
@@ -6847,7 +6413,6 @@ dependencies = [
  "async-trait",
  "blst",
  "cucumber",
- "cucumber_ext",
  "futures",
  "futures-util",
  "hex",
@@ -6890,9 +6455,6 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "tempfile",
- "testing-framework-core",
- "testing-framework-runner-local",
- "testing-framework-workflows",
  "time",
  "tokio",
  "tracing",
@@ -7296,18 +6858,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mmr"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "ark-ff 0.4.2",
- "groth16",
- "poseidon2",
- "rpds",
- "serde",
-]
-
-[[package]]
 name = "moka"
 version = "0.12.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7416,23 +6966,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "native-tls"
-version = "0.2.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87de3442987e9dbec73158d5c715e7ad9072fda936bb03d19d7fa10e00520f0e"
-dependencies = [
- "libc",
- "log",
- "openssl",
- "openssl-probe 0.1.6",
- "openssl-sys",
- "schannel",
- "security-framework 2.11.1",
- "security-framework-sys",
- "tempfile",
 ]
 
 [[package]]
@@ -7655,711 +7188,6 @@ dependencies = [
  "bytecount",
  "memchr",
  "nom 8.0.0",
-]
-
-[[package]]
-name = "nomos-api"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "broadcast-service",
- "bytes",
- "chain-service",
- "futures",
- "kzgrs-backend",
- "nomos-core",
- "nomos-da-dispersal",
- "nomos-da-network-core",
- "nomos-da-network-service",
- "nomos-da-sampling",
- "nomos-da-verifier",
- "nomos-libp2p",
- "nomos-network",
- "nomos-sdp",
- "nomos-storage",
- "overwatch",
- "serde",
- "serde_json",
- "subnetworks-assignations",
- "tokio",
- "tokio-stream",
- "tracing",
- "tx-service",
- "utoipa",
- "utoipa-swagger-ui",
-]
-
-[[package]]
-name = "nomos-blend"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "nomos-blend-crypto",
- "nomos-blend-message",
- "nomos-blend-network",
- "nomos-blend-proofs",
- "nomos-blend-scheduling",
-]
-
-[[package]]
-name = "nomos-blend-crypto"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "blake2",
- "groth16",
- "nomos-utils",
- "poq",
- "poseidon2",
- "rs-merkle-tree",
- "serde",
- "subtle",
- "thiserror 1.0.69",
- "x25519-dalek",
- "zeroize",
-]
-
-[[package]]
-name = "nomos-blend-message"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "blake2",
- "derivative",
- "groth16",
- "itertools 0.14.0",
- "key-management-system-keys",
- "nomos-blend-crypto",
- "nomos-blend-proofs",
- "nomos-core",
- "nomos-utils",
- "serde",
- "serde-big-array",
- "serde_with",
- "thiserror 1.0.69",
- "tracing",
- "zeroize",
-]
-
-[[package]]
-name = "nomos-blend-network"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "either",
- "futures",
- "futures-timer",
- "key-management-system-keys",
- "libp2p",
- "nomos-blend-message",
- "nomos-blend-proofs",
- "nomos-blend-scheduling",
- "nomos-core",
- "nomos-libp2p",
- "tracing",
-]
-
-[[package]]
-name = "nomos-blend-proofs"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "ed25519-dalek",
- "generic-array 1.3.5",
- "groth16",
- "nomos-blend-crypto",
- "num-bigint",
- "poq",
- "serde",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "nomos-blend-scheduling"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "derivative",
- "fork_stream",
- "futures",
- "key-management-system-keys",
- "multiaddr",
- "nomos-blend-crypto",
- "nomos-blend-message",
- "nomos-blend-proofs",
- "nomos-core",
- "nomos-utils",
- "rand 0.8.5",
- "serde",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
-]
-
-[[package]]
-name = "nomos-blend-service"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "broadcast-service",
- "chain-service",
- "cryptarchia-engine",
- "fork_stream",
- "futures",
- "groth16",
- "key-management-system-service",
- "libp2p",
- "libp2p-stream",
- "nomos-blend",
- "nomos-core",
- "nomos-ledger",
- "nomos-libp2p",
- "nomos-network",
- "nomos-sdp",
- "nomos-time",
- "nomos-utils",
- "overwatch",
- "poq",
- "rand 0.8.5",
- "serde",
- "serde_with",
- "services-utils",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
-]
-
-[[package]]
-name = "nomos-core"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "ark-ff 0.4.2",
- "async-trait",
- "bincode",
- "blake2",
- "bytes",
- "const-hex",
- "cryptarchia-engine",
- "futures",
- "generic-array 1.3.5",
- "groth16",
- "hex",
- "key-management-system-keys",
- "multiaddr",
- "nom 8.0.0",
- "nomos-blend-proofs",
- "nomos-utils",
- "num-bigint",
- "pol",
- "poseidon2",
- "serde",
- "strum",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
-name = "nomos-da-dispersal"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "broadcast-service",
- "futures",
- "key-management-system-keys",
- "kzgrs-backend",
- "nomos-core",
- "nomos-da-network-core",
- "nomos-da-network-service",
- "nomos-tracing",
- "nomos-utils",
- "overwatch",
- "serde",
- "serde_with",
- "services-utils",
- "subnetworks-assignations",
- "thiserror 2.0.17",
- "tokio",
- "tokio-stream",
- "tracing",
-]
-
-[[package]]
-name = "nomos-da-messages"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "blake2",
- "futures",
- "kzgrs-backend",
- "nomos-core",
- "serde",
- "tokio",
-]
-
-[[package]]
-name = "nomos-da-network-core"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "cached",
- "fixed",
- "futures",
- "indexmap 2.13.0",
- "kzgrs-backend",
- "libp2p",
- "libp2p-stream",
- "log",
- "nomos-core",
- "nomos-da-messages",
- "nomos-utils",
- "rand 0.9.2",
- "serde",
- "serde_with",
- "subnetworks-assignations",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
- "tracing-subscriber 0.3.22",
-]
-
-[[package]]
-name = "nomos-da-network-service"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "arc-swap",
- "async-trait",
- "bitvec",
- "blake2",
- "broadcast-service",
- "common-http-client",
- "futures",
- "kzgrs-backend",
- "libp2p",
- "libp2p-identity",
- "log",
- "multiaddr",
- "nomos-core",
- "nomos-da-messages",
- "nomos-da-network-core",
- "nomos-libp2p",
- "nomos-sdp",
- "nomos-storage",
- "nomos-tracing",
- "nomos-utils",
- "overwatch",
- "rand 0.8.5",
- "serde",
- "services-utils",
- "subnetworks-assignations",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "nomos-da-sampling"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "bytes",
- "futures",
- "hex",
- "kzgrs-backend",
- "libp2p-identity",
- "nomos-core",
- "nomos-da-network-core",
- "nomos-da-network-service",
- "nomos-storage",
- "nomos-tracing",
- "overwatch",
- "rand 0.8.5",
- "serde",
- "services-utils",
- "subnetworks-assignations",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
- "tx-service",
-]
-
-[[package]]
-name = "nomos-da-verifier"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "futures",
- "kzgrs-backend",
- "libp2p",
- "nomos-core",
- "nomos-da-network-core",
- "nomos-da-network-service",
- "nomos-storage",
- "nomos-tracing",
- "nomos-utils",
- "overwatch",
- "serde",
- "serde_with",
- "services-utils",
- "subnetworks-assignations",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
- "tx-service",
-]
-
-[[package]]
-name = "nomos-executor"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "axum 0.7.9",
- "broadcast-service",
- "clap",
- "color-eyre",
- "futures",
- "kzgrs-backend",
- "nomos-api",
- "nomos-core",
- "nomos-da-dispersal",
- "nomos-da-network-core",
- "nomos-da-network-service",
- "nomos-da-sampling",
- "nomos-da-verifier",
- "nomos-http-api-common",
- "nomos-libp2p",
- "nomos-network",
- "nomos-node",
- "nomos-sdp",
- "nomos-storage",
- "nomos-time",
- "overwatch",
- "serde",
- "services-utils",
- "subnetworks-assignations",
- "tokio",
- "tower 0.4.13",
- "tower-http 0.5.2",
- "tracing",
- "tx-service",
- "utoipa",
- "utoipa-swagger-ui",
-]
-
-[[package]]
-name = "nomos-http-api-common"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "axum 0.7.9",
- "governor",
- "key-management-system-keys",
- "nomos-core",
- "serde",
- "serde_json",
- "serde_with",
- "tower_governor",
- "tracing",
-]
-
-[[package]]
-name = "nomos-ledger"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "cryptarchia-engine",
- "groth16",
- "key-management-system-keys",
- "mmr",
- "nomos-blend-crypto",
- "nomos-blend-message",
- "nomos-blend-proofs",
- "nomos-core",
- "nomos-utils",
- "num-bigint",
- "rand 0.8.5",
- "rpds",
- "serde",
- "thiserror 1.0.69",
- "tracing",
- "utxotree",
-]
-
-[[package]]
-name = "nomos-libp2p"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "backon",
- "blake2",
- "cryptarchia-sync",
- "default-net",
- "either",
- "futures",
- "hex",
- "igd-next 0.16.2",
- "libp2p",
- "multiaddr",
- "natpmp",
- "netdev",
- "nomos-utils",
- "num_enum",
- "rand 0.8.5",
- "serde",
- "serde_with",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "zerocopy",
-]
-
-[[package]]
-name = "nomos-network"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "cryptarchia-sync",
- "futures",
- "nomos-core",
- "nomos-libp2p",
- "overwatch",
- "rand 0.8.5",
- "rand_chacha 0.3.1",
- "serde",
- "tokio",
- "tokio-stream",
- "tracing",
-]
-
-[[package]]
-name = "nomos-node"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "axum 0.7.9",
- "broadcast-service",
- "chain-leader",
- "chain-network",
- "chain-service",
- "clap",
- "color-eyre",
- "cryptarchia-engine",
- "derivative",
- "futures",
- "groth16",
- "hex",
- "http 1.4.0",
- "key-management-system-service",
- "kzgrs-backend",
- "nomos-api",
- "nomos-blend",
- "nomos-blend-service",
- "nomos-core",
- "nomos-da-messages",
- "nomos-da-network-core",
- "nomos-da-network-service",
- "nomos-da-sampling",
- "nomos-da-verifier",
- "nomos-http-api-common",
- "nomos-ledger",
- "nomos-libp2p",
- "nomos-network",
- "nomos-sdp",
- "nomos-storage",
- "nomos-system-sig",
- "nomos-time",
- "nomos-tracing",
- "nomos-tracing-service",
- "nomos-utils",
- "nomos-wallet",
- "num-bigint",
- "overwatch",
- "pol",
- "poq",
- "serde",
- "serde_ignored",
- "serde_json",
- "serde_with",
- "serde_yaml",
- "services-utils",
- "subnetworks-assignations",
- "thiserror 2.0.17",
- "time",
- "tokio",
- "tokio-stream",
- "tower 0.4.13",
- "tower-http 0.5.2",
- "tracing",
- "tx-service",
- "utoipa",
- "utoipa-swagger-ui",
-]
-
-[[package]]
-name = "nomos-sdp"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "futures",
- "key-management-system-keys",
- "nomos-core",
- "overwatch",
- "serde",
- "thiserror 2.0.17",
- "tokio",
- "tokio-stream",
- "tracing",
- "tx-service",
-]
-
-[[package]]
-name = "nomos-storage"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "bytes",
- "cryptarchia-engine",
- "futures",
- "libp2p-identity",
- "multiaddr",
- "nomos-core",
- "overwatch",
- "rocksdb",
- "serde",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "nomos-system-sig"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-ctrlc",
- "async-trait",
- "overwatch",
- "tracing",
-]
-
-[[package]]
-name = "nomos-time"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "cfg_eval",
- "cryptarchia-engine",
- "futures",
- "log",
- "nomos-utils",
- "overwatch",
- "serde",
- "serde_with",
- "sntpc",
- "thiserror 2.0.17",
- "time",
- "tokio",
- "tokio-stream",
- "tracing",
-]
-
-[[package]]
-name = "nomos-tracing"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "opentelemetry",
- "opentelemetry-http",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry_sdk",
- "rand 0.8.5",
- "reqwest 0.12.28",
- "serde",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-gelf",
- "tracing-loki",
- "tracing-opentelemetry",
- "tracing-subscriber 0.3.22",
- "url",
-]
-
-[[package]]
-name = "nomos-tracing-service"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "nomos-tracing",
- "overwatch",
- "serde",
- "tracing",
- "tracing-appender",
- "tracing-subscriber 0.3.22",
-]
-
-[[package]]
-name = "nomos-utils"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "blake2",
- "cipher",
- "const-hex",
- "humantime",
- "overwatch",
- "rand 0.8.5",
- "serde",
- "serde_with",
- "time",
-]
-
-[[package]]
-name = "nomos-wallet"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "bytes",
- "chain-service",
- "futures",
- "groth16",
- "hex",
- "key-management-system-service",
- "nomos-core",
- "nomos-ledger",
- "nomos-storage",
- "overwatch",
- "serde",
- "services-utils",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "wallet",
 ]
 
 [[package]]
@@ -8657,32 +7485,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
-name = "openssl"
-version = "0.10.75"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08838db121398ad17ab8531ce9de97b244589089e290a384c900cb9ff7434328"
-dependencies = [
- "bitflags 2.10.0",
- "cfg-if",
- "foreign-types",
- "libc",
- "once_cell",
- "openssl-macros",
- "openssl-sys",
-]
-
-[[package]]
-name = "openssl-macros"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
-]
-
-[[package]]
 name = "openssl-probe"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8693,18 +7495,6 @@ name = "openssl-probe"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f50d9b3dabb09ecd771ad0aa242ca6894994c130308ca3d7684634df8037391"
-
-[[package]]
-name = "openssl-sys"
-version = "0.9.111"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82cab2d520aa75e3c58898289429321eb788c3106963d0dc886ec7a5f4adc321"
-dependencies = [
- "cc",
- "libc",
- "pkg-config",
- "vcpkg",
-]
 
 [[package]]
 name = "opentelemetry"
@@ -8921,15 +7711,6 @@ dependencies = [
  "redox_syscall 0.5.18",
  "smallvec",
  "windows-link 0.2.1",
-]
-
-[[package]]
-name = "parse-zoneinfo"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f2a05b18d44e2957b88f96ba460715e295bc1d7510468a2f3d3b44535d26c24"
-dependencies = [
- "regex",
 ]
 
 [[package]]
@@ -9151,16 +7932,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "phf_codegen"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aef8048c789fa5e851558d709946d6d79a8ff88c0440c587967f8e94bfb1216a"
-dependencies = [
- "phf_generator",
- "phf_shared",
-]
-
-[[package]]
 name = "phf_generator"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9336,22 +8107,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pol"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "circuits-prover",
- "circuits-utils",
- "groth16",
- "num-bigint",
- "num-traits",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "witness-generator",
-]
-
-[[package]]
 name = "polling"
 version = "3.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9378,37 +8133,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "poq"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "circuits-prover",
- "circuits-utils",
- "groth16",
- "num-bigint",
- "pol",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "witness-generator",
-]
-
-[[package]]
 name = "portable-atomic"
 version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f89776e4d69bb58bc6993e99ffa1d11f228b839984854c7daeb5d37f87cbe950"
-
-[[package]]
-name = "poseidon2"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "ark-bn254 0.4.0",
- "ark-ff 0.4.2",
- "jf-poseidon2",
- "num-bigint",
-]
 
 [[package]]
 name = "potential_utf"
@@ -9597,20 +8325,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "prometheus-http-query"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fcebfa99f03ae51220778316b37d24981e36322c82c24848f48c5bd0f64cbdb"
-dependencies = [
- "enum-as-inner",
- "mime",
- "reqwest 0.12.28",
- "serde",
- "time",
- "url",
-]
-
-[[package]]
 name = "proptest"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9786,15 +8500,6 @@ name = "quick-xml"
 version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f50b1c63b38611e7d4d7f68b82d3ad0cc71a2ad2e7f61fc10f1328d917c93cd"
-dependencies = [
- "memchr",
-]
-
-[[package]]
-name = "quick-xml"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1004a344b30a54e2ee58d66a71b32d2db2feb0a31f9a2d302bf0536f15de2a33"
 dependencies = [
  "memchr",
 ]
@@ -10311,11 +9016,9 @@ dependencies = [
  "http-body-util",
  "hyper 1.8.1",
  "hyper-rustls 0.27.7",
- "hyper-tls",
  "hyper-util",
  "js-sys",
  "log",
- "native-tls",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
@@ -10326,7 +9029,6 @@ dependencies = [
  "serde_urlencoded",
  "sync_wrapper 1.0.2",
  "tokio",
- "tokio-native-tls",
  "tokio-rustls 0.26.4",
  "tokio-util",
  "tower 0.5.3",
@@ -11184,21 +9886,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "services-utils"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "futures",
- "log",
- "overwatch",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
 name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11332,16 +10019,6 @@ name = "slab"
 version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2ae44ef20feb57a68b23d846850f861394c2e02dc425a50098ae8c90267589"
-
-[[package]]
-name = "slug"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "882a80f72ee45de3cc9a5afeb2da0331d58df69e4e7d8eeb5d3c7784ae67e724"
-dependencies = [
- "deunicode",
- "wasm-bindgen",
-]
 
 [[package]]
 name = "smallvec"
@@ -11537,15 +10214,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe895eb47f22e2ddd4dabc02bce419d2e643c8e3b585c78158b349195bc24d82"
 
 [[package]]
-name = "strip-ansi-escapes"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a8f8038e7e7969abb3f1b7c2a811225e9296da208539e0f79c5251d6cac0025"
-dependencies = [
- "vte",
-]
-
-[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11570,19 +10238,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
-]
-
-[[package]]
-name = "subnetworks-assignations"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "counter",
- "libp2p-identity",
- "nomos-core",
- "nomos-utils",
- "rand 0.8.5",
- "serde",
 ]
 
 [[package]]
@@ -11907,28 +10562,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tera"
-version = "1.20.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8004bca281f2d32df3bacd59bc67b312cb4c70cea46cbd79dbe8ac5ed206722"
-dependencies = [
- "chrono",
- "chrono-tz",
- "globwalk",
- "humansize",
- "lazy_static",
- "percent-encoding",
- "pest",
- "pest_derive",
- "rand 0.8.5",
- "regex",
- "serde",
- "serde_json",
- "slug",
- "unicode-segmentation",
-]
-
-[[package]]
 name = "termcolor"
 version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11966,146 +10599,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
-]
-
-[[package]]
-name = "testing-framework-config"
-version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#416ec051a531d4ec2eb026d836577677eedd44af"
-dependencies = [
- "blst",
- "chain-leader",
- "chain-network",
- "chain-service",
- "cryptarchia-engine",
- "cryptarchia-sync",
- "groth16",
- "hex",
- "key-management-system-service",
- "nomos-api",
- "nomos-blend-service",
- "nomos-core",
- "nomos-da-dispersal",
- "nomos-da-network-core",
- "nomos-da-network-service",
- "nomos-da-sampling",
- "nomos-da-verifier",
- "nomos-executor",
- "nomos-ledger",
- "nomos-libp2p",
- "nomos-node",
- "nomos-sdp",
- "nomos-time",
- "nomos-tracing",
- "nomos-tracing-service",
- "nomos-utils",
- "nomos-wallet",
- "num-bigint",
- "rand 0.8.5",
- "serde",
- "subnetworks-assignations",
- "testing-framework-env",
- "thiserror 2.0.17",
- "time",
- "tracing",
-]
-
-[[package]]
-name = "testing-framework-core"
-version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#416ec051a531d4ec2eb026d836577677eedd44af"
-dependencies = [
- "anyhow",
- "async-trait",
- "chain-service",
- "common-http-client",
- "futures",
- "groth16",
- "hex",
- "key-management-system-service",
- "nomos-core",
- "nomos-da-network-core",
- "nomos-da-network-service",
- "nomos-executor",
- "nomos-http-api-common",
- "nomos-libp2p",
- "nomos-network",
- "nomos-node",
- "nomos-tracing",
- "nomos-tracing-service",
- "nomos-utils",
- "prometheus-http-query",
- "rand 0.8.5",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "serde_with",
- "serde_yaml",
- "tempfile",
- "testing-framework-config",
- "testing-framework-env",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "testing-framework-env"
-version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#416ec051a531d4ec2eb026d836577677eedd44af"
-
-[[package]]
-name = "testing-framework-runner-compose"
-version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#416ec051a531d4ec2eb026d836577677eedd44af"
-dependencies = [
- "anyhow",
- "async-trait",
- "cfgsync",
- "nomos-tracing",
- "nomos-tracing-service",
- "reqwest 0.12.28",
- "serde",
- "tempfile",
- "tera",
- "testing-framework-core",
- "testing-framework-env",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "testing-framework-runner-local"
-version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#416ec051a531d4ec2eb026d836577677eedd44af"
-dependencies = [
- "async-trait",
- "testing-framework-core",
- "thiserror 2.0.17",
- "tracing",
-]
-
-[[package]]
-name = "testing-framework-workflows"
-version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#416ec051a531d4ec2eb026d836577677eedd44af"
-dependencies = [
- "async-trait",
- "chain-service",
- "executor-http-client",
- "futures",
- "key-management-system-service",
- "nomos-core",
- "rand 0.8.5",
- "reqwest 0.12.28",
- "testing-framework-config",
- "testing-framework-core",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -12293,16 +10786,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
-]
-
-[[package]]
-name = "tokio-native-tls"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
-dependencies = [
- "native-tls",
- "tokio",
 ]
 
 [[package]]
@@ -12796,28 +11279,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tx-service"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "async-trait",
- "futures",
- "nomos-core",
- "nomos-network",
- "nomos-storage",
- "overwatch",
- "rand 0.8.5",
- "serde",
- "serde_json",
- "services-utils",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
- "utoipa",
-]
-
-[[package]]
 name = "typed-builder"
 version = "0.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13139,20 +11600,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2eebbbfe4093922c2b6734d7c679ebfebd704a0d7e56dfcb0d05818ce28977d"
 
 [[package]]
-name = "utxotree"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "ark-ff 0.4.2",
- "groth16",
- "num-bigint",
- "poseidon2",
- "rpds",
- "serde",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "uuid"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13201,15 +11648,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
-name = "vte"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "231fdcd7ef3037e8330d8e17e61011a2c244126acc0a982f4040ac3f9f0bc077"
-dependencies = [
- "memchr",
-]
-
-[[package]]
 name = "walkdir"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13217,20 +11655,6 @@ checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
 dependencies = [
  "same-file",
  "winapi-util",
-]
-
-[[package]]
-name = "wallet"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "key-management-system-keys",
- "nomos-core",
- "nomos-ledger",
- "num-bigint",
- "rpds",
- "thiserror 2.0.17",
- "tracing",
 ]
 
 [[package]]
@@ -13934,15 +12358,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7249219f66ced02969388cf2bb044a09756a083d0fab1e566056b04d9fbcaa5"
 
 [[package]]
-name = "witness-generator"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "circuits-utils",
- "tempfile",
-]
-
-[[package]]
 name = "writeable"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14280,22 +12695,6 @@ dependencies = [
  "byteorder",
  "bytesize",
  "thiserror 1.0.69",
-]
-
-[[package]]
-name = "zksign"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917#1fce2dc3f482c16361316eb2a1b6ccd1206aa917"
-dependencies = [
- "circuits-prover",
- "circuits-utils",
- "groth16",
- "num-bigint",
- "poseidon2",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "witness-generator",
 ]
 
 [[package]]
