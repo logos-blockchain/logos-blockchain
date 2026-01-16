@@ -74,13 +74,13 @@ impl State {
     }
 }
 
-// Implementation of the fork choice rule as defined in the Ouroboros Genesis
-// paper k defines the forking depth of chain we accept without more
-// analysis s defines the length of time (unit of slots) after the fork
-// happened we will inspect for chain density
-//
-// It returns the new local chain and the lowest common ancestor with the
-// previous.
+/// Implementation of the fork choice rule as defined in the Ouroboros Genesis
+/// paper k defines the forking depth of chain we accept without more
+/// analysis s defines the length of time (unit of slots) after the fork
+/// happened we will inspect for chain density
+///
+/// It returns the new local chain and the lowest common ancestor with the
+/// previous.
 fn maxvalid_bg<Id>(
     local_chain: Branch<Id>,
     branches: &Branches<Id>,
@@ -118,11 +118,11 @@ where
     (cmax, lowest_common_ancestor_with_cmax)
 }
 
-// Implementation of the fork choice rule as defined in the Ouroboros Praos
-// paper k defines the forking depth of chain we can accept.
-//
-// It returns the new local chain and the lowest common ancestor with the
-// previous.
+/// Implementation of the fork choice rule as defined in the Ouroboros Praos
+/// paper k defines the forking depth of chain we can accept.
+///
+/// It returns the new local chain and the lowest common ancestor with the
+/// previous.
 fn maxvalid_mc<Id>(
     local_chain: Branch<Id>,
     branches: &Branches<Id>,
@@ -266,7 +266,7 @@ where
         self.tips.iter().map(|id| self.branches[id])
     }
 
-    // find the lowest common ancestor of two branches
+    /// find the lowest common ancestor of two branches
     pub fn lca<'a>(&'a self, mut b1: &'a Branch<Id>, mut b2: &'a Branch<Id>) -> Branch<Id> {
         // first reduce branches to the same length
         while b1.length > b2.length {
@@ -294,7 +294,7 @@ where
         self.get(header_id).map(|branch| branch.length)
     }
 
-    // Walk back the chain until the target slot
+    /// Walk back the chain until the target slot
     fn walk_back_before(&self, branch: &Branch<Id>, slot: Slot) -> Branch<Id> {
         let mut current = branch;
         while current.slot > slot {
@@ -322,8 +322,8 @@ where
         })
     }
 
-    // Returns the min(n, A)-th ancestor of the provided block, where A is the
-    // number of ancestors of this block.
+    /// Returns the min(n, A)-th ancestor of the provided block, where A is the
+    /// number of ancestors of this block.
     fn nth_ancestor(&self, branch: &Branch<Id>, mut n: u64) -> Branch<Id> {
         let mut current = branch;
         while n > 0 {
