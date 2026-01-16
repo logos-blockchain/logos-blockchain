@@ -6,11 +6,10 @@ use std::{
     time::Duration,
 };
 
+use futures::Stream;
 use logos_blockchain_chain_broadcast_service::BlockInfo;
 use logos_blockchain_chain_service::CryptarchiaInfo;
 use logos_blockchain_common_http_client::CommonHttpClient;
-use futures::Stream;
-use logos_blockchain_kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
 use logos_blockchain_core::{
     block::Block, da::BlobId, header::HeaderId, mantle::SignedMantleTx, sdp::SessionNumber,
 };
@@ -44,6 +43,7 @@ use logos_blockchain_http_api_common::paths::{
     DA_GET_SHARES_COMMITMENTS, DA_HISTORIC_SAMPLING, DA_MONITOR_STATS, DA_UNBLOCK_PEER,
     MANTLE_METRICS, NETWORK_INFO, STORAGE_BLOCK,
 };
+use logos_blockchain_kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
 use logos_blockchain_network_service::backends::libp2p::Libp2pInfo;
 use logos_blockchain_node::{
     RocksBackendSettings,
@@ -460,7 +460,7 @@ pub fn create_executor_config(config: GeneralConfig) -> Config {
             },
         },
         sdp: SdpSettings { declaration: None },
-        wallet: logos_blockchain_wallet::WalletServiceSettings {
+        wallet: logos_blockchain_wallet_service::WalletServiceSettings {
             known_keys: HashSet::from_iter([config.consensus_config.user_config().leader.pk]),
         },
         key_management: config.kms_config,

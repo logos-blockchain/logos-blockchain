@@ -4,14 +4,14 @@ use axum::{Json, Router, extract::State, http::StatusCode, response::IntoRespons
 use logos_blockchain_da_network_core::swarm::{
     DAConnectionMonitorSettings, DAConnectionPolicySettings, ReplicationConfig,
 };
+use logos_blockchain_tests::{
+    nodes::{executor::create_executor_config, validator::create_validator_config},
+    topology::configs::da::DaParams,
+};
 use logos_blockchain_tracing_service::TracingSettings;
 use logos_blockchain_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use tests::{
-    nodes::{executor::create_executor_config, validator::create_validator_config},
-    topology::configs::da::DaParams,
-};
 use tokio::sync::oneshot::channel;
 
 use crate::{

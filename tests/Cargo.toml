@@ -52,7 +52,7 @@ logos-blockchain-tracing                       = { workspace = true }
 logos-blockchain-tracing-service               = { workspace = true }
 logos-blockchain-tx-service                    = { features = ["libp2p", "mock"], workspace = true }
 logos-blockchain-utils                         = { workspace = true }
-logos-blockchain-wallet                        = { workspace = true }
+logos-blockchain-wallet-service                = { workspace = true }
 num-bigint                                     = { default-features = false, version = "0.4" }
 rand                                           = { workspace = true }
 reqwest                                        = { features = ["json"], workspace = true }

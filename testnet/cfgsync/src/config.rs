@@ -5,10 +5,7 @@ use logos_blockchain_core::{
     sdp::{Locator, ServiceType},
 };
 use logos_blockchain_libp2p::{Multiaddr, multiaddr};
-use logos_blockchain_tracing_service::{LoggerLayer, MetricsLayer, TracingLayer, TracingSettings};
-use logos_blockchain_utils::net::get_available_udp_port;
-use rand::{Rng as _, thread_rng};
-use tests::topology::{
+use logos_blockchain_tests::topology::{
     configs::{
         GeneralConfig,
         api::GeneralApiConfig,
@@ -24,6 +21,9 @@ use tests::topology::{
     },
     create_kms_configs,
 };
+use logos_blockchain_tracing_service::{LoggerLayer, MetricsLayer, TracingLayer, TracingSettings};
+use logos_blockchain_utils::net::get_available_udp_port;
+use rand::{Rng as _, thread_rng};
 
 const DEFAULT_LIBP2P_NETWORK_PORT: u16 = 3000;
 const DEFAULT_DA_NETWORK_PORT: u16 = 3300;
@@ -276,7 +276,7 @@ mod cfgsync_tests {
     use logos_blockchain_tracing_service::{
         ConsoleLayer, FilterLayer, LoggerLayer, MetricsLayer, TracingLayer, TracingSettings,
     };
-    use tests::topology::configs::da::DaParams;
+    use logos_blockchain_tests::topology::configs::da::DaParams;
     use tracing::Level;
 
     use super::{Host, HostKind, create_node_configs};

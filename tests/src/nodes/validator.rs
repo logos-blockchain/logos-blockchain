@@ -6,11 +6,10 @@ use std::{
     time::Duration,
 };
 
+use futures::Stream;
 use logos_blockchain_chain_broadcast_service::BlockInfo;
 use logos_blockchain_chain_service::CryptarchiaInfo;
 use logos_blockchain_common_http_client::CommonHttpClient;
-use futures::Stream;
-use logos_blockchain_kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
 use logos_blockchain_core::{
     block::Block,
     da::BlobId,
@@ -39,6 +38,7 @@ use logos_blockchain_http_api_common::paths::{
     DA_GET_SHARES_COMMITMENTS, DA_HISTORIC_SAMPLING, DA_MONITOR_STATS, MANTLE_SDP_DECLARATIONS,
     NETWORK_INFO, STORAGE_BLOCK,
 };
+use logos_blockchain_kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
 use logos_blockchain_network_service::backends::libp2p::Libp2pInfo;
 use logos_blockchain_node::{
     Config, HeaderId, RocksBackendSettings,
@@ -51,12 +51,12 @@ use logos_blockchain_node::{
 use logos_blockchain_sdp_service::SdpSettings;
 use logos_blockchain_tracing::logging::local::FileConfig;
 use logos_blockchain_tracing_service::LoggerLayer;
+use logos_blockchain_tx_service::MempoolMetrics;
 use logos_blockchain_utils::{math::NonNegativeF64, net::get_available_tcp_port};
-use logos_blockchain_wallet::WalletServiceSettings;
+use logos_blockchain_wallet_service::WalletServiceSettings;
 use reqwest::Url;
 use tempfile::NamedTempFile;
 use tokio::time::error::Elapsed;
-use logos_blockchain_tx_service::MempoolMetrics;
 
 use super::{CLIENT, create_tempdir, get_exe_path, persist_tempdir};
 use crate::{

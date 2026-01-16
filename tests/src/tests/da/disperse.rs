@@ -1,11 +1,12 @@
 use std::time::Duration;
 
-use logos_blockchain_chain_service::StartingState;
 use futures::StreamExt as _;
-use logos_blockchain_kzgrs_backend::{common::share::DaShare, reconstruction::reconstruct_without_missing_data};
-use serial_test::serial;
+use logos_blockchain_chain_service::StartingState;
+use logos_blockchain_kzgrs_backend::{
+    common::share::DaShare, reconstruction::reconstruct_without_missing_data,
+};
 use logos_blockchain_subnetworks_assignations::MembershipHandler as _;
-use tests::{
+use logos_blockchain_tests::{
     common::da::{
         disseminate_with_metadata, setup_test_channel, wait_for_blob_onchain,
         wait_for_shares_number,
@@ -14,6 +15,7 @@ use tests::{
     secret_key_to_peer_id,
     topology::{Topology, TopologyConfig, configs::create_general_configs},
 };
+use serial_test::serial;
 use tokio::time::interval;
 
 #[ignore = "for manual usage, disseminate_retrieve_reconstruct is preferred for ci"]

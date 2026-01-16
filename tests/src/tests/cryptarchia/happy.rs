@@ -2,7 +2,7 @@ use std::{collections::HashSet, time::Duration};
 
 use futures::stream::{self, StreamExt as _};
 use serial_test::serial;
-use tests::{
+use logos_blockchain_tests::{
     adjust_timeout,
     topology::{Topology, TopologyConfig},
 };

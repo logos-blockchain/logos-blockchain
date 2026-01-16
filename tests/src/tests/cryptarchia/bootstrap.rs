@@ -5,8 +5,7 @@ use std::{
 
 use futures::stream::{self, StreamExt as _};
 use logos_blockchain_libp2p::PeerId;
-use serial_test::serial;
-use tests::{
+use logos_blockchain_tests::{
     adjust_timeout,
     common::sync::{wait_for_validators_mode, wait_for_validators_mode_and_height},
     nodes::validator::{Validator, create_validator_config},
@@ -16,6 +15,7 @@ use tests::{
         network::{Libp2pNetworkLayout, NetworkParams},
     },
 };
+use serial_test::serial;
 
 #[tokio::test]
 #[serial]
