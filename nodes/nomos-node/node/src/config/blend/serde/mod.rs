@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use derivative::Derivative;
 use key_management_system_service::backend::preload::KeyId;
 use nomos_libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
@@ -14,7 +13,7 @@ pub mod edge;
 ///
 /// This includes all values that are not strictly related to any specific
 /// deployment and that users have to specify when starting up the node.
-#[derive(Clone, Debug, Derivative, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     /// The non-ephemeral signing key (NSK) ID corresponding to the public key
     /// registered in the membership (SDP).

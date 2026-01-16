@@ -7713,7 +7713,6 @@ dependencies = [
  "clap",
  "color-eyre",
  "cryptarchia-engine 0.1.0",
- "derivative",
  "futures",
  "groth16 0.1.0",
  "hex",
