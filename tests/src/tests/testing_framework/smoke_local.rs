@@ -1,3 +1,6 @@
+// TODO: Re-enable these once the nomos->logos-blockchain PR is merged and the
+// testing framework updated accordingly.
+
 // use std::time::Duration;
 
 // use testing_framework_core::scenario::{Deployer as _, ScenarioBuilder};
@@ -9,10 +12,10 @@
 // std::error::Error + Send + Sync>> {     // Required env vars (set on the
 // command line when running this test):     // - `POL_PROOF_DEV_MODE=true`
 // (required for local proof generation)     // - `LOGOS_BLOCKCHAIN_NODE_BIN=...
-// ` (path to `logos-blockchain-node` binary)     // - `LOGOS_BLOCKCHAIN_EXECUTOR_BIN=.
-// ..` (optional; only needed if the scenario spawns     //   executors)
-//     // - `RUST_LOG=info` (optional; better visibility)
-//     let _init_result = tracing_subscriber::fmt()
+// ` (path to `logos-blockchain-node` binary)     // -
+// `LOGOS_BLOCKCHAIN_EXECUTOR_BIN=. ..` (optional; only needed if the scenario
+// spawns     //   executors)     // - `RUST_LOG=info` (optional; better
+// visibility)     let _init_result = tracing_subscriber::fmt()
 //         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
 //         .try_init();
 
@@ -20,7 +23,7 @@
 
 //     let mut scenario =
 //         ScenarioBuilder::topology_with(|t|
-// t.network_star().validators(2).executors(0))             
+// t.network_star().validators(2).executors(0))
 // .with_run_duration(duration)             .expect_consensus_liveness()
 //             .build()?;
 

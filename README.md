@@ -202,7 +202,7 @@ a few minutes of your current system time) before launching the node, **or use a
 with the chain start time set to the current time:
 
 ```bash
-CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true logos-blockchain-node nodes/logos-blockchain-node/config-one-node.yaml --dev-mode-reset-chain-clock
+CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true logos-blockchain-node nodes/node/config-one-node.yaml --dev-mode-reset-chain-clock
 ```
 
 #### Manually set chain start time in config
@@ -214,7 +214,7 @@ Bash
 date -u +"%Y-%m-%d %H:%M:%S.000000 +00:00:00"
 ```
 
-Open nodes/logos-blockchain-node/config-one-node.yaml and locate the time section. Replace the chain_start_time value with the 
+Open nodes/node/config-one-node.yaml and locate the time section. Replace the `chain_start_time` value with the 
 output from the command above:
 YAML
 
@@ -239,13 +239,13 @@ the configuration.
 docker run -v "/path/to/config.yml" -v "/path/to/global_params:global/params/path" logos-blockchain /etc/logos-blockchain/config.yml
 ```
 
-To use an example configuration located at `nodes/logos-blockchain-node/config.yaml`, first run the test that generates the random
+To use an example configuration located at `nodes/node/config.yaml`, first run the test that generates the random
 kzgrs file and then run the docker container with the appropriate config and global params:
 
 ```bash
 cargo test --package kzgrs-backend write_random_kzgrs_params_to_file -- --ignored
 
-docker run -v "$(pwd)/nodes/logos-blockchain-node/config.yaml:/etc/logos-blockchain/config.yml" \
+docker run -v "$(pwd)/nodes/node/config.yaml:/etc/logos-blockchain/config.yml" \
   -v "$(pwd)/logos-blockchain-da/kzgrs-backend/kzgrs_test_params:/app/tests/kzgrs/kzgrs_test_params" \
   logos-blockchain /etc/logos-blockchain/config.yml
 
@@ -259,7 +259,7 @@ When the node is built locally, it can be run with example config for one node n
 cargo build --all-features --all-targets
 
 # Run node without connecting to any other node.
-CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true target/debug/logos-blockchain-node nodes/logos-blockchain-node/config-one-node.yaml
+CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true target/debug/logos-blockchain-node nodes/node/config-one-node.yaml
 ```
 
 Node stores its state inside the `db` directory. If there are any issues when restarting the node, please try removing 
@@ -267,7 +267,7 @@ Node stores its state inside the `db` directory. If there are any issues when re
 
 **Notes**
 
-- To use an example configuration located at `nodes/logos-blockchain-node/config.yaml`, first run the test that generates the 
+- To use an example configuration located at `nodes/node/config.yaml`, first run the test that generates the 
 random kzgrs file (`kzgrs_test_params`), leave it in `./tests/kzgrs/kzgrs_test_params` or place it in a convenient 
 location:
 

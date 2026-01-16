@@ -67,11 +67,11 @@ neither are defined, preference will be given to debug binaries.
 _**MacOS or Linux**_
 
 ```bash
-logos-blockchain-pol_PROOF_DEV_MODE=some_value cargo test --test test_cryptarchia_happy_path two_nodes_happy -- --no-capture
+POL_PROOF_DEV_MODE=some_value cargo test --test test_cryptarchia_happy_path two_nodes_happy -- --no-capture
 ```
 or 
 ```bash
-logos-blockchain-pol_PROOF_DEV_MODE=some_value USE_RELEASE_BINARIES=some_value cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
+POL_PROOF_DEV_MODE=some_value USE_RELEASE_BINARIES=some_value cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
 ```
 
 _**Windows (PowerShell)**_
@@ -96,7 +96,7 @@ To execute the test suite with the debug feature flag, use the following command
 _**MacOS or Linux**_
 
 ```bash
-logos-blockchain-pol_PROOF_DEV_MODE=some_value cargo test -p tests -F debug disseminate_and_retrieve
+POL_PROOF_DEV_MODE=some_value cargo test -p tests -F debug disseminate_and_retrieve
 ```
 
 _**Windows (PowerShell)**_

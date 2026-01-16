@@ -1,4 +1,7 @@
-// use std::path::PathBuf;
+// TODO: Re-enable these once the nomos->logos-blockchain PR is merged and the
+// testing framework updated accordingly.
+
+//  use std::path::PathBuf;
 
 // use cucumber::World as _;
 // use cucumber_ext::TestingFrameworkWorld;

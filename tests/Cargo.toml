@@ -1,3 +1,5 @@
+# TODO: Re-enable commented out dependencies and tests once the nomos->logos-blockchain PR is merged and the testing framework updated accordingly.
+
 [package]
 categories  = { workspace = true }
 description = { workspace = true }

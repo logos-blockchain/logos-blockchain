@@ -1,10 +1,7 @@
 on:
   pull_request:
   push:
-    branches: 
-      - master
-    # TODO: Remove
-      - aa/nomos-to-logos
+    branches: [ master ]
 
 name: Code checks
 
