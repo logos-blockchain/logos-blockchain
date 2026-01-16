@@ -16,7 +16,7 @@ use futures::{
 use key_management_system_service::{
     api::KmsServiceApi,
     keys::{KeyOperators, PublicKeyEncoding},
-    operators::ed25519::exfiltrate_secret_key::ExfiltrateSecretKeyOperator,
+    operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
 };
 use network::NetworkAdapter;
 use nomos_blend::{
@@ -341,7 +341,7 @@ where
             kms_api
                 .execute(
                     blend_config.non_ephemeral_signing_key_id.clone(),
-                    KeyOperators::Ed25519(Box::new(ExfiltrateSecretKeyOperator::new(sender))),
+                    KeyOperators::Ed25519(Box::new(LeakSecretKeyOperator::new(sender))),
                 )
                 .await
                 .expect("Failed to interact with KMS to fetch non-ephemeral signing key.");

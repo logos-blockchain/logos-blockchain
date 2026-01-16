@@ -7,17 +7,17 @@ use crate::keys::{
     Ed25519Key, UnsecuredEd25519Key, errors::KeyError, secured_key::SecureKeyOperator,
 };
 
-pub struct ExfiltrateSecretKeyOperator {
+pub struct LeakSecretKeyOperator {
     response_channel: oneshot::Sender<UnsecuredEd25519Key>,
 }
 
-impl Debug for ExfiltrateSecretKeyOperator {
+impl Debug for LeakSecretKeyOperator {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ExfiltrateSecretKeyOperator").finish()
+        f.debug_struct("LeakSecretKeyOperator").finish()
     }
 }
 
-impl ExfiltrateSecretKeyOperator {
+impl LeakSecretKeyOperator {
     #[must_use]
     pub const fn new(response_channel: oneshot::Sender<UnsecuredEd25519Key>) -> Self {
         Self { response_channel }
@@ -25,7 +25,7 @@ impl ExfiltrateSecretKeyOperator {
 }
 
 #[async_trait::async_trait]
-impl SecureKeyOperator for ExfiltrateSecretKeyOperator {
+impl SecureKeyOperator for LeakSecretKeyOperator {
     type Key = Ed25519Key;
     type Error = KeyError;
 

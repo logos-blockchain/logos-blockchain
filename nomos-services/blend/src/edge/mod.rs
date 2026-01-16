@@ -17,7 +17,7 @@ use chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use futures::{Stream, StreamExt as _};
 use key_management_system_service::{
     api::KmsServiceApi, keys::KeyOperators,
-    operators::ed25519::exfiltrate_secret_key::ExfiltrateSecretKeyOperator,
+    operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
 };
 use nomos_blend::{
     message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
@@ -217,7 +217,7 @@ where
             let (sender, receiver) = oneshot::channel();
             kms.execute(
                 settings.non_ephemeral_signing_key_id,
-                KeyOperators::Ed25519(Box::new(ExfiltrateSecretKeyOperator::new(sender))),
+                KeyOperators::Ed25519(Box::new(LeakSecretKeyOperator::new(sender))),
             )
             .await
             .expect("Failed to interact with KMS to fetch non-ephemeral signing key.");
