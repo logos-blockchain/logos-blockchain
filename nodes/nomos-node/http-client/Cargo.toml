@@ -14,11 +14,12 @@ workspace = true
 
 [dependencies]
 broadcast-service     = { workspace = true }
+chain-service         = { workspace = true }
 futures               = { default-features = false, version = "0.3.31" }
 nomos-core            = { workspace = true }
 nomos-da-messages     = { workspace = true }
 nomos-http-api-common = { workspace = true }
-reqwest               = { features = ["json", "stream"], workspace = true }
+reqwest               = { features = ["json", "rustls-tls", "stream"], workspace = true }
 serde                 = { workspace = true }
 serde_json            = { default-features = false, version = "1.0.140" }
 thiserror             = "1.0"

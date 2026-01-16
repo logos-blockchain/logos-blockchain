@@ -8,6 +8,8 @@ use nomos_ledger::{EpochState, UtxoTree};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch::Sender;
 
+use crate::WinningPolInfo;
+
 #[derive(Clone)]
 pub struct Leader {
     sk: UnsecuredZkKey,
@@ -46,7 +48,7 @@ impl Leader {
             let public_inputs = public_inputs_for_slot(epoch_state, slot, latest_tree);
 
             let note_id = utxo.id().0;
-            let secret_key = self.slot_secret_key(slot);
+            let secret_key = self.secret_key();
 
             #[cfg(feature = "pol-dev-mode")]
             let winning = public_inputs.check_winning_dev(
@@ -82,7 +84,6 @@ impl Leader {
 
                 winning_pol_info_notifier.notify_about_winning_slot(
                     private_inputs.clone(),
-                    secret_key,
                     epoch_state.epoch,
                     slot,
                 );
@@ -151,12 +152,7 @@ impl Leader {
                 Vec::new()
             }
         };
-        let slot_secret = *self.sk.as_fr();
-        let starting_slot = self
-            .config
-            .epoch_config
-            .starting_slot(&epoch_state.epoch, self.config.base_period_length())
-            .into();
+        let secret_key = *self.sk.as_fr();
         let leader_signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let leader_pk = leader_signing_key.public_key(); // TODO: get actual leader public key
 
@@ -165,13 +161,12 @@ impl Leader {
             *utxo,
             &aged_path,
             &latest_path,
-            slot_secret,
-            starting_slot,
+            secret_key,
             &leader_pk,
         ))
     }
 
-    fn slot_secret_key(&self, _slot: Slot) -> UnsecuredZkKey {
+    fn secret_key(&self) -> UnsecuredZkKey {
         self.sk.clone()
     }
 }
@@ -197,7 +192,7 @@ fn public_inputs_for_slot(
 /// notifying all consumers via the provided sender channel.
 pub struct WinningPoLSlotNotifier<'service> {
     leader: &'service Leader,
-    sender: &'service Sender<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>,
+    sender: &'service Sender<Option<WinningPolInfo>>,
     /// Keeps track of the last processed epoch, if any, and for it the first
     /// winning slot that was pre-computed, if any.
     last_processed_epoch_and_found_first_winning_slot: Option<(Epoch, Option<Slot>)>,
@@ -206,7 +201,7 @@ pub struct WinningPoLSlotNotifier<'service> {
 impl<'service> WinningPoLSlotNotifier<'service> {
     pub(super) const fn new(
         leader: &'service Leader,
-        sender: &'service Sender<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>,
+        sender: &'service Sender<Option<WinningPolInfo>>,
     ) -> Self {
         Self {
             leader,
@@ -256,7 +251,7 @@ impl<'service> WinningPoLSlotNotifier<'service> {
                 let slot = epoch_starting_slot
                     .checked_add(offset)
                     .expect("Slot calculation overflow.");
-                let secret_key = self.leader.slot_secret_key(slot.into());
+                let secret_key = self.leader.secret_key();
 
                 let public_inputs = public_inputs_for_slot(epoch_state, slot.into(), &latest_tree);
                 if !public_inputs.check_winning(utxo.note.value, note_id, *secret_key.as_fr()) {
@@ -277,11 +272,7 @@ impl<'service> WinningPoLSlotNotifier<'service> {
                     continue;
                 };
 
-                if let Err(err) = self.sender.send(Some((
-                    leader_private,
-                    secret_key.clone(),
-                    epoch_state.epoch,
-                ))) {
+                if let Err(err) = self.sender.send(Some((leader_private, epoch_state.epoch))) {
                     tracing::error!(
                         "Failed to send pre-calculated PoL winning slots to receivers. Error: {err:?}"
                     );
@@ -303,7 +294,6 @@ impl<'service> WinningPoLSlotNotifier<'service> {
     pub(super) fn notify_about_winning_slot(
         &self,
         private_inputs: LeaderPrivate,
-        secret_key: UnsecuredZkKey,
         epoch: Epoch,
         slot: Slot,
     ) {
@@ -319,7 +309,7 @@ impl<'service> WinningPoLSlotNotifier<'service> {
             return;
         }
 
-        if let Err(err) = self.sender.send(Some((private_inputs, secret_key, epoch))) {
+        if let Err(err) = self.sender.send(Some((private_inputs, epoch))) {
             tracing::error!(
                 "Failed to send pre-calculated PoL winning slots to receivers. Error: {err:?}"
             );

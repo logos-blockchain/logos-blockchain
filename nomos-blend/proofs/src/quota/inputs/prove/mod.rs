@@ -82,11 +82,8 @@ fn witness_input_for_proof_type(
                 note_value,
                 output_number,
                 slot,
-                slot_secret,
-                slot_secret_path,
-                starting_slot,
+                secret_key,
                 transaction_hash,
-                ..
             } = *leadership_quota_private_inputs;
 
             let wallet_input_data = PoQWalletInputsData {
@@ -94,9 +91,7 @@ fn witness_input_for_proof_type(
                 note_value,
                 output_number,
                 slot,
-                slot_secret,
-                slot_secret_path,
-                starting_slot,
+                secret_key,
                 transaction_hash,
             };
             PoQWitnessInputs::from_leader_data(

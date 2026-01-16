@@ -57,6 +57,7 @@ use crate::{
 };
 
 pub type SampleArgs<Membership> = (HeaderId, HashMap<Membership, HashSet<BlobId>>);
+pub type CommitmentsArgs<Membership> = (HeaderId, Membership, BlobId);
 
 // Metrics
 const EVENT_SAMPLING: &str = "sampling";
@@ -237,6 +238,15 @@ where
             .behaviour()
             .sampling_behaviour()
             .historical_request_channel()
+    }
+
+    pub fn historic_commitments_request_channel(
+        &mut self,
+    ) -> UnboundedSender<CommitmentsArgs<HistoricMembership>> {
+        self.swarm
+            .behaviour()
+            .sampling_behaviour()
+            .historical_commitments_request_channel()
     }
 
     pub fn commitments_request_channel(&mut self) -> UnboundedSender<(BlobId, SessionNumber)> {

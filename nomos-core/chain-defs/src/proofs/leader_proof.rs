@@ -6,7 +6,7 @@ use poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-const POL_PROOF_DEV_MODE: &str = "POL_PROOF_DEV_MODE";
+pub const POL_PROOF_DEV_MODE: &str = "POL_PROOF_DEV_MODE";
 
 use crate::{
     mantle::{
@@ -254,8 +254,7 @@ impl LeaderPrivate {
         note: Utxo,
         aged_path: &MerklePath<Fr>,
         latest_path: &MerklePath<Fr>,
-        slot_secret: Fr,
-        starting_slot: u64,
+        secret_key: Fr,
         leader_pk: &Ed25519PublicKey,
     ) -> Self {
         let public_key = *leader_pk;
@@ -282,9 +281,7 @@ impl LeaderPrivate {
                 .iter()
                 .map(|n| matches!(n, MerkleNode::Right(_)))
                 .collect(),
-            slot_secret,
-            slot_secret_path: vec![], // TODO: implement
-            starting_slot,
+            secret_key,
         };
         let input = pol::PolWitnessInputsData::from_chain_and_wallet_data(chain, wallet);
         Self {

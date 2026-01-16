@@ -79,7 +79,12 @@ impl MembershipStorageAdapter<PeerId, SubnetworkId> for MockStorage {
         Ok(state.provider_mappings.get(&id).copied())
     }
 
-    async fn prune(&self) {
-        todo!()
+    async fn prune(&self, cutoff_session: SessionNumber) -> Result<(), DynError> {
+        self.state
+            .lock()
+            .unwrap()
+            .assignations
+            .retain(|key, _| *key >= cutoff_session);
+        Ok(())
     }
 }

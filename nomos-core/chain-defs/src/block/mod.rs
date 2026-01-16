@@ -252,7 +252,6 @@ mod tests {
             &aged_path,
             &latest_path,
             Fr::from(6),
-            0,
             &verifying_key,
         );
         Groth16LeaderProof::prove(private_inputs, VoucherCm::default())

@@ -21,7 +21,7 @@ use nomos_da_network_core::{
     protocols::sampling::opinions::OpinionEvent,
     swarm::{
         BalancerStats, MonitorStats,
-        validator::{SampleArgs, SwarmSettings, ValidatorSwarm},
+        validator::{CommitmentsArgs, SampleArgs, SwarmSettings, ValidatorSwarm},
     },
 };
 use nomos_libp2p::ed25519;
@@ -40,8 +40,8 @@ use crate::{
         libp2p::common::{
             BROADCAST_CHANNEL_SIZE, CommitmentsEvent, DaNetworkBackendSettings,
             HistoricSamplingEvent, SamplingEvent, VerificationEvent, handle_balancer_command,
-            handle_historic_sample_request, handle_monitor_command, handle_sample_request,
-            handle_validator_events_stream,
+            handle_historic_commitments_request, handle_historic_sample_request,
+            handle_monitor_command, handle_sample_request, handle_validator_events_stream,
         },
     },
     membership::handler::{DaMembershipHandler, SharedMembershipHandler},
@@ -99,6 +99,8 @@ pub struct DaNetworkValidatorBackend<Membership> {
     commitments_request_channel: UnboundedSender<(BlobId, SessionNumber)>,
     historic_sample_request_channel:
         UnboundedSender<SampleArgs<SharedMembershipHandler<Membership>>>,
+    historic_commitments_request_channel:
+        UnboundedSender<CommitmentsArgs<SharedMembershipHandler<Membership>>>,
     balancer_command_sender: UnboundedSender<ConnectionBalancerCommand<BalancerStats>>,
     monitor_command_sender: UnboundedSender<ConnectionMonitorCommand<MonitorStats>>,
     sampling_broadcast_receiver: broadcast::Receiver<SamplingEvent>,
@@ -175,6 +177,8 @@ where
         let shares_request_channel = validator_swarm.shares_request_channel();
         let commitments_request_channel = validator_swarm.commitments_request_channel();
         let historic_sample_request_channel = validator_swarm.historic_sample_request_channel();
+        let historic_commitments_request_channel =
+            validator_swarm.historic_commitments_request_channel();
         let balancer_command_sender = validator_swarm.balancer_command_channel();
         let monitor_command_sender = validator_swarm.monitor_command_channel();
 
@@ -215,6 +219,7 @@ where
             shares_request_channel,
             commitments_request_channel,
             historic_sample_request_channel,
+            historic_commitments_request_channel,
             balancer_command_sender,
             monitor_command_sender,
             sampling_broadcast_receiver,
@@ -307,6 +312,21 @@ where
     ) {
         handle_historic_sample_request(&self.historic_sample_request_channel, block_id, blob_ids)
             .await;
+    }
+
+    async fn start_historic_commitments(
+        &self,
+        block_id: HeaderId,
+        blob_id: BlobId,
+        session: Self::HistoricMembership,
+    ) {
+        handle_historic_commitments_request(
+            &self.historic_commitments_request_channel,
+            block_id,
+            blob_id,
+            session,
+        )
+        .await;
     }
 
     fn local_peer_id(&self) -> (PeerId, ProviderId) {

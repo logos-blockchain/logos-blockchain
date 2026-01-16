@@ -10,7 +10,7 @@ use zksign::{ZkSignError, ZkSignPrivateKeysData, ZkSignWitnessInputs};
 
 use crate::keys::zk::{public::PublicKey, signature::Signature};
 
-static NOMOS_KDF: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"NOMOS_KDF"));
+static KDF: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"KDF"));
 
 /// A ZK secret key exposing methods to retrieve its inner secret value.
 ///
@@ -60,9 +60,7 @@ impl SecretKey {
 
     #[must_use]
     pub fn to_public_key(&self) -> PublicKey {
-        PublicKey::new(<Poseidon2Bn254Hasher as Digest>::compress(&[
-            *NOMOS_KDF, self.0,
-        ]))
+        PublicKey::new(<Poseidon2Bn254Hasher as Digest>::compress(&[*KDF, self.0]))
     }
 }
 

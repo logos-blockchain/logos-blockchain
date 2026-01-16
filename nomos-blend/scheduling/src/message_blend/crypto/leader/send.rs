@@ -191,11 +191,8 @@ mod test {
                     aged_path_and_selectors: [(ZkHash::ZERO, false); _],
                     note_value: 1,
                     output_number: 1,
-                    pol_secret_key: ZkHash::ZERO,
+                    secret_key: ZkHash::ZERO,
                     slot: 1,
-                    slot_secret: ZkHash::ZERO,
-                    slot_secret_path: [ZkHash::ZERO; _],
-                    starting_slot: 1,
                     transaction_hash: ZkHash::ZERO,
                 },
             );
@@ -210,11 +207,8 @@ mod test {
             aged_path_and_selectors: [(ZkHash::ONE, true); _],
             note_value: 2,
             output_number: 2,
-            pol_secret_key: ZkHash::ONE,
+            secret_key: ZkHash::ONE,
             slot: 2,
-            slot_secret: ZkHash::ONE,
-            slot_secret_path: [ZkHash::ONE; _],
-            starting_slot: 2,
             transaction_hash: ZkHash::ONE,
         };
 

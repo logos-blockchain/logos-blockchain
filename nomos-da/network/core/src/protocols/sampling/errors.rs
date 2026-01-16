@@ -70,6 +70,12 @@ pub enum SamplingError {
         session: SessionNumber,
         blob_id: BlobId,
     },
+
+    #[error("Mismatch session {session} for blob {blob_id:?}")]
+    CommitmentsMismatchSession {
+        session: SessionNumber,
+        blob_id: BlobId,
+    },
 }
 
 impl SamplingError {
@@ -86,7 +92,9 @@ impl SamplingError {
             | Self::InvalidBlobId { peer_id, .. }
             | Self::MismatchSubnetwork { peer_id, .. }
             | Self::BlobNotFound { peer_id, .. } => Some(peer_id),
-            Self::MismatchSession { .. } | Self::NoSubnetworkPeers { .. } => None,
+            Self::MismatchSession { .. }
+            | Self::NoSubnetworkPeers { .. }
+            | Self::CommitmentsMismatchSession { .. } => None,
         }
     }
 
@@ -190,6 +198,12 @@ impl Clone for SamplingError {
                 session: *session,
                 blob_id: *blob_id,
             },
+            Self::CommitmentsMismatchSession { session, blob_id } => {
+                Self::CommitmentsMismatchSession {
+                    session: *session,
+                    blob_id: *blob_id,
+                }
+            }
         }
     }
 }
@@ -200,4 +214,21 @@ pub enum HistoricSamplingError {
     SamplingFailed(OpinionEvent),
     #[error("Internal server error: {0}")]
     InternalServerError(String),
+}
+
+#[derive(Error, Debug, Clone)]
+pub enum HistoricCommitmentsError {
+    #[error("Historic commitments sampling failed")]
+    CommitmentsFailed(OpinionEvent),
+    #[error("Internal server error: {0}")]
+    InternalServerError(String),
+}
+
+impl From<HistoricSamplingError> for HistoricCommitmentsError {
+    fn from(err: HistoricSamplingError) -> Self {
+        match err {
+            HistoricSamplingError::SamplingFailed(opinion) => Self::CommitmentsFailed(opinion),
+            HistoricSamplingError::InternalServerError(msg) => Self::InternalServerError(msg),
+        }
+    }
 }

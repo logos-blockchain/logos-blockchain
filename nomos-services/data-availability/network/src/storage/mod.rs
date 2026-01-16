@@ -46,7 +46,7 @@ pub trait MembershipStorageAdapter<Id, NetworkId> {
 
     async fn get_provider_id(&self, id: Id) -> Result<Option<ProviderId>, DynError>;
 
-    async fn prune(&self);
+    async fn prune(&self, cutoff_session: SessionNumber) -> Result<(), DynError>;
 }
 
 pub struct MembershipStorage<MembershipAdapter, Membership, AddressBook> {
@@ -156,6 +156,10 @@ where
 
         Ok(Some(membership.unwrap()))
     }
+
+    pub async fn prune(&self, cutoff_session: SessionNumber) -> Result<(), DynError> {
+        self.membership_adapter.prune(cutoff_session).await
+    }
 }
 
 #[async_trait::async_trait]
@@ -201,7 +205,7 @@ where
         (**self).get_provider_id(id).await
     }
 
-    async fn prune(&self) {
-        (**self).prune().await;
+    async fn prune(&self, cutoff_session: SessionNumber) -> Result<(), DynError> {
+        (**self).prune(cutoff_session).await
     }
 }

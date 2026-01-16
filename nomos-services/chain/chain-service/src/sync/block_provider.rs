@@ -968,8 +968,7 @@ mod tests {
                 utxo,
                 &aged_path,
                 &latest_path,
-                Fr::from(6), // slot secret
-                0,           // starting slot
+                Fr::from(6), // secret key
                 &Ed25519Key::from_bytes(&[1u8; 32]).public_key(),
             );
 

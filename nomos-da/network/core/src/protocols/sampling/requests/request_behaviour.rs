@@ -542,7 +542,9 @@ where
             }
 
             // No opinion needed - no peer to evaluate
-            SamplingError::NoSubnetworkPeers { .. } | SamplingError::MismatchSession { .. } => {}
+            SamplingError::NoSubnetworkPeers { .. }
+            | SamplingError::MismatchSession { .. }
+            | SamplingError::CommitmentsMismatchSession { .. } => {}
         }
     }
 
@@ -577,7 +579,7 @@ where
                 cx.waker().wake_by_ref();
                 return Some(Poll::Ready(ToSwarm::GenerateEvent(
                     SamplingEvent::SamplingError {
-                        error: SamplingError::MismatchSession { blob_id, session },
+                        error: SamplingError::CommitmentsMismatchSession { blob_id, session },
                     },
                 )));
             }

@@ -48,7 +48,7 @@ use crate::{
             monitor::MonitorEvent,
             policy::DAConnectionPolicy,
         },
-        validator::{SampleArgs, SwarmSettings, ValidatorEventsStream},
+        validator::{CommitmentsArgs, SampleArgs, SwarmSettings, ValidatorEventsStream},
     },
 };
 
@@ -227,6 +227,15 @@ where
             .behaviour()
             .sampling_behaviour()
             .historical_request_channel()
+    }
+
+    pub fn historic_commitments_request_channel(
+        &mut self,
+    ) -> UnboundedSender<CommitmentsArgs<HistoricMembership>> {
+        self.swarm
+            .behaviour()
+            .sampling_behaviour()
+            .historical_commitments_request_channel()
     }
 
     pub fn commitments_request_channel(&mut self) -> UnboundedSender<(BlobId, SessionNumber)> {

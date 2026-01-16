@@ -119,6 +119,11 @@ pub trait StorageDaApi {
         assignations: HashMap<Self::NetworkId, HashSet<Self::Id>>,
     ) -> Result<(), Self::Error>;
 
+    async fn prune_assignations(
+        &mut self,
+        cutoff_session: SessionNumber,
+    ) -> Result<(), Self::Error>;
+
     async fn store_providerid_mappings(
         &mut self,
         mappings: HashMap<Self::Id, ProviderId>,
