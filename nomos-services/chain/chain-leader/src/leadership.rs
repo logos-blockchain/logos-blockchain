@@ -69,17 +69,20 @@ impl Leader {
                     epoch_state.total_stake()
                 );
 
-                let Some(private_inputs) = self.private_inputs_for_winning_utxo_and_slot(
+                let private_inputs = match self.private_inputs_for_winning_utxo_and_slot(
                     utxo,
                     epoch_state,
                     public_inputs,
                     latest_tree,
-                ) else {
-                    tracing::error!(
-                        "Failed to build private inputs for winning utxo {:?} for {slot:?}",
-                        utxo.id(),
-                    );
-                    continue;
+                ) {
+                    Ok(private_inputs) => private_inputs,
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to build private inputs for winning utxo {:?} for {slot:?}: {e:?}",
+                            utxo.id(),
+                        );
+                        continue;
+                    }
                 };
 
                 winning_pol_info_notifier.notify_about_winning_slot(
@@ -131,11 +134,13 @@ impl Leader {
         epoch_state: &EpochState,
         public_inputs: LeaderPublic,
         latest_tree: &UtxoTree,
-    ) -> Option<LeaderPrivate> {
+    ) -> Result<LeaderPrivate, PrivateInputsError> {
         let aged_path = {
             #[cfg(not(feature = "pol-dev-mode"))]
             {
-                epoch_state.utxo_merkle_path(utxo)?
+                epoch_state
+                    .utxo_merkle_path(utxo)
+                    .ok_or(PrivateInputsError::AgedNoteNotFound)?
             }
             #[cfg(feature = "pol-dev-mode")]
             {
@@ -145,7 +150,9 @@ impl Leader {
         let latest_path = {
             #[cfg(not(feature = "pol-dev-mode"))]
             {
-                latest_tree.path(&utxo.id())?
+                latest_tree
+                    .path(&utxo.id())
+                    .ok_or(PrivateInputsError::LatestNoteNotFound)?
             }
             #[cfg(feature = "pol-dev-mode")]
             {
@@ -156,7 +163,7 @@ impl Leader {
         let leader_signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let leader_pk = leader_signing_key.public_key(); // TODO: get actual leader public key
 
-        Some(LeaderPrivate::new(
+        Ok(LeaderPrivate::new(
             public_inputs,
             *utxo,
             &aged_path,
@@ -183,6 +190,18 @@ fn public_inputs_for_slot(
         slot.into(),
         epoch_state.total_stake(),
     )
+}
+
+#[cfg_attr(
+    feature = "pol-dev-mode",
+    expect(unused, reason = "used only in non-dev mode currently")
+)]
+#[derive(thiserror::Error, Debug)]
+enum PrivateInputsError {
+    #[error("Aged note not found from merkle tree")]
+    AgedNoteNotFound,
+    #[error("Latest note not found from merkle tree")]
+    LatestNoteNotFound,
 }
 
 /// Process every tick and reacts to the very first one received and the first
@@ -259,17 +278,20 @@ impl<'service> WinningPoLSlotNotifier<'service> {
                 }
                 tracing::debug!("Found winning utxo with ID {:?} for slot {slot}", utxo.id());
 
-                let Some(leader_private) = self.leader.private_inputs_for_winning_utxo_and_slot(
+                let leader_private = match self.leader.private_inputs_for_winning_utxo_and_slot(
                     utxo,
                     epoch_state,
                     public_inputs,
                     &latest_tree,
-                ) else {
-                    tracing::error!(
-                        "Failed to build private inputs for winning utxo {:?} for {slot:?}",
-                        utxo.id(),
-                    );
-                    continue;
+                ) {
+                    Ok(leader_private) => leader_private,
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to build private inputs for winning utxo {:?} for {slot:?}: {e:?}",
+                            utxo.id(),
+                        );
+                        continue;
+                    }
                 };
 
                 if let Err(err) = self.sender.send(Some((leader_private, epoch_state.epoch))) {
