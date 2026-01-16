@@ -52,6 +52,7 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
             nat_config,
             identify_protocol_name,
             kad_protocol_name,
+            chain_sync_protocol_name,
             host,
             port,
             ..
@@ -70,6 +71,7 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
                         nat_config,
                         kad_protocol_name: kad_protocol_name.into(),
                         identify_protocol_name: identify_protocol_name.into(),
+                        chain_sync_protocol_name: chain_sync_protocol_name.into(),
                         public_key: keypair.public(),
                         chain_sync_config,
                     },

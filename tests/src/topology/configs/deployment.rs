@@ -25,6 +25,10 @@ use logos_blockchain_utils::math::NonNegativeF64;
 
 use crate::topology::configs::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Deployment settings are inherently verbose."
+)]
 #[must_use]
 pub fn default_e2e_deployment_settings() -> DeploymentSettings {
     let slot_duration_in_secs = std::env::var(CONSENSUS_SLOT_TIME_VAR)
@@ -74,8 +78,13 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
             },
         },
         NetworkDeploymentSettings {
-            identify_protocol_name: StreamProtocol::new("/integration/logos-blockchain/identify/1.0.0"),
+            identify_protocol_name: StreamProtocol::new(
+                "/integration/logos-blockchain/identify/1.0.0",
+            ),
             kademlia_protocol_name: StreamProtocol::new("/integration/logos-blockchain/kad/1.0.0"),
+            chain_sync_protocol_name: StreamProtocol::new(
+                "/integration/logos-blockchain/chainsync/1.0.0",
+            ),
         },
         CryptarchiaDeploymentSettings {
             gossipsub_protocol: "/integration/logos-blockchain/cryptarchia/proto/1.0.0".to_owned(),

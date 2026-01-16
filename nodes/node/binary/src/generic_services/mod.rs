@@ -100,7 +100,7 @@ pub type MempoolBackend<RuntimeServiceId> = Mempool<
 >;
 
 pub type CryptarchiaService<RuntimeServiceId> =
-    CryptarchiaConsensus<SignedMantleTx, RocksBackend, RuntimeServiceId>;
+    CryptarchiaConsensus<SignedMantleTx, RocksBackend, NtpTimeBackend, RuntimeServiceId>;
 
 pub type ChainNetworkService<SamplingAdapter, RuntimeServiceId> = logos_blockchain_chain_network_service::ChainNetwork<
     CryptarchiaService<RuntimeServiceId>,

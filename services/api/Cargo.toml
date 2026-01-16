@@ -36,6 +36,7 @@ logos-blockchain-network-service          = { workspace = true }
 logos-blockchain-sdp-service              = { workspace = true }
 logos-blockchain-storage-service          = { features = ["rocksdb-backend"], workspace = true }
 logos-blockchain-subnetworks-assignations = { workspace = true }
+logos-blockchain-time-service             = { workspace = true }
 logos-blockchain-tx-service               = { features = ["libp2p", "mock", "openapi"], workspace = true }
 overwatch                                 = { workspace = true }
 serde                                     = { workspace = true }

@@ -1,5 +1,5 @@
 use futures::stream;
-use libp2p::PeerId;
+use libp2p::{PeerId, StreamProtocol};
 use libp2p_stream::Control;
 use tokio::{sync::oneshot, time, time::Duration};
 use tracing::error;
@@ -22,9 +22,10 @@ impl Downloader {
     pub async fn send_tip_request(
         peer_id: PeerId,
         control: &mut Control,
+        protocol_name: StreamProtocol,
         reply_sender: oneshot::Sender<Result<GetTipResponse, ChainSyncError>>,
     ) -> Result<TipRequestStream, ChainSyncError> {
-        let mut stream = open_stream(peer_id, control).await?;
+        let mut stream = open_stream(peer_id, control, protocol_name).await?;
 
         let tip_request = RequestMessage::GetTip;
         send_message(peer_id, &mut stream, &tip_request).await?;
@@ -37,9 +38,10 @@ impl Downloader {
         peer_id: PeerId,
         mut control: Control,
         request: DownloadBlocksRequest,
+        protocol_name: StreamProtocol,
         reply_sender: oneshot::Sender<BoxedStream<Result<SerialisedBlock, ChainSyncError>>>,
     ) -> Result<BlocksRequestStream, ChainSyncError> {
-        let mut stream = open_stream(peer_id, &mut control).await?;
+        let mut stream = open_stream(peer_id, &mut control, protocol_name).await?;
 
         let download_request = RequestMessage::DownloadBlocksRequest(request);
 

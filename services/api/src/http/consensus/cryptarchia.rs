@@ -3,13 +3,14 @@ use std::fmt::{Debug, Display};
 use logos_blockchain_chain_service::{ConsensusMsg, CryptarchiaConsensus, CryptarchiaInfo};
 use logos_blockchain_core::{header::HeaderId, mantle::SignedMantleTx};
 use logos_blockchain_storage_service::backends::rocksdb::RocksBackend;
+use logos_blockchain_time_service::backends::ntp::NtpTimeBackend;
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::sync::oneshot;
 
 use crate::http::DynError;
 
 pub type Cryptarchia<RuntimeServiceId> =
-    CryptarchiaConsensus<SignedMantleTx, RocksBackend, RuntimeServiceId>;
+    CryptarchiaConsensus<SignedMantleTx, RocksBackend, NtpTimeBackend, RuntimeServiceId>;
 
 pub async fn cryptarchia_info<RuntimeServiceId>(
     handle: &OverwatchHandle<RuntimeServiceId>,

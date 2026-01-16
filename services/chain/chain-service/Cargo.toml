@@ -25,6 +25,7 @@ logos-blockchain-ledger                  = { features = ["serde"], workspace = t
 logos-blockchain-network-service         = { workspace = true }
 logos-blockchain-services-utils          = { workspace = true }
 logos-blockchain-storage-service         = { workspace = true }
+logos-blockchain-time-service            = { workspace = true, features = ["ntp"] }
 logos-blockchain-utils                   = { workspace = true }
 num-bigint                               = { default-features = false, version = "0.4" }
 overwatch                                = { workspace = true }

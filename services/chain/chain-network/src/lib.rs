@@ -710,7 +710,6 @@ where
 {
     debug!("received proposal {:?}", block);
 
-    // TODO: filter on time?
     let header = block.header();
     let id = header.id();
 
