@@ -158,7 +158,7 @@ services:
       - TESTNET_ENDPOINT=http://logos-blockchain-node-1:18080
       - CHANNEL_ID=6d656d636f696e00000000000000000000000000000000000000000000000001
       - TOKEN_NAME=MEM
-    entrypoint: [ "/usr/bin/logos-blockchain-archiver" ]
+    entrypoint: [ "/usr/bin/logos-blockchain-demo-archiver" ]
 
 volumes:
   l2-sequencer-data:

@@ -180,7 +180,7 @@ fi
 if [[ "$SERVICE" == "archiver" || "$SERVICE" == "all" ]] && [ ! -f "$ARCHIVER_BIN" ]; then
     echo -e "${YELLOW}Building archiver...${NC}"
     cd "$REPO_ROOT"
-    cargo build --release -p logos-blockchain-archiver
+    cargo build --release -p logos-blockchain-demo-archiver
 fi
 
 # Run the selected service(s)

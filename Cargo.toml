@@ -84,7 +84,6 @@ resolver = "2"
 [workspace.dependencies]
 # Internal
 logos-blockchain-api-service                   = { default-features = false, path = "./services/api" }
-logos-blockchain-archiver                      = { default-features = false, path = "./testnet/l2-sequencer-archival-demo/archiver" }
 logos-blockchain-blend                         = { default-features = false, path = "./blend/core" }
 logos-blockchain-blend-crypto                  = { default-features = false, path = "./blend/crypto" }
 logos-blockchain-blend-message                 = { default-features = false, path = "./blend/message" }
@@ -113,6 +112,7 @@ logos-blockchain-da-network-core               = { default-features = false, pat
 logos-blockchain-da-network-service            = { default-features = false, path = "./services/data-availability/network" }
 logos-blockchain-da-sampling-service           = { default-features = false, path = "./services/data-availability/sampling" }
 logos-blockchain-da-verifier-service           = { default-features = false, path = "./services/data-availability/verifier" }
+logos-blockchain-demo-archiver                 = { default-features = false, path = "./testnet/l2-sequencer-archival-demo/archiver" }
 logos-blockchain-demo-sequencer                = { default-features = false, path = "./testnet/l2-sequencer-archival-demo/sequencer" }
 logos-blockchain-executor                      = { default-features = false, path = "./nodes/executor/binary" }
 logos-blockchain-executor-http-client          = { default-features = false, path = "./nodes/executor/http-client" }
