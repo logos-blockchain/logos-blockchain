@@ -8,10 +8,7 @@ pub mod config;
 pub mod time;
 
 use core::{fmt::Debug, hash::Hash};
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    ops::Deref,
-};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub use config::*;
 use thiserror::Error;
@@ -667,13 +664,20 @@ impl<Id> ReorgedBlocks<Id> {
     const fn new() -> Self {
         Self(vec![])
     }
-}
 
-impl<Id> Deref for ReorgedBlocks<Id> {
-    type Target = [Id];
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.0.len()
+    }
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    #[must_use]
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Id> {
+        self.0.iter()
     }
 }
 
@@ -899,7 +903,7 @@ pub mod tests {
         length: usize,
         cryptarchia: &Cryptarchia<Id>,
     ) {
-        assert_eq!(blocks.first().unwrap(), tip);
+        assert_eq!(blocks.iter().next().unwrap(), tip);
         assert_eq!(blocks.len(), length);
         blocks
             .iter()
