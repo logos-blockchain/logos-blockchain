@@ -4,7 +4,7 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "key-management-system-keys"
+name        = "logos-blockchain-key-management-system-keys"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }

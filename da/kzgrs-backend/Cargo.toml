@@ -4,7 +4,7 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "kzgrs-backend"
+name        = "logos-blockchain-kzgrs-backend"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
@@ -13,16 +13,16 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-ark-ff                = "0.4"
-ark-poly              = "0.4.2"
-ark-serialize         = "0.4.2"
-blake2                = { default-features = false, workspace = true }
-itertools             = { default-features = false, version = "0.12" }
-kzgrs                 = { workspace = true }
-logos-blockchain-core = { workspace = true }
-rand                  = { default-features = false, features = ["std"], workspace = true }
-rayon                 = { optional = true, version = "1.10.0" }
-serde                 = { workspace = true }
+ark-ff                 = "0.4"
+ark-poly               = "0.4.2"
+ark-serialize          = "0.4.2"
+blake2                 = { default-features = false, workspace = true }
+itertools              = { default-features = false, version = "0.12" }
+logos-blockchain-core  = { workspace = true }
+logos-blockchain-kzgrs = { workspace = true }
+rand                   = { default-features = false, features = ["std"], workspace = true }
+rayon                  = { optional = true, version = "1.10.0" }
+serde                  = { workspace = true }
 
 [dev-dependencies]
 ark-bls12-381 = { default-features = false, version = "0.4.0" }

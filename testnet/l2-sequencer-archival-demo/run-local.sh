@@ -168,8 +168,8 @@ echo "  Data directory:     $DATA_DIR"
 echo ""
 
 # Check if binaries exist, if not build them
-SEQUENCER_BIN="$REPO_ROOT/target/release/demo-sequencer"
-ARCHIVER_BIN="$REPO_ROOT/target/release/logos-blockchain-archiver"
+SEQUENCER_BIN="$REPO_ROOT/target/release/logos-blockchain-demo-sequencer"
+ARCHIVER_BIN="$REPO_ROOT/target/release/logos-blockchain-demo-archiver"
 
 if [[ "$SERVICE" == "sequencer" || "$SERVICE" == "all" ]] && [ ! -f "$SEQUENCER_BIN" ]; then
     echo -e "${YELLOW}Building sequencer...${NC}"

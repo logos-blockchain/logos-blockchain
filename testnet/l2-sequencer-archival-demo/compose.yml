@@ -11,7 +11,7 @@ services:
     depends_on:
       - l2-sequencer
       - l2-archiver
-    entrypoint: ["nginx", "-g", "daemon off;"]
+    entrypoint: [ "nginx", "-g", "daemon off;" ]
 
   l2-sequencer:
     container_name: l2_sequencer
@@ -27,7 +27,7 @@ services:
       - SEQUENCER_NODE_AUTH_PASSWORD=${SEQUENCER_NODE_PASSWORD}
     volumes:
       - l2-sequencer-data:/data
-    entrypoint: ["/usr/bin/demo-sequencer"]
+    entrypoint: [ "/usr/bin/logos-blockchain-demo-sequencer" ]
 
   l2-archiver:
     container_name: l2_archiver
@@ -40,7 +40,7 @@ services:
       - TOKEN_NAME=${TOKEN_NAME:-MEM}
     volumes:
       - l2-archiver-data:/data
-    entrypoint: ["/usr/bin/logos-blockchain-archiver"]
+    entrypoint: [ "/usr/bin/logos-blockchain-demo-archiver" ]
 
 volumes:
   l2-sequencer-data:

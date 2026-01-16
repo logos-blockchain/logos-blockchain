@@ -4,7 +4,7 @@ description = "Simple sequencer for demo - receives HTTP transactions and submit
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "demo-sequencer"
+name        = "logos-blockchain-demo-sequencer"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }

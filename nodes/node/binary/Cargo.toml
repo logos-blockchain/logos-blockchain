@@ -20,7 +20,7 @@ ignored = [
 workspace = true
 
 [dependencies]
-logos-blockchain-blockchain-blockchain-blockchain-blockchain-da-sampling = { features = [
+logos-blockchain-da-sampling = { features = [
 logos-blockchain-p2p",
   "rocksdb-backend",
 ], workspace = true }

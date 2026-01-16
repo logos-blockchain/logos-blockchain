@@ -4,7 +4,7 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "zksign"
+name        = "logos-blockchain-zksign"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }

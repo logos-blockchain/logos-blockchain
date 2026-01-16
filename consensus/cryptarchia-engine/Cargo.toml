@@ -4,7 +4,7 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "cryptarchia-engine"
+name        = "logos-blockchain-cryptarchia-engine"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }

@@ -4,7 +4,7 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "logos-blockchain-time"
+name        = "logos-blockchain-time-service"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
