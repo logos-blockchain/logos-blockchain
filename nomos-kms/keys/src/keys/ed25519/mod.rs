@@ -60,6 +60,7 @@ impl Ed25519Key {
         self.0.derive_x25519()
     }
 
+    #[cfg(feature = "unsafe")]
     pub(crate) fn into_unsecured(self) -> UnsecuredEd25519Key {
         self.0.clone()
     }
