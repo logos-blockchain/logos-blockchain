@@ -73,6 +73,9 @@ impl EpochState {
         self.utxos.root()
     }
 
+    /// Computes the Merkle path for the utxo.
+    /// The path is ordered from leaf to root (excluded).
+    /// Returns `None` if the utxo does not exist or has been removed.
     #[must_use]
     pub fn utxo_merkle_path(&self, utxo: &Utxo) -> Option<MerklePath<Fr>> {
         self.utxos.path(&utxo.id())
