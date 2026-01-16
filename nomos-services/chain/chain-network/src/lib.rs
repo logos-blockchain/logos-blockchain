@@ -696,7 +696,7 @@ async fn process_block<BlobStrategy, Cryptarchia, Mempool, SamplingBackend, Runt
     block: Block<Cryptarchia::Tx>,
     blob_validation: Option<&blob::Validation<BlobStrategy>>,
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
-    mempool_adapter: &MempoolAdapter<Mempool::Item, Mempool::Item>,
+    mempool_adapter: &MempoolAdapter<Mempool::Item>,
     sampling_relay: &SamplingRelay<SamplingBackend::BlobId>,
 ) -> Result<(), Error>
 where
@@ -716,7 +716,7 @@ where
         blob_validation.validate(&block).await?;
     }
 
-    let tip = cryptarchia.apply_block(block.clone()).await?;
+    let (tip, reorged_txs) = cryptarchia.apply_block(block.clone()).await?;
 
     // Remove included content from mempool if the block was applied to the honest
     // chain. Otherwise, we keep them in mempool, so they can be included to the
@@ -731,6 +731,13 @@ where
             )
             .await
             .unwrap_or_else(|e| error!("Could not mark transactions in block: {e}"));
+    }
+
+    // Re-insert reorged txs back into the mempool.
+    for tx in reorged_txs {
+        if let Err(e) = mempool_adapter.add_transaction(tx).await {
+            error!("Could not reinsert a reorged tx into mempool: {e:?}");
+        }
     }
 
     let blob_ids: Vec<da::BlobId> = block
@@ -765,12 +772,11 @@ async fn mark_blob_in_block<BlobId: Debug + Send>(
 }
 
 /// Reconstruct a Block from a Proposal by looking up transactions from mempool
-async fn reconstruct_block_from_proposal<Payload, Item>(
+async fn reconstruct_block_from_proposal<Item>(
     proposal: Proposal,
-    mempool: &MempoolAdapter<Payload, Item>,
+    mempool: &MempoolAdapter<Item>,
 ) -> Result<Block<Item>, Error>
 where
-    Payload: Send + Sync,
     Item: AuthenticatedMantleTx<Hash = TxHash> + Clone + Send + Sync + 'static,
 {
     let mempool_hashes: Vec<TxHash> = proposal.mempool_transactions().to_vec();

@@ -6,6 +6,8 @@ pub mod adapter;
 
 #[async_trait]
 pub trait MempoolAdapter<Tx>: Send + Sync {
+    async fn add_transaction(&self, tx: Tx) -> Result<(), overwatch::DynError>;
+
     async fn remove_transactions(&self, ids: &[TxHash]) -> Result<(), overwatch::DynError>;
 
     async fn get_transactions_by_hashes(
