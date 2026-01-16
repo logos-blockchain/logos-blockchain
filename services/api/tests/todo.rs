@@ -8,7 +8,7 @@ use std::{
 };
 
 use axum::{Router, routing};
-use logos_blockchain_api::{ApiService, ApiServiceSettings, Backend};
+use logos_blockchain_api_service::{ApiService, ApiServiceSettings, Backend};
 use overwatch::{
     DynError, derive_services,
     overwatch::{OverwatchRunner, handle::OverwatchHandle},

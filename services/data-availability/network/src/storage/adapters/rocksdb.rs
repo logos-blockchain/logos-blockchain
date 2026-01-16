@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use libp2p::{Multiaddr, PeerId};
 use logos_blockchain_core::sdp::{ProviderId, SessionNumber};
 use logos_blockchain_da_network_core::SubnetworkId;
-use logos_blockchain_storage::{StorageMsg, StorageService, backends::StorageBackend};
+use logos_blockchain_storage_service::{StorageMsg, StorageService, backends::StorageBackend};
 use overwatch::{DynError, services::relay::OutboundRelay};
 
 use crate::{membership::Assignations, storage::MembershipStorageAdapter};

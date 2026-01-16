@@ -21,22 +21,22 @@ use logos_blockchain_core::{
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
 };
-use logos_blockchain_da_sampling::{
+use logos_blockchain_da_sampling_service::{
     DaSamplingService, DaSamplingServiceMsg, backend::DaSamplingServiceBackend,
     mempool::DaMempoolAdapter,
 };
-use logos_blockchain_time::{SlotTick, TimeService, TimeServiceMessage};
+use logos_blockchain_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use services_utils::wait_until_services_are_ready;
+use logos_blockchain_services_utils::wait_until_services_are_ready;
 use thiserror::Error;
 use tokio::sync::{oneshot, watch};
 use tracing::{Level, error, info, instrument, span};
 use tracing_futures::Instrument as _;
-use tx_service::{
+use logos_blockchain_tx_service::{
     TxMempoolService,
     backend::{MemPool, RecoverableMempool},
     network::NetworkAdapter as MempoolNetworkAdapter,
@@ -130,12 +130,12 @@ pub struct CryptarchiaLeader<
     SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send,
     SamplingBackend::Settings: Clone,
     SamplingBackend::Share: Debug + 'static,
-    SamplingNetworkAdapter: logos_blockchain_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: logos_blockchain_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
-    TimeBackend: logos_blockchain_time::backends::TimeBackend,
+    SamplingNetworkAdapter: logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
+    SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
+    TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData,
-    Wallet: logos_blockchain_wallet::api::WalletServiceData,
+    Wallet: logos_blockchain_wallet_service::api::WalletServiceData,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     winning_pol_epoch_slots_sender: watch::Sender<Option<WinningPolInfo>>,
@@ -185,12 +185,12 @@ where
     SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send,
     SamplingBackend::Settings: Clone,
     SamplingBackend::Share: Debug + 'static,
-    SamplingNetworkAdapter: logos_blockchain_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: logos_blockchain_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
-    TimeBackend: logos_blockchain_time::backends::TimeBackend,
+    SamplingNetworkAdapter: logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
+    SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
+    TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData,
-    Wallet: logos_blockchain_wallet::api::WalletServiceData,
+    Wallet: logos_blockchain_wallet_service::api::WalletServiceData,
 {
     type Settings = LeaderSettings<TxS::Settings, BlendService::BroadcastSettings>;
     type State = overwatch::services::state::NoState<Self::Settings>;
@@ -262,13 +262,13 @@ where
     SamplingBackend::Settings: Clone,
     SamplingBackend::Share: Debug + Send + 'static,
     SamplingNetworkAdapter:
-        logos_blockchain_da_sampling::network::NetworkAdapter<RuntimeServiceId> + Send + Sync + 'static,
+        logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId> + Send + Sync + 'static,
     SamplingStorage:
-        logos_blockchain_da_sampling::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
-    TimeBackend: logos_blockchain_time::backends::TimeBackend,
+        logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
+    TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item>,
-    Wallet: logos_blockchain_wallet::api::WalletServiceData,
+    Wallet: logos_blockchain_wallet_service::api::WalletServiceData,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -341,7 +341,7 @@ where
         let mut winning_pol_slot_notifier =
             WinningPoLSlotNotifier::new(&leader, &self.winning_pol_epoch_slots_sender);
 
-        let wallet_api = logos_blockchain_wallet::api::WalletApi::<Wallet, RuntimeServiceId>::new(
+        let wallet_api = logos_blockchain_wallet_service::api::WalletApi::<Wallet, RuntimeServiceId>::new(
             self.service_resources_handle
                 .overwatch_handle
                 .relay::<Wallet>()
@@ -550,12 +550,12 @@ where
     SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send,
     SamplingBackend::Settings: Clone,
     SamplingBackend::Share: Debug + 'static,
-    SamplingNetworkAdapter: logos_blockchain_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: logos_blockchain_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
-    TimeBackend: logos_blockchain_time::backends::TimeBackend,
+    SamplingNetworkAdapter: logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
+    SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
+    TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
     CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item>,
-    Wallet: logos_blockchain_wallet::api::WalletServiceData,
+    Wallet: logos_blockchain_wallet_service::api::WalletServiceData,
     RuntimeServiceId: Sync + Send + 'static,
 {
     #[expect(clippy::allow_attributes_without_reason)]

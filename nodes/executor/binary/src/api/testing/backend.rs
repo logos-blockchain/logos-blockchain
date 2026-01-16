@@ -9,9 +9,9 @@ use axum::{
     routing::post,
 };
 use logos_blockchain_kzgrs_backend::common::share::DaShare;
-use logos_blockchain_api::Backend;
+use logos_blockchain_api_service::Backend;
 use logos_blockchain_da_network_service::backends::libp2p::executor::DaNetworkExecutorBackend;
-use logos_blockchain_da_sampling::{
+use logos_blockchain_da_sampling_service::{
     backend::kzgrs::KzgrsSamplingBackend,
     network::adapters::executor::Libp2pAdapter as SamplingLibp2pAdapter,
     storage::adapters::rocksdb::{
@@ -135,7 +135,7 @@ where
                 post(
                     da_historic_sampling::<
                         KzgrsSamplingBackend,
-                        logos_blockchain_da_sampling::network::adapters::executor::Libp2pAdapter<
+                        logos_blockchain_da_sampling_service::network::adapters::executor::Libp2pAdapter<
                             LogosBlockchainDaMembership,
                             DaMembershipAdapter<RuntimeServiceId>,
                             DaMembershipStorage,

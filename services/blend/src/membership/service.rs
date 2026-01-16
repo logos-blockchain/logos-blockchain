@@ -1,6 +1,6 @@
 use std::{hash::Hash, marker::PhantomData};
 
-use logos_blockchain_broadcast_service::{BlockBroadcastMsg, SessionSubscription, SessionUpdate};
+use logos_blockchain_chain_broadcast_service::{BlockBroadcastMsg, SessionSubscription, SessionUpdate};
 use futures::StreamExt as _;
 use logos_blockchain_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
 use logos_blockchain_blend::{

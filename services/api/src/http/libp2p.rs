@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
 
-use logos_blockchain_network::{
+use logos_blockchain_network_service::{
     NetworkService,
     backends::libp2p::{Command, Libp2p, Libp2pInfo, NetworkCommand::Info},
     message::NetworkMsg,

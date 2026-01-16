@@ -4,7 +4,7 @@ use std::{
 };
 
 use ::time::OffsetDateTime;
-use chain_leader::LeaderConfig;
+use logos_blockchain_chain_leader_service::LeaderConfig;
 use clap::{Parser, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use hex::FromHex as _;

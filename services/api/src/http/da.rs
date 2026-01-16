@@ -16,7 +16,7 @@ use logos_blockchain_core::{
     },
     sdp::SessionNumber,
 };
-use logos_blockchain_da_dispersal::{
+use logos_blockchain_da_dispersal_service::{
     DaDispersalMsg, DispersalService, adapters::network::DispersalNetworkAdapter,
     backend::DispersalBackend,
 };
@@ -30,16 +30,16 @@ use logos_blockchain_da_network_service::{
     },
     sdp::SdpAdapter as SdpAdapterTrait,
 };
-use logos_blockchain_da_sampling::{
+use logos_blockchain_da_sampling_service::{
     DaSamplingService, DaSamplingServiceMsg, backend::DaSamplingServiceBackend,
     mempool::DaMempoolAdapter as DaMempoolSamplingAdapter,
 };
-use logos_blockchain_da_verifier::{
+use logos_blockchain_da_verifier_service::{
     DaVerifierMsg, DaVerifierService, backend::VerifierBackend, mempool::DaMempoolAdapter,
     storage::adapters::rocksdb::RocksAdapter as VerifierStorageAdapter,
 };
 use logos_blockchain_libp2p::PeerId;
-use logos_blockchain_storage::{api::da::DaConverter, backends::rocksdb::RocksBackend};
+use logos_blockchain_storage_service::{api::da::DaConverter, backends::rocksdb::RocksBackend};
 use overwatch::{DynError, overwatch::handle::OverwatchHandle, services::AsServiceId};
 use serde::{Serialize, de::DeserializeOwned};
 use logos_blockchain_subnetworks_assignations::MembershipHandler;
@@ -99,7 +99,7 @@ where
     <DaShare as Share>::LightShare: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
     <DaShare as Share>::SharesCommitments:
         Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-    VerifierNetwork: logos_blockchain_da_verifier::network::NetworkAdapter<RuntimeServiceId>,
+    VerifierNetwork: logos_blockchain_da_verifier_service::network::NetworkAdapter<RuntimeServiceId>,
     VerifierNetwork::Settings: Clone,
     ShareVerifier: VerifierBackend + CoreDaVerifier<DaShare = DaShare>,
     <ShareVerifier as VerifierBackend>::Settings: Clone,
@@ -150,8 +150,8 @@ pub async fn get_commitments<
 where
     SamplingBackend: DaSamplingServiceBackend,
     <SamplingBackend as DaSamplingServiceBackend>::BlobId: Send + 'static,
-    SamplingNetwork: logos_blockchain_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: logos_blockchain_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
+    SamplingNetwork: logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
+    SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
     DaSamplingMempool: DaMempoolSamplingAdapter,
     RuntimeServiceId: Debug
         + Sync
@@ -436,8 +436,8 @@ pub async fn da_historic_sampling<
 where
     SamplingBackend: DaSamplingServiceBackend,
     <SamplingBackend as DaSamplingServiceBackend>::BlobId: Send + Eq + Hash + 'static,
-    SamplingNetwork: logos_blockchain_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: logos_blockchain_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
+    SamplingNetwork: logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
+    SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
     DaSamplingMempool: DaMempoolSamplingAdapter,
     RuntimeServiceId: Debug
         + Sync

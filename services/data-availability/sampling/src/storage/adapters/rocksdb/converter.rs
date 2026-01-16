@@ -5,7 +5,7 @@ use logos_blockchain_core::{
     da::{BlobId, blob::Share},
     mantle::SignedMantleTx,
 };
-use logos_blockchain_storage::{
+use logos_blockchain_storage_service::{
     api::da::{DaConverter, StorageDaApi},
     backends::rocksdb::RocksBackend,
 };

@@ -12,7 +12,7 @@ use logos_blockchain_node::{
         time::ServiceConfig as TimeConfig,
     },
 };
-use logos_blockchain_sdp::SdpSettings;
+use logos_blockchain_sdp_service::SdpSettings;
 use overwatch::overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner};
 use tracing::warn;
 

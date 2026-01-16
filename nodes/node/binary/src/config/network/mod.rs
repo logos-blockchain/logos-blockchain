@@ -1,5 +1,5 @@
 use logos_blockchain_libp2p::SwarmConfig;
-use logos_blockchain_network::{backends::libp2p::config::Libp2pConfig, config::NetworkConfig};
+use logos_blockchain_network_service::{backends::libp2p::config::Libp2pConfig, config::NetworkConfig};
 
 use crate::config::network::{deployment::Settings as DeploymentSettings, serde::Config};
 

@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::mpsc::Sender};
 
 use clap::Args;
-use executor_http_client::{BasicAuthCredentials, ExecutorHttpClient};
+use logos_blockchain_executor_http_client::{BasicAuthCredentials, ExecutorHttpClient};
 use logos_blockchain_kzgrs_backend::encoder::DaEncoderParams;
 use logos_blockchain_core::{
     da::BlobId,

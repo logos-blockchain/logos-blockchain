@@ -60,7 +60,7 @@ logos-blockchain-tracing                       = { workspace = true }
 logos-blockchain-tracing-service               = { workspace = true }
 logos-blockchain-tx-service                    = { features = ["rocksdb-backend"], workspace = true }
 logos-blockchain-utils                         = { workspace = true, features = ["serde"] }
-logos-blockchain-wallet                        = { workspace = true }
+logos-blockchain-wallet-service                = { workspace = true }
 num-bigint                                     = { default-features = false, version = "0.4" }
 overwatch                                      = { workspace = true }
 serde                                          = { workspace = true }

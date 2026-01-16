@@ -1,6 +1,6 @@
 use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
 use logos_blockchain_core::mantle::{SignedMantleTx, Transaction as _};
-use logos_blockchain_wallet::{WalletService, api::WalletApi};
+use logos_blockchain_wallet_service::{WalletService, api::WalletApi};
 use num_bigint::BigUint;
 
 use crate::{

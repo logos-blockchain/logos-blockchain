@@ -5,7 +5,7 @@ mod sequencer;
 
 use std::sync::Arc;
 
-use demo_sequencer::db::AccountDb;
+use logos_blockchain_demo_sequencer::db::AccountDb;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _};

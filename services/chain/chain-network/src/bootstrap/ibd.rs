@@ -12,10 +12,10 @@ use logos_blockchain_core::{
     header::HeaderId,
     mantle::{AuthenticatedMantleTx, TxHash},
 };
-use logos_blockchain_da_sampling::backend::DaSamplingServiceBackend;
+use logos_blockchain_da_sampling_service::backend::DaSamplingServiceBackend;
 use overwatch::DynError;
 use tracing::{debug, error};
-use tx_service::backend::RecoverableMempool;
+use logos_blockchain_tx_service::backend::RecoverableMempool;
 
 use crate::{
     Error as ChainError, IbdConfig, SamplingRelay, blob,
@@ -428,7 +428,7 @@ mod tests {
         LedgerState,
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
-    use logos_blockchain_network::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
+    use logos_blockchain_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
     use logos_blockchain_utils::math::NonNegativeF64;
     use overwatch::{
         overwatch::OverwatchHandle,

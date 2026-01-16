@@ -1,8 +1,8 @@
 use core::{num::NonZeroUsize, time::Duration};
 use std::collections::HashSet;
 
-use chain_leader::LeaderConfig;
-use chain_network::{IbdConfig, OrphanConfig, SyncConfig};
+use logos_blockchain_chain_leader_service::LeaderConfig;
+use logos_blockchain_chain_network_service::{IbdConfig, OrphanConfig, SyncConfig};
 use logos_blockchain_chain_service::{OfflineGracePeriodConfig, StartingState};
 use logos_blockchain_groth16::CompressedGroth16Proof;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkKey, ZkPublicKey, ZkSignature};
@@ -145,7 +145,7 @@ pub fn create_consensus_configs(
                     sk: sk.into_unsecured(),
                 },
                 network: NetworkConfig {
-                    bootstrap: chain_network::BootstrapConfig {
+                    bootstrap: logos_blockchain_chain_network_service::BootstrapConfig {
                         ibd: IbdConfig {
                             delay_before_new_download: Duration::from_secs(10),
                             peers: HashSet::new(),

@@ -564,7 +564,7 @@ mod tests {
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
         utils::merkle::MerkleNode,
     };
-    use logos_blockchain_storage::{
+    use logos_blockchain_storage_service::{
         StorageService,
         backends::rocksdb::{RocksBackend, RocksBackendSettings},
     };

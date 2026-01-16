@@ -20,14 +20,14 @@ use logos_blockchain_core::{
     mantle::{AuthenticatedMantleTx, Transaction, TxHash, genesis_tx::GenesisTx, ops::Op},
     sdp::ServiceType,
 };
-use logos_blockchain_da_sampling::{
+use logos_blockchain_da_sampling_service::{
     DaSamplingService, DaSamplingServiceMsg, backend::DaSamplingServiceBackend,
     mempool::DaMempoolAdapter,
 };
 pub use logos_blockchain_ledger::EpochState;
 use logos_blockchain_ledger::LedgerState;
-use logos_blockchain_network::NetworkService;
-use logos_blockchain_time::TimeService;
+use logos_blockchain_network_service::NetworkService;
+use logos_blockchain_time_service::TimeService;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -37,11 +37,11 @@ use overwatch::{
     },
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use services_utils::wait_until_services_are_ready;
+use logos_blockchain_services_utils::wait_until_services_are_ready;
 use thiserror::Error;
 use tracing::{Level, debug, error, info, instrument, span};
 use tracing_futures::Instrument as _;
-use tx_service::{
+use logos_blockchain_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
 };
@@ -136,9 +136,9 @@ pub struct ChainNetwork<
     SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send,
     SamplingBackend::Settings: Clone,
     SamplingBackend::Share: Debug + 'static,
-    SamplingNetworkAdapter: logos_blockchain_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: logos_blockchain_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
-    TimeBackend: logos_blockchain_time::backends::TimeBackend,
+    SamplingNetworkAdapter: logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
+    SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
+    TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -185,9 +185,9 @@ where
     SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send,
     SamplingBackend::Settings: Clone,
     SamplingBackend::Share: Debug + 'static,
-    SamplingNetworkAdapter: logos_blockchain_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: logos_blockchain_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
-    TimeBackend: logos_blockchain_time::backends::TimeBackend,
+    SamplingNetworkAdapter: logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
+    SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
+    TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
 {
     type Settings = ChainNetworkSettings<NetAdapter::PeerId, NetAdapter::Settings>;
@@ -255,9 +255,9 @@ where
     SamplingBackend::Settings: Clone,
     SamplingBackend::Share: Debug + Send + 'static,
     SamplingNetworkAdapter:
-        logos_blockchain_da_sampling::network::NetworkAdapter<RuntimeServiceId> + Send + Sync,
-    SamplingStorage: logos_blockchain_da_sampling::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync,
-    TimeBackend: logos_blockchain_time::backends::TimeBackend,
+        logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId> + Send + Sync,
+    SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync,
+    TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
     RuntimeServiceId: Debug
         + Send
@@ -515,9 +515,9 @@ where
     SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send,
     SamplingBackend::Settings: Clone,
     SamplingBackend::Share: Debug + 'static,
-    SamplingNetworkAdapter: logos_blockchain_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: logos_blockchain_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
-    TimeBackend: logos_blockchain_time::backends::TimeBackend,
+    SamplingNetworkAdapter: logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
+    SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
+    TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
     RuntimeServiceId: Display + AsServiceId<Self> + Sync,
 {

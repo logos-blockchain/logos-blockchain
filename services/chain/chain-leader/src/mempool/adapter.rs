@@ -4,7 +4,7 @@ use futures::Stream;
 use logos_blockchain_core::{header::HeaderId, mantle::TxHash};
 use overwatch::services::relay::OutboundRelay;
 use tokio::sync::oneshot;
-use tx_service::MempoolMsg;
+use logos_blockchain_tx_service::MempoolMsg;
 
 use super::MempoolAdapter as MempoolAdapterTrait;
 

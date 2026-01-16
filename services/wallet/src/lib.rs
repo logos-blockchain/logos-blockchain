@@ -138,7 +138,7 @@ where
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     RuntimeServiceId: AsServiceId<Self>
         + AsServiceId<Cryptarchia>
-        + AsServiceId<logos_blockchain_storage::StorageService<Storage, RuntimeServiceId>>
+        + AsServiceId<logos_blockchain_storage_service::StorageService<Storage, RuntimeServiceId>>
         + AsServiceId<Kms>
         + std::fmt::Debug
         + std::fmt::Display
@@ -165,7 +165,7 @@ where
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
             Some(Duration::from_secs(60)),
-            logos_blockchain_storage::StorageService<_, _>,
+            logos_blockchain_storage_service::StorageService<_, _>,
             Cryptarchia,
             Kms
         )
@@ -178,7 +178,7 @@ where
 
         let storage_relay = service_resources_handle
             .overwatch_handle
-            .relay::<logos_blockchain_storage::StorageService<Storage, RuntimeServiceId>>()
+            .relay::<logos_blockchain_storage_service::StorageService<Storage, RuntimeServiceId>>()
             .await?;
 
         // Create the API wrapper for cleaner communication

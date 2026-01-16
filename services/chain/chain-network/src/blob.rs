@@ -6,8 +6,8 @@ use logos_blockchain_core::{
     da,
     mantle::{AuthenticatedMantleTx, Op},
 };
-use logos_blockchain_da_sampling::DaSamplingServiceMsg;
-use logos_blockchain_time::TimeServiceMessage;
+use logos_blockchain_da_sampling_service::DaSamplingServiceMsg;
+use logos_blockchain_time_service::TimeServiceMessage;
 use tokio::sync::oneshot;
 use tracing::debug;
 

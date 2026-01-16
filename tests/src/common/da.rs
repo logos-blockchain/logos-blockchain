@@ -2,7 +2,7 @@ use std::{collections::HashSet, time::Duration};
 
 use logos_blockchain_chain_service::CryptarchiaInfo;
 use logos_blockchain_common_http_client::Error;
-use executor_http_client::ExecutorHttpClient;
+use logos_blockchain_executor_http_client::ExecutorHttpClient;
 use futures::StreamExt as _;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkKey};
 use logos_blockchain_core::{

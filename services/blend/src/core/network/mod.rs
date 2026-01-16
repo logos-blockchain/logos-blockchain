@@ -3,7 +3,7 @@ pub mod libp2p;
 
 use std::fmt::Debug;
 
-use logos_blockchain_network::{NetworkService, backends::NetworkBackend};
+use logos_blockchain_network_service::{NetworkService, backends::NetworkBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Serialize, de::DeserializeOwned};
 

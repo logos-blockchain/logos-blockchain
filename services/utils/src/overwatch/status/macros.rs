@@ -24,7 +24,7 @@
 /// ```rust,ignore
 /// use std::time::Duration;
 /// use overwatch::{DynError, overwatch::OverwatchHandle};
-/// use services_utils::overwatch::status::wait_until_services_are_ready;
+/// use logos_blockchain_services_utils::overwatch::status::wait_until_services_are_ready;
 ///
 /// // The following types would be defined as part of your Overwatch runtime.
 /// struct RuntimeServiceId;

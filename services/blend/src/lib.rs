@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use futures::StreamExt as _;
 pub use logos_blockchain_blend::message::{crypto::proofs::RealProofsVerifier, encap::ProofsVerifier};
 use logos_blockchain_blend::scheduling::session::UninitializedSessionEventStream;
-use logos_blockchain_network::NetworkService;
+use logos_blockchain_network_service::NetworkService;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -17,7 +17,7 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
-use services_utils::wait_until_services_are_ready;
+use logos_blockchain_services_utils::wait_until_services_are_ready;
 use tracing::{debug, error, info};
 
 use crate::{

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use logos_blockchain_core::{header::HeaderId, mantle::TxHash};
-use tx_service::TransactionsByHashesResponse;
+use logos_blockchain_tx_service::TransactionsByHashesResponse;
 
 pub mod adapter;
 

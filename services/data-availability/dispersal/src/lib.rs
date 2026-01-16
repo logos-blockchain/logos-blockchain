@@ -28,7 +28,7 @@ use overwatch::{
 };
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use services_utils::wait_until_services_are_ready;
+use logos_blockchain_services_utils::wait_until_services_are_ready;
 use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use thiserror::Error;
 use tokio::sync::oneshot;

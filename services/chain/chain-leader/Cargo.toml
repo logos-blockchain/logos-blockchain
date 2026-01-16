@@ -26,7 +26,7 @@ logos-blockchain-ledger                     = { features = ["serde"], workspace 
 logos-blockchain-services-utils             = { workspace = true }
 logos-blockchain-time-service               = { workspace = true }
 logos-blockchain-tx-service                 = { workspace = true }
-logos-blockchain-wallet                     = { workspace = true }
+logos-blockchain-wallet-service             = { workspace = true }
 overwatch                                   = { workspace = true }
 serde                                       = { workspace = true }
 thiserror                                   = "1.0"
@@ -35,6 +35,6 @@ tracing                                     = { workspace = true }
 tracing-futures                             = { default-features = false, version = "0.2" }
 
 [features]
-default                       = []
-libp2p                        = ["logos-blockchain-blend-service/libp2p"]
-logos-blockchain-pol-dev-mode = ["logos-blockchain-core/pol-dev-mode"]
+default      = []
+libp2p       = ["logos-blockchain-blend-service/libp2p"]
+pol-dev-mode = ["logos-blockchain-core/pol-dev-mode"]

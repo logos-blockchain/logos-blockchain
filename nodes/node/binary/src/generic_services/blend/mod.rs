@@ -6,8 +6,8 @@ use core::{
 };
 
 use async_trait::async_trait;
-use logos_blockchain_broadcast_service::BlockBroadcastService;
-use chain_leader::LeaderMsg;
+use logos_blockchain_chain_broadcast_service::BlockBroadcastService;
+use logos_blockchain_chain_leader_service::LeaderMsg;
 use futures::{Stream, StreamExt as _};
 use logos_blockchain_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use logos_blockchain_blend_service::{
@@ -16,13 +16,13 @@ use logos_blockchain_blend_service::{
     membership::service::Adapter,
 };
 use logos_blockchain_core::crypto::ZkHash;
-use logos_blockchain_da_sampling::network::NetworkAdapter;
+use logos_blockchain_da_sampling_service::network::NetworkAdapter;
 use logos_blockchain_libp2p::PeerId;
-use logos_blockchain_time::backends::NtpTimeBackend;
+use logos_blockchain_time_service::backends::NtpTimeBackend;
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use logos_blockchain_pol::{PolChainInputsData, PolWalletInputsData, PolWitnessInputsData};
 use logos_blockchain_poq::AGED_NOTE_MERKLE_TREE_HEIGHT;
-use services_utils::wait_until_services_are_ready;
+use logos_blockchain_services_utils::wait_until_services_are_ready;
 use tokio::sync::oneshot::channel;
 use tokio_stream::wrappers::WatchStream;
 

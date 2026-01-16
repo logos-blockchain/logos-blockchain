@@ -23,7 +23,7 @@ use logos_blockchain_core::{
 };
 use logos_blockchain_da_network_core::swarm::{BalancerStats, DAConnectionPolicySettings};
 use logos_blockchain_da_network_service::MembershipResponse;
-use logos_blockchain_network::backends::libp2p::Libp2pInfo;
+use logos_blockchain_network_service::backends::libp2p::Libp2pInfo;
 use logos_blockchain_utils::net::get_available_udp_port;
 use rand::{Rng as _, thread_rng};
 use tokio::time::{sleep, timeout};

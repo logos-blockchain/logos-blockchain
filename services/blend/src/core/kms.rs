@@ -6,7 +6,7 @@ use logos_blockchain_key_management_system_service::{
     api::KmsServiceApi,
     backend::preload::{KeyId, PreloadKMSBackend},
     keys::KeyOperators,
-    operators::blend::logos_blockchain_poq::PoQOperator,
+    operators::blend::poq::PoQOperator,
 };
 use logos_blockchain_blend::{
     proofs::quota::{self, VerifiedProofOfQuota, inputs::prove::PublicInputs},

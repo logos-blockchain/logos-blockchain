@@ -1,5 +1,5 @@
 use logos_blockchain_cryptarchia_engine::time::SlotConfig;
-use logos_blockchain_time::{TimeServiceSettings, backends::NtpTimeBackendSettings};
+use logos_blockchain_time_service::{TimeServiceSettings, backends::NtpTimeBackendSettings};
 
 use crate::config::{
     cryptarchia::deployment::Settings as CryptarchiaDeploymentSettings,

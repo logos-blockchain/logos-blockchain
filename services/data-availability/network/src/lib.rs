@@ -29,7 +29,7 @@ use logos_blockchain_da_network_core::{
     SubnetworkId, addressbook::AddressBookHandler as _,
     protocols::sampling::opinions::OpinionEvent, swarm::BalancerStats,
 };
-use logos_blockchain_libp2p::logos_blockchain_cryptarchia_sync::DynError;
+use logos_blockchain_libp2p::cryptarchia_sync::DynError;
 use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{
@@ -38,7 +38,7 @@ use overwatch::{
     },
 };
 use serde::{Deserialize, Serialize};
-use services_utils::wait_until_services_are_ready;
+use logos_blockchain_services_utils::wait_until_services_are_ready;
 use storage::{MembershipStorage, MembershipStorageAdapter};
 use logos_blockchain_subnetworks_assignations::{MembershipCreator, MembershipHandler, SubnetworkAssignations};
 use tokio::sync::{

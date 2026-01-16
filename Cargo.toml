@@ -34,7 +34,6 @@ members = [
   "libp2p",
   "mmr",
   "nodes/api-common",
-  "nodes/api-common",
   "nodes/executor/binary",
   "nodes/executor/http-client",
   "nodes/node/binary",

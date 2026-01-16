@@ -2,11 +2,11 @@ use core::{fmt::Debug, hash::Hash};
 use std::fmt::Display;
 
 use logos_blockchain_core::{header::HeaderId, mantle::Transaction};
-use logos_blockchain_network::backends::NetworkBackend;
+use logos_blockchain_network_service::backends::NetworkBackend;
 use overwatch::{DynError, services::AsServiceId};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
-use tx_service::{MempoolMsg, TxMempoolService, backend::Mempool, network::NetworkAdapter};
+use logos_blockchain_tx_service::{MempoolMsg, TxMempoolService, backend::Mempool, network::NetworkAdapter};
 
 pub async fn add_tx<
     MempoolNetworkBackend,
@@ -27,7 +27,7 @@ where
         + Sync
         + 'static,
     MempoolNetworkAdapter::Settings: Send + Sync,
-    StorageAdapter: tx_service::storage::MempoolStorageAdapter<RuntimeServiceId, Key = Key, Item = Item>
+    StorageAdapter: logos_blockchain_tx_service::storage::MempoolStorageAdapter<RuntimeServiceId, Key = Key, Item = Item>
         + Clone
         + 'static,
     StorageAdapter::Error: Debug,

@@ -7,7 +7,7 @@ use overwatch::{
     overwatch::OverwatchHandle,
     services::{AsServiceId, ServiceData, relay::OutboundRelay, status::ServiceStatus},
 };
-use services_utils::wait_until_services_are_ready;
+use logos_blockchain_services_utils::wait_until_services_are_ready;
 use tracing::{debug, error, info};
 
 use crate::modes::{Error, LOG_TARGET};

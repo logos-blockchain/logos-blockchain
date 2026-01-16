@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use chain_common::NetworkMessage as ChainNetworkMessage;
+use logos_blockchain_chain_service_common::NetworkMessage as ChainNetworkMessage;
 use logos_blockchain_blend_service::message::{NetworkMessage, ServiceMessage};
 use logos_blockchain_core::{block::Proposal, codec::SerializeOp as _};
 use overwatch::services::{ServiceData, relay::OutboundRelay};

@@ -1,5 +1,5 @@
-use chain_leader::CryptarchiaLeader;
-use chain_network::network::adapters::libp2p::LibP2pAdapter;
+use logos_blockchain_chain_leader_service::CryptarchiaLeader;
+use logos_blockchain_chain_network_service::network::adapters::libp2p::LibP2pAdapter;
 use logos_blockchain_chain_service::CryptarchiaConsensus;
 use logos_blockchain_key_management_system_service::backend::preload::PreloadKMSBackend;
 use logos_blockchain_kzgrs_backend::common::share::DaShare;
@@ -11,23 +11,23 @@ use logos_blockchain_da_network_service::{
     membership::adapters::service::MembershipServiceAdapter,
     sdp::adapters::sdp_service::SdpServiceAdapter, storage::adapters::rocksdb::RocksAdapter,
 };
-use logos_blockchain_da_sampling::{
+use logos_blockchain_da_sampling_service::{
     backend::kzgrs::KzgrsSamplingBackend, storage::adapters::rocksdb::converter::DaStorageConverter,
 };
-use logos_blockchain_da_verifier::{
+use logos_blockchain_da_verifier_service::{
     backend::kzgrs::KzgrsDaVerifier, mempool::kzgrs::KzgrsMempoolNetworkAdapter,
 };
-use logos_blockchain_sdp::adapters::mempool::sdp::SdpMempoolNetworkAdapter;
-use logos_blockchain_storage::backends::rocksdb::RocksBackend;
-use logos_blockchain_time::backends::NtpTimeBackend;
-use tx_service::{backend::pool::Mempool, storage::adapters::rocksdb::RocksStorageAdapter};
+use logos_blockchain_sdp_service::adapters::mempool::sdp::SdpMempoolNetworkAdapter;
+use logos_blockchain_storage_service::backends::rocksdb::RocksBackend;
+use logos_blockchain_time_service::backends::NtpTimeBackend;
+use logos_blockchain_tx_service::{backend::pool::Mempool, storage::adapters::rocksdb::RocksStorageAdapter};
 
 use crate::{MB16, generic_services::blend::BlendService};
 
 pub mod blend;
 
-pub type TxMempoolService<RuntimeServiceId> = tx_service::TxMempoolService<
-    tx_service::network::adapters::libp2p::Libp2pAdapter<
+pub type TxMempoolService<RuntimeServiceId> = logos_blockchain_tx_service::TxMempoolService<
+    logos_blockchain_tx_service::network::adapters::libp2p::Libp2pAdapter<
         SignedMantleTx,
         <SignedMantleTx as Transaction>::Hash,
         RuntimeServiceId,
@@ -44,16 +44,16 @@ pub type TxMempoolService<RuntimeServiceId> = tx_service::TxMempoolService<
 >;
 
 pub type SamplingMempoolAdapter<RuntimeServiceId> =
-    logos_blockchain_da_sampling::mempool::sampling::SamplingMempoolNetworkAdapter<
+    logos_blockchain_da_sampling_service::mempool::sampling::SamplingMempoolNetworkAdapter<
         MempoolAdapter<RuntimeServiceId>,
         MempoolBackend<RuntimeServiceId>,
         RuntimeServiceId,
     >;
 
-pub type TimeService<RuntimeServiceId> = logos_blockchain_time::TimeService<NtpTimeBackend, RuntimeServiceId>;
+pub type TimeService<RuntimeServiceId> = logos_blockchain_time_service::TimeService<NtpTimeBackend, RuntimeServiceId>;
 
 pub type VerifierMempoolAdapter<RuntimeServiceId> = KzgrsMempoolNetworkAdapter<
-    tx_service::network::adapters::libp2p::Libp2pAdapter<SignedMantleTx, TxHash, RuntimeServiceId>,
+    logos_blockchain_tx_service::network::adapters::libp2p::Libp2pAdapter<SignedMantleTx, TxHash, RuntimeServiceId>,
     Mempool<
         HeaderId,
         SignedMantleTx,
@@ -65,19 +65,19 @@ pub type VerifierMempoolAdapter<RuntimeServiceId> = KzgrsMempoolNetworkAdapter<
 >;
 
 pub type DaVerifierService<VerifierAdapter, MempoolAdapter, RuntimeServiceId> =
-    logos_blockchain_da_verifier::DaVerifierService<
+    logos_blockchain_da_verifier_service::DaVerifierService<
         KzgrsDaVerifier,
         VerifierAdapter,
-        logos_blockchain_da_verifier::storage::adapters::rocksdb::RocksAdapter<DaShare, DaStorageConverter>,
+        logos_blockchain_da_verifier_service::storage::adapters::rocksdb::RocksAdapter<DaShare, DaStorageConverter>,
         MempoolAdapter,
         RuntimeServiceId,
     >;
 
 pub type DaSamplingStorage =
-    logos_blockchain_da_sampling::storage::adapters::rocksdb::RocksAdapter<DaShare, DaStorageConverter>;
+    logos_blockchain_da_sampling_service::storage::adapters::rocksdb::RocksAdapter<DaShare, DaStorageConverter>;
 
 pub type DaSamplingService<SamplingAdapter, RuntimeServiceId> =
-    logos_blockchain_da_sampling::DaSamplingService<
+    logos_blockchain_da_sampling_service::DaSamplingService<
         KzgrsSamplingBackend,
         SamplingAdapter,
         DaSamplingStorage,
@@ -85,7 +85,7 @@ pub type DaSamplingService<SamplingAdapter, RuntimeServiceId> =
         RuntimeServiceId,
     >;
 
-pub type MempoolAdapter<RuntimeServiceId> = tx_service::network::adapters::libp2p::Libp2pAdapter<
+pub type MempoolAdapter<RuntimeServiceId> = logos_blockchain_tx_service::network::adapters::libp2p::Libp2pAdapter<
     SignedMantleTx,
     <SignedMantleTx as Transaction>::Hash,
     RuntimeServiceId,
@@ -102,7 +102,7 @@ pub type MempoolBackend<RuntimeServiceId> = Mempool<
 pub type CryptarchiaService<RuntimeServiceId> =
     CryptarchiaConsensus<SignedMantleTx, RocksBackend, RuntimeServiceId>;
 
-pub type ChainNetworkService<SamplingAdapter, RuntimeServiceId> = chain_network::ChainNetwork<
+pub type ChainNetworkService<SamplingAdapter, RuntimeServiceId> = logos_blockchain_chain_network_service::ChainNetwork<
     CryptarchiaService<RuntimeServiceId>,
     LibP2pAdapter<SignedMantleTx, RuntimeServiceId>,
     MempoolBackend<RuntimeServiceId>,
@@ -116,9 +116,9 @@ pub type ChainNetworkService<SamplingAdapter, RuntimeServiceId> = chain_network:
 >;
 
 pub type KeyManagementService<RuntimeServiceId> =
-    key_management_system_service::KMSService<PreloadKMSBackend, RuntimeServiceId>;
+    logos_blockchain_key_management_system_service::KMSService<PreloadKMSBackend, RuntimeServiceId>;
 
-pub type WalletService<Cryptarchia, RuntimeServiceId> = logos_blockchain_wallet::WalletService<
+pub type WalletService<Cryptarchia, RuntimeServiceId> = logos_blockchain_wallet_service::WalletService<
     KeyManagementService<RuntimeServiceId>,
     Cryptarchia,
     SignedMantleTx,
@@ -145,7 +145,7 @@ pub type CryptarchiaLeaderService<Cryptarchia, Wallet, SamplingAdapter, RuntimeS
 pub type DaMembershipAdapter<RuntimeServiceId> = MembershipServiceAdapter<RuntimeServiceId>;
 
 pub type SdpMempoolAdapterGeneric<RuntimeServiceId> = SdpMempoolNetworkAdapter<
-    tx_service::network::adapters::libp2p::Libp2pAdapter<SignedMantleTx, TxHash, RuntimeServiceId>,
+    logos_blockchain_tx_service::network::adapters::libp2p::Libp2pAdapter<SignedMantleTx, TxHash, RuntimeServiceId>,
     Mempool<
         HeaderId,
         SignedMantleTx,
@@ -157,7 +157,7 @@ pub type SdpMempoolAdapterGeneric<RuntimeServiceId> = SdpMempoolNetworkAdapter<
 >;
 
 pub type SdpService<RuntimeServiceId> =
-    logos_blockchain_sdp::SdpService<SdpMempoolAdapterGeneric<RuntimeServiceId>, RuntimeServiceId>;
+    logos_blockchain_sdp_service::SdpService<SdpMempoolAdapterGeneric<RuntimeServiceId>, RuntimeServiceId>;
 
 pub type SdpServiceAdapterGeneric<RuntimeServiceId> =
     SdpServiceAdapter<SdpMempoolAdapterGeneric<RuntimeServiceId>, RuntimeServiceId>;

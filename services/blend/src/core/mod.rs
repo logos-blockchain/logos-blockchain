@@ -48,9 +48,9 @@ use logos_blockchain_core::{
     codec::{DeserializeOp as _, SerializeOp as _},
     sdp::ActivityMetadata,
 };
-use logos_blockchain_network::NetworkService;
-use logos_blockchain_sdp::SdpMessage;
-use logos_blockchain_time::{SlotTick, TimeService, TimeServiceMessage};
+use logos_blockchain_network_service::NetworkService;
+use logos_blockchain_sdp_service::SdpMessage;
+use logos_blockchain_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use logos_blockchain_utils::blake_rng::BlakeRng;
 use overwatch::{
     OpaqueServiceResourcesHandle,
@@ -63,7 +63,7 @@ use overwatch::{
 };
 use rand::{RngCore, SeedableRng as _, seq::SliceRandom as _};
 use serde::{Deserialize, Serialize};
-use services_utils::{
+use logos_blockchain_services_utils::{
     overwatch::{JsonFileBackend, RecoveryOperator},
     wait_until_services_are_ready,
 };

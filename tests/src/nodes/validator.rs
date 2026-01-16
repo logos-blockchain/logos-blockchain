@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use logos_blockchain_broadcast_service::BlockInfo;
+use logos_blockchain_chain_broadcast_service::BlockInfo;
 use logos_blockchain_chain_service::CryptarchiaInfo;
 use logos_blockchain_common_http_client::CommonHttpClient;
 use futures::Stream;
@@ -25,11 +25,11 @@ use logos_blockchain_da_network_service::{
     MembershipResponse, NetworkConfig as DaNetworkConfig, api::http::ApiAdapterSettings,
     backends::libp2p::common::DaNetworkBackendSettings,
 };
-use logos_blockchain_da_sampling::{
+use logos_blockchain_da_sampling_service::{
     DaSamplingServiceSettings, backend::kzgrs::KzgrsSamplingBackendSettings,
     verifier::kzgrs::KzgrsDaVerifierSettings as SamplingVerifierSettings,
 };
-use logos_blockchain_da_verifier::{
+use logos_blockchain_da_verifier_service::{
     DaVerifierServiceSettings,
     backend::{kzgrs::KzgrsDaVerifierSettings, trigger::MempoolPublishTriggerConfig},
     storage::adapters::rocksdb::RocksAdapterSettings as VerifierStorageAdapterSettings,
@@ -39,7 +39,7 @@ use logos_blockchain_http_api_common::paths::{
     DA_GET_SHARES_COMMITMENTS, DA_HISTORIC_SAMPLING, DA_MONITOR_STATS, MANTLE_SDP_DECLARATIONS,
     NETWORK_INFO, STORAGE_BLOCK,
 };
-use logos_blockchain_network::backends::libp2p::Libp2pInfo;
+use logos_blockchain_network_service::backends::libp2p::Libp2pInfo;
 use logos_blockchain_node::{
     Config, HeaderId, RocksBackendSettings,
     api::{
@@ -48,7 +48,7 @@ use logos_blockchain_node::{
     },
     config::mempool::serde::Config as MempoolConfig,
 };
-use logos_blockchain_sdp::SdpSettings;
+use logos_blockchain_sdp_service::SdpSettings;
 use logos_blockchain_tracing::logging::local::FileConfig;
 use logos_blockchain_tracing_service::LoggerLayer;
 use logos_blockchain_utils::{math::NonNegativeF64, net::get_available_tcp_port};
@@ -56,7 +56,7 @@ use logos_blockchain_wallet::WalletServiceSettings;
 use reqwest::Url;
 use tempfile::NamedTempFile;
 use tokio::time::error::Elapsed;
-use tx_service::MempoolMetrics;
+use logos_blockchain_tx_service::MempoolMetrics;
 
 use super::{CLIENT, create_tempdir, get_exe_path, persist_tempdir};
 use crate::{
@@ -379,7 +379,7 @@ impl Validator {
         requested_shares: HashSet<[u8; 2]>,
         filter_shares: HashSet<[u8; 2]>,
         return_available: bool,
-    ) -> Result<impl Stream<Item = DaLightShare>, common_http_client::Error> {
+    ) -> Result<impl Stream<Item = DaLightShare>, logos_blockchain_common_http_client::Error> {
         self.http_client
             .get_shares::<DaShare>(
                 Url::from_str(&format!("http://{}", self.addr))?,
@@ -394,7 +394,7 @@ impl Validator {
     pub async fn get_storage_commitments(
         &self,
         blob_id: BlobId,
-    ) -> Result<Option<DaSharesCommitments>, common_http_client::Error> {
+    ) -> Result<Option<DaSharesCommitments>, logos_blockchain_common_http_client::Error> {
         self.http_client
             .get_storage_commitments::<DaShare>(
                 Url::from_str(&format!("http://{}", self.addr))?,
@@ -405,7 +405,7 @@ impl Validator {
 
     pub async fn get_lib_stream(
         &self,
-    ) -> Result<impl Stream<Item = BlockInfo>, common_http_client::Error> {
+    ) -> Result<impl Stream<Item = BlockInfo>, logos_blockchain_common_http_client::Error> {
         self.http_client
             .get_lib_stream(Url::from_str(&format!("http://{}", self.addr))?)
             .await
@@ -523,7 +523,7 @@ pub fn create_validator_config(config: GeneralConfig) -> Config {
             },
         },
         tracing: config.tracing_config.tracing_settings,
-        http: logos_blockchain_api::ApiServiceSettings {
+        http: logos_blockchain_api_service::ApiServiceSettings {
             backend_settings: AxumBackendSettings {
                 address: config.api_config.address,
                 rate_limit_per_second: 10000,
@@ -556,7 +556,7 @@ pub fn create_validator_config(config: GeneralConfig) -> Config {
             known_keys: HashSet::from_iter([config.consensus_config.user_config().leader.pk]),
         },
         key_management: config.kms_config,
-        testing_http: logos_blockchain_api::ApiServiceSettings {
+        testing_http: logos_blockchain_api_service::ApiServiceSettings {
             backend_settings: AxumBackendSettings {
                 address: testing_http_address,
                 rate_limit_per_second: 10000,

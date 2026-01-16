@@ -1,8 +1,8 @@
 use std::fmt::{Debug, Display};
 
 use axum::{Json, extract::State, response::Response};
-use logos_blockchain_api::http::da::{self, DaDispersal};
-use logos_blockchain_da_dispersal::{adapters::network::DispersalNetworkAdapter, backend::DispersalBackend};
+use logos_blockchain_api_service::http::da::{self, DaDispersal};
+use logos_blockchain_da_dispersal_service::{adapters::network::DispersalNetworkAdapter, backend::DispersalBackend};
 use logos_blockchain_da_network_core::SubnetworkId;
 use logos_blockchain_http_api_common::{bodies::dispersal::DispersalRequestBody, paths};
 use logos_blockchain_libp2p::PeerId;

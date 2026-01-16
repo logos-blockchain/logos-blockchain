@@ -7,7 +7,7 @@ use futures::Stream;
 use logos_blockchain_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use logos_blockchain_core::crypto::ZkHash;
 use logos_blockchain_ledger::EpochState;
-use logos_blockchain_time::SlotTick;
+use logos_blockchain_time_service::SlotTick;
 use overwatch::overwatch::OverwatchHandle;
 
 /// Secret `PoL` info associated to an epoch, as returned by the `PoL` info

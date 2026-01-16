@@ -8,7 +8,7 @@ use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
 };
-use tx_service::backend::MempoolError;
+use logos_blockchain_tx_service::backend::MempoolError;
 
 #[derive(thiserror::Error, Debug)]
 pub enum MempoolAdapterError {

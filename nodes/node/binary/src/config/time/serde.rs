@@ -1,4 +1,4 @@
-use logos_blockchain_time::backends::NtpTimeBackendSettings;
+use logos_blockchain_time_service::backends::NtpTimeBackendSettings;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 

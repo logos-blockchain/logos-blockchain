@@ -29,7 +29,7 @@ use logos_blockchain_blend::{
     },
 };
 use logos_blockchain_core::codec::SerializeOp as _;
-use logos_blockchain_time::{SlotTick, TimeService, TimeServiceMessage};
+use logos_blockchain_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use overwatch::{
     OpaqueServiceResourcesHandle,
     overwatch::OverwatchHandle,
@@ -41,7 +41,7 @@ use overwatch::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 pub(crate) use service_components::ServiceComponents;
-use services_utils::wait_until_services_are_ready;
+use logos_blockchain_services_utils::wait_until_services_are_ready;
 use settings::BlendConfig;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};

@@ -5,7 +5,7 @@ use logos_blockchain_blend::scheduling::message_blend::crypto::SessionCryptograp
 use logos_blockchain_core::blend::core_quota;
 use logos_blockchain_utils::math::NonNegativeF64;
 use serde::{Deserialize, Serialize};
-use services_utils::overwatch::recovery::backends::FileBackendSettings;
+use logos_blockchain_services_utils::overwatch::recovery::backends::FileBackendSettings;
 
 use crate::settings::TimingSettings;
 

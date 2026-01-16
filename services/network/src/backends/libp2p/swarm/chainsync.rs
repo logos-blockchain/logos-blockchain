@@ -2,7 +2,7 @@ use std::{collections::HashSet, fmt::Debug};
 
 use logos_blockchain_libp2p::{
     PeerId,
-    logos_blockchain_cryptarchia_sync::{BoxedStream, ChainSyncError, GetTipResponse, HeaderId, SerialisedBlock},
+    cryptarchia_sync::{BoxedStream, ChainSyncError, GetTipResponse, HeaderId, SerialisedBlock},
 };
 use rand::RngCore;
 use tokio::sync::oneshot;

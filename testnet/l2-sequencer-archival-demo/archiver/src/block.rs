@@ -1,5 +1,5 @@
 use async_stream::stream;
-use logos_blockchain_broadcast_service::BlockInfo;
+use logos_blockchain_chain_broadcast_service::BlockInfo;
 use logos_blockchain_common_http_client::CommonHttpClient;
 use logos_blockchain_demo_sequencer::{BlockData, db::AccountDb};
 use futures::{Stream, StreamExt as _};

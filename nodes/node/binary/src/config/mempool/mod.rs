@@ -1,5 +1,5 @@
 use logos_blockchain_core::mantle::{SignedMantleTx, Transaction as _, TxHash};
-use tx_service::{
+use logos_blockchain_tx_service::{
     TxMempoolSettings, network::adapters::libp2p::Settings as Libp2pNetworkAdapterSettings,
 };
 

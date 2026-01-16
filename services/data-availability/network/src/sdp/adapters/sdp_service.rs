@@ -4,7 +4,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use logos_blockchain_sdp::{SdpMessage, SdpService, adapters::mempool::SdpMempoolAdapter};
+use logos_blockchain_sdp_service::{SdpMessage, SdpService, adapters::mempool::SdpMempoolAdapter};
 use overwatch::{
     overwatch::OverwatchHandle,
     services::{AsServiceId, relay::OutboundRelay},

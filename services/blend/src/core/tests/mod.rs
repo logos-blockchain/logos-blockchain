@@ -302,7 +302,7 @@ async fn test_handle_session_transition_expired() {
     .await;
 
     // Check that an activity proof has been submitted to SDP service.
-    let logos_blockchain_sdp::SdpMessage::PostActivity {
+    let logos_blockchain_sdp_service::SdpMessage::PostActivity {
         metadata: ActivityMetadata::Blend(activity_proof),
     } = sdp_relay_receiver
         .try_recv()

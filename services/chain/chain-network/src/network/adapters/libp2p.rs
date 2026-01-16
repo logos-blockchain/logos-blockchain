@@ -1,6 +1,6 @@
 use std::{collections::HashSet, fmt::Debug, hash::Hash, marker::PhantomData};
 
-use chain_common::NetworkMessage;
+use logos_blockchain_chain_service_common::NetworkMessage;
 use logos_blockchain_cryptarchia_sync::GetTipResponse;
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok};
 use logos_blockchain_core::{
@@ -9,7 +9,7 @@ use logos_blockchain_core::{
     header::HeaderId,
     mantle::AuthenticatedMantleTx,
 };
-use logos_blockchain_network::{
+use logos_blockchain_network_service::{
     NetworkService,
     backends::libp2p::{
         ChainSyncCommand, Command, DiscoveryCommand, Libp2p, NetworkCommand, PeerId,

@@ -83,7 +83,7 @@ where
             .relay::<BlockBroadcastService<_>>()
             .await
             .expect(
-                "Relay connection with logos_blockchain_broadcast_service::BlockBroadcastService should
+                "Relay connection with logos_blockchain_chain_broadcast_service::BlockBroadcastService should
         succeed",
             );
 

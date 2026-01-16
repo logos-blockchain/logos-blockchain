@@ -22,7 +22,7 @@ use logos_blockchain_da_network_core::swarm::DispersalValidationError;
 use logos_blockchain_da_network_service::{
     NetworkService, membership::MembershipAdapter, storage::MembershipStorageAdapter,
 };
-use logos_blockchain_storage::StorageService;
+use logos_blockchain_storage_service::StorageService;
 use logos_blockchain_tracing::info_with_id;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -32,13 +32,13 @@ use overwatch::{
     },
 };
 use serde::{Deserialize, Serialize};
-use services_utils::wait_until_services_are_ready;
+use logos_blockchain_services_utils::wait_until_services_are_ready;
 use storage::DaStorageAdapter;
 use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use tokio::sync::oneshot::Sender;
 use tokio_stream::StreamExt as _;
 use tracing::{error, instrument};
-use tx_service::backend::MempoolError;
+use logos_blockchain_tx_service::backend::MempoolError;
 
 use crate::{
     backend::{TxVerifierBackend, VerifierBackend},

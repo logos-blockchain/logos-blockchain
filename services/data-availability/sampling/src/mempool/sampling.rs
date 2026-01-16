@@ -8,7 +8,7 @@ use logos_blockchain_core::{
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
-use tx_service::{
+use logos_blockchain_tx_service::{
     MempoolMsg, TxMempoolService,
     backend::{MemPool, RecoverableMempool},
     network::NetworkAdapter as MempoolNetworkAdapter,

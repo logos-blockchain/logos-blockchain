@@ -4,13 +4,13 @@ use std::{
 };
 
 use axum::{Json, extract::State, response::Response};
-use logos_blockchain_api::http::{da, mantle};
+use logos_blockchain_api_service::http::{da, mantle};
 use logos_blockchain_core::{header::HeaderId, sdp::SessionNumber};
 use logos_blockchain_da_network_service::{
     NetworkService, api::ApiAdapter as ApiAdapterTrait, backends::NetworkBackend,
     sdp::SdpAdapter as SdpAdapterTrait,
 };
-use logos_blockchain_da_sampling::{
+use logos_blockchain_da_sampling_service::{
     DaSamplingService, backend::DaSamplingServiceBackend, mempool::DaMempoolAdapter,
 };
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
@@ -91,8 +91,8 @@ pub async fn da_historic_sampling<
 where
     SamplingBackend: DaSamplingServiceBackend,
     <SamplingBackend as DaSamplingServiceBackend>::BlobId: Send + Eq + Hash + 'static,
-    SamplingNetwork: logos_blockchain_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: logos_blockchain_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
+    SamplingNetwork: logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
+    SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
     SamplingMempoolAdapter: DaMempoolAdapter,
     RuntimeServiceId: Debug
         + Sync

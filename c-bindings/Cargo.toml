@@ -16,7 +16,7 @@ logos-blockchain-core                       = { workspace = true }
 logos-blockchain-cryptarchia-engine         = { workspace = true }
 logos-blockchain-key-management-system-keys = { workspace = true }
 logos-blockchain-node                       = { default-features = true, workspace = true }
-logos-blockchain-wallet                     = { workspace = true }
+logos-blockchain-wallet-service             = { workspace = true }
 num-bigint                                  = { version = "0.4", default-features = false }
 overwatch                                   = { workspace = true }
 serde_yaml                                  = { default-features = false, workspace = true }

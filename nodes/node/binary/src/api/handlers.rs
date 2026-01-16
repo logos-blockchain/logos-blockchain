@@ -11,8 +11,8 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse as _, Response},
 };
-use logos_blockchain_broadcast_service::BlockBroadcastService;
-use logos_blockchain_api::http::{
+use logos_blockchain_chain_broadcast_service::BlockBroadcastService;
+use logos_blockchain_api_service::http::{
     consensus::{self, Cryptarchia},
     da::{self, BalancerMessageFactory, DaVerifier, MonitorMessageFactory},
     libp2p, mantle, mempool,
@@ -31,8 +31,8 @@ use logos_blockchain_da_network_service::{
     NetworkService, api::ApiAdapter as ApiAdapterTrait, backends::NetworkBackend,
     sdp::SdpAdapter as SdpAdapterTrait,
 };
-use logos_blockchain_da_sampling::{DaSamplingService, backend::DaSamplingServiceBackend};
-use logos_blockchain_da_verifier::{backend::VerifierBackend, mempool::DaMempoolAdapter};
+use logos_blockchain_da_sampling_service::{DaSamplingService, backend::DaSamplingServiceBackend};
+use logos_blockchain_da_verifier_service::{backend::VerifierBackend, mempool::DaMempoolAdapter};
 use logos_blockchain_http_api_common::{
     bodies::wallet::{
         balance::WalletBalanceResponseBody,
@@ -41,15 +41,15 @@ use logos_blockchain_http_api_common::{
     paths,
 };
 use logos_blockchain_libp2p::PeerId;
-use logos_blockchain_network::backends::libp2p::Libp2p as Libp2pNetworkBackend;
-use logos_blockchain_sdp::adapters::mempool::SdpMempoolAdapter;
-use logos_blockchain_storage::{StorageService, api::da::DaConverter, backends::rocksdb::RocksBackend};
-use logos_blockchain_wallet::api::{WalletApi, WalletServiceData};
+use logos_blockchain_network_service::backends::libp2p::Libp2p as Libp2pNetworkBackend;
+use logos_blockchain_sdp_service::adapters::mempool::SdpMempoolAdapter;
+use logos_blockchain_storage_service::{StorageService, api::da::DaConverter, backends::rocksdb::RocksBackend};
+use logos_blockchain_wallet_service::api::{WalletApi, WalletServiceData};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use logos_blockchain_subnetworks_assignations::MembershipHandler;
 use tracing::error;
-use tx_service::{
+use logos_blockchain_tx_service::{
     TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
 };
@@ -58,10 +58,10 @@ use {
     crate::api::{queries::BlockRangeQuery, serializers::blocks::ApiBlock},
     logos_blockchain_chain_service::ConsensusMsg,
     futures::FutureExt as _,
-    logos_blockchain_api::http::DynError,
+    logos_blockchain_api_service::http::DynError,
     logos_blockchain_core::block::Block,
     logos_blockchain_libp2p::libp2p::bytes::Bytes,
-    logos_blockchain_storage::api::chain::StorageChainApi,
+    logos_blockchain_storage_service::api::chain::StorageChainApi,
     overwatch::services::ServiceData,
     tokio_stream::StreamExt as _,
 };
@@ -96,7 +96,7 @@ pub async fn mantle_metrics<StorageAdapter, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
-    StorageAdapter: tx_service::storage::MempoolStorageAdapter<
+    StorageAdapter: logos_blockchain_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
             Item = SignedMantleTx,
             Key = <SignedMantleTx as Transaction>::Hash,
@@ -158,7 +158,7 @@ pub async fn mantle_status<StorageAdapter, RuntimeServiceId>(
     Json(items): Json<Vec<<SignedMantleTx as Transaction>::Hash>>,
 ) -> Response
 where
-    StorageAdapter: tx_service::storage::MempoolStorageAdapter<
+    StorageAdapter: logos_blockchain_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
             Item = SignedMantleTx,
             Key = <SignedMantleTx as Transaction>::Hash,
@@ -283,7 +283,7 @@ where
     <S as Share>::ShareIndex: Clone + Hash + Eq + Send + Sync + 'static,
     <S as Share>::LightShare: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
     <S as Share>::SharesCommitments: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-    N: logos_blockchain_da_verifier::network::NetworkAdapter<RuntimeServiceId>,
+    N: logos_blockchain_da_verifier_service::network::NetworkAdapter<RuntimeServiceId>,
     N::Settings: Clone,
     VB: VerifierBackend + CoreDaVerifier<DaShare = S>,
     <VB as VerifierBackend>::Settings: Clone,
@@ -479,7 +479,7 @@ where
     get,
     path = paths::NETWORK_INFO,
     responses(
-        (status = 200, description = "Query the network information", body = logos_blockchain_network::backends::libp2p::Libp2pInfo),
+        (status = 200, description = "Query the network information", body = logos_blockchain_network_service::backends::libp2p::Libp2pInfo),
         (status = 500, description = "Internal server error", body = String),
     )
 )]
@@ -492,8 +492,8 @@ where
         + Display
         + 'static
         + AsServiceId<
-            logos_blockchain_network::NetworkService<
-                logos_blockchain_network::backends::libp2p::Libp2p,
+            logos_blockchain_network_service::NetworkService<
+                logos_blockchain_network_service::backends::libp2p::Libp2p,
                 RuntimeServiceId,
             >,
         >,
@@ -553,9 +553,9 @@ pub async fn da_get_commitments<
 where
     DaBlobId: Serialize + for<'de> Deserialize<'de> + Send + 'static,
     SamplingBackend: DaSamplingServiceBackend<BlobId = DaBlobId>,
-    SamplingNetwork: logos_blockchain_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: logos_blockchain_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
-    SamplingMempoolAdapter: logos_blockchain_da_sampling::mempool::DaMempoolAdapter,
+    SamplingNetwork: logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
+    SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
+    SamplingMempoolAdapter: logos_blockchain_da_sampling_service::mempool::DaMempoolAdapter,
     RuntimeServiceId: Debug
         + Sync
         + Display
@@ -826,7 +826,7 @@ pub async fn add_tx<StorageAdapter, RuntimeServiceId>(
     Json(tx): Json<SignedMantleTx>,
 ) -> Response
 where
-    StorageAdapter: tx_service::storage::MempoolStorageAdapter<
+    StorageAdapter: logos_blockchain_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
             Item = SignedMantleTx,
             Key = <SignedMantleTx as Transaction>::Hash,
@@ -892,9 +892,9 @@ where
         + Send
         + Display
         + 'static
-        + AsServiceId<logos_blockchain_sdp::SdpService<MempoolAdapter, RuntimeServiceId>>,
+        + AsServiceId<logos_blockchain_sdp_service::SdpService<MempoolAdapter, RuntimeServiceId>>,
 {
-    make_request_and_return_response!(logos_blockchain_api::http::sdp::post_declaration_handler::<
+    make_request_and_return_response!(logos_blockchain_api_service::http::sdp::post_declaration_handler::<
         MempoolAdapter,
         RuntimeServiceId,
     >(handle, declaration))
@@ -919,9 +919,9 @@ where
         + Send
         + Display
         + 'static
-        + AsServiceId<logos_blockchain_sdp::SdpService<MempoolAdapter, RuntimeServiceId>>,
+        + AsServiceId<logos_blockchain_sdp_service::SdpService<MempoolAdapter, RuntimeServiceId>>,
 {
-    make_request_and_return_response!(logos_blockchain_api::http::sdp::post_activity_handler::<
+    make_request_and_return_response!(logos_blockchain_api_service::http::sdp::post_activity_handler::<
         MempoolAdapter,
         RuntimeServiceId,
     >(handle, metadata))
@@ -946,9 +946,9 @@ where
         + Send
         + Display
         + 'static
-        + AsServiceId<logos_blockchain_sdp::SdpService<MempoolAdapter, RuntimeServiceId>>,
+        + AsServiceId<logos_blockchain_sdp_service::SdpService<MempoolAdapter, RuntimeServiceId>>,
 {
-    make_request_and_return_response!(logos_blockchain_api::http::sdp::post_withdrawal_handler::<
+    make_request_and_return_response!(logos_blockchain_api_service::http::sdp::post_withdrawal_handler::<
         MempoolAdapter,
         RuntimeServiceId,
     >(handle, declaration_id))
@@ -969,7 +969,7 @@ pub async fn blocks<StorageBackend, RuntimeServiceId>(
     Query(query): Query<BlockRangeQuery>,
 ) -> Response
 where
-    StorageBackend: logos_blockchain_storage::backends::StorageBackend + Send + Sync + 'static, /* TODO: StorageChainApi */
+    StorageBackend: logos_blockchain_storage_service::backends::StorageBackend + Send + Sync + 'static, /* TODO: StorageChainApi */
     StorageBackend::Block: Serialize,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
@@ -1000,7 +1000,7 @@ pub async fn blocks_stream<StorageBackend, ConsensusService, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
-    StorageBackend: logos_blockchain_storage::backends::StorageBackend + Send + Sync + 'static,
+    StorageBackend: logos_blockchain_storage_service::backends::StorageBackend + Send + Sync + 'static,
     StorageBackend::Block: Serialize,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
@@ -1059,16 +1059,16 @@ pub mod wallet {
         SamplingBackend::Settings: Clone,
         SamplingBackend::Share: Debug + 'static,
         SamplingBackend::BlobId: Debug + 'static,
-        SamplingNetworkAdapter: logos_blockchain_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-        SamplingStorage: logos_blockchain_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
-        MempoolStorageAdapter: tx_service::storage::MempoolStorageAdapter<
+        SamplingNetworkAdapter: logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
+        SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
+        MempoolStorageAdapter: logos_blockchain_tx_service::storage::MempoolStorageAdapter<
                 RuntimeServiceId,
                 Key = <SignedMantleTx as Transaction>::Hash,
                 Item = SignedMantleTx,
             > + Clone
             + 'static,
         MempoolStorageAdapter::Error: Debug,
-        TimeBackend: logos_blockchain_time::backends::TimeBackend,
+        TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
         TimeBackend::Settings: Clone + Send + Sync,
         RuntimeServiceId: Debug
             + Send
@@ -1142,21 +1142,21 @@ pub mod wallet {
     ) -> Response
     where
         WalletService: WalletServiceData + 'static,
-        StorageBackend: logos_blockchain_storage::backends::StorageBackend + Send + Sync + 'static,
+        StorageBackend: logos_blockchain_storage_service::backends::StorageBackend + Send + Sync + 'static,
         SamplingBackend: DaSamplingServiceBackend<BlobId = BlobId> + Send,
         SamplingBackend::Settings: Clone,
         SamplingBackend::Share: Debug + 'static,
         SamplingBackend::BlobId: Debug + 'static,
-        SamplingNetworkAdapter: logos_blockchain_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-        SamplingStorage: logos_blockchain_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
-        MempoolStorageAdapter: tx_service::storage::MempoolStorageAdapter<
+        SamplingNetworkAdapter: logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
+        SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
+        MempoolStorageAdapter: logos_blockchain_tx_service::storage::MempoolStorageAdapter<
                 RuntimeServiceId,
                 Key = <SignedMantleTx as Transaction>::Hash,
                 Item = SignedMantleTx,
             > + Clone
             + 'static,
         MempoolStorageAdapter::Error: Debug,
-        TimeBackend: logos_blockchain_time::backends::TimeBackend,
+        TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
         TimeBackend::Settings: Clone + Send + Sync,
         RuntimeServiceId: Debug
             + Send

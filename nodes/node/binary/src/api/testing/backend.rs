@@ -9,9 +9,9 @@ use axum::{
     routing::{get, post},
 };
 use logos_blockchain_kzgrs_backend::common::share::DaShare;
-use logos_blockchain_api::Backend;
+use logos_blockchain_api_service::Backend;
 use logos_blockchain_da_network_service::backends::libp2p::validator::DaNetworkValidatorBackend;
-use logos_blockchain_da_sampling::{
+use logos_blockchain_da_sampling_service::{
     backend::kzgrs::KzgrsSamplingBackend,
     network::adapters::validator::Libp2pAdapter as SamplingLibp2pAdapter,
     storage::adapters::rocksdb::{
@@ -22,7 +22,7 @@ use logos_blockchain_http_api_common::{
     paths::{DA_GET_MEMBERSHIP, DA_HISTORIC_SAMPLING, MANTLE_SDP_DECLARATIONS},
     utils::create_rate_limit_layer,
 };
-pub use logos_blockchain_network::backends::libp2p::Libp2p as NetworkBackend;
+pub use logos_blockchain_network_service::backends::libp2p::Libp2p as NetworkBackend;
 use overwatch::{DynError, overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
@@ -73,7 +73,7 @@ type TestCryptarchiaService<RuntimeServiceId> =
     generic_services::CryptarchiaService<RuntimeServiceId>;
 
 pub(super) type TestHttpCryptarchiaService<RuntimeServiceId> =
-    logos_blockchain_api::http::consensus::Cryptarchia<RuntimeServiceId>;
+    logos_blockchain_api_service::http::consensus::Cryptarchia<RuntimeServiceId>;
 
 #[async_trait::async_trait]
 impl<RuntimeServiceId> Backend<RuntimeServiceId> for TestAxumBackend
@@ -144,7 +144,7 @@ where
                 post(
                     da_historic_sampling::<
                         KzgrsSamplingBackend,
-                        logos_blockchain_da_sampling::network::adapters::validator::Libp2pAdapter<
+                        logos_blockchain_da_sampling_service::network::adapters::validator::Libp2pAdapter<
                             LogosBlockchainDaMembership,
                             DaMembershipAdapter<RuntimeServiceId>,
                             DaMembershipStorage,
