@@ -32,6 +32,7 @@ pub use nomos_ledger::EpochState;
 use nomos_ledger::LedgerState;
 use nomos_network::message::ChainSyncEvent;
 use nomos_storage::{StorageService, api::chain::StorageChainApi, backends::StorageBackend};
+use nomos_time::TimeService;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData, state::StateUpdater},
@@ -73,6 +74,11 @@ pub enum Error {
     ParentMissing {
         parent: HeaderId,
         info: CryptarchiaInfo,
+    },
+    #[error("Block from future slot({block_slot:?}): current_slot:{current_slot:?}")]
+    FutureBlock {
+        block_slot: Slot,
+        current_slot: Slot,
     },
     #[error("Ledger error: {0}")]
     Ledger(#[from] nomos_ledger::LedgerError<HeaderId>),
@@ -228,6 +234,7 @@ impl Cryptarchia {
     fn try_apply_block<Tx>(
         &self,
         block: &Block<Tx>,
+        current_slot: Slot,
     ) -> Result<(Self, PrunedBlocks<HeaderId>), Error>
     where
         Tx: AuthenticatedMantleTx,
@@ -236,6 +243,15 @@ impl Cryptarchia {
         let id = header.id();
         let parent = header.parent();
         let slot = header.slot();
+
+        // Reject blocks from future slots
+        if slot > current_slot {
+            return Err(Error::FutureBlock {
+                block_slot: slot,
+                current_slot,
+            });
+        }
+
         // A block number of this block if it's applied to the chain.
         let ledger = self
             .ledger
@@ -390,11 +406,12 @@ impl FileBackendSettings for CryptarchiaSettings {
 }
 
 #[expect(clippy::allow_attributes_without_reason)]
-pub struct CryptarchiaConsensus<Tx, Storage, RuntimeServiceId>
+pub struct CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
     Tx: AuthenticatedMantleTx + Clone + Eq + Debug,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    TimeBackend: nomos_time::backends::TimeBackend,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     new_block_subscription_sender: broadcast::Sender<HeaderId>,
@@ -402,12 +419,13 @@ where
     state: <Self as ServiceData>::State,
 }
 
-impl<Tx, Storage, RuntimeServiceId> ServiceData
-    for CryptarchiaConsensus<Tx, Storage, RuntimeServiceId>
+impl<Tx, Storage, TimeBackend, RuntimeServiceId> ServiceData
+    for CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
     Tx: AuthenticatedMantleTx + Clone + Eq + Debug,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    TimeBackend: nomos_time::backends::TimeBackend,
 {
     type Settings = CryptarchiaSettings;
     type State = CryptarchiaConsensusState;
@@ -416,8 +434,8 @@ where
 }
 
 #[async_trait::async_trait]
-impl<Tx, Storage, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for CryptarchiaConsensus<Tx, Storage, RuntimeServiceId>
+impl<Tx, Storage, TimeBackend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
     Tx: Transaction<Hash = TxHash>
         + AuthenticatedMantleTx
@@ -433,6 +451,8 @@ where
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
+    TimeBackend: nomos_time::backends::TimeBackend,
+    TimeBackend::Settings: Clone + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -440,7 +460,8 @@ where
         + 'static
         + AsServiceId<Self>
         + AsServiceId<BlockBroadcastService<RuntimeServiceId>>
-        + AsServiceId<StorageService<Storage, RuntimeServiceId>>,
+        + AsServiceId<StorageService<Storage, RuntimeServiceId>>
+        + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -460,7 +481,7 @@ where
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn run(mut self) -> Result<(), DynError> {
         let relays: CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId> =
-            CryptarchiaConsensusRelays::from_service_resources_handle(
+            CryptarchiaConsensusRelays::from_service_resources_handle::<TimeBackend>(
                 &self.service_resources_handle,
             )
             .await;
@@ -475,9 +496,25 @@ where
             .notifier()
             .get_updated_settings();
 
+        wait_until_services_are_ready!(
+            &self.service_resources_handle.overwatch_handle,
+            Some(Duration::from_secs(60)),
+            BlockBroadcastService<_>,
+            StorageService<_, _>,
+            TimeService<_, _>
+        )
+        .await?;
+
+        let (mut current_slot, mut slot_timer) = Self::get_slot_timer(&relays).await?;
+
         // TODO: check active slot coeff is exactly 1/30
         let (mut cryptarchia, pruned_blocks) = self
-            .initialize_cryptarchia(&bootstrap_config, ledger_config.clone(), &relays)
+            .initialize_cryptarchia(
+                &bootstrap_config,
+                ledger_config.clone(),
+                &relays,
+                current_slot,
+            )
             .await;
         // These are blocks that have been pruned by the cryptarchia engine but have not
         // yet been deleted from the storage layer.
@@ -490,14 +527,6 @@ where
 
         let sync_blocks_provider: BlockProvider<_, _> =
             BlockProvider::new(relays.storage_adapter().storage_relay.clone());
-
-        wait_until_services_are_ready!(
-            &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_secs(60)),
-            BlockBroadcastService<_>,
-            StorageService<_, _>
-        )
-        .await?;
 
         // The prolonged bootstrap timer will be started when chain-network notifies us
         // that IBD has completed. This ensures we don't transition to Online mode
@@ -547,6 +576,7 @@ where
                                 match Self::process_block_and_update_state(
                                         cryptarchia.clone(),
                                         *block,
+                                        current_slot,
                                         &storage_blocks_to_remove,
                                         &relays,
                                         &self.new_block_subscription_sender,
@@ -582,6 +612,10 @@ where
                         }
                     }
 
+                    Some(nomos_time::SlotTick { slot, .. }) = slot_timer.next() => {
+                        current_slot = slot;
+                    }
+
                     _ = state_recording_timer.tick() => {
                         // Periodically record the current timestamp and engine state
                         Self::update_state(
@@ -609,7 +643,8 @@ where
     }
 }
 
-impl<Tx, Storage, RuntimeServiceId> CryptarchiaConsensus<Tx, Storage, RuntimeServiceId>
+impl<Tx, Storage, TimeBackend, RuntimeServiceId>
+    CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
     Tx: Transaction<Hash = TxHash>
         + AuthenticatedMantleTx
@@ -625,6 +660,7 @@ where
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
+    TimeBackend: nomos_time::backends::TimeBackend,
     RuntimeServiceId: Display + AsServiceId<Self>,
 {
     fn notify_service_ready(&self) {
@@ -633,6 +669,35 @@ where
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
+    }
+
+    /// Get current slot and slot timer from time service.
+    async fn get_slot_timer(
+        relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
+    ) -> Result<(Slot, nomos_time::EpochSlotTickStream), DynError> {
+        let slot_timer = {
+            let (sender, receiver) = oneshot::channel();
+            relays
+                .time_relay()
+                .send(nomos_time::TimeServiceMessage::Subscribe { sender })
+                .await
+                .expect("Request time subscription to time service should succeed");
+            receiver.await?
+        };
+
+        // TODO: Improve Subscribe API to return current slot immediately,
+        // so we don't need to call CurrentSlot API separately.
+        let current_slot = {
+            let (sender, receiver) = oneshot::channel();
+            relays
+                .time_relay()
+                .send(nomos_time::TimeServiceMessage::CurrentSlot { sender })
+                .await
+                .expect("Request current slot from time service should succeed");
+            receiver.await?.slot
+        };
+
+        Ok((current_slot, slot_timer))
     }
 
     fn process_message(
@@ -728,9 +793,11 @@ where
         }
     }
 
+    #[expect(clippy::too_many_arguments, reason = "Need all args")]
     async fn process_block_and_update_state(
         cryptarchia: Cryptarchia,
         block: Block<Tx>,
+        current_slot: Slot,
         storage_blocks_to_remove: &HashSet<HeaderId>,
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
         new_block_subscription_sender: &broadcast::Sender<HeaderId>,
@@ -740,6 +807,7 @@ where
         let (cryptarchia, pruned_blocks) = Self::process_block(
             cryptarchia,
             block,
+            current_slot,
             relays,
             new_block_subscription_sender,
             lib_subscription_sender,
@@ -787,13 +855,13 @@ where
     async fn process_block(
         cryptarchia: Cryptarchia,
         block: Block<Tx>,
+        current_slot: Slot,
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
         new_block_subscription_sender: &broadcast::Sender<HeaderId>,
         lib_broadcaster: &broadcast::Sender<LibUpdate>,
     ) -> Result<(Cryptarchia, PrunedBlocks<HeaderId>), Error> {
         debug!("received proposal {:?}", block);
 
-        // TODO: filter on time?
         let header = block.header();
         let prev_lib = cryptarchia.lib();
 
@@ -805,7 +873,7 @@ where
             }
         };
 
-        let (cryptarchia, pruned_blocks) = cryptarchia.try_apply_block(&block)?;
+        let (cryptarchia, pruned_blocks) = cryptarchia.try_apply_block(&block, current_slot)?;
         let new_lib = cryptarchia.lib();
 
         relays
@@ -928,6 +996,7 @@ where
         bootstrap_config: &BootstrapConfig,
         ledger_config: nomos_ledger::Config,
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
+        current_slot: Slot,
     ) -> (Cryptarchia, PrunedBlocks<HeaderId>) {
         let lib_id = self.state.lib;
         let genesis_id = self.state.genesis_id;
@@ -965,6 +1034,7 @@ where
             match Self::process_block(
                 cryptarchia.clone(),
                 block,
+                current_slot,
                 relays,
                 &self.new_block_subscription_sender,
                 &self.lib_subscription_sender,
