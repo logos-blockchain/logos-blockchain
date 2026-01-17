@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 cryptarchia-engine         = { workspace = true }
+fixed-slice-deque          = { version = "0.1.0-beta2" }
 groth16                    = { workspace = true }
 key-management-system-keys = { workspace = true }
 mmr                        = { features = ["serde"], workspace = true }

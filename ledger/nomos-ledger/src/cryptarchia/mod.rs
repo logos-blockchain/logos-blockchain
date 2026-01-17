@@ -1,3 +1,6 @@
+mod block_density;
+mod stake;
+
 use std::sync::LazyLock;
 
 use cryptarchia_engine::{Epoch, Slot};

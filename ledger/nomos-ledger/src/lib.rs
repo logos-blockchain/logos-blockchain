@@ -1,5 +1,5 @@
 mod config;
-// The edger is split into two modules:
+// The ledger is split into two modules:
 // - `cryptarchia`: the base functionalities needed by the Cryptarchia consensus
 //   algorithm, including a minimal UTxO model.
 // - `mantle_ops` : our extensions in the form of Mantle operations, e.g. SDP.
