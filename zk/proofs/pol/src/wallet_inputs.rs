@@ -8,10 +8,10 @@ pub struct PolWalletInputs {
     note_value: Groth16Input,
     transaction_hash: Groth16Input,
     output_number: Groth16Input,
-    aged_path: Vec<Groth16Input>,
-    aged_selector: Vec<Groth16Input>,
-    latest_path: Vec<Groth16Input>,
-    latest_selector: Vec<Groth16Input>,
+    aged_path: Vec<Groth16Input>,       // leaf-to-root
+    aged_selector: Vec<Groth16Input>,   // root-to-leaf
+    latest_path: Vec<Groth16Input>,     // leaf-to-root
+    latest_selector: Vec<Groth16Input>, // root-to-leaf
     secret_key: Groth16Input,
 }
 
@@ -21,10 +21,10 @@ pub struct PolWalletInputsData {
     pub note_value: u64,
     pub transaction_hash: Fr,
     pub output_number: u64,
-    pub aged_path: Vec<Fr>,
-    pub aged_selector: Vec<bool>,
-    pub latest_path: Vec<Fr>,
-    pub latest_selector: Vec<bool>,
+    pub aged_path: Vec<Fr>,         // leaf-to-root
+    pub aged_selector: Vec<bool>,   // root-to-leaf
+    pub latest_path: Vec<Fr>,       // leaf-to-root
+    pub latest_selector: Vec<bool>, // root-to-leaf
     pub secret_key: Fr,
 }
 
@@ -37,13 +37,13 @@ pub struct PolWalletInputsJson {
     #[serde(rename = "note_output_number")]
     output_number: Groth16InputDeser,
     #[serde(rename = "noteid_aged_path")]
-    aged_path: Vec<Groth16InputDeser>,
+    aged_path: Vec<Groth16InputDeser>, // leaf-to-root
     #[serde(rename = "noteid_aged_selectors")]
-    aged_selector: Vec<Groth16InputDeser>,
+    aged_selector: Vec<Groth16InputDeser>, // root-to-leaf
     #[serde(rename = "noteid_latest_path")]
-    latest_path: Vec<Groth16InputDeser>,
+    latest_path: Vec<Groth16InputDeser>, // leaf-to-root
     #[serde(rename = "noteid_latest_selectors")]
-    latest_selector: Vec<Groth16InputDeser>,
+    latest_selector: Vec<Groth16InputDeser>, // root-to-leaf
     secret_key: Groth16InputDeser,
 }
 impl From<&PolWalletInputs> for PolWalletInputsJson {

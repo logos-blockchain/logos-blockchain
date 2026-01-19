@@ -274,11 +274,13 @@ impl LeaderPrivate {
             aged_path: aged_path.iter().map(|n| *n.item()).collect(),
             aged_selector: aged_path
                 .iter()
+                .rev() // PoL circuit expects the reverse order for selectors
                 .map(|n| matches!(n, MerkleNode::Right(_)))
                 .collect(),
             latest_path: latest_path.iter().map(|n| *n.item()).collect(),
             latest_selector: latest_path
                 .iter()
+                .rev() // PoL circuit expects the reverse order for selectors
                 .map(|n| matches!(n, MerkleNode::Right(_)))
                 .collect(),
             secret_key,
