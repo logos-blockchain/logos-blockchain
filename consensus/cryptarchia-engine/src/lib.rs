@@ -675,8 +675,16 @@ impl<Id> ReorgedBlocks<Id> {
         self.0.is_empty()
     }
 
-    #[must_use]
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Id> {
+    pub fn iter(&self) -> std::slice::Iter<'_, Id> {
+        <&Self as IntoIterator>::into_iter(self)
+    }
+}
+
+impl<'a, Id> IntoIterator for &'a ReorgedBlocks<Id> {
+    type Item = &'a Id;
+    type IntoIter = std::slice::Iter<'a, Id>;
+
+    fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
     }
 }
