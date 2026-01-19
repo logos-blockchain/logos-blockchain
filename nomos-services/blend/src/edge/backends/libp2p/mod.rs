@@ -46,7 +46,7 @@ impl<RuntimeServiceId> BlendBackend<PeerId, RuntimeServiceId> for Libp2pBlendBac
         let (swarm_command_sender, swarm_command_receiver) = mpsc::channel(CHANNEL_SIZE);
         let swarm_identity = {
             let mut non_ephemeral_signing_key_bytes = non_ephemeral_signing_key.to_bytes();
-            Keypair::try_from_bytes(&mut non_ephemeral_signing_key_bytes)
+            Keypair::try_from_bytes(&mut non_ephemeral_signing_key_bytes[..])
                 .expect("Cryptographic secret key should be a valid Ed25519 private key.")
         };
         let swarm = BlendSwarm::new(

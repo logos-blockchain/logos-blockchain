@@ -3,7 +3,7 @@ use nomos_utils::serde::{deserialize_bytes_array, serialize_bytes_array};
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use subtle::ConstantTimeEq as _;
-use zeroize::ZeroizeOnDrop;
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::{
     keys::{Ed25519PublicKey, Ed25519Signature},
@@ -48,8 +48,8 @@ impl UnsecuredEd25519Key {
     }
 
     #[must_use]
-    pub fn to_bytes(&self) -> [u8; SECRET_KEY_LENGTH] {
-        self.0.to_bytes()
+    pub fn to_bytes(&self) -> Zeroizing<[u8; SECRET_KEY_LENGTH]> {
+        self.0.to_bytes().into()
     }
 
     #[must_use]
@@ -72,7 +72,7 @@ impl<'de> Deserialize<'de> for UnsecuredEd25519Key {
     where
         D: Deserializer<'de>,
     {
-        let bytes = deserialize_bytes_array::<KEY_SIZE, _>(deserializer)?;
+        let bytes = Zeroizing::new(deserialize_bytes_array::<KEY_SIZE, _>(deserializer)?);
         Ok(Self(SigningKey::from_bytes(&bytes)))
     }
 }
