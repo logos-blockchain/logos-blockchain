@@ -663,6 +663,10 @@ where
         Ok(block)
     }
 
+    /// A helper function to remove all transactions in the given block from the
+    /// mempool.
+    /// On error, logs the error instead of propagating it, to keep the caller
+    /// logic simple.
     async fn remove_txs_in_block_from_mempool(
         block: &Block<Mempool::Item>,
         relays: &CryptarchiaConsensusRelays<
