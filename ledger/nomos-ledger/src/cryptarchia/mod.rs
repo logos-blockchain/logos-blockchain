@@ -14,7 +14,7 @@ use nomos_core::{
 };
 
 use crate::cryptarchia::{
-    block_density::BlockDensityInference,
+    block_density::BlockDensity,
     stake::{LEARNING_RATE, StakeInference},
 };
 
@@ -93,7 +93,7 @@ pub struct LedgerState {
     pub next_epoch_state: EpochState,
     pub epoch_state: EpochState,
     #[derivative(PartialEq = "ignore")]
-    block_density_inference: BlockDensityInference,
+    block_density: BlockDensity,
     // Using an Arc wrapper here as this can be completely shared among instances of LedgerState
     #[derivative(PartialEq = "ignore")]
     stake_inference: Arc<StakeInference>,
@@ -109,7 +109,7 @@ impl LedgerState {
         }
 
         // increment density for new slot
-        let mut block_density_inference = self.block_density_inference.clone();
+        let mut block_density_inference = self.block_density.clone();
         block_density_inference.increment_block_density(slot);
         // infere new total stake
         let total_stake = self.stake_inference.total_stake_inference(
@@ -134,7 +134,7 @@ impl LedgerState {
             Ok(Self {
                 slot,
                 next_epoch_state,
-                block_density_inference,
+                block_density: block_density_inference,
                 ..self
             })
         } else if new_epoch == current_epoch + 1 {
@@ -150,7 +150,7 @@ impl LedgerState {
                 slot,
                 next_epoch_state,
                 epoch_state,
-                block_density_inference,
+                block_density: block_density_inference,
                 ..self
             })
         } else {
@@ -171,7 +171,7 @@ impl LedgerState {
                 slot,
                 next_epoch_state,
                 epoch_state,
-                block_density_inference,
+                block_density: block_density_inference,
                 ..self
             })
         }
@@ -330,7 +330,7 @@ impl LedgerState {
             config.consensus_config.active_slot_coeff,
             config.consensus_config.security_param.get().into(),
         ));
-        let block_density_inference = BlockDensityInference::new(stake_inference.period(), slot);
+        let block_density_inference = BlockDensity::new(stake_inference.period(), slot);
         Self {
             utxos: utxos.clone(),
             nonce,
@@ -347,7 +347,7 @@ impl LedgerState {
                 utxos,
                 total_stake,
             },
-            block_density_inference,
+            block_density: block_density_inference,
             stake_inference,
         }
     }
@@ -541,7 +541,7 @@ pub mod tests {
                 active_slot_coeff: 1.0,
             },
             sdp_config: crate::mantle::sdp::Config {
-                service_params: std::sync::Arc::new(service_params),
+                service_params: Arc::new(service_params),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_session: NonZeroU64::new(10).unwrap(),
@@ -560,11 +560,18 @@ pub mod tests {
 
     #[must_use]
     pub fn genesis_state(utxos: &[Utxo]) -> LedgerState {
+        let config = config();
         let total_stake = utxos.iter().map(|u| u.note.value).sum();
         let utxos = utxos
             .iter()
             .map(|utxo| (utxo.id(), *utxo))
             .collect::<UtxoTree>();
+        let stake_inference = Arc::new(StakeInference::new(
+            LEARNING_RATE,
+            config.consensus_config.active_slot_coeff,
+            config.consensus_config.security_param.get().into(),
+        ));
+        let block_density_inference = BlockDensity::new(stake_inference.period(), 0.into());
         LedgerState {
             utxos: utxos.clone(),
             nonce: Fr::ZERO,
@@ -581,6 +588,8 @@ pub mod tests {
                 utxos,
                 total_stake,
             },
+            stake_inference,
+            block_density: block_density_inference,
         }
     }
 
@@ -836,7 +845,7 @@ pub mod tests {
         let output_note2 = Note::new(3000, output_note2_sk.to_public_key());
 
         let locked_notes = LockedNotes::new();
-        let ledger_state = LedgerState::from_utxos([input_utxo], Fr::ZERO);
+        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
         let tx = create_tx(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
 
         let _fees = tx.gas_cost::<MainnetGasConstants>();
@@ -908,7 +917,7 @@ pub mod tests {
             note: Note::new(999, Fr::from(BigUint::from(1u8)).into()),
         };
 
-        let ledger_state = LedgerState::from_utxos([input_utxo], Fr::ZERO);
+        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
 
         let invalid_utxos = [
             non_existent_utxo_1,
@@ -939,7 +948,7 @@ pub mod tests {
         let output_note = Note::new(1, Fr::from(BigUint::from(2u8)).into());
 
         let locked_notes = LockedNotes::new();
-        let ledger_state = LedgerState::from_utxos([input_utxo], Fr::ZERO);
+        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
         let tx = create_tx(&[(&input_sk, &input_utxo)], vec![output_note, output_note]);
 
         let (_, balance) = ledger_state
@@ -969,7 +978,7 @@ pub mod tests {
         };
 
         let locked_notes = LockedNotes::new();
-        let ledger_state = LedgerState::from_utxos([input_utxo], Fr::ZERO);
+        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
         let tx = create_tx(&[(&input_sk, &input_utxo)], vec![]);
 
         let _fees = tx.gas_cost::<MainnetGasConstants>();
@@ -993,7 +1002,7 @@ pub mod tests {
         };
 
         let locked_notes = LockedNotes::new();
-        let ledger_state = LedgerState::from_utxos([input_utxo], Fr::ZERO);
+        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
         let tx = create_tx(
             &[(&input_sk, &input_utxo)],
             vec![Note::new(0, Fr::from(BigUint::from(2u8)).into())],

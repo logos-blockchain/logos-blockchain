@@ -3,6 +3,7 @@ use std::ops::{Div as _, Mul as _};
 /// Current learning rate as per [especification](https://nomos-tech.notion.site/Total-Stake-Inference-22d261aa09df8051a454caa46ec54b34), this is not configurable.
 pub const LEARNING_RATE: u64 = 1;
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Copy, Clone)]
 pub struct StakeInference {
     learning_rate: u64,

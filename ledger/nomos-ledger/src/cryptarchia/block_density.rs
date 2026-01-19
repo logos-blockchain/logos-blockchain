@@ -2,7 +2,7 @@ use cryptarchia_engine::Slot;
 use fixed_slice_deque::FixedSliceDeque;
 
 #[derive(Clone)]
-pub struct BlockDensityInference {
+pub struct BlockDensity {
     // TODO: this can be optimized using a bitarray family data structure and shifting instead
     // current available option bitvec crate doesnt support fixed size structures so we go for this
     // instead for now.
@@ -10,7 +10,7 @@ pub struct BlockDensityInference {
     current_slot: Slot,
 }
 
-impl BlockDensityInference {
+impl BlockDensity {
     pub fn new(period: u64, current_slot: Slot) -> Self {
         let slots_window = FixedSliceDeque::new(period as usize);
         Self {
@@ -41,12 +41,12 @@ mod tests {
     use super::*;
 
     // Helper method to create a BlockDensityInference with a given period
-    fn create_inference(period: u64, current_slot: u64) -> BlockDensityInference {
-        BlockDensityInference::new(period, Slot::from(current_slot))
+    fn create_inference(period: u64, current_slot: u64) -> BlockDensity {
+        BlockDensity::new(period, Slot::from(current_slot))
     }
 
     // Helper method to fill window with a specific number of blocks and empty slots
-    fn fill_window(inference: &mut BlockDensityInference, blocks: &[bool]) {
+    fn fill_window(inference: &mut BlockDensity, blocks: &[bool]) {
         for &has_block in blocks {
             if has_block {
                 inference.slots_window.push_back(true);
