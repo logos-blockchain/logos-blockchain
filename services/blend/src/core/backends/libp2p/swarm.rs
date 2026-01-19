@@ -39,7 +39,7 @@ use crate::core::{
             behaviour::{BlendBehaviour, BlendBehaviourEvent},
         },
     },
-    settings::BlendConfig,
+    settings::RunningBlendConfig as BlendConfig,
 };
 
 #[derive(Debug)]

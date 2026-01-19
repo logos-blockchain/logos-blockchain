@@ -14,7 +14,7 @@ pub struct Cipher(BlakeRng);
 
 impl Cipher {
     #[must_use]
-    pub(crate) fn new(domain: &[u8], seed: &[u8]) -> Self {
+    pub fn new(domain: &[u8], seed: &[u8]) -> Self {
         Self(BlakeRng::from_seed(blake2b512(&[domain, seed]).into()))
     }
 

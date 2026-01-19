@@ -1,8 +1,8 @@
-use lb_blend_crypto::keys::SharedKey;
 use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
-use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
-
-use crate::crypto::key_ext::{Ed25519PublicKeyExt as _, Ed25519SecretKeyExt as _};
+use lb_key_management_system_keys::{
+    keys::{Ed25519PublicKey, UnsecuredEd25519Key},
+    operators::ed25519::derive_x25519::SharedKey,
+};
 
 /// Input for a single encapsulation,
 pub struct EncapsulationInput {

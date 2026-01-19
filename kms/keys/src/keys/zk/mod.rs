@@ -86,7 +86,6 @@ impl From<BigUint> for ZkKey {
     }
 }
 
-#[cfg(feature = "unsafe")]
 impl From<UnsecuredZkKey> for ZkKey {
     fn from(value: UnsecuredZkKey) -> Self {
         Self(value)

@@ -3,8 +3,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    core::settings::{BlendConfig as CoreConfig, SchedulerSettings},
-    edge::settings::BlendConfig as EdgeConfig,
+    core::settings::{SchedulerSettings, StartingBlendConfig as CoreConfig},
+    edge::settings::StartingBlendConfig as EdgeConfig,
 };
 
 mod common;
@@ -32,10 +32,11 @@ impl<CoreBackendSettings, EdgeBackendSettings>
         Settings {
             common:
                 CommonSettings {
-                    crypto,
                     minimum_network_size,
                     time,
                     recovery_path_prefix,
+                    non_ephemeral_signing_key_id,
+                    num_blend_layers,
                 },
             core:
                 CoreSettings {
@@ -53,10 +54,11 @@ impl<CoreBackendSettings, EdgeBackendSettings>
         };
         Self {
             backend,
-            crypto,
             scheduler,
             time,
             zk,
+            non_ephemeral_signing_key_id,
+            num_blend_layers,
             minimum_network_size,
             recovery_path,
         }
@@ -70,9 +72,10 @@ impl<CoreBackendSettings, EdgeBackendSettings>
         Settings {
             common:
                 CommonSettings {
-                    crypto,
                     minimum_network_size,
                     time,
+                    non_ephemeral_signing_key_id,
+                    num_blend_layers,
                     ..
                 },
             edge: EdgeSettings { backend },
@@ -85,8 +88,9 @@ impl<CoreBackendSettings, EdgeBackendSettings>
     ) -> Self {
         Self {
             backend,
-            crypto,
             time,
+            non_ephemeral_signing_key_id,
+            num_blend_layers,
             minimum_network_size,
             cover,
         }

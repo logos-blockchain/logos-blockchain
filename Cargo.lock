@@ -5134,11 +5134,7 @@ dependencies = [
  "logos-blockchain-utils",
  "num-bigint",
  "rs-merkle-tree",
- "serde",
- "subtle",
  "thiserror 1.0.69",
- "x25519-dalek",
- "zeroize",
 ]
 
 [[package]]
@@ -5213,7 +5209,6 @@ dependencies = [
  "fork_stream",
  "futures",
  "libp2p",
- "logos-blockchain-blend-crypto",
  "logos-blockchain-blend-message",
  "logos-blockchain-blend-proofs",
  "logos-blockchain-core",
@@ -5870,6 +5865,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "x25519-dalek",
  "zeroize",
 ]
 
@@ -6034,7 +6030,6 @@ dependencies = [
  "axum 0.7.9",
  "clap",
  "color-eyre",
- "derivative",
  "futures",
  "hex",
  "http 1.4.0",

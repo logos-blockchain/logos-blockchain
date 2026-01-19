@@ -23,7 +23,6 @@ workspace = true
 async-trait                      = "0.1"
 clap                             = { default-features = false, features = ["derive", "env", "std"], version = "4" }
 color-eyre                       = { default-features = false, version = "0.6.0" }
-derivative                       = { version = "2", default-features = false }
 futures                          = { default-features = false, version = "0.3" }
 hex                              = { default-features = false, version = "0.4.3" }
 http                             = "1.3"

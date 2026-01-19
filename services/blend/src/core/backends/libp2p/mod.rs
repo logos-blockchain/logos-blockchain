@@ -26,7 +26,7 @@ use crate::core::{
             tokio_provider::ObservationWindowTokioIntervalProvider,
         },
     },
-    settings::BlendConfig,
+    settings::RunningBlendConfig as BlendConfig,
 };
 
 const LOG_TARGET: &str = "blend::backend::libp2p";

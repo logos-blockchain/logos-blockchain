@@ -7,20 +7,16 @@ use lb_blend::{
 };
 use lb_core::crypto::ZkHash;
 use lb_key_management_system_service::{
-    KMSService,
-    api::KmsServiceApi,
-    backend::preload::{KeyId, PreloadKMSBackend},
-    keys::KeyOperators,
+    api::KmsServiceApi, backend::preload::KeyId, keys::KeyOperators,
     operators::blend::poq::PoQOperator,
 };
 use lb_poq::CorePathAndSelectors;
 use overwatch::services::AsServiceId;
 use tokio::sync::oneshot;
 
-const LOG_TARGET: &str = "blend::service::core::kms-poq-generator";
+use crate::kms::PreloadKmsService;
 
-pub(super) type PreloadKmsService<RuntimeServiceId> =
-    KMSService<PreloadKMSBackend, RuntimeServiceId>;
+const LOG_TARGET: &str = "blend::service::core::kms-poq-generator";
 
 #[async_trait]
 pub trait KmsPoQAdapter<RuntimeServiceId> {

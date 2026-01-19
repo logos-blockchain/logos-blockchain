@@ -57,8 +57,8 @@ use crate::{
         network::NetworkAdapter,
         processor::CoreCryptographicProcessor,
         settings::{
-            BlendConfig, CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings,
-            ZkSettings,
+            CoverTrafficSettings, MessageDelayerSettings, RunningBlendConfig as BlendConfig,
+            SchedulerSettings, ZkSettings,
         },
         state::RecoveryServiceState,
         tests::RuntimeServiceId,
@@ -93,10 +93,6 @@ pub fn settings<BackendSettings>(
     let recovery_file = NamedTempFile::new().unwrap();
     let settings = BlendConfig {
         backend: backend_settings,
-        crypto: SessionCryptographicProcessorSettings {
-            non_ephemeral_signing_key: local_private_key,
-            num_blend_layers: NonZeroU64::try_from(1).unwrap(),
-        },
         scheduler: SchedulerSettings {
             cover: CoverTrafficSettings {
                 message_frequency_per_round: 1.0.try_into().unwrap(),
@@ -110,6 +106,8 @@ pub fn settings<BackendSettings>(
         zk: ZkSettings {
             secret_key_kms_id: "test-key".to_owned(),
         },
+        non_ephemeral_signing_key: local_private_key,
+        num_blend_layers: NonZeroU64::try_from(1).unwrap(),
         minimum_network_size,
         recovery_path: recovery_file.path().to_path_buf(),
     };
@@ -292,7 +290,7 @@ pub fn dummy_overwatch_resources<BackendSettings, BroadcastSettings, RuntimeServ
 }
 
 pub fn new_crypto_processor<CorePoQGenerator>(
-    settings: &SessionCryptographicProcessorSettings,
+    settings: SessionCryptographicProcessorSettings,
     public_info: &PublicInfo<NodeId>,
     core_poq_generator: CorePoQGenerator,
 ) -> CoreCryptographicProcessor<
@@ -337,7 +335,7 @@ pub fn new_public_info<BackendSettings>(
         epoch: LeaderInputs {
             pol_ledger_aged: ZkHash::ZERO,
             pol_epoch_nonce: ZkHash::ZERO,
-            message_quota: settings.crypto.num_blend_layers.get(),
+            message_quota: settings.num_blend_layers.get(),
             total_stake: 10,
         },
     }
