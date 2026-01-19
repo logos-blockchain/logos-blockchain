@@ -6442,7 +6442,6 @@ dependencies = [
 name = "logos-blockchain-witness-generator"
 version = "0.1.0"
 dependencies = [
- "logos-blockchain-circuits-utils",
  "tempfile",
 ]
 
