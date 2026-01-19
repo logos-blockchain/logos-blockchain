@@ -109,3 +109,31 @@ $env:POL_PROOF_DEV_MODE="some_value"; cargo test -p tests -F debug disseminate_a
 debug-only code paths to be enabled during the tests.
 To modify the tracing configuration when using `-F debug` flag go to `tests/src/topology/configs/tracing.rs`. If debug
 flag is not used, logs will be written into each nodes temporary directory.
+
+## Running Cucumber tests
+
+To run the Cucumber tests, ensure the binaries are built (debug or release) and the environment variables below point to 
+the corresponding binaries:
+
+```text
+POL_PROOF_DEV_MODE=1
+NOMOS_KZGRS_PARAMS_PATH=/path-to/tests/kzgrs
+NOMOS_NODE_BIN=/path-to/target/release/nomos-node
+NOMOS_EXECUTOR_BIN=/path-to/target/release/nomos-executor
+```
+
+Filtering based on tags can be done using the `--tags` option. For example, to run all tests tagged with `@normal_ci`, 
+use the following command:
+```bash
+cargo test --release --test cucumber -- --tags "@normal_ci"
+```
+
+Filtering based on test names can be done using the `--name` option. For example, to run a specific test named
+"Idle smoke", use the following command:
+
+```bash
+cargo test --release --test cucumber -- --name "Idle smoke"
+```
+
+For more information on running Cucumber tests, refer to https://github.com/cucumber-rs/cucumber or 
+https://cucumber.io/docs.
