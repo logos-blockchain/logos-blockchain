@@ -18,7 +18,7 @@ use bytes::Bytes;
 pub use cryptarchia_engine::{Epoch, Slot};
 use cryptarchia_engine::{PrunedBlocks, ReorgedBlocks, UpdatedCryptarchia};
 use cryptarchia_sync::{GetTipResponse, ProviderResponse};
-use futures::{FutureExt as _, StreamExt as _};
+use futures::{FutureExt as _, StreamExt as _, future::join_all};
 use nomos_core::{
     block::Block,
     header::HeaderId,
@@ -867,12 +867,16 @@ where
             .await;
         }
 
-        let mut reorged_txs = Vec::new();
-        for id in reorged_blocks.iter() {
-            if let Some(block) = relays.storage_adapter().get_block(id).await {
-                reorged_txs.extend(block.transactions().cloned());
-            }
-        }
+        let reorged_txs: Vec<_> = join_all(
+            reorged_blocks
+                .iter()
+                .map(|id| relays.storage_adapter().get_block(id)),
+        )
+        .await
+        .into_iter()
+        .flatten()
+        .flat_map(Block::into_transactions)
+        .collect();
 
         Ok((cryptarchia, pruned_blocks, reorged_txs))
     }

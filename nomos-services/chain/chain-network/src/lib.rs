@@ -11,7 +11,7 @@ use std::{fmt::Display, hash::Hash, time::Duration};
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 pub use cryptarchia_engine::{Epoch, Slot};
-use futures::StreamExt as _;
+use futures::{StreamExt as _, future::join_all};
 use network::NetworkAdapter;
 use nomos_core::{
     block::{Block, Proposal},
@@ -734,11 +734,15 @@ where
     }
 
     // Re-insert reorged txs back into the mempool.
-    for tx in reorged_txs {
-        if let Err(e) = mempool_adapter.add_transaction(tx).await {
-            error!("Could not reinsert a reorged tx into mempool: {e:?}");
+    join_all(reorged_txs.into_iter().map(|tx| {
+        let mempool_adapter = mempool_adapter.clone();
+        async move {
+            if let Err(e) = mempool_adapter.add_transaction(tx).await {
+                error!("Could not reinsert a reorged tx into mempool: {e:?}");
+            }
         }
-    }
+    }))
+    .await;
 
     let blob_ids: Vec<da::BlobId> = block
         .transactions()
