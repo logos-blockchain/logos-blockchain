@@ -1,11 +1,13 @@
 use cryptarchia_engine::Slot;
 use fixed_slice_deque::FixedSliceDeque;
+
+#[derive(Clone)]
 pub struct BlockDensityInference {
     // TODO: this can be optimized using a bitarray family data structure and shifting instead
     // current available option bitvec crate doesnt support fixed size structures so we go for this
     // instead for now.
     pub slots_window: FixedSliceDeque<bool>,
-    pub current_slot: Slot,
+    current_slot: Slot,
 }
 
 impl BlockDensityInference {

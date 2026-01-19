@@ -7587,6 +7587,7 @@ name = "nomos-ledger"
 version = "0.1.0"
 dependencies = [
  "cryptarchia-engine 0.1.0",
+ "derivative",
  "fixed-slice-deque",
  "groth16 0.1.0",
  "key-management-system-keys 0.1.0",

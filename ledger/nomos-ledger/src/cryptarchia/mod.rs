@@ -1,15 +1,21 @@
 mod block_density;
 mod stake;
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use cryptarchia_engine::{Epoch, Slot};
+use derivative::Derivative;
 use groth16::{Fr, fr_from_bytes};
 use key_management_system_keys::keys::ZkPublicKey;
 use nomos_core::{
     crypto::{ZkDigest, ZkHasher},
     mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value, gas::GasConstants},
     proofs::leader_proof::{self, LeaderPublic},
+};
+
+use crate::cryptarchia::{
+    block_density::BlockDensityInference,
+    stake::{LEARNING_RATE, StakeInference},
 };
 
 pub type UtxoTree = utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
@@ -74,7 +80,8 @@ impl EpochState {
 /// Tracks bedrock transactions and minimal the state needed for consensus to
 /// work.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Derivative)]
+#[derivative(Clone, Eq, PartialEq)]
 pub struct LedgerState {
     // All available Unspent Transtaction Outputs (UTXOs) at the current slot
     pub utxos: UtxoTree,
@@ -85,6 +92,11 @@ pub struct LedgerState {
     // rolling snapshot of the state for the next epoch, used for epoch transitions
     pub next_epoch_state: EpochState,
     pub epoch_state: EpochState,
+    #[derivative(PartialEq = "ignore")]
+    block_density_inference: BlockDensityInference,
+    // Using an Arc wrapper here as this can be completely shared among instances of LedgerState
+    #[derivative(PartialEq = "ignore")]
+    stake_inference: Arc<StakeInference>,
 }
 
 impl LedgerState {
@@ -96,14 +108,20 @@ impl LedgerState {
             });
         }
 
-        // TODO: update once supply can change
-        let total_stake = self.epoch_state.total_stake;
+        // increment density for new slot
+        let mut block_density_inference = self.block_density_inference.clone();
+        block_density_inference.increment_block_density(slot);
+        // infere new total stake
+        let total_stake = self.stake_inference.total_stake_inference(
+            self.epoch_state.total_stake,
+            block_density_inference.current_block_density(),
+        );
         let current_epoch = config.epoch(self.slot);
         let new_epoch = config.epoch(slot);
 
         // there are 3 cases to consider:
-        // 1. we are in the same epoch as the parent state update the next epoch state
-        // 2. we are in the next epoch use the next epoch state as the current epoch
+        // 1. we are in the same epoch as the parent state: update the next epoch state
+        // 2. we are in the next epoch use the next epoch state as the current epoch:
         //    state and reset next epoch state
         // 3. we are in the next-next or later epoch: use the parent state as the epoch
         //    state and reset next epoch state
@@ -116,6 +134,7 @@ impl LedgerState {
             Ok(Self {
                 slot,
                 next_epoch_state,
+                block_density_inference,
                 ..self
             })
         } else if new_epoch == current_epoch + 1 {
@@ -131,6 +150,7 @@ impl LedgerState {
                 slot,
                 next_epoch_state,
                 epoch_state,
+                block_density_inference,
                 ..self
             })
         } else {
@@ -151,6 +171,7 @@ impl LedgerState {
                 slot,
                 next_epoch_state,
                 epoch_state,
+                block_density_inference,
                 ..self
             })
         }
@@ -277,6 +298,7 @@ impl LedgerState {
 
     pub fn from_genesis_tx<Id>(
         tx: impl GenesisTx,
+        config: &Config,
         epoch_nonce: Fr,
     ) -> Result<Self, LedgerError<Id>> {
         if !tx.mantle_tx().ledger_tx.inputs.is_empty() {
@@ -287,11 +309,12 @@ impl LedgerState {
 
         Ok(Self::from_utxos(
             tx.mantle_tx().ledger_tx.utxos(),
+            config,
             epoch_nonce,
         ))
     }
 
-    pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, nonce: Fr) -> Self {
+    pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config, nonce: Fr) -> Self {
         let utxos = utxos
             .into_iter()
             .map(|utxo| (utxo.id(), utxo))
@@ -301,10 +324,17 @@ impl LedgerState {
             .iter()
             .map(|(_, (utxo, _))| utxo.note.value)
             .sum::<Value>();
+        let slot: Slot = 0.into();
+        let stake_inference = Arc::new(StakeInference::new(
+            LEARNING_RATE,
+            config.consensus_config.active_slot_coeff,
+            config.consensus_config.security_param.get().into(),
+        ));
+        let block_density_inference = BlockDensityInference::new(stake_inference.period(), slot);
         Self {
             utxos: utxos.clone(),
             nonce,
-            slot: 0.into(),
+            slot,
             next_epoch_state: EpochState {
                 epoch: 1.into(),
                 nonce,
@@ -317,6 +347,8 @@ impl LedgerState {
                 utxos,
                 total_stake,
             },
+            block_density_inference,
+            stake_inference,
         }
     }
 }

@@ -1,7 +1,9 @@
 use std::ops::{Div as _, Mul as _};
 
-use nomos_core::mantle::Value;
+/// Current learning rate as per [especification](https://nomos-tech.notion.site/Total-Stake-Inference-22d261aa09df8051a454caa46ec54b34), this is not configurable.
+pub const LEARNING_RATE: u64 = 1;
 
+#[derive(Copy, Clone)]
 pub struct StakeInference {
     learning_rate: u64,
     slot_activation_coefficient: f64,
@@ -27,6 +29,7 @@ impl StakeInference {
             .div(self.slot_activation_coefficient)
             .floor() as u64
     }
+
     pub fn total_stake_inference(
         &self,
         total_stake_estimate: u64,
