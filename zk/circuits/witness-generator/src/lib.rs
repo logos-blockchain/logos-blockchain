@@ -1,5 +1,3 @@
-mod pol_test;
-
 use std::{
     io::{Error, Write as _},
     path::{Path, PathBuf},
