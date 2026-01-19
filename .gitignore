@@ -23,9 +23,6 @@ tests/.tmp*
 # Wildcard for any file that contains ignore
 *ignore*
 
-# Circom Circuits' Binaries
-zk/**/bin/*
-
 # C headers
 c-bindings/lib_logos_blockchain.h
 
