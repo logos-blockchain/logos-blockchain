@@ -1796,6 +1796,7 @@ dependencies = [
 [[package]]
 name = "cfgsync_tf"
 version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#77ae5078a612618583ab1430ab726999e16789f0"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -11813,6 +11814,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-config"
 version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#77ae5078a612618583ab1430ab726999e16789f0"
 dependencies = [
  "blst",
  "chain-leader 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
@@ -11854,6 +11856,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-core"
 version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#77ae5078a612618583ab1430ab726999e16789f0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11892,10 +11895,12 @@ dependencies = [
 [[package]]
 name = "testing-framework-env"
 version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#77ae5078a612618583ab1430ab726999e16789f0"
 
 [[package]]
 name = "testing-framework-runner-compose"
 version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#77ae5078a612618583ab1430ab726999e16789f0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11919,6 +11924,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-local"
 version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#77ae5078a612618583ab1430ab726999e16789f0"
 dependencies = [
  "async-trait",
  "testing-framework-core",
@@ -11929,6 +11935,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-workflows"
 version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#77ae5078a612618583ab1430ab726999e16789f0"
 dependencies = [
  "async-trait",
  "chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",

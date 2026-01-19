@@ -1,0 +1,93 @@
+on:
+  pull_request:
+  push:
+    branches: [ master ]
+
+name: Cucumber integration tests
+
+concurrency:
+  group: ${{ github.workflow }}@${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Run cucumber integration tests, not long running
+    runs-on: [self-hosted, Linux]
+
+    if: >
+      ${{
+        github.event_name != 'pull_request' ||
+        (
+          !startsWith(github.event.pull_request.title, '[WIP]') &&
+          !contains(toJson(github.event.pull_request.labels), 'DO NOT MERGE')
+        )
+      }}
+
+    steps:
+      - name: Disable rustup override
+        run: rustup override unset
+
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+
+      - name: Setup Circuits
+        uses: ./.github/actions/setup-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build binaries with all features
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+        with:
+          command: build
+          args: --release --locked --all-features -p nomos-node -p nomos-executor
+
+      - name: Run the node binary to check the config file validity
+        run: ${{ github.workspace }}/target/release/nomos-node nodes/nomos-node/config.yaml --check-config
+
+      - name: Run the executor binary to check the config file validity
+        run: ${{ github.workspace }}/target/release/nomos-executor nodes/nomos-executor/config.yaml --check-config
+
+      - name: Run cucumber
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+        env:
+          POL_PROOF_DEV_MODE: true
+          CONSENSUS_SLOT_TIME: 5
+          NOMOS_NODE_BIN: ${{ github.workspace }}/target/release/nomos-node
+          NOMOS_EXECUTOR_BIN: ${{ github.workspace }}/target/release/nomos-executor
+          NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
+        with:
+          command: test
+          args: --locked --test cucumber -- --tags "@normal_ci"
+
+      - name: Upload cucumber JUnit results
+        if: always()
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
+        with:
+          name: cucumber-junit
+          path: cucumber_tests/temp/cucumber-output-junit.xml
+          if-no-files-found: warn
+
+      - name: Upload cucumber logs on failure
+        if: failure()
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
+        with:
+          name: cucumber-artifacts
+          include-hidden-files: true
+          path: |
+            cucumber_tests/temp/**
+            cucumber_tests/temp/node-logs/**
+
+      - name: Publish cucumber test report
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Cucumber
+          path: cucumber_tests/temp/cucumber-output-junit.xml
+          reporter: java-junit
+
