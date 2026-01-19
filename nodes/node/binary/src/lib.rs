@@ -161,12 +161,12 @@ pub(crate) type CryptarchiaLeaderService = generic_services::CryptarchiaLeaderSe
     RuntimeServiceId,
 >;
 
-pub(crate) type TimeService = generic_services::TimeService<RuntimeServiceId>;
+pub type TimeService = generic_services::TimeService<RuntimeServiceId>;
 
-pub(crate) type ApiStorageAdapter<RuntimeServiceId> =
+pub type ApiStorageAdapter<RuntimeServiceId> =
     lb_api_service::http::storage::adapters::rocksdb::RocksAdapter<RuntimeServiceId>;
 
-pub(crate) type ApiService = lb_api_service::ApiService<
+pub type ApiService = lb_api_service::ApiService<
     AxumBackend<
         DaShare,
         LogosBlockchainDaMembership,
@@ -205,9 +205,9 @@ pub(crate) type ApiService = lb_api_service::ApiService<
     RuntimeServiceId,
 >;
 
-type StorageService = lb_storage_service::StorageService<RocksBackend, RuntimeServiceId>;
+pub type StorageService = lb_storage_service::StorageService<RocksBackend, RuntimeServiceId>;
 
-type SystemSigService = SystemSig<RuntimeServiceId>;
+pub type SystemSigService = SystemSig<RuntimeServiceId>;
 
 #[cfg(feature = "testing")]
 type TestingApiService<RuntimeServiceId> =

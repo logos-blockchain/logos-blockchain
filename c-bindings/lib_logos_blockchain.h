@@ -65,6 +65,8 @@ typedef struct PointerResult_LogosBlockchainNode__OperationStatus {
 
 typedef struct PointerResult_LogosBlockchainNode__OperationStatus InitializedLogosBlockchainNodeResult;
 
+typedef void (*CCallback______c_char)(const char *data);
+
 typedef uint64_t Value;
 
 /**
@@ -139,8 +141,8 @@ CryptarchiaInfoResult get_cryptarchia_info(const struct LogosBlockchainNode *nod
 void free_cryptarchia_info(struct CryptarchiaInfo *pointer);
 
 /**
- * Creates and starts a Logos blockchain node based on the provided configuration file
- * path.
+ * Creates and starts a Logos blockchain node based on the provided
+ * configuration file path.
  *
  * # Arguments
  *
@@ -155,7 +157,8 @@ void free_cryptarchia_info(struct CryptarchiaInfo *pointer);
 InitializedLogosBlockchainNodeResult start_lb_node(const char *config_path);
 
 /**
- * Stops and frees the resources associated with the given Logos blockchain node.
+ * Stops and frees the resources associated with the given Logos blockchain
+ * node.
  *
  * # Arguments
  *
@@ -173,6 +176,9 @@ InitializedLogosBlockchainNodeResult start_lb_node(const char *config_path);
  * - The pointer will not be used after this function returns
  */
 enum OperationStatus stop_node(struct LogosBlockchainNode *node);
+
+void subscribe_to_new_blocks(const struct LogosBlockchainNode *node,
+                             CCallback______c_char callback_per_block);
 
 /**
  * Get the balance of a wallet address
