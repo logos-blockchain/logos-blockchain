@@ -202,13 +202,11 @@ fn create_providers(
             note: consensus_configs[0].da_notes[i].clone(),
         })
         .collect();
-    providers.extend(
-        blend_configs
-            .iter()
-            .enumerate()
-            .map(|(i, (blend_conf, secret_zk_key))| ProviderInfo {
+    providers.extend(blend_configs.iter().enumerate().map(
+        |(i, (_, private_key, secret_zk_key))| {
+            ProviderInfo {
                 service_type: ServiceType::BlendNetwork,
-                provider_sk: blend_conf.non_ephemeral_signing_key.clone().into(),
+                provider_sk: private_key.clone(),
                 zk_sk: secret_zk_key.clone(),
                 locator: Locator(
                     Multiaddr::from_str(&format!(
@@ -218,8 +216,9 @@ fn create_providers(
                     .unwrap(),
                 ),
                 note: consensus_configs[0].blend_notes[i].clone(),
-            }),
-    );
+            }
+        },
+    ));
 
     providers
 }

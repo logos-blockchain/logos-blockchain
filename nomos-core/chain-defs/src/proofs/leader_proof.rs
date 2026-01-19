@@ -254,8 +254,7 @@ impl LeaderPrivate {
         note: Utxo,
         aged_path: &MerklePath<Fr>,
         latest_path: &MerklePath<Fr>,
-        slot_secret: Fr,
-        starting_slot: u64,
+        secret_key: Fr,
         leader_pk: &Ed25519PublicKey,
     ) -> Self {
         let public_key = *leader_pk;
@@ -275,16 +274,16 @@ impl LeaderPrivate {
             aged_path: aged_path.iter().map(|n| *n.item()).collect(),
             aged_selector: aged_path
                 .iter()
+                .rev() // PoL circuit expects the reverse order for selectors
                 .map(|n| matches!(n, MerkleNode::Right(_)))
                 .collect(),
             latest_path: latest_path.iter().map(|n| *n.item()).collect(),
             latest_selector: latest_path
                 .iter()
+                .rev() // PoL circuit expects the reverse order for selectors
                 .map(|n| matches!(n, MerkleNode::Right(_)))
                 .collect(),
-            slot_secret,
-            slot_secret_path: vec![], // TODO: implement
-            starting_slot,
+            secret_key,
         };
         let input = pol::PolWitnessInputsData::from_chain_and_wallet_data(chain, wallet);
         Self {

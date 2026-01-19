@@ -904,8 +904,8 @@ mod tests {
             + "00"                                                               // LedgerOutputCount
             + "6400000000000000"                                                 // ExecutionGasPrice
             + "3200000000000000"                                                 // StorageGasPrice
-            + "78911d4c283759b2aca32eb186c314fc966c13b08f14cffbd50c53e5d61b5ac5" // Signature (64Byte)
-            + "8f511d1c6b0b56682c7849def1bab6838427b9a3c751affd6bbe449f5926050f"
+            + "e0195c329ab39c18b05b7e226d1ecea2f3dc40ac2f4fa3eb4caf98c9563a6255" // Signature (64Byte)
+            + "25a9e5048368ea31d50c74da105d41ad3723c001371553e3da1bbe762859ed0b"
             + "f8bdd66cbbbae6cba142f2c15ccc8b0c3cb10566e7ca89978ef987515f922c95" // ZkSignature (128Byte)
             + "ef2c897d66d12352fcbf7657da8cec24a3e8a6b9338278b0e7be953be416ce25"
             + "10b53711585e78e1e4d402f7348f72adc134608a520e8b7ec5dad75b287f14a5"
@@ -971,8 +971,8 @@ mod tests {
             + "00"                                                               // LedgerOutputCount
             + "6400000000000000"                                                 // ExecutionGasPrice
             + "3200000000000000"                                                 // StorageGasPrice
-            + "26fa66800c50d65de3808c9e715f3ca2833c212d5bc31613365024689a62c029" // Ed25519Signature (64Byte)
-            + "93baddd11647c11467c9bcc72335457bc28492c916a84c991b30a28eef73fc08"
+            + "2a3f65e717a4ed8e6cc44c7b5fd6fd6a6d97267e590b434f37fac876254444df" // Ed25519Signature (64Byte)
+            + "ebbe1e01350551fa54b8ed840dec1f060ee75d377876ccc6bf708a118d376402"
             + "e05fa8a516f4b3bdc2aa85938c47702ef2dddbdf480217c6e262eece51175829" // ZkSignature (128Byte)
             + "9321cff6aa14d050ef653c83ab20f939d3c05227f4be58973ee6c7618ba79c09"
             + "c80e560c8354a4b87d3041407472b32708fdf9119094323f0d6ecd5d2ebea297"
@@ -1058,10 +1058,10 @@ mod tests {
             + "00"                                                               // LedgerOutputCount
             + "6400000000000000"                                                 // ExecutionGasPrice
             + "3200000000000000"                                                 // StorageGasPrice
-            + "d6b4691bdf69ed56fe63b2599d338e9861ed9566ca2c870b6db19207961004c2" // Ed25519Signature (64Byte)
-            + "25be0d1b772e3d0ca094be0678f2996947319b2e20542d67a37315c3e1cf2506" // -- for Op1
-            + "d6b4691bdf69ed56fe63b2599d338e9861ed9566ca2c870b6db19207961004c2" // Ed25519Signature (64Byte)
-            + "25be0d1b772e3d0ca094be0678f2996947319b2e20542d67a37315c3e1cf2506" // -- for Op2
+            + "8872fb1dfe7d5aee9b95cb8bc8ae4d2a3482a97adf4dab57f32b4356199cefa6" // Ed25519Signature (64Byte)
+            + "9de99d0dcecc0a15a5fcdf84e57afdb841987412407c43f4898eecc4debfe301" // -- for Op1
+            + "8872fb1dfe7d5aee9b95cb8bc8ae4d2a3482a97adf4dab57f32b4356199cefa6" // Ed25519Signature (64Byte)
+            + "9de99d0dcecc0a15a5fcdf84e57afdb841987412407c43f4898eecc4debfe301" // -- for Op2
             + "bf5fac329532b4c08784494945535887808607fca0b3b354e6303e03e58d4a96" // ZkSignature (128Byte)
             + "6d1fc5818d2955a3b20d5cb38d93a9afa752035052b956b2617e61c495f0ce2e" // -- for ledger tx
             + "bb33fd9c546dfd507aeceb360bde13c882cf475a814a9c799b0d7a2519541212"

@@ -15,6 +15,6 @@ pub struct Config {
     pub peer_response_timeout: Duration,
 }
 
-fn default_response_timeout() -> Duration {
+const fn default_response_timeout() -> Duration {
     DEFAULT_RESPONSE_TIMEOUT
 }

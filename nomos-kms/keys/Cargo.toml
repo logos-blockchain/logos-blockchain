@@ -29,6 +29,7 @@ subtle                       = { workspace = true }
 thiserror                    = { default-features = false, version = "2" }
 tokio                        = { default-features = false, version = "1", features = ["rt"] }
 tracing                      = { default-features = false, version = "0.1" }
+x25519-dalek                 = { workspace = true, features = ["serde", "static_secrets", "zeroize"] }
 zeroize                      = { workspace = true }
 zksign                       = { workspace = true }
 

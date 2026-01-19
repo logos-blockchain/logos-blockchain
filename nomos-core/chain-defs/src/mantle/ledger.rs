@@ -77,8 +77,8 @@ pub struct Utxo {
     pub note: Note,
 }
 
-static NOMOS_NOTE_ID_V1: LazyLock<Fr> = LazyLock::new(|| {
-    fr_from_bytes(b"NOMOS_NOTE_ID_V1").expect("BigUint should load from constant string")
+static NOTE_ID_V1: LazyLock<Fr> = LazyLock::new(|| {
+    fr_from_bytes(b"NOTE_ID_V1").expect("BigUint should load from constant string")
 });
 
 impl Utxo {
@@ -103,7 +103,7 @@ impl Utxo {
         let note_value: Fr =
             fr_from_bytes(self.note.value.to_le_bytes().as_slice()).expect("u64 fits in Fr");
         let note_pk: Fr = self.note.pk.into();
-        <ZkHasher as Digest>::update(&mut hasher, &NOMOS_NOTE_ID_V1);
+        <ZkHasher as Digest>::update(&mut hasher, &NOTE_ID_V1);
         <ZkHasher as Digest>::update(&mut hasher, &tx_hash);
         <ZkHasher as Digest>::update(&mut hasher, &output_index);
         <ZkHasher as Digest>::update(&mut hasher, &note_value);
@@ -114,9 +114,8 @@ impl Utxo {
     }
 }
 
-static NOMOS_LEDGER_TXHASH_V1_FR: LazyLock<Fr> = LazyLock::new(|| {
-    fr_from_bytes(b"NOMOS_LEDGER_TXHASH_V1").expect("Constant should be valid Fr")
-});
+static LEDGER_TXHASH_V1_FR: LazyLock<Fr> =
+    LazyLock::new(|| fr_from_bytes(b"LEDGER_TXHASH_V1").expect("Constant should be valid Fr"));
 
 impl Tx {
     #[must_use]
@@ -133,9 +132,7 @@ impl Tx {
             .as_slice()
             .chunks(GROTH16_SAFE_BYTES_SIZE)
             .map(fr_from_bytes_unchecked);
-        std::iter::once(*NOMOS_LEDGER_TXHASH_V1_FR)
-            .chain(frs)
-            .collect()
+        std::iter::once(*LEDGER_TXHASH_V1_FR).chain(frs).collect()
     }
 
     #[must_use]

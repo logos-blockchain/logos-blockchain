@@ -47,10 +47,7 @@ impl<RuntimeServiceId> PolInfoProvider<RuntimeServiceId> for OncePolStreamProvid
                 transaction_hash: ZkHash::ZERO,
                 output_number: 1,
                 aged_path_and_selectors: [(ZkHash::ZERO, false); _],
-                slot_secret: ZkHash::ZERO,
-                slot_secret_path: [ZkHash::ZERO; _],
-                starting_slot: 1,
-                pol_secret_key: ZkHash::ZERO,
+                secret_key: ZkHash::ZERO,
             },
         }))))
     }

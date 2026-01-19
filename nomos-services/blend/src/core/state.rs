@@ -535,7 +535,7 @@ mod recovery_state {
     use serde::{Deserialize, Serialize};
 
     use crate::core::{
-        settings::BlendConfig,
+        settings::StartingBlendConfig as BlendConfig,
         state::{ServiceState, serde::SerializableServiceState},
     };
 

@@ -1,5 +1,7 @@
-use key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
-use nomos_blend_crypto::keys::{X25519PrivateKey, X25519PublicKey};
+use key_management_system_keys::{
+    keys::UnsecuredEd25519Key, operators::ed25519::derive_x25519::SharedKey,
+};
+use nomos_blend_crypto::cipher::Cipher;
 use nomos_utils::blake_rng::{BlakeRng, SeedableRng as _};
 use zeroize::ZeroizeOnDrop;
 
@@ -9,25 +11,20 @@ use zeroize::ZeroizeOnDrop;
 // in this crate, so it makes most sense for them to be defined here.
 pub trait Ed25519SecretKeyExt: ZeroizeOnDrop {
     fn generate_with_blake_rng() -> Self;
-    fn derive_x25519(&self) -> X25519PrivateKey;
 }
 
 impl Ed25519SecretKeyExt for UnsecuredEd25519Key {
     fn generate_with_blake_rng() -> Self {
         Self::generate(&mut BlakeRng::from_entropy())
     }
-
-    fn derive_x25519(&self) -> X25519PrivateKey {
-        self.as_inner().to_scalar_bytes().into()
-    }
 }
 
-pub(crate) trait Ed25519PublicKeyExt {
-    fn derive_x25519(&self) -> X25519PublicKey;
+pub(crate) trait SharedKeyExt {
+    fn cipher(&self, domain: &[u8]) -> Cipher;
 }
 
-impl Ed25519PublicKeyExt for Ed25519PublicKey {
-    fn derive_x25519(&self) -> X25519PublicKey {
-        self.as_inner().to_montgomery().to_bytes().into()
+impl SharedKeyExt for SharedKey {
+    fn cipher(&self, domain: &[u8]) -> Cipher {
+        Cipher::new(domain, self.as_slice())
     }
 }

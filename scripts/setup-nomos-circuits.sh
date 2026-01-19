@@ -16,10 +16,10 @@
 set -e
 
 # Default values
-VERSION="${1:-v0.3.1}"
+VERSION="${1:-v0.3.2}"
 DEFAULT_INSTALL_DIR="$HOME/.nomos-circuits"
 INSTALL_DIR="${2:-$DEFAULT_INSTALL_DIR}"
-REPO="logos-co/nomos-circuits"
+REPO="logos-blockchain/logos-blockchain-circuits"
 
 # Colors for output
 RED='\033[0;31m'

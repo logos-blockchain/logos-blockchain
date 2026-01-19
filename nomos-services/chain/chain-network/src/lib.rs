@@ -710,8 +710,6 @@ where
 {
     debug!("received proposal {:?}", block);
 
-    // TODO: filter on time?
-
     if let Some(blob_validation) = blob_validation {
         blob_validation.validate(&block).await?;
     }

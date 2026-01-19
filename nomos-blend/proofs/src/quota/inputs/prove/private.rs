@@ -1,4 +1,4 @@
-use poq::{NotePathAndSelectors, SlotSecretPath};
+use poq::NotePathAndSelectors;
 
 use crate::{CorePathAndSelectors, ZkHash};
 
@@ -44,7 +44,7 @@ impl Inputs {
         match &self.proof_type {
             ProofType::CoreQuota(core_quota_private_inputs) => core_quota_private_inputs.core_sk,
             ProofType::LeadershipQuota(leadership_quota_private_inputs) => {
-                leadership_quota_private_inputs.pol_secret_key
+                leadership_quota_private_inputs.secret_key
             }
         }
     }
@@ -85,10 +85,7 @@ pub struct ProofOfLeadershipQuotaInputs {
     pub transaction_hash: ZkHash,
     pub output_number: u64,
     pub aged_path_and_selectors: NotePathAndSelectors,
-    pub slot_secret: ZkHash,
-    pub slot_secret_path: SlotSecretPath,
-    pub starting_slot: u64,
-    pub pol_secret_key: ZkHash,
+    pub secret_key: ZkHash,
 }
 
 impl From<ProofOfLeadershipQuotaInputs> for ProofType {

@@ -8,6 +8,8 @@ use nomos_ledger::{EpochState, UtxoTree};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch::Sender;
 
+use crate::WinningPolInfo;
+
 #[derive(Clone)]
 pub struct Leader {
     sk: UnsecuredZkKey,
@@ -46,7 +48,7 @@ impl Leader {
             let public_inputs = public_inputs_for_slot(epoch_state, slot, latest_tree);
 
             let note_id = utxo.id().0;
-            let secret_key = self.slot_secret_key(slot);
+            let secret_key = self.secret_key();
 
             #[cfg(feature = "pol-dev-mode")]
             let winning = public_inputs.check_winning_dev(
@@ -67,16 +69,24 @@ impl Leader {
                     epoch_state.total_stake()
                 );
 
-                let private_inputs = self.private_inputs_for_winning_utxo_and_slot(
+                let private_inputs = match self.private_inputs_for_winning_utxo_and_slot(
                     utxo,
                     epoch_state,
                     public_inputs,
                     latest_tree,
-                );
+                ) {
+                    Ok(private_inputs) => private_inputs,
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to build private inputs for winning utxo {:?} for {slot:?}: {e:?}",
+                            utxo.id(),
+                        );
+                        continue;
+                    }
+                };
 
                 winning_pol_info_notifier.notify_about_winning_slot(
                     private_inputs.clone(),
-                    secret_key,
                     epoch_state.epoch,
                     slot,
                 );
@@ -110,39 +120,60 @@ impl Leader {
         None
     }
 
+    #[cfg_attr(
+        feature = "pol-dev-mode",
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "Return value is always Some in dev mode"
+        ),
+        expect(unused_variables, reason = "Some variables are unused in dev mode")
+    )]
     fn private_inputs_for_winning_utxo_and_slot(
         &self,
         utxo: &Utxo,
-        // TODO: Use aged tree to compute `aged_path`
         epoch_state: &EpochState,
         public_inputs: LeaderPublic,
-        // TODO: Use latest tree to compute `latest_path`
-        _latest_tree: &UtxoTree,
-    ) -> LeaderPrivate {
-        // TODO: Get the actual witness paths and leader key
-        let aged_path = Vec::new(); // Placeholder for aged path, aged UTXO tree is included in `EpochState`.
-        let latest_path = Vec::new();
-        let slot_secret = *self.sk.as_fr();
-        let starting_slot = self
-            .config
-            .epoch_config
-            .starting_slot(&epoch_state.epoch, self.config.base_period_length())
-            .into();
+        latest_tree: &UtxoTree,
+    ) -> Result<LeaderPrivate, PrivateInputsError> {
+        let aged_path = {
+            #[cfg(not(feature = "pol-dev-mode"))]
+            {
+                epoch_state
+                    .utxo_merkle_path(utxo)
+                    .ok_or(PrivateInputsError::AgedNoteNotFound)?
+            }
+            #[cfg(feature = "pol-dev-mode")]
+            {
+                Vec::new()
+            }
+        };
+        let latest_path = {
+            #[cfg(not(feature = "pol-dev-mode"))]
+            {
+                latest_tree
+                    .path(&utxo.id())
+                    .ok_or(PrivateInputsError::LatestNoteNotFound)?
+            }
+            #[cfg(feature = "pol-dev-mode")]
+            {
+                Vec::new()
+            }
+        };
+        let secret_key = *self.sk.as_fr();
         let leader_signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let leader_pk = leader_signing_key.public_key(); // TODO: get actual leader public key
 
-        LeaderPrivate::new(
+        Ok(LeaderPrivate::new(
             public_inputs,
             *utxo,
             &aged_path,
             &latest_path,
-            slot_secret,
-            starting_slot,
+            secret_key,
             &leader_pk,
-        )
+        ))
     }
 
-    fn slot_secret_key(&self, _slot: Slot) -> UnsecuredZkKey {
+    fn secret_key(&self) -> UnsecuredZkKey {
         self.sk.clone()
     }
 }
@@ -153,12 +184,24 @@ fn public_inputs_for_slot(
     latest_tree: &UtxoTree,
 ) -> LeaderPublic {
     LeaderPublic::new(
-        epoch_state.utxos.root(),
+        epoch_state.utxo_merkle_root(),
         latest_tree.root(),
         epoch_state.nonce,
         slot.into(),
         epoch_state.total_stake(),
     )
+}
+
+#[cfg_attr(
+    feature = "pol-dev-mode",
+    expect(unused, reason = "used only in non-dev mode currently")
+)]
+#[derive(thiserror::Error, Debug)]
+enum PrivateInputsError {
+    #[error("Aged note not found from merkle tree")]
+    AgedNoteNotFound,
+    #[error("Latest note not found from merkle tree")]
+    LatestNoteNotFound,
 }
 
 /// Process every tick and reacts to the very first one received and the first
@@ -168,7 +211,7 @@ fn public_inputs_for_slot(
 /// notifying all consumers via the provided sender channel.
 pub struct WinningPoLSlotNotifier<'service> {
     leader: &'service Leader,
-    sender: &'service Sender<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>,
+    sender: &'service Sender<Option<WinningPolInfo>>,
     /// Keeps track of the last processed epoch, if any, and for it the first
     /// winning slot that was pre-computed, if any.
     last_processed_epoch_and_found_first_winning_slot: Option<(Epoch, Option<Slot>)>,
@@ -177,7 +220,7 @@ pub struct WinningPoLSlotNotifier<'service> {
 impl<'service> WinningPoLSlotNotifier<'service> {
     pub(super) const fn new(
         leader: &'service Leader,
-        sender: &'service Sender<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>,
+        sender: &'service Sender<Option<WinningPolInfo>>,
     ) -> Self {
         Self {
             leader,
@@ -207,6 +250,7 @@ impl<'service> WinningPoLSlotNotifier<'service> {
         self.check_epoch_winning_utxos(utxos, epoch_state);
     }
 
+    #[expect(clippy::cognitive_complexity, reason = "TODO: extract inner loop")]
     fn check_epoch_winning_utxos(&mut self, utxos: &[Utxo], epoch_state: &EpochState) {
         let slots_per_epoch = self.leader.config.epoch_length();
         let epoch_starting_slot: u64 = self
@@ -226,7 +270,7 @@ impl<'service> WinningPoLSlotNotifier<'service> {
                 let slot = epoch_starting_slot
                     .checked_add(offset)
                     .expect("Slot calculation overflow.");
-                let secret_key = self.leader.slot_secret_key(slot.into());
+                let secret_key = self.leader.secret_key();
 
                 let public_inputs = public_inputs_for_slot(epoch_state, slot.into(), &latest_tree);
                 if !public_inputs.check_winning(utxo.note.value, note_id, *secret_key.as_fr()) {
@@ -234,18 +278,23 @@ impl<'service> WinningPoLSlotNotifier<'service> {
                 }
                 tracing::debug!("Found winning utxo with ID {:?} for slot {slot}", utxo.id());
 
-                let leader_private = self.leader.private_inputs_for_winning_utxo_and_slot(
+                let leader_private = match self.leader.private_inputs_for_winning_utxo_and_slot(
                     utxo,
                     epoch_state,
                     public_inputs,
                     &latest_tree,
-                );
+                ) {
+                    Ok(leader_private) => leader_private,
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to build private inputs for winning utxo {:?} for {slot:?}: {e:?}",
+                            utxo.id(),
+                        );
+                        continue;
+                    }
+                };
 
-                if let Err(err) = self.sender.send(Some((
-                    leader_private,
-                    secret_key.clone(),
-                    epoch_state.epoch,
-                ))) {
+                if let Err(err) = self.sender.send(Some((leader_private, epoch_state.epoch))) {
                     tracing::error!(
                         "Failed to send pre-calculated PoL winning slots to receivers. Error: {err:?}"
                     );
@@ -267,7 +316,6 @@ impl<'service> WinningPoLSlotNotifier<'service> {
     pub(super) fn notify_about_winning_slot(
         &self,
         private_inputs: LeaderPrivate,
-        secret_key: UnsecuredZkKey,
         epoch: Epoch,
         slot: Slot,
     ) {
@@ -283,7 +331,7 @@ impl<'service> WinningPoLSlotNotifier<'service> {
             return;
         }
 
-        if let Err(err) = self.sender.send(Some((private_inputs, secret_key, epoch))) {
+        if let Err(err) = self.sender.send(Some((private_inputs, epoch))) {
             tracing::error!(
                 "Failed to send pre-calculated PoL winning slots to receivers. Error: {err:?}"
             );

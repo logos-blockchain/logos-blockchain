@@ -21,7 +21,7 @@ use nomos_libp2p::PeerId;
 use nomos_time::backends::NtpTimeBackend;
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use pol::{PolChainInputsData, PolWalletInputsData, PolWitnessInputsData};
-use poq::{AGED_NOTE_MERKLE_TREE_HEIGHT, SLOT_SECRET_MERKLE_TREE_HEIGHT};
+use poq::AGED_NOTE_MERKLE_TREE_HEIGHT;
 use services_utils::wait_until_services_are_ready;
 use tokio::sync::oneshot::channel;
 use tokio_stream::wrappers::WatchStream;
@@ -127,7 +127,7 @@ where
         Some(Box::new(
             WatchStream::new(pol_winning_slot_receiver)
                 .filter_map(ready)
-                .map(|(leader_private, secret_key, _)| {
+                .map(|(leader_private, _)| {
                     let PolWitnessInputsData {
                         wallet:
                             PolWalletInputsData {
@@ -135,9 +135,7 @@ where
                                 aged_selector,
                                 note_value,
                                 output_number,
-                                slot_secret,
-                                slot_secret_path,
-                                starting_slot,
+                                secret_key,
                                 transaction_hash,
                                 ..
                             },
@@ -154,15 +152,6 @@ where
                     vec_from_inputs.resize(AGED_NOTE_MERKLE_TREE_HEIGHT, (ZkHash::ZERO, false));
                     vec_from_inputs
                 };
-                let mapped_slot_secret_path = {
-                    let mut vec_from_inputs: Vec<_> = slot_secret_path.clone();
-                    let input_len = vec_from_inputs.len();
-                    if input_len != AGED_NOTE_MERKLE_TREE_HEIGHT {
-                        tracing::warn!("Provided merkle path for slot secret does not match the expected size for PoQ inputs.");
-                    }
-                    vec_from_inputs.resize(SLOT_SECRET_MERKLE_TREE_HEIGHT, ZkHash::ZERO);
-                    vec_from_inputs
-                };
 
                 PolEpochInfo {
                     nonce: *epoch_nonce,
@@ -170,11 +159,8 @@ where
                         aged_path_and_selectors: aged_path_and_selectors.try_into().expect("List of aged note paths and selectors does not match the expected size for PoQ inputs, although it has already been pre-processed."),
                         note_value: *note_value,
                         output_number: *output_number,
-                        pol_secret_key: *secret_key.as_fr(),
+                        secret_key: *secret_key,
                         slot: *slot_number,
-                        slot_secret: *slot_secret,
-                        slot_secret_path: mapped_slot_secret_path.try_into().expect("Slot secret path does not match the expected size for PoQ inputs, although it has already been pre-processed."),
-                        starting_slot: *starting_slot,
                         transaction_hash: *transaction_hash,
                     },
                 }
