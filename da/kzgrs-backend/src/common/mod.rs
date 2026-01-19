@@ -22,8 +22,6 @@ pub struct Column(pub Vec<Chunk>);
 pub struct ChunksMatrix(pub Vec<Row>);
 pub type ShareIndex = u16;
 
-pub const DA_DST: &[u8] = b"LOGOS_BLOCKCHAIN_DA_AVAIL";
-
 impl Chunk {
     #[must_use]
     pub const fn len(&self) -> usize {
