@@ -105,6 +105,9 @@ where
         self.items.contains_key(key).then_some(())
     }
 
+    /// Computes the Merkle path for the key.
+    /// The path is ordered from leaf to root (excluded).
+    /// Returns `None` if the key does not exist or has been removed.
     pub fn path(&self, key: &Key) -> Option<MerklePath<Fr>> {
         let (_, pos) = self.items.get(key)?;
         self.merkle.path(*pos)

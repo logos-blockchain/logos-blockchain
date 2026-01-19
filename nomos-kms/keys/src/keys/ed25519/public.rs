@@ -2,7 +2,7 @@ use ed25519_dalek::{PUBLIC_KEY_LENGTH, SignatureError, Verifier as _, VerifyingK
 use nomos_utils::serde::{deserialize_bytes_array, serialize_bytes_array};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 
-use crate::keys::Ed25519Signature;
+use crate::{keys::Ed25519Signature, operators::ed25519::derive_x25519::X25519PublicKey};
 
 pub const KEY_SIZE: usize = PUBLIC_KEY_LENGTH;
 
@@ -61,6 +61,11 @@ impl PublicKey {
     #[must_use]
     pub const fn as_inner(&self) -> &VerifyingKey {
         &self.0
+    }
+
+    #[must_use]
+    pub fn derive_x25519(&self) -> X25519PublicKey {
+        self.0.to_montgomery().to_bytes().into()
     }
 }
 

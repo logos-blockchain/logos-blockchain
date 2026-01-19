@@ -28,6 +28,7 @@ pub(crate) struct BehaviourConfig {
     pub nat_config: NatSettings,
     pub kad_protocol_name: StreamProtocol,
     pub identify_protocol_name: StreamProtocol,
+    pub chain_sync_protocol_name: StreamProtocol,
     pub public_key: identity::PublicKey,
     pub chain_sync_config: cryptarchia_sync::Config,
 }
@@ -62,6 +63,7 @@ impl<Rng: Clone + Send + RngCore + 'static> Behaviour<Rng> {
             nat_config,
             kad_protocol_name,
             identify_protocol_name,
+            chain_sync_protocol_name,
             public_key,
         } = config;
 
@@ -89,7 +91,8 @@ impl<Rng: Clone + Send + RngCore + 'static> Behaviour<Rng> {
         let autonat_server = autonat::v2::server::Behaviour::new(rng.clone());
         let nat = nat::Behaviour::new(rng, &nat_config);
 
-        let chain_sync = cryptarchia_sync::Behaviour::new(chain_sync_config);
+        let chain_sync =
+            cryptarchia_sync::Behaviour::new(chain_sync_protocol_name, chain_sync_config);
 
         Ok(Self {
             gossipsub,

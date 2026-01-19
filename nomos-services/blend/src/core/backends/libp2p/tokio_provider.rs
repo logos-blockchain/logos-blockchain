@@ -8,7 +8,9 @@ use nomos_blend::{
 use nomos_utils::math::NonNegativeF64;
 use tokio_stream::wrappers::IntervalStream;
 
-use crate::core::{backends::libp2p::Libp2pBlendBackendSettings, settings::BlendConfig};
+use crate::core::{
+    backends::libp2p::Libp2pBlendBackendSettings, settings::RunningBlendConfig as BlendConfig,
+};
 
 #[derive(Clone)]
 /// Provider of a stream of observation windows used by the Blend connection
@@ -70,7 +72,7 @@ where
         ),
     ) -> Self {
         Self {
-            blending_ops_per_message: config.crypto.num_blend_layers.into(),
+            blending_ops_per_message: config.num_blend_layers.into(),
             maximal_delay_rounds: config.scheduler.delayer.maximum_release_delay_in_rounds,
             // TODO: Replace with a session stream: https://github.com/logos-co/nomos/issues/1533
             membership_size: NonZeroU64::try_from(membership.size() as u64)

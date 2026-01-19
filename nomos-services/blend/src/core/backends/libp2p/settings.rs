@@ -6,7 +6,7 @@ use nomos_libp2p::protocol_name::StreamProtocol;
 use nomos_utils::math::NonNegativeF64;
 use serde::{Deserialize, Serialize};
 
-use crate::core::settings::BlendConfig;
+use crate::core::settings::RunningBlendConfig as BlendConfig;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde_with::serde_as]
@@ -27,7 +27,7 @@ pub struct Libp2pBlendBackendSettings {
 impl BlendConfig<Libp2pBlendBackendSettings> {
     #[must_use]
     pub fn keypair(&self) -> Keypair {
-        let mut secret_key_bytes = *self.crypto.non_ephemeral_signing_key.as_bytes();
+        let mut secret_key_bytes = *self.non_ephemeral_signing_key.as_bytes();
         Keypair::ed25519_from_bytes(&mut secret_key_bytes)
             .expect("Cryptographic secret key should be a valid Ed25519 private key.")
     }

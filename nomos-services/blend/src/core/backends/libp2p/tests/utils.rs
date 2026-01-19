@@ -39,7 +39,7 @@ use crate::{
             PublicInfo,
             libp2p::{BlendSwarm, behaviour::BlendBehaviour, swarm::BlendSwarmMessage},
         },
-        settings::BlendConfig,
+        settings::StartingBlendConfig as BlendConfig,
     },
     test_utils::{PROTOCOL_NAME, crypto::MockProofsVerifier},
 };
