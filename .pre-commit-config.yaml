@@ -28,7 +28,7 @@ repos:
       - id: taplo-format
       - id: taplo-lint
   - repo: https://github.com/bnjbvr/cargo-machete
-    rev: v0.9.1 # No tag yet with .pre-commit-hooks.yml
+    rev: v0.9.1
     hooks:
       - id: cargo-machete
   - repo: local
