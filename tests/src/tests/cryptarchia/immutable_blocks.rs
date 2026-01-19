@@ -2,7 +2,7 @@ use std::{num::NonZero, time::Duration};
 
 use futures_util::StreamExt as _;
 use serial_test::serial;
-use logos_blockchain_tests::{
+use lb_tests::{
     adjust_timeout,
     nodes::validator::{Validator, create_validator_config},
     topology::configs::create_general_configs,

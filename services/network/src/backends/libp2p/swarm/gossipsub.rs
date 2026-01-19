@@ -1,4 +1,4 @@
-use logos_blockchain_libp2p::{behaviour::gossipsub::swarm_ext::topic_hash, gossipsub};
+use lb_libp2p::{behaviour::gossipsub::swarm_ext::topic_hash, gossipsub};
 use rand::RngCore;
 
 use crate::backends::libp2p::{

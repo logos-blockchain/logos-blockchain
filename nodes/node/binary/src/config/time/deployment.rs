@@ -8,7 +8,7 @@ use crate::config::deployment::WellKnownDeployment;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde_as]
 pub struct Settings {
-    #[serde_as(as = "logos_blockchain_utils::bounded_duration::MinimalBoundedDuration<1, SECOND>")]
+    #[serde_as(as = "lb_utils::bounded_duration::MinimalBoundedDuration<1, SECOND>")]
     pub slot_duration: Duration,
 }
 

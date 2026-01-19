@@ -5,32 +5,32 @@ use std::{
 };
 
 use futures::StreamExt as _;
-use logos_blockchain_core::{
+use lb_core::{
     codec::{DeserializeOp as _, SerializeOp as _},
     header::HeaderId,
     mantle::mock::{MockTransaction, MockTxId},
 };
-use logos_blockchain_network_service::{
+use lb_network_service::{
     NetworkService,
     backends::mock::{Mock, MockBackendMessage, MockConfig, MockMessage},
     config::NetworkConfig,
     message::NetworkMsg,
 };
-use logos_blockchain_storage_service::{
+use lb_storage_service::{
     StorageService,
     backends::rocksdb::{self, RocksBackend},
 };
-use logos_blockchain_tracing_service::{Tracing, TracingSettings};
-use logos_blockchain_utils::noop_service::NoService;
+use lb_tracing_service::{Tracing, TracingSettings};
+use lb_utils::noop_service::NoService;
 use overwatch::overwatch::OverwatchRunner;
 use overwatch_derive::*;
 use rand::distributions::{Alphanumeric, DistString as _};
-use logos_blockchain_services_utils::{
+use lb_services_utils::{
     overwatch::{JsonFileBackend, recovery::operators::RecoveryBackend as _},
     traits::FromSettings as _,
 };
 use tempfile::TempDir;
-use logos_blockchain_tx_service::{
+use lb_tx_service::{
     MempoolMsg, TxMempoolSettings,
     backend::{Mempool, PoolRecoveryState},
     network::adapters::mock::{MOCK_TX_CONTENT_TOPIC, MockAdapter},

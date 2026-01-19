@@ -1,11 +1,11 @@
 use bytes::Bytes;
-use logos_blockchain_kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
-use logos_blockchain_core::{
+use lb_kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
+use lb_core::{
     codec::{DeserializeOp as _, SerializeOp as _},
     da::{BlobId, blob::Share},
     mantle::SignedMantleTx,
 };
-use logos_blockchain_storage_service::{
+use lb_storage_service::{
     api::da::{DaConverter, StorageDaApi},
     backends::rocksdb::RocksBackend,
 };
@@ -16,7 +16,7 @@ pub struct DaStorageConverter;
 impl DaConverter<RocksBackend> for DaStorageConverter {
     type Share = DaShare;
     type Tx = SignedMantleTx;
-    type Error = logos_blockchain_core::codec::Error;
+    type Error = lb_core::codec::Error;
 
     fn blob_id_to_storage(blob_id: BlobId) -> Result<BlobId, Self::Error> {
         Ok(blob_id)

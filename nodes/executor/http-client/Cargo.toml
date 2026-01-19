@@ -13,9 +13,9 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-futures                             = { default-features = false, version = "0.3.31" }
-logos-blockchain-common-http-client = { workspace = true }
-logos-blockchain-core               = { workspace = true }
-logos-blockchain-http-api-common    = { workspace = true }
-reqwest                             = { workspace = true }
-serde                               = { workspace = true }
+futures               = { default-features = false, version = "0.3.31" }
+lb-common-http-client = { workspace = true }
+lb-core               = { workspace = true }
+lb-http-api-common    = { workspace = true }
+reqwest               = { workspace = true }
+serde                 = { workspace = true }

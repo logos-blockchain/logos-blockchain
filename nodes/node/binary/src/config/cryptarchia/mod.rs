@@ -1,7 +1,7 @@
-use logos_blockchain_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
-use logos_blockchain_blend_service::core::network::libp2p::Libp2pBroadcastSettings;
-use logos_blockchain_ledger::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
-use logos_blockchain_libp2p::PeerId;
+use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
+use lb_blend_service::core::network::libp2p::Libp2pBroadcastSettings;
+use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
+use lb_libp2p::PeerId;
 
 use crate::config::{
     blend::deployment::Settings as BlendDeploymentSettings,
@@ -22,14 +22,14 @@ impl ServiceConfig {
         self,
         blend_deployment: &BlendDeploymentSettings,
     ) -> (
-        logos_blockchain_chain_service::CryptarchiaSettings,
-        logos_blockchain_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
-        logos_blockchain_chain_leader_service::LeaderSettings<(), Libp2pBroadcastSettings>,
+        lb_chain_service::CryptarchiaSettings,
+        lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
+        lb_chain_leader_service::LeaderSettings<(), Libp2pBroadcastSettings>,
     ) {
-        let ledger_config = logos_blockchain_ledger::Config {
+        let ledger_config = lb_ledger::Config {
             consensus_config: self.deployment.consensus_config,
             epoch_config: self.deployment.epoch_config,
-            sdp_config: logos_blockchain_ledger::mantle::sdp::Config {
+            sdp_config: lb_ledger::mantle::sdp::Config {
                 min_stake: self.deployment.sdp_config.min_stake,
                 service_params: self.deployment.sdp_config.service_params,
                 service_rewards_params: ServiceRewardsParameters {
@@ -47,13 +47,13 @@ impl ServiceConfig {
             },
         };
 
-        let chain_service_settings = logos_blockchain_chain_service::CryptarchiaSettings {
+        let chain_service_settings = lb_chain_service::CryptarchiaSettings {
             bootstrap: self.user.service.bootstrap,
             config: ledger_config.clone(),
             recovery_file: self.user.service.recovery_file,
             starting_state: self.user.service.starting_state,
         };
-        let chain_network_settings = logos_blockchain_chain_network_service::ChainNetworkSettings {
+        let chain_network_settings = lb_chain_network_service::ChainNetworkSettings {
             bootstrap: self.user.network.bootstrap,
             config: ledger_config.clone(),
             network_adapter_settings: LibP2pAdapterSettings {
@@ -61,7 +61,7 @@ impl ServiceConfig {
             },
             sync: self.user.network.sync,
         };
-        let chain_leader_settings = logos_blockchain_chain_leader_service::LeaderSettings {
+        let chain_leader_settings = lb_chain_leader_service::LeaderSettings {
             blend_broadcast_settings: Libp2pBroadcastSettings {
                 topic: self.deployment.gossipsub_protocol,
             },

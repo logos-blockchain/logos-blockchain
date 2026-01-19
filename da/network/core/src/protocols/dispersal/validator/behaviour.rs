@@ -13,13 +13,13 @@ use libp2p::{
 };
 use libp2p_stream::IncomingStreams;
 use log::debug;
-use logos_blockchain_core::mantle::{Op, SignedMantleTx, ops::channel::blob::BlobOp};
-use logos_blockchain_da_messages::{
+use lb_core::mantle::{Op, SignedMantleTx, ops::channel::blob::BlobOp};
+use lb_da_messages::{
     common::Share,
     dispersal,
     packing::{pack_to_writer, unpack_from_reader},
 };
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_subnetworks_assignations::MembershipHandler;
 use thiserror::Error;
 
 use crate::{SubnetworkId, protocol::DISPERSAL_PROTOCOL};

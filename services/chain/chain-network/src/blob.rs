@@ -1,13 +1,13 @@
 use std::{collections::BTreeSet, fmt::Debug, marker::PhantomData, num::NonZero};
 
-use logos_blockchain_cryptarchia_engine::Slot;
-use logos_blockchain_core::{
+use lb_cryptarchia_engine::Slot;
+use lb_core::{
     block::Block,
     da,
     mantle::{AuthenticatedMantleTx, Op},
 };
-use logos_blockchain_da_sampling_service::DaSamplingServiceMsg;
-use logos_blockchain_time_service::TimeServiceMessage;
+use lb_da_sampling_service::DaSamplingServiceMsg;
+use lb_time_service::TimeServiceMessage;
 use tokio::sync::oneshot;
 use tracing::debug;
 

@@ -1,6 +1,6 @@
 use futures::StreamExt as _;
-use logos_blockchain_core::{da::BlobId, sdp::SessionNumber};
-use logos_blockchain_tests::{
+use lb_core::{da::BlobId, sdp::SessionNumber};
+use lb_tests::{
     common::da::{disseminate_with_metadata, setup_test_channel, wait_for_blob_onchain},
     nodes::executor::Executor,
     topology::{Topology, TopologyConfig},

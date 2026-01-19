@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
-use logos_blockchain_groth16::Fr;
-use logos_blockchain_blend_proofs::{
+use lb_groth16::Fr;
+use lb_blend_proofs::{
     CorePathAndSelectors,
     quota::{
         self, VerifiedProofOfQuota,

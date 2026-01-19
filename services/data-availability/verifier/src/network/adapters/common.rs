@@ -102,7 +102,7 @@ macro_rules! adapter_for {
             ) -> Box<dyn Stream<Item = ValidationRequest<Self::Share>> + Unpin + Send> {
                 let (sender, receiver) = tokio::sync::oneshot::channel();
                 self.network_relay
-                    .send(logos_blockchain_da_network_service::DaNetworkMsg::Subscribe {
+                    .send(lb_da_network_service::DaNetworkMsg::Subscribe {
                         kind: $DaNetworksEventKind::Verifying,
                         sender,
                     })
@@ -133,7 +133,7 @@ macro_rules! adapter_for {
             ) -> Box<dyn Stream<Item = ValidationRequest<(u16, Self::Tx)>> + Unpin + Send> {
                 let (sender, receiver) = tokio::sync::oneshot::channel();
                 self.network_relay
-                    .send(logos_blockchain_da_network_service::DaNetworkMsg::Subscribe {
+                    .send(lb_da_network_service::DaNetworkMsg::Subscribe {
                         kind: $DaNetworksEventKind::Verifying,
                         sender,
                     })

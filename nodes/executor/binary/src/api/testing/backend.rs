@@ -8,22 +8,22 @@ use axum::{
     },
     routing::post,
 };
-use logos_blockchain_kzgrs_backend::common::share::DaShare;
-use logos_blockchain_api_service::Backend;
-use logos_blockchain_da_network_service::backends::libp2p::executor::DaNetworkExecutorBackend;
-use logos_blockchain_da_sampling_service::{
+use lb_kzgrs_backend::common::share::DaShare;
+use lb_api_service::Backend;
+use lb_da_network_service::backends::libp2p::executor::DaNetworkExecutorBackend;
+use lb_da_sampling_service::{
     backend::kzgrs::KzgrsSamplingBackend,
     network::adapters::executor::Libp2pAdapter as SamplingLibp2pAdapter,
     storage::adapters::rocksdb::{
         RocksAdapter as SamplingStorageAdapter, converter::DaStorageConverter,
     },
 };
-use logos_blockchain_http_api_common::{
+use lb_http_api_common::{
     paths::{DA_GET_MEMBERSHIP, DA_HISTORIC_SAMPLING},
     settings::AxumBackendSettings,
     utils::create_rate_limit_layer,
 };
-use logos_blockchain_node::{
+use lb_node::{
     DaNetworkApiAdapter, LogosBlockchainDaMembership,
     api::testing::handlers::{da_get_membership, da_historic_sampling},
     generic_services::{
@@ -46,7 +46,7 @@ pub struct TestAxumBackend {
     settings: AxumBackendSettings,
 }
 
-type TestDaNetworkService<RuntimeServiceId> = logos_blockchain_da_network_service::NetworkService<
+type TestDaNetworkService<RuntimeServiceId> = lb_da_network_service::NetworkService<
     DaNetworkExecutorBackend<LogosBlockchainDaMembership>,
     LogosBlockchainDaMembership,
     DaMembershipAdapter<RuntimeServiceId>,
@@ -135,7 +135,7 @@ where
                 post(
                     da_historic_sampling::<
                         KzgrsSamplingBackend,
-                        logos_blockchain_da_sampling_service::network::adapters::executor::Libp2pAdapter<
+                        lb_da_sampling_service::network::adapters::executor::Libp2pAdapter<
                             LogosBlockchainDaMembership,
                             DaMembershipAdapter<RuntimeServiceId>,
                             DaMembershipStorage,

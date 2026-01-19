@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 
-use logos_blockchain_cryptarchia_engine::Epoch;
-use logos_blockchain_mmr::MerkleMountainRange;
-use logos_blockchain_core::mantle::{
+use lb_cryptarchia_engine::Epoch;
+use lb_mmr::MerkleMountainRange;
+use lb_core::mantle::{
     Value,
     ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier},
 };
@@ -28,7 +28,7 @@ pub struct LeaderState {
     claimable_rewards: Value,
     // Merkle tree of vouchers, vouchers can only be claimed with a delay
     // of one epoch.
-    vouchers: MerkleMountainRange<VoucherCm, logos_blockchain_core::crypto::ZkHasher>,
+    vouchers: MerkleMountainRange<VoucherCm, lb_core::crypto::ZkHasher>,
 }
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
@@ -129,8 +129,8 @@ impl LeaderState {
 
 #[cfg(test)]
 mod tests {
-    use logos_blockchain_groth16::{Field as _, Fr};
-    use logos_blockchain_core::mantle::TxHash;
+    use lb_groth16::{Field as _, Fr};
+    use lb_core::mantle::TxHash;
 
     use super::*;
 

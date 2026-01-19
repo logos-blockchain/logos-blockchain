@@ -1,7 +1,7 @@
 use core::time::Duration;
 
 use libp2p::core::Endpoint;
-use logos_blockchain_blend::{
+use lb_blend::{
     network::core::with_core::behaviour::NegotiatedPeerState, scheduling::membership::Node,
 };
 use test_log::test;

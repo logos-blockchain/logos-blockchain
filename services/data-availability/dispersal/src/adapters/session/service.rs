@@ -1,4 +1,4 @@
-use logos_blockchain_chain_broadcast_service::BlockBroadcastService;
+use lb_chain_broadcast_service::BlockBroadcastService;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use tokio::sync::oneshot;
 use tokio_stream::StreamExt as _;
@@ -22,7 +22,7 @@ where
     async fn subscribe(&self) -> Result<SessionStream, SessionAdapterError> {
         let (sender, receiver) = oneshot::channel();
         self.relay
-            .send(logos_blockchain_chain_broadcast_service::BlockBroadcastMsg::SubscribeDASession {
+            .send(lb_chain_broadcast_service::BlockBroadcastMsg::SubscribeDASession {
                 result_sender: sender,
             })
             .await

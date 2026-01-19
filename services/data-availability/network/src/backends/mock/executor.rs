@@ -4,19 +4,19 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
-use logos_blockchain_kzgrs_backend::common::{build_blob_id, share::DaShare};
+use lb_kzgrs_backend::common::{build_blob_id, share::DaShare};
 use libp2p::PeerId;
-use logos_blockchain_core::{
+use lb_core::{
     da::BlobId,
     header::HeaderId,
     sdp::{ProviderId, SessionNumber},
 };
-use logos_blockchain_da_network_core::{
+use lb_da_network_core::{
     SubnetworkId, protocols::sampling::opinions::OpinionEvent, swarm::BalancerStats,
 };
 use overwatch::{overwatch::handle::OverwatchHandle, services::state::NoState};
 use serde::{Deserialize, Serialize};
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_subnetworks_assignations::MembershipHandler;
 use tokio::sync::{
     broadcast::{self},
     mpsc::{self, UnboundedSender},
@@ -38,7 +38,7 @@ pub enum EventKind {
 
 // A subset of dispersal protocol messages that will come over the wire.
 // Imitates the message that will come from libp2p behaviour.
-// Assuming that behaviour will wrap the logos_blockchain_da_message types.
+// Assuming that behaviour will wrap the lb_da_message types.
 #[derive(Debug, Clone)]
 pub enum DisperseMessage {
     DispersalSuccess {
@@ -49,7 +49,7 @@ pub enum DisperseMessage {
 
 // A subset of sample protocol messages that will come over the wire.
 // Imitates the message that will come from libp2p behaviour
-// Assuming that behaviour will wrap the logos_blockchain_da_message types.
+// Assuming that behaviour will wrap the lb_da_message types.
 #[derive(Debug, Clone)]
 pub enum SampleMessage {
     SampleSuccess {
@@ -196,7 +196,7 @@ impl MembershipHandler for MockMembership {
 
     fn subnetworks(
         &self,
-    ) -> logos_blockchain_subnetworks_assignations::SubnetworkAssignations<Self::NetworkId, Self::Id> {
+    ) -> lb_subnetworks_assignations::SubnetworkAssignations<Self::NetworkId, Self::Id> {
         todo!()
     }
 

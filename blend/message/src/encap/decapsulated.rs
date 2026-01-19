@@ -1,4 +1,4 @@
-use logos_blockchain_blend_proofs::selection::VerifiedProofOfSelection;
+use lb_blend_proofs::selection::VerifiedProofOfSelection;
 
 use crate::{
     PayloadType,

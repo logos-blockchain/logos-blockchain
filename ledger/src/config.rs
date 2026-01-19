@@ -1,12 +1,12 @@
 use std::num::{NonZero, NonZeroU64};
 
-use logos_blockchain_cryptarchia_engine::{Epoch, Slot};
+use lb_cryptarchia_engine::{Epoch, Slot};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
-    pub epoch_config: logos_blockchain_cryptarchia_engine::EpochConfig,
-    pub consensus_config: logos_blockchain_cryptarchia_engine::Config,
+    pub epoch_config: lb_cryptarchia_engine::EpochConfig,
+    pub consensus_config: lb_cryptarchia_engine::Config,
     pub sdp_config: crate::mantle::sdp::Config,
 }
 
@@ -56,9 +56,9 @@ mod tests {
         sync::Arc,
     };
 
-    use logos_blockchain_cryptarchia_engine::EpochConfig;
-    use logos_blockchain_core::sdp::{MinStake, ServiceParameters, ServiceType};
-    use logos_blockchain_utils::math::NonNegativeF64;
+    use lb_cryptarchia_engine::EpochConfig;
+    use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
+    use lb_utils::math::NonNegativeF64;
 
     use crate::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
 
@@ -70,7 +70,7 @@ mod tests {
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
             },
-            consensus_config: logos_blockchain_cryptarchia_engine::Config {
+            consensus_config: lb_cryptarchia_engine::Config {
                 security_param: NonZero::new(5).unwrap(),
                 active_slot_coeff: 0.5,
             },
@@ -129,7 +129,7 @@ mod tests {
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
             },
-            consensus_config: logos_blockchain_cryptarchia_engine::Config {
+            consensus_config: lb_cryptarchia_engine::Config {
                 security_param: NonZero::new(5).unwrap(),
                 active_slot_coeff: 0.5,
             },

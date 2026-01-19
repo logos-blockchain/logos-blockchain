@@ -1,4 +1,4 @@
-use logos_blockchain_blend_proofs::{quota, selection};
+use lb_blend_proofs::{quota, selection};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {

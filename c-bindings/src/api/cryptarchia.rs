@@ -10,11 +10,11 @@ pub enum State {
     Online = 0x1,
 }
 
-impl From<logos_blockchain_cryptarchia_engine::State> for State {
-    fn from(value: logos_blockchain_cryptarchia_engine::State) -> Self {
+impl From<lb_cryptarchia_engine::State> for State {
+    fn from(value: lb_cryptarchia_engine::State) -> Self {
         match value {
-            logos_blockchain_cryptarchia_engine::State::Bootstrapping => Self::Bootstrapping,
-            logos_blockchain_cryptarchia_engine::State::Online => Self::Online,
+            lb_cryptarchia_engine::State::Bootstrapping => Self::Bootstrapping,
+            lb_cryptarchia_engine::State::Online => Self::Online,
         }
     }
 }
@@ -31,8 +31,8 @@ pub struct CryptarchiaInfo {
     pub mode: State,
 }
 
-impl From<logos_blockchain_chain_service::CryptarchiaInfo> for CryptarchiaInfo {
-    fn from(value: logos_blockchain_chain_service::CryptarchiaInfo) -> Self {
+impl From<lb_chain_service::CryptarchiaInfo> for CryptarchiaInfo {
+    fn from(value: lb_chain_service::CryptarchiaInfo) -> Self {
         Self {
             lib: value.lib.into(),
             tip: value.tip.into(),
@@ -46,7 +46,7 @@ impl From<logos_blockchain_chain_service::CryptarchiaInfo> for CryptarchiaInfo {
 /// Gets the current Cryptarchia info.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`cryptarchia_info`](logos_blockchain_api_service::http::consensus::cryptarchia_info) function.
+/// [`cryptarchia_info`](lb_api_service::http::consensus::cryptarchia_info) function.
 ///
 /// # Arguments
 ///
@@ -58,12 +58,12 @@ impl From<logos_blockchain_chain_service::CryptarchiaInfo> for CryptarchiaInfo {
 /// [`OperationStatus`] error on failure.
 pub(crate) fn get_cryptarchia_info_sync(
     node: &LogosBlockchainNode,
-) -> Result<logos_blockchain_chain_service::CryptarchiaInfo, OperationStatus> {
+) -> Result<lb_chain_service::CryptarchiaInfo, OperationStatus> {
     let Ok(runtime) = tokio::runtime::Runtime::new() else {
         eprintln!("[get_cryptarchia_info_sync] Failed to create tokio runtime. Aborting.");
         return Err(OperationStatus::RuntimeError);
     };
-    let Ok(cryptarchia_info) = runtime.block_on(logos_blockchain_api_service::http::consensus::cryptarchia_info(
+    let Ok(cryptarchia_info) = runtime.block_on(lb_api_service::http::consensus::cryptarchia_info(
         node.get_overwatch_handle(),
     )) else {
         eprintln!("[get_cryptarchia_info_sync] Failed to get cryptarchia info. Aborting.");

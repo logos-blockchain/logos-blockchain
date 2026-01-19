@@ -1,6 +1,6 @@
 use std::{collections::HashSet, fmt::Debug};
 
-use logos_blockchain_libp2p::{
+use lb_libp2p::{
     PeerId,
     cryptarchia_sync::{BoxedStream, ChainSyncError, GetTipResponse, HeaderId, SerialisedBlock},
 };
@@ -81,7 +81,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         }
     }
 
-    pub(super) fn handle_chainsync_event(&self, event: logos_blockchain_cryptarchia_sync::Event) {
+    pub(super) fn handle_chainsync_event(&self, event: lb_cryptarchia_sync::Event) {
         let event = ChainSyncEvent::from(event);
         if let Err(e) = self.chainsync_events_tx.send(event) {
             tracing::error!("failed to send chainsync event: {e:?}");
@@ -90,10 +90,10 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
 }
 
 // Convert libp2p specific type to a common type.
-impl From<logos_blockchain_cryptarchia_sync::Event> for ChainSyncEvent {
-    fn from(event: logos_blockchain_cryptarchia_sync::Event) -> Self {
+impl From<lb_cryptarchia_sync::Event> for ChainSyncEvent {
+    fn from(event: lb_cryptarchia_sync::Event) -> Self {
         match event {
-            logos_blockchain_cryptarchia_sync::Event::ProvideBlocksRequest {
+            lb_cryptarchia_sync::Event::ProvideBlocksRequest {
                 target_block,
                 local_tip,
                 latest_immutable_block,
@@ -106,7 +106,7 @@ impl From<logos_blockchain_cryptarchia_sync::Event> for ChainSyncEvent {
                 additional_blocks,
                 reply_sender,
             },
-            logos_blockchain_cryptarchia_sync::Event::ProvideTipsRequest { reply_sender } => {
+            lb_cryptarchia_sync::Event::ProvideTipsRequest { reply_sender } => {
                 Self::ProvideTipRequest { reply_sender }
             }
         }

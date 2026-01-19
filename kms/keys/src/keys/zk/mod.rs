@@ -1,10 +1,10 @@
 use core::fmt::{self, Debug, Formatter};
 
-use logos_blockchain_groth16::Fr;
+use lb_groth16::Fr;
 use num_bigint::BigUint;
 use serde::Deserialize;
 use zeroize::ZeroizeOnDrop;
-use logos_blockchain_zksign::ZkSignError;
+use lb_zksign::ZkSignError;
 
 use crate::keys::{errors::KeyError, secured_key::SecuredKey};
 

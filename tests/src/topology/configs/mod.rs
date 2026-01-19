@@ -10,15 +10,15 @@ pub mod tracing;
 use blend::GeneralBlendConfig;
 use consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_tx_with_declarations};
 use da::GeneralDaConfig;
-use logos_blockchain_key_management_system_service::{
+use lb_key_management_system_service::{
     backend::preload::PreloadKMSBackendSettings, keys::Ed25519Key,
 };
 use network::GeneralNetworkConfig;
-use logos_blockchain_core::{
+use lb_core::{
     mantle::GenesisTx as _,
     sdp::{Locator, ServiceType},
 };
-use logos_blockchain_utils::net::get_available_udp_port;
+use lb_utils::net::get_available_udp_port;
 use rand::{Rng as _, thread_rng};
 use tracing::GeneralTracingConfig;
 

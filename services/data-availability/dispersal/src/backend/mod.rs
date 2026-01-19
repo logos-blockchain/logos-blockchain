@@ -2,7 +2,7 @@ pub mod kzgrs;
 
 use std::pin::Pin;
 
-use logos_blockchain_core::{
+use lb_core::{
     da::{DaDispersal, DaEncoder},
     mantle::{
         SignedMantleTx,

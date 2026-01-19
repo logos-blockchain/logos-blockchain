@@ -1,7 +1,7 @@
 use blake2::Digest as _;
-use logos_blockchain_cryptarchia_engine::Slot;
-use logos_blockchain_groth16::fr_to_bytes;
-use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
+use lb_cryptarchia_engine::Slot;
+use lb_groth16::fr_to_bytes;
+use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use serde::{Deserialize, Serialize};
 
 pub const BEDROCK_VERSION: u8 = 1;

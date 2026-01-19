@@ -1,4 +1,4 @@
-use logos_blockchain_network_service::{
+use lb_network_service::{
     NetworkService,
     backends::libp2p::{Command, Libp2p, PubSubCommand},
     message::NetworkMsg,

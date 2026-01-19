@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use logos_blockchain_blend::scheduling::{
+use lb_blend::scheduling::{
     SessionMessageScheduler,
     message_scheduler::{ProcessedMessageScheduler as _, Settings, session_info::SessionInfo},
 };

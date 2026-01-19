@@ -1,18 +1,18 @@
 use std::{error::Error, sync::Arc, time::Duration};
 
 use futures::StreamExt as _;
-use logos_blockchain_kzgrs_backend::{
+use lb_kzgrs_backend::{
     common::build_blob_id,
     encoder,
     encoder::{DaEncoderParams, EncodedData},
 };
-use logos_blockchain_core::{
+use lb_core::{
     da::{BlobId, DaDispersal, DaEncoder},
     mantle::{SignedMantleTx, tx_builder::MantleTxBuilder},
 };
-use logos_blockchain_da_network_service::backends::ProcessingError;
-use logos_blockchain_tracing::info_with_id;
-use logos_blockchain_utils::bounded_duration::{MinimalBoundedDuration, NANO};
+use lb_da_network_service::backends::ProcessingError;
+use lb_tracing::info_with_id;
+use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use overwatch::DynError;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -259,7 +259,7 @@ where
     ) -> Self {
         let encoder_settings = &settings.encoder_settings;
         let global_params =
-            logos_blockchain_kzgrs_backend::kzg_keys::proving_key_from_file(&encoder_settings.global_params_path)
+            lb_kzgrs_backend::kzg_keys::proving_key_from_file(&encoder_settings.global_params_path)
                 .expect("Global encoder params should be available");
         let encoder = Self::Encoder::new(DaEncoderParams::new(
             encoder_settings.num_columns,

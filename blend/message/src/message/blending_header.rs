@@ -1,9 +1,9 @@
-use logos_blockchain_key_management_system_keys::keys::{
+use lb_key_management_system_keys::keys::{
     ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
     UnsecuredEd25519Key,
 };
-use logos_blockchain_blend_crypto::pseudo_random_sized_bytes;
-use logos_blockchain_blend_proofs::{
+use lb_blend_crypto::pseudo_random_sized_bytes;
+use lb_blend_proofs::{
     quota::{PROOF_OF_QUOTA_SIZE, ProofOfQuota, VerifiedProofOfQuota},
     selection::{PROOF_OF_SELECTION_SIZE, ProofOfSelection, VerifiedProofOfSelection},
 };

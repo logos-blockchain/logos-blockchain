@@ -1,12 +1,12 @@
 use std::hint::black_box;
 
 use divan::{Bencher, counter::BytesCount};
-use logos_blockchain_kzgrs_backend::{
+use lb_kzgrs_backend::{
     common::{Chunk, share::DaShare},
     encoder::{DaEncoder, DaEncoderParams},
     kzg_keys::{PROVING_KEY, VERIFICATION_KEY},
 };
-use logos_blockchain_core::da::{DaEncoder as _, blob::Share as _};
+use lb_core::da::{DaEncoder as _, blob::Share as _};
 use rand::{RngCore as _, thread_rng};
 
 fn main() {
@@ -32,7 +32,7 @@ fn verify<const SIZE: usize>(bencher: Bencher, column_size: usize) {
             let encoder = DaEncoder::new(params);
             let data = rand_data(SIZE * KB / DaEncoderParams::MAX_BLS12_381_ENCODING_CHUNK_SIZE);
             let encoded_data = encoder.encode(&data).unwrap();
-            let verifier = logos_blockchain_kzgrs_backend::verifier::DaVerifier {
+            let verifier = lb_kzgrs_backend::verifier::DaVerifier {
                 verification_key: VERIFICATION_KEY.clone(),
             };
             let da_share = DaShare {

@@ -6,7 +6,7 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
-use logos_blockchain_core::header::HeaderId;
+use lb_core::header::HeaderId;
 use overwatch::DynError;
 use tracing::error;
 
@@ -316,9 +316,9 @@ mod tests {
         time::Duration,
     };
 
-    use logos_blockchain_cryptarchia_sync::GetTipResponse;
+    use lb_cryptarchia_sync::GetTipResponse;
     use futures::stream;
-    use logos_blockchain_network_service::{NetworkService, backends::mock::Mock, message::ChainSyncEvent};
+    use lb_network_service::{NetworkService, backends::mock::Mock, message::ChainSyncEvent};
     use overwatch::services::{ServiceData, relay::OutboundRelay};
     use tokio::time::timeout;
 

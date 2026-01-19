@@ -1,11 +1,11 @@
 use std::{collections::HashMap, net::Ipv4Addr, str::FromStr as _};
 
-use logos_blockchain_core::{
+use lb_core::{
     mantle::GenesisTx as _,
     sdp::{Locator, ServiceType},
 };
-use logos_blockchain_libp2p::{Multiaddr, multiaddr};
-use logos_blockchain_tests::topology::{
+use lb_libp2p::{Multiaddr, multiaddr};
+use lb_tests::topology::{
     configs::{
         GeneralConfig,
         api::GeneralApiConfig,
@@ -21,8 +21,8 @@ use logos_blockchain_tests::topology::{
     },
     create_kms_configs,
 };
-use logos_blockchain_tracing_service::{LoggerLayer, MetricsLayer, TracingLayer, TracingSettings};
-use logos_blockchain_utils::net::get_available_udp_port;
+use lb_tracing_service::{LoggerLayer, MetricsLayer, TracingLayer, TracingSettings};
+use lb_utils::net::get_available_udp_port;
 use rand::{Rng as _, thread_rng};
 
 const DEFAULT_LIBP2P_NETWORK_PORT: u16 = 3000;
@@ -146,7 +146,7 @@ pub fn create_node_configs(
             .backend
             .initial_peers
             .clone_from(&host_network_init_peers);
-        network_config.backend.swarm.nat_config = logos_blockchain_libp2p::NatSettings::Static {
+        network_config.backend.swarm.nat_config = lb_libp2p::NatSettings::Static {
             external_address: Multiaddr::from_str(&format!(
                 "/ip4/{}/udp/{}/quic-v1",
                 host.ip, host.network_port
@@ -269,14 +269,14 @@ fn update_tracing_identifier(
 mod cfgsync_tests {
     use std::{net::Ipv4Addr, str::FromStr as _, time::Duration};
 
-    use logos_blockchain_da_network_core::swarm::{
+    use lb_da_network_core::swarm::{
         DAConnectionMonitorSettings, DAConnectionPolicySettings, ReplicationConfig,
     };
-    use logos_blockchain_libp2p::{Multiaddr, Protocol};
-    use logos_blockchain_tracing_service::{
+    use lb_libp2p::{Multiaddr, Protocol};
+    use lb_tracing_service::{
         ConsoleLayer, FilterLayer, LoggerLayer, MetricsLayer, TracingLayer, TracingSettings,
     };
-    use logos_blockchain_tests::topology::configs::da::DaParams;
+    use lb_tests::topology::configs::da::DaParams;
     use tracing::Level;
 
     use super::{Host, HostKind, create_node_configs};

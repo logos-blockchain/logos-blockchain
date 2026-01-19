@@ -6,7 +6,7 @@ use libp2p::{
     swarm::{ConnectionId, dummy},
 };
 use libp2p_swarm_test::SwarmExt as _;
-use logos_blockchain_libp2p::SwarmEvent;
+use lb_libp2p::SwarmEvent;
 use test_log::test;
 use tokio::{select, time::sleep};
 

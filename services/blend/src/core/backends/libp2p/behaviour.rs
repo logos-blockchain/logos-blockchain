@@ -1,13 +1,13 @@
 use libp2p::{PeerId, allow_block_list::BlockedPeers, connection_limits::ConnectionLimits};
-use logos_blockchain_blend::scheduling::membership::Membership;
-use logos_blockchain_libp2p::NetworkBehaviour;
+use lb_blend::scheduling::membership::Membership;
+use lb_libp2p::NetworkBehaviour;
 
 use crate::core::{backends::libp2p::Libp2pBlendBackendSettings, settings::BlendConfig};
 
 #[derive(NetworkBehaviour)]
 pub struct BlendBehaviour<ProofsVerifier, ObservationWindowProvider> {
     pub blend:
-        logos_blockchain_blend::network::core::NetworkBehaviour<ProofsVerifier, ObservationWindowProvider>,
+        lb_blend::network::core::NetworkBehaviour<ProofsVerifier, ObservationWindowProvider>,
     pub limits: libp2p::connection_limits::Behaviour,
     pub blocked_peers: libp2p::allow_block_list::Behaviour<BlockedPeers>,
 }
@@ -34,14 +34,14 @@ where
         let maximum_edge_incoming_connections =
             config.backend.max_edge_node_incoming_connections as usize;
         Self {
-            blend: logos_blockchain_blend::network::core::NetworkBehaviour::new(
-                &logos_blockchain_blend::network::core::Config {
-                    with_core: logos_blockchain_blend::network::core::with_core::behaviour::Config {
+            blend: lb_blend::network::core::NetworkBehaviour::new(
+                &lb_blend::network::core::Config {
+                    with_core: lb_blend::network::core::with_core::behaviour::Config {
                         peering_degree: minimum_core_healthy_peering_degree
                             ..=maximum_core_peering_degree,
                         minimum_network_size: config.minimum_network_size.try_into().unwrap(),
                     },
-                    with_edge: logos_blockchain_blend::network::core::with_edge::behaviour::Config {
+                    with_edge: lb_blend::network::core::with_edge::behaviour::Config {
                         connection_timeout: config.backend.edge_node_connection_timeout,
                         max_incoming_connections: maximum_edge_incoming_connections,
                         minimum_network_size: config.minimum_network_size.try_into().unwrap(),

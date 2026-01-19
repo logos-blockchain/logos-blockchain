@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use logos_blockchain_utils::net::get_available_tcp_port;
+use lb_utils::net::get_available_tcp_port;
 
 #[derive(Clone)]
 pub struct GeneralApiConfig {

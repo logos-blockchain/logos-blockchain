@@ -15,9 +15,9 @@ use libp2p::{
     identity::Keypair,
     swarm::{DialError, SwarmEvent},
 };
-use logos_blockchain_core::{da::BlobId, header::HeaderId, sdp::SessionNumber};
-use logos_blockchain_da_messages::replication::ReplicationRequest;
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_core::{da::BlobId, header::HeaderId, sdp::SessionNumber};
+use lb_da_messages::replication::ReplicationRequest;
+use lb_subnetworks_assignations::MembershipHandler;
 use tokio::{
     sync::{
         broadcast,

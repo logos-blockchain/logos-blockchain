@@ -1,7 +1,7 @@
 use const_hex::FromHex as _;
-use logos_blockchain_groth16::{Field as _, fr_from_bytes_unchecked};
-use logos_blockchain_key_management_system_keys::keys::UnsecuredZkKey;
-use logos_blockchain_blend_crypto::{ZkHash, merkle::MerkleTree};
+use lb_groth16::{Field as _, fr_from_bytes_unchecked};
+use lb_key_management_system_keys::keys::UnsecuredZkKey;
+use lb_blend_crypto::{ZkHash, merkle::MerkleTree};
 
 use crate::{
     quota::{

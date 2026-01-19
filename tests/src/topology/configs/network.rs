@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use logos_blockchain_libp2p::{
+use lb_libp2p::{
     IdentifySettings, KademliaSettings, Multiaddr, NatSettings, ed25519, gossipsub,
 };
-use logos_blockchain_node::config::network::serde::{BackendSettings, Config, SwarmConfig};
-use logos_blockchain_utils::net::get_available_udp_port;
+use lb_node::config::network::serde::{BackendSettings, Config, SwarmConfig};
+use lb_utils::net::get_available_udp_port;
 
 use crate::node_address_from_port;
 
@@ -31,7 +31,7 @@ fn default_swarm_config() -> SwarmConfig {
         gossipsub_config: gossipsub::Config::default(),
         kademlia_config: KademliaSettings::default(),
         identify_config: IdentifySettings::default(),
-        chain_sync_config: logos_blockchain_cryptarchia_sync::Config::default(),
+        chain_sync_config: lb_cryptarchia_sync::Config::default(),
         nat_config: NatSettings::default(),
     }
 }
@@ -51,7 +51,7 @@ pub fn create_network_configs(
             SwarmConfig {
                 node_key,
                 port: get_available_udp_port().unwrap(),
-                chain_sync_config: logos_blockchain_cryptarchia_sync::Config {
+                chain_sync_config: lb_cryptarchia_sync::Config {
                     peer_response_timeout: Duration::from_secs(60),
                 },
                 ..default_swarm_config()

@@ -186,7 +186,7 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
     use log::trace;
-    use logos_blockchain_utils::net::get_available_tcp_port;
+    use lb_utils::net::get_available_tcp_port;
 
     use super::*;
     use crate::backends::ntp::async_client::{AsyncNTPClient, NTPClientSettings};

@@ -15,10 +15,10 @@ use std::{
 
 use bytes::Bytes;
 use futures::{FutureExt as _, StreamExt as _};
-use logos_blockchain_chain_broadcast_service::{
+use lb_chain_broadcast_service::{
     BlockBroadcastMsg, BlockBroadcastService, BlockInfo, SessionUpdate,
 };
-use logos_blockchain_core::{
+use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
@@ -27,20 +27,20 @@ use logos_blockchain_core::{
     },
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType},
 };
-use logos_blockchain_cryptarchia_engine::PrunedBlocks;
-pub use logos_blockchain_cryptarchia_engine::{Epoch, Slot};
-use logos_blockchain_cryptarchia_sync::{GetTipResponse, ProviderResponse};
-pub use logos_blockchain_ledger::EpochState;
-use logos_blockchain_ledger::LedgerState;
-use logos_blockchain_network_service::message::ChainSyncEvent;
-use logos_blockchain_services_utils::{
+use lb_cryptarchia_engine::PrunedBlocks;
+pub use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_cryptarchia_sync::{GetTipResponse, ProviderResponse};
+pub use lb_ledger::EpochState;
+use lb_ledger::LedgerState;
+use lb_network_service::message::ChainSyncEvent;
+use lb_services_utils::{
     overwatch::{JsonFileBackend, RecoveryOperator, recovery::backends::FileBackendSettings},
     wait_until_services_are_ready,
 };
-use logos_blockchain_storage_service::{
+use lb_storage_service::{
     StorageService, api::chain::StorageChainApi, backends::StorageBackend,
 };
-use logos_blockchain_time_service::TimeService;
+use lb_time_service::TimeService;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData, state::StateUpdater},
@@ -85,11 +85,11 @@ pub enum Error {
         current_slot: Slot,
     },
     #[error("Ledger error: {0}")]
-    Ledger(#[from] logos_blockchain_ledger::LedgerError<HeaderId>),
+    Ledger(#[from] lb_ledger::LedgerError<HeaderId>),
     #[error("Consensus error: {0}")]
-    Consensus(#[from] logos_blockchain_cryptarchia_engine::Error<HeaderId>),
+    Consensus(#[from] lb_cryptarchia_engine::Error<HeaderId>),
     #[error("Serialization error: {0}")]
-    Serialisation(#[from] logos_blockchain_core::codec::Error),
+    Serialisation(#[from] lb_core::codec::Error),
     #[error("Invalid block: {0}")]
     InvalidBlock(String),
     #[error("Storage error: {0}")]
@@ -151,7 +151,7 @@ pub struct CryptarchiaInfo {
     pub tip: HeaderId,
     pub slot: Slot,
     pub height: u64,
-    pub mode: logos_blockchain_cryptarchia_engine::State,
+    pub mode: lb_cryptarchia_engine::State,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -180,8 +180,8 @@ impl PrunedBlocksInfo {
 
 #[derive(Clone)]
 pub struct Cryptarchia {
-    pub ledger: logos_blockchain_ledger::Ledger<HeaderId>,
-    pub consensus: logos_blockchain_cryptarchia_engine::Cryptarchia<HeaderId>,
+    pub ledger: lb_ledger::Ledger<HeaderId>,
+    pub consensus: lb_cryptarchia_engine::Cryptarchia<HeaderId>,
     pub genesis_id: HeaderId,
 }
 
@@ -192,16 +192,16 @@ impl Cryptarchia {
         lib_id: HeaderId,
         lib_ledger_state: LedgerState,
         genesis_id: HeaderId,
-        ledger_config: logos_blockchain_ledger::Config,
-        state: logos_blockchain_cryptarchia_engine::State,
+        ledger_config: lb_ledger::Config,
+        state: lb_cryptarchia_engine::State,
     ) -> Self {
         Self {
-            consensus: <logos_blockchain_cryptarchia_engine::Cryptarchia<_>>::from_lib(
+            consensus: <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib_id,
                 ledger_config.consensus_config,
                 state,
             ),
-            ledger: <logos_blockchain_ledger::Ledger<_>>::new(
+            ledger: <lb_ledger::Ledger<_>>::new(
                 lib_id,
                 lib_ledger_state,
                 ledger_config,
@@ -272,7 +272,7 @@ impl Cryptarchia {
                 block.transactions(),
             )
             .map_err(|err| match err {
-                logos_blockchain_ledger::LedgerError::ParentNotFound(parent) => {
+                lb_ledger::LedgerError::ParentNotFound(parent) => {
                     Error::ParentMissing {
                         parent,
                         info: self.info(),
@@ -284,7 +284,7 @@ impl Cryptarchia {
             self.consensus
                 .receive_block(id, parent, slot)
                 .map_err(|err| match err {
-                    logos_blockchain_cryptarchia_engine::Error::ParentMissing(parent) => {
+                    lb_cryptarchia_engine::Error::ParentMissing(parent) => {
                         Error::ParentMissing {
                             parent,
                             info: self.info(),
@@ -318,10 +318,10 @@ impl Cryptarchia {
     }
 
     /// Remove the ledger states associated with blocks that have been pruned by
-    /// the [`logos_blockchain_cryptarchia_engine::Cryptarchia`].
+    /// the [`lb_cryptarchia_engine::Cryptarchia`].
     ///
     /// Details on which blocks are pruned can be found in the
-    /// [`logos_blockchain_cryptarchia_engine::Cryptarchia::receive_block`].
+    /// [`lb_cryptarchia_engine::Cryptarchia::receive_block`].
     fn prune_ledger_states<'a>(&'a mut self, blocks: impl Iterator<Item = &'a HeaderId>) {
         let mut pruned_states_count = 0usize;
         for block in blocks {
@@ -354,7 +354,7 @@ impl Cryptarchia {
         self.consensus.state().is_bootstrapping()
     }
 
-    const fn state(&self) -> &logos_blockchain_cryptarchia_engine::State {
+    const fn state(&self) -> &lb_cryptarchia_engine::State {
         self.consensus.state()
     }
 
@@ -393,7 +393,7 @@ impl Cryptarchia {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CryptarchiaSettings {
-    pub config: logos_blockchain_ledger::Config,
+    pub config: lb_ledger::Config,
     pub starting_state: StartingState,
     pub recovery_file: PathBuf,
     pub bootstrap: BootstrapConfig,
@@ -423,7 +423,7 @@ where
     Tx: AuthenticatedMantleTx + Clone + Eq + Debug,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
+    TimeBackend: lb_time_service::backends::TimeBackend,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     new_block_subscription_sender: broadcast::Sender<HeaderId>,
@@ -437,7 +437,7 @@ where
     Tx: AuthenticatedMantleTx + Clone + Eq + Debug,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
+    TimeBackend: lb_time_service::backends::TimeBackend,
 {
     type Settings = CryptarchiaSettings;
     type State = CryptarchiaConsensusState;
@@ -463,7 +463,7 @@ where
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
-    TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
+    TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Send
@@ -624,7 +624,7 @@ where
                         }
                     }
 
-                    Some(logos_blockchain_time_service::SlotTick { slot, .. }) = slot_timer.next() => {
+                    Some(lb_time_service::SlotTick { slot, .. }) = slot_timer.next() => {
                         current_slot = slot;
                     }
 
@@ -672,7 +672,7 @@ where
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
-    TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
+    TimeBackend: lb_time_service::backends::TimeBackend,
     RuntimeServiceId: Display + AsServiceId<Self>,
 {
     fn notify_service_ready(&self) {
@@ -686,12 +686,12 @@ where
     /// Get current slot and slot timer from time service.
     async fn get_slot_timer(
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
-    ) -> Result<(Slot, logos_blockchain_time_service::EpochSlotTickStream), DynError> {
+    ) -> Result<(Slot, lb_time_service::EpochSlotTickStream), DynError> {
         let slot_timer = {
             let (sender, receiver) = oneshot::channel();
             relays
                 .time_relay()
-                .send(logos_blockchain_time_service::TimeServiceMessage::Subscribe { sender })
+                .send(lb_time_service::TimeServiceMessage::Subscribe { sender })
                 .await
                 .expect("Request time subscription to time service should succeed");
             receiver.await?
@@ -703,7 +703,7 @@ where
             let (sender, receiver) = oneshot::channel();
             relays
                 .time_relay()
-                .send(logos_blockchain_time_service::TimeServiceMessage::CurrentSlot { sender })
+                .send(lb_time_service::TimeServiceMessage::CurrentSlot { sender })
                 .await
                 .expect("Request current slot from time service should succeed");
             receiver.await?.slot
@@ -1006,7 +1006,7 @@ where
     async fn initialize_cryptarchia(
         &self,
         bootstrap_config: &BootstrapConfig,
-        ledger_config: logos_blockchain_ledger::Config,
+        ledger_config: lb_ledger::Config,
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
         current_slot: Slot,
     ) -> (Cryptarchia, PrunedBlocks<HeaderId>) {

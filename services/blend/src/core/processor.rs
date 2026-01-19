@@ -4,7 +4,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use logos_blockchain_blend::{
+use lb_blend::{
     message::{
         Error as InnerError,
         crypto::proofs::PoQVerificationInputsMinusSigningKey,
@@ -222,8 +222,8 @@ pub enum Error {
 mod tests {
     use core::num::NonZeroU64;
 
-    use logos_blockchain_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
-    use logos_blockchain_blend::{
+    use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+    use lb_blend::{
         message::{
             Error as InnerError, PayloadType,
             crypto::{
@@ -241,7 +241,7 @@ mod tests {
         },
         scheduling::message_blend::crypto::SessionCryptographicProcessorSettings,
     };
-    use logos_blockchain_core::crypto::ZkHash;
+    use lb_core::crypto::ZkHash;
 
     use crate::{
         core::processor::{CoreCryptographicProcessor, DecapsulatedMessageType, Error},
@@ -252,7 +252,7 @@ mod tests {
     };
 
     fn mock_verification_inputs() -> PoQVerificationInputsMinusSigningKey {
-        use logos_blockchain_groth16::Field as _;
+        use lb_groth16::Field as _;
 
         PoQVerificationInputsMinusSigningKey {
             session: 1,

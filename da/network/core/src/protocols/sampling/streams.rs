@@ -1,6 +1,6 @@
 use futures::AsyncWriteExt as _;
 use libp2p::{PeerId, Stream};
-use logos_blockchain_da_messages::{
+use lb_da_messages::{
     packing::{pack_to_writer, unpack_from_reader},
     sampling::{self, SampleResponse},
 };

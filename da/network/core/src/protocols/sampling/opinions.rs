@@ -1,5 +1,5 @@
 use libp2p::PeerId;
-use logos_blockchain_core::sdp::SessionNumber;
+use lb_core::sdp::SessionNumber;
 
 #[derive(Debug, Clone)]
 pub enum Opinion {

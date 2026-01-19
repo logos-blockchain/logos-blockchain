@@ -1,7 +1,7 @@
 use core::time::Duration;
 
 use libp2p::{Multiaddr, PeerId};
-use logos_blockchain_libp2p::{Protocol, SwarmEvent};
+use lb_libp2p::{Protocol, SwarmEvent};
 use test_log::test;
 use tokio::{select, time::sleep};
 

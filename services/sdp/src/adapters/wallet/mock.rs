@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
-use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
-use logos_blockchain_core::{
+use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
+use lb_core::{
     mantle::{NoteId, Op, OpProof, SignedMantleTx, Transaction as _, tx_builder::MantleTxBuilder},
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };

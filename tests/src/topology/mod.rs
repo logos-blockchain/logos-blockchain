@@ -13,18 +13,18 @@ use configs::{
     tracing::create_tracing_configs,
 };
 use futures::future::join_all;
-use logos_blockchain_key_management_system_service::{
+use lb_key_management_system_service::{
     backend::preload::PreloadKMSBackendSettings,
     keys::{Ed25519Key, ZkKey},
 };
-use logos_blockchain_core::{
+use lb_core::{
     mantle::{GenesisTx as _, Note, NoteId},
     sdp::{Locator, ServiceType, SessionNumber},
 };
-use logos_blockchain_da_network_core::swarm::{BalancerStats, DAConnectionPolicySettings};
-use logos_blockchain_da_network_service::MembershipResponse;
-use logos_blockchain_network_service::backends::libp2p::Libp2pInfo;
-use logos_blockchain_utils::net::get_available_udp_port;
+use lb_da_network_core::swarm::{BalancerStats, DAConnectionPolicySettings};
+use lb_da_network_service::MembershipResponse;
+use lb_network_service::backends::libp2p::Libp2pInfo;
+use lb_utils::net::get_available_udp_port;
 use rand::{Rng as _, thread_rng};
 use tokio::time::{sleep, timeout};
 
@@ -745,10 +745,10 @@ fn build_membership_summary(labels: &[String], statuses: &[bool], description: &
         .join(", ")
 }
 
-fn multiaddr_port(addr: &logos_blockchain_libp2p::Multiaddr) -> Option<u16> {
+fn multiaddr_port(addr: &lb_libp2p::Multiaddr) -> Option<u16> {
     for protocol in addr {
         match protocol {
-            logos_blockchain_libp2p::Protocol::Udp(port) | logos_blockchain_libp2p::Protocol::Tcp(port) => {
+            lb_libp2p::Protocol::Udp(port) | lb_libp2p::Protocol::Tcp(port) => {
                 return Some(port);
             }
             _ => {}

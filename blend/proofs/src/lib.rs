@@ -1,5 +1,5 @@
-use logos_blockchain_blend_crypto::{ZkHash, ZkHasher};
-pub use logos_blockchain_poq::CorePathAndSelectors;
+use lb_blend_crypto::{ZkHash, ZkHasher};
+pub use lb_poq::CorePathAndSelectors;
 
 pub mod quota;
 pub mod selection;

@@ -3,8 +3,8 @@ use std::{
     time::Duration,
 };
 
-use logos_blockchain_node::config::time::serde::Config;
-use logos_blockchain_time_service::backends::{NtpTimeBackendSettings, ntp::async_client::NTPClientSettings};
+use lb_node::config::time::serde::Config;
+use lb_time_service::backends::{NtpTimeBackendSettings, ntp::async_client::NTPClientSettings};
 use time::OffsetDateTime;
 
 pub(crate) const DEFAULT_SLOT_TIME_IN_SECS: u64 = 2;

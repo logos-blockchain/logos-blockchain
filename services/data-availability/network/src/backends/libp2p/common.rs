@@ -8,13 +8,13 @@ use futures::{
     StreamExt,
     channel::oneshot::{Receiver, Sender},
 };
-use logos_blockchain_kzgrs_backend::common::{
+use lb_kzgrs_backend::common::{
     ShareIndex,
     share::{DaLightShare, DaShare, DaSharesCommitments},
 };
-use logos_blockchain_core::{da::BlobId, header::HeaderId, mantle::SignedMantleTx, sdp::SessionNumber};
-use logos_blockchain_da_messages::common::Share;
-use logos_blockchain_da_network_core::{
+use lb_core::{da::BlobId, header::HeaderId, mantle::SignedMantleTx, sdp::SessionNumber};
+use lb_da_messages::common::Share;
+use lb_da_network_core::{
     maintenance::{balancer::ConnectionBalancerCommand, monitor::ConnectionMonitorCommand},
     protocols::{
         dispersal::validator::behaviour::DispersalEvent,
@@ -30,7 +30,7 @@ use logos_blockchain_da_network_core::{
         validator::{CommitmentsArgs, SampleArgs, ValidatorEventsStream},
     },
 };
-use logos_blockchain_libp2p::{Multiaddr, ed25519, secret_key_serde};
+use lb_libp2p::{Multiaddr, ed25519, secret_key_serde};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{
     broadcast,

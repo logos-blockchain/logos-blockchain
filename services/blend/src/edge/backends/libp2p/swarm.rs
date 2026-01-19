@@ -13,7 +13,7 @@ use libp2p::{
     swarm::{ConnectionId, dial_opts::PeerCondition},
 };
 use libp2p_stream::OpenStreamError;
-use logos_blockchain_blend::{
+use lb_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     network::send_msg,
     scheduling::{
@@ -21,7 +21,7 @@ use logos_blockchain_blend::{
         serialize_encapsulated_message,
     },
 };
-use logos_blockchain_libp2p::{DialError, DialOpts, SwarmEvent};
+use lb_libp2p::{DialError, DialOpts, SwarmEvent};
 use rand::RngCore;
 use tokio::sync::mpsc;
 use tracing::{debug, error, trace, warn};

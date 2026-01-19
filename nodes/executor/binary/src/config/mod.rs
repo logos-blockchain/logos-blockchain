@@ -1,5 +1,5 @@
 use color_eyre::eyre::Result;
-use logos_blockchain_node::{
+use lb_node::{
     CryptarchiaLeaderArgs, HttpArgs, LogArgs, NetworkArgs,
     config::{
         BlendArgs, TimeArgs, blend::serde::Config as BlendConfig,
@@ -39,7 +39,7 @@ pub struct Config {
     pub key_management: <KeyManagementService as ServiceData>::Settings,
 
     #[cfg(feature = "tracing")]
-    pub tracing: <logos_blockchain_node::Tracing<RuntimeServiceId> as ServiceData>::Settings,
+    pub tracing: <lb_node::Tracing<RuntimeServiceId> as ServiceData>::Settings,
 
     #[cfg(feature = "testing")]
     pub testing_http: <ApiService as ServiceData>::Settings,
@@ -63,7 +63,7 @@ impl Config {
         time_args: &TimeArgs,
     ) -> Result<Self> {
         #[cfg(feature = "tracing")]
-        logos_blockchain_node::config::update_tracing(&mut self.tracing, log_args)?;
+        lb_node::config::update_tracing(&mut self.tracing, log_args)?;
         update_network(&mut self.network, network_args)?;
         update_blend(&mut self.blend, blend_args)?;
         update_http(&mut self.http, http_args)?;

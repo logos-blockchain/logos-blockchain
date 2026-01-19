@@ -10,23 +10,23 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-logos-blockchain-circuits-prover   = { workspace = true }
-logos-blockchain-circuits-utils    = { workspace = true }
-logos-blockchain-groth16           = { features = ["deser"], workspace = true }
-logos-blockchain-poseidon2         = { workspace = true }
-logos-blockchain-witness-generator = { workspace = true }
-num-bigint                         = { default-features = false, version = "0.4" }
-serde                              = { features = ["derive"], workspace = true }
-serde_json                         = { workspace = true }
-thiserror                          = { workspace = true }
+lb-circuits-prover   = { workspace = true }
+lb-circuits-utils    = { workspace = true }
+lb-groth16           = { features = ["deser"], workspace = true }
+lb-poseidon2         = { workspace = true }
+lb-witness-generator = { workspace = true }
+num-bigint           = { default-features = false, version = "0.4" }
+serde                = { features = ["derive"], workspace = true }
+serde_json           = { workspace = true }
+thiserror            = { workspace = true }
 
 [dev-dependencies]
-logos-blockchain-poseidon2 = { workspace = true }
-num-bigint                 = "0.4"
-rand                       = "0.8"
+lb-poseidon2 = { workspace = true }
+num-bigint   = "0.4"
+rand         = "0.8"
 
 [build-dependencies]
-logos-blockchain-circuits-utils = { workspace = true }
+lb-circuits-utils = { workspace = true }
 
 [lints]
 workspace = true

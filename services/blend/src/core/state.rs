@@ -1,7 +1,7 @@
 mod serde {
     use std::collections::HashSet;
 
-    use logos_blockchain_blend::message::{
+    use lb_blend::message::{
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
         reward::{OldSessionBlendingTokenCollector, SessionBlendingTokenCollector},
     };
@@ -87,7 +87,7 @@ mod service {
     };
     use std::collections::HashSet;
 
-    use logos_blockchain_blend::message::{
+    use lb_blend::message::{
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
         reward::{BlendingToken, OldSessionBlendingTokenCollector, SessionBlendingTokenCollector},
     };
@@ -376,7 +376,7 @@ pub use self::state_updater::StateUpdater;
 mod state_updater {
     use core::hash::Hash;
 
-    use logos_blockchain_blend::message::{
+    use lb_blend::message::{
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
         reward::{BlendingToken, OldSessionBlendingTokenCollector},
     };
@@ -583,7 +583,7 @@ mod recovery_state {
 }
 
 pub mod error {
-    use logos_blockchain_core::sdp::SessionNumber;
+    use lb_core::sdp::SessionNumber;
 
     #[derive(Debug)]
     pub struct SessionMismatch {

@@ -1,10 +1,10 @@
 use core::fmt::Debug;
 use std::fmt::Display;
 
-use logos_blockchain_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
-use logos_blockchain_chain_service::ConsensusMsg;
+use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
+use lb_chain_service::ConsensusMsg;
 use futures::{Stream, StreamExt as _};
-use logos_blockchain_core::{
+use lb_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction},
     sdp::Declaration,
@@ -12,7 +12,7 @@ use logos_blockchain_core::{
 use overwatch::services::AsServiceId;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::BroadcastStream;
-use logos_blockchain_tx_service::{
+use lb_tx_service::{
     MempoolMetrics, MempoolMsg, TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
     tx::service::openapi::Status,
@@ -20,12 +20,12 @@ use logos_blockchain_tx_service::{
 #[cfg(feature = "block-explorer")]
 use {
     bytes::Bytes,
-    logos_blockchain_chain_service::Slot,
-    logos_blockchain_chain_service::storage::StorageAdapter as _,
-    logos_blockchain_chain_service::storage::adapters::StorageAdapter,
+    lb_chain_service::Slot,
+    lb_chain_service::storage::StorageAdapter as _,
+    lb_chain_service::storage::adapters::StorageAdapter,
     futures::future::join_all,
-    logos_blockchain_core::{block::Block, mantle::TxHash},
-    logos_blockchain_storage_service::{
+    lb_core::{block::Block, mantle::TxHash},
+    lb_storage_service::{
         StorageMsg, StorageService,
         api::{
             StorageApiRequest,
@@ -54,7 +54,7 @@ pub async fn mantle_mempool_metrics<StorageAdapter, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
 ) -> Result<MempoolMetrics, super::DynError>
 where
-    StorageAdapter: logos_blockchain_tx_service::storage::MempoolStorageAdapter<
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
             Key = <SignedMantleTx as Transaction>::Hash,
             Item = SignedMantleTx,
@@ -84,7 +84,7 @@ pub async fn mantle_mempool_status<StorageAdapter, RuntimeServiceId>(
     items: Vec<<SignedMantleTx as Transaction>::Hash>,
 ) -> Result<Vec<Status<HeaderId>>, super::DynError>
 where
-    StorageAdapter: logos_blockchain_tx_service::storage::MempoolStorageAdapter<
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
             Key = <SignedMantleTx as Transaction>::Hash,
             Item = SignedMantleTx,
@@ -190,8 +190,8 @@ where
         + Send
         + Sync
         + 'static
-        + logos_blockchain_core::mantle::Transaction<Hash = TxHash>,
-    StorageBackend: logos_blockchain_storage_service::backends::StorageBackend + Send + Sync + 'static,
+        + lb_core::mantle::Transaction<Hash = TxHash>,
+    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
@@ -246,7 +246,7 @@ pub async fn get_blocks_header_ids<Backend, RuntimeServiceId>(
     to_slot: usize,
 ) -> Result<Vec<HeaderId>, super::DynError>
 where
-    Backend: logos_blockchain_storage_service::backends::StorageBackend + Send + Sync + 'static,
+    Backend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     RuntimeServiceId:
         Debug + Sync + Display + AsServiceId<StorageService<Backend, RuntimeServiceId>>,
 {
@@ -310,8 +310,8 @@ where
         + Send
         + Sync
         + 'static
-        + logos_blockchain_core::mantle::Transaction<Hash = TxHash>,
-    StorageBackend: logos_blockchain_storage_service::backends::StorageBackend + Send + Sync + 'static,
+        + lb_core::mantle::Transaction<Hash = TxHash>,
+    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,

@@ -1,7 +1,7 @@
 use std::{path::PathBuf, process};
 
 use clap::Parser;
-use logos_blockchain_cfgsync::server::{CfgSyncConfig, cfgsync_app};
+use lb_cfgsync::server::{CfgSyncConfig, cfgsync_app};
 use tokio::net::TcpListener;
 
 #[derive(Parser, Debug)]

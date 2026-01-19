@@ -1,7 +1,7 @@
-use logos_blockchain_common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
-use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
-use logos_blockchain_core::{codec::SerializeOp as _, header::HeaderId};
-use logos_blockchain_http_api_common::{
+use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
+use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_core::{codec::SerializeOp as _, header::HeaderId};
+use lb_http_api_common::{
     bodies::{
         NoopBody,
         wallet::{
@@ -75,7 +75,7 @@ impl WalletHttpClient {
 
 #[cfg(test)]
 mod tests {
-    use logos_blockchain_core::codec::DeserializeOp as _;
+    use lb_core::codec::DeserializeOp as _;
 
     use super::*;
 

@@ -2,7 +2,7 @@ pub mod kzgrs;
 pub mod trigger;
 pub mod tx;
 
-pub use logos_blockchain_core::da::DaVerifier;
+pub use lb_core::da::DaVerifier;
 
 pub trait VerifierBackend: DaVerifier {
     type Settings;

@@ -9,10 +9,10 @@ use std::{
     time::Duration,
 };
 
-use logos_blockchain_cryptarchia_engine::{EpochConfig, Slot, time::SlotConfig};
+use lb_cryptarchia_engine::{EpochConfig, Slot, time::SlotConfig};
 use futures::{Stream, StreamExt as _};
 #[cfg(feature = "serde")]
-use logos_blockchain_utils::bounded_duration::{MinimalBoundedDuration, NANO};
+use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use sntpc::{NtpResult, fraction_to_nanoseconds};
 use time::OffsetDateTime;
 use tokio::time::{MissedTickBehavior, interval};

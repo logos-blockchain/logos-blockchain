@@ -20,36 +20,36 @@ ignored = [
 workspace = true
 
 [dependencies]
-async-trait                      = "0.1"
-futures                          = { default-features = false, version = "0.3" }
-logos-blockchain-core            = { workspace = true }
-logos-blockchain-network-service = { workspace = true }
-logos-blockchain-services-utils  = { workspace = true }
-logos-blockchain-storage-service = { workspace = true }
-overwatch                        = { workspace = true }
-rand                             = { workspace = true }
-serde                            = { workspace = true }
-serde_json                       = { default-features = false, optional = true, version = "1" }
-thiserror                        = "1.0"
-tokio                            = { default-features = false, version = "1" }
-tokio-stream                     = { default-features = false, version = "0.1" }
-tracing                          = { workspace = true }
-utoipa                           = { optional = true, workspace = true }
+async-trait        = "0.1"
+futures            = { default-features = false, version = "0.3" }
+lb-core            = { workspace = true }
+lb-network-service = { workspace = true }
+lb-services-utils  = { workspace = true }
+lb-storage-service = { workspace = true }
+overwatch          = { workspace = true }
+rand               = { workspace = true }
+serde              = { workspace = true }
+serde_json         = { default-features = false, optional = true, version = "1" }
+thiserror          = "1.0"
+tokio              = { default-features = false, version = "1" }
+tokio-stream       = { default-features = false, version = "0.1" }
+tracing            = { workspace = true }
+utoipa             = { optional = true, workspace = true }
 
 [dev-dependencies]
-logos-blockchain-tracing-service = { workspace = true }
-logos-blockchain-tx-service      = { features = ["mock", "rocksdb-backend"], path = "." }
-logos-blockchain-utils           = { workspace = true }
-overwatch-derive                 = { workspace = true }
-tempfile                         = "3"
-tokio                            = { default-features = false, version = "1" }
+lb-tracing-service = { workspace = true }
+lb-tx-service      = { features = ["mock", "rocksdb-backend"], path = ".", package = "logos-blockchain-tx-service" }
+lb-utils           = { workspace = true }
+overwatch-derive   = { workspace = true }
+tempfile           = "3"
+tokio              = { default-features = false, version = "1" }
 
 [features]
 default         = []
 instrumentation = []
-libp2p          = ["logos-blockchain-network-service/libp2p"]
-mock            = ["logos-blockchain-core/mock", "logos-blockchain-network-service/mock"]
-rocksdb-backend = ["logos-blockchain-storage-service/rocksdb-backend"]
+libp2p          = ["lb-network-service/libp2p"]
+mock            = ["lb-core/mock", "lb-network-service/mock"]
+rocksdb-backend = ["lb-storage-service/rocksdb-backend"]
 
 # enable to help generate OpenAPI
 openapi = ["dep:serde_json", "dep:utoipa"]

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
-use logos_blockchain_cryptarchia_engine::{Config as ConsensusConfig, EpochConfig};
-use logos_blockchain_core::sdp::{MinStake, ServiceParameters, ServiceType};
+use lb_cryptarchia_engine::{Config as ConsensusConfig, EpochConfig};
+use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
 use serde::{Deserialize, Serialize};
 
 use crate::config::deployment::WellKnownDeployment;
@@ -14,7 +14,7 @@ pub struct Settings {
     pub gossipsub_protocol: String,
 }
 
-// The same as `logos_blockchain_ledger::mantle::sdp::Config`, minus the
+// The same as `lb_ledger::mantle::sdp::Config`, minus the
 // `service_rewards_params` values, which are taken from the Blend deployment
 // config instead.
 #[derive(Serialize, Deserialize, Debug, Clone)]

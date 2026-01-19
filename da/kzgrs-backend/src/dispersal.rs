@@ -1,6 +1,6 @@
 use std::hash::{Hash, Hasher};
 
-use logos_blockchain_core::da::{
+use lb_core::da::{
     BlobId,
     blob::{self, metadata::Next},
 };
@@ -109,7 +109,7 @@ impl AsRef<[u8]> for Index {
 
 #[cfg(test)]
 mod tests {
-    use logos_blockchain_core::da::{DaEncoder as _, blob::Share as _};
+    use lb_core::da::{DaEncoder as _, blob::Share as _};
 
     use crate::{
         common::share::DaShare,

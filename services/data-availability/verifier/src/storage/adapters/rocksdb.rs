@@ -1,8 +1,8 @@
 use std::{fmt::Debug, hash::Hash, marker::PhantomData, path::PathBuf};
 
 use futures::try_join;
-use logos_blockchain_core::{da::blob::Share, mantle::SignedMantleTx};
-use logos_blockchain_storage_service::{
+use lb_core::{da::blob::Share, mantle::SignedMantleTx};
+use lb_storage_service::{
     StorageMsg, StorageService, api::da::DaConverter, backends::rocksdb::RocksBackend,
 };
 use overwatch::{

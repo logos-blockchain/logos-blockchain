@@ -1,11 +1,11 @@
 use std::{collections::HashSet, time::Duration};
 
-use logos_blockchain_chain_service::CryptarchiaInfo;
-use logos_blockchain_common_http_client::Error;
-use logos_blockchain_executor_http_client::ExecutorHttpClient;
+use lb_chain_service::CryptarchiaInfo;
+use lb_common_http_client::Error;
+use lb_executor_http_client::ExecutorHttpClient;
 use futures::StreamExt as _;
-use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkKey};
-use logos_blockchain_core::{
+use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
+use lb_core::{
     block::Block,
     da::BlobId,
     mantle::{

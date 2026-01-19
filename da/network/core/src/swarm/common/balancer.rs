@@ -7,7 +7,7 @@ use std::{
 use libp2p::PeerId;
 use rand::seq::IteratorRandom as _;
 use serde::{Deserialize, Serialize};
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_subnetworks_assignations::MembershipHandler;
 
 use crate::{
     SubnetworkId,
@@ -295,7 +295,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn session_id(&self) -> logos_blockchain_core::sdp::SessionNumber {
+        fn session_id(&self) -> lb_core::sdp::SessionNumber {
             0
         }
     }

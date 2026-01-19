@@ -2,9 +2,9 @@ pub mod api;
 pub mod config;
 
 use api::backend::AxumBackend;
-use logos_blockchain_kzgrs_backend::common::share::DaShare;
-use logos_blockchain_core::mantle::{SignedMantleTx, TxHash};
-use logos_blockchain_da_dispersal_service::{
+use lb_kzgrs_backend::common::share::DaShare;
+use lb_core::mantle::{SignedMantleTx, TxHash};
+use lb_da_dispersal_service::{
     DispersalService,
     adapters::{
         network::libp2p::Libp2pNetworkAdapter as DispersalNetworkAdapter,
@@ -12,46 +12,46 @@ use logos_blockchain_da_dispersal_service::{
     },
     backend::kzgrs::DispersalKZGRSBackend,
 };
-use logos_blockchain_da_network_service::backends::libp2p::executor::DaNetworkExecutorBackend;
-use logos_blockchain_da_sampling_service::{
+use lb_da_network_service::backends::libp2p::executor::DaNetworkExecutorBackend;
+use lb_da_sampling_service::{
     backend::kzgrs::KzgrsSamplingBackend,
     storage::adapters::rocksdb::{
         RocksAdapter as SamplingStorageAdapter, converter::DaStorageConverter,
     },
 };
-use logos_blockchain_da_verifier_service::{
+use lb_da_verifier_service::{
     backend::kzgrs::KzgrsDaVerifier,
     network::adapters::executor::Libp2pAdapter as VerifierNetworkAdapter,
     storage::adapters::rocksdb::RocksAdapter as VerifierStorageAdapter,
 };
 #[cfg(feature = "tracing")]
-use logos_blockchain_node::Tracing;
-use logos_blockchain_node::{
+use lb_node::Tracing;
+use lb_node::{
     BlobInfo, DaNetworkApiAdapter, NetworkBackend, LogosBlockchainDaMembership, RocksBackend, SystemSig,
     generic_services::{
         DaMembershipAdapter, DaMembershipStorageGeneric, SamplingMempoolAdapter,
         SdpMempoolAdapterGeneric, SdpService, SdpServiceAdapterGeneric, VerifierMempoolAdapter,
     },
 };
-use logos_blockchain_time_service::backends::NtpTimeBackend;
+use lb_time_service::backends::NtpTimeBackend;
 use overwatch::derive_services;
-use logos_blockchain_tx_service::storage::adapters::RocksStorageAdapter;
+use lb_tx_service::storage::adapters::RocksStorageAdapter;
 
 #[cfg(feature = "tracing")]
 pub(crate) type TracingService = Tracing<RuntimeServiceId>;
 
 type DaMembershipStorage = DaMembershipStorageGeneric<RuntimeServiceId>;
 
-pub(crate) type NetworkService = logos_blockchain_network_service::NetworkService<NetworkBackend, RuntimeServiceId>;
+pub(crate) type NetworkService = lb_network_service::NetworkService<NetworkBackend, RuntimeServiceId>;
 
 pub(crate) type BlendCoreService =
-    logos_blockchain_node::generic_services::blend::BlendCoreService<DaNetworkAdapter, RuntimeServiceId>;
+    lb_node::generic_services::blend::BlendCoreService<DaNetworkAdapter, RuntimeServiceId>;
 pub(crate) type BlendEdgeService =
-    logos_blockchain_node::generic_services::blend::BlendEdgeService<DaNetworkAdapter, RuntimeServiceId>;
+    lb_node::generic_services::blend::BlendEdgeService<DaNetworkAdapter, RuntimeServiceId>;
 pub(crate) type BlendService =
-    logos_blockchain_node::generic_services::blend::BlendService<DaNetworkAdapter, RuntimeServiceId>;
+    lb_node::generic_services::blend::BlendService<DaNetworkAdapter, RuntimeServiceId>;
 
-pub(crate) type BlockBroadcastService = logos_blockchain_chain_broadcast_service::BlockBroadcastService<RuntimeServiceId>;
+pub(crate) type BlockBroadcastService = lb_chain_broadcast_service::BlockBroadcastService<RuntimeServiceId>;
 
 pub(crate) type DaDispersalService = DispersalService<
     DispersalKZGRSBackend<
@@ -77,7 +77,7 @@ pub(crate) type DaDispersalService = DispersalService<
     RuntimeServiceId,
 >;
 
-pub(crate) type DaVerifierService = logos_blockchain_node::generic_services::DaVerifierService<
+pub(crate) type DaVerifierService = lb_node::generic_services::DaVerifierService<
     VerifierNetworkAdapter<
         LogosBlockchainDaMembership,
         DaMembershipAdapter<RuntimeServiceId>,
@@ -91,9 +91,9 @@ pub(crate) type DaVerifierService = logos_blockchain_node::generic_services::DaV
 >;
 
 pub(crate) type DaSamplingService =
-    logos_blockchain_node::generic_services::DaSamplingService<DaNetworkAdapter, RuntimeServiceId>;
+    lb_node::generic_services::DaSamplingService<DaNetworkAdapter, RuntimeServiceId>;
 
-pub(crate) type DaNetworkService = logos_blockchain_da_network_service::NetworkService<
+pub(crate) type DaNetworkService = lb_da_network_service::NetworkService<
     DaNetworkExecutorBackend<LogosBlockchainDaMembership>,
     LogosBlockchainDaMembership,
     DaMembershipAdapter<RuntimeServiceId>,
@@ -103,9 +103,9 @@ pub(crate) type DaNetworkService = logos_blockchain_da_network_service::NetworkS
     RuntimeServiceId,
 >;
 
-pub(crate) type MempoolService = logos_blockchain_node::generic_services::TxMempoolService<RuntimeServiceId>;
+pub(crate) type MempoolService = lb_node::generic_services::TxMempoolService<RuntimeServiceId>;
 
-pub(crate) type DaNetworkAdapter = logos_blockchain_da_sampling_service::network::adapters::executor::Libp2pAdapter<
+pub(crate) type DaNetworkAdapter = lb_da_sampling_service::network::adapters::executor::Libp2pAdapter<
     LogosBlockchainDaMembership,
     DaMembershipAdapter<RuntimeServiceId>,
     DaMembershipStorage,
@@ -115,30 +115,30 @@ pub(crate) type DaNetworkAdapter = logos_blockchain_da_sampling_service::network
 >;
 
 pub(crate) type CryptarchiaService =
-    logos_blockchain_node::generic_services::CryptarchiaService<RuntimeServiceId>;
+    lb_node::generic_services::CryptarchiaService<RuntimeServiceId>;
 
 pub(crate) type ChainNetworkService =
-    logos_blockchain_node::generic_services::ChainNetworkService<DaNetworkAdapter, RuntimeServiceId>;
+    lb_node::generic_services::ChainNetworkService<DaNetworkAdapter, RuntimeServiceId>;
 
 pub(crate) type WalletService =
-    logos_blockchain_node::generic_services::WalletService<CryptarchiaService, RuntimeServiceId>;
+    lb_node::generic_services::WalletService<CryptarchiaService, RuntimeServiceId>;
 
 pub(crate) type KeyManagementService =
-    logos_blockchain_node::generic_services::KeyManagementService<RuntimeServiceId>;
+    lb_node::generic_services::KeyManagementService<RuntimeServiceId>;
 
-pub(crate) type CryptarchiaLeaderService = logos_blockchain_node::generic_services::CryptarchiaLeaderService<
+pub(crate) type CryptarchiaLeaderService = lb_node::generic_services::CryptarchiaLeaderService<
     CryptarchiaService,
     WalletService,
     DaNetworkAdapter,
     RuntimeServiceId,
 >;
 
-pub(crate) type TimeService = logos_blockchain_node::generic_services::TimeService<RuntimeServiceId>;
+pub(crate) type TimeService = lb_node::generic_services::TimeService<RuntimeServiceId>;
 
 pub(crate) type ApiStorageAdapter<RuntimeServiceId> =
-    logos_blockchain_api_service::http::storage::adapters::rocksdb::RocksAdapter<RuntimeServiceId>;
+    lb_api_service::http::storage::adapters::rocksdb::RocksAdapter<RuntimeServiceId>;
 
-pub(crate) type ApiService = logos_blockchain_api_service::ApiService<
+pub(crate) type ApiService = lb_api_service::ApiService<
     AxumBackend<
         DaShare,
         BlobInfo,
@@ -176,7 +176,7 @@ pub(crate) type ApiService = logos_blockchain_api_service::ApiService<
             SdpServiceAdapterGeneric<RuntimeServiceId>,
             RuntimeServiceId,
         >,
-        logos_blockchain_kzgrs_backend::dispersal::Metadata,
+        lb_kzgrs_backend::dispersal::Metadata,
         KzgrsSamplingBackend,
         DaNetworkAdapter,
         SamplingMempoolAdapter<RuntimeServiceId>,
@@ -192,13 +192,13 @@ pub(crate) type ApiService = logos_blockchain_api_service::ApiService<
     RuntimeServiceId,
 >;
 
-pub(crate) type StorageService = logos_blockchain_storage_service::StorageService<RocksBackend, RuntimeServiceId>;
+pub(crate) type StorageService = lb_storage_service::StorageService<RocksBackend, RuntimeServiceId>;
 
 pub(crate) type SystemSigService = SystemSig<RuntimeServiceId>;
 
 #[cfg(feature = "testing")]
 type TestingApiService<RuntimeServiceId> =
-    logos_blockchain_api_service::ApiService<api::testing::backend::TestAxumBackend, RuntimeServiceId>;
+    lb_api_service::ApiService<api::testing::backend::TestAxumBackend, RuntimeServiceId>;
 
 #[derive_services]
 pub struct LogosBlockchainExecutor {

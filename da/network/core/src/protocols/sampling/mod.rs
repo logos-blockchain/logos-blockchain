@@ -13,16 +13,16 @@ use futures::{
     channel::oneshot::{Receiver, Sender},
     future::BoxFuture,
 };
-use logos_blockchain_kzgrs_backend::common::{
+use lb_kzgrs_backend::common::{
     ShareIndex,
     share::{DaLightShare, DaSharesCommitments},
 };
 use libp2p::{PeerId, swarm::NetworkBehaviour};
-use logos_blockchain_core::{da::BlobId, header::HeaderId, sdp::SessionNumber};
-use logos_blockchain_da_messages::{common, sampling, sampling::SampleResponse};
+use lb_core::{da::BlobId, header::HeaderId, sdp::SessionNumber};
+use lb_da_messages::{common, sampling, sampling::SampleResponse};
 use serde::{Deserialize, Serialize};
 use streams::SampleStream;
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_subnetworks_assignations::MembershipHandler;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
@@ -327,12 +327,12 @@ mod test {
     use std::time::Duration;
 
     use futures::StreamExt as _;
-    use logos_blockchain_kzgrs::Proof;
-    use logos_blockchain_kzgrs_backend::common::{Column, share::DaLightShare};
+    use lb_kzgrs::Proof;
+    use lb_kzgrs_backend::common::{Column, share::DaLightShare};
     use libp2p::{Multiaddr, PeerId, Swarm, identity::Keypair, swarm::SwarmEvent};
     use log::debug;
     use rand::Rng as _;
-    use logos_blockchain_subnetworks_assignations::MembershipHandler;
+    use lb_subnetworks_assignations::MembershipHandler;
     use tokio::time;
     use tokio_stream::wrappers::IntervalStream;
     use tracing_subscriber::{EnvFilter, fmt::TestWriter};

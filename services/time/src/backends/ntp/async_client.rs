@@ -6,7 +6,7 @@ use std::{
 
 use futures::{StreamExt as _, TryStreamExt as _, stream::FuturesUnordered};
 #[cfg(feature = "serde")]
-use logos_blockchain_utils::bounded_duration::{MinimalBoundedDuration, NANO};
+use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use sntpc::{Error as SntpError, NtpContext, NtpResult, StdTimestampGen, get_time};
 use tokio::{
     net::{ToSocketAddrs, UdpSocket, lookup_host},

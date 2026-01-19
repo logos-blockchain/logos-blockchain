@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, pin::Pin};
 
 use async_trait::async_trait;
 use futures::Stream;
-use logos_blockchain_storage_service::backends::StorageBackend;
+use lb_storage_service::backends::StorageBackend;
 
 pub mod adapters;
 
@@ -18,7 +18,7 @@ pub trait MempoolStorageAdapter<RuntimeServiceId>: Send + Sync {
 
     fn new(
         storage_relay: overwatch::services::relay::OutboundRelay<
-            <logos_blockchain_storage_service::StorageService<Self::Backend, RuntimeServiceId> as overwatch::services::ServiceData>::Message,
+            <lb_storage_service::StorageService<Self::Backend, RuntimeServiceId> as overwatch::services::ServiceData>::Message,
         >,
     ) -> Self;
 

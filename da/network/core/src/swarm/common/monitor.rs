@@ -5,7 +5,7 @@ use std::{
 
 use fixed::types::U57F7;
 use libp2p::PeerId;
-use logos_blockchain_utils::bounded_duration::{MinimalBoundedDuration, NANO};
+use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -378,7 +378,7 @@ fn compute_failure_rate(
 
 #[cfg(test)]
 mod tests {
-    use logos_blockchain_subnetworks_assignations::versions::v1::FillFromNodeList;
+    use lb_subnetworks_assignations::versions::v1::FillFromNodeList;
 
     use super::*;
     use crate::swarm::{DAConnectionPolicySettings, common::policy::DAConnectionPolicy};

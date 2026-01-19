@@ -1,7 +1,7 @@
 pub mod adapters;
 
-use logos_blockchain_core::da::blob::Share;
-use logos_blockchain_storage_service::{StorageService, backends::StorageBackend};
+use lb_core::da::blob::Share;
+use lb_storage_service::{StorageService, backends::StorageBackend};
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},

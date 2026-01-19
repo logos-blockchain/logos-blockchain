@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
-use logos_blockchain_core::{
+use lb_core::{
     codec::{DeserializeOp as _, SerializeOp as _},
     da::BlobId,
     sdp::{ProviderId, SessionNumber},

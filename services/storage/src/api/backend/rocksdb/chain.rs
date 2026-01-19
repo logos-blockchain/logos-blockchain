@@ -7,9 +7,9 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use logos_blockchain_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::Slot;
 use futures::{Stream, StreamExt as _, stream};
-use logos_blockchain_core::{header::HeaderId, mantle::TxHash};
+use lb_core::{header::HeaderId, mantle::TxHash};
 use rocksdb::WriteBatch;
 
 use crate::{

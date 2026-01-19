@@ -11,9 +11,9 @@
 // async fn smoke_two_validators_run_30s() -> Result<(), Box<dyn
 // std::error::Error + Send + Sync>> {     // Required env vars (set on the
 // command line when running this test):     // - `POL_PROOF_DEV_MODE=true`
-// (required for local proof generation)     // - `LOGOS_BLOCKCHAIN_NODE_BIN=...
+// (required for local proof generation)     // - `lb_NODE_BIN=...
 // ` (path to `logos-blockchain-node` binary)     // -
-// `LOGOS_BLOCKCHAIN_EXECUTOR_BIN=. ..` (optional; only needed if the scenario
+// `lb_EXECUTOR_BIN=. ..` (optional; only needed if the scenario
 // spawns     //   executors)     // - `RUST_LOG=info` (optional; better
 // visibility)     let _init_result = tracing_subscriber::fmt()
 //         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())

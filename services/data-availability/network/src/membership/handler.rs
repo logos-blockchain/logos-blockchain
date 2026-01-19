@@ -6,7 +6,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use logos_blockchain_subnetworks_assignations::{MembershipHandler, SubnetworkAssignations};
+use lb_subnetworks_assignations::{MembershipHandler, SubnetworkAssignations};
 
 #[derive(Debug, Clone)]
 pub struct DaMembershipHandler<Membership> {
@@ -67,7 +67,7 @@ where
         self.membership.load().subnetworks()
     }
 
-    fn session_id(&self) -> logos_blockchain_core::sdp::SessionNumber {
+    fn session_id(&self) -> lb_core::sdp::SessionNumber {
         self.membership.load().session_id()
     }
 }
@@ -116,7 +116,7 @@ where
         self.membership.subnetworks()
     }
 
-    fn session_id(&self) -> logos_blockchain_core::sdp::SessionNumber {
+    fn session_id(&self) -> lb_core::sdp::SessionNumber {
         self.membership.session_id()
     }
 }

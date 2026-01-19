@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use logos_blockchain_core::mantle::{SignedMantleTx, ops::channel::ChannelId};
+use lb_core::mantle::{SignedMantleTx, ops::channel::ChannelId};
 
 use super::DispersalStorageAdapter;
 

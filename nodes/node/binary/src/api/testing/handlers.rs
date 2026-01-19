@@ -4,18 +4,18 @@ use std::{
 };
 
 use axum::{Json, extract::State, response::Response};
-use logos_blockchain_api_service::http::{da, mantle};
-use logos_blockchain_core::{header::HeaderId, sdp::SessionNumber};
-use logos_blockchain_da_network_service::{
+use lb_api_service::http::{da, mantle};
+use lb_core::{header::HeaderId, sdp::SessionNumber};
+use lb_da_network_service::{
     NetworkService, api::ApiAdapter as ApiAdapterTrait, backends::NetworkBackend,
     sdp::SdpAdapter as SdpAdapterTrait,
 };
-use logos_blockchain_da_sampling_service::{
+use lb_da_sampling_service::{
     DaSamplingService, backend::DaSamplingServiceBackend, mempool::DaMempoolAdapter,
 };
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use serde::{Deserialize, Serialize};
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_subnetworks_assignations::MembershipHandler;
 
 use super::backend::TestHttpCryptarchiaService;
 use crate::{
@@ -91,8 +91,8 @@ pub async fn da_historic_sampling<
 where
     SamplingBackend: DaSamplingServiceBackend,
     <SamplingBackend as DaSamplingServiceBackend>::BlobId: Send + Eq + Hash + 'static,
-    SamplingNetwork: logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
+    SamplingNetwork: lb_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
+    SamplingStorage: lb_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
     SamplingMempoolAdapter: DaMempoolAdapter,
     RuntimeServiceId: Debug
         + Sync

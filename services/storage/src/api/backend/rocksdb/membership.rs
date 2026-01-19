@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use async_trait::async_trait;
-use logos_blockchain_core::{
+use lb_core::{
     block::BlockNumber,
     codec::{DeserializeOp as _, SerializeOp as _},
     sdp::{Locator, ProviderId, ServiceType, SessionNumber},

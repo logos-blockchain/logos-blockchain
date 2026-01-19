@@ -1,12 +1,12 @@
 use std::{collections::HashSet, time::Duration};
 
-use logos_blockchain_common_http_client::CommonHttpClient;
-use logos_blockchain_core::mantle::{
+use lb_common_http_client::CommonHttpClient;
+use lb_core::mantle::{
     MantleTx, Note, SignedMantleTx, Transaction as _, TxHash, ledger::Tx as LedgerTx,
     ops::channel::ChannelId,
 };
-use logos_blockchain_key_management_system_service::keys::{ZkKey, ZkPublicKey};
-use logos_blockchain_tests::{
+use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
+use lb_tests::{
     common::{chain::scan_chain_until, da::create_inscription_transaction_with_id},
     nodes::validator::Validator,
     topology::{Topology, TopologyConfig},
@@ -95,7 +95,7 @@ async fn wait_for_transactions_processing(
             |header_id| validator.get_block(header_id),
             |block| {
                 for tx in block.transactions() {
-                    let hash = logos_blockchain_core::mantle::Transaction::hash(tx);
+                    let hash = lb_core::mantle::Transaction::hash(tx);
                     if valid_tx_hashes.contains(&hash) {
                         found_valid_txs.insert(hash);
                     }

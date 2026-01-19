@@ -1,7 +1,7 @@
 use std::io;
 
 use futures::{AsyncReadExt, AsyncWriteExt};
-use logos_blockchain_core::codec::{DeserializeOp as _, SerializeOp as _};
+use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::Result;
@@ -85,8 +85,8 @@ where
 #[cfg(test)]
 mod tests {
     use futures::io::BufReader;
-    use logos_blockchain_kzgrs_backend::testutils::get_da_share;
-    use logos_blockchain_core::da::BlobId;
+    use lb_kzgrs_backend::testutils::get_da_share;
+    use lb_core::da::BlobId;
 
     use super::*;
     use crate::{

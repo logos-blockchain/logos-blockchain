@@ -1,5 +1,5 @@
-use logos_blockchain_core::{block::Block, header::HeaderId};
-use logos_blockchain_network_service::message::ChainSyncEvent;
+use lb_core::{block::Block, header::HeaderId};
+use lb_network_service::message::ChainSyncEvent;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
@@ -149,7 +149,7 @@ where
     pub async fn get_ledger_state(
         &self,
         block_id: HeaderId,
-    ) -> Result<Option<logos_blockchain_ledger::LedgerState>, ApiError> {
+    ) -> Result<Option<lb_ledger::LedgerState>, ApiError> {
         let (tx, rx) = oneshot::channel();
 
         self.relay
@@ -167,8 +167,8 @@ where
     /// Get the epoch state for a given slot
     pub async fn get_epoch_state(
         &self,
-        slot: logos_blockchain_cryptarchia_engine::Slot,
-    ) -> Result<Option<logos_blockchain_ledger::EpochState>, ApiError> {
+        slot: lb_cryptarchia_engine::Slot,
+    ) -> Result<Option<lb_ledger::EpochState>, ApiError> {
         let (tx, rx) = oneshot::channel();
 
         self.relay

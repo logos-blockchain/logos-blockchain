@@ -1,4 +1,4 @@
-use logos_blockchain_core::da::DaEncoder as _;
+use lb_core::da::DaEncoder as _;
 
 use crate::{common::share::DaShare, testutils::encoder::get_encoder};
 

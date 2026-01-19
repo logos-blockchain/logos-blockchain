@@ -1,5 +1,5 @@
-use logos_blockchain_blend_proofs::quota::{self, VerifiedProofOfQuota, inputs::prove::PublicInputs};
-use logos_blockchain_core::crypto::ZkHash;
+use lb_blend_proofs::quota::{self, VerifiedProofOfQuota, inputs::prove::PublicInputs};
+use lb_core::crypto::ZkHash;
 
 pub mod crypto;
 pub mod provers;

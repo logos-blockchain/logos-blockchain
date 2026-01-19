@@ -11,8 +11,8 @@ mod test {
     };
 
     use futures::StreamExt as _;
-    use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, ZkKey};
-    use logos_blockchain_kzgrs_backend::testutils;
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use lb_kzgrs_backend::testutils;
     use libp2p::{
         PeerId, Swarm,
         identity::{Keypair, PublicKey},
@@ -22,7 +22,7 @@ mod test {
     };
     use libp2p_swarm_test::SwarmExt as _;
     use log::info;
-    use logos_blockchain_core::mantle::{
+    use lb_core::mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
         ledger::Tx as LedgerTx,
         ops::{
@@ -30,11 +30,11 @@ mod test {
             channel::{ChannelId, MsgId, blob::BlobOp},
         },
     };
-    use logos_blockchain_da_messages::{
+    use lb_da_messages::{
         common::Share,
         replication::{ReplicationRequest, ReplicationResponseId},
     };
-    use logos_blockchain_utils::net::get_available_udp_port;
+    use lb_utils::net::get_available_udp_port;
     use tokio::sync::mpsc;
     use tracing_subscriber::{EnvFilter, fmt::TestWriter};
 

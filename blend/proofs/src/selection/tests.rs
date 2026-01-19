@@ -1,6 +1,6 @@
 use const_hex::FromHex as _;
-use logos_blockchain_groth16::{Field as _, fr_from_bytes_unchecked};
-use logos_blockchain_core::codec::{DeserializeOp as _, SerializeOp as _};
+use lb_groth16::{Field as _, fr_from_bytes_unchecked};
+use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 
 use crate::{
     ZkHash,

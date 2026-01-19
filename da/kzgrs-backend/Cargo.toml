@@ -13,16 +13,16 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-ark-ff                 = "0.4"
-ark-poly               = "0.4.2"
-ark-serialize          = "0.4.2"
-blake2                 = { default-features = false, workspace = true }
-itertools              = { default-features = false, version = "0.12" }
-logos-blockchain-core  = { workspace = true }
-logos-blockchain-kzgrs = { workspace = true }
-rand                   = { default-features = false, features = ["std"], workspace = true }
-rayon                  = { optional = true, version = "1.10.0" }
-serde                  = { workspace = true }
+ark-ff        = "0.4"
+ark-poly      = "0.4.2"
+ark-serialize = "0.4.2"
+blake2        = { default-features = false, workspace = true }
+itertools     = { default-features = false, version = "0.12" }
+lb-core       = { workspace = true }
+lb-kzgrs      = { workspace = true }
+rand          = { default-features = false, features = ["std"], workspace = true }
+rayon         = { optional = true, version = "1.10.0" }
+serde         = { workspace = true }
 
 [dev-dependencies]
 ark-bls12-381 = { default-features = false, version = "0.4.0" }
@@ -30,7 +30,7 @@ divan         = { default-features = false, version = "0.1" }
 
 [features]
 default   = []
-parallel  = ["dep:rayon", "logos-blockchain-kzgrs/parallel"]
+parallel  = ["dep:rayon", "lb-kzgrs/parallel"]
 single    = []
 testutils = []
 

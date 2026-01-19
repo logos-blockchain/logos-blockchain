@@ -5,9 +5,9 @@ mod test_utils;
 
 use std::collections::HashMap;
 
-use logos_blockchain_groth16::{Fr, fr_from_bytes};
-use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
-use logos_blockchain_core::{
+use lb_groth16::{Fr, fr_from_bytes};
+use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_core::{
     block::BlockNumber,
     crypto::{ZkDigest, ZkHasher},
     mantle::{Note, TxHash, Utxo},

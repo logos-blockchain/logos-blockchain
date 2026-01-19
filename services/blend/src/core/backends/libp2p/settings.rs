@@ -2,8 +2,8 @@ use core::time::Duration;
 use std::{num::NonZeroU64, ops::RangeInclusive};
 
 use libp2p::{Multiaddr, PeerId, identity::Keypair};
-use logos_blockchain_libp2p::protocol_name::StreamProtocol;
-use logos_blockchain_utils::math::NonNegativeF64;
+use lb_libp2p::protocol_name::StreamProtocol;
+use lb_utils::math::NonNegativeF64;
 use serde::{Deserialize, Serialize};
 
 use crate::core::settings::BlendConfig;
@@ -16,7 +16,7 @@ pub struct Libp2pBlendBackendSettings {
     pub minimum_messages_coefficient: NonZeroU64,
     pub normalization_constant: NonNegativeF64,
     #[serde_as(
-        as = "logos_blockchain_utils::bounded_duration::MinimalBoundedDuration<1, logos_blockchain_utils::bounded_duration::SECOND>"
+        as = "lb_utils::bounded_duration::MinimalBoundedDuration<1, lb_utils::bounded_duration::SECOND>"
     )]
     pub edge_node_connection_timeout: Duration,
     pub max_edge_node_incoming_connections: u64,

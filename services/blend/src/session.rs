@@ -1,4 +1,4 @@
-use logos_blockchain_blend::{
+use lb_blend::{
     proofs::quota::inputs::prove::public::CoreInputs, scheduling::membership::Membership,
 };
 

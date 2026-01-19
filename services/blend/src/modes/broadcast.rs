@@ -4,12 +4,12 @@ use std::{
     time::Duration,
 };
 
-use logos_blockchain_network_service::message::BackendNetworkMsg;
+use lb_network_service::message::BackendNetworkMsg;
 use overwatch::{
     overwatch::OverwatchHandle,
     services::{AsServiceId, ServiceData},
 };
-use logos_blockchain_services_utils::wait_until_services_are_ready;
+use lb_services_utils::wait_until_services_are_ready;
 
 use crate::{
     core::{network::NetworkAdapter, service_components::MessageComponents},
@@ -73,7 +73,7 @@ where
 #[cfg(test)]
 pub mod tests {
     use futures::StreamExt as _;
-    use logos_blockchain_network_service::{NetworkService, backends::NetworkBackend, message::NetworkMsg};
+    use lb_network_service::{NetworkService, backends::NetworkBackend, message::NetworkMsg};
     use overwatch::{
         DynError, OpaqueServiceResourcesHandle,
         overwatch::OverwatchRunner,

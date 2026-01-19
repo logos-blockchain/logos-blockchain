@@ -4,7 +4,7 @@ use std::{collections::HashMap, fmt::Display};
 use async_trait::async_trait;
 use derivative::Derivative;
 use futures::{Stream, StreamExt as _, future::ready, stream::iter};
-use logos_blockchain_core::{
+use lb_core::{
     header::HeaderId,
     sdp::{ProviderId, ProviderInfo, SessionNumber},
 };

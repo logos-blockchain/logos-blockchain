@@ -1,4 +1,4 @@
-use logos_blockchain_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::Slot;
 use time::OffsetDateTime;
 
 use crate::{
@@ -35,7 +35,7 @@ impl TimeBackend for SystemTimeBackend {
 mod test {
     use std::{num::NonZero, time::Duration};
 
-    use logos_blockchain_cryptarchia_engine::{EpochConfig, Slot, time::SlotConfig};
+    use lb_cryptarchia_engine::{EpochConfig, Slot, time::SlotConfig};
     use futures::StreamExt as _;
     use time::OffsetDateTime;
 

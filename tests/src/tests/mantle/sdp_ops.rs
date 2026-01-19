@@ -1,12 +1,12 @@
 use std::{collections::HashSet, time::Duration};
 
-use logos_blockchain_common_http_client::CommonHttpClient;
-use logos_blockchain_core::{
+use lb_common_http_client::CommonHttpClient;
+use lb_core::{
     mantle::{Note, NoteId, Transaction as _},
     sdp::{ActiveMessage, Declaration, Locator, ServiceType, SessionNumber, WithdrawMessage},
 };
-use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkKey};
-use logos_blockchain_tests::{
+use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
+use lb_tests::{
     adjust_timeout,
     common::mantle_tx::{
         create_sdp_active_tx, create_sdp_declare_tx, create_sdp_withdraw_tx,

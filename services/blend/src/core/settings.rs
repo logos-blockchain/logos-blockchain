@@ -1,11 +1,11 @@
 use std::{num::NonZeroU64, path::PathBuf};
 
-use logos_blockchain_key_management_system_service::backend::preload::KeyId;
-use logos_blockchain_blend::scheduling::message_blend::crypto::SessionCryptographicProcessorSettings;
-use logos_blockchain_core::blend::core_quota;
-use logos_blockchain_utils::math::NonNegativeF64;
+use lb_key_management_system_service::backend::preload::KeyId;
+use lb_blend::scheduling::message_blend::crypto::SessionCryptographicProcessorSettings;
+use lb_core::blend::core_quota;
+use lb_utils::math::NonNegativeF64;
 use serde::{Deserialize, Serialize};
-use logos_blockchain_services_utils::overwatch::recovery::backends::FileBackendSettings;
+use lb_services_utils::overwatch::recovery::backends::FileBackendSettings;
 
 use crate::settings::TimingSettings;
 
@@ -29,8 +29,8 @@ impl<BackendSettings> BlendConfig<BackendSettings> {
 
     pub(super) fn scheduler_settings(
         &self,
-    ) -> logos_blockchain_blend::scheduling::message_scheduler::Settings {
-        logos_blockchain_blend::scheduling::message_scheduler::Settings {
+    ) -> lb_blend::scheduling::message_scheduler::Settings {
+        lb_blend::scheduling::message_scheduler::Settings {
             additional_safety_intervals: self.scheduler.cover.intervals_for_safety_buffer,
             expected_intervals_per_session: self.time.intervals_per_session(),
             maximum_release_delay_in_rounds: self.scheduler.delayer.maximum_release_delay_in_rounds,

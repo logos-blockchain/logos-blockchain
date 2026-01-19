@@ -4,21 +4,12 @@ use std::{collections::HashSet, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use logos_blockchain_chain_service::{
+use lb_chain_service::{
     LibUpdate,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
     storage::{StorageAdapter as _, adapters::storage::StorageAdapter},
 };
-use logos_blockchain_groth16::fr_to_bytes;
-use logos_blockchain_key_management_system_service::{
-    api::{KmsServiceApi, KmsServiceData},
-    backend::preload::PreloadKMSBackend,
-    keys::{
-        Ed25519Key, PayloadEncoding, SignatureEncoding, ZkPublicKey, ZkSignature,
-        secured_key::SecuredKey,
-    },
-};
-use logos_blockchain_core::{
+use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
@@ -28,8 +19,19 @@ use logos_blockchain_core::{
         tx_builder::MantleTxBuilder,
     },
 };
-use logos_blockchain_ledger::LedgerState;
-use logos_blockchain_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
+use lb_groth16::fr_to_bytes;
+use lb_key_management_system_service::{
+    api::{KmsServiceApi, KmsServiceData},
+    backend::preload::PreloadKMSBackend,
+    keys::{
+        Ed25519Key, PayloadEncoding, SignatureEncoding, ZkPublicKey, ZkSignature,
+        secured_key::SecuredKey,
+    },
+};
+use lb_ledger::LedgerState;
+use lb_services_utils::wait_until_services_are_ready;
+use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
+use lb_wallet::{Wallet, WalletBlock, WalletError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -38,10 +40,8 @@ use overwatch::{
     },
 };
 use serde::{Serialize, de::DeserializeOwned};
-use logos_blockchain_services_utils::wait_until_services_are_ready;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, trace};
-use logos_blockchain_wallet::{Wallet, WalletBlock, WalletError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletServiceError {
@@ -64,16 +64,16 @@ pub enum WalletServiceError {
     KmsApi(DynError),
 
     #[error("Cryptarchia API error: {0}")]
-    CryptarchiaApi(#[from] logos_blockchain_chain_service::api::ApiError),
+    CryptarchiaApi(#[from] lb_chain_service::api::ApiError),
 
     #[error("Channel {0:?} is missing state in ledger")]
     MissingChannelState(ChannelId),
 
     #[error("Declaration {0:?} is missing in ledger")]
-    MissingDeclaration(logos_blockchain_core::sdp::DeclarationId),
+    MissingDeclaration(lb_core::sdp::DeclarationId),
 
     #[error("Locked note {0:?} is missing in ledger")]
-    MissingLockedNote(logos_blockchain_core::mantle::NoteId),
+    MissingLockedNote(lb_core::mantle::NoteId),
 }
 
 #[derive(Debug)]
@@ -138,7 +138,7 @@ where
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     RuntimeServiceId: AsServiceId<Self>
         + AsServiceId<Cryptarchia>
-        + AsServiceId<logos_blockchain_storage_service::StorageService<Storage, RuntimeServiceId>>
+        + AsServiceId<lb_storage_service::StorageService<Storage, RuntimeServiceId>>
         + AsServiceId<Kms>
         + std::fmt::Debug
         + std::fmt::Display
@@ -165,7 +165,7 @@ where
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
             Some(Duration::from_secs(60)),
-            logos_blockchain_storage_service::StorageService<_, _>,
+            lb_storage_service::StorageService<_, _>,
             Cryptarchia,
             Kms
         )
@@ -178,7 +178,7 @@ where
 
         let storage_relay = service_resources_handle
             .overwatch_handle
-            .relay::<logos_blockchain_storage_service::StorageService<Storage, RuntimeServiceId>>()
+            .relay::<lb_storage_service::StorageService<Storage, RuntimeServiceId>>()
             .await?;
 
         // Create the API wrapper for cleaner communication

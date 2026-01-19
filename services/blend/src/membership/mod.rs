@@ -4,11 +4,11 @@ pub mod service;
 use std::pin::Pin;
 
 use futures::Stream;
-use logos_blockchain_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
-use logos_blockchain_blend::scheduling::membership::Membership;
-use logos_blockchain_core::crypto::ZkHash;
+use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
+use lb_blend::scheduling::membership::Membership;
+use lb_core::crypto::ZkHash;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
-use logos_blockchain_poq::CorePathAndSelectors;
+use lb_poq::CorePathAndSelectors;
 
 #[derive(Clone, Debug)]
 pub struct MembershipInfo<NodeId> {

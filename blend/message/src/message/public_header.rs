@@ -1,5 +1,5 @@
-use logos_blockchain_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature};
-use logos_blockchain_blend_proofs::quota::{self, ProofOfQuota, VerifiedProofOfQuota};
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature};
+use lb_blend_proofs::quota::{self, ProofOfQuota, VerifiedProofOfQuota};
 use serde::{Deserialize, Serialize};
 
 use crate::{Error, MessageIdentifier, encap::ProofsVerifier};
@@ -161,9 +161,9 @@ impl VerifiedPublicHeader {
 
 #[cfg(test)]
 mod tests {
-    use logos_blockchain_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
-    use logos_blockchain_blend_proofs::quota::VerifiedProofOfQuota;
-    use logos_blockchain_core::codec::{DeserializeOp as _, SerializeOp as _};
+    use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
+    use lb_blend_proofs::quota::VerifiedProofOfQuota;
+    use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 
     use crate::message::{PublicHeader, public_header::VerifiedPublicHeader};
 

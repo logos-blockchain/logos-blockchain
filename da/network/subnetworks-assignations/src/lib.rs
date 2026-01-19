@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
 };
 
-use logos_blockchain_core::sdp::SessionNumber;
+use lb_core::sdp::SessionNumber;
 use rand::RngCore;
 
 pub type SubnetworkId = u16;

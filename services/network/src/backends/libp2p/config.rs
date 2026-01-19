@@ -1,4 +1,4 @@
-use logos_blockchain_libp2p::{Multiaddr, SwarmConfig};
+use lb_libp2p::{Multiaddr, SwarmConfig};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

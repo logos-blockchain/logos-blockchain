@@ -3,13 +3,13 @@ use std::iter::repeat_with;
 
 use async_trait::async_trait;
 use futures::StreamExt as _;
-use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
+use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use libp2p::{
     Multiaddr, PeerId, Swarm, allow_block_list, connection_limits, core::transport::ListenerId,
     identity::Keypair,
 };
 use libp2p_swarm_test::SwarmExt as _;
-use logos_blockchain_blend::{
+use lb_blend::{
     message::{
         crypto::key_ext::Ed25519SecretKeyExt as _,
         encap::{
@@ -24,8 +24,8 @@ use logos_blockchain_blend::{
     },
     scheduling::membership::{Membership, Node},
 };
-use logos_blockchain_libp2p::{Protocol, SwarmEvent};
-use logos_blockchain_utils::blake_rng::BlakeRng;
+use lb_libp2p::{Protocol, SwarmEvent};
+use lb_utils::blake_rng::BlakeRng;
 use rand::SeedableRng as _;
 use tokio::{
     sync::{broadcast, mpsc},

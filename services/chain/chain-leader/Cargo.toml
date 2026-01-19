@@ -13,28 +13,28 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                                 = "0.1"
-futures                                     = { default-features = false, version = "0.3" }
-logos-blockchain-blend-service              = { workspace = true }
-logos-blockchain-chain-service              = { workspace = true }
-logos-blockchain-chain-service-common       = { workspace = true }
-logos-blockchain-core                       = { workspace = true }
-logos-blockchain-cryptarchia-engine         = { workspace = true }
-logos-blockchain-da-sampling-service        = { workspace = true }
-logos-blockchain-key-management-system-keys = { workspace = true }
-logos-blockchain-ledger                     = { features = ["serde"], workspace = true }
-logos-blockchain-services-utils             = { workspace = true }
-logos-blockchain-time-service               = { workspace = true }
-logos-blockchain-tx-service                 = { workspace = true }
-logos-blockchain-wallet-service             = { workspace = true }
-overwatch                                   = { workspace = true }
-serde                                       = { workspace = true }
-thiserror                                   = "1.0"
-tokio                                       = { default-features = false, version = "1" }
-tracing                                     = { workspace = true }
-tracing-futures                             = { default-features = false, version = "0.2" }
+async-trait                   = "0.1"
+futures                       = { default-features = false, version = "0.3" }
+lb-blend-service              = { workspace = true }
+lb-chain-service              = { workspace = true }
+lb-chain-service-common       = { workspace = true }
+lb-core                       = { workspace = true }
+lb-cryptarchia-engine         = { workspace = true }
+lb-da-sampling-service        = { workspace = true }
+lb-key-management-system-keys = { workspace = true }
+lb-ledger                     = { features = ["serde"], workspace = true }
+lb-services-utils             = { workspace = true }
+lb-time-service               = { workspace = true }
+lb-tx-service                 = { workspace = true }
+lb-wallet-service             = { workspace = true }
+overwatch                     = { workspace = true }
+serde                         = { workspace = true }
+thiserror                     = "1.0"
+tokio                         = { default-features = false, version = "1" }
+tracing                       = { workspace = true }
+tracing-futures               = { default-features = false, version = "0.2" }
 
 [features]
 default      = []
-libp2p       = ["logos-blockchain-blend-service/libp2p"]
-pol-dev-mode = ["logos-blockchain-core/pol-dev-mode"]
+libp2p       = ["lb-blend-service/libp2p"]
+pol-dev-mode = ["lb-core/pol-dev-mode"]

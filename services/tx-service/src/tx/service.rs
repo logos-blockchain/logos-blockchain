@@ -13,19 +13,19 @@ use std::{
 };
 
 use futures::StreamExt as _;
-use logos_blockchain_core::mantle::Transaction;
-use logos_blockchain_network_service::{NetworkService, message::BackendNetworkMsg};
-use logos_blockchain_storage_service::StorageService;
-use overwatch::{
-    OpaqueServiceResourcesHandle,
-    services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
-};
-use logos_blockchain_services_utils::{
+use lb_core::mantle::Transaction;
+use lb_network_service::{NetworkService, message::BackendNetworkMsg};
+use lb_services_utils::{
     overwatch::{
         JsonFileBackend, RecoveryOperator,
         recovery::operators::RecoveryBackend as RecoveryBackendTrait,
     },
     wait_until_services_are_ready,
+};
+use lb_storage_service::StorageService;
+use overwatch::{
+    OpaqueServiceResourcesHandle,
+    services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
 };
 use tokio::sync::{broadcast, oneshot};
 

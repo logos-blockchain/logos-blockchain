@@ -248,7 +248,7 @@ fn build_key_enum_impl_secured_key_method_sign_multiple(
     };
 
     let verify_same_variant = quote! {
-        if !logos_blockchain_utils::types::enumerated::is_same_variant(keys) {
+        if !lb_utils::types::enumerated::is_same_variant(keys) {
             let error_message = String::from("Multi-key signature requires all keys to have the same variant.");
             return Err(Self::Error::UnsupportedKey(error_message));
         }

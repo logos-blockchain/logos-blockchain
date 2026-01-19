@@ -1,4 +1,4 @@
-use logos_blockchain_blend::message::encap::encapsulated::EncapsulatedMessage;
+use lb_blend::message::encap::encapsulated::EncapsulatedMessage;
 use serde::{Deserialize, Serialize};
 
 /// A message that is handled by [`BlendService`].

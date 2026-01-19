@@ -1,11 +1,11 @@
 use core::hash::Hash;
 use std::num::NonZeroU64;
 
-use logos_blockchain_blend_message::{
+use lb_blend_message::{
     Error, PaddedPayloadBody, PayloadType, crypto::proofs::PoQVerificationInputsMinusSigningKey,
     input::EncapsulationInput,
 };
-use logos_blockchain_blend_proofs::quota::inputs::prove::{
+use lb_blend_proofs::quota::inputs::prove::{
     private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
 };
 
@@ -138,19 +138,19 @@ where
 mod test {
     use std::num::NonZeroU64;
 
-    use logos_blockchain_groth16::Field as _;
-    use logos_blockchain_key_management_system_keys::keys::{
+    use lb_groth16::Field as _;
+    use lb_key_management_system_keys::keys::{
         ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, UnsecuredEd25519Key,
     };
     use libp2p::{Multiaddr, PeerId};
-    use logos_blockchain_blend_message::crypto::{
+    use lb_blend_message::crypto::{
         key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
     };
-    use logos_blockchain_blend_proofs::quota::inputs::prove::{
+    use lb_blend_proofs::quota::inputs::prove::{
         private::ProofOfLeadershipQuotaInputs,
         public::{CoreInputs, LeaderInputs},
     };
-    use logos_blockchain_core::crypto::ZkHash;
+    use lb_core::crypto::ZkHash;
 
     use super::SessionCryptographicProcessor;
     use crate::{

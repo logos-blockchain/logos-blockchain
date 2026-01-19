@@ -13,33 +13,33 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                               = "0.1"
-bytes                                     = { workspace = true }
-either                                    = { default-features = false, version = "1.15.0" }
-futures                                   = { default-features = false, version = "0.3" }
-hex                                       = { default-features = false, version = "0.4.3" }
-libp2p-identity                           = { version = "0.2" }
-logos-blockchain-core                     = { workspace = true }
-logos-blockchain-da-network-core          = { workspace = true }
-logos-blockchain-da-network-service       = { workspace = true }
-logos-blockchain-kzgrs-backend            = { workspace = true }
-logos-blockchain-services-utils           = { workspace = true }
-logos-blockchain-storage-service          = { workspace = true }
-logos-blockchain-subnetworks-assignations = { workspace = true }
-logos-blockchain-tracing                  = { workspace = true }
-logos-blockchain-tx-service               = { workspace = true }
-overwatch                                 = { workspace = true }
-rand                                      = { workspace = true }
-serde                                     = { workspace = true }
-thiserror                                 = "1.0"
-tokio                                     = { default-features = false, features = ["test-util"], version = "1" }
-tokio-stream                              = { default-features = false, version = "0.1.15" }
-tracing                                   = { workspace = true }
+async-trait                 = "0.1"
+bytes                       = { workspace = true }
+either                      = { default-features = false, version = "1.15.0" }
+futures                     = { default-features = false, version = "0.3" }
+hex                         = { default-features = false, version = "0.4.3" }
+lb-core                     = { workspace = true }
+lb-da-network-core          = { workspace = true }
+lb-da-network-service       = { workspace = true }
+lb-kzgrs-backend            = { workspace = true }
+lb-services-utils           = { workspace = true }
+lb-storage-service          = { workspace = true }
+lb-subnetworks-assignations = { workspace = true }
+lb-tracing                  = { workspace = true }
+lb-tx-service               = { workspace = true }
+libp2p-identity             = { version = "0.2" }
+overwatch                   = { workspace = true }
+rand                        = { workspace = true }
+serde                       = { workspace = true }
+thiserror                   = "1.0"
+tokio                       = { default-features = false, features = ["test-util"], version = "1" }
+tokio-stream                = { default-features = false, version = "0.1.15" }
+tracing                     = { workspace = true }
 
 [dev-dependencies]
-logos-blockchain-kzgrs = { workspace = true }
+lb-kzgrs = { workspace = true }
 
 [features]
 default         = ["libp2p"]
 libp2p          = []
-rocksdb-backend = ["logos-blockchain-storage-service/rocksdb-backend"]
+rocksdb-backend = ["lb-storage-service/rocksdb-backend"]

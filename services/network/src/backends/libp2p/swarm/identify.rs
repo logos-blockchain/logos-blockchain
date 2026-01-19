@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use logos_blockchain_libp2p::libp2p::identify;
+use lb_libp2p::libp2p::identify;
 use rand::RngCore;
 
 use crate::backends::libp2p::swarm::SwarmHandler;

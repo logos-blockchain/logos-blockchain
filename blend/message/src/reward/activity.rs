@@ -1,6 +1,6 @@
 use derivative::Derivative;
-use logos_blockchain_blend_proofs::selection::inputs::VerifyInputs;
-use logos_blockchain_core::sdp::SessionNumber;
+use lb_blend_proofs::selection::inputs::VerifyInputs;
+use lb_core::sdp::SessionNumber;
 use serde::Serialize;
 use tracing::debug;
 
@@ -37,7 +37,7 @@ impl ActivityProof {
     }
 
     pub fn verify_and_build<ProofsVerifier>(
-        proof: &logos_blockchain_core::sdp::blend::ActivityProof,
+        proof: &lb_core::sdp::blend::ActivityProof,
         verifier: &ProofsVerifier,
         node_index: u64,
         membership_size: u64,
@@ -81,7 +81,7 @@ pub fn activity_threshold(token_count_bit_len: u64, network_size_bit_len: u64) -
         .into()
 }
 
-impl From<&ActivityProof> for logos_blockchain_core::sdp::blend::ActivityProof {
+impl From<&ActivityProof> for lb_core::sdp::blend::ActivityProof {
     fn from(proof: &ActivityProof) -> Self {
         Self {
             session: proof.session_number,

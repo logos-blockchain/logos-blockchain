@@ -3,7 +3,7 @@ pub mod service;
 use std::pin::Pin;
 
 use futures::Stream;
-use logos_blockchain_core::sdp::SessionNumber;
+use lb_core::sdp::SessionNumber;
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},

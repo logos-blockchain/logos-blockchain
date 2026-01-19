@@ -1,21 +1,21 @@
 use std::{collections::HashSet, fmt::Debug, hash::Hash, marker::PhantomData};
 
-use logos_blockchain_chain_service::{
+use lb_chain_service::{
     CryptarchiaInfo,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
-use logos_blockchain_cryptarchia_sync::GetTipResponse;
+use lb_cryptarchia_sync::GetTipResponse;
 use futures::StreamExt as _;
-use logos_blockchain_core::{
+use lb_core::{
     block::Block,
     da,
     header::HeaderId,
     mantle::{AuthenticatedMantleTx, TxHash},
 };
-use logos_blockchain_da_sampling_service::backend::DaSamplingServiceBackend;
+use lb_da_sampling_service::backend::DaSamplingServiceBackend;
 use overwatch::DynError;
 use tracing::{debug, error};
-use logos_blockchain_tx_service::backend::RecoverableMempool;
+use lb_tx_service::backend::RecoverableMempool;
 
 use crate::{
     Error as ChainError, IbdConfig, SamplingRelay, blob,
@@ -401,7 +401,7 @@ where
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Cryptarchia(#[from] logos_blockchain_chain_service::api::ApiError),
+    Cryptarchia(#[from] lb_chain_service::api::ApiError),
     #[error("Block provider error: {0}")]
     BlockProvider(DynError),
     #[error("All peers failed")]
@@ -419,17 +419,17 @@ mod tests {
         sync::Arc,
     };
 
-    use logos_blockchain_cryptarchia_engine::{EpochConfig, Slot};
-    use logos_blockchain_core::{
+    use lb_cryptarchia_engine::{EpochConfig, Slot};
+    use lb_core::{
         block::Proposal,
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use logos_blockchain_ledger::{
+    use lb_ledger::{
         LedgerState,
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
-    use logos_blockchain_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
-    use logos_blockchain_utils::math::NonNegativeF64;
+    use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
+    use lb_utils::math::NonNegativeF64;
     use overwatch::{
         overwatch::OverwatchHandle,
         services::{ServiceData, relay::OutboundRelay},
@@ -827,7 +827,7 @@ mod tests {
     }
 
     struct MockBlockProcessor {
-        cryptarchia: logos_blockchain_chain_service::Cryptarchia,
+        cryptarchia: lb_chain_service::Cryptarchia,
     }
 
     impl MockBlockProcessor {
@@ -1077,30 +1077,30 @@ mod tests {
         }
     }
 
-    fn new_cryptarchia() -> logos_blockchain_chain_service::Cryptarchia {
+    fn new_cryptarchia() -> lb_chain_service::Cryptarchia {
         let ledger_config = ledger_config();
-        logos_blockchain_chain_service::Cryptarchia::from_lib(
+        lb_chain_service::Cryptarchia::from_lib(
             [GENESIS_ID; 32].into(),
             LedgerState::from_utxos(empty(), &ledger_config),
             [GENESIS_ID; 32].into(),
             ledger_config,
-            logos_blockchain_cryptarchia_engine::State::Bootstrapping,
+            lb_cryptarchia_engine::State::Bootstrapping,
         )
     }
 
     #[must_use]
-    fn ledger_config() -> logos_blockchain_ledger::Config {
-        logos_blockchain_ledger::Config {
+    fn ledger_config() -> lb_ledger::Config {
+        lb_ledger::Config {
             epoch_config: EpochConfig {
                 epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
                 epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
             },
-            consensus_config: logos_blockchain_cryptarchia_engine::Config {
+            consensus_config: lb_cryptarchia_engine::Config {
                 security_param: NonZero::new(1).unwrap(),
                 active_slot_coeff: 1.0,
             },
-            sdp_config: logos_blockchain_ledger::mantle::sdp::Config {
+            sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [
                         (

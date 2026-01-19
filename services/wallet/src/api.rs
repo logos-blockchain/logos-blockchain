@@ -1,8 +1,8 @@
-use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
-use logos_blockchain_core::{
+use lb_core::{
     header::HeaderId,
     mantle::{Note, Utxo, Value, tx_builder::MantleTxBuilder},
 };
+use lb_key_management_system_service::keys::ZkPublicKey;
 use overwatch::{
     DynError,
     overwatch::OverwatchHandle,
@@ -78,7 +78,7 @@ where
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
-    ) -> Result<logos_blockchain_core::mantle::SignedMantleTx, DynError> {
+    ) -> Result<lb_core::mantle::SignedMantleTx, DynError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
@@ -102,7 +102,7 @@ where
         funding_pks: Vec<ZkPublicKey>,
         recipient_pk: ZkPublicKey,
         amount: Value,
-    ) -> Result<logos_blockchain_core::mantle::SignedMantleTx, DynError> {
+    ) -> Result<lb_core::mantle::SignedMantleTx, DynError> {
         let mantle_tx_builder =
             MantleTxBuilder::new().add_ledger_output(Note::new(amount, recipient_pk));
         self.fund_and_sign_tx(tip, mantle_tx_builder, change_pk, funding_pks)

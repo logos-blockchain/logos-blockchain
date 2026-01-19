@@ -5,7 +5,7 @@ use std::{
 
 use async_trait::async_trait;
 use multiaddr::Multiaddr;
-use logos_blockchain_core::{
+use lb_core::{
     da::blob::Share,
     sdp::{ProviderId, SessionNumber},
 };

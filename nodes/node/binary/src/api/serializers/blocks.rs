@@ -1,5 +1,5 @@
-use logos_blockchain_chain_service::Slot;
-use logos_blockchain_core::{
+use lb_chain_service::Slot;
+use lb_core::{
     block::Block,
     header::{ContentId, Header, HeaderId},
     mantle::SignedMantleTx,

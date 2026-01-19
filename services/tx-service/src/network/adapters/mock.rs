@@ -1,6 +1,6 @@
 use futures::{Stream, StreamExt as _};
-use logos_blockchain_core::mantle::mock::{MockTransaction, MockTxId};
-use logos_blockchain_network_service::{
+use lb_core::mantle::mock::{MockTransaction, MockTxId};
+use lb_network_service::{
     NetworkService,
     backends::mock::{Mock, MockBackendMessage, MockContentTopic, MockMessage, NetworkEvent},
     message::NetworkMsg,

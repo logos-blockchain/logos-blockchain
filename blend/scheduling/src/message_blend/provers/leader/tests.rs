@@ -1,6 +1,6 @@
 use core::time::Duration;
 
-use logos_blockchain_blend_proofs::selection::inputs::VerifyInputs;
+use lb_blend_proofs::selection::inputs::VerifyInputs;
 use test_log::test;
 use tokio::time::timeout;
 

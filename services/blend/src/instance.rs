@@ -3,8 +3,8 @@ use std::{
     hash::Hash,
 };
 
-use logos_blockchain_blend::scheduling::{membership::Membership, session::SessionEvent};
-use logos_blockchain_network_service::NetworkService;
+use lb_blend::scheduling::{membership::Membership, session::SessionEvent};
+use lb_network_service::NetworkService;
 use overwatch::{
     overwatch::OverwatchHandle,
     services::{AsServiceId, ServiceData},
@@ -302,10 +302,10 @@ impl Mode {
 mod tests {
     use std::time::Duration;
 
-    use logos_blockchain_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+    use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
     use libp2p::Multiaddr;
-    use logos_blockchain_blend::scheduling::membership::Node;
-    use logos_blockchain_network_service::config::NetworkConfig;
+    use lb_blend::scheduling::membership::Node;
+    use lb_network_service::config::NetworkConfig;
     use overwatch::{
         DynError, OpaqueServiceResourcesHandle,
         overwatch::OverwatchRunner,

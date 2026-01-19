@@ -1,5 +1,5 @@
-use logos_blockchain_kzgrs_backend::common::share::DaShare;
-use logos_blockchain_core::{
+use lb_kzgrs_backend::common::share::DaShare;
+use lb_core::{
     da::{BlobId, blob},
     mantle::{SignedMantleTx, ops::Op},
 };

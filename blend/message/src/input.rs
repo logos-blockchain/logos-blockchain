@@ -1,6 +1,6 @@
-use logos_blockchain_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
-use logos_blockchain_blend_crypto::keys::SharedKey;
-use logos_blockchain_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+use lb_blend_crypto::keys::SharedKey;
+use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 
 use crate::crypto::key_ext::{Ed25519PublicKeyExt as _, Ed25519SecretKeyExt as _};
 

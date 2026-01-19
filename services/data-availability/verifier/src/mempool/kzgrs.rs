@@ -1,13 +1,13 @@
 use std::{fmt::Debug, marker::PhantomData};
 
-use logos_blockchain_core::{
+use lb_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction as _, TxHash},
 };
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
-use logos_blockchain_tx_service::{
+use lb_tx_service::{
     MempoolMsg, TxMempoolService,
     backend::{MemPool, RecoverableMempool},
     network::NetworkAdapter as MempoolNetworkAdapter,

@@ -1,10 +1,10 @@
 use std::collections::{BTreeSet, HashMap};
 
-use logos_blockchain_chain_broadcast_service::BlockBroadcastService;
+use lb_chain_broadcast_service::BlockBroadcastService;
 use futures::StreamExt as _;
 use libp2p::{Multiaddr, PeerId, core::signed_envelope::DecodingError};
-use logos_blockchain_core::sdp::{Locator, ProviderId, ProviderInfo, SessionNumber};
-use logos_blockchain_libp2p::ed25519;
+use lb_core::sdp::{Locator, ProviderId, ProviderInfo, SessionNumber};
+use lb_libp2p::ed25519;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use tokio::sync::oneshot;
 
@@ -33,7 +33,7 @@ where
     async fn subscribe(&self) -> Result<PeerMultiaddrStream<Self::Id>, MembershipAdapterError> {
         let (sender, receiver) = oneshot::channel();
         self.relay
-            .send(logos_blockchain_chain_broadcast_service::BlockBroadcastMsg::SubscribeDASession {
+            .send(lb_chain_broadcast_service::BlockBroadcastMsg::SubscribeDASession {
                 result_sender: sender,
             })
             .await
@@ -46,7 +46,7 @@ where
     }
 }
 
-fn session_to_peers(session: logos_blockchain_chain_broadcast_service::SessionUpdate) -> SubnetworkPeers<PeerId> {
+fn session_to_peers(session: lb_chain_broadcast_service::SessionUpdate) -> SubnetworkPeers<PeerId> {
     let mut peers = HashMap::new();
     let mut provider_mappings = HashMap::new();
 

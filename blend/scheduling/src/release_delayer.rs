@@ -174,7 +174,7 @@ mod tests {
     use std::num::NonZeroU64;
 
     use futures::{StreamExt as _, io::empty, task::noop_waker_ref};
-    use logos_blockchain_utils::blake_rng::BlakeRng;
+    use lb_utils::blake_rng::BlakeRng;
     use rand::SeedableRng as _;
     use tokio_stream::iter;
 

@@ -4,13 +4,13 @@ use std::{
     sync::Arc,
 };
 
-use logos_blockchain_kzgrs_backend::common::{
+use lb_kzgrs_backend::common::{
     ShareIndex,
     share::{DaShare, DaSharesCommitments},
 };
-use logos_blockchain_core::da::BlobId;
-use logos_blockchain_da_network_core::SubnetworkId;
-use logos_blockchain_tracing::info_with_id;
+use lb_core::da::BlobId;
+use lb_da_network_core::SubnetworkId;
+use lb_tracing::info_with_id;
 use serde::{Deserialize, Serialize};
 use tokio::{
     time,
@@ -156,9 +156,9 @@ impl DaSamplingServiceBackend for KzgrsSamplingBackend {
 mod test {
     use std::collections::HashSet;
 
-    use logos_blockchain_kzgrs::Proof;
-    use logos_blockchain_kzgrs_backend::common::{Column, share::DaShare};
-    use logos_blockchain_core::da::BlobId;
+    use lb_kzgrs::Proof;
+    use lb_kzgrs_backend::common::{Column, share::DaShare};
+    use lb_core::da::BlobId;
     use rand::prelude::*;
     use tokio::time::Duration;
 

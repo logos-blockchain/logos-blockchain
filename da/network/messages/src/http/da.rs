@@ -1,6 +1,6 @@
 use std::{collections::HashSet, hash::Hash, ops::Range};
 
-use logos_blockchain_core::da::blob::{metadata::Metadata, Share};
+use lb_core::da::blob::{metadata::Metadata, Share};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 // Shared types for http requests. Probably better part of upcoming

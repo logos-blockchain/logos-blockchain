@@ -1,8 +1,8 @@
 use std::{collections::HashSet, time::SystemTime};
 
-use logos_blockchain_groth16::{Field as _, Fr};
-use logos_blockchain_core::header::{Header, HeaderId};
-use logos_blockchain_ledger::LedgerState;
+use lb_groth16::{Field as _, Fr};
+use lb_core::header::{Header, HeaderId};
+use lb_ledger::LedgerState;
 use overwatch::{DynError, services::state::ServiceState};
 use serde::{Deserialize, Serialize};
 
@@ -96,7 +96,7 @@ impl ServiceState for CryptarchiaConsensusState {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LastEngineState {
     pub timestamp: SystemTime,
-    pub state: logos_blockchain_cryptarchia_engine::State,
+    pub state: lb_cryptarchia_engine::State,
 }
 
 #[cfg(test)]
@@ -106,10 +106,10 @@ mod tests {
         sync::Arc,
     };
 
-    use logos_blockchain_cryptarchia_engine::State::Bootstrapping;
-    use logos_blockchain_core::sdp::{MinStake, ServiceParameters, ServiceType};
-    use logos_blockchain_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
-    use logos_blockchain_utils::math::NonNegativeF64;
+    use lb_cryptarchia_engine::State::Bootstrapping;
+    use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
+    use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
+    use lb_utils::math::NonNegativeF64;
 
     use super::*;
 
@@ -119,18 +119,18 @@ mod tests {
         let genesis_header_id: HeaderId = [0; 32].into();
         // We don't prune fork stemming from the block before the current tip.
         let security_param: NonZero<u32> = 2.try_into().unwrap();
-        let cryptarchia_engine_config = logos_blockchain_cryptarchia_engine::Config {
+        let cryptarchia_engine_config = lb_cryptarchia_engine::Config {
             security_param,
             active_slot_coeff: 0f64,
         };
-        let ledger_config = logos_blockchain_ledger::Config {
-            epoch_config: logos_blockchain_cryptarchia_engine::EpochConfig {
+        let ledger_config = lb_ledger::Config {
+            epoch_config: lb_cryptarchia_engine::EpochConfig {
                 epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
                 epoch_period_nonce_buffer: 1.try_into().unwrap(),
                 epoch_period_nonce_stabilization: 1.try_into().unwrap(),
             },
             consensus_config: cryptarchia_engine_config,
-            sdp_config: logos_blockchain_ledger::mantle::sdp::Config {
+            sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [
                         (
@@ -174,7 +174,7 @@ mod tests {
         let (cryptarchia_engine, pruned_blocks) = {
             // Boostrapping mode since we are pursposefully adding old forks to test the
             // recovery mechanism.
-            let mut cryptarchia = logos_blockchain_cryptarchia_engine::Cryptarchia::<_>::from_lib(
+            let mut cryptarchia = lb_cryptarchia_engine::Cryptarchia::<_>::from_lib(
                 genesis_header_id,
                 cryptarchia_engine_config,
                 Bootstrapping,
@@ -226,7 +226,7 @@ mod tests {
         };
 
         // Empty ledger state.
-        let ledger_state = logos_blockchain_ledger::Ledger::new(
+        let ledger_state = lb_ledger::Ledger::new(
             cryptarchia_engine.lib(),
             LedgerState::from_utxos([], &ledger_config),
             ledger_config,

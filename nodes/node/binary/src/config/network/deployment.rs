@@ -1,4 +1,4 @@
-use logos_blockchain_libp2p::protocol_name::StreamProtocol;
+use lb_libp2p::protocol_name::StreamProtocol;
 use serde::{Deserialize, Serialize};
 
 use crate::config::deployment::WellKnownDeployment;

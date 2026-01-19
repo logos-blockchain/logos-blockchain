@@ -9,16 +9,16 @@ use futures::{
     Stream, StreamExt as _,
     stream::{AbortHandle, Abortable},
 };
-use logos_blockchain_kzgrs_backend::common::share::DaShare;
+use lb_kzgrs_backend::common::share::DaShare;
 use libp2p::PeerId;
 use log::error;
-use logos_blockchain_core::{
+use lb_core::{
     da::BlobId,
     header::HeaderId,
     mantle::SignedMantleTx,
     sdp::{ProviderId, SessionNumber},
 };
-use logos_blockchain_da_network_core::{
+use lb_da_network_core::{
     SubnetworkId,
     maintenance::{balancer::ConnectionBalancerCommand, monitor::ConnectionMonitorCommand},
     protocols::{
@@ -30,11 +30,11 @@ use logos_blockchain_da_network_core::{
         validator::{CommitmentsArgs, SampleArgs, SwarmSettings},
     },
 };
-use logos_blockchain_libp2p::ed25519;
-use logos_blockchain_tracing::info_with_id;
+use lb_libp2p::ed25519;
+use lb_tracing::info_with_id;
 use overwatch::{overwatch::handle::OverwatchHandle, services::state::NoState};
 use serde::{Deserialize, Serialize};
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_subnetworks_assignations::MembershipHandler;
 use tokio::sync::{broadcast, mpsc::UnboundedSender, oneshot};
 use tokio_stream::wrappers::{
     BroadcastStream, UnboundedReceiverStream, errors::BroadcastStreamRecvError,

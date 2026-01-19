@@ -1,6 +1,6 @@
 use core::net::SocketAddr;
 
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
+use lb_core::mantle::ops::channel::ChannelId;
 use owo_colors::OwoColorize as _;
 use url::Url;
 

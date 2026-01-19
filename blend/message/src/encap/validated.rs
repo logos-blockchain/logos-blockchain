@@ -1,6 +1,6 @@
-use logos_blockchain_key_management_system_keys::keys::UnsecuredEd25519Key;
-use logos_blockchain_blend_crypto::{keys::X25519PrivateKey, random_sized_bytes};
-use logos_blockchain_blend_proofs::{quota::VerifiedProofOfQuota, selection::inputs::VerifyInputs};
+use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
+use lb_blend_crypto::{keys::X25519PrivateKey, random_sized_bytes};
+use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::inputs::VerifyInputs};
 use serde::{Deserialize, Serialize};
 
 use crate::{

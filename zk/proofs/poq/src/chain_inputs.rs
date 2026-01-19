@@ -1,6 +1,6 @@
-use logos_blockchain_groth16::{Fr, Groth16Input, Groth16InputDeser};
+use lb_groth16::{Fr, Groth16Input, Groth16InputDeser};
 use num_bigint::BigUint;
-use logos_blockchain_pol::{P, compute_lottery_values};
+use lb_pol::{P, compute_lottery_values};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

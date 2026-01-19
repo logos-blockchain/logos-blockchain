@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use logos_blockchain_key_management_system_keys::keys::Ed25519Signature;
-use logos_blockchain_core::mantle::{
+use lb_key_management_system_keys::keys::Ed25519Signature;
+use lb_core::mantle::{
     TxHash,
     ops::channel::{
         ChannelId, Ed25519PublicKey as PublicKey, MsgId, inscribe::InscriptionOp,

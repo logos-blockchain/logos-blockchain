@@ -4,19 +4,19 @@ use std::{
     sync::LazyLock,
 };
 
-use logos_blockchain_circuits_utils::logos_blockchain_circuits_dir;
+use lb_circuits_utils::lb_circuits_dir;
 use tempfile::NamedTempFile;
 
 const BINARY_NAME: &str = "verifier";
 
-/// Path to the verifier binary in the `LOGOS_BLOCKCHAIN_CIRCUITS` directory.
+/// Path to the verifier binary in the `lb_CIRCUITS` directory.
 ///
 /// # Panics
 ///
 /// Panics if the verifier binary is not found at the expected path.
 fn verifier_binary() -> PathBuf {
     // Get the logos-blockchain-circuits directory
-    let circuits_dir = logos_blockchain_circuits_dir();
+    let circuits_dir = lb_circuits_dir();
 
     // Check for verifier binary at the root of logos-blockchain-circuits directory
     let verifier_path = circuits_dir.join(BINARY_NAME);

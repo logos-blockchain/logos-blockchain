@@ -5,7 +5,7 @@ mod token;
 use std::collections::HashSet;
 
 pub use activity::ActivityProof;
-use logos_blockchain_core::sdp::SessionNumber;
+use lb_core::sdp::SessionNumber;
 use serde::{Deserialize, Serialize};
 pub use session::SessionInfo;
 pub use token::{BlendingToken, HammingDistance};
@@ -113,12 +113,12 @@ pub const fn evaluate_hamming_distance(distance: u64, activity_threshold: u64) -
 
 #[cfg(test)]
 mod tests {
-    use logos_blockchain_key_management_system_keys::keys::Ed25519Key;
-    use logos_blockchain_blend_proofs::{
+    use lb_key_management_system_keys::keys::Ed25519Key;
+    use lb_blend_proofs::{
         quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
         selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
     };
-    use logos_blockchain_core::crypto::ZkHash;
+    use lb_core::crypto::ZkHash;
 
     use super::*;
 

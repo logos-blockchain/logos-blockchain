@@ -2,7 +2,7 @@
 //! are preloaded from config file.
 use std::collections::HashMap;
 
-use logos_blockchain_key_management_system_keys::keys::{
+use lb_key_management_system_keys::keys::{
     Key, KeyOperators, errors::KeyError, secured_key::SecuredKey,
 };
 use serde::Deserialize;
@@ -120,7 +120,7 @@ mod tests {
     use std::marker::PhantomData;
 
     use bytes::{Bytes as RawBytes, Bytes};
-    use logos_blockchain_key_management_system_keys::keys::{
+    use lb_key_management_system_keys::keys::{
         Ed25519Key, PayloadEncoding, ZkKey, secured_key::SecureKeyOperator,
     };
     use num_bigint::BigUint;

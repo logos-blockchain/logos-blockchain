@@ -8,8 +8,8 @@ use std::{
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt as _, stream};
-use logos_blockchain_core::{block::Block, da::blob::Share, header::HeaderId};
-use logos_blockchain_storage_service::{
+use lb_core::{block::Block, da::blob::Share, header::HeaderId};
+use lb_storage_service::{
     StorageMsg, StorageService, api::da::DaConverter, backends::rocksdb::RocksBackend,
 };
 use overwatch::{

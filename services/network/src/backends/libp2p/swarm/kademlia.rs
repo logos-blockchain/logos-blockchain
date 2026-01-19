@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use logos_blockchain_libp2p::{
+use lb_libp2p::{
     Multiaddr, PeerId, Protocol,
     libp2p::kad::{self, PeerInfo, ProgressStep, QueryId},
 };

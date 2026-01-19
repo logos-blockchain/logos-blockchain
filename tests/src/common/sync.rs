@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use logos_blockchain_chain_service::CryptarchiaInfo;
+use lb_chain_service::CryptarchiaInfo;
 use futures_util::{StreamExt as _, stream};
 use tokio::time::timeout;
 
@@ -8,7 +8,7 @@ use crate::nodes::validator::Validator;
 
 pub async fn wait_for_validators_mode_and_height(
     validators: &[Validator],
-    mode: logos_blockchain_cryptarchia_engine::State,
+    mode: lb_cryptarchia_engine::State,
     min_height: u64,
     timeout_duration: Duration,
 ) {
@@ -40,7 +40,7 @@ pub async fn wait_for_validators_mode_and_height(
 
 pub async fn wait_for_validators_mode(
     validators: &[&Validator],
-    mode: logos_blockchain_cryptarchia_engine::State,
+    mode: lb_cryptarchia_engine::State,
     timeout_duration: Duration,
 ) {
     timeout(timeout_duration, async {

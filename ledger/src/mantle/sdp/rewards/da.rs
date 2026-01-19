@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
-use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
-use logos_blockchain_core::{
+use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_core::{
     block::BlockNumber,
     mantle::Utxo,
     sdp::{ActivityMetadata, ProviderId, ServiceParameters, ServiceType},
@@ -252,7 +252,7 @@ impl super::Rewards for Rewards {
 
 #[cfg(test)]
 mod tests {
-    use logos_blockchain_core::sdp::da;
+    use lb_core::sdp::da;
 
     use super::*;
     use crate::mantle::sdp::rewards::{

@@ -2,10 +2,10 @@ use core::{num::NonZeroU64, ops::RangeInclusive, time::Duration};
 use std::hash::Hash;
 
 use futures::StreamExt as _;
-use logos_blockchain_blend::{
+use lb_blend::{
     network::core::with_core::behaviour::IntervalStreamProvider, scheduling::membership::Membership,
 };
-use logos_blockchain_utils::math::NonNegativeF64;
+use lb_utils::math::NonNegativeF64;
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::core::{backends::libp2p::Libp2pBlendBackendSettings, settings::BlendConfig};

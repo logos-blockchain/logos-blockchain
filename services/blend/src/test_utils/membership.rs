@@ -1,8 +1,8 @@
 use std::hash::Hash;
 
-use logos_blockchain_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use libp2p::Multiaddr;
-use logos_blockchain_blend::scheduling::membership::{Membership, Node};
+use lb_blend::scheduling::membership::{Membership, Node};
 
 pub fn membership<NodeId>(ids: &[NodeId], local_id: NodeId) -> Membership<NodeId>
 where

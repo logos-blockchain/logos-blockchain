@@ -1,8 +1,8 @@
 use std::{env, fs, net::Ipv4Addr, process};
 
-use logos_blockchain_cfgsync::client::get_config;
-use logos_blockchain_executor::config::Config as ExecutorConfig;
-use logos_blockchain_node::Config as ValidatorConfig;
+use lb_cfgsync::client::get_config;
+use lb_executor::config::Config as ExecutorConfig;
+use lb_node::Config as ValidatorConfig;
 use serde::{Serialize, de::DeserializeOwned};
 
 fn parse_ip(ip_str: &str) -> Ipv4Addr {

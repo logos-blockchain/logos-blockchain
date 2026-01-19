@@ -1,7 +1,7 @@
 use core::mem::swap;
 
-use logos_blockchain_key_management_system_keys::keys::Ed25519PublicKey;
-use logos_blockchain_blend_proofs::{
+use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use lb_blend_proofs::{
     quota::{
         self, ProofOfQuota, VerifiedProofOfQuota,
         inputs::prove::{
@@ -29,7 +29,7 @@ pub struct PoQVerificationInputsMinusSigningKey {
 #[cfg(test)]
 impl Default for PoQVerificationInputsMinusSigningKey {
     fn default() -> Self {
-        use logos_blockchain_core::crypto::ZkHash;
+        use lb_core::crypto::ZkHash;
 
         Self {
             session: 1,

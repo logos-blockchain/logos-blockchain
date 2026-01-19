@@ -13,7 +13,7 @@ serde_bytes_newtype!(ChannelId, 32);
 pub struct MsgId([u8; 32]);
 serde_bytes_newtype!(MsgId, 32);
 
-pub type Ed25519PublicKey = logos_blockchain_key_management_system_keys::keys::Ed25519PublicKey;
+pub type Ed25519PublicKey = lb_key_management_system_keys::keys::Ed25519PublicKey;
 
 impl MsgId {
     #[must_use]

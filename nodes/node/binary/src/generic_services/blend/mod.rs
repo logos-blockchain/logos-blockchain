@@ -6,23 +6,23 @@ use core::{
 };
 
 use async_trait::async_trait;
-use logos_blockchain_chain_broadcast_service::BlockBroadcastService;
-use logos_blockchain_chain_leader_service::LeaderMsg;
+use lb_chain_broadcast_service::BlockBroadcastService;
+use lb_chain_leader_service::LeaderMsg;
 use futures::{Stream, StreamExt as _};
-use logos_blockchain_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
-use logos_blockchain_blend_service::{
+use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
+use lb_blend_service::{
     core::kms::PreloadKMSBackendCorePoQGenerator,
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     membership::service::Adapter,
 };
-use logos_blockchain_core::crypto::ZkHash;
-use logos_blockchain_da_sampling_service::network::NetworkAdapter;
-use logos_blockchain_libp2p::PeerId;
-use logos_blockchain_time_service::backends::NtpTimeBackend;
+use lb_core::crypto::ZkHash;
+use lb_da_sampling_service::network::NetworkAdapter;
+use lb_libp2p::PeerId;
+use lb_time_service::backends::NtpTimeBackend;
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
-use logos_blockchain_pol::{PolChainInputsData, PolWalletInputsData, PolWitnessInputsData};
-use logos_blockchain_poq::AGED_NOTE_MERKLE_TREE_HEIGHT;
-use logos_blockchain_services_utils::wait_until_services_are_ready;
+use lb_pol::{PolChainInputsData, PolWalletInputsData, PolWitnessInputsData};
+use lb_poq::AGED_NOTE_MERKLE_TREE_HEIGHT;
+use lb_services_utils::wait_until_services_are_ready;
 use tokio::sync::oneshot::channel;
 use tokio_stream::wrappers::WatchStream;
 
@@ -36,10 +36,10 @@ mod proofs;
 pub type BlendMembershipAdapter<RuntimeServiceId> =
     Adapter<BlockBroadcastService<RuntimeServiceId>, PeerId>;
 pub type BlendCoreService<SamplingAdapter, RuntimeServiceId> =
-    logos_blockchain_blend_service::core::BlendService<
-        logos_blockchain_blend_service::core::backends::libp2p::Libp2pBlendBackend,
+    lb_blend_service::core::BlendService<
+        lb_blend_service::core::backends::libp2p::Libp2pBlendBackend,
         PeerId,
-        logos_blockchain_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
+        lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
         BlendMembershipAdapter<RuntimeServiceId>,
         SdpService<RuntimeServiceId>,
         CoreProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>,
@@ -49,10 +49,10 @@ pub type BlendCoreService<SamplingAdapter, RuntimeServiceId> =
         PolInfoProvider<SamplingAdapter>,
         RuntimeServiceId,
     >;
-pub type BlendEdgeService<SamplingAdapter, RuntimeServiceId> = logos_blockchain_blend_service::edge::BlendService<
-        logos_blockchain_blend_service::edge::backends::libp2p::Libp2pBlendBackend,
+pub type BlendEdgeService<SamplingAdapter, RuntimeServiceId> = lb_blend_service::edge::BlendService<
+        lb_blend_service::edge::backends::libp2p::Libp2pBlendBackend,
         PeerId,
-        <logos_blockchain_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as logos_blockchain_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::BroadcastSettings,
+        <lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::BroadcastSettings,
         BlendMembershipAdapter<RuntimeServiceId>,
         EdgeProofsGenerator,
         NtpTimeBackend,
@@ -60,7 +60,7 @@ pub type BlendEdgeService<SamplingAdapter, RuntimeServiceId> = logos_blockchain_
         PolInfoProvider<SamplingAdapter>,
         RuntimeServiceId
     >;
-pub type BlendService<SamplingAdapter, RuntimeServiceId> = logos_blockchain_blend_service::BlendService<
+pub type BlendService<SamplingAdapter, RuntimeServiceId> = lb_blend_service::BlendService<
     BlendCoreService<SamplingAdapter, RuntimeServiceId>,
     BlendEdgeService<SamplingAdapter, RuntimeServiceId>,
     RuntimeServiceId,
@@ -93,7 +93,7 @@ where
     async fn subscribe(
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     ) -> Option<Self::Stream> {
-        use logos_blockchain_groth16::Field as _;
+        use lb_groth16::Field as _;
 
         wait_until_services_are_ready!(
             overwatch_handle,

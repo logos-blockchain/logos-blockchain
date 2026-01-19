@@ -17,15 +17,15 @@ ignored = ["logos-blockchain-utils"]
 workspace = true
 
 [dependencies]
-cfg_eval               = { optional = true, version = "0.1" }
-logos-blockchain-utils = { features = ["time"], optional = true, workspace = true }
-serde                  = { workspace = true, optional = true }
-serde_with             = { features = ["macros"], optional = true, workspace = true }
-thiserror              = "1"
-time                   = { default-features = false, version = "0.3" }
-tokio                  = { default-features = false, features = ["time"], optional = true, version = "1" }
-tracing                = { workspace = true }
+cfg_eval   = { optional = true, version = "0.1" }
+lb-utils   = { features = ["time"], optional = true, workspace = true }
+serde      = { workspace = true, optional = true }
+serde_with = { features = ["macros"], optional = true, workspace = true }
+thiserror  = "1"
+time       = { default-features = false, version = "0.3" }
+tokio      = { default-features = false, features = ["time"], optional = true, version = "1" }
+tracing    = { workspace = true }
 
 [features]
-serde = ["dep:cfg_eval", "dep:logos-blockchain-utils", "dep:serde", "dep:serde_with"]
+serde = ["dep:cfg_eval", "dep:lb-utils", "dep:serde", "dep:serde_with"]
 tokio = ["dep:tokio"]

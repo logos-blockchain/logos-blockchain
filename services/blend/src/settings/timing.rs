@@ -12,7 +12,7 @@ pub struct TimingSettings {
     /// `|I|`: length of an interval in terms of rounds.
     pub rounds_per_interval: NonZeroU64,
     #[serde_as(
-        as = "logos_blockchain_utils::bounded_duration::MinimalBoundedDuration<1, logos_blockchain_utils::bounded_duration::SECOND>"
+        as = "lb_utils::bounded_duration::MinimalBoundedDuration<1, lb_utils::bounded_duration::SECOND>"
     )]
     /// Duration of a round.
     pub round_duration: Duration,

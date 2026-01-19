@@ -1,5 +1,5 @@
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SignatureError, Verifier as _, VerifyingKey};
-use logos_blockchain_utils::serde::{deserialize_bytes_array, serialize_bytes_array};
+use lb_utils::serde::{deserialize_bytes_array, serialize_bytes_array};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 
 use crate::keys::Ed25519Signature;

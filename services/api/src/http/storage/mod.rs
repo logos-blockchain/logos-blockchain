@@ -6,8 +6,8 @@ use std::{
 
 use bytes::Bytes;
 use futures::Stream;
-use logos_blockchain_core::{block::Block, da::blob::Share, header::HeaderId};
-use logos_blockchain_storage_service::{
+use lb_core::{block::Block, da::blob::Share, header::HeaderId};
+use lb_storage_service::{
     StorageService,
     api::da::DaConverter,
     backends::{StorageBackend, rocksdb::RocksBackend},

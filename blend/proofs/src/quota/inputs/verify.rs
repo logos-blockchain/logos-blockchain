@@ -1,5 +1,5 @@
-use logos_blockchain_groth16::fr_from_bytes;
-use logos_blockchain_poq::{PoQVerifierInput, PoQVerifierInputData};
+use lb_groth16::fr_from_bytes;
+use lb_poq::{PoQVerifierInput, PoQVerifierInputData};
 
 use crate::{
     ZkHash,

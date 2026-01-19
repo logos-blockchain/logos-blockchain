@@ -1,6 +1,6 @@
 use core::num::NonZeroU64;
 
-use logos_blockchain_blend::scheduling::message_blend::crypto::SessionCryptographicProcessorSettings;
+use lb_blend::scheduling::message_blend::crypto::SessionCryptographicProcessorSettings;
 
 use crate::{core::settings::CoverTrafficSettings, settings::TimingSettings};
 

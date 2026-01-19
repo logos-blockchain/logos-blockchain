@@ -5,7 +5,7 @@ use std::{
 };
 
 use counter::Counter;
-use logos_blockchain_utils::fisheryates::FisherYates;
+use lb_utils::fisheryates::FisherYates;
 use rand::RngCore;
 
 use super::{participant::Participant, subnetwork::Subnetwork};

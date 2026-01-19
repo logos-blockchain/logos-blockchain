@@ -9,25 +9,25 @@ use core::fmt::Debug;
 use std::{fmt::Display, hash::Hash, time::Duration};
 
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
-use logos_blockchain_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
-pub use logos_blockchain_cryptarchia_engine::{Epoch, Slot};
+use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+pub use lb_cryptarchia_engine::{Epoch, Slot};
 use futures::StreamExt as _;
 use network::NetworkAdapter;
-use logos_blockchain_core::{
+use lb_core::{
     block::{Block, Proposal},
     da::{self},
     header::HeaderId,
     mantle::{AuthenticatedMantleTx, Transaction, TxHash, genesis_tx::GenesisTx, ops::Op},
     sdp::ServiceType,
 };
-use logos_blockchain_da_sampling_service::{
+use lb_da_sampling_service::{
     DaSamplingService, DaSamplingServiceMsg, backend::DaSamplingServiceBackend,
     mempool::DaMempoolAdapter,
 };
-pub use logos_blockchain_ledger::EpochState;
-use logos_blockchain_ledger::LedgerState;
-use logos_blockchain_network_service::NetworkService;
-use logos_blockchain_time_service::TimeService;
+pub use lb_ledger::EpochState;
+use lb_ledger::LedgerState;
+use lb_network_service::NetworkService;
+use lb_time_service::TimeService;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -37,11 +37,11 @@ use overwatch::{
     },
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use logos_blockchain_services_utils::wait_until_services_are_ready;
+use lb_services_utils::wait_until_services_are_ready;
 use thiserror::Error;
 use tracing::{Level, debug, error, info, instrument, span};
 use tracing_futures::Instrument as _;
-use logos_blockchain_tx_service::{
+use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
 };
@@ -67,9 +67,9 @@ pub(crate) const LOG_TARGET: &str = "cryptarchia::service";
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
-    Cryptarchia(#[from] logos_blockchain_chain_service::api::ApiError),
+    Cryptarchia(#[from] lb_chain_service::api::ApiError),
     #[error("Serialization error: {0}")]
-    Serialisation(#[from] logos_blockchain_core::codec::Error),
+    Serialisation(#[from] lb_core::codec::Error),
     #[error("Invalid block: {0}")]
     InvalidBlock(String),
     #[error("Mempool error: {0}")]
@@ -87,7 +87,7 @@ pub struct ChainNetworkSettings<NodeId, NetworkAdapterSettings>
 where
     NodeId: Clone + Eq + Hash,
 {
-    pub config: logos_blockchain_ledger::Config,
+    pub config: lb_ledger::Config,
     pub network_adapter_settings: NetworkAdapterSettings,
     pub bootstrap: BootstrapConfig<NodeId>,
     pub sync: SyncConfig,
@@ -136,9 +136,9 @@ pub struct ChainNetwork<
     SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send,
     SamplingBackend::Settings: Clone,
     SamplingBackend::Share: Debug + 'static,
-    SamplingNetworkAdapter: logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
-    TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
+    SamplingNetworkAdapter: lb_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
+    SamplingStorage: lb_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
+    TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -185,9 +185,9 @@ where
     SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send,
     SamplingBackend::Settings: Clone,
     SamplingBackend::Share: Debug + 'static,
-    SamplingNetworkAdapter: logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
-    TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
+    SamplingNetworkAdapter: lb_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
+    SamplingStorage: lb_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
+    TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
 {
     type Settings = ChainNetworkSettings<NetAdapter::PeerId, NetAdapter::Settings>;
@@ -255,9 +255,9 @@ where
     SamplingBackend::Settings: Clone,
     SamplingBackend::Share: Debug + Send + 'static,
     SamplingNetworkAdapter:
-        logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId> + Send + Sync,
-    SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync,
-    TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
+        lb_da_sampling_service::network::NetworkAdapter<RuntimeServiceId> + Send + Sync,
+    SamplingStorage: lb_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync,
+    TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
     RuntimeServiceId: Debug
         + Send
@@ -515,9 +515,9 @@ where
     SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send,
     SamplingBackend::Settings: Clone,
     SamplingBackend::Share: Debug + 'static,
-    SamplingNetworkAdapter: logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
-    TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
+    SamplingNetworkAdapter: lb_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
+    SamplingStorage: lb_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
+    TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
     RuntimeServiceId: Display + AsServiceId<Self> + Sync,
 {
@@ -580,7 +580,7 @@ where
         RuntimeServiceId: Send + Sync + 'static,
     {
         match err {
-            Error::Cryptarchia(logos_blockchain_chain_service::api::ApiError::ParentMissing { parent, info }) => {
+            Error::Cryptarchia(lb_chain_service::api::ApiError::ParentMissing { parent, info }) => {
                 orphan_downloader.enqueue_orphan(block_id, info.tip, info.lib);
 
                 error!(

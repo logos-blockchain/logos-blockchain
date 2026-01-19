@@ -10,7 +10,7 @@ use std::{
     pin::Pin,
 };
 
-use logos_blockchain_cryptarchia_engine::{Epoch, EpochConfig, Slot, time::SlotConfig};
+use lb_cryptarchia_engine::{Epoch, EpochConfig, Slot, time::SlotConfig};
 use futures::{Stream, StreamExt as _};
 use log::error;
 use overwatch::{

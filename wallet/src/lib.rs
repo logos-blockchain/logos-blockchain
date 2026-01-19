@@ -7,8 +7,8 @@ use std::{
 };
 
 pub use error::WalletError;
-use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
-use logos_blockchain_core::{
+use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
@@ -16,7 +16,7 @@ use logos_blockchain_core::{
         tx_builder::MantleTxBuilder,
     },
 };
-use logos_blockchain_ledger::LedgerState;
+use lb_ledger::LedgerState;
 
 pub struct WalletBlock {
     pub id: HeaderId,
@@ -273,13 +273,13 @@ mod tests {
         sync::Arc,
     };
 
-    use logos_blockchain_cryptarchia_engine::EpochConfig;
-    use logos_blockchain_core::{
+    use lb_cryptarchia_engine::EpochConfig;
+    use lb_core::{
         mantle::{Note, TxHash, gas::MainnetGasConstants as Gas},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use logos_blockchain_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
-    use logos_blockchain_utils::math::NonNegativeF64;
+    use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
+    use lb_utils::math::NonNegativeF64;
     use num_bigint::BigUint;
 
     use super::*;
@@ -582,18 +582,18 @@ mod tests {
     }
 
     #[must_use]
-    fn ledger_config() -> logos_blockchain_ledger::Config {
-        logos_blockchain_ledger::Config {
+    fn ledger_config() -> lb_ledger::Config {
+        lb_ledger::Config {
             epoch_config: EpochConfig {
                 epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
                 epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
             },
-            consensus_config: logos_blockchain_cryptarchia_engine::Config {
+            consensus_config: lb_cryptarchia_engine::Config {
                 security_param: NonZero::new(1).unwrap(),
                 active_slot_coeff: 1.0,
             },
-            sdp_config: logos_blockchain_ledger::mantle::sdp::Config {
+            sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [
                         (

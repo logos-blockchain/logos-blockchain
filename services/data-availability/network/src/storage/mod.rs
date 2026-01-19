@@ -7,14 +7,14 @@ use std::{
 
 use blake2::{Blake2b512, Digest as _, digest::Update as BlakeUpdate};
 use multiaddr::Multiaddr;
-use logos_blockchain_core::sdp::{ProviderId, SessionNumber};
-use logos_blockchain_utils::blake_rng::BlakeRng;
+use lb_core::sdp::{ProviderId, SessionNumber};
+use lb_utils::blake_rng::BlakeRng;
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
 };
 use rand::SeedableRng as _;
-use logos_blockchain_subnetworks_assignations::{MembershipCreator, MembershipHandler, SubnetworkAssignations};
+use lb_subnetworks_assignations::{MembershipCreator, MembershipHandler, SubnetworkAssignations};
 
 use crate::{
     SessionStatus,

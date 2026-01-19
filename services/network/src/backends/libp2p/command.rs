@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use logos_blockchain_libp2p::{Multiaddr, PeerId};
+use lb_libp2p::{Multiaddr, PeerId};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
@@ -31,7 +31,7 @@ pub enum Command {
 pub struct Dial {
     pub addr: Multiaddr,
     pub retry_count: usize,
-    pub result_sender: oneshot::Sender<Result<PeerId, logos_blockchain_libp2p::DialError>>,
+    pub result_sender: oneshot::Sender<Result<PeerId, lb_libp2p::DialError>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

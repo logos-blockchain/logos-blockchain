@@ -10,5 +10,5 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-logos-blockchain-core = { workspace = true }
-serde                 = { workspace = true, features = ["derive"] }
+lb-core = { workspace = true }
+serde   = { workspace = true, features = ["derive"] }

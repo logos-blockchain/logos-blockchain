@@ -22,37 +22,37 @@ ignored = [
 workspace = true
 
 [dependencies]
-async-trait                               = "0.1"
-axum                                      = { default-features = false, features = ["http1", "http2", "json", "query", "tokio"], version = "0.7.5" }
-clap                                      = { default-features = false, features = ["derive"], version = "4.5.13" }
-color-eyre                                = { default-features = false, version = "0.6.0" }
-futures                                   = { default-features = false, version = "0.3" }
-logos-blockchain-api-service              = { workspace = true }
-logos-blockchain-chain-broadcast-service  = { workspace = true }
-logos-blockchain-core                     = { workspace = true }
-logos-blockchain-da-dispersal-service     = { workspace = true }
-logos-blockchain-da-network-core          = { workspace = true }
-logos-blockchain-da-network-service       = { workspace = true }
-logos-blockchain-da-sampling-service      = { workspace = true }
-logos-blockchain-da-verifier-service      = { workspace = true }
-logos-blockchain-http-api-common          = { workspace = true }
-logos-blockchain-kzgrs-backend            = { workspace = true }
-logos-blockchain-libp2p                   = { workspace = true }
-logos-blockchain-network-service          = { workspace = true }
-logos-blockchain-node                     = { workspace = true }
-logos-blockchain-sdp-service              = { workspace = true }
-logos-blockchain-services-utils           = { workspace = true }
-logos-blockchain-storage-service          = { workspace = true }
-logos-blockchain-subnetworks-assignations = { workspace = true }
-logos-blockchain-time-service             = { workspace = true }
-logos-blockchain-tx-service               = { workspace = true }
-overwatch                                 = { workspace = true }
-serde                                     = { workspace = true }
-tokio                                     = { features = ["net"], version = "1" }
-tower                                     = { default-features = false, features = ["limit"], version = "0.4" }
-tower-http                                = { default-features = false, features = ["cors", "limit", "timeout", "trace"], version = "0.5" }
-tracing                                   = { workspace = true }
-utoipa                                    = { workspace = true }
+async-trait                 = "0.1"
+axum                        = { default-features = false, features = ["http1", "http2", "json", "query", "tokio"], version = "0.7.5" }
+clap                        = { default-features = false, features = ["derive"], version = "4.5.13" }
+color-eyre                  = { default-features = false, version = "0.6.0" }
+futures                     = { default-features = false, version = "0.3" }
+lb-api-service              = { workspace = true }
+lb-chain-broadcast-service  = { workspace = true }
+lb-core                     = { workspace = true }
+lb-da-dispersal-service     = { workspace = true }
+lb-da-network-core          = { workspace = true }
+lb-da-network-service       = { workspace = true }
+lb-da-sampling-service      = { workspace = true }
+lb-da-verifier-service      = { workspace = true }
+lb-http-api-common          = { workspace = true }
+lb-kzgrs-backend            = { workspace = true }
+lb-libp2p                   = { workspace = true }
+lb-network-service          = { workspace = true }
+lb-node                     = { workspace = true }
+lb-sdp-service              = { workspace = true }
+lb-services-utils           = { workspace = true }
+lb-storage-service          = { workspace = true }
+lb-subnetworks-assignations = { workspace = true }
+lb-time-service             = { workspace = true }
+lb-tx-service               = { workspace = true }
+overwatch                   = { workspace = true }
+serde                       = { workspace = true }
+tokio                       = { features = ["net"], version = "1" }
+tower                       = { default-features = false, features = ["limit"], version = "0.4" }
+tower-http                  = { default-features = false, features = ["cors", "limit", "timeout", "trace"], version = "0.5" }
+tracing                     = { workspace = true }
+utoipa                      = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # XCompiling from Unix has issues downloading assets. Use vendored instead.
@@ -64,7 +64,7 @@ utoipa-swagger-ui = { workspace = true, features = ["axum"] }
 
 [features]
 default         = ["tracing"]
-instrumentation = ["logos-blockchain-node/instrumentation"]
-profiling       = ["logos-blockchain-http-api-common/profiling", "logos-blockchain-node/profiling"]
-testing         = ["logos-blockchain-node/testing"]
-tracing         = ["logos-blockchain-node/tracing"]
+instrumentation = ["lb-node/instrumentation"]
+profiling       = ["lb-http-api-common/profiling", "lb-node/profiling"]
+testing         = ["lb-node/testing"]
+tracing         = ["lb-node/tracing"]

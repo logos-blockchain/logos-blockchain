@@ -1,12 +1,12 @@
 use std::sync::LazyLock;
 
 use bytes::Bytes;
-use logos_blockchain_groth16::{
+use lb_groth16::{
     Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes, fr_from_bytes_unchecked, serde::serde_fr,
 };
-use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use num_bigint::BigUint;
-use logos_blockchain_poseidon2::Digest;
+use lb_poseidon2::Digest;
 use serde::{Deserialize, Serialize};
 
 use crate::{

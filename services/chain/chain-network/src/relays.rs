@@ -4,23 +4,23 @@ use std::{
     marker::PhantomData,
 };
 
-use logos_blockchain_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
-use logos_blockchain_core::{
+use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use lb_core::{
     da,
     header::HeaderId,
     mantle::{AuthenticatedMantleTx, TxHash},
 };
-use logos_blockchain_da_sampling_service::{
+use lb_da_sampling_service::{
     DaSamplingService, backend::DaSamplingServiceBackend, mempool::DaMempoolAdapter,
 };
-use logos_blockchain_network_service::{NetworkService, message::BackendNetworkMsg};
-use logos_blockchain_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend as TimeBackendTrait};
+use lb_network_service::{NetworkService, message::BackendNetworkMsg};
+use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend as TimeBackendTrait};
 use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{AsServiceId, relay::OutboundRelay},
 };
 use serde::{Serialize, de::DeserializeOwned};
-use logos_blockchain_tx_service::{
+use lb_tx_service::{
     MempoolMsg, TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
 };
@@ -42,7 +42,7 @@ pub struct ChainNetworkRelays<
 > where
     Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
     Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash> + Send + Sync,
-    MempoolNetAdapter: logos_blockchain_tx_service::network::NetworkAdapter<RuntimeServiceId>,
+    MempoolNetAdapter: lb_tx_service::network::NetworkAdapter<RuntimeServiceId>,
     MempoolDaAdapter: DaMempoolAdapter,
     NetworkAdapter: network::NetworkAdapter<RuntimeServiceId>,
     SamplingBackend: DaSamplingServiceBackend,
@@ -148,9 +148,9 @@ where
         Mempool::Key: Send,
         NetworkAdapter::Settings: Sync + Send,
         SamplingNetworkAdapter:
-            logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId> + Send + Sync,
+            lb_da_sampling_service::network::NetworkAdapter<RuntimeServiceId> + Send + Sync,
         SamplingStorage:
-            logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync,
+            lb_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync,
         TimeBackend: TimeBackendTrait,
         TimeBackend::Settings: Clone + Send + Sync,
         RuntimeServiceId: Debug

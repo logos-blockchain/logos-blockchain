@@ -10,9 +10,9 @@ use std::{
 };
 
 use async_trait::async_trait;
-use logos_blockchain_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::Slot;
 use futures::Stream;
-use logos_blockchain_core::{header::HeaderId, mantle::TxHash};
+use lb_core::{header::HeaderId, mantle::TxHash};
 
 #[async_trait]
 pub trait StorageChainApi {

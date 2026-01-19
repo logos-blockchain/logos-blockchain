@@ -1,15 +1,15 @@
 use std::fmt::{Debug, Display};
 
-use logos_blockchain_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService};
+use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService};
 use bytes::Bytes;
-use logos_blockchain_core::{
+use lb_core::{
     block::Block,
     mantle::{AuthenticatedMantleTx, Transaction, TxHash},
 };
-use logos_blockchain_storage_service::{
+use lb_storage_service::{
     StorageMsg, StorageService, api::chain::StorageChainApi, backends::StorageBackend,
 };
-use logos_blockchain_time_service::{TimeService, TimeServiceMessage};
+use lb_time_service::{TimeService, TimeServiceMessage};
 use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{AsServiceId, relay::OutboundRelay},
@@ -76,7 +76,7 @@ where
         >,
     ) -> Self
     where
-        TimeBackend: logos_blockchain_time_service::backends::TimeBackend,
+        TimeBackend: lb_time_service::backends::TimeBackend,
         TimeBackend::Settings: Clone + Send + Sync + 'static,
         RuntimeServiceId: Debug
             + Sync
@@ -92,7 +92,7 @@ where
             .relay::<BlockBroadcastService<_>>()
             .await
             .expect(
-                "Relay connection with logos_blockchain_chain_broadcast_service::BlockBroadcastService should
+                "Relay connection with lb_chain_broadcast_service::BlockBroadcastService should
         succeed",
             );
 

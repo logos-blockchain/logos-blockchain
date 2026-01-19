@@ -6,8 +6,8 @@ pub mod test_fr;
 use std::collections::BTreeMap;
 
 use merkle::DynamicMerkleTree;
-use logos_blockchain_core::utils::merkle::MerklePath;
-use logos_blockchain_poseidon2::{Digest, Fr};
+use lb_core::utils::merkle::MerklePath;
+use lb_poseidon2::{Digest, Fr};
 use rpds::HashTrieMapSync;
 use thiserror::Error;
 
@@ -193,7 +193,7 @@ pub struct CompressedUtxoTree<Key, Item> {
 
 #[cfg(feature = "serde")]
 mod serde {
-    use logos_blockchain_poseidon2::{Digest, Fr};
+    use lb_poseidon2::{Digest, Fr};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     impl<Key, Item, Hash> Serialize for super::UtxoTree<Key, Item, Hash>
@@ -234,7 +234,7 @@ mod tests {
 
     use super::*;
     use crate::test_fr::TestFr;
-    type TestHash = logos_blockchain_poseidon2::Poseidon2Bn254Hasher;
+    type TestHash = lb_poseidon2::Poseidon2Bn254Hasher;
 
     #[test]
     fn test_empty_tree() {

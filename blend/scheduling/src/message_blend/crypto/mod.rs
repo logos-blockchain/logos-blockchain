@@ -1,14 +1,14 @@
 use std::num::NonZeroU64;
 
 use derivative::Derivative;
-use logos_blockchain_key_management_system_keys::keys::UnsecuredEd25519Key;
-use logos_blockchain_blend_message::{
+use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
+use lb_blend_message::{
     Error,
     encap::{
         encapsulated::EncapsulatedMessage, validated::EncapsulatedMessageWithVerifiedPublicHeader,
     },
 };
-use logos_blockchain_core::codec::{DeserializeOp as _, SerializeOp as _};
+use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 
 pub mod core_and_leader;
 pub use self::core_and_leader::{

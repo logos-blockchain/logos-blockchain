@@ -6,21 +6,21 @@ use std::{
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _, select};
-use logos_blockchain_groth16::Field as _;
-use logos_blockchain_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+use lb_groth16::Field as _;
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use libp2p::{
     Multiaddr, PeerId, Swarm,
     identity::{PublicKey, ed25519},
 };
 use libp2p_swarm_test::SwarmExt as _;
-use logos_blockchain_blend_message::{
+use lb_blend_message::{
     crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
     encap,
 };
-use logos_blockchain_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
-use logos_blockchain_blend_scheduling::membership::{Membership, Node};
-use logos_blockchain_core::{crypto::ZkHash, sdp::SessionNumber};
-use logos_blockchain_libp2p::{NetworkBehaviour, SwarmEvent};
+use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
+use lb_blend_scheduling::membership::{Membership, Node};
+use lb_core::{crypto::ZkHash, sdp::SessionNumber};
+use lb_libp2p::{NetworkBehaviour, SwarmEvent};
 use tokio::time::interval;
 use tokio_stream::wrappers::IntervalStream;
 

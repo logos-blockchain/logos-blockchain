@@ -22,14 +22,14 @@ use libp2p::{
 };
 use libp2p_stream::{Control, IncomingStreams, OpenStreamError};
 use log::trace;
-use logos_blockchain_da_messages::{
+use lb_da_messages::{
     packing::{pack_to_writer, unpack_from_reader},
     replication::{ReplicationRequest, ReplicationResponseId},
 };
-use logos_blockchain_utils::bounded_duration::{MINUTE, MinimalBoundedDuration};
+use lb_utils::bounded_duration::{MINUTE, MinimalBoundedDuration};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_subnetworks_assignations::MembershipHandler;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;

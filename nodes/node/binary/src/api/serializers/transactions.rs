@@ -1,5 +1,5 @@
-use logos_blockchain_key_management_system_service::keys::ZkSignature;
-use logos_blockchain_core::mantle::{
+use lb_key_management_system_service::keys::ZkSignature;
+use lb_core::mantle::{
     MantleTx, Op, OpProof, SignedMantleTx, TxHash, gas::Gas, ledger::Tx as LedgerTx,
 };
 use serde::Serialize;
@@ -7,7 +7,7 @@ use serde::Serialize;
 #[derive(Serialize)]
 #[serde(remote = "MantleTx")]
 pub struct ApiTransactionSerializer {
-    #[serde(getter = "<MantleTx as logos_blockchain_core::mantle::Transaction>::hash")]
+    #[serde(getter = "<MantleTx as lb_core::mantle::Transaction>::hash")]
     hash: TxHash,
     ops: Vec<Op>,
     ledger_tx: LedgerTx,
@@ -30,7 +30,7 @@ struct SignedApiTransaction<'a>(
 );
 
 pub mod signed_api_transaction_vec {
-    use logos_blockchain_core::mantle::SignedMantleTx;
+    use lb_core::mantle::SignedMantleTx;
     use serde::ser::SerializeSeq as _;
 
     use crate::api::serializers::transactions::SignedApiTransaction;

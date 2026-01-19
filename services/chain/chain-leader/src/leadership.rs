@@ -1,10 +1,10 @@
-use logos_blockchain_cryptarchia_engine::{Epoch, Slot};
-use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey, ZkPublicKey};
-use logos_blockchain_core::{
+use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey, ZkPublicKey};
+use lb_core::{
     mantle::{Utxo, ops::leader_claim::VoucherCm},
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
 };
-use logos_blockchain_ledger::{EpochState, UtxoTree};
+use lb_ledger::{EpochState, UtxoTree};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch::Sender;
 
@@ -13,7 +13,7 @@ use crate::WinningPolInfo;
 #[derive(Clone)]
 pub struct Leader {
     sk: UnsecuredZkKey,
-    config: logos_blockchain_ledger::Config,
+    config: lb_ledger::Config,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -23,7 +23,7 @@ pub struct LeaderConfig {
 }
 
 impl Leader {
-    pub const fn new(sk: UnsecuredZkKey, config: logos_blockchain_ledger::Config) -> Self {
+    pub const fn new(sk: UnsecuredZkKey, config: lb_ledger::Config) -> Self {
         Self { sk, config }
     }
 

@@ -4,7 +4,7 @@ use std::{
     hash::Hash,
 };
 
-use logos_blockchain_core::sdp::SessionNumber;
+use lb_core::sdp::SessionNumber;
 use rand::RngCore;
 use serde::{Deserialize, Deserializer, Serialize};
 

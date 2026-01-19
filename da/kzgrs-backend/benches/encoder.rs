@@ -1,7 +1,7 @@
 use std::hint::black_box;
 
 use divan::{Bencher, counter::BytesCount};
-use logos_blockchain_kzgrs_backend::{
+use lb_kzgrs_backend::{
     encoder::{DaEncoder, DaEncoderParams},
     kzg_keys::PROVING_KEY,
 };
@@ -32,5 +32,5 @@ fn encode<const SIZE: usize>(bencher: Bencher, column_size: usize) {
             )
         })
         .input_counter(|(_, buff)| BytesCount::new(buff.len()))
-        .bench_refs(|(encoder, buff)| black_box(logos_blockchain_core::da::DaEncoder::encode(encoder, buff)));
+        .bench_refs(|(encoder, buff)| black_box(lb_core::da::DaEncoder::encode(encoder, buff)));
 }

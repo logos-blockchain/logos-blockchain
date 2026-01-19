@@ -1,12 +1,12 @@
 use core::convert::Infallible;
 
-use logos_blockchain_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
-use logos_blockchain_blend_crypto::keys::X25519PrivateKey;
-use logos_blockchain_blend_proofs::{
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
+use lb_blend_crypto::keys::X25519PrivateKey;
+use lb_blend_proofs::{
     quota::{ProofOfQuota, VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
-use logos_blockchain_core::codec::{DeserializeOp as _, SerializeOp as _};
+use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 
 use crate::{
     Error, PayloadType,
@@ -225,7 +225,7 @@ fn invalid_public_header_signature() {
 
 #[test]
 fn invalid_public_header_proof_of_quota() {
-    use logos_blockchain_blend_proofs::quota::Error as PoQError;
+    use lb_blend_proofs::quota::Error as PoQError;
 
     const PAYLOAD_BODY: &[u8] = b"hello";
     let verifier = AlwaysFailingProofOfQuotaVerifier;
@@ -248,7 +248,7 @@ fn invalid_public_header_proof_of_quota() {
 
 #[test]
 fn invalid_blend_header_proof_of_selection() {
-    use logos_blockchain_blend_proofs::selection::Error as PoSelError;
+    use lb_blend_proofs::selection::Error as PoSelError;
 
     const PAYLOAD_BODY: &[u8] = b"hello";
     let verifier = AlwaysFailingProofOfSelectionVerifier;

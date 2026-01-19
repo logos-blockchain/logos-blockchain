@@ -14,7 +14,7 @@ use libp2p::{
     },
 };
 use libp2p_stream::{Behaviour as StreamBehaviour, Control, IncomingStreams};
-use logos_blockchain_core::header::HeaderId;
+use lb_core::header::HeaderId;
 use tokio::sync::{mpsc, mpsc::Sender, oneshot};
 use tracing::{debug, error};
 
@@ -525,8 +525,8 @@ mod tests {
     use futures::StreamExt as _;
     use libp2p::{Multiaddr, PeerId, StreamProtocol, Swarm, bytes::Bytes, swarm::SwarmEvent};
     use libp2p_swarm_test::SwarmExt as _;
-    use logos_blockchain_core::header::HeaderId;
-    use logos_blockchain_cryptarchia_engine::Slot;
+    use lb_core::header::HeaderId;
+    use lb_cryptarchia_engine::Slot;
     use rand::{Rng, thread_rng};
     use tokio::sync::oneshot;
 

@@ -6,25 +6,25 @@ use core::{
 };
 use std::time::Duration;
 
-use logos_blockchain_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
 use libp2p::{
     PeerId, StreamProtocol, Swarm, Transport as _, core::transport::MemoryTransport,
     identity::PublicKey, plaintext, swarm, tcp, yamux,
 };
 use libp2p_swarm_test::SwarmExt as _;
-use logos_blockchain_blend_message::{
+use lb_blend_message::{
     PayloadType,
     crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
     encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
     input::EncapsulationInput,
 };
-use logos_blockchain_blend_proofs::{
+use lb_blend_proofs::{
     quota::{ProofOfQuota, VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
-use logos_blockchain_blend_scheduling::message_blend::provers::BlendLayerProof;
-use logos_blockchain_core::sdp::SessionNumber;
-use logos_blockchain_libp2p::{NetworkBehaviour, ed25519, upgrade::Version};
+use lb_blend_scheduling::message_blend::provers::BlendLayerProof;
+use lb_core::sdp::SessionNumber;
+use lb_libp2p::{NetworkBehaviour, ed25519, upgrade::Version};
 
 pub const PROTOCOL_NAME: StreamProtocol = StreamProtocol::new("/blend/core-behaviour/test");
 

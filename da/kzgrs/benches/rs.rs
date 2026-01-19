@@ -1,7 +1,7 @@
 use ark_bls12_381::Fr;
 use ark_poly::{EvaluationDomain as _, GeneralEvaluationDomain};
 use divan::{Bencher, black_box, counter::BytesCount};
-use logos_blockchain_kzgrs::{
+use lb_kzgrs::{
     common::bytes_to_polynomial,
     rs::{decode_unchecked, encode},
 };

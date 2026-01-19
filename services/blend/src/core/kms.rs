@@ -1,20 +1,20 @@
 use core::fmt::{Debug, Display};
 
 use async_trait::async_trait;
-use logos_blockchain_key_management_system_service::{
+use lb_key_management_system_service::{
     KMSService,
     api::KmsServiceApi,
     backend::preload::{KeyId, PreloadKMSBackend},
     keys::KeyOperators,
     operators::blend::poq::PoQOperator,
 };
-use logos_blockchain_blend::{
+use lb_blend::{
     proofs::quota::{self, VerifiedProofOfQuota, inputs::prove::PublicInputs},
     scheduling::message_blend::CoreProofOfQuotaGenerator,
 };
-use logos_blockchain_core::crypto::ZkHash;
+use lb_core::crypto::ZkHash;
 use overwatch::services::AsServiceId;
-use logos_blockchain_poq::CorePathAndSelectors;
+use lb_poq::CorePathAndSelectors;
 use tokio::sync::oneshot;
 
 const LOG_TARGET: &str = "blend::service::core::kms-poq-generator";

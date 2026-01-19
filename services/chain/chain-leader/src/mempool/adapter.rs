@@ -1,10 +1,10 @@
 use std::{marker::PhantomData, pin::Pin};
 
 use futures::Stream;
-use logos_blockchain_core::{header::HeaderId, mantle::TxHash};
+use lb_core::{header::HeaderId, mantle::TxHash};
 use overwatch::services::relay::OutboundRelay;
 use tokio::sync::oneshot;
-use logos_blockchain_tx_service::MempoolMsg;
+use lb_tx_service::MempoolMsg;
 
 use super::MempoolAdapter as MempoolAdapterTrait;
 

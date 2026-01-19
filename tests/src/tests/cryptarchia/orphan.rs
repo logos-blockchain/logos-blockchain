@@ -2,7 +2,7 @@ use std::{slice, time::Duration};
 
 use futures::stream::{self, StreamExt as _};
 use serial_test::serial;
-use logos_blockchain_tests::{
+use lb_tests::{
     adjust_timeout,
     common::sync::{format_cryptarhica_info, wait_for_validators_mode_and_height},
     nodes::validator::{Validator, create_validator_config},
@@ -38,7 +38,7 @@ async fn test_orphan_handling() {
     // but only one of them would be eligible for leadership.
     wait_for_validators_mode_and_height(
         &validators,
-        logos_blockchain_cryptarchia_engine::State::Online,
+        lb_cryptarchia_engine::State::Online,
         min_height,
         Duration::from_secs(500),
     )

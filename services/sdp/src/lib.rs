@@ -8,8 +8,8 @@ use std::{
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _};
-use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
-use logos_blockchain_core::{
+use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_core::{
     block::BlockNumber,
     mantle::{NoteId, SignedMantleTx, tx_builder::MantleTxBuilder},
     sdp::{

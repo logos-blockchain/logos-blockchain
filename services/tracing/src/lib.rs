@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use logos_blockchain_tracing::{
+use lb_tracing::{
     filter::envfilter::{EnvFilterConfig, create_envfilter_layer},
     logging::{
         gelf::{GelfConfig, create_gelf_layer},
@@ -271,7 +271,7 @@ where
                 .init();
         });
 
-        panic::set_hook(Box::new(logos_blockchain_tracing::panic::panic_hook));
+        panic::set_hook(Box::new(lb_tracing::panic::panic_hook));
 
         Ok(Self {
             service_resources_handle,

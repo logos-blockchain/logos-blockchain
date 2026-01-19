@@ -4,13 +4,13 @@ use core::{
 };
 use std::sync::Arc;
 
-use logos_blockchain_blend_service::{
+use lb_blend_service::{
     core::settings::{CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings},
     settings::TimingSettings,
 };
-use logos_blockchain_core::sdp::{ServiceParameters, ServiceType};
-use logos_blockchain_libp2p::protocol_name::StreamProtocol;
-use logos_blockchain_node::config::{
+use lb_core::sdp::{ServiceParameters, ServiceType};
+use lb_libp2p::protocol_name::StreamProtocol;
+use lb_node::config::{
     blend::deployment::{
         CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
         Settings as BlendDeploymentSettings,
@@ -21,7 +21,7 @@ use logos_blockchain_node::config::{
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
-use logos_blockchain_utils::math::NonNegativeF64;
+use lb_utils::math::NonNegativeF64;
 
 use crate::topology::configs::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
@@ -88,7 +88,7 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
         },
         CryptarchiaDeploymentSettings {
             gossipsub_protocol: "/integration/logos-blockchain/cryptarchia/proto/1.0.0".to_owned(),
-            consensus_config: logos_blockchain_cryptarchia_engine::Config {
+            consensus_config: lb_cryptarchia_engine::Config {
                 // a block should be produced (on average) every slot
                 active_slot_coeff: 0.9,
                 // by setting the slot coeff to 1, we also increase the probability of multiple
@@ -98,12 +98,12 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
                 // longest chain.
                 security_param: NonZero::new(10).unwrap(),
             },
-            epoch_config: logos_blockchain_cryptarchia_engine::EpochConfig {
+            epoch_config: lb_cryptarchia_engine::EpochConfig {
                 epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
             },
-            sdp_config: logos_blockchain_node::config::cryptarchia::deployment::SdpConfig {
+            sdp_config: lb_node::config::cryptarchia::deployment::SdpConfig {
                 service_params: Arc::new(
                     [
                         (
@@ -129,7 +129,7 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
                     ]
                     .into(),
                 ),
-                min_stake: logos_blockchain_core::sdp::MinStake {
+                min_stake: lb_core::sdp::MinStake {
                     threshold: 1,
                     timestamp: 0,
                 },

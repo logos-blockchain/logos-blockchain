@@ -1,14 +1,14 @@
 pub mod adapters;
 
 use futures::Stream;
-use logos_blockchain_da_network_service::{
+use lb_da_network_service::{
     NetworkService,
     api::ApiAdapter,
     backends::{NetworkBackend, libp2p::common::BroadcastValidationResultSender},
     sdp::SdpAdapter,
 };
 use overwatch::services::{ServiceData, relay::OutboundRelay};
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_subnetworks_assignations::MembershipHandler;
 
 pub struct ValidationRequest<T> {
     pub item: T,

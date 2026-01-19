@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use logos_blockchain_utils::{
+use lb_utils::{
     bounded_duration::{MinimalBoundedDuration, SECOND},
     math::PositiveF64,
 };

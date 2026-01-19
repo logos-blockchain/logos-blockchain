@@ -6,10 +6,10 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use logos_blockchain_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::Slot;
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
-use logos_blockchain_core::{
+use lb_core::{
     block::{BlockNumber, SessionNumber},
     header::HeaderId,
     sdp::{Locator, ProviderId, ServiceType},

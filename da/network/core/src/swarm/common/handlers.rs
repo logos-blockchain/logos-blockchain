@@ -2,8 +2,8 @@ use std::pin::Pin;
 
 use futures::channel::oneshot;
 use log::{debug, error};
-use logos_blockchain_da_messages::replication::ReplicationRequest;
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_da_messages::replication::ReplicationRequest;
+use lb_subnetworks_assignations::MembershipHandler;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{

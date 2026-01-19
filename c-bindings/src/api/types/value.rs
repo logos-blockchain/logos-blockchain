@@ -1,13 +1,13 @@
 //! Canonical `Value` type for the C FFI.
 //!
-//! `logos_blockchain_core::mantle::Value` is a type alias defined in an external
+//! `lb_core::mantle::Value` is a type alias defined in an external
 //! crate. Since `cbindgen` cannot reliably emit typedefs for
 //! re-exported aliases, we define the FFI-facing `Value` locally and
 //! enforce at compile time that it is exactly the same type as the
 //! upstream one.
 
 // Upstream Logos blockchain type
-use logos_blockchain_core::mantle::Value as LogosBlockchainValue;
+use lb_core::mantle::Value as LogosBlockchainValue;
 
 // FFI-visible type (emitted by cbindgen)
 pub type Value = u64;

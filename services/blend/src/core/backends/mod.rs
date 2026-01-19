@@ -1,7 +1,7 @@
 use std::{fmt::Debug, pin::Pin};
 
 use futures::Stream;
-use logos_blockchain_blend::{
+use lb_blend::{
     message::{
         crypto::proofs::PoQVerificationInputsMinusSigningKey,
         encap::{
@@ -37,8 +37,8 @@ where
     NodeId: Clone + core::hash::Hash + Eq,
 {
     fn default() -> Self {
-        use logos_blockchain_groth16::Field as _;
-        use logos_blockchain_core::crypto::ZkHash;
+        use lb_groth16::Field as _;
+        use lb_core::crypto::ZkHash;
 
         Self {
             epoch: LeaderInputs {
@@ -62,8 +62,8 @@ where
 #[cfg(test)]
 impl<NodeId> From<Membership<NodeId>> for PublicInfo<NodeId> {
     fn from(value: Membership<NodeId>) -> Self {
-        use logos_blockchain_groth16::Field as _;
-        use logos_blockchain_core::crypto::ZkHash;
+        use lb_groth16::Field as _;
+        use lb_core::crypto::ZkHash;
 
         Self {
             epoch: LeaderInputs {

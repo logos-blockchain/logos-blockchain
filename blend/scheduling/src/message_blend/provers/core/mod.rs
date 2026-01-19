@@ -2,11 +2,11 @@ use core::pin::Pin;
 
 use async_trait::async_trait;
 use futures::stream::{self, Stream, StreamExt as _};
-use logos_blockchain_key_management_system_keys::keys::UnsecuredEd25519Key;
-use logos_blockchain_blend_message::crypto::{
+use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
+use lb_blend_message::crypto::{
     key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
 };
-use logos_blockchain_blend_proofs::{
+use lb_blend_proofs::{
     quota::inputs::prove::{PublicInputs, public::LeaderInputs},
     selection::VerifiedProofOfSelection,
 };

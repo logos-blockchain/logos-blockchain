@@ -4,7 +4,7 @@ pub mod sdp;
 
 use std::collections::HashMap;
 
-use logos_blockchain_core::{
+use lb_core::{
     block::BlockNumber,
     mantle::{
         AuthenticatedMantleTx, GasConstants, GenesisTx, NoteId, TxHash, Utxo,
@@ -210,8 +210,8 @@ impl LedgerState {
 
 #[cfg(test)]
 mod tests {
-    use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey};
-    use logos_blockchain_core::mantle::{
+    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey};
+    use lb_core::mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
         gas::MainnetGasConstants,
         ledger::Tx as LedgerTx,

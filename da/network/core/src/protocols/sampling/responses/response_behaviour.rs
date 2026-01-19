@@ -20,7 +20,7 @@ use libp2p::{
     },
 };
 use libp2p_stream::IncomingStreams;
-use logos_blockchain_da_messages::sampling;
+use lb_da_messages::sampling;
 
 use crate::{
     protocol::SAMPLING_PROTOCOL,

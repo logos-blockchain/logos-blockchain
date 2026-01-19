@@ -1,5 +1,5 @@
 use ed25519_dalek::{SECRET_KEY_LENGTH, SigningKey, ed25519::signature::Signer as _};
-use logos_blockchain_utils::serde::{deserialize_bytes_array, serialize_bytes_array};
+use lb_utils::serde::{deserialize_bytes_array, serialize_bytes_array};
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use subtle::ConstantTimeEq as _;

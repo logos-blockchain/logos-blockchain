@@ -1,4 +1,4 @@
-use logos_blockchain_core::da::DaVerifier;
+use lb_core::da::DaVerifier;
 
 pub mod kzgrs;
 

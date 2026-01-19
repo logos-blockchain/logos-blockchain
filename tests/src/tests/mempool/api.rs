@@ -1,9 +1,9 @@
-use logos_blockchain_common_http_client::CommonHttpClient;
-use logos_blockchain_core::mantle::{
+use lb_common_http_client::CommonHttpClient;
+use lb_core::mantle::{
     MantleTx, SignedMantleTx, Transaction as _, ledger::Tx as LedgerTx,
 };
-use logos_blockchain_key_management_system_service::keys::ZkKey;
-use logos_blockchain_tests::topology::{Topology, TopologyConfig};
+use lb_key_management_system_service::keys::ZkKey;
+use lb_tests::topology::{Topology, TopologyConfig};
 use reqwest::Url;
 use serial_test::serial;
 

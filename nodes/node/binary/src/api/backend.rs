@@ -15,12 +15,12 @@ use axum::{
     },
     routing,
 };
-use logos_blockchain_chain_broadcast_service::BlockBroadcastService;
-use logos_blockchain_api_service::{
+use lb_chain_broadcast_service::BlockBroadcastService;
+use lb_api_service::{
     Backend,
     http::{consensus::Cryptarchia, da::DaVerifier},
 };
-use logos_blockchain_core::{
+use lb_core::{
     da::{
         BlobId, DaVerifier as CoreDaVerifier,
         blob::{LightShare, Share},
@@ -28,22 +28,22 @@ use logos_blockchain_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction},
 };
-use logos_blockchain_da_network_core::SubnetworkId;
-use logos_blockchain_da_network_service::{
+use lb_da_network_core::SubnetworkId;
+use lb_da_network_service::{
     backends::libp2p::validator::DaNetworkValidatorBackend, membership::MembershipAdapter,
     sdp::SdpAdapter as SdpAdapterTrait, storage::MembershipStorageAdapter,
 };
-use logos_blockchain_da_sampling_service::{DaSamplingService, backend::DaSamplingServiceBackend};
-use logos_blockchain_da_verifier_service::{backend::VerifierBackend, mempool::DaMempoolAdapter};
-pub use logos_blockchain_http_api_common::settings::AxumBackendSettings;
-use logos_blockchain_http_api_common::{paths, utils::create_rate_limit_layer};
-use logos_blockchain_libp2p::PeerId;
-use logos_blockchain_sdp_service::adapters::mempool::SdpMempoolAdapter;
-use logos_blockchain_storage_service::{StorageService, api::da::DaConverter, backends::rocksdb::RocksBackend};
+use lb_da_sampling_service::{DaSamplingService, backend::DaSamplingServiceBackend};
+use lb_da_verifier_service::{backend::VerifierBackend, mempool::DaMempoolAdapter};
+pub use lb_http_api_common::settings::AxumBackendSettings;
+use lb_http_api_common::{paths, utils::create_rate_limit_layer};
+use lb_libp2p::PeerId;
+use lb_sdp_service::adapters::mempool::SdpMempoolAdapter;
+use lb_storage_service::{StorageService, api::da::DaConverter, backends::rocksdb::RocksBackend};
 use overwatch::{DynError, overwatch::handle::OverwatchHandle, services::AsServiceId};
 use serde::{Serialize, de::DeserializeOwned};
-use logos_blockchain_services_utils::wait_until_services_are_ready;
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_services_utils::wait_until_services_are_ready;
+use lb_subnetworks_assignations::MembershipHandler;
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::{
@@ -52,7 +52,7 @@ use tower_http::{
     timeout::TimeoutLayer,
     trace::TraceLayer,
 };
-use logos_blockchain_tx_service::{
+use lb_tx_service::{
     MempoolMetrics, TxMempoolService, backend::Mempool, tx::service::openapi::Status,
 };
 use utoipa::OpenApi;
@@ -60,7 +60,7 @@ use utoipa_swagger_ui::SwaggerUi;
 #[cfg(feature = "block-explorer")]
 use {
     super::handlers::{blocks, blocks_stream},
-    logos_blockchain_chain_service::CryptarchiaConsensus,
+    lb_chain_service::CryptarchiaConsensus,
 };
 
 use super::handlers::{
@@ -194,14 +194,14 @@ where
     <DaVerifierBackend as VerifierBackend>::Settings: Clone,
     <DaVerifierBackend as CoreDaVerifier>::Error: Error,
     DaVerifierNetwork:
-        logos_blockchain_da_verifier_service::network::NetworkAdapter<RuntimeServiceId> + Send + Sync + 'static,
+        lb_da_verifier_service::network::NetworkAdapter<RuntimeServiceId> + Send + Sync + 'static,
     DaVerifierStorage:
-        logos_blockchain_da_verifier_service::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
+        lb_da_verifier_service::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
     SamplingBackend: DaSamplingServiceBackend<BlobId = BlobId> + Send + 'static,
     SamplingBackend::Settings: Clone,
     SamplingBackend::Share: Debug + 'static,
     SamplingBackend::BlobId: Debug + 'static,
-    SamplingMempoolAdapter: logos_blockchain_da_sampling_service::mempool::DaMempoolAdapter,
+    SamplingMempoolAdapter: lb_da_sampling_service::mempool::DaMempoolAdapter,
     DaShare::LightShare: LightShare<ShareIndex = <DaShare as Share>::ShareIndex>
         + Serialize
         + DeserializeOwned
@@ -213,20 +213,20 @@ where
     DaShare::LightShare: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
     DaShare::SharesCommitments: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
     SamplingNetworkAdapter:
-        logos_blockchain_da_sampling_service::network::NetworkAdapter<RuntimeServiceId> + Send + Sync + 'static,
+        lb_da_sampling_service::network::NetworkAdapter<RuntimeServiceId> + Send + Sync + 'static,
     SamplingStorage:
-        logos_blockchain_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
+        lb_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
     DaVerifierNetwork::Settings: Clone,
     VerifierMempoolAdapter: DaMempoolAdapter + Send + Sync + 'static,
-    TimeBackend: logos_blockchain_time_service::backends::TimeBackend + Send + 'static,
+    TimeBackend: lb_time_service::backends::TimeBackend + Send + 'static,
     TimeBackend::Settings: Clone + Send + Sync,
-    ApiAdapter: logos_blockchain_da_network_service::api::ApiAdapter + Send + Sync + 'static,
+    ApiAdapter: lb_da_network_service::api::ApiAdapter + Send + Sync + 'static,
     DaStorageConverter:
         DaConverter<DaStorageBackend, Share = DaShare, Tx = SignedMantleTx> + Send + Sync + 'static,
     StorageAdapter:
-        logos_blockchain_api_service::http::storage::StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
+        lb_api_service::http::storage::StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
     SdpAdapter: SdpAdapterTrait<RuntimeServiceId> + Send + Sync + 'static,
-    MempoolStorageAdapter: logos_blockchain_tx_service::storage::MempoolStorageAdapter<
+    MempoolStorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
             Item = SignedMantleTx,
             Key = <SignedMantleTx as Transaction>::Hash,
@@ -236,7 +236,7 @@ where
         + 'static,
     MempoolStorageAdapter::Error: Debug,
     SdpMempool: SdpMempoolAdapter + Send + Sync + 'static,
-    SamplingMempoolAdapter: logos_blockchain_da_sampling_service::mempool::DaMempoolAdapter + Send + Sync + 'static,
+    SamplingMempoolAdapter: lb_da_sampling_service::mempool::DaMempoolAdapter + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -256,7 +256,7 @@ where
             >,
         >
         + AsServiceId<
-            logos_blockchain_da_network_service::NetworkService<
+            lb_da_network_service::NetworkService<
                 DaNetworkValidatorBackend<Membership>,
                 Membership,
                 DaMembershipAdapter,
@@ -267,15 +267,15 @@ where
             >,
         >
         + AsServiceId<
-            logos_blockchain_network_service::NetworkService<
-                logos_blockchain_network_service::backends::libp2p::Libp2p,
+            lb_network_service::NetworkService<
+                lb_network_service::backends::libp2p::Libp2p,
                 RuntimeServiceId,
             >,
         >
         + AsServiceId<DaStorageService<RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
-                logos_blockchain_tx_service::network::adapters::libp2p::Libp2pAdapter<
+                lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
                     RuntimeServiceId,
@@ -300,7 +300,7 @@ where
                 RuntimeServiceId,
             >,
         >
-        + AsServiceId<logos_blockchain_sdp_service::SdpService<SdpMempool, RuntimeServiceId>>
+        + AsServiceId<lb_sdp_service::SdpService<SdpMempool, RuntimeServiceId>>
         + AsServiceId<WalletService>,
 {
     type Error = std::io::Error;
@@ -342,8 +342,8 @@ where
             Some(Duration::from_secs(60)),
             Cryptarchia<_>,
             DaVerifier<_, _, _, _, _, _>,
-            logos_blockchain_da_network_service::NetworkService<_, _, _, _, _, _, _>,
-            logos_blockchain_network_service::NetworkService<_, _>,
+            lb_da_network_service::NetworkService<_, _, _, _, _, _, _>,
+            lb_network_service::NetworkService<_, _>,
             DaStorageService<_>,
             TxMempoolService<_, _, _,  _>
         )
@@ -602,7 +602,7 @@ where
 
         #[cfg(feature = "profiling")]
         let app = {
-            let pprof_routes = logos_blockchain_http_api_common::pprof::create_pprof_router()
+            let pprof_routes = lb_http_api_common::pprof::create_pprof_router()
                 .layer(TraceLayer::new_for_http())
                 .layer(cors_layer);
 

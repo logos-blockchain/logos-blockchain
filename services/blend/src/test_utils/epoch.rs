@@ -1,16 +1,16 @@
 use async_trait::async_trait;
-use logos_blockchain_chain_service::Slot;
+use lb_chain_service::Slot;
 use futures::{Stream, future::ready, stream::once};
-use logos_blockchain_groth16::Field as _;
-use logos_blockchain_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
-use logos_blockchain_core::crypto::ZkHash;
-use logos_blockchain_ledger::EpochState;
+use lb_groth16::Field as _;
+use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
+use lb_core::crypto::ZkHash;
+use lb_ledger::EpochState;
 use overwatch::overwatch::OverwatchHandle;
 
 use crate::epoch_info::{ChainApi, PolEpochInfo, PolInfoProvider};
 
 pub fn default_epoch_state() -> EpochState {
-    use logos_blockchain_ledger::UtxoTree;
+    use lb_ledger::UtxoTree;
 
     EpochState {
         epoch: 1.into(),

@@ -10,7 +10,7 @@ use libp2p::{
     identity::Keypair,
     swarm::NetworkBehaviour,
 };
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_subnetworks_assignations::MembershipHandler;
 
 use crate::{SubnetworkId, addressbook::AddressBookHandler};
 
@@ -72,7 +72,7 @@ impl MembershipHandler for AllNeighbours {
         HashMap::new()
     }
 
-    fn session_id(&self) -> logos_blockchain_core::sdp::SessionNumber {
+    fn session_id(&self) -> lb_core::sdp::SessionNumber {
         0
     }
 }

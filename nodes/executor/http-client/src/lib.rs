@@ -1,12 +1,12 @@
 use std::{collections::HashSet, hash::Hash};
 
-pub use logos_blockchain_common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
+pub use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
 use futures::Stream;
-use logos_blockchain_core::{
+use lb_core::{
     da::{BlobId, blob::Share},
     mantle::ops::channel::{ChannelId, Ed25519PublicKey, MsgId},
 };
-use logos_blockchain_http_api_common::{bodies::dispersal::DispersalRequestBody, paths};
+use lb_http_api_common::{bodies::dispersal::DispersalRequestBody, paths};
 use reqwest::Url;
 use serde::{Serialize, de::DeserializeOwned};
 

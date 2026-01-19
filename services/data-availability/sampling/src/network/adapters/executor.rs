@@ -1,11 +1,11 @@
 use std::{collections::HashMap, fmt::Debug, pin::Pin};
 
 use futures::{Stream, StreamExt as _};
-use logos_blockchain_kzgrs_backend::common::share::{DaShare, DaSharesCommitments};
+use lb_kzgrs_backend::common::share::{DaShare, DaSharesCommitments};
 use libp2p_identity::PeerId;
-use logos_blockchain_core::{da::BlobId, header::HeaderId, sdp::SessionNumber};
-use logos_blockchain_da_network_core::SubnetworkId;
-use logos_blockchain_da_network_service::{
+use lb_core::{da::BlobId, header::HeaderId, sdp::SessionNumber};
+use lb_da_network_core::SubnetworkId;
+use lb_da_network_service::{
     DaNetworkMsg, NetworkService,
     api::ApiAdapter as ApiAdapterTrait,
     backends::libp2p::{
@@ -21,7 +21,7 @@ use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
 };
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_subnetworks_assignations::MembershipHandler;
 use tokio::sync::oneshot;
 
 use crate::network::{CommitmentsEvent, NetworkAdapter, adapters::common::adapter_for};

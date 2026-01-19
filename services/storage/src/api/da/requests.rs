@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use multiaddr::Multiaddr;
-use logos_blockchain_core::sdp::{ProviderId, SessionNumber};
+use lb_core::sdp::{ProviderId, SessionNumber};
 use overwatch::DynError;
 use tokio::sync::oneshot::Sender;
 

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use libp2p_identity::PeerId;
-use logos_blockchain_core::sdp::SessionNumber;
+use lb_core::sdp::SessionNumber;
 use serde::{Deserialize, Serialize};
 
 use crate::{MembershipHandler, SubnetworkAssignations};

@@ -3,10 +3,10 @@ pub mod rewards;
 
 use std::collections::HashMap;
 
-use logos_blockchain_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
+use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
 use locked_notes::LockedNotes;
-use logos_blockchain_blend_message::crypto::proofs::RealProofsVerifier;
-use logos_blockchain_core::{
+use lb_blend_message::crypto::proofs::RealProofsVerifier;
+use lb_core::{
     block::BlockNumber,
     mantle::{
         Note, NoteId, OpProof, TxHash, Utxo,
@@ -672,10 +672,10 @@ impl SdpLedger {
 mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
-    use logos_blockchain_groth16::{Field as _, Fr};
-    use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, ZkKey};
-    use logos_blockchain_core::crypto::ZkHash;
-    use logos_blockchain_utils::math::NonNegativeF64;
+    use lb_groth16::{Field as _, Fr};
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use lb_core::crypto::ZkHash;
+    use lb_utils::math::NonNegativeF64;
     use num_bigint::BigUint;
 
     use super::*;
@@ -1396,8 +1396,8 @@ mod tests {
         let active_op = SDPActiveOp {
             declaration_id: declaration_id_da_2,
             nonce: 1,
-            metadata: logos_blockchain_core::sdp::ActivityMetadata::DataAvailability(
-                logos_blockchain_core::sdp::da::ActivityProof {
+            metadata: lb_core::sdp::ActivityMetadata::DataAvailability(
+                lb_core::sdp::da::ActivityProof {
                     current_session: 4,
                     previous_session_opinions: vec![0b00_11u8],
                     current_session_opinions: vec![0b00_11u8],

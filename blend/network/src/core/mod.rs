@@ -5,9 +5,9 @@ pub mod with_edge;
 mod tests;
 
 use libp2p::{PeerId, StreamProtocol};
-use logos_blockchain_blend_message::encap;
-use logos_blockchain_blend_proofs::quota::inputs::prove::public::LeaderInputs;
-use logos_blockchain_blend_scheduling::membership::Membership;
+use lb_blend_message::encap;
+use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
+use lb_blend_scheduling::membership::Membership;
 
 use self::{
     with_core::behaviour::Behaviour as CoreToCoreBehaviour,
@@ -20,7 +20,7 @@ use crate::core::{
 
 /// A composed behaviour that wraps the two sub-behaviours for dealing with core
 /// and edge nodes.
-#[derive(logos_blockchain_libp2p::NetworkBehaviour)]
+#[derive(lb_libp2p::NetworkBehaviour)]
 pub struct NetworkBehaviour<ProofsVerifier, ObservationWindowClockProvider> {
     with_core: CoreToCoreBehaviour<ProofsVerifier, ObservationWindowClockProvider>,
     with_edge: CoreToEdgeBehaviour<ProofsVerifier>,

@@ -36,8 +36,8 @@ pub struct Swarm<R: Clone + Send + RngCore + 'static> {
 }
 
 impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
-    /// Builds a [`Swarm`] configured for use with Logos blockchain on top of a tokio
-    /// executor.
+    /// Builds a [`Swarm`] configured for use with Logos blockchain on top of a
+    /// tokio executor.
     pub fn build(config: SwarmConfig, rng: R) -> Result<Self, Box<dyn Error>> {
         let keypair =
             libp2p::identity::Keypair::from(ed25519::Keypair::from(config.node_key.clone()));
@@ -82,7 +82,7 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
             .with_swarm_config(|c| c.with_idle_connection_timeout(IDLE_CONN_TIMEOUT))
             .build();
 
-        let logos_blockchain_swarm = {
+        let lb_swarm = {
             let listen_addr = multiaddr(host, port);
             let mut s = Self { swarm };
             // We start listening on the provided address, which triggers the Identify flow,
@@ -92,7 +92,7 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
             Ok::<_, Box<dyn Error>>(s)
         }?;
 
-        Ok(logos_blockchain_swarm)
+        Ok(lb_swarm)
     }
 
     /// Initiates a connection attempt to a peer

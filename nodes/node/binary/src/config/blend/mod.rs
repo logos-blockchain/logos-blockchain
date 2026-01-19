@@ -1,5 +1,5 @@
-use logos_blockchain_blend::scheduling::message_blend::crypto::SessionCryptographicProcessorSettings;
-use logos_blockchain_blend_service::{
+use lb_blend::scheduling::message_blend::crypto::SessionCryptographicProcessorSettings;
+use lb_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pCoreBlendBackendSettings,
         settings::BlendConfig as BlendCoreSettings,

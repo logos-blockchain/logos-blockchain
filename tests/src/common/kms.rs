@@ -1,5 +1,5 @@
-use logos_blockchain_groth16::fr_to_bytes;
-use logos_blockchain_key_management_system_service::{
+use lb_groth16::fr_to_bytes;
+use lb_key_management_system_service::{
     backend::preload::KeyId,
     keys::{Key, secured_key::SecuredKey as _},
 };

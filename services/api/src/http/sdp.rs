@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display};
 
-use logos_blockchain_core::sdp::{ActivityMetadata, DeclarationId, DeclarationMessage};
-use logos_blockchain_sdp_service::{SdpService, adapters::mempool::SdpMempoolAdapter};
+use lb_core::sdp::{ActivityMetadata, DeclarationId, DeclarationMessage};
+use lb_sdp_service::{SdpService, adapters::mempool::SdpMempoolAdapter};
 use overwatch::{DynError, overwatch::OverwatchHandle};
 
 pub async fn post_declaration_handler<MempoolAdapter, RuntimeServiceId>(
@@ -21,7 +21,7 @@ where
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
 
     relay
-        .send(logos_blockchain_sdp_service::SdpMessage::PostDeclaration {
+        .send(lb_sdp_service::SdpMessage::PostDeclaration {
             declaration: Box::new(declaration),
             reply_channel: reply_tx,
         })
@@ -47,7 +47,7 @@ where
     let relay = handle.relay().await?;
 
     relay
-        .send(logos_blockchain_sdp_service::SdpMessage::PostActivity { metadata })
+        .send(lb_sdp_service::SdpMessage::PostActivity { metadata })
         .await
         .map_err(|(e, _)| e)?;
 
@@ -70,7 +70,7 @@ where
     let relay = handle.relay().await?;
 
     relay
-        .send(logos_blockchain_sdp_service::SdpMessage::PostWithdrawal { declaration_id })
+        .send(lb_sdp_service::SdpMessage::PostWithdrawal { declaration_id })
         .await
         .map_err(|(e, _)| e)?;
 

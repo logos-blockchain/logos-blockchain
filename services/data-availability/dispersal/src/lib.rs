@@ -10,7 +10,7 @@ use adapters::{
 };
 use backend::DispersalTask;
 use futures::{StreamExt as _, stream::FuturesUnordered};
-use logos_blockchain_core::{
+use lb_core::{
     mantle::{
         Transaction as _,
         ops::channel::{ChannelId, Ed25519PublicKey, MsgId},
@@ -18,7 +18,7 @@ use logos_blockchain_core::{
     },
     sdp::SessionNumber,
 };
-use logos_blockchain_da_network_core::{PeerId, SubnetworkId};
+use lb_da_network_core::{PeerId, SubnetworkId};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -28,8 +28,8 @@ use overwatch::{
 };
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use logos_blockchain_services_utils::wait_until_services_are_ready;
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_services_utils::wait_until_services_are_ready;
+use lb_subnetworks_assignations::MembershipHandler;
 use thiserror::Error;
 use tokio::sync::oneshot;
 use tracing::error;

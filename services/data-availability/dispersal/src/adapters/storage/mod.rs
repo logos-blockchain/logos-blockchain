@@ -1,6 +1,6 @@
 pub mod mock;
 
-use logos_blockchain_core::mantle::{SignedMantleTx, ops::channel::ChannelId};
+use lb_core::mantle::{SignedMantleTx, ops::channel::ChannelId};
 
 pub struct DispersalStorageError;
 

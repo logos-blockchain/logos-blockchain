@@ -1,7 +1,7 @@
 pub mod adapters;
 
 use futures::Stream;
-use logos_blockchain_network_service::{NetworkService, backends::NetworkBackend};
+use lb_network_service::{NetworkService, backends::NetworkBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 
 #[async_trait::async_trait]

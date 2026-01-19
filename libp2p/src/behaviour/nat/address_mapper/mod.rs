@@ -10,6 +10,7 @@ use std::{
 };
 
 use futures::{FutureExt as _, future::BoxFuture};
+use lb_utils::math::PositiveF64;
 use libp2p::{
     PeerId,
     core::{Endpoint, Multiaddr, transport::PortUse},
@@ -18,7 +19,6 @@ use libp2p::{
         ToSwarm, dummy::ConnectionHandler,
     },
 };
-use logos_blockchain_utils::math::PositiveF64;
 pub use protocols::NatMapper;
 use tokio::time::{self, Sleep};
 use tracing::{debug, info, warn};

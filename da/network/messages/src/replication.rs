@@ -1,5 +1,5 @@
 use blake2::Digest as _;
-use logos_blockchain_core::{
+use lb_core::{
     da::BlobId,
     mantle::{SignedMantleTx, Transaction as _},
 };

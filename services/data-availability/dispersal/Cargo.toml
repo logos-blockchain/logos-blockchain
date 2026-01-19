@@ -13,22 +13,22 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                                 = "0.1"
-futures                                     = { default-features = false, version = "0.3" }
-logos-blockchain-chain-broadcast-service    = { workspace = true }
-logos-blockchain-core                       = { workspace = true }
-logos-blockchain-da-network-core            = { workspace = true }
-logos-blockchain-da-network-service         = { workspace = true }
-logos-blockchain-key-management-system-keys = { workspace = true }
-logos-blockchain-kzgrs-backend              = { workspace = true }
-logos-blockchain-services-utils             = { workspace = true }
-logos-blockchain-subnetworks-assignations   = { workspace = true }
-logos-blockchain-tracing                    = { workspace = true }
-logos-blockchain-utils                      = { workspace = true }
-overwatch                                   = { workspace = true }
-serde                                       = { workspace = true }
-serde_with                                  = { workspace = true }
-thiserror                                   = { workspace = true }
-tokio                                       = "1"
-tokio-stream                                = { default-features = false, version = "0.1.15" }
-tracing                                     = { workspace = true }
+async-trait                   = "0.1"
+futures                       = { default-features = false, version = "0.3" }
+lb-chain-broadcast-service    = { workspace = true }
+lb-core                       = { workspace = true }
+lb-da-network-core            = { workspace = true }
+lb-da-network-service         = { workspace = true }
+lb-key-management-system-keys = { workspace = true }
+lb-kzgrs-backend              = { workspace = true }
+lb-services-utils             = { workspace = true }
+lb-subnetworks-assignations   = { workspace = true }
+lb-tracing                    = { workspace = true }
+lb-utils                      = { workspace = true }
+overwatch                     = { workspace = true }
+serde                         = { workspace = true }
+serde_with                    = { workspace = true }
+thiserror                     = { workspace = true }
+tokio                         = "1"
+tokio-stream                  = { default-features = false, version = "0.1.15" }
+tracing                       = { workspace = true }

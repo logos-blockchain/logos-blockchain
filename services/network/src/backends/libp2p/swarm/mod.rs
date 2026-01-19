@@ -15,7 +15,7 @@ macro_rules! log_error {
 
 use std::{collections::HashMap, time::Duration};
 
-use logos_blockchain_libp2p::{
+use lb_libp2p::{
     Multiaddr, PeerId, Swarm, SwarmEvent,
     behaviour::BehaviourEvent,
     libp2p::{kad::QueryId, swarm::ConnectionId},
@@ -284,8 +284,8 @@ const fn exp_backoff(retry: usize) -> Duration {
 mod tests {
     use std::{net::Ipv4Addr, sync::Once, time::Instant};
 
-    use logos_blockchain_libp2p::{Protocol, protocol_name::StreamProtocol};
-    use logos_blockchain_utils::net::get_available_udp_port;
+    use lb_libp2p::{Protocol, protocol_name::StreamProtocol};
+    use lb_utils::net::get_available_udp_port;
     use rand::rngs::OsRng;
     use tracing_subscriber::EnvFilter;
 
@@ -301,30 +301,30 @@ mod tests {
         });
     }
 
-    fn create_swarm_config(port: u16, is_boot: bool) -> logos_blockchain_libp2p::SwarmConfig {
-        logos_blockchain_libp2p::SwarmConfig {
+    fn create_swarm_config(port: u16, is_boot: bool) -> lb_libp2p::SwarmConfig {
+        lb_libp2p::SwarmConfig {
             host: Ipv4Addr::LOCALHOST,
             port,
-            node_key: logos_blockchain_libp2p::ed25519::SecretKey::generate(),
-            gossipsub_config: logos_blockchain_libp2p::gossipsub::Config::default(),
+            node_key: lb_libp2p::ed25519::SecretKey::generate(),
+            gossipsub_config: lb_libp2p::gossipsub::Config::default(),
             // Use a tighter bootstrap interval for the first node if requested,
             // otherwise fall back to defaults.
             kademlia_config: if is_boot {
-                logos_blockchain_libp2p::KademliaSettings {
+                lb_libp2p::KademliaSettings {
                     periodic_bootstrap_interval_secs: Some(1),
                     ..Default::default()
                 }
             } else {
-                logos_blockchain_libp2p::KademliaSettings::default()
+                lb_libp2p::KademliaSettings::default()
             },
             kad_protocol_name: StreamProtocol::new("/kademlia/test"),
             identify_protocol_name: StreamProtocol::new("/identify/test"),
             chain_sync_protocol_name: StreamProtocol::new("/chainsync/test"),
-            identify_config: logos_blockchain_libp2p::IdentifySettings::default(),
-            chain_sync_config: logos_blockchain_cryptarchia_sync::Config::default(),
-            nat_config: logos_blockchain_libp2p::NatSettings::Traversal(
-                logos_blockchain_libp2p::TraversalSettings {
-                    autonat: logos_blockchain_libp2p::AutonatClientSettings {
+            identify_config: lb_libp2p::IdentifySettings::default(),
+            chain_sync_config: lb_cryptarchia_sync::Config::default(),
+            nat_config: lb_libp2p::NatSettings::Traversal(
+                lb_libp2p::TraversalSettings {
+                    autonat: lb_libp2p::AutonatClientSettings {
                         probe_interval_millisecs: Some(1000),
                         ..Default::default()
                     },

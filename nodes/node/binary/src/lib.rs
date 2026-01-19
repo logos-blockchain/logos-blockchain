@@ -4,54 +4,54 @@ pub mod generic_services;
 
 use color_eyre::eyre::{Result, eyre};
 use generic_services::{SamplingMempoolAdapter, VerifierMempoolAdapter};
-use logos_blockchain_kzgrs_backend::common::share::DaShare;
-pub use logos_blockchain_kzgrs_backend::dispersal::BlobInfo;
-pub use logos_blockchain_blend_service::{
+use lb_kzgrs_backend::common::share::DaShare;
+pub use lb_kzgrs_backend::dispersal::BlobInfo;
+pub use lb_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackend as BlendBackend,
         network::libp2p::Libp2pAdapter as BlendNetworkAdapter,
     },
     membership::service::Adapter as BlendMembershipAdapter,
 };
-pub use logos_blockchain_core::{
+pub use lb_core::{
     codec,
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction, TxHash, select::FillSize as FillSizeWithTx},
 };
-pub use logos_blockchain_da_network_service::backends::libp2p::validator::DaNetworkValidatorBackend;
-use logos_blockchain_da_network_service::{
+pub use lb_da_network_service::backends::libp2p::validator::DaNetworkValidatorBackend;
+use lb_da_network_service::{
     DaAddressbook, api::http::HttApiAdapter, membership::handler::DaMembershipHandler,
 };
-use logos_blockchain_da_sampling_service::{
+use lb_da_sampling_service::{
     backend::kzgrs::KzgrsSamplingBackend,
     network::adapters::validator::Libp2pAdapter as SamplingLibp2pAdapter,
     storage::adapters::rocksdb::{
         RocksAdapter as SamplingStorageAdapter, converter::DaStorageConverter,
     },
 };
-use logos_blockchain_da_verifier_service::{
+use lb_da_verifier_service::{
     backend::kzgrs::KzgrsDaVerifier,
     network::adapters::validator::Libp2pAdapter as VerifierNetworkAdapter,
     storage::adapters::rocksdb::RocksAdapter as VerifierStorageAdapter,
 };
-use logos_blockchain_libp2p::PeerId;
-pub use logos_blockchain_network_service::backends::libp2p::Libp2p as NetworkBackend;
-use logos_blockchain_sdp_service::SdpSettings;
-pub use logos_blockchain_storage_service::backends::{
+use lb_libp2p::PeerId;
+pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
+use lb_sdp_service::SdpSettings;
+pub use lb_storage_service::backends::{
     SerdeOp,
     rocksdb::{RocksBackend, RocksBackendSettings},
 };
-pub use logos_blockchain_system_sig_service::SystemSig;
-use logos_blockchain_time_service::backends::NtpTimeBackend;
+pub use lb_system_sig_service::SystemSig;
+use lb_time_service::backends::NtpTimeBackend;
 #[cfg(feature = "tracing")]
-pub use logos_blockchain_tracing_service::Tracing;
+pub use lb_tracing_service::Tracing;
 use overwatch::{
     DynError, derive_services,
     overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
 };
-use logos_blockchain_subnetworks_assignations::versions::history_aware_refill::HistoryAware;
-use logos_blockchain_tx_service::storage::adapters::RocksStorageAdapter;
-pub use logos_blockchain_tx_service::{
+use lb_subnetworks_assignations::versions::history_aware_refill::HistoryAware;
+use lb_tx_service::storage::adapters::RocksStorageAdapter;
+pub use lb_tx_service::{
     network::adapters::libp2p::{
         Libp2pAdapter as MempoolNetworkAdapter, Settings as MempoolAdapterSettings,
         Settings as AdapterSettings,
@@ -84,7 +84,7 @@ pub type DaNetworkApiAdapter = HttApiAdapter<DaMembershipHandler<LogosBlockchain
 #[cfg(feature = "tracing")]
 pub(crate) type TracingService = Tracing<RuntimeServiceId>;
 
-pub(crate) type NetworkService = logos_blockchain_network_service::NetworkService<NetworkBackend, RuntimeServiceId>;
+pub(crate) type NetworkService = lb_network_service::NetworkService<NetworkBackend, RuntimeServiceId>;
 
 pub(crate) type DaSamplingAdapter = SamplingLibp2pAdapter<
     LogosBlockchainDaMembership,
@@ -102,7 +102,7 @@ pub(crate) type BlendEdgeService =
 pub(crate) type BlendService =
     generic_services::blend::BlendService<DaSamplingAdapter, RuntimeServiceId>;
 
-pub(crate) type BlockBroadcastService = logos_blockchain_chain_broadcast_service::BlockBroadcastService<RuntimeServiceId>;
+pub(crate) type BlockBroadcastService = lb_chain_broadcast_service::BlockBroadcastService<RuntimeServiceId>;
 pub(crate) type DaVerifierService = generic_services::DaVerifierService<
     VerifierNetworkAdapter<
         LogosBlockchainDaMembership,
@@ -119,7 +119,7 @@ pub(crate) type DaVerifierService = generic_services::DaVerifierService<
 pub(crate) type DaSamplingService =
     generic_services::DaSamplingService<DaSamplingAdapter, RuntimeServiceId>;
 
-pub(crate) type DaNetworkService = logos_blockchain_da_network_service::NetworkService<
+pub(crate) type DaNetworkService = lb_da_network_service::NetworkService<
     DaNetworkValidatorBackend<LogosBlockchainDaMembership>,
     LogosBlockchainDaMembership,
     DaMembershipAdapter<RuntimeServiceId>,
@@ -131,7 +131,7 @@ pub(crate) type DaNetworkService = logos_blockchain_da_network_service::NetworkS
 
 pub(crate) type MempoolService = generic_services::TxMempoolService<RuntimeServiceId>;
 
-pub(crate) type DaNetworkAdapter = logos_blockchain_da_sampling_service::network::adapters::validator::Libp2pAdapter<
+pub(crate) type DaNetworkAdapter = lb_da_sampling_service::network::adapters::validator::Libp2pAdapter<
     LogosBlockchainDaMembership,
     DaMembershipAdapter<RuntimeServiceId>,
     DaMembershipStorage,
@@ -160,9 +160,9 @@ pub(crate) type CryptarchiaLeaderService = generic_services::CryptarchiaLeaderSe
 pub(crate) type TimeService = generic_services::TimeService<RuntimeServiceId>;
 
 pub(crate) type ApiStorageAdapter<RuntimeServiceId> =
-    logos_blockchain_api_service::http::storage::adapters::rocksdb::RocksAdapter<RuntimeServiceId>;
+    lb_api_service::http::storage::adapters::rocksdb::RocksAdapter<RuntimeServiceId>;
 
-pub(crate) type ApiService = logos_blockchain_api_service::ApiService<
+pub(crate) type ApiService = lb_api_service::ApiService<
     AxumBackend<
         DaShare,
         LogosBlockchainDaMembership,
@@ -180,7 +180,7 @@ pub(crate) type ApiService = logos_blockchain_api_service::ApiService<
         VerifierStorageAdapter<DaShare, DaStorageConverter>,
         DaStorageConverter,
         KzgrsSamplingBackend,
-        logos_blockchain_da_sampling_service::network::adapters::validator::Libp2pAdapter<
+        lb_da_sampling_service::network::adapters::validator::Libp2pAdapter<
             LogosBlockchainDaMembership,
             DaMembershipAdapter<RuntimeServiceId>,
             DaMembershipStorage,
@@ -201,13 +201,13 @@ pub(crate) type ApiService = logos_blockchain_api_service::ApiService<
     RuntimeServiceId,
 >;
 
-type StorageService = logos_blockchain_storage_service::StorageService<RocksBackend, RuntimeServiceId>;
+type StorageService = lb_storage_service::StorageService<RocksBackend, RuntimeServiceId>;
 
 type SystemSigService = SystemSig<RuntimeServiceId>;
 
 #[cfg(feature = "testing")]
 type TestingApiService<RuntimeServiceId> =
-    logos_blockchain_api_service::ApiService<api::testing::backend::TestAxumBackend, RuntimeServiceId>;
+    lb_api_service::ApiService<api::testing::backend::TestAxumBackend, RuntimeServiceId>;
 
 #[derive_services]
 pub struct LogosBlockchain {

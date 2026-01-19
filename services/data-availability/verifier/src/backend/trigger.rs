@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use logos_blockchain_utils::{
+use lb_utils::{
     bounded_duration::{MinimalBoundedDuration, NANO, SECOND},
     math::NonNegativeF64,
 };

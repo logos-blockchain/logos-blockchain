@@ -87,7 +87,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use logos_blockchain_groth16::Fr;
+    use lb_groth16::Fr;
 
     use super::*;
     use crate::mantle::TxHash;

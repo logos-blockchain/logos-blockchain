@@ -1,6 +1,6 @@
-use logos_blockchain_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
-use logos_blockchain_blend_crypto::keys::{X25519PrivateKey, X25519PublicKey};
-use logos_blockchain_utils::blake_rng::{BlakeRng, SeedableRng as _};
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+use lb_blend_crypto::keys::{X25519PrivateKey, X25519PublicKey};
+use lb_utils::blake_rng::{BlakeRng, SeedableRng as _};
 use zeroize::ZeroizeOnDrop;
 
 // This extension trait must go here instead of `logos-blockchain-blend-crypto`

@@ -1,8 +1,8 @@
 use ark_ff::{Field as _, PrimeField as _};
 use generic_array::GenericArray;
-use logos_blockchain_groth16::{Fr, fr_from_bytes, serde::serde_fr};
+use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use num_bigint::BigUint;
-use logos_blockchain_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
+use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -19,7 +19,7 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Groth16LeaderProof {
     #[serde(with = "proof_serde")]
-    proof: logos_blockchain_pol::PoLProof,
+    proof: lb_pol::PoLProof,
     #[serde(with = "serde_fr")]
     entropy_contribution: Fr,
     leader_key: Ed25519PublicKey,
@@ -31,7 +31,7 @@ pub struct Groth16LeaderProof {
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Proof of leadership failed: {0}")]
-    PoLProofFailed(#[from] logos_blockchain_pol::ProveError),
+    PoLProofFailed(#[from] lb_pol::ProveError),
 }
 
 impl Groth16LeaderProof {
@@ -56,7 +56,7 @@ impl Groth16LeaderProof {
     #[must_use]
     pub fn genesis() -> Self {
         Self {
-            proof: logos_blockchain_pol::PoLProof::from_bytes(&[0u8; 128]),
+            proof: lb_pol::PoLProof::from_bytes(&[0u8; 128]),
             entropy_contribution: Fr::ZERO,
             leader_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
@@ -65,12 +65,12 @@ impl Groth16LeaderProof {
         }
     }
 
-    fn generate_proof(private: LeaderPrivate) -> Result<(logos_blockchain_pol::PoLProof, Fr), Error> {
+    fn generate_proof(private: LeaderPrivate) -> Result<(lb_pol::PoLProof, Fr), Error> {
         if cfg!(feature = "pol-dev-mode") && std::env::var(POL_PROOF_DEV_MODE).is_ok() {
             tracing::warn!(
                 "Proofs are being generated in dev mode. This should never be used in production."
             );
-            let proof = logos_blockchain_groth16::CompressedGroth16Proof::new(
+            let proof = lb_groth16::CompressedGroth16Proof::new(
                 GenericArray::default(),
                 GenericArray::default(),
                 GenericArray::default(),
@@ -79,12 +79,12 @@ impl Groth16LeaderProof {
             return Ok((proof, Fr::ZERO));
         }
         let (proof, verif_inputs) =
-            logos_blockchain_pol::prove(&private.input.into()).map_err(Error::PoLProofFailed)?;
+            lb_pol::prove(&private.input.into()).map_err(Error::PoLProofFailed)?;
         Ok((proof, verif_inputs.entropy_contribution.into_inner()))
     }
 
     #[must_use]
-    pub const fn proof(&self) -> &logos_blockchain_pol::PoLProof {
+    pub const fn proof(&self) -> &lb_pol::PoLProof {
         &self.proof
     }
 }
@@ -114,9 +114,9 @@ impl LeaderProof for Groth16LeaderProof {
         }
 
         let leader_pk = ed25519_pk_to_fr_tuple(self.leader_key());
-        logos_blockchain_pol::verify(
+        lb_pol::verify(
             &self.proof,
-            &logos_blockchain_pol::PolVerifierInput::new(
+            &lb_pol::PolVerifierInput::new(
                 self.entropy(),
                 public_inputs.slot,
                 public_inputs.epoch_nonce,
@@ -130,7 +130,7 @@ impl LeaderProof for Groth16LeaderProof {
     }
 
     fn verify_genesis(&self) -> bool {
-        self.proof == logos_blockchain_pol::PoLProof::from_bytes(&[0u8; 128])
+        self.proof == lb_pol::PoLProof::from_bytes(&[0u8; 128])
             && self.entropy_contribution == Fr::ZERO
             && self.leader_key == Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()
             && self.voucher_cm == VoucherCm::default()
@@ -205,9 +205,9 @@ impl LeaderPublic {
     }
 
     fn scaled_phi_approx(&self) -> (BigUint, BigUint) {
-        let t0 = &*logos_blockchain_pol::T0_CONSTANT / &BigUint::from(self.total_stake);
+        let t0 = &*lb_pol::T0_CONSTANT / &BigUint::from(self.total_stake);
         let total_stake_sq = &BigUint::from(self.total_stake) * &BigUint::from(self.total_stake);
-        let t1 = &*logos_blockchain_pol::P - (&*logos_blockchain_pol::T1_CONSTANT / &total_stake_sq);
+        let t1 = &*lb_pol::P - (&*lb_pol::T1_CONSTANT / &total_stake_sq);
         (t0, t1)
     }
 
@@ -218,7 +218,7 @@ impl LeaderPublic {
         let double_total_stake_sq = &total_stake_sq * 2u64;
 
         let precision = 1_000_000_000_000_000_000u128;
-        let order = logos_blockchain_pol::P.clone();
+        let order = lb_pol::P.clone();
         let neg_f_ln =
             BigUint::from((-(1.0 - active_slot_coeff).ln() * precision as f64).round() as u128);
         let neg_f_ln_sq = &neg_f_ln * &neg_f_ln;
@@ -241,7 +241,7 @@ impl LeaderPublic {
 
 #[derive(Debug, Clone)]
 pub struct LeaderPrivate {
-    input: logos_blockchain_pol::PolWitnessInputsData,
+    input: lb_pol::PolWitnessInputsData,
     pk: Ed25519PublicKey,
     #[cfg(feature = "pol-dev-mode")]
     public: LeaderPublic,
@@ -259,7 +259,7 @@ impl LeaderPrivate {
     ) -> Self {
         let public_key = *leader_pk;
         let leader_pk = ed25519_pk_to_fr_tuple(leader_pk);
-        let chain = logos_blockchain_pol::PolChainInputsData {
+        let chain = lb_pol::PolChainInputsData {
             slot_number: public.slot,
             epoch_nonce: public.epoch_nonce,
             total_stake: public.total_stake,
@@ -267,7 +267,7 @@ impl LeaderPrivate {
             latest_root: public.latest_root,
             leader_pk,
         };
-        let wallet = logos_blockchain_pol::PolWalletInputsData {
+        let wallet = lb_pol::PolWalletInputsData {
             note_value: note.note.value,
             transaction_hash: *note.tx_hash.as_ref(),
             output_number: note.output_index as u64,
@@ -285,7 +285,7 @@ impl LeaderPrivate {
                 .collect(),
             secret_key,
         };
-        let input = logos_blockchain_pol::PolWitnessInputsData::from_chain_and_wallet_data(chain, wallet);
+        let input = lb_pol::PolWitnessInputsData::from_chain_and_wallet_data(chain, wallet);
         Self {
             input,
             pk: public_key,
@@ -295,12 +295,12 @@ impl LeaderPrivate {
     }
 
     #[must_use]
-    pub const fn input(&self) -> &logos_blockchain_pol::PolWitnessInputsData {
+    pub const fn input(&self) -> &lb_pol::PolWitnessInputsData {
         &self.input
     }
 }
 
-impl From<LeaderPrivate> for logos_blockchain_pol::PolWitnessInputsData {
+impl From<LeaderPrivate> for lb_pol::PolWitnessInputsData {
     fn from(value: LeaderPrivate) -> Self {
         value.input
     }
@@ -309,14 +309,14 @@ impl From<LeaderPrivate> for logos_blockchain_pol::PolWitnessInputsData {
 mod proof_serde {
     use serde::{Deserialize, Deserializer, Serializer};
 
-    pub fn serialize<S>(item: &logos_blockchain_pol::PoLProof, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(item: &lb_pol::PoLProof, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         serializer.serialize_bytes(&item.to_bytes())
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<logos_blockchain_pol::PoLProof, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<lb_pol::PoLProof, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -324,7 +324,7 @@ mod proof_serde {
         let proof_array: [u8; 128] = proof_bytes
             .try_into()
             .map_err(|_| serde::de::Error::custom("Expected exactly 128 bytes"))?;
-        Ok(logos_blockchain_pol::PoLProof::from_bytes(&proof_array))
+        Ok(lb_pol::PoLProof::from_bytes(&proof_array))
     }
 }
 

@@ -3,17 +3,17 @@ mod target_session;
 
 use std::{fmt::Debug, num::NonZeroU64};
 
-use logos_blockchain_blend_message::{
+use lb_blend_message::{
     encap::ProofsVerifier as ProofsVerifierTrait, reward::BlendingTokenEvaluation,
 };
-use logos_blockchain_blend_proofs::quota::inputs::prove::public::LeaderInputs;
-use logos_blockchain_core::{
+use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
+use lb_core::{
     blend::core_quota,
     block::BlockNumber,
     mantle::Utxo,
     sdp::{ActivityMetadata, ProviderId, ServiceParameters},
 };
-use logos_blockchain_utils::math::NonNegativeF64;
+use lb_utils::math::NonNegativeF64;
 
 use crate::{
     EpochState,
@@ -244,7 +244,7 @@ impl RewardsParameters {
     fn core_quota_and_token_evaluation(
         &self,
         num_core_nodes: u64,
-    ) -> Result<(u64, BlendingTokenEvaluation), logos_blockchain_blend_message::reward::Error> {
+    ) -> Result<(u64, BlendingTokenEvaluation), lb_blend_message::reward::Error> {
         let core_quota = core_quota(
             self.rounds_per_session,
             self.message_frequency_per_round,
@@ -271,14 +271,14 @@ impl RewardsParameters {
 mod tests {
     use std::{collections::HashMap, convert::Infallible};
 
-    use logos_blockchain_groth16::Field as _;
-    use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
-    use logos_blockchain_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
-    use logos_blockchain_blend_proofs::{
+    use lb_groth16::Field as _;
+    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
+    use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
+    use lb_blend_proofs::{
         quota::{ProofOfQuota, VerifiedProofOfQuota},
         selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
     };
-    use logos_blockchain_core::{
+    use lb_core::{
         crypto::ZkHash,
         sdp::{ServiceType, blend},
     };

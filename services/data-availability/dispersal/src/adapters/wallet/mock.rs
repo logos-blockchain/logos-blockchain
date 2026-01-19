@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
-use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, ZkKey};
-use logos_blockchain_core::mantle::{
+use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+use lb_core::mantle::{
     Op, OpProof, SignedMantleTx, Transaction as _, ops::channel::blob::BlobOp,
     tx_builder::MantleTxBuilder,
 };

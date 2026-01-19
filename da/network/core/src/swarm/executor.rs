@@ -4,7 +4,7 @@ use futures::{
     StreamExt as _,
     stream::{self, FuturesUnordered},
 };
-use logos_blockchain_kzgrs_backend::common::share::DaShare;
+use lb_kzgrs_backend::common::share::DaShare;
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
     core::transport::ListenerId,
@@ -12,9 +12,9 @@ use libp2p::{
     swarm::{DialError, SwarmEvent},
 };
 use log::debug;
-use logos_blockchain_core::{da::BlobId, mantle::SignedMantleTx, sdp::SessionNumber};
-use logos_blockchain_da_messages::replication::ReplicationRequest;
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_core::{da::BlobId, mantle::SignedMantleTx, sdp::SessionNumber};
+use lb_da_messages::replication::ReplicationRequest;
+use lb_subnetworks_assignations::MembershipHandler;
 use tokio::{
     sync::{
         broadcast,

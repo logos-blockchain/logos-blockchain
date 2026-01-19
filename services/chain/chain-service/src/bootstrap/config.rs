@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use logos_blockchain_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
+use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use serde::{Deserialize, Serialize};
 
 #[serde_with::serde_as]

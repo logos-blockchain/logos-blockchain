@@ -8,7 +8,7 @@ use std::{
 
 use futures::Stream;
 use libp2p::Multiaddr;
-use logos_blockchain_core::sdp::{ProviderId, SessionNumber};
+use lb_core::sdp::{ProviderId, SessionNumber};
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},

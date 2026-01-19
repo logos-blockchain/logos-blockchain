@@ -1,5 +1,5 @@
-use logos_blockchain_groth16::fr_from_bytes;
-use logos_blockchain_poq::{
+use lb_groth16::fr_from_bytes;
+use lb_poq::{
     PoQBlendInputsData, PoQChainInputsData, PoQCommonInputsData, PoQInputsFromDataError,
     PoQWalletInputsData, PoQWitnessInputs,
 };

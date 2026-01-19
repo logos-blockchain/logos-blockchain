@@ -1,8 +1,8 @@
 use core::fmt::{self, Debug, Formatter};
 use std::collections::HashMap;
 
-use logos_blockchain_groth16::{fr_from_bytes_unchecked, fr_to_bytes};
-use logos_blockchain_poq::{CORE_MERKLE_TREE_HEIGHT, CorePathAndSelectors};
+use lb_groth16::{fr_from_bytes_unchecked, fr_to_bytes};
+use lb_poq::{CORE_MERKLE_TREE_HEIGHT, CorePathAndSelectors};
 use rs_merkle_tree::{Node, stores::MemoryStore, tree::MerkleProof};
 use thiserror::Error;
 
@@ -47,7 +47,7 @@ impl rs_merkle_tree::hasher::Hasher for InnerTreeZkHasher {
 ///
 /// It is a fixed-height tree, with the height expected by the [`PoQ` specification](https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#215261aa09df81ec850ad7965bf6e76b).
 /// It is a wrapped around an instance of an [`rs_merkle_tree`], configured with
-/// our [`logos_blockchain_core::crypto::ZkHasher`] and additional information to make it
+/// our [`lb_core::crypto::ZkHasher`] and additional information to make it
 /// suitable for `PoQ` usage.
 pub struct MerkleTree {
     /// A map of key -> index after the input keys have been sorted, for proof
@@ -227,7 +227,7 @@ pub fn sort_nodes_and_build_merkle_tree<Node>(
 mod tests {
     use core::iter::repeat_n;
 
-    use logos_blockchain_groth16::{Field as _, fr_from_bytes_unchecked};
+    use lb_groth16::{Field as _, fr_from_bytes_unchecked};
     use num_bigint::BigUint;
 
     use crate::{

@@ -45,7 +45,7 @@ pub struct SwarmConfig {
 
     /// Chain sync config
     #[serde(default)]
-    pub chain_sync_config: logos_blockchain_cryptarchia_sync::Config,
+    pub chain_sync_config: lb_cryptarchia_sync::Config,
 
     /// Nat config
     #[serde(default)]
@@ -91,7 +91,7 @@ mod tests {
                 chain_sync_protocol_name: StreamProtocol::new("/chainsync/test"),
                 kademlia_config: kademlia::Settings::default(),
                 identify_config: identify::Settings::default(),
-                chain_sync_config: logos_blockchain_cryptarchia_sync::Config::default(),
+                chain_sync_config: lb_cryptarchia_sync::Config::default(),
                 nat_config: nat::Settings::default(),
             }
         }

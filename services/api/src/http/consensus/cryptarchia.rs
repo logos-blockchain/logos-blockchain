@@ -1,9 +1,9 @@
 use std::fmt::{Debug, Display};
 
-use logos_blockchain_chain_service::{ConsensusMsg, CryptarchiaConsensus, CryptarchiaInfo};
-use logos_blockchain_core::{header::HeaderId, mantle::SignedMantleTx};
-use logos_blockchain_storage_service::backends::rocksdb::RocksBackend;
-use logos_blockchain_time_service::backends::ntp::NtpTimeBackend;
+use lb_chain_service::{ConsensusMsg, CryptarchiaConsensus, CryptarchiaInfo};
+use lb_core::{header::HeaderId, mantle::SignedMantleTx};
+use lb_storage_service::backends::rocksdb::RocksBackend;
+use lb_time_service::backends::ntp::NtpTimeBackend;
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::sync::oneshot;
 

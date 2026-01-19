@@ -7,15 +7,15 @@ use std::{
 
 use async_trait::async_trait;
 use backends::BlendBackend;
-use logos_blockchain_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use fork_stream::StreamExt as _;
 use futures::{
     FutureExt as _, Stream, StreamExt as _,
     future::{BoxFuture, join_all},
 };
-use logos_blockchain_key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
+use lb_key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
 use network::NetworkAdapter;
-use logos_blockchain_blend::{
+use lb_blend::{
     crypto::random_sized_bytes,
     message::{
         PayloadType,
@@ -44,14 +44,14 @@ use logos_blockchain_blend::{
         stream::UninitializedFirstReadyStream,
     },
 };
-use logos_blockchain_core::{
+use lb_core::{
     codec::{DeserializeOp as _, SerializeOp as _},
     sdp::ActivityMetadata,
 };
-use logos_blockchain_network_service::NetworkService;
-use logos_blockchain_sdp_service::SdpMessage;
-use logos_blockchain_time_service::{SlotTick, TimeService, TimeServiceMessage};
-use logos_blockchain_utils::blake_rng::BlakeRng;
+use lb_network_service::NetworkService;
+use lb_sdp_service::SdpMessage;
+use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
+use lb_utils::blake_rng::BlakeRng;
 use overwatch::{
     OpaqueServiceResourcesHandle,
     overwatch::OverwatchHandle,
@@ -63,7 +63,7 @@ use overwatch::{
 };
 use rand::{RngCore, SeedableRng as _, seq::SliceRandom as _};
 use serde::{Deserialize, Serialize};
-use logos_blockchain_services_utils::{
+use lb_services_utils::{
     overwatch::{JsonFileBackend, RecoveryOperator},
     wait_until_services_are_ready,
 };
@@ -222,7 +222,7 @@ where
         CoreAndLeaderProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>> + Send,
     SdpService: ServiceData<Message = SdpMessage> + Send,
     ProofsVerifier: ProofsVerifierTrait + Clone + Send,
-    TimeBackend: logos_blockchain_time_service::backends::TimeBackend + Send,
+    TimeBackend: lb_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
     RuntimeServiceId: AsServiceId<NetworkService<Network::Backend, RuntimeServiceId>>

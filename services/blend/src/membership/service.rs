@@ -1,13 +1,13 @@
 use std::{hash::Hash, marker::PhantomData};
 
-use logos_blockchain_chain_broadcast_service::{BlockBroadcastMsg, SessionSubscription, SessionUpdate};
+use lb_chain_broadcast_service::{BlockBroadcastMsg, SessionSubscription, SessionUpdate};
 use futures::StreamExt as _;
-use logos_blockchain_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
-use logos_blockchain_blend::{
+use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
+use lb_blend::{
     crypto::merkle::sort_nodes_and_build_merkle_tree,
     scheduling::membership::{Membership, Node},
 };
-use logos_blockchain_core::sdp::{ProviderId, ProviderInfo};
+use lb_core::sdp::{ProviderId, ProviderInfo};
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},

@@ -3,8 +3,8 @@ pub mod adapters;
 use std::{collections::HashMap, pin::Pin};
 
 use futures::Stream;
-use logos_blockchain_core::{da::BlobId, header::HeaderId, sdp::SessionNumber};
-use logos_blockchain_da_network_service::{
+use lb_core::{da::BlobId, header::HeaderId, sdp::SessionNumber};
+use lb_da_network_service::{
     NetworkService,
     api::ApiAdapter,
     backends::{
@@ -17,7 +17,7 @@ use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
 };
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_subnetworks_assignations::MembershipHandler;
 
 #[async_trait::async_trait]
 pub trait NetworkAdapter<RuntimeServiceId> {

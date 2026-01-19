@@ -10,8 +10,8 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-logos-blockchain-circuits-utils = { workspace = true }
-tempfile                        = { workspace = true }
+lb-circuits-utils = { workspace = true }
+tempfile          = { workspace = true }
 
 [lints]
 workspace = true

@@ -2,10 +2,10 @@ pub mod adapters;
 
 use std::collections::HashSet;
 
-use logos_blockchain_cryptarchia_sync::GetTipResponse;
+use lb_cryptarchia_sync::GetTipResponse;
 use futures::Stream;
-use logos_blockchain_core::header::HeaderId;
-use logos_blockchain_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
+use lb_core::header::HeaderId;
+use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},

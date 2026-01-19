@@ -5,7 +5,7 @@ use core::{
 use std::collections::HashSet;
 
 use futures::{StreamExt as _, task::noop_waker_ref};
-use logos_blockchain_utils::blake_rng::BlakeRng;
+use lb_utils::blake_rng::BlakeRng;
 use rand::SeedableRng as _;
 use tokio_stream::iter;
 

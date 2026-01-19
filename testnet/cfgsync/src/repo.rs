@@ -4,8 +4,8 @@ use std::{
     time::Duration,
 };
 
-use logos_blockchain_tests::topology::configs::{GeneralConfig, da::DaParams};
-use logos_blockchain_tracing_service::TracingSettings;
+use lb_tests::topology::configs::{GeneralConfig, da::DaParams};
+use lb_tracing_service::TracingSettings;
 use tokio::{sync::oneshot::Sender, time::timeout};
 
 use crate::{

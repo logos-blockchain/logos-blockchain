@@ -17,7 +17,7 @@ pub mod enumerated {
     /// # Example
     ///
     /// ```
-    /// use logos_blockchain_utils::types::enumerated::is_same_variant;
+    /// use lb_utils::types::enumerated::is_same_variant;
     ///
     /// enum Color {
     ///     Red,

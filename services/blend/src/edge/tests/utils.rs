@@ -6,7 +6,7 @@ use std::{
 
 use async_trait::async_trait;
 use futures::{StreamExt as _, future::ready, stream::once};
-use logos_blockchain_blend::{
+use lb_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     proofs::quota::inputs::prove::{private::ProofOfLeadershipQuotaInputs, public::LeaderInputs},
     scheduling::{
@@ -19,7 +19,7 @@ use logos_blockchain_blend::{
         stream::UninitializedFirstReadyStream,
     },
 };
-use logos_blockchain_time_service::SlotTick;
+use lb_time_service::SlotTick;
 use overwatch::overwatch::{OverwatchHandle, commands::OverwatchCommand};
 use rand::{RngCore, rngs::OsRng};
 use tokio::{sync::mpsc, task::JoinHandle};

@@ -2,11 +2,11 @@ use core::convert::Infallible;
 
 use async_trait::async_trait;
 use futures::future::ready;
-use logos_blockchain_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
-use logos_blockchain_blend_message::{
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+use lb_blend_message::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey, encap::ProofsVerifier,
 };
-use logos_blockchain_blend_proofs::{
+use lb_blend_proofs::{
     quota::{
         self, ProofOfQuota, VerifiedProofOfQuota,
         inputs::prove::{
@@ -15,7 +15,7 @@ use logos_blockchain_blend_proofs::{
     },
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
-use logos_blockchain_core::crypto::ZkHash;
+use lb_core::crypto::ZkHash;
 
 use crate::message_blend::{
     CoreProofOfQuotaGenerator,
@@ -66,7 +66,7 @@ impl CoreProofOfQuotaGenerator for MockCorePoQGenerator {
         _key_index: u64,
     ) -> impl Future<Output = Result<(VerifiedProofOfQuota, ZkHash), quota::Error>> + Send + Sync
     {
-        use logos_blockchain_groth16::Field as _;
+        use lb_groth16::Field as _;
 
         ready(Ok((
             VerifiedProofOfQuota::from_bytes_unchecked([0; _]),

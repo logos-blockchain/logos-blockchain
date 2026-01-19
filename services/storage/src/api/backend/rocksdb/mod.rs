@@ -1,4 +1,4 @@
-use logos_blockchain_core::header;
+use lb_core::header;
 
 use crate::{api::StorageBackendApi, backends::rocksdb::RocksBackend};
 

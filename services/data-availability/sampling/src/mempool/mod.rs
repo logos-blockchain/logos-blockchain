@@ -3,12 +3,12 @@ pub mod sampling;
 use std::pin::Pin;
 
 use futures::Stream;
-use logos_blockchain_core::{da::BlobId, sdp::SessionNumber};
+use lb_core::{da::BlobId, sdp::SessionNumber};
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
 };
-use logos_blockchain_tx_service::backend::MempoolError;
+use lb_tx_service::backend::MempoolError;
 
 #[derive(thiserror::Error, Debug)]
 pub enum MempoolAdapterError {

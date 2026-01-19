@@ -8,7 +8,7 @@ use futures::{
     future::BoxFuture,
     stream::{BoxStream, FuturesUnordered},
 };
-use logos_blockchain_kzgrs_backend::common::share::DaShare;
+use lb_kzgrs_backend::common::share::DaShare;
 use libp2p::{
     Multiaddr, PeerId, Stream,
     core::{Endpoint, transport::PortUse},
@@ -18,12 +18,12 @@ use libp2p::{
     },
 };
 use libp2p_stream::{Control, OpenStreamError};
-use logos_blockchain_core::{codec, da::BlobId, mantle::SignedMantleTx};
-use logos_blockchain_da_messages::{
+use lb_core::{codec, da::BlobId, mantle::SignedMantleTx};
+use lb_da_messages::{
     dispersal,
     packing::{pack_to_writer, unpack_from_reader},
 };
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_subnetworks_assignations::MembershipHandler;
 use thiserror::Error;
 use tokio::sync::{mpsc, mpsc::UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;

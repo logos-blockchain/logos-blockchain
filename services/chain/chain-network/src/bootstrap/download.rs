@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use logos_blockchain_cryptarchia_sync::HeaderId;
+use lb_cryptarchia_sync::HeaderId;
 use futures::{Stream, StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
 use overwatch::DynError;
 use tracing::{debug, info};

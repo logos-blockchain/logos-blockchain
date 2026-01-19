@@ -83,72 +83,72 @@ resolver = "2"
 
 [workspace.dependencies]
 # Internal
-logos-blockchain-api-service                   = { default-features = false, path = "./services/api" }
-logos-blockchain-blend                         = { default-features = false, path = "./blend/core" }
-logos-blockchain-blend-crypto                  = { default-features = false, path = "./blend/crypto" }
-logos-blockchain-blend-message                 = { default-features = false, path = "./blend/message" }
-logos-blockchain-blend-network                 = { default-features = false, path = "./blend/network" }
-logos-blockchain-blend-proofs                  = { default-features = false, path = "./blend/proofs" }
-logos-blockchain-blend-scheduling              = { default-features = false, path = "./blend/scheduling" }
-logos-blockchain-blend-service                 = { default-features = false, path = "./services/blend" }
-logos-blockchain-bundler                       = { default-features = false, path = "./bundler" }
-logos-blockchain-cfgsync                       = { default-features = false, path = "./testnet/cfgsync" }
-logos-blockchain-chain-broadcast-service       = { default-features = false, path = "./services/chain/broadcast-service" }
-logos-blockchain-chain-leader-service          = { default-features = false, path = "./services/chain/chain-leader" }
-logos-blockchain-chain-network-service         = { default-features = false, path = "./services/chain/chain-network" }
-logos-blockchain-chain-service                 = { default-features = false, path = "./services/chain/chain-service" }
-logos-blockchain-chain-service-common          = { default-features = false, path = "./services/chain/chain-common" }
-logos-blockchain-circuits-prover               = { default-features = false, path = "./zk/circuits/prover" }
-logos-blockchain-circuits-utils                = { default-features = false, path = "./zk/circuits/utils" }
-logos-blockchain-circuits-verifier             = { default-features = false, path = "./zk/circuits/verifier" }
-logos-blockchain-cli                           = { default-features = false, path = "./cli" }
-logos-blockchain-common-http-client            = { default-features = false, path = "./nodes/node/http-client" }
-logos-blockchain-core                          = { default-features = false, path = "./core" }
-logos-blockchain-cryptarchia-engine            = { default-features = false, path = "./consensus/cryptarchia-engine" }
-logos-blockchain-cryptarchia-sync              = { default-features = false, path = "./consensus/cryptarchia-sync" }
-logos-blockchain-da-dispersal-service          = { default-features = false, path = "./services/data-availability/dispersal" }
-logos-blockchain-da-messages                   = { default-features = false, path = "./da/network/messages" }
-logos-blockchain-da-network-core               = { default-features = false, path = "./da/network/core" }
-logos-blockchain-da-network-service            = { default-features = false, path = "./services/data-availability/network" }
-logos-blockchain-da-sampling-service           = { default-features = false, path = "./services/data-availability/sampling" }
-logos-blockchain-da-verifier-service           = { default-features = false, path = "./services/data-availability/verifier" }
-logos-blockchain-demo-archiver                 = { default-features = false, path = "./testnet/l2-sequencer-archival-demo/archiver" }
-logos-blockchain-demo-sequencer                = { default-features = false, path = "./testnet/l2-sequencer-archival-demo/sequencer" }
-logos-blockchain-executor                      = { default-features = false, path = "./nodes/executor/binary" }
-logos-blockchain-executor-http-client          = { default-features = false, path = "./nodes/executor/http-client" }
-logos-blockchain-groth16                       = { default-features = false, path = "./zk/groth16" }
-logos-blockchain-http-api-common               = { default-features = false, path = "./nodes/api-common" }
-logos-blockchain-key-management-system-keys    = { default-features = false, path = "./kms/keys" }
-logos-blockchain-key-management-system-macros  = { default-features = false, path = "./kms/macros" }
-logos-blockchain-key-management-system-service = { default-features = false, path = "./services/key-management-system" }
-logos-blockchain-kzgrs                         = { default-features = false, path = "./da/kzgrs" }
-logos-blockchain-kzgrs-backend                 = { default-features = false, path = "./da/kzgrs-backend" }
-logos-blockchain-ledger                        = { default-features = false, path = "./ledger" }
-logos-blockchain-libp2p                        = { default-features = false, path = "./libp2p" }
-logos-blockchain-mmr                           = { default-features = false, path = "./mmr" }
-logos-blockchain-network-service               = { default-features = false, path = "./services/network" }
-logos-blockchain-node                          = { default-features = false, path = "./nodes/node/binary" }
-logos-blockchain-poc                           = { default-features = false, path = "./zk/proofs/poc" }
-logos-blockchain-pol                           = { default-features = false, path = "./zk/proofs/pol" }
-logos-blockchain-poq                           = { default-features = false, path = "./zk/proofs/poq" }
-logos-blockchain-poseidon2                     = { default-features = false, path = "./zk/poseidon2" }
-logos-blockchain-sdp-service                   = { default-features = false, path = "./services/sdp" }
-logos-blockchain-services-utils                = { default-features = false, path = "./services/utils" }
-logos-blockchain-storage-service               = { default-features = false, path = "./services/storage" }
-logos-blockchain-subnetworks-assignations      = { default-features = false, path = "./da/network/subnetworks-assignations" }
-logos-blockchain-system-sig-service            = { default-features = false, path = "./services/system-sig" }
-logos-blockchain-tests                         = { default-features = false, path = "./tests" }
-logos-blockchain-time-service                  = { default-features = false, path = "./services/time" }
-logos-blockchain-tracing                       = { default-features = false, path = "./tracing" }
-logos-blockchain-tracing-service               = { default-features = false, path = "./services/tracing" }
-logos-blockchain-tx-service                    = { default-features = false, path = "./services/tx-service" }
-logos-blockchain-utils                         = { default-features = false, path = "./utils" }
-logos-blockchain-utxotree                      = { default-features = false, path = "./utxotree" }
-logos-blockchain-wallet                        = { default-features = false, path = "./wallet" }
-logos-blockchain-wallet-http-client            = { default-features = false, path = "./wallet-http-client" }
-logos-blockchain-wallet-service                = { default-features = false, path = "./services/wallet" }
-logos-blockchain-witness-generator             = { default-features = false, path = "./zk/circuits/witness-generator" }
-logos-blockchain-zksign                        = { default-features = false, path = "./zk/proofs/zksign" }
+lb-api-service                   = { default-features = false, path = "./services/api", package = "logos-blockchain-api-service" }
+lb-blend                         = { default-features = false, path = "./blend/core", package = "logos-blockchain-blend" }
+lb-blend-crypto                  = { default-features = false, path = "./blend/crypto", package = "logos-blockchain-blend-crypto" }
+lb-blend-message                 = { default-features = false, path = "./blend/message", package = "logos-blockchain-blend-message" }
+lb-blend-network                 = { default-features = false, path = "./blend/network", package = "logos-blockchain-blend-network" }
+lb-blend-proofs                  = { default-features = false, path = "./blend/proofs", package = "logos-blockchain-blend-proofs" }
+lb-blend-scheduling              = { default-features = false, path = "./blend/scheduling", package = "logos-blockchain-blend-scheduling" }
+lb-blend-service                 = { default-features = false, path = "./services/blend", package = "logos-blockchain-blend-service" }
+lb-bundler                       = { default-features = false, path = "./bundler", package = "logos-blockchain-bundler" }
+lb-cfgsync                       = { default-features = false, path = "./testnet/cfgsync", package = "logos-blockchain-cfgsync" }
+lb-chain-broadcast-service       = { default-features = false, path = "./services/chain/broadcast-service", package = "logos-blockchain-chain-broadcast-service" }
+lb-chain-leader-service          = { default-features = false, path = "./services/chain/chain-leader", package = "logos-blockchain-chain-leader-service" }
+lb-chain-network-service         = { default-features = false, path = "./services/chain/chain-network", package = "logos-blockchain-chain-network-service" }
+lb-chain-service                 = { default-features = false, path = "./services/chain/chain-service", package = "logos-blockchain-chain-service" }
+lb-chain-service-common          = { default-features = false, path = "./services/chain/chain-common", package = "logos-blockchain-chain-service-common" }
+lb-circuits-prover               = { default-features = false, path = "./zk/circuits/prover", package = "logos-blockchain-circuits-prover" }
+lb-circuits-utils                = { default-features = false, path = "./zk/circuits/utils", package = "logos-blockchain-circuits-utils" }
+lb-circuits-verifier             = { default-features = false, path = "./zk/circuits/verifier", package = "logos-blockchain-circuits-verifier" }
+lb-cli                           = { default-features = false, path = "./cli", package = "logos-blockchain-cli" }
+lb-common-http-client            = { default-features = false, path = "./nodes/node/http-client", package = "logos-blockchain-common-http-client" }
+lb-core                          = { default-features = false, path = "./core", package = "logos-blockchain-core" }
+lb-cryptarchia-engine            = { default-features = false, path = "./consensus/cryptarchia-engine", package = "logos-blockchain-cryptarchia-engine" }
+lb-cryptarchia-sync              = { default-features = false, path = "./consensus/cryptarchia-sync", package = "logos-blockchain-cryptarchia-sync" }
+lb-da-dispersal-service          = { default-features = false, path = "./services/data-availability/dispersal", package = "logos-blockchain-da-dispersal-service" }
+lb-da-messages                   = { default-features = false, path = "./da/network/messages", package = "logos-blockchain-da-messages" }
+lb-da-network-core               = { default-features = false, path = "./da/network/core", package = "logos-blockchain-da-network-core" }
+lb-da-network-service            = { default-features = false, path = "./services/data-availability/network", package = "logos-blockchain-da-network-service" }
+lb-da-sampling-service           = { default-features = false, path = "./services/data-availability/sampling", package = "logos-blockchain-da-sampling-service" }
+lb-da-verifier-service           = { default-features = false, path = "./services/data-availability/verifier", package = "logos-blockchain-da-verifier-service" }
+lb-demo-archiver                 = { default-features = false, path = "./testnet/l2-sequencer-archival-demo/archiver", package = "logos-blockchain-demo-archiver" }
+lb-demo-sequencer                = { default-features = false, path = "./testnet/l2-sequencer-archival-demo/sequencer", package = "logos-blockchain-demo-sequencer" }
+lb-executor                      = { default-features = false, path = "./nodes/executor/binary", package = "logos-blockchain-executor" }
+lb-executor-http-client          = { default-features = false, path = "./nodes/executor/http-client", package = "logos-blockchain-executor-http-client" }
+lb-groth16                       = { default-features = false, path = "./zk/groth16", package = "logos-blockchain-groth16" }
+lb-http-api-common               = { default-features = false, path = "./nodes/api-common", package = "logos-blockchain-http-api-common" }
+lb-key-management-system-keys    = { default-features = false, path = "./kms/keys", package = "logos-blockchain-key-management-system-keys" }
+lb-key-management-system-macros  = { default-features = false, path = "./kms/macros", package = "logos-blockchain-key-management-system-macros" }
+lb-key-management-system-service = { default-features = false, path = "./services/key-management-system", package = "logos-blockchain-key-management-system-service" }
+lb-kzgrs                         = { default-features = false, path = "./da/kzgrs", package = "logos-blockchain-kzgrs" }
+lb-kzgrs-backend                 = { default-features = false, path = "./da/kzgrs-backend", package = "logos-blockchain-kzgrs-backend" }
+lb-ledger                        = { default-features = false, path = "./ledger", package = "logos-blockchain-ledger" }
+lb-libp2p                        = { default-features = false, path = "./libp2p", package = "logos-blockchain-libp2p" }
+lb-mmr                           = { default-features = false, path = "./mmr", package = "logos-blockchain-mmr" }
+lb-network-service               = { default-features = false, path = "./services/network", package = "logos-blockchain-network-service" }
+lb-node                          = { default-features = false, path = "./nodes/node/binary", package = "logos-blockchain-node" }
+lb-poc                           = { default-features = false, path = "./zk/proofs/poc", package = "logos-blockchain-poc" }
+lb-pol                           = { default-features = false, path = "./zk/proofs/pol", package = "logos-blockchain-pol" }
+lb-poq                           = { default-features = false, path = "./zk/proofs/poq", package = "logos-blockchain-poq" }
+lb-poseidon2                     = { default-features = false, path = "./zk/poseidon2", package = "logos-blockchain-poseidon2" }
+lb-sdp-service                   = { default-features = false, path = "./services/sdp", package = "logos-blockchain-sdp-service" }
+lb-services-utils                = { default-features = false, path = "./services/utils", package = "logos-blockchain-services-utils" }
+lb-storage-service               = { default-features = false, path = "./services/storage", package = "logos-blockchain-storage-service" }
+lb-subnetworks-assignations      = { default-features = false, path = "./da/network/subnetworks-assignations", package = "logos-blockchain-subnetworks-assignations" }
+lb-system-sig-service            = { default-features = false, path = "./services/system-sig", package = "logos-blockchain-system-sig-service" }
+lb-tests                         = { default-features = false, path = "./tests", package = "logos-blockchain-tests" }
+lb-time-service                  = { default-features = false, path = "./services/time", package = "logos-blockchain-time-service" }
+lb-tracing                       = { default-features = false, path = "./tracing", package = "logos-blockchain-tracing" }
+lb-tracing-service               = { default-features = false, path = "./services/tracing", package = "logos-blockchain-tracing-service" }
+lb-tx-service                    = { default-features = false, path = "./services/tx-service", package = "logos-blockchain-tx-service" }
+lb-utils                         = { default-features = false, path = "./utils", package = "logos-blockchain-utils" }
+lb-utxotree                      = { default-features = false, path = "./utxotree", package = "logos-blockchain-utxotree" }
+lb-wallet                        = { default-features = false, path = "./wallet", package = "logos-blockchain-wallet" }
+lb-wallet-http-client            = { default-features = false, path = "./wallet-http-client", package = "logos-blockchain-wallet-http-client" }
+lb-wallet-service                = { default-features = false, path = "./services/wallet", package = "logos-blockchain-wallet-service" }
+lb-witness-generator             = { default-features = false, path = "./zk/circuits/witness-generator", package = "logos-blockchain-witness-generator" }
+lb-zksign                        = { default-features = false, path = "./zk/proofs/zksign", package = "logos-blockchain-zksign" }
 
 # External
 blake2            = { default-features = false, version = "0.10" }

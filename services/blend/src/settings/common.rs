@@ -1,7 +1,7 @@
 use core::num::NonZeroU64;
 use std::path::PathBuf;
 
-use logos_blockchain_blend::scheduling::message_blend::crypto::SessionCryptographicProcessorSettings;
+use lb_blend::scheduling::message_blend::crypto::SessionCryptographicProcessorSettings;
 use serde::{Deserialize, Serialize};
 
 use crate::settings::timing::TimingSettings;

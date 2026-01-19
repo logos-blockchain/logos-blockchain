@@ -1,12 +1,12 @@
-use logos_blockchain_cryptarchia_engine::Epoch;
-use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
-use logos_blockchain_blend_crypto::merkle::sort_nodes_and_build_merkle_tree;
-use logos_blockchain_blend_message::{
+use lb_cryptarchia_engine::Epoch;
+use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_blend_crypto::merkle::sort_nodes_and_build_merkle_tree;
+use lb_blend_message::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey,
     encap::ProofsVerifier as ProofsVerifierTrait, reward::SessionRandomness,
 };
-use logos_blockchain_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
-use logos_blockchain_core::{
+use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
+use lb_core::{
     crypto::ZkHash,
     sdp::{ProviderId, SessionNumber},
 };

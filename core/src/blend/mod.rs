@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use logos_blockchain_utils::math::NonNegativeF64;
+use lb_utils::math::NonNegativeF64;
 
 #[must_use]
 pub fn core_quota(

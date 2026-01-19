@@ -1,16 +1,16 @@
 use std::sync::LazyLock;
 
-use logos_blockchain_cryptarchia_engine::{Epoch, Slot};
-use logos_blockchain_groth16::{Fr, fr_from_bytes};
-use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
-use logos_blockchain_core::{
+use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_groth16::{Fr, fr_from_bytes};
+use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_core::{
     crypto::{ZkDigest, ZkHasher},
     mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value, gas::GasConstants},
     proofs::leader_proof::{self, LeaderPublic},
     utils::merkle::MerklePath,
 };
 
-pub type UtxoTree = logos_blockchain_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
+pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
 use super::{Balance, Config, LedgerError};
 use crate::mantle::sdp::locked_notes::LockedNotes;
 
@@ -21,7 +21,7 @@ pub struct EpochState {
     pub epoch: Epoch,
     // value of the ledger nonce after 'epoch_period_nonce_buffer' slots from the beginning of the
     // epoch
-    #[cfg_attr(feature = "serde", serde(with = "logos_blockchain_groth16::serde::serde_fr"))]
+    #[cfg_attr(feature = "serde", serde(with = "lb_groth16::serde::serde_fr"))]
     pub nonce: Fr,
     // stake distribution snapshot taken at the beginning of the epoch
     // (in practice, this is equivalent to the utxos the are spendable at the beginning of the
@@ -90,7 +90,7 @@ pub struct LedgerState {
     // All available Unspent Transtaction Outputs (UTXOs) at the current slot
     pub utxos: UtxoTree,
     // randomness contribution
-    #[cfg_attr(feature = "serde", serde(with = "logos_blockchain_groth16::serde::serde_fr"))]
+    #[cfg_attr(feature = "serde", serde(with = "lb_groth16::serde::serde_fr"))]
     pub nonce: Fr,
     pub slot: Slot,
     // rolling snapshot of the state for the next epoch, used for epoch transitions
@@ -350,10 +350,10 @@ impl core::fmt::Debug for LedgerState {
 pub mod tests {
     use std::num::{NonZero, NonZeroU64};
 
-    use logos_blockchain_cryptarchia_engine::EpochConfig;
-    use logos_blockchain_groth16::Field as _;
-    use logos_blockchain_key_management_system_keys::keys::{Ed25519PublicKey, ZkKey};
-    use logos_blockchain_core::{
+    use lb_cryptarchia_engine::EpochConfig;
+    use lb_groth16::Field as _;
+    use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkKey};
+    use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
             GasCost as _, MantleTx, Note, SignedMantleTx, Transaction as _,
@@ -361,7 +361,7 @@ pub mod tests {
         },
         sdp::ServiceParameters,
     };
-    use logos_blockchain_utils::math::NonNegativeF64;
+    use lb_utils::math::NonNegativeF64;
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
 
@@ -489,7 +489,7 @@ pub mod tests {
     pub fn config() -> Config {
         let mut service_params = std::collections::HashMap::new();
         service_params.insert(
-            logos_blockchain_core::sdp::ServiceType::DataAvailability,
+            lb_core::sdp::ServiceType::DataAvailability,
             ServiceParameters {
                 lock_period: 10,
                 inactivity_period: 20,
@@ -499,7 +499,7 @@ pub mod tests {
             },
         );
         service_params.insert(
-            logos_blockchain_core::sdp::ServiceType::BlendNetwork,
+            lb_core::sdp::ServiceType::BlendNetwork,
             ServiceParameters {
                 lock_period: 10,
                 inactivity_period: 20,
@@ -515,7 +515,7 @@ pub mod tests {
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(3).unwrap(),
             },
-            consensus_config: logos_blockchain_cryptarchia_engine::Config {
+            consensus_config: lb_cryptarchia_engine::Config {
                 security_param: NonZero::new(1).unwrap(),
                 active_slot_coeff: 1.0,
             },
@@ -529,7 +529,7 @@ pub mod tests {
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                     },
                 },
-                min_stake: logos_blockchain_core::sdp::MinStake {
+                min_stake: lb_core::sdp::MinStake {
                     threshold: 1,
                     timestamp: 0,
                 },

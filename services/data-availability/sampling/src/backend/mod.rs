@@ -2,7 +2,7 @@ pub mod kzgrs;
 
 use std::{collections::BTreeSet, sync::Arc};
 
-use logos_blockchain_kzgrs_backend::common::ShareIndex;
+use lb_kzgrs_backend::common::ShareIndex;
 use tokio::time::Interval;
 
 pub enum SamplingState {

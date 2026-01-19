@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bitvec::prelude::*;
 use libp2p::PeerId;
-use logos_blockchain_core::sdp::{ActivityMetadata, ProviderId, SessionNumber, da::ActivityProof};
-use logos_blockchain_da_network_core::{
+use lb_core::sdp::{ActivityMetadata, ProviderId, SessionNumber, da::ActivityProof};
+use lb_da_network_core::{
     SubnetworkId,
     protocols::sampling::opinions::{Opinion, OpinionEvent},
 };
@@ -385,9 +385,9 @@ fn bitvec_to_bytes(bv: &OpinionsBitVec) -> Vec<u8> {
 mod tests {
     use std::sync::Arc;
 
-    use logos_blockchain_key_management_system_keys::keys::Ed25519Key;
+    use lb_key_management_system_keys::keys::Ed25519Key;
     use rand::{RngCore, SeedableRng as _, rngs::SmallRng};
-    use logos_blockchain_subnetworks_assignations::{
+    use lb_subnetworks_assignations::{
         MembershipCreator as _, MembershipHandler as _,
         versions::history_aware_refill::HistoryAware,
     };

@@ -1,12 +1,12 @@
 use core::slice::from_ref;
 
-use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
+use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use libp2p::{Multiaddr, PeerId};
-use logos_blockchain_blend::{
+use lb_blend::{
     message::crypto::key_ext::Ed25519SecretKeyExt as _,
     scheduling::membership::{Membership, Node},
 };
-use logos_blockchain_libp2p::{Protocol, SwarmEvent};
+use lb_libp2p::{Protocol, SwarmEvent};
 use test_log::test;
 use tokio::spawn;
 

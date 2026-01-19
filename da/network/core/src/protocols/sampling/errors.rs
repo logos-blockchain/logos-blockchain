@@ -1,8 +1,8 @@
 use futures::channel::oneshot::Canceled;
 use libp2p::PeerId;
 use libp2p_stream::OpenStreamError;
-use logos_blockchain_core::{codec, da::BlobId, sdp::SessionNumber};
-use logos_blockchain_da_messages::sampling;
+use lb_core::{codec, da::BlobId, sdp::SessionNumber};
+use lb_da_messages::sampling;
 use thiserror::Error;
 
 use super::BehaviourSampleReq;

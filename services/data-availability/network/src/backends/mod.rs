@@ -9,13 +9,13 @@ use std::{
 
 use ::libp2p::PeerId;
 use futures::Stream;
-use logos_blockchain_core::{da::BlobId, header::HeaderId, sdp::ProviderId};
-use logos_blockchain_da_network_core::{
+use lb_core::{da::BlobId, header::HeaderId, sdp::ProviderId};
+use lb_da_network_core::{
     addressbook::AddressBookHandler, protocols::sampling::opinions::OpinionEvent,
     swarm::BalancerStats,
 };
 use overwatch::{overwatch::handle::OverwatchHandle, services::state::ServiceState};
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_subnetworks_assignations::MembershipHandler;
 use tokio::sync::{broadcast, mpsc::UnboundedSender};
 
 use crate::SessionStatus;

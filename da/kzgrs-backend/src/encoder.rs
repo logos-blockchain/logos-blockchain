@@ -2,7 +2,7 @@ use std::ops::Div as _;
 
 use ark_ff::{BigInteger as _, PrimeField as _};
 use ark_poly::EvaluationDomain as _;
-use logos_blockchain_kzgrs::{
+use lb_kzgrs::{
     BYTES_PER_FIELD_ELEMENT, Commitment, Evaluations, KzgRsError, Polynomial,
     PolynomialEvaluationDomain, Proof, ProvingKey, bdfg_proving, commit_polynomial,
     common::bytes_to_polynomial_unchecked, encode, fk20::Toeplitz1Cache,
@@ -221,7 +221,7 @@ impl DaEncoder {
     }
 }
 
-impl logos_blockchain_core::da::DaEncoder for DaEncoder {
+impl lb_core::da::DaEncoder for DaEncoder {
     type EncodedData = EncodedData;
     type Error = KzgRsError;
 
@@ -262,11 +262,11 @@ pub mod test {
     use ark_ff::PrimeField as _;
     use ark_poly::{EvaluationDomain as _, GeneralEvaluationDomain};
     use itertools::izip;
-    use logos_blockchain_kzgrs::{
+    use lb_kzgrs::{
         BYTES_PER_FIELD_ELEMENT, FieldElement, PolynomialEvaluationDomain,
         common::bytes_to_polynomial_unchecked, decode_unchecked,
     };
-    use logos_blockchain_core::da::DaEncoder as _;
+    use lb_core::da::DaEncoder as _;
     use rand::RngCore as _;
 
     use crate::{
@@ -383,7 +383,7 @@ pub mod test {
                 .iter()
                 .map(|Chunk(b)| FieldElement::from_le_bytes_mod_order(b))
                 .collect();
-            assert!(logos_blockchain_kzgrs::bdfg_proving::verify_column(
+            assert!(lb_kzgrs::bdfg_proving::verify_column(
                 idx,
                 &column,
                 &encoding_data.row_commitments,

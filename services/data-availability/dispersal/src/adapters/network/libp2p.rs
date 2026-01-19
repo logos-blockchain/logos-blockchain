@@ -1,15 +1,15 @@
 use std::{collections::HashSet, fmt::Debug, marker::PhantomData, pin::Pin, time::Duration};
 
 use futures::{Stream, StreamExt as _, stream::BoxStream};
-use logos_blockchain_kzgrs_backend::common::share::{DaShare, DaSharesCommitments};
-use logos_blockchain_core::{da::BlobId, mantle::SignedMantleTx, sdp::SessionNumber};
-use logos_blockchain_da_network_core::{
+use lb_kzgrs_backend::common::share::{DaShare, DaSharesCommitments};
+use lb_core::{da::BlobId, mantle::SignedMantleTx, sdp::SessionNumber};
+use lb_da_network_core::{
     PeerId, SubnetworkId,
     protocols::{
         dispersal::executor::behaviour::DispersalExecutorEvent, sampling::errors::SamplingError,
     },
 };
-use logos_blockchain_da_network_service::{
+use lb_da_network_service::{
     DaNetworkMsg, NetworkService,
     api::ApiAdapter as ApiAdapterTrait,
     backends::libp2p::{
@@ -25,7 +25,7 @@ use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
 };
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_subnetworks_assignations::MembershipHandler;
 use tokio::sync::oneshot;
 
 use crate::adapters::network::DispersalNetworkAdapter;

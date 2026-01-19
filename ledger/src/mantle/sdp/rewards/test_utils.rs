@@ -1,6 +1,6 @@
-use logos_blockchain_groth16::Fr;
-use logos_blockchain_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
-use logos_blockchain_core::{
+use lb_groth16::Fr;
+use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
+use lb_core::{
     crypto::ZkHash,
     sdp::{Declaration, DeclarationId, ProviderId, ServiceParameters, ServiceType, SessionNumber},
 };

@@ -3,8 +3,8 @@ use std::sync::LazyLock;
 use ::serde::{Deserialize, Serialize};
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, VerifyingKey};
 use generic_array::{ArrayLength, GenericArray};
-use logos_blockchain_groth16::{Bn254, CompressSize, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes};
-use logos_blockchain_poq::{PoQProof, PoQVerifierInput, PoQWitnessInputs, ProveError, prove, verify};
+use lb_groth16::{Bn254, CompressSize, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes};
+use lb_poq::{PoQProof, PoQVerifierInput, PoQWitnessInputs, ProveError, prove, verify};
 use thiserror::Error;
 
 use crate::{
@@ -45,7 +45,7 @@ pub enum Error {
 /// A Proof of Quota as described in the Blend v1 spec: <https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#26a261aa09df80f4b119f900fbb36f3f>.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProofOfQuota {
-    #[serde(with = "logos_blockchain_groth16::serde::serde_fr")]
+    #[serde(with = "lb_groth16::serde::serde_fr")]
     key_nullifier: ZkHash,
     #[serde(with = "self::serde::proof::SerializablePoQProof")]
     proof: PoQProof,

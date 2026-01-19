@@ -1,5 +1,5 @@
-use logos_blockchain_groth16::{fr_to_bytes, serde::serde_fr};
-use logos_blockchain_poseidon2::{Fr, ZkHash};
+use lb_groth16::{fr_to_bytes, serde::serde_fr};
+use lb_poseidon2::{Fr, ZkHash};
 use serde::{Deserialize, Serialize};
 
 use crate::mantle::TxHash;

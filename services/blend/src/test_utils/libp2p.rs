@@ -4,12 +4,12 @@ use core::{
     time::Duration,
 };
 
-use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
+use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use libp2p::{
     PeerId, StreamProtocol, Swarm, Transport as _, core::transport::MemoryTransport,
     identity::Keypair, plaintext, swarm, tcp, yamux,
 };
-use logos_blockchain_blend::{
+use lb_blend::{
     message::{
         PayloadType, crypto::key_ext::Ed25519SecretKeyExt as _,
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader, input::EncapsulationInput,
@@ -17,7 +17,7 @@ use logos_blockchain_blend::{
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
     scheduling::membership::Membership,
 };
-use logos_blockchain_libp2p::{NetworkBehaviour, upgrade::Version};
+use lb_libp2p::{NetworkBehaviour, upgrade::Version};
 
 pub const PROTOCOL_NAME: StreamProtocol = StreamProtocol::new("/blend/swarm/test");
 

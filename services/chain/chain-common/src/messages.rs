@@ -1,4 +1,4 @@
-use logos_blockchain_core::block::Proposal;
+use lb_core::block::Proposal;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

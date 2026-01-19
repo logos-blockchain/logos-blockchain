@@ -1,11 +1,11 @@
 use std::{cmp::Ordering, collections::HashMap, iter::once};
 
-use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
-use logos_blockchain_blend_message::{
+use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_blend_message::{
     encap::ProofsVerifier as ProofsVerifierTrait,
     reward::{BlendingTokenEvaluation, HammingDistance},
 };
-use logos_blockchain_core::{
+use lb_core::{
     mantle::Utxo,
     sdp::{ProviderId, ServiceType, SessionNumber},
 };
@@ -71,7 +71,7 @@ where
     pub fn verify_proof(
         &self,
         provider_id: &ProviderId,
-        proof: &logos_blockchain_core::sdp::blend::ActivityProof,
+        proof: &lb_core::sdp::blend::ActivityProof,
         current_session_state: &CurrentSessionState,
         settings: &RewardsParameters,
     ) -> Result<(ZkPublicKey, HammingDistance), Error> {
@@ -97,7 +97,7 @@ where
             .proof_verifiers
             .iter()
             .find_map(|verifier| {
-                logos_blockchain_blend_message::reward::ActivityProof::verify_and_build(
+                lb_blend_message::reward::ActivityProof::verify_and_build(
                     proof,
                     verifier,
                     index,

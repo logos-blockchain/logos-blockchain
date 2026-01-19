@@ -1,7 +1,7 @@
 pub mod mock;
 
-use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
-use logos_blockchain_core::{
+use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_core::{
     mantle::{NoteId, SignedMantleTx, tx_builder::MantleTxBuilder},
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };

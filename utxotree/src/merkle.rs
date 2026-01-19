@@ -5,9 +5,9 @@ use std::{
 
 use ark_ff::Field;
 #[cfg(feature = "serde")]
-use logos_blockchain_groth16::serde::serde_fr;
-use logos_blockchain_core::utils::merkle::{MerkleNode, MerklePath};
-use logos_blockchain_poseidon2::{Digest, Fr};
+use lb_groth16::serde::serde_fr;
+use lb_core::utils::merkle::{MerkleNode, MerklePath};
+use lb_poseidon2::{Digest, Fr};
 use rpds::RedBlackTreeSetSync;
 
 use crate::CompressedUtxoTree;
@@ -447,7 +447,7 @@ mod tests {
     use super::*;
     use crate::test_fr::TestFr;
 
-    type TestHash = logos_blockchain_poseidon2::Poseidon2Bn254Hasher;
+    type TestHash = lb_poseidon2::Poseidon2Bn254Hasher;
 
     #[test]
     fn test_empty_tree() {

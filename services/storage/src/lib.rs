@@ -10,7 +10,7 @@ use std::{
 use async_trait::async_trait;
 use backends::{StorageBackend, StorageTransaction};
 use bytes::Bytes;
-use logos_blockchain_core::codec::{DeserializeOp as _, SerializeOp as _};
+use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -107,7 +107,7 @@ impl<Backend: StorageBackend> StorageMsg<Backend> {
     pub fn new_store_message<V: Serialize + DeserializeOwned>(
         key: Bytes,
         value: &V,
-    ) -> Result<Self, logos_blockchain_core::codec::Error> {
+    ) -> Result<Self, lb_core::codec::Error> {
         let value = value.to_bytes()?;
         Ok(Self::Store { key, value })
     }

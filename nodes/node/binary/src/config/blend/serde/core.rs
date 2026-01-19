@@ -1,7 +1,7 @@
 use core::{num::NonZeroU64, ops::RangeInclusive, time::Duration};
 
-use logos_blockchain_blend_service::core::settings::ZkSettings;
-use logos_blockchain_libp2p::Multiaddr;
+use lb_blend_service::core::settings::ZkSettings;
+use lb_libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
@@ -17,7 +17,7 @@ pub struct BackendConfig {
     pub listening_address: Multiaddr,
     pub core_peering_degree: RangeInclusive<u64>,
     #[serde_as(
-        as = "logos_blockchain_utils::bounded_duration::MinimalBoundedDuration<1, logos_blockchain_utils::bounded_duration::SECOND>"
+        as = "lb_utils::bounded_duration::MinimalBoundedDuration<1, lb_utils::bounded_duration::SECOND>"
     )]
     pub edge_node_connection_timeout: Duration,
     pub max_edge_node_incoming_connections: u64,

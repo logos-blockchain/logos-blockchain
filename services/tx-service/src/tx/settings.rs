@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
+use lb_services_utils::overwatch::recovery::backends::FileBackendSettings;
 use serde::{Deserialize, Serialize};
-use logos_blockchain_services_utils::overwatch::recovery::backends::FileBackendSettings;
 
 /// Settings for the tx mempool service.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

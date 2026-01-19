@@ -7,11 +7,11 @@ use std::{
 };
 
 use bytes::Bytes;
-use logos_blockchain_cryptarchia_engine::{Branch, Slot};
-use logos_blockchain_cryptarchia_sync::{BlocksResponse, ProviderResponse};
+use lb_cryptarchia_engine::{Branch, Slot};
+use lb_cryptarchia_sync::{BlocksResponse, ProviderResponse};
 use futures::{StreamExt as _, TryStreamExt as _, future, stream, stream::BoxStream};
-use logos_blockchain_core::{block::Block, header::HeaderId};
-use logos_blockchain_storage_service::{StorageMsg, api::chain::StorageChainApi, backends::StorageBackend};
+use lb_core::{block::Block, header::HeaderId};
+use lb_storage_service::{StorageMsg, api::chain::StorageChainApi, backends::StorageBackend};
 use overwatch::DynError;
 use serde::Serialize;
 use thiserror::Error;
@@ -77,7 +77,7 @@ where
     /// to the [`target_block`], and sends it to the [`reply_sender`].
     pub async fn send_blocks(
         &self,
-        cryptarchia: &logos_blockchain_cryptarchia_engine::Cryptarchia<HeaderId>,
+        cryptarchia: &lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         target_block: HeaderId,
         known_blocks: &HashSet<HeaderId>,
         reply_sender: Sender<BlocksResponse>,
@@ -123,7 +123,7 @@ where
         &self,
         target_block: HeaderId,
         known_blocks: &HashSet<HeaderId>,
-        cryptarchia: &logos_blockchain_cryptarchia_engine::Cryptarchia<HeaderId>,
+        cryptarchia: &lb_cryptarchia_engine::Cryptarchia<HeaderId>,
     ) -> Result<BoxStream<'static, Result<Bytes, DynError>>, DynError> {
         let path = self
             .find_path(cryptarchia, target_block, known_blocks)
@@ -163,7 +163,7 @@ where
     /// Finds the path from one of the known blocks to the target block
     async fn find_path(
         &self,
-        cryptarchia: &logos_blockchain_cryptarchia_engine::Cryptarchia<HeaderId>,
+        cryptarchia: &lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         target_block: HeaderId,
         known_blocks: &HashSet<HeaderId>,
     ) -> Result<Vec<HeaderId>, GetBlocksError> {
@@ -180,7 +180,7 @@ where
     /// Locates the target block and determines its slot and location
     async fn find_target_block(
         &self,
-        cryptarchia: &logos_blockchain_cryptarchia_engine::Cryptarchia<HeaderId>,
+        cryptarchia: &lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         target_block: HeaderId,
     ) -> Result<BlockInfo, GetBlocksError> {
         if let Some(target_branch) = cryptarchia.branches().get(&target_block) {
@@ -219,7 +219,7 @@ where
     /// [`GetBlocksError::StartBlockNotFound`] is returned.
     async fn find_optimal_start_block(
         &self,
-        cryptarchia: &logos_blockchain_cryptarchia_engine::Cryptarchia<HeaderId>,
+        cryptarchia: &lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         known_blocks: &HashSet<HeaderId>,
         target_info: &BlockInfo,
     ) -> Result<BlockInfo, GetBlocksError> {
@@ -236,7 +236,7 @@ where
     }
 
     fn find_optimal_start_block_from_engine(
-        cryptarchia: &logos_blockchain_cryptarchia_engine::Cryptarchia<HeaderId>,
+        cryptarchia: &lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         known_blocks: &HashSet<HeaderId>,
         target_info: &BlockInfo,
     ) -> Result<Option<BlockInfo>, GetBlocksError> {
@@ -303,7 +303,7 @@ where
 
     async fn compute_path_between_endpoints(
         &self,
-        cryptarchia: &logos_blockchain_cryptarchia_engine::Cryptarchia<HeaderId>,
+        cryptarchia: &lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         start_info: BlockInfo,
         target_info: BlockInfo,
     ) -> Result<Vec<HeaderId>, GetBlocksError> {
@@ -332,7 +332,7 @@ where
     }
 
     fn compute_path_from_engine(
-        cryptarchia: &logos_blockchain_cryptarchia_engine::Cryptarchia<HeaderId>,
+        cryptarchia: &lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         start_block: HeaderId,
         target_block: HeaderId,
         limit: NonZeroUsize,
@@ -373,7 +373,7 @@ where
     /// Builds a list of block IDs using storage scan + engine path when needed
     async fn compute_path_from_storage_and_engine(
         &self,
-        cryptarchia: &logos_blockchain_cryptarchia_engine::Cryptarchia<HeaderId>,
+        cryptarchia: &lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         start_block_slot: Slot,
         target_block: HeaderId,
         target_block_slot: Slot,
@@ -407,7 +407,7 @@ where
     }
 
     fn max_lca(
-        cryptarchia: &logos_blockchain_cryptarchia_engine::Cryptarchia<HeaderId>,
+        cryptarchia: &lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         target_branch: &Branch<HeaderId>,
         known_blocks: &HashSet<HeaderId>,
     ) -> Option<Branch<HeaderId>> {
@@ -554,17 +554,17 @@ where
 mod tests {
     use std::{collections::BTreeMap, num::NonZero};
 
-    use logos_blockchain_cryptarchia_engine::Config;
+    use lb_cryptarchia_engine::Config;
     use futures::StreamExt as _;
-    use logos_blockchain_groth16::Fr;
-    use logos_blockchain_key_management_system_keys::keys::Ed25519Key;
-    use logos_blockchain_core::{
+    use lb_groth16::Fr;
+    use lb_key_management_system_keys::keys::Ed25519Key;
+    use lb_core::{
         codec::DeserializeOp as _,
         mantle::{Note, SignedMantleTx, ledger::Utxo},
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
         utils::merkle::MerkleNode,
     };
-    use logos_blockchain_storage_service::{
+    use lb_storage_service::{
         StorageService,
         backends::rocksdb::{RocksBackend, RocksBackendSettings},
     };
@@ -688,8 +688,8 @@ mod tests {
     struct TestEnv {
         service: overwatch::overwatch::Overwatch<RuntimeServiceId>,
         storage_relay: StorageRelay<RocksBackend>,
-        cryptarchia: logos_blockchain_cryptarchia_engine::Cryptarchia<HeaderId>,
-        proof: logos_blockchain_core::proofs::leader_proof::Groth16LeaderProof,
+        cryptarchia: lb_cryptarchia_engine::Cryptarchia<HeaderId>,
+        proof: lb_core::proofs::leader_proof::Groth16LeaderProof,
         provider: BlockProvider<RocksBackend, SignedMantleTx>,
     }
 
@@ -945,7 +945,7 @@ mod tests {
             );
         }
 
-        fn make_test_proof() -> logos_blockchain_core::proofs::leader_proof::Groth16LeaderProof {
+        fn make_test_proof() -> lb_core::proofs::leader_proof::Groth16LeaderProof {
             let public_inputs = LeaderPublic::new(
                 Fr::from(1), // aged root
                 Fr::from(2), // latest root
@@ -972,21 +972,21 @@ mod tests {
                 &Ed25519Key::from_bytes(&[1u8; 32]).public_key(),
             );
 
-            logos_blockchain_core::proofs::leader_proof::Groth16LeaderProof::prove(
+            lb_core::proofs::leader_proof::Groth16LeaderProof::prove(
                 private_inputs,
-                logos_blockchain_core::mantle::ops::leader_claim::VoucherCm::default(),
+                lb_core::mantle::ops::leader_claim::VoucherCm::default(),
             )
             .expect("Proof generation should succeed")
         }
 
-        fn new_cryptarchia(lib: HeaderId) -> logos_blockchain_cryptarchia_engine::Cryptarchia<HeaderId> {
-            <logos_blockchain_cryptarchia_engine::Cryptarchia<_>>::from_lib(
+        fn new_cryptarchia(lib: HeaderId) -> lb_cryptarchia_engine::Cryptarchia<HeaderId> {
+            <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib,
                 Config {
                     security_param: NonZero::new(1).unwrap(),
                     active_slot_coeff: 1.0,
                 },
-                logos_blockchain_cryptarchia_engine::State::Bootstrapping,
+                lb_cryptarchia_engine::State::Bootstrapping,
             )
         }
     }

@@ -1,6 +1,6 @@
 use ark_ff::PrimeField as _;
 use ark_poly::EvaluationDomain as _;
-use logos_blockchain_kzgrs::{FieldElement, PolynomialEvaluationDomain, VerificationKey};
+use lb_kzgrs::{FieldElement, PolynomialEvaluationDomain, VerificationKey};
 
 use crate::common::{
     Chunk,
@@ -32,7 +32,7 @@ impl DaVerifier {
             .collect();
         let rows_domain = PolynomialEvaluationDomain::new(rows_domain_size)
             .expect("Domain should be able to build");
-        logos_blockchain_kzgrs::bdfg_proving::verify_column(
+        lb_kzgrs::bdfg_proving::verify_column(
             share.share_idx as usize,
             &column,
             &commitments.rows_commitments,
@@ -48,7 +48,7 @@ mod test {
     #[cfg(target_arch = "x86_64")]
     use std::hint::black_box;
 
-    use logos_blockchain_core::da::{DaEncoder as _, blob::Share as _};
+    use lb_core::da::{DaEncoder as _, blob::Share as _};
 
     use crate::{
         encoder::{DaEncoder, DaEncoderParams, test::rand_data},

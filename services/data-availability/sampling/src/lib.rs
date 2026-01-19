@@ -14,19 +14,19 @@ use std::{
 use backend::{DaSamplingServiceBackend, SamplingState};
 use either::Either;
 use futures::{FutureExt as _, Stream, future::BoxFuture, stream::FuturesUnordered};
-use logos_blockchain_kzgrs_backend::common::{
+use lb_kzgrs_backend::common::{
     ShareIndex,
     share::{DaLightShare, DaShare, DaSharesCommitments},
 };
 use network::NetworkAdapter;
-use logos_blockchain_core::{da::BlobId, header::HeaderId, mantle::SignedMantleTx, sdp::SessionNumber};
-use logos_blockchain_da_network_core::protocols::sampling::errors::SamplingError;
-use logos_blockchain_da_network_service::{
+use lb_core::{da::BlobId, header::HeaderId, mantle::SignedMantleTx, sdp::SessionNumber};
+use lb_da_network_core::protocols::sampling::errors::SamplingError;
+use lb_da_network_service::{
     NetworkService,
     backends::libp2p::common::{CommitmentsEvent, HistoricSamplingEvent, SamplingEvent},
 };
-use logos_blockchain_storage_service::StorageService;
-use logos_blockchain_tracing::{error_with_id, info_with_id};
+use lb_storage_service::StorageService;
+use lb_tracing::{error_with_id, info_with_id};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -35,9 +35,9 @@ use overwatch::{
     },
 };
 use serde::{Deserialize, Serialize};
-use logos_blockchain_services_utils::wait_until_services_are_ready;
+use lb_services_utils::wait_until_services_are_ready;
 use storage::DaStorageAdapter;
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_subnetworks_assignations::MembershipHandler;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::StreamExt as _;
 use tracing::{error, instrument};

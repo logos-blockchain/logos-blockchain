@@ -1,6 +1,6 @@
 use futures::Stream;
-use logos_blockchain_core::codec::{DeserializeOp as _, SerializeOp as _};
-use logos_blockchain_network_service::{
+use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
+use lb_network_service::{
     NetworkService,
     backends::libp2p::{Command, Libp2p, Message, PubSubCommand, TopicHash},
     message::NetworkMsg,

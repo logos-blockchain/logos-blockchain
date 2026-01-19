@@ -1,11 +1,11 @@
 use std::{collections::HashSet, time::Duration};
 
 use futures_util::stream::StreamExt as _;
-use logos_blockchain_common_http_client::CommonHttpClient;
-use logos_blockchain_core::{da::blob::LightShare as _, sdp::SessionNumber};
-use logos_blockchain_kzgrs_backend::common::share::DaShare;
-use logos_blockchain_libp2p::ed25519;
-use logos_blockchain_tests::{
+use lb_common_http_client::CommonHttpClient;
+use lb_core::{da::blob::LightShare as _, sdp::SessionNumber};
+use lb_kzgrs_backend::common::share::DaShare;
+use lb_libp2p::ed25519;
+use lb_tests::{
     adjust_timeout,
     common::da::{
         DA_TESTS_TIMEOUT, disseminate_with_metadata, setup_test_channel, wait_for_blob_onchain,

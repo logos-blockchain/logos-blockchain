@@ -3,7 +3,7 @@ macro_rules! serialize_bytes_newtype {
         #[cfg(feature = "serde")]
         impl serde::Serialize for $newtype {
             fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                logos_blockchain_utils::serde::serialize_bytes_array(self.0, serializer)
+                lb_utils::serde::serialize_bytes_array(self.0, serializer)
             }
         }
 
@@ -13,7 +13,7 @@ macro_rules! serialize_bytes_newtype {
             where
                 D: serde::Deserializer<'de>,
             {
-                logos_blockchain_utils::serde::deserialize_bytes_array(deserializer).map(Self)
+                lb_utils::serde::deserialize_bytes_array(deserializer).map(Self)
             }
         }
     };

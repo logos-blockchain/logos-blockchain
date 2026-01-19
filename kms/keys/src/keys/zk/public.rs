@@ -1,14 +1,14 @@
-use logos_blockchain_groth16::{Field as _, Fr, Groth16Input};
+use lb_groth16::{Field as _, Fr, Groth16Input};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use tracing::error;
-use logos_blockchain_zksign::{ZkSignError, ZkSignVerifierInputs};
+use lb_zksign::{ZkSignError, ZkSignVerifierInputs};
 
 use crate::keys::zk::{private::SecretKey, signature::Signature};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(transparent)]
-pub struct PublicKey(#[serde(with = "logos_blockchain_groth16::serde::serde_fr")] Fr);
+pub struct PublicKey(#[serde(with = "lb_groth16::serde::serde_fr")] Fr);
 
 impl PublicKey {
     #[must_use]
@@ -41,7 +41,7 @@ impl PublicKey {
             }
         };
 
-        logos_blockchain_zksign::verify(signature.as_proof(), &inputs).unwrap_or_else(|e| {
+        lb_zksign::verify(signature.as_proof(), &inputs).unwrap_or_else(|e| {
             error!("Error verifying signature: {e:?}");
             false
         })

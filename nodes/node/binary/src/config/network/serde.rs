@@ -1,4 +1,4 @@
-use logos_blockchain_libp2p::{
+use lb_libp2p::{
     cryptarchia_sync, ed25519, gossipsub, IdentifySettings, KademliaSettings, Multiaddr,
     NatSettings,
 };
@@ -28,15 +28,15 @@ pub struct SwarmConfig {
     pub port: u16,
     /// Ed25519 private key in hex format. Default: random.
     #[serde(
-        with = "logos_blockchain_libp2p::secret_key_serde",
+        with = "lb_libp2p::secret_key_serde",
         default = "ed25519::SecretKey::generate"
     )]
     pub node_key: ed25519::SecretKey,
 
     /// Gossipsub config
     #[serde(
-        with = "logos_blockchain_libp2p::config::gossipsub::ConfigDef",
-        default = "logos_blockchain_libp2p::gossipsub::Config::default"
+        with = "lb_libp2p::config::gossipsub::ConfigDef",
+        default = "lb_libp2p::gossipsub::Config::default"
     )]
     pub gossipsub_config: gossipsub::Config,
 

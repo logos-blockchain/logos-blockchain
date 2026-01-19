@@ -1,9 +1,9 @@
 use std::ops::{Add as _, Deref};
 
-use logos_blockchain_groth16::fr_to_bytes;
-use logos_blockchain_blend_crypto::blake2b512;
-use logos_blockchain_core::{crypto::ZkHash, sdp::SessionNumber};
-use logos_blockchain_utils::math::{F64Ge1, NonNegativeF64};
+use lb_groth16::fr_to_bytes;
+use lb_blend_crypto::blake2b512;
+use lb_core::{crypto::ZkHash, sdp::SessionNumber};
+use lb_utils::math::{F64Ge1, NonNegativeF64};
 use serde::{Deserialize, Serialize};
 
 use crate::reward::{BlendingToken, activity, token::HammingDistance};
@@ -147,8 +147,8 @@ pub fn activity_threshold(
 
 #[cfg(test)]
 mod tests {
-    use logos_blockchain_key_management_system_keys::keys::Ed25519Key;
-    use logos_blockchain_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
+    use lb_key_management_system_keys::keys::Ed25519Key;
+    use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 
     use super::*;
 

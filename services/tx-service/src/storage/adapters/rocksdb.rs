@@ -6,11 +6,11 @@ use std::{
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _};
-use logos_blockchain_core::{
+use lb_core::{
     codec::{DeserializeOp as _, SerializeOp as _},
     mantle::TxHash,
 };
-use logos_blockchain_storage_service::{StorageMsg, StorageService, backends::rocksdb::RocksBackend};
+use lb_storage_service::{StorageMsg, StorageService, backends::rocksdb::RocksBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
 

@@ -1,6 +1,6 @@
 use std::{hash::Hash, marker::PhantomData};
 
-use logos_blockchain_blend::{
+use lb_blend::{
     message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
     proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs,
     scheduling::{
@@ -11,7 +11,7 @@ use logos_blockchain_blend::{
         },
     },
 };
-use logos_blockchain_utils::blake_rng::BlakeRng;
+use lb_utils::blake_rng::BlakeRng;
 use overwatch::overwatch::OverwatchHandle;
 use rand::SeedableRng as _;
 

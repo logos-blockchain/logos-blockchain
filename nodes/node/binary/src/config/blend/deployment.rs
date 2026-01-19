@@ -1,11 +1,11 @@
 use core::{num::NonZeroU64, time::Duration};
 
-use logos_blockchain_blend_service::{
+use lb_blend_service::{
     core::settings::{CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings},
     settings::TimingSettings,
 };
-use logos_blockchain_libp2p::protocol_name::StreamProtocol;
-use logos_blockchain_utils::math::NonNegativeF64;
+use lb_libp2p::protocol_name::StreamProtocol;
+use lb_utils::math::NonNegativeF64;
 use serde::{Deserialize, Serialize};
 
 use crate::config::deployment::WellKnownDeployment;

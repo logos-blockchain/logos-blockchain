@@ -1,4 +1,4 @@
-use logos_blockchain_utils::blake_rng::{BlakeRng, RngCore as _, SeedableRng as _};
+use lb_utils::blake_rng::{BlakeRng, RngCore as _, SeedableRng as _};
 
 use crate::blake2b512;
 

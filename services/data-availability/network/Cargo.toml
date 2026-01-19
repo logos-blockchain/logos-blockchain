@@ -17,33 +17,33 @@ arc-swap    = "1"
 async-trait = "0.1"
 bitvec      = "1"
 
-blake2                                    = { workspace = true }
-futures                                   = { default-features = false, version = "0.3" }
-libp2p                                    = { features = ["ed25519"], workspace = true }
-libp2p-identity                           = { version = "0.2" }
-log                                       = "0.4.22"
-logos-blockchain-chain-broadcast-service  = { workspace = true }
-logos-blockchain-common-http-client       = { workspace = true }
-logos-blockchain-core                     = { workspace = true }
-logos-blockchain-da-messages              = { workspace = true }
-logos-blockchain-da-network-core          = { workspace = true }
-logos-blockchain-kzgrs-backend            = { workspace = true }
-logos-blockchain-libp2p                   = { workspace = true }
-logos-blockchain-sdp-service              = { workspace = true }
-logos-blockchain-services-utils           = { workspace = true }
-logos-blockchain-storage-service          = { workspace = true }
-logos-blockchain-subnetworks-assignations = { workspace = true }
-logos-blockchain-tracing                  = { workspace = true }
-logos-blockchain-utils                    = { features = ["rng"], workspace = true }
-multiaddr                                 = { default-features = false, version = "0.18" }
-overwatch                                 = { workspace = true }
-rand                                      = { workspace = true }
-serde                                     = { workspace = true, features = ["derive"] }
-thiserror                                 = "1"
-tokio                                     = { default-features = false, features = ["macros", "sync"], version = "1" }
-tokio-stream                              = { default-features = false, version = "0.1" }
-tracing                                   = { workspace = true }
-url                                       = { default-features = false, version = "2.5.4" }
+blake2                      = { workspace = true }
+futures                     = { default-features = false, version = "0.3" }
+lb-chain-broadcast-service  = { workspace = true }
+lb-common-http-client       = { workspace = true }
+lb-core                     = { workspace = true }
+lb-da-messages              = { workspace = true }
+lb-da-network-core          = { workspace = true }
+lb-kzgrs-backend            = { workspace = true }
+lb-libp2p                   = { workspace = true }
+lb-sdp-service              = { workspace = true }
+lb-services-utils           = { workspace = true }
+lb-storage-service          = { workspace = true }
+lb-subnetworks-assignations = { workspace = true }
+lb-tracing                  = { workspace = true }
+lb-utils                    = { features = ["rng"], workspace = true }
+libp2p                      = { features = ["ed25519"], workspace = true }
+libp2p-identity             = { version = "0.2" }
+log                         = "0.4.22"
+multiaddr                   = { default-features = false, version = "0.18" }
+overwatch                   = { workspace = true }
+rand                        = { workspace = true }
+serde                       = { workspace = true, features = ["derive"] }
+thiserror                   = "1"
+tokio                       = { default-features = false, features = ["macros", "sync"], version = "1" }
+tokio-stream                = { default-features = false, version = "0.1" }
+tracing                     = { workspace = true }
+url                         = { default-features = false, version = "2.5.4" }
 
 [dev-dependencies]
-logos-blockchain-key-management-system-keys = { workspace = true }
+lb-key-management-system-keys = { workspace = true }

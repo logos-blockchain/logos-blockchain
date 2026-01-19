@@ -1,7 +1,7 @@
 use std::{marker::PhantomData, path::PathBuf};
 
-use logos_blockchain_core::da::blob::Share;
-use logos_blockchain_storage_service::{
+use lb_core::da::blob::Share;
+use lb_storage_service::{
     StorageMsg, StorageService, api::da::DaConverter, backends::rocksdb::RocksBackend,
 };
 use overwatch::{

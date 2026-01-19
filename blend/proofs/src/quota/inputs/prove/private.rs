@@ -1,4 +1,4 @@
-use logos_blockchain_poq::NotePathAndSelectors;
+use lb_poq::NotePathAndSelectors;
 
 use crate::{CorePathAndSelectors, ZkHash};
 

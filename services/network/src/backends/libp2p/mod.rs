@@ -2,7 +2,7 @@ mod command;
 pub mod config;
 pub(crate) mod swarm;
 
-pub use logos_blockchain_libp2p::{
+pub use lb_libp2p::{
     PeerId,
     libp2p::gossipsub::{Message, TopicHash},
 };

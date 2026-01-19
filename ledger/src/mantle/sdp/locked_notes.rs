@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use logos_blockchain_core::{
+use lb_core::{
     mantle::{Note, NoteId},
     sdp::{MinStake, ServiceType},
 };
@@ -114,7 +114,7 @@ impl LockedNotes {
 mod tests {
     use std::collections::HashSet;
 
-    use logos_blockchain_core::sdp::{MinStake, ServiceType};
+    use lb_core::sdp::{MinStake, ServiceType};
 
     use super::{Error, LockedNotes};
     use crate::cryptarchia::tests::utxo;

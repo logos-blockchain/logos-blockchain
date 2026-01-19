@@ -5,7 +5,7 @@ use futures::StreamExt as _;
 use libp2p::{PeerId, Stream, swarm::dummy};
 use libp2p_stream::{Behaviour as StreamBehaviour, OpenStreamError};
 use libp2p_swarm_test::SwarmExt as _;
-use logos_blockchain_libp2p::SwarmEvent;
+use lb_libp2p::SwarmEvent;
 use test_log::test;
 use tokio::{select, spawn, time::sleep};
 

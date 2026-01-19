@@ -1,6 +1,6 @@
-use logos_blockchain_kzgrs_backend::common::share::{DaLightShare, DaSharesCommitments};
-use logos_blockchain_core::da::BlobId;
-use logos_blockchain_subnetworks_assignations::SubnetworkId;
+use lb_kzgrs_backend::common::share::{DaLightShare, DaSharesCommitments};
+use lb_core::da::BlobId;
+use lb_subnetworks_assignations::SubnetworkId;
 
 use crate::protocols::sampling::{errors::SamplingError, opinions::OpinionEvent};
 

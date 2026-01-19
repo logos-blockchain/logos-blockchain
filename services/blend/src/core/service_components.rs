@@ -1,4 +1,4 @@
-use logos_blockchain_utils::blake_rng::BlakeRng;
+use lb_utils::blake_rng::BlakeRng;
 
 use crate::{
     core::{BlendService, backends::BlendBackend},

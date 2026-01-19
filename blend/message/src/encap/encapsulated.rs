@@ -1,11 +1,11 @@
 use itertools::Itertools as _;
-use logos_blockchain_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
-use logos_blockchain_blend_crypto::{cipher::Cipher, keys::SharedKey};
-use logos_blockchain_blend_proofs::{
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
+use lb_blend_crypto::{cipher::Cipher, keys::SharedKey};
+use lb_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},
     selection::{self, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
-use logos_blockchain_core::codec::{DeserializeOp as _, SerializeOp as _};
+use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{

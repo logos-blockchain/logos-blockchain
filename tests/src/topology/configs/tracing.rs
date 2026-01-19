@@ -1,7 +1,7 @@
-use logos_blockchain_tracing::{
+use lb_tracing::{
     logging::loki::LokiConfig, metrics::otlp::OtlpMetricsConfig, tracing::otlp::OtlpTracingConfig,
 };
-use logos_blockchain_tracing_service::{
+use lb_tracing_service::{
     ConsoleLayer, FilterLayer, LoggerLayer, MetricsLayer, TracingLayer, TracingSettings,
 };
 use tracing::Level;
@@ -27,7 +27,7 @@ impl GeneralTracingConfig {
                     sample_ratio: 0.5,
                     service_name: host_identifier.clone(),
                 }),
-                filter: FilterLayer::EnvFilter(logos_blockchain_tracing::filter::envfilter::EnvFilterConfig {
+                filter: FilterLayer::EnvFilter(lb_tracing::filter::envfilter::EnvFilterConfig {
                     // Allow events only from modules that matches the regex, if it matches - use
                     // provided tracing level. Libp2p related crates are very log intensive in debug
                     // mode.

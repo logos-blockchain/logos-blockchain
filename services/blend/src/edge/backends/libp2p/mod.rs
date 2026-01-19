@@ -3,7 +3,7 @@ mod swarm;
 
 use futures::future::{AbortHandle, Abortable};
 use libp2p::PeerId;
-use logos_blockchain_blend::{
+use lb_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     scheduling::membership::Membership,
 };

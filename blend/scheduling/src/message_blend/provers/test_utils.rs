@@ -1,7 +1,7 @@
 use futures::future::ready;
-use logos_blockchain_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
-use logos_blockchain_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
-use logos_blockchain_blend_proofs::quota::{
+use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
+use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
+use lb_blend_proofs::quota::{
     self, VerifiedProofOfQuota,
     fixtures::{valid_proof_of_core_quota_inputs, valid_proof_of_leadership_quota_inputs},
     inputs::prove::{
@@ -9,7 +9,7 @@ use logos_blockchain_blend_proofs::quota::{
         private::{ProofOfCoreQuotaInputs, ProofOfLeadershipQuotaInputs},
     },
 };
-use logos_blockchain_core::crypto::ZkHash;
+use lb_core::crypto::ZkHash;
 
 use crate::message_blend::CoreProofOfQuotaGenerator;
 

@@ -7,53 +7,53 @@ use std::{
 };
 
 use futures::Stream;
-use logos_blockchain_chain_broadcast_service::BlockInfo;
-use logos_blockchain_chain_service::CryptarchiaInfo;
-use logos_blockchain_common_http_client::CommonHttpClient;
-use logos_blockchain_core::{
+use lb_chain_broadcast_service::BlockInfo;
+use lb_chain_service::CryptarchiaInfo;
+use lb_common_http_client::CommonHttpClient;
+use lb_core::{
     block::Block, da::BlobId, header::HeaderId, mantle::SignedMantleTx, sdp::SessionNumber,
 };
-use logos_blockchain_da_dispersal_service::{
+use lb_da_dispersal_service::{
     DispersalServiceSettings,
     backend::kzgrs::{DispersalKZGRSBackendSettings, EncoderSettings},
 };
-use logos_blockchain_da_network_core::{
+use lb_da_network_core::{
     protocols::sampling::SubnetsConfig,
     swarm::{BalancerStats, MonitorStats},
 };
-use logos_blockchain_da_network_service::{
+use lb_da_network_service::{
     MembershipResponse, NetworkConfig as DaNetworkConfig,
     api::http::ApiAdapterSettings,
     backends::libp2p::{
         common::DaNetworkBackendSettings, executor::DaNetworkExecutorBackendSettings,
     },
 };
-use logos_blockchain_da_sampling_service::{
+use lb_da_sampling_service::{
     DaSamplingServiceSettings, backend::kzgrs::KzgrsSamplingBackendSettings,
     verifier::kzgrs::KzgrsDaVerifierSettings as SamplingVerifierSettings,
 };
-use logos_blockchain_da_verifier_service::{
+use lb_da_verifier_service::{
     DaVerifierServiceSettings,
     backend::{kzgrs::KzgrsDaVerifierSettings, trigger::MempoolPublishTriggerConfig},
     storage::adapters::rocksdb::RocksAdapterSettings as VerifierStorageAdapterSettings,
 };
-use logos_blockchain_executor::{api::backend::AxumBackendSettings, config::Config};
-use logos_blockchain_http_api_common::paths::{
+use lb_executor::{api::backend::AxumBackendSettings, config::Config};
+use lb_http_api_common::paths::{
     CRYPTARCHIA_INFO, DA_BALANCER_STATS, DA_BLACKLISTED_PEERS, DA_BLOCK_PEER, DA_GET_MEMBERSHIP,
     DA_GET_SHARES_COMMITMENTS, DA_HISTORIC_SAMPLING, DA_MONITOR_STATS, DA_UNBLOCK_PEER,
     MANTLE_METRICS, NETWORK_INFO, STORAGE_BLOCK,
 };
-use logos_blockchain_kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
-use logos_blockchain_network_service::backends::libp2p::Libp2pInfo;
-use logos_blockchain_node::{
+use lb_kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
+use lb_network_service::backends::libp2p::Libp2pInfo;
+use lb_node::{
     RocksBackendSettings,
     api::{handlers::GetCommitmentsRequest, testing::handlers::HistoricSamplingRequest},
     config::mempool::serde::Config as MempoolConfig,
 };
-use logos_blockchain_sdp_service::SdpSettings;
-use logos_blockchain_tracing::logging::local::FileConfig;
-use logos_blockchain_tracing_service::LoggerLayer;
-use logos_blockchain_utils::{math::NonNegativeF64, net::get_available_tcp_port};
+use lb_sdp_service::SdpSettings;
+use lb_tracing::logging::local::FileConfig;
+use lb_tracing_service::LoggerLayer;
+use lb_utils::{math::NonNegativeF64, net::get_available_tcp_port};
 use reqwest::Url;
 use tempfile::NamedTempFile;
 
@@ -246,7 +246,7 @@ impl Executor {
         requested_shares: HashSet<[u8; 2]>,
         filter_shares: HashSet<[u8; 2]>,
         return_available: bool,
-    ) -> Result<impl Stream<Item = DaLightShare>, logos_blockchain_common_http_client::Error> {
+    ) -> Result<impl Stream<Item = DaLightShare>, lb_common_http_client::Error> {
         self.http_client
             .get_shares::<DaShare>(
                 Url::from_str(&format!("http://{}", self.addr))?,
@@ -280,7 +280,7 @@ impl Executor {
     pub async fn get_storage_commitments(
         &self,
         blob_id: BlobId,
-    ) -> Result<Option<DaSharesCommitments>, logos_blockchain_common_http_client::Error> {
+    ) -> Result<Option<DaSharesCommitments>, lb_common_http_client::Error> {
         self.http_client
             .get_storage_commitments::<DaShare>(
                 Url::from_str(&format!("http://{}", self.addr))?,
@@ -334,7 +334,7 @@ impl Executor {
 
     pub async fn get_lib_stream(
         &self,
-    ) -> Result<impl Stream<Item = BlockInfo>, logos_blockchain_common_http_client::Error> {
+    ) -> Result<impl Stream<Item = BlockInfo>, lb_common_http_client::Error> {
         self.http_client
             .get_lib_stream(Url::from_str(&format!("http://{}", self.addr))?)
             .await
@@ -345,7 +345,7 @@ impl Executor {
             .post(format!(
                 "http://{}{}",
                 self.addr,
-                logos_blockchain_http_api_common::paths::MEMPOOL_ADD_TX
+                lb_http_api_common::paths::MEMPOOL_ADD_TX
             ))
             .header("Content-Type", "application/json")
             .body(serde_json::to_string(&tx).unwrap())
@@ -419,7 +419,7 @@ pub fn create_executor_config(config: GeneralConfig) -> Config {
             },
         },
         tracing: config.tracing_config.tracing_settings,
-        http: logos_blockchain_api_service::ApiServiceSettings {
+        http: lb_api_service::ApiServiceSettings {
             backend_settings: AxumBackendSettings {
                 address: config.api_config.address,
                 rate_limit_per_second: 10000,
@@ -460,12 +460,12 @@ pub fn create_executor_config(config: GeneralConfig) -> Config {
             },
         },
         sdp: SdpSettings { declaration: None },
-        wallet: logos_blockchain_wallet_service::WalletServiceSettings {
+        wallet: lb_wallet_service::WalletServiceSettings {
             known_keys: HashSet::from_iter([config.consensus_config.user_config().leader.pk]),
         },
         key_management: config.kms_config,
 
-        testing_http: logos_blockchain_api_service::ApiServiceSettings {
+        testing_http: lb_api_service::ApiServiceSettings {
             backend_settings: AxumBackendSettings {
                 address: testing_http_address,
                 rate_limit_per_second: 10000,

@@ -13,19 +13,19 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-ed25519-dalek                 = { workspace = true }
-generic-array                 = { default-features = false, version = "1.2" }
-logos-blockchain-blend-crypto = { workspace = true }
-logos-blockchain-groth16      = { workspace = true }
-logos-blockchain-poq          = { workspace = true }
-num-bigint                    = { default-features = false, version = "0.4" }
-serde                         = { workspace = true }
-thiserror                     = "1"
+ed25519-dalek   = { workspace = true }
+generic-array   = { default-features = false, version = "1.2" }
+lb-blend-crypto = { workspace = true }
+lb-groth16      = { workspace = true }
+lb-poq          = { workspace = true }
+num-bigint      = { default-features = false, version = "0.4" }
+serde           = { workspace = true }
+thiserror       = "1"
 
 [dev-dependencies]
-const-hex                                   = { default-features = false, version = "1.15.0" }
-logos-blockchain-core                       = { workspace = true }
-logos-blockchain-key-management-system-keys = { workspace = true }
+const-hex                     = { default-features = false, version = "1.15.0" }
+lb-core                       = { workspace = true }
+lb-key-management-system-keys = { workspace = true }
 
 [features]
 unsafe-test-functions = []

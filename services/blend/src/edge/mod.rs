@@ -13,9 +13,9 @@ use std::{
 };
 
 use backends::BlendBackend;
-use logos_blockchain_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use futures::{Stream, StreamExt as _};
-use logos_blockchain_blend::{
+use lb_blend::{
     message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
     proofs::quota::inputs::prove::{
         private::ProofOfLeadershipQuotaInputs,
@@ -28,8 +28,8 @@ use logos_blockchain_blend::{
         stream::UninitializedFirstReadyStream,
     },
 };
-use logos_blockchain_core::codec::SerializeOp as _;
-use logos_blockchain_time_service::{SlotTick, TimeService, TimeServiceMessage};
+use lb_core::codec::SerializeOp as _;
+use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use overwatch::{
     OpaqueServiceResourcesHandle,
     overwatch::OverwatchHandle,
@@ -41,7 +41,7 @@ use overwatch::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 pub(crate) use service_components::ServiceComponents;
-use logos_blockchain_services_utils::wait_until_services_are_ready;
+use lb_services_utils::wait_until_services_are_ready;
 use settings::BlendConfig;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
@@ -148,7 +148,7 @@ where
     MembershipAdapter: membership::Adapter<NodeId = NodeId, Error: Send + Sync + 'static> + Send,
     membership::ServiceMessage<MembershipAdapter>: Send + Sync + 'static,
     ProofsGenerator: LeaderProofsGenerator + Send,
-    TimeBackend: logos_blockchain_time_service::backends::TimeBackend + Send,
+    TimeBackend: lb_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
     RuntimeServiceId: AsServiceId<<MembershipAdapter as membership::Adapter>::Service>

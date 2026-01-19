@@ -13,16 +13,16 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-logos-blockchain-blend-crypto     = { workspace = true }
-logos-blockchain-blend-message    = { workspace = true }
-logos-blockchain-blend-network    = { workspace = true }
-logos-blockchain-blend-proofs     = { workspace = true }
-logos-blockchain-blend-scheduling = { workspace = true }
+lb-blend-crypto     = { workspace = true }
+lb-blend-message    = { workspace = true }
+lb-blend-network    = { workspace = true }
+lb-blend-proofs     = { workspace = true }
+lb-blend-scheduling = { workspace = true }
 
 [features]
 unsafe-test-functions = [
-  "logos-blockchain-blend-message/unsafe-test-functions",
-  "logos-blockchain-blend-network/unsafe-test-functions",
-  "logos-blockchain-blend-proofs/unsafe-test-functions",
-  "logos-blockchain-blend-scheduling/unsafe-test-functions",
+  "lb-blend-message/unsafe-test-functions",
+  "lb-blend-network/unsafe-test-functions",
+  "lb-blend-proofs/unsafe-test-functions",
+  "lb-blend-scheduling/unsafe-test-functions",
 ]

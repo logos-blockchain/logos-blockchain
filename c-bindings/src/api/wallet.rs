@@ -1,6 +1,6 @@
-use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
-use logos_blockchain_core::mantle::{SignedMantleTx, Transaction as _};
-use logos_blockchain_wallet_service::{WalletService, api::WalletApi};
+use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_core::mantle::{SignedMantleTx, Transaction as _};
+use lb_wallet_service::{WalletService, api::WalletApi};
 use num_bigint::BigUint;
 
 use crate::{
@@ -30,7 +30,7 @@ use crate::{
 /// [`OperationStatus`] error on failure.
 pub(crate) fn get_balance_sync(
     node: &LogosBlockchainNode,
-    tip: logos_blockchain_core::header::HeaderId,
+    tip: lb_core::header::HeaderId,
     wallet_address: ZkPublicKey,
 ) -> Result<Option<Value>, OperationStatus> {
     let Ok(runtime) = tokio::runtime::Runtime::new() else {
@@ -92,7 +92,7 @@ pub unsafe extern "C" fn get_balance(
             Err(error) => return BalanceResult::from_error(error),
         }
     } else {
-        logos_blockchain_core::header::HeaderId::from(unsafe { *optional_tip })
+        lb_core::header::HeaderId::from(unsafe { *optional_tip })
     };
     let wallet_address_bytes = unsafe { std::slice::from_raw_parts(wallet_address, 32) };
     let wallet_address = ZkPublicKey::from(BigUint::from_bytes_le(wallet_address_bytes));
@@ -182,7 +182,7 @@ impl TransferFundsArguments {
 /// [`OperationStatus`] error on failure.
 pub(crate) fn transfer_funds_sync(
     node: &LogosBlockchainNode,
-    tip: logos_blockchain_core::header::HeaderId,
+    tip: lb_core::header::HeaderId,
     change_public_key: ZkPublicKey,
     funding_public_keys: Vec<ZkPublicKey>,
     recipient_public_key: ZkPublicKey,
@@ -266,7 +266,7 @@ pub unsafe extern "C" fn transfer_funds(
             }
         }
     } else {
-        logos_blockchain_core::header::HeaderId::from(unsafe { *arguments.optional_tip })
+        lb_core::header::HeaderId::from(unsafe { *arguments.optional_tip })
     };
     let change_public_key = {
         let change_public_key_bytes =

@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 
-use logos_blockchain_node::RuntimeServiceId;
+use lb_node::RuntimeServiceId;
 use overwatch::overwatch::{Overwatch, OverwatchHandle};
 use tokio::runtime::{Handle, Runtime};
 

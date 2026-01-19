@@ -13,14 +13,14 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                                 = "0.1"
-futures                                     = { default-features = false, version = "0.3" }
-logos-blockchain-core                       = { workspace = true }
-logos-blockchain-key-management-system-keys = { workspace = true }
-logos-blockchain-tx-service                 = { workspace = true }
-overwatch                                   = { workspace = true }
-serde                                       = { workspace = true, features = ["derive"] }
-thiserror                                   = { workspace = true }
-tokio                                       = { default-features = false, version = "1" }
-tokio-stream                                = { default-features = false, version = "0.1" }
-tracing                                     = { workspace = true }
+async-trait                   = "0.1"
+futures                       = { default-features = false, version = "0.3" }
+lb-core                       = { workspace = true }
+lb-key-management-system-keys = { workspace = true }
+lb-tx-service                 = { workspace = true }
+overwatch                     = { workspace = true }
+serde                         = { workspace = true, features = ["derive"] }
+thiserror                     = { workspace = true }
+tokio                         = { default-features = false, version = "1" }
+tokio-stream                  = { default-features = false, version = "0.1" }
+tracing                       = { workspace = true }

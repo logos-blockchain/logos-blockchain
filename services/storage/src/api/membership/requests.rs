@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
 
-use logos_blockchain_core::{
+use lb_core::{
     block::BlockNumber,
     sdp::{Locator, ProviderId, ServiceType, SessionNumber},
 };

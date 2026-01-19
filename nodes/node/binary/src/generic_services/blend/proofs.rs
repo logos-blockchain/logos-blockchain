@@ -1,7 +1,7 @@
 use async_trait::async_trait;
-use logos_blockchain_groth16::{Field as _, fr_to_bytes};
-use logos_blockchain_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
-use logos_blockchain_blend::{
+use lb_groth16::{Field as _, fr_to_bytes};
+use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+use lb_blend::{
     crypto::random_sized_bytes,
     message::crypto::{
         key_ext::Ed25519SecretKeyExt as _,
@@ -24,9 +24,9 @@ use logos_blockchain_blend::{
         },
     },
 };
-use logos_blockchain_blend_service::{ProofsVerifier, RealProofsVerifier};
-use logos_blockchain_core::{codec::DeserializeOp as _, crypto::ZkHash};
-use logos_blockchain_poq::PoQProof;
+use lb_blend_service::{ProofsVerifier, RealProofsVerifier};
+use lb_core::{codec::DeserializeOp as _, crypto::ZkHash};
+use lb_poq::PoQProof;
 
 const LOG_TARGET: &str = "node::blend::proofs";
 const DUMMY_POQ_ZK_NULLIFIER: ZkHash = ZkHash::ZERO;
@@ -192,9 +192,9 @@ impl ProofsVerifier for BlendProofsVerifier {
 #[cfg(test)]
 mod core_to_core_tests {
     use futures::future::ready;
-    use logos_blockchain_groth16::Field as _;
-    use logos_blockchain_key_management_system_service::keys::{UnsecuredEd25519Key, UnsecuredZkKey};
-    use logos_blockchain_blend::{
+    use lb_groth16::Field as _;
+    use lb_key_management_system_service::keys::{UnsecuredEd25519Key, UnsecuredZkKey};
+    use lb_blend::{
         crypto::merkle::MerkleTree,
         message::crypto::{
             key_ext::Ed25519SecretKeyExt as _,
@@ -219,8 +219,8 @@ mod core_to_core_tests {
             },
         },
     };
-    use logos_blockchain_blend_service::ProofsVerifier as _;
-    use logos_blockchain_core::crypto::ZkHash;
+    use lb_blend_service::ProofsVerifier as _;
+    use lb_core::crypto::ZkHash;
 
     use crate::generic_services::blend::{BlendProofsVerifier, CoreProofsGenerator};
 

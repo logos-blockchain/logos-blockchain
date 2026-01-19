@@ -10,12 +10,12 @@ use futures::{
     future::{AbortHandle, Abortable},
 };
 use libp2p::PeerId;
-use logos_blockchain_core::{
+use lb_core::{
     da::BlobId,
     header::HeaderId,
     sdp::{ProviderId, SessionNumber},
 };
-use logos_blockchain_da_network_core::{
+use lb_da_network_core::{
     SubnetworkId,
     maintenance::{balancer::ConnectionBalancerCommand, monitor::ConnectionMonitorCommand},
     protocols::sampling::opinions::OpinionEvent,
@@ -24,11 +24,11 @@ use logos_blockchain_da_network_core::{
         validator::{CommitmentsArgs, SampleArgs, SwarmSettings, ValidatorSwarm},
     },
 };
-use logos_blockchain_libp2p::ed25519;
-use logos_blockchain_tracing::info_with_id;
+use lb_libp2p::ed25519;
+use lb_tracing::info_with_id;
 use overwatch::{overwatch::handle::OverwatchHandle, services::state::NoState};
 use serde::Serialize;
-use logos_blockchain_subnetworks_assignations::MembershipHandler;
+use lb_subnetworks_assignations::MembershipHandler;
 use tokio::sync::{broadcast, mpsc::UnboundedSender, oneshot};
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::instrument;
