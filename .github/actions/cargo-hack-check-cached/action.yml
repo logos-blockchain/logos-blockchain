@@ -39,6 +39,8 @@ runs:
 
     - name: Run Cache-Aware Cargo Hack Check
       shell: bash
+      env:
+        RUSTFLAGS: "-D warnings"
       run: python3 ./scripts/cargo-hack-check/script.py
 
     - name: Save Cargo Hack Keys (main)
