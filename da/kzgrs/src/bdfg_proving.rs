@@ -46,7 +46,7 @@ const ROW_HASH_SIZE: usize = 31;
 pub fn generate_row_commitments_hash(commitments: &[Commitment]) -> Vec<u8> {
     let mut hasher = Blake2bVar::new(ROW_HASH_SIZE).expect("Hasher should be able to build");
     // add dst for hashing
-    hasher.update(b"lb_DA_V1");
+    hasher.update(b"DA_V1");
     for c in commitments {
         let mut buffer = Cursor::new(Vec::new());
         c.serialize_uncompressed(&mut buffer)

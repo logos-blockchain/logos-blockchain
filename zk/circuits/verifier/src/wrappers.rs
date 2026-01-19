@@ -9,7 +9,7 @@ use tempfile::NamedTempFile;
 
 const BINARY_NAME: &str = "verifier";
 
-/// Path to the verifier binary in the `lb_CIRCUITS` directory.
+/// Path to the verifier binary in the `LOGOS_BLOCKCHAIN_CIRCUITS` directory.
 ///
 /// # Panics
 ///

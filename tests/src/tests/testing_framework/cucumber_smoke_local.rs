@@ -10,10 +10,10 @@
 // async fn cucumber_local_idle_smoke() {
 //     // Required env vars (set on the command line when running this test):
 //     // - `POL_PROOF_DEV_MODE=true`
-//     // - `lb_NODE_BIN=...`
-//     // - `lb_KZGRS_PARAMS_PATH=...` (path to KZG params
+//     // - `NODE_BIN=...`
+//     // - `KZGRS_PARAMS_PATH=...` (path to KZG params
 // directory/file, e.g.     //   `tests/kzgrs`)
-//     // - `lb_EXECUTOR_BIN=...` (optional; only needed when the
+//     // - `EXECUTOR_BIN=...` (optional; only needed when the
 // scenario uses     //   executors)
 //     // - `RUST_LOG=info` (optional; better visibility)
 //     let _init_result = tracing_subscriber::fmt()

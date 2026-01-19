@@ -25,7 +25,7 @@ pub static GLOBAL_PARAMS_PATH: LazyLock<String> = LazyLock::new(|| {
 /// Global flag indicating whether debug tracing configuration is enabled to
 /// send traces to local grafana stack.
 pub static IS_DEBUG_TRACING: LazyLock<bool> = LazyLock::new(|| {
-    env::var("lb_TESTS_TRACING").is_ok_and(|val| val.eq_ignore_ascii_case("true"))
+    env::var("LOGOS_BLOCKCHAIN_TESTS_TRACING").is_ok_and(|val| val.eq_ignore_ascii_case("true"))
 });
 
 /// In slow test environments like Codecov, use 2x timeout.

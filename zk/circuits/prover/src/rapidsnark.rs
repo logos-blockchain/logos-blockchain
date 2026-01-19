@@ -9,7 +9,7 @@ use tempfile::NamedTempFile;
 
 const BINARY_NAME: &str = "prover";
 
-/// Path to the prover binary in the `lb_CIRCUITS` directory.
+/// Path to the prover binary in the `LOGOS_BLOCKCHAIN_CIRCUITS` directory.
 ///
 /// # Panics
 ///
