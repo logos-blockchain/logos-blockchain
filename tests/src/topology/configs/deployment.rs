@@ -76,6 +76,7 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
         NetworkDeploymentSettings {
             identify_protocol_name: StreamProtocol::new("/integration/nomos/identify/1.0.0"),
             kademlia_protocol_name: StreamProtocol::new("/integration/nomos/kad/1.0.0"),
+            chain_sync_protocol_name: StreamProtocol::new("/integration/nomos/chainsync/1.0.0"),
         },
         CryptarchiaDeploymentSettings {
             gossipsub_protocol: "/integration/nomos/cryptarchia/proto/1.0.0".to_owned(),

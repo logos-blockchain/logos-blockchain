@@ -1,10 +1,9 @@
 use core::{hash::Hash, marker::PhantomData};
 use std::num::NonZeroU64;
 
-use nomos_blend_crypto::keys::X25519PrivateKey;
+use key_management_system_keys::operators::ed25519::derive_x25519::X25519PrivateKey;
 use nomos_blend_message::{
-    Error, PaddedPayloadBody, PayloadType,
-    crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
+    Error, PaddedPayloadBody, PayloadType, crypto::proofs::PoQVerificationInputsMinusSigningKey,
     input::EncapsulationInput,
 };
 use nomos_blend_proofs::quota::inputs::prove::{
@@ -62,14 +61,11 @@ where
 {
     #[must_use]
     pub fn new(
-        settings: &SessionCryptographicProcessorSettings,
+        settings: SessionCryptographicProcessorSettings,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
         core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self {
-        // Derive the non-ephemeral encryption key
-        // from the non-ephemeral signing key.
-        let non_ephemeral_encryption_key = settings.non_ephemeral_signing_key.derive_x25519();
         let generator_settings = ProofsGeneratorSettings {
             local_node_index: membership.local_index(),
             membership_size: membership.size(),
@@ -77,7 +73,7 @@ where
         };
         Self {
             num_blend_layers: settings.num_blend_layers,
-            non_ephemeral_encryption_key,
+            non_ephemeral_encryption_key: settings.non_ephemeral_encryption_key,
             membership,
             proofs_generator: ProofsGenerator::new(
                 generator_settings,
@@ -217,13 +213,9 @@ mod test {
     use std::num::NonZeroU64;
 
     use groth16::Field as _;
-    use key_management_system_keys::keys::{
-        ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, UnsecuredEd25519Key,
-    };
+    use key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
     use multiaddr::{Multiaddr, PeerId};
-    use nomos_blend_message::crypto::{
-        key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
-    };
+    use nomos_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
     use nomos_blend_proofs::quota::inputs::prove::{
         private::ProofOfLeadershipQuotaInputs,
         public::{CoreInputs, LeaderInputs},
@@ -246,8 +238,8 @@ mod test {
             _,
             TestEpochChangeCoreAndLeaderProofsGenerator,
         >::new(
-            &SessionCryptographicProcessorSettings {
-                non_ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
+            SessionCryptographicProcessorSettings {
+                non_ephemeral_encryption_key: [0; _].into(),
                 num_blend_layers: NonZeroU64::new(1).unwrap(),
             },
             Membership::new_without_local(&[Node {
@@ -293,8 +285,8 @@ mod test {
             _,
             TestEpochChangeCoreAndLeaderProofsGenerator,
         >::new(
-            &SessionCryptographicProcessorSettings {
-                non_ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
+            SessionCryptographicProcessorSettings {
+                non_ephemeral_encryption_key: [0; _].into(),
                 num_blend_layers: NonZeroU64::new(1).unwrap(),
             },
             Membership::new_without_local(&[Node {

@@ -13,7 +13,11 @@ use futures::{
     FutureExt as _, Stream, StreamExt as _,
     future::{BoxFuture, join_all},
 };
-use key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
+use key_management_system_service::{
+    api::KmsServiceApi,
+    keys::{KeyOperators, PublicKeyEncoding},
+    operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
+};
 use network::NetworkAdapter;
 use nomos_blend::{
     crypto::random_sized_bytes,
@@ -34,7 +38,10 @@ use nomos_blend::{
     },
     scheduling::{
         SessionMessageScheduler,
-        message_blend::provers::core_and_leader::CoreAndLeaderProofsGenerator,
+        message_blend::{
+            crypto::SessionCryptographicProcessorSettings,
+            provers::core_and_leader::CoreAndLeaderProofsGenerator,
+        },
         message_scheduler::{
             OldSessionMessageScheduler, ProcessedMessageScheduler,
             round_info::{RoundInfo, RoundReleaseType},
@@ -73,19 +80,20 @@ use tracing::{error, info};
 use crate::{
     core::{
         backends::{PublicInfo, SessionInfo},
-        kms::{KmsPoQAdapter, PreloadKMSBackendCorePoQGenerator, PreloadKmsService},
+        kms::{KmsPoQAdapter, PreloadKMSBackendCorePoQGenerator},
         processor::{
             CoreCryptographicProcessor, DecapsulatedMessageType, Error,
             MultiLayerDecapsulationOutput,
         },
         scheduler::SchedulerWrapper,
-        settings::BlendConfig,
+        settings::{RunningBlendConfig, StartingBlendConfig},
         state::{RecoveryServiceState, ServiceState, StateUpdater as ServiceStateUpdater},
     },
     epoch_info::{
         ChainApi, EpochEvent, EpochHandler, LeaderInputsMinusQuota, PolEpochInfo,
         PolInfoProvider as PolInfoProviderTrait,
     },
+    kms::PreloadKmsService,
     membership::{self, MembershipInfo, ZkInfo},
     message::{NetworkMessage, ProcessedMessage, ServiceMessage},
     session::{CoreSessionInfo, CoreSessionPublicInfo},
@@ -174,12 +182,12 @@ where
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
     Network: NetworkAdapter<RuntimeServiceId>,
 {
-    type Settings = BlendConfig<Backend::Settings>;
+    type Settings = StartingBlendConfig<Backend::Settings>;
     type State = RecoveryServiceState<Backend::Settings, Network::BroadcastSettings>;
     type StateOperator = RecoveryOperator<
         JsonFileBackend<
             RecoveryServiceState<Backend::Settings, Network::BroadcastSettings>,
-            BlendConfig<Backend::Settings>,
+            StartingBlendConfig<Backend::Settings>,
         >,
     >;
     type Message = ServiceMessage<Network::BroadcastSettings>;
@@ -326,12 +334,28 @@ where
             panic!("Key with specified ID is not a ZK key.");
         };
 
+        // TODO: This will go once we do not need to pass the secret key anymore, i.e.,
+        // when we have libp2p integration with KMS.
+        let non_ephemeral_signing_key = {
+            let (sender, receiver) = oneshot::channel();
+            kms_api
+                .execute(
+                    blend_config.non_ephemeral_signing_key_id.clone(),
+                    KeyOperators::Ed25519(Box::new(LeakSecretKeyOperator::new(sender))),
+                )
+                .await
+                .expect("Failed to interact with KMS to fetch non-ephemeral signing key.");
+            receiver
+                .await
+                .expect("Failed to retrieve non-ephemeral signing key from KMS.")
+        };
+
         let membership_stream = MembershipAdapter::new(
             overwatch_handle
                 .relay::<<MembershipAdapter as membership::Adapter>::Service>()
                 .await
                 .expect("Failed to get relay channel with membership service."),
-            blend_config.crypto.non_ephemeral_signing_key.public_key(),
+            non_ephemeral_signing_key.public_key(),
             Some(zk_public_key),
         )
         .subscribe()
@@ -361,6 +385,16 @@ where
         .await;
 
         // Initialize components for the service.
+        let running_blend_config = RunningBlendConfig {
+            backend: blend_config.backend,
+            non_ephemeral_signing_key,
+            num_blend_layers: blend_config.num_blend_layers,
+            minimum_network_size: blend_config.minimum_network_size,
+            recovery_path: blend_config.recovery_path.clone(),
+            scheduler: blend_config.scheduler,
+            time: blend_config.time,
+            zk: blend_config.zk,
+        };
         let (
             mut remaining_session_stream,
             mut remaining_clock_stream,
@@ -380,7 +414,7 @@ where
             KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
             RuntimeServiceId,
         >(
-            blend_config.clone(),
+            running_blend_config.clone(),
             membership_stream,
             clock_stream,
             &mut epoch_handler,
@@ -419,7 +453,7 @@ where
             &mut remaining_clock_stream,
             secret_pol_info_stream,
             &mut remaining_session_stream,
-            &blend_config,
+            &running_blend_config,
             &mut backend,
             &network_adapter,
             &sdp_relay,
@@ -440,7 +474,7 @@ where
             blend_messages,
             remaining_clock_stream,
             remaining_session_stream,
-            &blend_config,
+            &running_blend_config,
             backend,
             network_adapter,
             sdp_relay,
@@ -477,7 +511,7 @@ async fn initialize<
     KmsAdapter,
     RuntimeServiceId,
 >(
-    blend_config: BlendConfig<Backend::Settings>,
+    blend_config: RunningBlendConfig<Backend::Settings>,
     membership_stream: impl Stream<Item = MembershipInfo<NodeId>> + Send + Unpin + 'static,
     clock_stream: impl Stream<Item = SlotTick> + Send + Sync + Unpin + 'static,
     epoch_handler: &mut EpochHandler<ChainService, RuntimeServiceId>,
@@ -602,7 +636,7 @@ where
         epoch: LeaderInputs {
             pol_ledger_aged,
             pol_epoch_nonce,
-            message_quota: blend_config.crypto.num_blend_layers.into(),
+            message_quota: blend_config.num_blend_layers.into(),
             total_stake,
         },
         session: SessionInfo {
@@ -620,7 +654,10 @@ where
     >::try_new_with_core_condition_check(
         current_membership_info.public.membership.clone(),
         blend_config.minimum_network_size,
-        &blend_config.crypto,
+        SessionCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: blend_config.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: blend_config.num_blend_layers,
+        },
         current_public_info.clone().into(),
         current_membership_info.core_poq_generator,
     )
@@ -747,7 +784,7 @@ async fn run_event_loop<
              impl Stream<Item = SessionEvent<CoreSessionInfo<NodeId, CorePoQGenerator>>> + Unpin
          ),
 
-    blend_config: &BlendConfig<Backend::Settings>,
+    blend_config: &RunningBlendConfig<Backend::Settings>,
     backend: &mut Backend,
     network_adapter: &NetAdapter,
     sdp_relay: &OutboundRelay<SdpMessage>,
@@ -884,7 +921,7 @@ async fn retire<
     mut remaining_session_stream: impl Stream<
         Item = SessionEvent<CoreSessionInfo<NodeId, CorePoQGenerator>>,
     > + Unpin,
-    blend_config: &BlendConfig<Backend::Settings>,
+    blend_config: &RunningBlendConfig<Backend::Settings>,
     mut backend: Backend,
     network_adapter: NetAdapter,
     sdp_relay: OutboundRelay<SdpMessage>,
@@ -963,7 +1000,7 @@ async fn handle_session_event<
     RuntimeServiceId,
 >(
     event: SessionEvent<CoreSessionInfo<NodeId, CorePoQGenerator>>,
-    settings: &BlendConfig<Backend::Settings>,
+    settings: &RunningBlendConfig<Backend::Settings>,
     current_cryptographic_processor: CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1038,7 +1075,12 @@ where
             let new_processor = match CoreCryptographicProcessor::try_new_with_core_condition_check(
                 new_membership,
                 settings.minimum_network_size,
-                &settings.crypto,
+                SessionCryptographicProcessorSettings {
+                    non_ephemeral_encryption_key: settings
+                        .non_ephemeral_signing_key
+                        .derive_x25519(),
+                    num_blend_layers: settings.num_blend_layers,
+                },
                 new_public_info.clone().into(),
                 core_poq_generator,
             ) {
@@ -1741,7 +1783,7 @@ async fn handle_clock_event<
     RuntimeServiceId,
 >(
     slot_tick: SlotTick,
-    settings: &BlendConfig<Backend::Settings>,
+    settings: &RunningBlendConfig<Backend::Settings>,
     epoch_handler: &mut EpochHandler<ChainService, RuntimeServiceId>,
     cryptographic_processor: &mut CoreCryptographicProcessor<
         NodeId,
@@ -1770,7 +1812,7 @@ where
             total_stake,
         }) => {
             let new_leader_inputs = LeaderInputs {
-                message_quota: settings.crypto.num_blend_layers.into(),
+                message_quota: settings.num_blend_layers.into(),
                 pol_epoch_nonce,
                 pol_ledger_aged,
                 total_stake,
@@ -1797,7 +1839,7 @@ where
             total_stake,
         }) => {
             let new_leader_inputs = LeaderInputs {
-                message_quota: settings.crypto.num_blend_layers.into(),
+                message_quota: settings.num_blend_layers.into(),
                 pol_epoch_nonce,
                 pol_ledger_aged,
                 total_stake,

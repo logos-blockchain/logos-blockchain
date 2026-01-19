@@ -1,11 +1,9 @@
 use std::io;
 
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
-use libp2p::{Stream, StreamProtocol};
+use libp2p::Stream;
 
 pub mod core;
-
-pub const PROTOCOL_NAME: StreamProtocol = StreamProtocol::new("/nomos/blend/1.0.0");
 
 /// Write a message to the stream
 pub async fn send_msg(mut stream: Stream, msg: Vec<u8>) -> io::Result<Stream> {

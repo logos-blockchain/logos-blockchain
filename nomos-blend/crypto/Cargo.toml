@@ -19,11 +19,7 @@ nomos-utils    = { features = ["rng"], workspace = true }
 poq            = { workspace = true }
 poseidon2      = { workspace = true }
 rs-merkle-tree = { default-features = false, version = "0.1", features = ["memory_store"] }
-serde          = { workspace = true }
-subtle         = { workspace = true }
 thiserror      = "1"
-x25519-dalek   = { workspace = true, features = ["serde", "static_secrets", "zeroize"] }
-zeroize        = { workspace = true }
 
 [dev-dependencies]
 num-bigint = { default-features = false, version = "0.4" }

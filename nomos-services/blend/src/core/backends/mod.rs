@@ -14,7 +14,7 @@ use nomos_blend::{
 };
 use overwatch::overwatch::handle::OverwatchHandle;
 
-use crate::core::settings::BlendConfig;
+use crate::core::settings::RunningBlendConfig as BlendConfig;
 
 #[cfg(feature = "libp2p")]
 pub mod libp2p;

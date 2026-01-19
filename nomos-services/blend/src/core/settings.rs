@@ -1,7 +1,6 @@
 use std::{num::NonZeroU64, path::PathBuf};
 
-use key_management_system_service::backend::preload::KeyId;
-use nomos_blend::scheduling::message_blend::crypto::SessionCryptographicProcessorSettings;
+use key_management_system_service::{backend::preload::KeyId, keys::UnsecuredEd25519Key};
 use nomos_core::blend::core_quota;
 use nomos_utils::math::NonNegativeF64;
 use serde::{Deserialize, Serialize};
@@ -10,21 +9,36 @@ use services_utils::overwatch::recovery::backends::FileBackendSettings;
 use crate::settings::TimingSettings;
 
 #[derive(Clone, Debug)]
-pub struct BlendConfig<BackendSettings> {
+pub struct StartingBlendConfig<BackendSettings> {
     pub backend: BackendSettings,
-    pub crypto: SessionCryptographicProcessorSettings,
     pub scheduler: SchedulerSettings,
     pub time: TimingSettings,
     pub zk: ZkSettings,
+    pub non_ephemeral_signing_key_id: KeyId,
+    pub num_blend_layers: NonZeroU64,
     pub minimum_network_size: NonZeroU64,
     pub recovery_path: PathBuf,
 }
 
-impl<BackendSettings> BlendConfig<BackendSettings> {
+/// Same values as [`StartingBlendConfig`] but with the secret key exfiltrated
+/// from the KMS.
+#[derive(Clone)]
+pub struct RunningBlendConfig<BackendSettings> {
+    pub backend: BackendSettings,
+    pub scheduler: SchedulerSettings,
+    pub time: TimingSettings,
+    pub zk: ZkSettings,
+    pub non_ephemeral_signing_key: UnsecuredEd25519Key,
+    pub num_blend_layers: NonZeroU64,
+    pub minimum_network_size: NonZeroU64,
+    pub recovery_path: PathBuf,
+}
+
+impl<BackendSettings> RunningBlendConfig<BackendSettings> {
     pub fn session_quota(&self, membership_size: usize) -> u64 {
         self.scheduler
             .cover
-            .session_quota(&self.crypto, &self.time, membership_size)
+            .session_quota(self.num_blend_layers, &self.time, membership_size)
     }
 
     pub(super) fn scheduler_settings(
@@ -36,12 +50,20 @@ impl<BackendSettings> BlendConfig<BackendSettings> {
             maximum_release_delay_in_rounds: self.scheduler.delayer.maximum_release_delay_in_rounds,
             round_duration: self.time.round_duration,
             rounds_per_interval: self.time.rounds_per_interval,
-            num_blend_layers: self.crypto.num_blend_layers,
+            num_blend_layers: self.num_blend_layers,
         }
     }
 }
 
-impl<BackendSettings> FileBackendSettings for BlendConfig<BackendSettings> {
+impl<BackendSettings> StartingBlendConfig<BackendSettings> {
+    pub fn session_quota(&self, membership_size: usize) -> u64 {
+        self.scheduler
+            .cover
+            .session_quota(self.num_blend_layers, &self.time, membership_size)
+    }
+}
+
+impl<BackendSettings> FileBackendSettings for StartingBlendConfig<BackendSettings> {
     fn recovery_file(&self) -> &PathBuf {
         &self.recovery_path
     }
@@ -75,14 +97,14 @@ impl CoverTrafficSettings {
     #[must_use]
     pub(crate) fn session_quota(
         &self,
-        crypto: &SessionCryptographicProcessorSettings,
+        num_blend_layers: NonZeroU64,
         timings: &TimingSettings,
         membership_size: usize,
     ) -> u64 {
         core_quota(
             timings.rounds_per_session,
             self.message_frequency_per_round,
-            crypto.num_blend_layers,
+            num_blend_layers,
             membership_size,
         )
     }

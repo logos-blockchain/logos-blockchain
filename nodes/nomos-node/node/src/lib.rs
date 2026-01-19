@@ -157,12 +157,12 @@ pub(crate) type CryptarchiaLeaderService = generic_services::CryptarchiaLeaderSe
     RuntimeServiceId,
 >;
 
-pub(crate) type TimeService = generic_services::TimeService<RuntimeServiceId>;
+pub type TimeService = generic_services::TimeService<RuntimeServiceId>;
 
-pub(crate) type ApiStorageAdapter<RuntimeServiceId> =
+pub type ApiStorageAdapter<RuntimeServiceId> =
     nomos_api::http::storage::adapters::rocksdb::RocksAdapter<RuntimeServiceId>;
 
-pub(crate) type ApiService = nomos_api::ApiService<
+pub type ApiService = nomos_api::ApiService<
     AxumBackend<
         DaShare,
         NomosDaMembership,
@@ -201,9 +201,9 @@ pub(crate) type ApiService = nomos_api::ApiService<
     RuntimeServiceId,
 >;
 
-type StorageService = nomos_storage::StorageService<RocksBackend, RuntimeServiceId>;
+pub type StorageService = nomos_storage::StorageService<RocksBackend, RuntimeServiceId>;
 
-type SystemSigService = SystemSig<RuntimeServiceId>;
+pub type SystemSigService = SystemSig<RuntimeServiceId>;
 
 #[cfg(feature = "testing")]
 type TestingApiService<RuntimeServiceId> =

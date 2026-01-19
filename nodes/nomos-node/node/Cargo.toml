@@ -28,7 +28,6 @@ chain-service                 = { workspace = true }
 clap                          = { default-features = false, features = ["derive", "env", "std"], version = "4" }
 color-eyre                    = { default-features = false, version = "0.6.0" }
 cryptarchia-engine            = { workspace = true }
-derivative                    = { version = "2", default-features = false }
 futures                       = { default-features = false, version = "0.3" }
 groth16                       = { workspace = true }
 hex                           = { default-features = false, version = "0.4.3" }

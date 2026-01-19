@@ -2,10 +2,7 @@ use core::fmt::{Debug, Display};
 
 use async_trait::async_trait;
 use key_management_system_service::{
-    KMSService,
-    api::KmsServiceApi,
-    backend::preload::{KeyId, PreloadKMSBackend},
-    keys::KeyOperators,
+    api::KmsServiceApi, backend::preload::KeyId, keys::KeyOperators,
     operators::blend::poq::PoQOperator,
 };
 use nomos_blend::{
@@ -17,10 +14,9 @@ use overwatch::services::AsServiceId;
 use poq::CorePathAndSelectors;
 use tokio::sync::oneshot;
 
-const LOG_TARGET: &str = "blend::service::core::kms-poq-generator";
+use crate::kms::PreloadKmsService;
 
-pub(super) type PreloadKmsService<RuntimeServiceId> =
-    KMSService<PreloadKMSBackend, RuntimeServiceId>;
+const LOG_TARGET: &str = "blend::service::core::kms-poq-generator";
 
 #[async_trait]
 pub trait KmsPoQAdapter<RuntimeServiceId> {

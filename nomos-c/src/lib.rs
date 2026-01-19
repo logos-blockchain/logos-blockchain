@@ -6,6 +6,5 @@
 pub mod api;
 mod errors;
 mod node;
-
 pub use errors::OperationStatus;
 pub use node::NomosNode;

@@ -1,12 +1,11 @@
-use nomos_blend::scheduling::message_blend::crypto::SessionCryptographicProcessorSettings;
 use nomos_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pCoreBlendBackendSettings,
-        settings::BlendConfig as BlendCoreSettings,
+        settings::StartingBlendConfig as BlendCoreSettings,
     },
     edge::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pEdgeBlendBackendSettings,
-        settings::BlendConfig as BlendEdgeSettings,
+        settings::StartingBlendConfig as BlendEdgeSettings,
     },
     settings::{CommonSettings, CoreSettings, EdgeSettings, Settings as BlendSettings},
 };
@@ -39,10 +38,8 @@ impl From<ServiceConfig>
             Libp2pEdgeBlendBackendSettings,
         > {
             common: CommonSettings {
-                crypto: SessionCryptographicProcessorSettings {
-                    non_ephemeral_signing_key: config.user.non_ephemeral_signing_key,
-                    num_blend_layers: config.deployment.common.num_blend_layers,
-                },
+                non_ephemeral_signing_key_id: config.user.non_ephemeral_signing_key_id,
+                num_blend_layers: config.deployment.common.num_blend_layers,
                 minimum_network_size: config.deployment.common.minimum_network_size,
                 recovery_path_prefix: config.user.recovery_path_prefix,
                 time: config.deployment.common.timing,

@@ -24,6 +24,7 @@ nomos-core         = { workspace = true }
 nomos-ledger       = { features = ["serde"], workspace = true }
 nomos-network      = { workspace = true }
 nomos-storage      = { workspace = true }
+nomos-time         = { features = ["ntp"], workspace = true }
 nomos-utils        = { workspace = true }
 num-bigint         = { default-features = false, version = "0.4" }
 overwatch          = { workspace = true }
