@@ -56,8 +56,8 @@ mod tests {
         sync::Arc,
     };
 
-    use lb_cryptarchia_engine::EpochConfig;
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
+    use lb_cryptarchia_engine::EpochConfig;
     use lb_utils::math::NonNegativeF64;
 
     use crate::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};

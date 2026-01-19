@@ -2,14 +2,16 @@ use std::fmt::{Debug, Display};
 
 use axum::{Json, extract::State, response::Response};
 use lb_api_service::http::da::{self, DaDispersal};
-use lb_da_dispersal_service::{adapters::network::DispersalNetworkAdapter, backend::DispersalBackend};
+use lb_da_dispersal_service::{
+    adapters::network::DispersalNetworkAdapter, backend::DispersalBackend,
+};
 use lb_da_network_core::SubnetworkId;
 use lb_http_api_common::{bodies::dispersal::DispersalRequestBody, paths};
 use lb_libp2p::PeerId;
 use lb_node::make_request_and_return_response;
+use lb_subnetworks_assignations::MembershipHandler;
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use serde::Serialize;
-use lb_subnetworks_assignations::MembershipHandler;
 
 #[utoipa::path(
     post,

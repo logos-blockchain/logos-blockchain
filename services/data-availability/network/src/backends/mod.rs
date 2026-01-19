@@ -14,8 +14,8 @@ use lb_da_network_core::{
     addressbook::AddressBookHandler, protocols::sampling::opinions::OpinionEvent,
     swarm::BalancerStats,
 };
-use overwatch::{overwatch::handle::OverwatchHandle, services::state::ServiceState};
 use lb_subnetworks_assignations::MembershipHandler;
+use overwatch::{overwatch::handle::OverwatchHandle, services::state::ServiceState};
 use tokio::sync::{broadcast, mpsc::UnboundedSender};
 
 use crate::SessionStatus;

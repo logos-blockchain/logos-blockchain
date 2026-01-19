@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use libp2p_identity::PeerId;
 use lb_core::sdp::SessionNumber;
+use libp2p_identity::PeerId;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 

@@ -1,13 +1,12 @@
-use libp2p::{PeerId, allow_block_list::BlockedPeers, connection_limits::ConnectionLimits};
 use lb_blend::scheduling::membership::Membership;
 use lb_libp2p::NetworkBehaviour;
+use libp2p::{PeerId, allow_block_list::BlockedPeers, connection_limits::ConnectionLimits};
 
 use crate::core::{backends::libp2p::Libp2pBlendBackendSettings, settings::BlendConfig};
 
 #[derive(NetworkBehaviour)]
 pub struct BlendBehaviour<ProofsVerifier, ObservationWindowProvider> {
-    pub blend:
-        lb_blend::network::core::NetworkBehaviour<ProofsVerifier, ObservationWindowProvider>,
+    pub blend: lb_blend::network::core::NetworkBehaviour<ProofsVerifier, ObservationWindowProvider>,
     pub limits: libp2p::connection_limits::Behaviour,
     pub blocked_peers: libp2p::allow_block_list::Behaviour<BlockedPeers>,
 }

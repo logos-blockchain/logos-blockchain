@@ -12,6 +12,12 @@ use futures::{
     stream::{BoxStream, FuturesUnordered},
 };
 use indexmap::IndexMap;
+use lb_da_messages::{
+    packing::{pack_to_writer, unpack_from_reader},
+    replication::{ReplicationRequest, ReplicationResponseId},
+};
+use lb_subnetworks_assignations::MembershipHandler;
+use lb_utils::bounded_duration::{MINUTE, MinimalBoundedDuration};
 use libp2p::{
     Multiaddr, PeerId, Stream,
     core::{Endpoint, transport::PortUse},
@@ -22,14 +28,8 @@ use libp2p::{
 };
 use libp2p_stream::{Control, IncomingStreams, OpenStreamError};
 use log::trace;
-use lb_da_messages::{
-    packing::{pack_to_writer, unpack_from_reader},
-    replication::{ReplicationRequest, ReplicationResponseId},
-};
-use lb_utils::bounded_duration::{MINUTE, MinimalBoundedDuration};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use lb_subnetworks_assignations::MembershipHandler;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -197,8 +197,8 @@ pub struct ReplicationConfig {
 
 /// Logos blockchain DA broadcast network behaviour.
 ///
-/// This item handles the logic of the Logos blockchain da subnetworks broadcasting.
-/// DA subnetworks are a logical distribution of subsets.
+/// This item handles the logic of the Logos blockchain da subnetworks
+/// broadcasting. DA subnetworks are a logical distribution of subsets.
 /// A node just connects and accepts connections to other nodes that are in the
 /// same subsets. A node forwards messages to all connected peers which are
 /// member of the addressed `SubnetworkId`.

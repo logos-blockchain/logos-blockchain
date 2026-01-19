@@ -11,6 +11,7 @@ use futures::{
     },
     stream::FuturesUnordered,
 };
+use lb_da_messages::sampling;
 use libp2p::{
     Multiaddr, PeerId,
     core::{Endpoint, transport::PortUse},
@@ -20,7 +21,6 @@ use libp2p::{
     },
 };
 use libp2p_stream::IncomingStreams;
-use lb_da_messages::sampling;
 
 use crate::{
     protocol::SAMPLING_PROTOCOL,

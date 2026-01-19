@@ -1,9 +1,9 @@
 use futures::AsyncWriteExt as _;
-use libp2p::{PeerId, Stream};
 use lb_da_messages::{
     packing::{pack_to_writer, unpack_from_reader},
     sampling::{self, SampleResponse},
 };
+use libp2p::{PeerId, Stream};
 
 use super::{
     BehaviourSampleReq, ResponseChannel, SampleRequestFutureSuccess, errors::SamplingError,

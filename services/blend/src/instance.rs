@@ -302,10 +302,10 @@ impl Mode {
 mod tests {
     use std::time::Duration;
 
-    use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
-    use libp2p::Multiaddr;
     use lb_blend::scheduling::membership::Node;
+    use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
     use lb_network_service::config::NetworkConfig;
+    use libp2p::Multiaddr;
     use overwatch::{
         DynError, OpaqueServiceResourcesHandle,
         overwatch::OverwatchRunner,

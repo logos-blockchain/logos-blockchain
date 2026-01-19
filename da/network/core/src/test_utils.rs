@@ -4,13 +4,13 @@ use std::{
     time::Duration,
 };
 
+use lb_subnetworks_assignations::MembershipHandler;
 use libp2p::{
     PeerId, Transport as _,
     core::{transport::MemoryTransport, upgrade::Version},
     identity::Keypair,
     swarm::NetworkBehaviour,
 };
-use lb_subnetworks_assignations::MembershipHandler;
 
 use crate::{SubnetworkId, addressbook::AddressBookHandler};
 

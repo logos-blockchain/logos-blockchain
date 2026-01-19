@@ -4,9 +4,9 @@ use std::{
 };
 
 use ark_ff::Field;
+use lb_core::utils::merkle::{MerkleNode, MerklePath};
 #[cfg(feature = "serde")]
 use lb_groth16::serde::serde_fr;
-use lb_core::utils::merkle::{MerkleNode, MerklePath};
 use lb_poseidon2::{Digest, Fr};
 use rpds::RedBlackTreeSetSync;
 

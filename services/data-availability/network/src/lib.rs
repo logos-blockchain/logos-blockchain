@@ -18,8 +18,6 @@ use std::{
 use async_trait::async_trait;
 use backends::{ConnectionStatus, NetworkBackend};
 use futures::Stream;
-use lb_kzgrs_backend::common::share::{DaShare, DaSharesCommitments};
-use libp2p::{Multiaddr, PeerId};
 use lb_core::{
     da::BlobId,
     header::HeaderId,
@@ -29,7 +27,11 @@ use lb_da_network_core::{
     SubnetworkId, addressbook::AddressBookHandler as _,
     protocols::sampling::opinions::OpinionEvent, swarm::BalancerStats,
 };
+use lb_kzgrs_backend::common::share::{DaShare, DaSharesCommitments};
 use lb_libp2p::cryptarchia_sync::DynError;
+use lb_services_utils::wait_until_services_are_ready;
+use lb_subnetworks_assignations::{MembershipCreator, MembershipHandler, SubnetworkAssignations};
+use libp2p::{Multiaddr, PeerId};
 use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{
@@ -38,9 +40,7 @@ use overwatch::{
     },
 };
 use serde::{Deserialize, Serialize};
-use lb_services_utils::wait_until_services_are_ready;
 use storage::{MembershipStorage, MembershipStorageAdapter};
-use lb_subnetworks_assignations::{MembershipCreator, MembershipHandler, SubnetworkAssignations};
 use tokio::sync::{
     broadcast,
     broadcast::Sender,

@@ -13,7 +13,6 @@ use std::{
 };
 
 use backends::BlendBackend;
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use futures::{Stream, StreamExt as _};
 use lb_blend::{
     message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
@@ -28,7 +27,9 @@ use lb_blend::{
         stream::UninitializedFirstReadyStream,
     },
 };
+use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::codec::SerializeOp as _;
+use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use overwatch::{
     OpaqueServiceResourcesHandle,
@@ -41,7 +42,6 @@ use overwatch::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 pub(crate) use service_components::ServiceComponents;
-use lb_services_utils::wait_until_services_are_ready;
 use settings::BlendConfig;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};

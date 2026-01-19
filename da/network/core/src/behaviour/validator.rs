@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use futures::StreamExt as _;
-use libp2p::{PeerId, identity::Keypair, swarm::NetworkBehaviour};
 use lb_subnetworks_assignations::MembershipHandler;
+use libp2p::{PeerId, identity::Keypair, swarm::NetworkBehaviour};
 use tokio::sync::{broadcast, mpsc::UnboundedSender};
 use tokio_stream::wrappers::BroadcastStream;
 

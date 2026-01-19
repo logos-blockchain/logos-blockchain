@@ -4,8 +4,6 @@ use std::collections::HashSet;
 use lb_chain_leader_service::LeaderConfig;
 use lb_chain_network_service::{IbdConfig, OrphanConfig, SyncConfig};
 use lb_chain_service::{OfflineGracePeriodConfig, StartingState};
-use lb_groth16::CompressedGroth16Proof;
-use lb_key_management_system_service::keys::{Ed25519Key, ZkKey, ZkPublicKey, ZkSignature};
 use lb_core::{
     mantle::{
         MantleTx, Note, OpProof, Utxo,
@@ -18,6 +16,8 @@ use lb_core::{
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
+use lb_groth16::CompressedGroth16Proof;
+use lb_key_management_system_service::keys::{Ed25519Key, ZkKey, ZkPublicKey, ZkSignature};
 use lb_node::{
     SignedMantleTx, Transaction as _,
     config::cryptarchia::serde::{Config, NetworkConfig, ServiceConfig},

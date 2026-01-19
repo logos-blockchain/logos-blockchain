@@ -1,6 +1,5 @@
 use core::mem::swap;
 
-use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use lb_blend_proofs::{
     quota::{
         self, ProofOfQuota, VerifiedProofOfQuota,
@@ -11,6 +10,7 @@ use lb_blend_proofs::{
     },
     selection::{self, ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
+use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

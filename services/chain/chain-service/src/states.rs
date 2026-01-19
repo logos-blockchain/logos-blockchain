@@ -1,7 +1,7 @@
 use std::{collections::HashSet, time::SystemTime};
 
-use lb_groth16::{Field as _, Fr};
 use lb_core::header::{Header, HeaderId};
+use lb_groth16::{Field as _, Fr};
 use lb_ledger::LedgerState;
 use overwatch::{DynError, services::state::ServiceState};
 use serde::{Deserialize, Serialize};
@@ -106,8 +106,8 @@ mod tests {
         sync::Arc,
     };
 
-    use lb_cryptarchia_engine::State::Bootstrapping;
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
+    use lb_cryptarchia_engine::State::Bootstrapping;
     use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
     use lb_utils::math::NonNegativeF64;
 

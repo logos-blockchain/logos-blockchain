@@ -11,9 +11,6 @@ use std::{cmp::Ordering, collections::HashMap, hash::Hash};
 pub use config::Config;
 use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use cryptarchia::{EpochState, UtxoTree};
-use lb_cryptarchia_engine::Slot;
-use lb_groth16::{Field as _, Fr};
-use mantle::LedgerState as MantleLedger;
 use lb_core::{
     block::BlockNumber,
     mantle::{
@@ -23,6 +20,9 @@ use lb_core::{
     proofs::leader_proof,
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
 };
+use lb_cryptarchia_engine::Slot;
+use lb_groth16::{Field as _, Fr};
+use mantle::LedgerState as MantleLedger;
 use thiserror::Error;
 
 // While individual notes are constrained to be `u64`, intermediate calculations
@@ -311,11 +311,11 @@ impl LedgerState {
 #[cfg(test)]
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
-    use lb_key_management_system_keys::keys::{ZkKey, ZkPublicKey};
     use lb_core::mantle::{
         GasCost as _, MantleTx, Note, SignedMantleTx, Transaction as _, gas::MainnetGasConstants,
         ledger::Tx as LedgerTx,
     };
+    use lb_key_management_system_keys::keys::{ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
 
     use super::*;

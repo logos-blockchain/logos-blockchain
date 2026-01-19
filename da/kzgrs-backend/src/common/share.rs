@@ -1,6 +1,6 @@
 use blake2::{Blake2b, Digest as _, digest::consts::U32};
-use lb_kzgrs::Proof;
 use lb_core::da::{BlobId, blob};
+use lb_kzgrs::Proof;
 use serde::{Deserialize, Serialize};
 
 use super::{ShareIndex, build_blob_id};

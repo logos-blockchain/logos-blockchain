@@ -1,7 +1,7 @@
 use core::num::NonZeroU64;
 
-use libp2p::identity::Keypair;
 use lb_libp2p::protocol_name::StreamProtocol;
+use libp2p::identity::Keypair;
 use serde::{Deserialize, Serialize};
 
 use crate::edge::settings::BlendConfig;

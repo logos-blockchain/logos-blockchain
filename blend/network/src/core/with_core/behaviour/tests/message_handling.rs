@@ -2,9 +2,9 @@ use core::time::Duration;
 use std::collections::HashSet;
 
 use futures::StreamExt as _;
-use libp2p_swarm_test::SwarmExt as _;
 use lb_blend_message::encap::encapsulated::EncapsulatedMessage;
 use lb_libp2p::SwarmEvent;
+use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
 use tokio::{select, time::sleep};
 

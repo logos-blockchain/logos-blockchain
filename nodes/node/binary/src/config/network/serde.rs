@@ -1,6 +1,6 @@
 use lb_libp2p::{
-    cryptarchia_sync, ed25519, gossipsub, IdentifySettings, KademliaSettings, Multiaddr,
-    NatSettings,
+    IdentifySettings, KademliaSettings, Multiaddr, NatSettings, cryptarchia_sync, ed25519,
+    gossipsub,
 };
 use serde::{Deserialize, Serialize};
 

@@ -1,8 +1,8 @@
 use std::{collections::HashMap, sync::Mutex};
 
-use libp2p::PeerId;
 use lb_core::sdp::{ProviderId, SessionNumber};
 use lb_da_network_core::SubnetworkId;
+use libp2p::PeerId;
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay, state::NoState},

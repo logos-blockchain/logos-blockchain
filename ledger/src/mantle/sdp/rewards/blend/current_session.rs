@@ -1,5 +1,3 @@
-use lb_cryptarchia_engine::Epoch;
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_blend_crypto::merkle::sort_nodes_and_build_merkle_tree;
 use lb_blend_message::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey,
@@ -10,6 +8,8 @@ use lb_core::{
     crypto::ZkHash,
     sdp::{ProviderId, SessionNumber},
 };
+use lb_cryptarchia_engine::Epoch;
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use rpds::HashTrieMapSync;
 use tracing::debug;
 

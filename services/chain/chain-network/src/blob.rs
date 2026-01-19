@@ -1,11 +1,11 @@
 use std::{collections::BTreeSet, fmt::Debug, marker::PhantomData, num::NonZero};
 
-use lb_cryptarchia_engine::Slot;
 use lb_core::{
     block::Block,
     da,
     mantle::{AuthenticatedMantleTx, Op},
 };
+use lb_cryptarchia_engine::Slot;
 use lb_da_sampling_service::DaSamplingServiceMsg;
 use lb_time_service::TimeServiceMessage;
 use tokio::sync::oneshot;

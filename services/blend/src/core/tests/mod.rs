@@ -2,8 +2,6 @@ mod utils;
 
 use std::num::NonZeroU64;
 
-use lb_groth16::Field as _;
-use lb_key_management_system_service::keys::Ed25519Key;
 use lb_blend::{
     message::reward::{ActivityProof, BlendingToken, SessionBlendingTokenCollector},
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
@@ -13,9 +11,11 @@ use lb_blend::{
     },
 };
 use lb_core::{codec::SerializeOp as _, crypto::ZkHash, sdp::ActivityMetadata};
+use lb_groth16::Field as _;
+use lb_key_management_system_service::keys::Ed25519Key;
+use lb_poq::CORE_MERKLE_TREE_HEIGHT;
 use lb_time_service::SlotTick;
 use lb_utils::blake_rng::BlakeRng;
-use lb_poq::CORE_MERKLE_TREE_HEIGHT;
 use rand::SeedableRng as _;
 
 use crate::{

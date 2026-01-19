@@ -5,7 +5,6 @@ use futures::{
     Stream, StreamExt as _,
     future::{AbortHandle, Abortable},
 };
-use libp2p::PeerId;
 use lb_blend::{
     message::encap::{
         ProofsVerifier as ProofsVerifierTrait, encapsulated::EncapsulatedMessage,
@@ -13,6 +12,7 @@ use lb_blend::{
     },
     proofs::quota::inputs::prove::public::LeaderInputs,
 };
+use libp2p::PeerId;
 use overwatch::overwatch::handle::OverwatchHandle;
 use rand::RngCore;
 use tokio::sync::{broadcast, mpsc};

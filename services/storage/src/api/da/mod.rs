@@ -4,11 +4,11 @@ use std::{
 };
 
 use async_trait::async_trait;
-use multiaddr::Multiaddr;
 use lb_core::{
     da::blob::Share,
     sdp::{ProviderId, SessionNumber},
 };
+use multiaddr::Multiaddr;
 
 pub mod requests;
 

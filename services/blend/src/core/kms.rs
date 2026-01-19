@@ -1,6 +1,11 @@
 use core::fmt::{Debug, Display};
 
 use async_trait::async_trait;
+use lb_blend::{
+    proofs::quota::{self, VerifiedProofOfQuota, inputs::prove::PublicInputs},
+    scheduling::message_blend::CoreProofOfQuotaGenerator,
+};
+use lb_core::crypto::ZkHash;
 use lb_key_management_system_service::{
     KMSService,
     api::KmsServiceApi,
@@ -8,13 +13,8 @@ use lb_key_management_system_service::{
     keys::KeyOperators,
     operators::blend::poq::PoQOperator,
 };
-use lb_blend::{
-    proofs::quota::{self, VerifiedProofOfQuota, inputs::prove::PublicInputs},
-    scheduling::message_blend::CoreProofOfQuotaGenerator,
-};
-use lb_core::crypto::ZkHash;
-use overwatch::services::AsServiceId;
 use lb_poq::CorePathAndSelectors;
+use overwatch::services::AsServiceId;
 use tokio::sync::oneshot;
 
 const LOG_TARGET: &str = "blend::service::core::kms-poq-generator";

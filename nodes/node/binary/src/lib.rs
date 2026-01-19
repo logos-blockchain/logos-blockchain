@@ -4,8 +4,6 @@ pub mod generic_services;
 
 use color_eyre::eyre::{Result, eyre};
 use generic_services::{SamplingMempoolAdapter, VerifierMempoolAdapter};
-use lb_kzgrs_backend::common::share::DaShare;
-pub use lb_kzgrs_backend::dispersal::BlobInfo;
 pub use lb_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackend as BlendBackend,
@@ -34,6 +32,8 @@ use lb_da_verifier_service::{
     network::adapters::validator::Libp2pAdapter as VerifierNetworkAdapter,
     storage::adapters::rocksdb::RocksAdapter as VerifierStorageAdapter,
 };
+use lb_kzgrs_backend::common::share::DaShare;
+pub use lb_kzgrs_backend::dispersal::BlobInfo;
 use lb_libp2p::PeerId;
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 use lb_sdp_service::SdpSettings;
@@ -41,15 +41,11 @@ pub use lb_storage_service::backends::{
     SerdeOp,
     rocksdb::{RocksBackend, RocksBackendSettings},
 };
+use lb_subnetworks_assignations::versions::history_aware_refill::HistoryAware;
 pub use lb_system_sig_service::SystemSig;
 use lb_time_service::backends::NtpTimeBackend;
 #[cfg(feature = "tracing")]
 pub use lb_tracing_service::Tracing;
-use overwatch::{
-    DynError, derive_services,
-    overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
-};
-use lb_subnetworks_assignations::versions::history_aware_refill::HistoryAware;
 use lb_tx_service::storage::adapters::RocksStorageAdapter;
 pub use lb_tx_service::{
     network::adapters::libp2p::{
@@ -57,6 +53,10 @@ pub use lb_tx_service::{
         Settings as AdapterSettings,
     },
     tx::settings::TxMempoolSettings,
+};
+use overwatch::{
+    DynError, derive_services,
+    overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
 };
 
 pub use crate::config::{Config, CryptarchiaLeaderArgs, HttpArgs, LogArgs, NetworkArgs};
@@ -79,12 +79,14 @@ pub const MB16: usize = 1024 * 1024 * 16;
 /// Membership used by the DA Network service.
 pub type LogosBlockchainDaMembership = HistoryAware<PeerId>;
 type DaMembershipStorage = DaMembershipStorageGeneric<RuntimeServiceId>;
-pub type DaNetworkApiAdapter = HttApiAdapter<DaMembershipHandler<LogosBlockchainDaMembership>, DaAddressbook>;
+pub type DaNetworkApiAdapter =
+    HttApiAdapter<DaMembershipHandler<LogosBlockchainDaMembership>, DaAddressbook>;
 
 #[cfg(feature = "tracing")]
 pub(crate) type TracingService = Tracing<RuntimeServiceId>;
 
-pub(crate) type NetworkService = lb_network_service::NetworkService<NetworkBackend, RuntimeServiceId>;
+pub(crate) type NetworkService =
+    lb_network_service::NetworkService<NetworkBackend, RuntimeServiceId>;
 
 pub(crate) type DaSamplingAdapter = SamplingLibp2pAdapter<
     LogosBlockchainDaMembership,
@@ -102,7 +104,8 @@ pub(crate) type BlendEdgeService =
 pub(crate) type BlendService =
     generic_services::blend::BlendService<DaSamplingAdapter, RuntimeServiceId>;
 
-pub(crate) type BlockBroadcastService = lb_chain_broadcast_service::BlockBroadcastService<RuntimeServiceId>;
+pub(crate) type BlockBroadcastService =
+    lb_chain_broadcast_service::BlockBroadcastService<RuntimeServiceId>;
 pub(crate) type DaVerifierService = generic_services::DaVerifierService<
     VerifierNetworkAdapter<
         LogosBlockchainDaMembership,
@@ -131,14 +134,15 @@ pub(crate) type DaNetworkService = lb_da_network_service::NetworkService<
 
 pub(crate) type MempoolService = generic_services::TxMempoolService<RuntimeServiceId>;
 
-pub(crate) type DaNetworkAdapter = lb_da_sampling_service::network::adapters::validator::Libp2pAdapter<
-    LogosBlockchainDaMembership,
-    DaMembershipAdapter<RuntimeServiceId>,
-    DaMembershipStorage,
-    DaNetworkApiAdapter,
-    SdpServiceAdapterGeneric<RuntimeServiceId>,
-    RuntimeServiceId,
->;
+pub(crate) type DaNetworkAdapter =
+    lb_da_sampling_service::network::adapters::validator::Libp2pAdapter<
+        LogosBlockchainDaMembership,
+        DaMembershipAdapter<RuntimeServiceId>,
+        DaMembershipStorage,
+        DaNetworkApiAdapter,
+        SdpServiceAdapterGeneric<RuntimeServiceId>,
+        RuntimeServiceId,
+    >;
 
 pub(crate) type KeyManagementService = generic_services::KeyManagementService<RuntimeServiceId>;
 

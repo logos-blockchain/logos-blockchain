@@ -5,7 +5,6 @@ use std::{
     hash::Hash,
 };
 
-use lb_kzgrs_backend::common::share::DaSharesCommitments;
 use lb_core::{
     da::{DaVerifier as CoreDaVerifier, blob::Share},
     header::HeaderId,
@@ -38,11 +37,12 @@ use lb_da_verifier_service::{
     DaVerifierMsg, DaVerifierService, backend::VerifierBackend, mempool::DaMempoolAdapter,
     storage::adapters::rocksdb::RocksAdapter as VerifierStorageAdapter,
 };
+use lb_kzgrs_backend::common::share::DaSharesCommitments;
 use lb_libp2p::PeerId;
 use lb_storage_service::{api::da::DaConverter, backends::rocksdb::RocksBackend};
+use lb_subnetworks_assignations::MembershipHandler;
 use overwatch::{DynError, overwatch::handle::OverwatchHandle, services::AsServiceId};
 use serde::{Serialize, de::DeserializeOwned};
-use lb_subnetworks_assignations::MembershipHandler;
 use tokio::sync::oneshot;
 
 pub type DaVerifier<

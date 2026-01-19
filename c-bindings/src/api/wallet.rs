@@ -1,5 +1,5 @@
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_core::mantle::{SignedMantleTx, Transaction as _};
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_wallet_service::{WalletService, api::WalletApi};
 use num_bigint::BigUint;
 

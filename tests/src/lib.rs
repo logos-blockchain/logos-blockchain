@@ -40,11 +40,7 @@ fn node_address_from_port(port: u16) -> Multiaddr {
 
 #[must_use]
 pub fn secret_key_to_peer_id(node_key: lb_libp2p::ed25519::SecretKey) -> PeerId {
-    PeerId::from_public_key(
-        &lb_libp2p::ed25519::Keypair::from(node_key)
-            .public()
-            .into(),
-    )
+    PeerId::from_public_key(&lb_libp2p::ed25519::Keypair::from(node_key).public().into())
 }
 
 #[must_use]

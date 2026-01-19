@@ -1,6 +1,5 @@
 use std::{cmp::Ordering, collections::HashMap, iter::once};
 
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_blend_message::{
     encap::ProofsVerifier as ProofsVerifierTrait,
     reward::{BlendingTokenEvaluation, HammingDistance},
@@ -9,6 +8,7 @@ use lb_core::{
     mantle::Utxo,
     sdp::{ProviderId, ServiceType, SessionNumber},
 };
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use rpds::{HashTrieMapSync, HashTrieSetSync};
 
 use crate::mantle::sdp::rewards::{

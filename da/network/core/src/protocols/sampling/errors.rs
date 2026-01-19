@@ -1,8 +1,8 @@
 use futures::channel::oneshot::Canceled;
-use libp2p::PeerId;
-use libp2p_stream::OpenStreamError;
 use lb_core::{codec, da::BlobId, sdp::SessionNumber};
 use lb_da_messages::sampling;
+use libp2p::PeerId;
+use libp2p_stream::OpenStreamError;
 use thiserror::Error;
 
 use super::BehaviourSampleReq;

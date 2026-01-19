@@ -9,8 +9,8 @@ use std::{
     time::Duration,
 };
 
-use lb_cryptarchia_engine::{EpochConfig, Slot, time::SlotConfig};
 use futures::{Stream, StreamExt as _};
+use lb_cryptarchia_engine::{EpochConfig, Slot, time::SlotConfig};
 #[cfg(feature = "serde")]
 use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use sntpc::{NtpResult, fraction_to_nanoseconds};

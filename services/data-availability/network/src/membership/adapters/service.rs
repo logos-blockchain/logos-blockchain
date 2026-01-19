@@ -1,10 +1,10 @@
 use std::collections::{BTreeSet, HashMap};
 
-use lb_chain_broadcast_service::BlockBroadcastService;
 use futures::StreamExt as _;
-use libp2p::{Multiaddr, PeerId, core::signed_envelope::DecodingError};
+use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::sdp::{Locator, ProviderId, ProviderInfo, SessionNumber};
 use lb_libp2p::ed25519;
+use libp2p::{Multiaddr, PeerId, core::signed_envelope::DecodingError};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use tokio::sync::oneshot;
 
@@ -33,9 +33,11 @@ where
     async fn subscribe(&self) -> Result<PeerMultiaddrStream<Self::Id>, MembershipAdapterError> {
         let (sender, receiver) = oneshot::channel();
         self.relay
-            .send(lb_chain_broadcast_service::BlockBroadcastMsg::SubscribeDASession {
-                result_sender: sender,
-            })
+            .send(
+                lb_chain_broadcast_service::BlockBroadcastMsg::SubscribeDASession {
+                    result_sender: sender,
+                },
+            )
             .await
             .map_err(|(e, _)| MembershipAdapterError::Other(e.into()))?;
         let receiver_stream = receiver

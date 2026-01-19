@@ -271,8 +271,6 @@ impl RewardsParameters {
 mod tests {
     use std::{collections::HashMap, convert::Infallible};
 
-    use lb_groth16::Field as _;
-    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
     use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
     use lb_blend_proofs::{
         quota::{ProofOfQuota, VerifiedProofOfQuota},
@@ -282,6 +280,8 @@ mod tests {
         crypto::ZkHash,
         sdp::{ServiceType, blend},
     };
+    use lb_groth16::Field as _;
+    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
 
     use super::*;
     use crate::mantle::sdp::rewards::{

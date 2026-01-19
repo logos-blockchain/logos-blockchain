@@ -4,11 +4,6 @@ use core::{
     time::Duration,
 };
 
-use lb_key_management_system_service::keys::UnsecuredEd25519Key;
-use libp2p::{
-    PeerId, StreamProtocol, Swarm, Transport as _, core::transport::MemoryTransport,
-    identity::Keypair, plaintext, swarm, tcp, yamux,
-};
 use lb_blend::{
     message::{
         PayloadType, crypto::key_ext::Ed25519SecretKeyExt as _,
@@ -17,7 +12,12 @@ use lb_blend::{
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
     scheduling::membership::Membership,
 };
+use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_libp2p::{NetworkBehaviour, upgrade::Version};
+use libp2p::{
+    PeerId, StreamProtocol, Swarm, Transport as _, core::transport::MemoryTransport,
+    identity::Keypair, plaintext, swarm, tcp, yamux,
+};
 
 pub const PROTOCOL_NAME: StreamProtocol = StreamProtocol::new("/blend/swarm/test");
 

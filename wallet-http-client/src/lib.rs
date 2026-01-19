@@ -1,5 +1,4 @@
 use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_core::{codec::SerializeOp as _, header::HeaderId};
 use lb_http_api_common::{
     bodies::{
@@ -11,6 +10,7 @@ use lb_http_api_common::{
     },
     paths,
 };
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use url::Url;
 
 pub struct WalletHttpClient {

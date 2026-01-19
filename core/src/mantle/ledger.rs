@@ -5,8 +5,8 @@ use lb_groth16::{
     Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes, fr_from_bytes_unchecked, serde::serde_fr,
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use num_bigint::BigUint;
 use lb_poseidon2::Digest;
+use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 
 use crate::{

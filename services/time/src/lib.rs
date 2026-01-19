@@ -10,8 +10,8 @@ use std::{
     pin::Pin,
 };
 
-use lb_cryptarchia_engine::{Epoch, EpochConfig, Slot, time::SlotConfig};
 use futures::{Stream, StreamExt as _};
+use lb_cryptarchia_engine::{Epoch, EpochConfig, Slot, time::SlotConfig};
 use log::error;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,

@@ -1,8 +1,8 @@
 use std::ops::{Add as _, Deref};
 
-use lb_groth16::fr_to_bytes;
 use lb_blend_crypto::blake2b512;
 use lb_core::{crypto::ZkHash, sdp::SessionNumber};
+use lb_groth16::fr_to_bytes;
 use lb_utils::math::{F64Ge1, NonNegativeF64};
 use serde::{Deserialize, Serialize};
 
@@ -147,8 +147,8 @@ pub fn activity_threshold(
 
 #[cfg(test)]
 mod tests {
-    use lb_key_management_system_keys::keys::Ed25519Key;
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
+    use lb_key_management_system_keys::keys::Ed25519Key;
 
     use super::*;
 

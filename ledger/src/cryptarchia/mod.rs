@@ -1,14 +1,14 @@
 use std::sync::LazyLock;
 
-use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_groth16::{Fr, fr_from_bytes};
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_core::{
     crypto::{ZkDigest, ZkHasher},
     mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value, gas::GasConstants},
     proofs::leader_proof::{self, LeaderPublic},
     utils::merkle::MerklePath,
 };
+use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_groth16::{Fr, fr_from_bytes};
+use lb_key_management_system_keys::keys::ZkPublicKey;
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
 use super::{Balance, Config, LedgerError};
@@ -350,9 +350,6 @@ impl core::fmt::Debug for LedgerState {
 pub mod tests {
     use std::num::{NonZero, NonZeroU64};
 
-    use lb_cryptarchia_engine::EpochConfig;
-    use lb_groth16::Field as _;
-    use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkKey};
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
@@ -361,6 +358,9 @@ pub mod tests {
         },
         sdp::ServiceParameters,
     };
+    use lb_cryptarchia_engine::EpochConfig;
+    use lb_groth16::Field as _;
+    use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkKey};
     use lb_utils::math::NonNegativeF64;
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};

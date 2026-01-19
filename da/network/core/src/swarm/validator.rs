@@ -9,15 +9,15 @@ use futures::{
     StreamExt as _,
     stream::{self, FuturesUnordered},
 };
+use lb_core::{da::BlobId, header::HeaderId, sdp::SessionNumber};
+use lb_da_messages::replication::ReplicationRequest;
+use lb_subnetworks_assignations::MembershipHandler;
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
     core::transport::ListenerId,
     identity::Keypair,
     swarm::{DialError, SwarmEvent},
 };
-use lb_core::{da::BlobId, header::HeaderId, sdp::SessionNumber};
-use lb_da_messages::replication::ReplicationRequest;
-use lb_subnetworks_assignations::MembershipHandler;
 use tokio::{
     sync::{
         broadcast,

@@ -5,9 +5,9 @@ pub mod test_fr;
 
 use std::collections::BTreeMap;
 
-use merkle::DynamicMerkleTree;
 use lb_core::utils::merkle::MerklePath;
 use lb_poseidon2::{Digest, Fr};
+use merkle::DynamicMerkleTree;
 use rpds::HashTrieMapSync;
 use thiserror::Error;
 

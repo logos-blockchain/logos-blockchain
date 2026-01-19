@@ -15,15 +15,18 @@ use backend::{
     trigger::{MempoolPublishTrigger, MempoolPublishTriggerConfig, ShareEvent},
     tx::mock::MockTxVerifier,
 };
-use mempool::{DaMempoolAdapter, MempoolAdapterError};
-use network::NetworkAdapter;
 use lb_core::da::blob::Share;
 use lb_da_network_core::swarm::DispersalValidationError;
 use lb_da_network_service::{
     NetworkService, membership::MembershipAdapter, storage::MembershipStorageAdapter,
 };
+use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
+use lb_subnetworks_assignations::MembershipHandler;
 use lb_tracing::info_with_id;
+use lb_tx_service::backend::MempoolError;
+use mempool::{DaMempoolAdapter, MempoolAdapterError};
+use network::NetworkAdapter;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -32,13 +35,10 @@ use overwatch::{
     },
 };
 use serde::{Deserialize, Serialize};
-use lb_services_utils::wait_until_services_are_ready;
 use storage::DaStorageAdapter;
-use lb_subnetworks_assignations::MembershipHandler;
 use tokio::sync::oneshot::Sender;
 use tokio_stream::StreamExt as _;
 use tracing::{error, instrument};
-use lb_tx_service::backend::MempoolError;
 
 use crate::{
     backend::{TxVerifierBackend, VerifierBackend},

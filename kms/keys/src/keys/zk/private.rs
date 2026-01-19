@@ -1,12 +1,12 @@
 use std::sync::LazyLock;
 
 use lb_groth16::{Field as _, Fr, fr_from_bytes_unchecked};
-use num_bigint::BigUint;
 use lb_poseidon2::{Digest, Poseidon2Bn254Hasher};
+use lb_zksign::{ZkSignError, ZkSignPrivateKeysData, ZkSignWitnessInputs};
+use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq as _;
 use zeroize::ZeroizeOnDrop;
-use lb_zksign::{ZkSignError, ZkSignPrivateKeysData, ZkSignWitnessInputs};
 
 use crate::keys::zk::{public::PublicKey, signature::Signature};
 

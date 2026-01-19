@@ -6,13 +6,6 @@ use std::{
 };
 
 use futures::{AsyncWriteExt as _, StreamExt as _};
-#[cfg(test)]
-use libp2p::identity::Keypair;
-use libp2p::{
-    Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
-    swarm::{ConnectionId, dial_opts::PeerCondition},
-};
-use libp2p_stream::OpenStreamError;
 use lb_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     network::send_msg,
@@ -22,6 +15,13 @@ use lb_blend::{
     },
 };
 use lb_libp2p::{DialError, DialOpts, SwarmEvent};
+#[cfg(test)]
+use libp2p::identity::Keypair;
+use libp2p::{
+    Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
+    swarm::{ConnectionId, dial_opts::PeerCondition},
+};
+use libp2p_stream::OpenStreamError;
 use rand::RngCore;
 use tokio::sync::mpsc;
 use tracing::{debug, error, trace, warn};

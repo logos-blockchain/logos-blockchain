@@ -1,5 +1,5 @@
-use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_blend_crypto::keys::{X25519PrivateKey, X25519PublicKey};
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_utils::blake_rng::{BlakeRng, SeedableRng as _};
 use zeroize::ZeroizeOnDrop;
 

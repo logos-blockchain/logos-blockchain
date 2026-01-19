@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_core::mantle::{
     TxHash,
     ops::channel::{
@@ -8,6 +7,7 @@ use lb_core::mantle::{
         set_keys::SetKeysOp,
     },
 };
+use lb_key_management_system_keys::keys::Ed25519Signature;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 

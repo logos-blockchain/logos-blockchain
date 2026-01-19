@@ -1,5 +1,5 @@
-use lb_kzgrs_backend::common::share::{DaLightShare, DaSharesCommitments};
 use lb_core::da::BlobId;
+use lb_kzgrs_backend::common::share::{DaLightShare, DaSharesCommitments};
 use lb_subnetworks_assignations::SubnetworkId;
 
 use crate::protocols::sampling::{errors::SamplingError, opinions::OpinionEvent};

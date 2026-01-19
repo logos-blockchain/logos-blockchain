@@ -1,6 +1,6 @@
 use lb_groth16::{Fr, Groth16Input, Groth16InputDeser};
-use num_bigint::BigUint;
 use lb_pol::{P, compute_lottery_values};
+use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

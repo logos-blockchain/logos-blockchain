@@ -1,7 +1,6 @@
 use core::{cell::Cell, convert::Infallible};
 
 use async_trait::async_trait;
-use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_blend::{
     message::{
         crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
@@ -18,6 +17,7 @@ use lb_blend::{
         BlendLayerProof, ProofsGeneratorSettings, core_and_leader::CoreAndLeaderProofsGenerator,
     },
 };
+use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 
 pub struct MockCoreAndLeaderProofsGenerator;
 

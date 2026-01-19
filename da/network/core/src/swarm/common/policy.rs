@@ -1,6 +1,6 @@
+use lb_subnetworks_assignations::MembershipHandler;
 use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
-use lb_subnetworks_assignations::MembershipHandler;
 
 use super::balancer::{
     ConnectionDeviation, SubnetworkConnectionPolicy, SubnetworkDeviation, SubnetworkStats,

@@ -2,8 +2,8 @@ use generic_array::{
     GenericArray,
     typenum::{U32, U64},
 };
-use serde::{Deserialize, Serialize};
 use lb_zksign::ZkSignProof;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "lb_zksign::ZkSignProof")]

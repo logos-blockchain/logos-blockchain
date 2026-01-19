@@ -1,8 +1,8 @@
 use core::fmt::Debug;
 use std::sync::LazyLock;
 
-use lb_groth16::{fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes};
 use lb_blend_crypto::pseudo_random_sized_bytes;
+use lb_groth16::{fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use lb_kzgrs_backend::common::share::{DaLightShare, DaSharesCommitments};
 use lb_core::{da::BlobId, header::HeaderId};
+use lb_kzgrs_backend::common::share::{DaLightShare, DaSharesCommitments};
 
 use crate::protocols::sampling::{
     errors::{HistoricCommitmentsError, HistoricSamplingError},

@@ -32,8 +32,8 @@ pub fn reconstruct_without_missing_data(shares: &[DaShare]) -> Vec<u8> {
 
 #[cfg(test)]
 mod test {
-    use lb_kzgrs::Proof;
     use lb_core::da::DaEncoder as _;
+    use lb_kzgrs::Proof;
 
     use crate::{
         common::{ShareIndex, share::DaShare},

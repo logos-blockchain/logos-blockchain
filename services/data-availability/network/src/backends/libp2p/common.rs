@@ -8,10 +8,6 @@ use futures::{
     StreamExt,
     channel::oneshot::{Receiver, Sender},
 };
-use lb_kzgrs_backend::common::{
-    ShareIndex,
-    share::{DaLightShare, DaShare, DaSharesCommitments},
-};
 use lb_core::{da::BlobId, header::HeaderId, mantle::SignedMantleTx, sdp::SessionNumber};
 use lb_da_messages::common::Share;
 use lb_da_network_core::{
@@ -29,6 +25,10 @@ use lb_da_network_core::{
         DispersalValidationResult, DispersalValidatorEvent, ReplicationConfig,
         validator::{CommitmentsArgs, SampleArgs, ValidatorEventsStream},
     },
+};
+use lb_kzgrs_backend::common::{
+    ShareIndex,
+    share::{DaLightShare, DaShare, DaSharesCommitments},
 };
 use lb_libp2p::{Multiaddr, ed25519, secret_key_serde};
 use serde::{Deserialize, Serialize};

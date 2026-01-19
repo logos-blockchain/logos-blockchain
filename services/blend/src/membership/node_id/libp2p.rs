@@ -1,5 +1,5 @@
-use libp2p::{PeerId, identity::DecodingError};
 use lb_libp2p::ed25519;
+use libp2p::{PeerId, identity::DecodingError};
 
 impl super::TryFrom for PeerId {
     type Error = DecodingError;

@@ -2,7 +2,6 @@ pub mod api;
 pub mod config;
 
 use api::backend::AxumBackend;
-use lb_kzgrs_backend::common::share::DaShare;
 use lb_core::mantle::{SignedMantleTx, TxHash};
 use lb_da_dispersal_service::{
     DispersalService,
@@ -24,25 +23,28 @@ use lb_da_verifier_service::{
     network::adapters::executor::Libp2pAdapter as VerifierNetworkAdapter,
     storage::adapters::rocksdb::RocksAdapter as VerifierStorageAdapter,
 };
+use lb_kzgrs_backend::common::share::DaShare;
 #[cfg(feature = "tracing")]
 use lb_node::Tracing;
 use lb_node::{
-    BlobInfo, DaNetworkApiAdapter, NetworkBackend, LogosBlockchainDaMembership, RocksBackend, SystemSig,
+    BlobInfo, DaNetworkApiAdapter, LogosBlockchainDaMembership, NetworkBackend, RocksBackend,
+    SystemSig,
     generic_services::{
         DaMembershipAdapter, DaMembershipStorageGeneric, SamplingMempoolAdapter,
         SdpMempoolAdapterGeneric, SdpService, SdpServiceAdapterGeneric, VerifierMempoolAdapter,
     },
 };
 use lb_time_service::backends::NtpTimeBackend;
-use overwatch::derive_services;
 use lb_tx_service::storage::adapters::RocksStorageAdapter;
+use overwatch::derive_services;
 
 #[cfg(feature = "tracing")]
 pub(crate) type TracingService = Tracing<RuntimeServiceId>;
 
 type DaMembershipStorage = DaMembershipStorageGeneric<RuntimeServiceId>;
 
-pub(crate) type NetworkService = lb_network_service::NetworkService<NetworkBackend, RuntimeServiceId>;
+pub(crate) type NetworkService =
+    lb_network_service::NetworkService<NetworkBackend, RuntimeServiceId>;
 
 pub(crate) type BlendCoreService =
     lb_node::generic_services::blend::BlendCoreService<DaNetworkAdapter, RuntimeServiceId>;
@@ -51,7 +53,8 @@ pub(crate) type BlendEdgeService =
 pub(crate) type BlendService =
     lb_node::generic_services::blend::BlendService<DaNetworkAdapter, RuntimeServiceId>;
 
-pub(crate) type BlockBroadcastService = lb_chain_broadcast_service::BlockBroadcastService<RuntimeServiceId>;
+pub(crate) type BlockBroadcastService =
+    lb_chain_broadcast_service::BlockBroadcastService<RuntimeServiceId>;
 
 pub(crate) type DaDispersalService = DispersalService<
     DispersalKZGRSBackend<
@@ -105,14 +108,15 @@ pub(crate) type DaNetworkService = lb_da_network_service::NetworkService<
 
 pub(crate) type MempoolService = lb_node::generic_services::TxMempoolService<RuntimeServiceId>;
 
-pub(crate) type DaNetworkAdapter = lb_da_sampling_service::network::adapters::executor::Libp2pAdapter<
-    LogosBlockchainDaMembership,
-    DaMembershipAdapter<RuntimeServiceId>,
-    DaMembershipStorage,
-    DaNetworkApiAdapter,
-    SdpServiceAdapterGeneric<RuntimeServiceId>,
-    RuntimeServiceId,
->;
+pub(crate) type DaNetworkAdapter =
+    lb_da_sampling_service::network::adapters::executor::Libp2pAdapter<
+        LogosBlockchainDaMembership,
+        DaMembershipAdapter<RuntimeServiceId>,
+        DaMembershipStorage,
+        DaNetworkApiAdapter,
+        SdpServiceAdapterGeneric<RuntimeServiceId>,
+        RuntimeServiceId,
+    >;
 
 pub(crate) type CryptarchiaService =
     lb_node::generic_services::CryptarchiaService<RuntimeServiceId>;

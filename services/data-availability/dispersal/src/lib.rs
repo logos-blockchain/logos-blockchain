@@ -19,6 +19,8 @@ use lb_core::{
     sdp::SessionNumber,
 };
 use lb_da_network_core::{PeerId, SubnetworkId};
+use lb_services_utils::wait_until_services_are_ready;
+use lb_subnetworks_assignations::MembershipHandler;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -28,8 +30,6 @@ use overwatch::{
 };
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use lb_services_utils::wait_until_services_are_ready;
-use lb_subnetworks_assignations::MembershipHandler;
 use thiserror::Error;
 use tokio::sync::oneshot;
 use tracing::error;

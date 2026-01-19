@@ -1,8 +1,8 @@
 use core::num::NonZeroUsize;
 
-use libp2p::{PeerId, identity::Keypair};
 use lb_blend::scheduling::membership::Membership;
 use lb_utils::blake_rng::BlakeRng;
+use libp2p::{PeerId, identity::Keypair};
 use rand::SeedableRng as _;
 use tokio::sync::mpsc;
 

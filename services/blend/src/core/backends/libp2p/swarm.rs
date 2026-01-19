@@ -8,10 +8,6 @@ use std::{
 };
 
 use futures::StreamExt as _;
-use libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmBuilder,
-    swarm::{ConnectionId, dial_opts::PeerCondition},
-};
 use lb_blend::{
     message::encap::{
         ProofsVerifier as ProofsVerifierTrait, encapsulated::EncapsulatedMessage,
@@ -28,6 +24,10 @@ use lb_blend::{
     scheduling::membership::Membership,
 };
 use lb_libp2p::{DialOpts, SwarmEvent};
+use libp2p::{
+    Multiaddr, PeerId, Swarm, SwarmBuilder,
+    swarm::{ConnectionId, dial_opts::PeerCondition},
+};
 use rand::RngCore;
 use tokio::sync::{broadcast, mpsc};
 

@@ -1,12 +1,12 @@
 use core::time::Duration;
 
 use futures::StreamExt as _;
+use lb_libp2p::SwarmEvent;
 use libp2p::{
     core::Endpoint,
     swarm::{ConnectionId, dummy},
 };
 use libp2p_swarm_test::SwarmExt as _;
-use lb_libp2p::SwarmEvent;
 use test_log::test;
 use tokio::{select, time::sleep};
 

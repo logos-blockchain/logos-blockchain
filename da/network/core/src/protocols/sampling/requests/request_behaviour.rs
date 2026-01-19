@@ -8,6 +8,9 @@ use futures::{
     AsyncWriteExt as _, FutureExt as _, StreamExt as _,
     stream::{BoxStream, FuturesUnordered},
 };
+use lb_core::{da::BlobId, sdp::SessionNumber};
+use lb_da_messages::{sampling, sampling::SampleResponse};
+use lb_subnetworks_assignations::MembershipHandler;
 use libp2p::{
     Multiaddr, PeerId,
     core::{Endpoint, transport::PortUse},
@@ -17,10 +20,7 @@ use libp2p::{
     },
 };
 use libp2p_stream::Control;
-use lb_core::{da::BlobId, sdp::SessionNumber};
-use lb_da_messages::{sampling, sampling::SampleResponse};
 use rand::{rngs::ThreadRng, seq::IteratorRandom as _};
-use lb_subnetworks_assignations::MembershipHandler;
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;

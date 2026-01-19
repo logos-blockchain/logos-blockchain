@@ -4,10 +4,10 @@ use std::{
     task::{Context, Poll},
 };
 
+use lb_subnetworks_assignations::MembershipHandler;
 use libp2p::PeerId;
 use rand::seq::IteratorRandom as _;
 use serde::{Deserialize, Serialize};
-use lb_subnetworks_assignations::MembershipHandler;
 
 use crate::{
     SubnetworkId,

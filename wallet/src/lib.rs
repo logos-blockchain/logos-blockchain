@@ -7,7 +7,6 @@ use std::{
 };
 
 pub use error::WalletError;
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_core::{
     block::Block,
     header::HeaderId,
@@ -16,6 +15,7 @@ use lb_core::{
         tx_builder::MantleTxBuilder,
     },
 };
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_ledger::LedgerState;
 
 pub struct WalletBlock {
@@ -273,11 +273,11 @@ mod tests {
         sync::Arc,
     };
 
-    use lb_cryptarchia_engine::EpochConfig;
     use lb_core::{
         mantle::{Note, TxHash, gas::MainnetGasConstants as Gas},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
+    use lb_cryptarchia_engine::EpochConfig;
     use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
     use lb_utils::math::NonNegativeF64;
     use num_bigint::BigUint;

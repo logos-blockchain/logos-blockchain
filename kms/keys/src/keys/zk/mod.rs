@@ -1,10 +1,10 @@
 use core::fmt::{self, Debug, Formatter};
 
 use lb_groth16::Fr;
+use lb_zksign::ZkSignError;
 use num_bigint::BigUint;
 use serde::Deserialize;
 use zeroize::ZeroizeOnDrop;
-use lb_zksign::ZkSignError;
 
 use crate::keys::{errors::KeyError, secured_key::SecuredKey};
 

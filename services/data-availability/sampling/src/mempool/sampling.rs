@@ -5,15 +5,15 @@ use lb_core::{
     header::HeaderId,
     mantle::{Op, SignedMantleTx, TxHash},
 };
-use overwatch::services::{ServiceData, relay::OutboundRelay};
-use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot;
 use lb_tx_service::{
     MempoolMsg, TxMempoolService,
     backend::{MemPool, RecoverableMempool},
     network::NetworkAdapter as MempoolNetworkAdapter,
     storage::MempoolStorageAdapter,
 };
+use overwatch::services::{ServiceData, relay::OutboundRelay};
+use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot;
 
 use super::{DaMempoolAdapter, MempoolAdapterError};
 use crate::mempool::Blob;

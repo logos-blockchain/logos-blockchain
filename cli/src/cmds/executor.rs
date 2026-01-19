@@ -1,12 +1,12 @@
 use std::{path::PathBuf, sync::mpsc::Sender};
 
 use clap::Args;
-use lb_executor_http_client::{BasicAuthCredentials, ExecutorHttpClient};
-use lb_kzgrs_backend::encoder::DaEncoderParams;
 use lb_core::{
     da::BlobId,
     mantle::ops::channel::{ChannelId, Ed25519PublicKey, MsgId},
 };
+use lb_executor_http_client::{BasicAuthCredentials, ExecutorHttpClient};
+use lb_kzgrs_backend::encoder::DaEncoderParams;
 use reqwest::Url;
 
 #[derive(Args, Debug)]

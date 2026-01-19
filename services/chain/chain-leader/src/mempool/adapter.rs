@@ -2,9 +2,9 @@ use std::{marker::PhantomData, pin::Pin};
 
 use futures::Stream;
 use lb_core::{header::HeaderId, mantle::TxHash};
+use lb_tx_service::MempoolMsg;
 use overwatch::services::relay::OutboundRelay;
 use tokio::sync::oneshot;
-use lb_tx_service::MempoolMsg;
 
 use super::MempoolAdapter as MempoolAdapterTrait;
 

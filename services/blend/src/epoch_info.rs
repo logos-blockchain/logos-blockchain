@@ -1,11 +1,11 @@
 use core::{fmt::Debug, marker::PhantomData, num::NonZeroU64, ops::Deref};
 
 use async_trait::async_trait;
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
-use lb_cryptarchia_engine::{Epoch, Slot};
 use futures::Stream;
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
+use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::crypto::ZkHash;
+use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_ledger::EpochState;
 use lb_time_service::SlotTick;
 use overwatch::overwatch::OverwatchHandle;

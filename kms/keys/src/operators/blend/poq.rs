@@ -1,6 +1,5 @@
 use std::fmt::Debug;
 
-use lb_groth16::Fr;
 use lb_blend_proofs::{
     CorePathAndSelectors,
     quota::{
@@ -8,6 +7,7 @@ use lb_blend_proofs::{
         inputs::prove::{PrivateInputs, PublicInputs, private::ProofOfCoreQuotaInputs},
     },
 };
+use lb_groth16::Fr;
 use tokio::{sync::oneshot, task::spawn_blocking};
 use tracing::error;
 

@@ -1,16 +1,16 @@
 use std::{error::Error, sync::Arc, time::Duration};
 
 use futures::StreamExt as _;
-use lb_kzgrs_backend::{
-    common::build_blob_id,
-    encoder,
-    encoder::{DaEncoderParams, EncodedData},
-};
 use lb_core::{
     da::{BlobId, DaDispersal, DaEncoder},
     mantle::{SignedMantleTx, tx_builder::MantleTxBuilder},
 };
 use lb_da_network_service::backends::ProcessingError;
+use lb_kzgrs_backend::{
+    common::build_blob_id,
+    encoder,
+    encoder::{DaEncoderParams, EncodedData},
+};
 use lb_tracing::info_with_id;
 use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use overwatch::DynError;

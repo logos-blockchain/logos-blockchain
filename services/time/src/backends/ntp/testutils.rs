@@ -185,8 +185,8 @@ impl<TimestampGenerator: TimestampGeneratorTrait + Send + Sync> FakeNTPServer<Ti
 mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
-    use log::trace;
     use lb_utils::net::get_available_tcp_port;
+    use log::trace;
 
     use super::*;
     use crate::backends::ntp::async_client::{AsyncNTPClient, NTPClientSettings};

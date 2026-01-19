@@ -37,9 +37,7 @@ use lb_services_utils::{
     overwatch::{JsonFileBackend, RecoveryOperator, recovery::backends::FileBackendSettings},
     wait_until_services_are_ready,
 };
-use lb_storage_service::{
-    StorageService, api::chain::StorageChainApi, backends::StorageBackend,
-};
+use lb_storage_service::{StorageService, api::chain::StorageChainApi, backends::StorageBackend};
 use lb_time_service::TimeService;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -201,11 +199,7 @@ impl Cryptarchia {
                 ledger_config.consensus_config,
                 state,
             ),
-            ledger: <lb_ledger::Ledger<_>>::new(
-                lib_id,
-                lib_ledger_state,
-                ledger_config,
-            ),
+            ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, ledger_config),
             genesis_id,
         }
     }
@@ -272,24 +266,20 @@ impl Cryptarchia {
                 block.transactions(),
             )
             .map_err(|err| match err {
-                lb_ledger::LedgerError::ParentNotFound(parent) => {
-                    Error::ParentMissing {
-                        parent,
-                        info: self.info(),
-                    }
-                }
+                lb_ledger::LedgerError::ParentNotFound(parent) => Error::ParentMissing {
+                    parent,
+                    info: self.info(),
+                },
                 err => Error::Ledger(err),
             })?;
         let (consensus, pruned_blocks) =
             self.consensus
                 .receive_block(id, parent, slot)
                 .map_err(|err| match err {
-                    lb_cryptarchia_engine::Error::ParentMissing(parent) => {
-                        Error::ParentMissing {
-                            parent,
-                            info: self.info(),
-                        }
-                    }
+                    lb_cryptarchia_engine::Error::ParentMissing(parent) => Error::ParentMissing {
+                        parent,
+                        info: self.info(),
+                    },
                     err => Error::Consensus(err),
                 })?;
 

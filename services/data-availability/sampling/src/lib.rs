@@ -14,19 +14,21 @@ use std::{
 use backend::{DaSamplingServiceBackend, SamplingState};
 use either::Either;
 use futures::{FutureExt as _, Stream, future::BoxFuture, stream::FuturesUnordered};
-use lb_kzgrs_backend::common::{
-    ShareIndex,
-    share::{DaLightShare, DaShare, DaSharesCommitments},
-};
-use network::NetworkAdapter;
 use lb_core::{da::BlobId, header::HeaderId, mantle::SignedMantleTx, sdp::SessionNumber};
 use lb_da_network_core::protocols::sampling::errors::SamplingError;
 use lb_da_network_service::{
     NetworkService,
     backends::libp2p::common::{CommitmentsEvent, HistoricSamplingEvent, SamplingEvent},
 };
+use lb_kzgrs_backend::common::{
+    ShareIndex,
+    share::{DaLightShare, DaShare, DaSharesCommitments},
+};
+use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
+use lb_subnetworks_assignations::MembershipHandler;
 use lb_tracing::{error_with_id, info_with_id};
+use network::NetworkAdapter;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -35,9 +37,7 @@ use overwatch::{
     },
 };
 use serde::{Deserialize, Serialize};
-use lb_services_utils::wait_until_services_are_ready;
 use storage::DaStorageAdapter;
-use lb_subnetworks_assignations::MembershipHandler;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::StreamExt as _;
 use tracing::{error, instrument};

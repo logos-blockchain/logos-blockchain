@@ -2,11 +2,11 @@ mod settings;
 mod swarm;
 
 use futures::future::{AbortHandle, Abortable};
-use libp2p::PeerId;
 use lb_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     scheduling::membership::Membership,
 };
+use libp2p::PeerId;
 use overwatch::overwatch::OverwatchHandle;
 use rand::RngCore;
 pub use settings::Libp2pBlendBackendSettings;

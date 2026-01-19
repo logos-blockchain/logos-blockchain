@@ -113,12 +113,12 @@ pub const fn evaluate_hamming_distance(distance: u64, activity_threshold: u64) -
 
 #[cfg(test)]
 mod tests {
-    use lb_key_management_system_keys::keys::Ed25519Key;
     use lb_blend_proofs::{
         quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
         selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
     };
     use lb_core::crypto::ZkHash;
+    use lb_key_management_system_keys::keys::Ed25519Key;
 
     use super::*;
 

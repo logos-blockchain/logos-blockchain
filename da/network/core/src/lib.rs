@@ -15,5 +15,5 @@ pub mod swarm;
 #[cfg(test)]
 pub mod test_utils;
 
-pub use libp2p::PeerId;
 pub use lb_subnetworks_assignations::SubnetworkId;
+pub use libp2p::PeerId;

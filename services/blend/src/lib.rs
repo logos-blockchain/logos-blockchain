@@ -10,6 +10,7 @@ use futures::StreamExt as _;
 pub use lb_blend::message::{crypto::proofs::RealProofsVerifier, encap::ProofsVerifier};
 use lb_blend::scheduling::session::UninitializedSessionEventStream;
 use lb_network_service::NetworkService;
+use lb_services_utils::wait_until_services_are_ready;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -17,7 +18,6 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
-use lb_services_utils::wait_until_services_are_ready;
 use tracing::{debug, error, info};
 
 use crate::{

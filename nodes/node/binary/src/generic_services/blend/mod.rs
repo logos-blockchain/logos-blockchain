@@ -6,8 +6,6 @@ use core::{
 };
 
 use async_trait::async_trait;
-use lb_chain_broadcast_service::BlockBroadcastService;
-use lb_chain_leader_service::LeaderMsg;
 use futures::{Stream, StreamExt as _};
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_blend_service::{
@@ -15,14 +13,16 @@ use lb_blend_service::{
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     membership::service::Adapter,
 };
+use lb_chain_broadcast_service::BlockBroadcastService;
+use lb_chain_leader_service::LeaderMsg;
 use lb_core::crypto::ZkHash;
 use lb_da_sampling_service::network::NetworkAdapter;
 use lb_libp2p::PeerId;
-use lb_time_service::backends::NtpTimeBackend;
-use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use lb_pol::{PolChainInputsData, PolWalletInputsData, PolWitnessInputsData};
 use lb_poq::AGED_NOTE_MERKLE_TREE_HEIGHT;
 use lb_services_utils::wait_until_services_are_ready;
+use lb_time_service::backends::NtpTimeBackend;
+use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use tokio::sync::oneshot::channel;
 use tokio_stream::wrappers::WatchStream;
 
@@ -35,20 +35,19 @@ mod proofs;
 
 pub type BlendMembershipAdapter<RuntimeServiceId> =
     Adapter<BlockBroadcastService<RuntimeServiceId>, PeerId>;
-pub type BlendCoreService<SamplingAdapter, RuntimeServiceId> =
-    lb_blend_service::core::BlendService<
-        lb_blend_service::core::backends::libp2p::Libp2pBlendBackend,
-        PeerId,
-        lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
-        BlendMembershipAdapter<RuntimeServiceId>,
-        SdpService<RuntimeServiceId>,
-        CoreProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>,
-        BlendProofsVerifier,
-        NtpTimeBackend,
-        CryptarchiaService<RuntimeServiceId>,
-        PolInfoProvider<SamplingAdapter>,
-        RuntimeServiceId,
-    >;
+pub type BlendCoreService<SamplingAdapter, RuntimeServiceId> = lb_blend_service::core::BlendService<
+    lb_blend_service::core::backends::libp2p::Libp2pBlendBackend,
+    PeerId,
+    lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
+    BlendMembershipAdapter<RuntimeServiceId>,
+    SdpService<RuntimeServiceId>,
+    CoreProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>,
+    BlendProofsVerifier,
+    NtpTimeBackend,
+    CryptarchiaService<RuntimeServiceId>,
+    PolInfoProvider<SamplingAdapter>,
+    RuntimeServiceId,
+>;
 pub type BlendEdgeService<SamplingAdapter, RuntimeServiceId> = lb_blend_service::edge::BlendService<
         lb_blend_service::edge::backends::libp2p::Libp2pBlendBackend,
         PeerId,

@@ -1,11 +1,11 @@
 use std::cmp::Ordering;
 
-use lb_cryptarchia_engine::Epoch;
-use lb_mmr::MerkleMountainRange;
 use lb_core::mantle::{
     Value,
     ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier},
 };
+use lb_cryptarchia_engine::Epoch;
+use lb_mmr::MerkleMountainRange;
 
 use crate::Balance;
 
@@ -129,8 +129,8 @@ impl LeaderState {
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::{Field as _, Fr};
     use lb_core::mantle::TxHash;
+    use lb_groth16::{Field as _, Fr};
 
     use super::*;
 

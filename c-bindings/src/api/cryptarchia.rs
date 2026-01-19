@@ -46,7 +46,8 @@ impl From<lb_chain_service::CryptarchiaInfo> for CryptarchiaInfo {
 /// Gets the current Cryptarchia info.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`cryptarchia_info`](lb_api_service::http::consensus::cryptarchia_info) function.
+/// [`cryptarchia_info`](lb_api_service::http::consensus::cryptarchia_info)
+/// function.
 ///
 /// # Arguments
 ///
@@ -98,7 +99,9 @@ pub type CryptarchiaInfoResult = PointerResult<CryptarchiaInfo, OperationStatus>
 /// The caller must free this memory using the [`free_cryptarchia_info`]
 /// function.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn get_cryptarchia_info(node: *const LogosBlockchainNode) -> CryptarchiaInfoResult {
+pub unsafe extern "C" fn get_cryptarchia_info(
+    node: *const LogosBlockchainNode,
+) -> CryptarchiaInfoResult {
     if node.is_null() {
         eprintln!("[get_cryptarchia_info] Received a null `node` pointer. Exiting.");
         return CryptarchiaInfoResult::from_error(OperationStatus::NullPointer);

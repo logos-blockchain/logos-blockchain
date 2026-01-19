@@ -1,9 +1,9 @@
 use core::time::Duration;
 use std::{num::NonZeroU64, ops::RangeInclusive};
 
-use libp2p::{Multiaddr, PeerId, identity::Keypair};
 use lb_libp2p::protocol_name::StreamProtocol;
 use lb_utils::math::NonNegativeF64;
+use libp2p::{Multiaddr, PeerId, identity::Keypair};
 use serde::{Deserialize, Serialize};
 
 use crate::core::settings::BlendConfig;

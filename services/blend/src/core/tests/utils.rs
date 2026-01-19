@@ -2,8 +2,6 @@ use std::{num::NonZeroU64, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use futures::Stream;
-use lb_groth16::Field as _;
-use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_blend::{
     message::{
         crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
@@ -36,13 +34,15 @@ use lb_blend::{
     },
 };
 use lb_core::{crypto::ZkHash, sdp::SessionNumber};
+use lb_groth16::Field as _;
+use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_network_service::{NetworkService, backends::NetworkBackend};
+use lb_poq::CorePathAndSelectors;
 use lb_sdp_service::SdpMessage;
 use overwatch::{
     overwatch::{OverwatchHandle, commands::OverwatchCommand},
     services::{ServiceData, relay::OutboundRelay, state::StateUpdater},
 };
-use lb_poq::CorePathAndSelectors;
 use tempfile::NamedTempFile;
 use tokio::sync::{
     broadcast::{self},

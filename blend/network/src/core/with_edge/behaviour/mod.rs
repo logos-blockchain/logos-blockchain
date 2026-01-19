@@ -8,15 +8,6 @@ use std::{
 };
 
 use either::Either;
-use libp2p::{
-    Multiaddr, PeerId, StreamProtocol,
-    core::{Endpoint, transport::PortUse},
-    swarm::{
-        ConnectionClosed, ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour,
-        NotifyHandler, THandler, THandlerInEvent, THandlerOutEvent, ToSwarm,
-        dummy::ConnectionHandler as DummyConnectionHandler,
-    },
-};
 use lb_blend_message::{
     Error,
     encap::{
@@ -26,6 +17,15 @@ use lb_blend_message::{
 };
 use lb_blend_proofs::quota::{self, inputs::prove::public::LeaderInputs};
 use lb_blend_scheduling::{deserialize_encapsulated_message, membership::Membership};
+use libp2p::{
+    Multiaddr, PeerId, StreamProtocol,
+    core::{Endpoint, transport::PortUse},
+    swarm::{
+        ConnectionClosed, ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour,
+        NotifyHandler, THandler, THandlerInEvent, THandlerOutEvent, ToSwarm,
+        dummy::ConnectionHandler as DummyConnectionHandler,
+    },
+};
 
 use crate::core::with_edge::behaviour::handler::{ConnectionHandler, FromBehaviour, ToBehaviour};
 

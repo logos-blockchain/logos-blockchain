@@ -4,8 +4,6 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
-use lb_kzgrs_backend::common::{build_blob_id, share::DaShare};
-use libp2p::PeerId;
 use lb_core::{
     da::BlobId,
     header::HeaderId,
@@ -14,9 +12,11 @@ use lb_core::{
 use lb_da_network_core::{
     SubnetworkId, protocols::sampling::opinions::OpinionEvent, swarm::BalancerStats,
 };
+use lb_kzgrs_backend::common::{build_blob_id, share::DaShare};
+use lb_subnetworks_assignations::MembershipHandler;
+use libp2p::PeerId;
 use overwatch::{overwatch::handle::OverwatchHandle, services::state::NoState};
 use serde::{Deserialize, Serialize};
-use lb_subnetworks_assignations::MembershipHandler;
 use tokio::sync::{
     broadcast::{self},
     mpsc::{self, UnboundedSender},

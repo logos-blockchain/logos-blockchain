@@ -15,15 +15,15 @@ use lb_da_sampling_service::{
 };
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
 use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend as TimeBackendTrait};
+use lb_tx_service::{
+    MempoolMsg, TxMempoolService, backend::RecoverableMempool,
+    network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
+};
 use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{AsServiceId, relay::OutboundRelay},
 };
 use serde::{Serialize, de::DeserializeOwned};
-use lb_tx_service::{
-    MempoolMsg, TxMempoolService, backend::RecoverableMempool,
-    network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
-};
 
 use crate::{ChainNetwork, SamplingRelay, mempool::adapter::MempoolAdapter, network};
 

@@ -37,8 +37,8 @@ where
     NodeId: Clone + core::hash::Hash + Eq,
 {
     fn default() -> Self {
-        use lb_groth16::Field as _;
         use lb_core::crypto::ZkHash;
+        use lb_groth16::Field as _;
 
         Self {
             epoch: LeaderInputs {
@@ -62,8 +62,8 @@ where
 #[cfg(test)]
 impl<NodeId> From<Membership<NodeId>> for PublicInfo<NodeId> {
     fn from(value: Membership<NodeId>) -> Self {
-        use lb_groth16::Field as _;
         use lb_core::crypto::ZkHash;
+        use lb_groth16::Field as _;
 
         Self {
             epoch: LeaderInputs {

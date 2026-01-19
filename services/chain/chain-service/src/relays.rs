@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display};
 
-use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService};
 use bytes::Bytes;
+use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService};
 use lb_core::{
     block::Block,
     mantle::{AuthenticatedMantleTx, Transaction, TxHash},

@@ -85,8 +85,8 @@ where
 #[cfg(test)]
 mod tests {
     use futures::io::BufReader;
-    use lb_kzgrs_backend::testutils::get_da_share;
     use lb_core::da::BlobId;
+    use lb_kzgrs_backend::testutils::get_da_share;
 
     use super::*;
     use crate::{

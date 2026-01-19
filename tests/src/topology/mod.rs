@@ -13,16 +13,16 @@ use configs::{
     tracing::create_tracing_configs,
 };
 use futures::future::join_all;
-use lb_key_management_system_service::{
-    backend::preload::PreloadKMSBackendSettings,
-    keys::{Ed25519Key, ZkKey},
-};
 use lb_core::{
     mantle::{GenesisTx as _, Note, NoteId},
     sdp::{Locator, ServiceType, SessionNumber},
 };
 use lb_da_network_core::swarm::{BalancerStats, DAConnectionPolicySettings};
 use lb_da_network_service::MembershipResponse;
+use lb_key_management_system_service::{
+    backend::preload::PreloadKMSBackendSettings,
+    keys::{Ed25519Key, ZkKey},
+};
 use lb_network_service::backends::libp2p::Libp2pInfo;
 use lb_utils::net::get_available_udp_port;
 use rand::{Rng as _, thread_rng};

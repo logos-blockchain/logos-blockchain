@@ -1,7 +1,7 @@
 use std::{collections::HashSet, hash::Hash};
 
-pub use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
 use futures::Stream;
+pub use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
 use lb_core::{
     da::{BlobId, blob::Share},
     mantle::ops::channel::{ChannelId, Ed25519PublicKey, MsgId},

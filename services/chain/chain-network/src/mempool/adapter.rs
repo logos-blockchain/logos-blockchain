@@ -1,9 +1,9 @@
 use std::marker::PhantomData;
 
 use lb_core::{header::HeaderId, mantle::TxHash};
+use lb_tx_service::{MempoolMsg, TransactionsByHashesResponse};
 use overwatch::services::relay::OutboundRelay;
 use tokio::sync::oneshot;
-use lb_tx_service::{MempoolMsg, TransactionsByHashesResponse};
 
 use super::MempoolAdapter as MempoolAdapterTrait;
 

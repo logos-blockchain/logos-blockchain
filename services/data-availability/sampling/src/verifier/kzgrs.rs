@@ -1,11 +1,11 @@
 use core::fmt;
 
+use lb_core::da::{DaVerifier, blob::Share};
 use lb_kzgrs_backend::{
     common::share::DaShare,
     kzg_keys::{proving_key_from_file, verification_key_proving_key},
     verifier::DaVerifier as LogosBlockchainKzgrsVerifier,
 };
-use lb_core::da::{DaVerifier, blob::Share};
 use serde::{Deserialize, Serialize};
 
 use super::VerifierBackend;

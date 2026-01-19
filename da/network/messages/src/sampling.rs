@@ -1,5 +1,5 @@
-use lb_kzgrs_backend::common::{ShareIndex, share::DaSharesCommitments};
 use lb_core::da::BlobId;
+use lb_kzgrs_backend::common::{ShareIndex, share::DaSharesCommitments};
 use serde::{Deserialize, Serialize};
 
 use crate::common::LightShare;

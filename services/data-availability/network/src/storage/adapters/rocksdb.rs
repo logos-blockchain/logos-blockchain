@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use libp2p::{Multiaddr, PeerId};
 use lb_core::sdp::{ProviderId, SessionNumber};
 use lb_da_network_core::SubnetworkId;
 use lb_storage_service::{StorageMsg, StorageService, backends::StorageBackend};
+use libp2p::{Multiaddr, PeerId};
 use overwatch::{DynError, services::relay::OutboundRelay};
 
 use crate::{membership::Assignations, storage::MembershipStorageAdapter};

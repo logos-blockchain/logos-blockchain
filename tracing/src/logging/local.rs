@@ -18,7 +18,9 @@ pub struct FileConfig {
 pub fn create_file_layer<S>(config: FileConfig) -> (FmtLayer<S>, WorkerGuard) {
     let file_appender = tracing_appender::rolling::hourly(
         config.directory,
-        config.prefix.unwrap_or_else(|| PathBuf::from("logos-blockchain.log")),
+        config
+            .prefix
+            .unwrap_or_else(|| PathBuf::from("logos-blockchain.log")),
     );
 
     create_writer_layer(file_appender)

@@ -1,6 +1,4 @@
 use async_trait::async_trait;
-use lb_groth16::{Field as _, fr_to_bytes};
-use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_blend::{
     crypto::random_sized_bytes,
     message::crypto::{
@@ -26,6 +24,8 @@ use lb_blend::{
 };
 use lb_blend_service::{ProofsVerifier, RealProofsVerifier};
 use lb_core::{codec::DeserializeOp as _, crypto::ZkHash};
+use lb_groth16::{Field as _, fr_to_bytes};
+use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_poq::PoQProof;
 
 const LOG_TARGET: &str = "node::blend::proofs";
@@ -192,8 +192,6 @@ impl ProofsVerifier for BlendProofsVerifier {
 #[cfg(test)]
 mod core_to_core_tests {
     use futures::future::ready;
-    use lb_groth16::Field as _;
-    use lb_key_management_system_service::keys::{UnsecuredEd25519Key, UnsecuredZkKey};
     use lb_blend::{
         crypto::merkle::MerkleTree,
         message::crypto::{
@@ -221,6 +219,8 @@ mod core_to_core_tests {
     };
     use lb_blend_service::ProofsVerifier as _;
     use lb_core::crypto::ZkHash;
+    use lb_groth16::Field as _;
+    use lb_key_management_system_service::keys::{UnsecuredEd25519Key, UnsecuredZkKey};
 
     use crate::generic_services::blend::{BlendProofsVerifier, CoreProofsGenerator};
 

@@ -1,6 +1,6 @@
 use bytes::Bytes;
-use lb_cryptarchia_engine::Slot;
 use lb_core::header::HeaderId;
+use lb_cryptarchia_engine::Slot;
 use serde::{Deserialize, Serialize};
 
 /// Blocks are serialized using logos-blockchain-core's wire format.

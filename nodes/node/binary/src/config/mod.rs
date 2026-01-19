@@ -4,10 +4,10 @@ use std::{
 };
 
 use ::time::OffsetDateTime;
-use lb_chain_leader_service::LeaderConfig;
 use clap::{Parser, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use hex::FromHex as _;
+use lb_chain_leader_service::LeaderConfig;
 use lb_key_management_system_service::keys::UnsecuredZkKey;
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use lb_tracing::logging::{gelf::GelfConfig, local::FileConfig};

@@ -2,9 +2,9 @@ use blake2::{
     Blake2bVar,
     digest::{Update as _, VariableOutput as _},
 };
-use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 use lb_core::codec::SerializeOp as _;
+use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use serde::{Deserialize, Serialize};
 
 use crate::reward::session::SessionRandomness;
@@ -105,8 +105,8 @@ impl From<u64> for HammingDistance {
 
 #[cfg(test)]
 mod tests {
-    use lb_key_management_system_keys::keys::Ed25519Key;
     use lb_blend_proofs::{quota::PROOF_OF_QUOTA_SIZE, selection::PROOF_OF_SELECTION_SIZE};
+    use lb_key_management_system_keys::keys::Ed25519Key;
 
     use super::*;
 

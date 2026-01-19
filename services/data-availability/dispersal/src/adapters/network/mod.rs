@@ -2,9 +2,9 @@ pub mod libp2p;
 use std::{pin::Pin, time::Duration};
 
 use futures::Stream;
-use lb_kzgrs_backend::common::share::DaShare;
 use lb_core::{da::BlobId, mantle::SignedMantleTx, sdp::SessionNumber};
 use lb_da_network_core::SubnetworkId;
+use lb_kzgrs_backend::common::share::DaShare;
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},

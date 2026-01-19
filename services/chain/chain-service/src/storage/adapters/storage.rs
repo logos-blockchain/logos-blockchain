@@ -5,7 +5,6 @@ use std::{
 };
 
 use bytes::Bytes;
-use lb_cryptarchia_engine::Slot;
 use futures::{Stream, StreamExt as _};
 use lb_core::{
     block::Block,
@@ -13,6 +12,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{Transaction, TxHash},
 };
+use lb_cryptarchia_engine::Slot;
 use lb_storage_service::{
     StorageMsg, StorageService, api::chain::StorageChainApi, backends::StorageBackend,
 };

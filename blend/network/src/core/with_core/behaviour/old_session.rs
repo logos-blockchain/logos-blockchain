@@ -5,10 +5,6 @@ use std::{
 };
 
 use either::Either;
-use libp2p::{
-    PeerId,
-    swarm::{ConnectionId, NotifyHandler, ToSwarm},
-};
 use lb_blend_message::{
     MessageIdentifier,
     encap::{
@@ -18,6 +14,10 @@ use lb_blend_message::{
 };
 use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
 use lb_blend_scheduling::{deserialize_encapsulated_message, serialize_encapsulated_message};
+use libp2p::{
+    PeerId,
+    swarm::{ConnectionId, NotifyHandler, ToSwarm},
+};
 
 use crate::core::with_core::{
     behaviour::{Event, handler::FromBehaviour},

@@ -210,7 +210,6 @@ impl LedgerState {
 
 #[cfg(test)]
 mod tests {
-    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey};
     use lb_core::mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
         gas::MainnetGasConstants,
@@ -219,6 +218,7 @@ mod tests {
             ChannelId, MsgId, blob::BlobOp, inscribe::InscriptionOp, set_keys::SetKeysOp,
         },
     };
+    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey};
 
     use super::*;
     use crate::cryptarchia::tests::{config, genesis_state, utxo};

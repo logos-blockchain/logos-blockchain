@@ -262,11 +262,11 @@ pub mod test {
     use ark_ff::PrimeField as _;
     use ark_poly::{EvaluationDomain as _, GeneralEvaluationDomain};
     use itertools::izip;
+    use lb_core::da::DaEncoder as _;
     use lb_kzgrs::{
         BYTES_PER_FIELD_ELEMENT, FieldElement, PolynomialEvaluationDomain,
         common::bytes_to_polynomial_unchecked, decode_unchecked,
     };
-    use lb_core::da::DaEncoder as _;
     use rand::RngCore as _;
 
     use crate::{

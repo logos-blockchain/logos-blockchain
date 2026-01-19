@@ -4,10 +4,10 @@ pub mod with_edge;
 #[cfg(test)]
 mod tests;
 
-use libp2p::{PeerId, StreamProtocol};
 use lb_blend_message::encap;
 use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
 use lb_blend_scheduling::membership::Membership;
+use libp2p::{PeerId, StreamProtocol};
 
 use self::{
     with_core::behaviour::Behaviour as CoreToCoreBehaviour,

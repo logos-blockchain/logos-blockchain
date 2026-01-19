@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, HashMap};
 
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_core::{
     block::BlockNumber,
     mantle::Utxo,
     sdp::{ActivityMetadata, ProviderId, ServiceParameters, ServiceType},
 };
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use rpds::{HashTrieMapSync, HashTrieSetSync};
 
 use crate::{
@@ -21,9 +21,9 @@ const ACTIVITY_THRESHOLD: u64 = 2;
 /// Data Availability rewards implementation based on opinion-based peer
 /// evaluation.
 ///
-/// Implements the `LogosBlockchainDA` Rewarding specification where providers submit
-/// activity proofs containing opinions about peer service quality, and rewards
-/// are distributed based on accumulated positive opinions exceeding a
+/// Implements the `LogosBlockchainDA` Rewarding specification where providers
+/// submit activity proofs containing opinions about peer service quality, and
+/// rewards are distributed based on accumulated positive opinions exceeding a
 /// threshold.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]

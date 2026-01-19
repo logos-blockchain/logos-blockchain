@@ -1,14 +1,14 @@
 use std::{collections::HashSet, fmt::Debug, hash::Hash, marker::PhantomData};
 
-use lb_chain_service_common::NetworkMessage;
-use lb_cryptarchia_sync::GetTipResponse;
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok};
+use lb_chain_service_common::NetworkMessage;
 use lb_core::{
     block::{Block, Proposal},
     codec::DeserializeOp as _,
     header::HeaderId,
     mantle::AuthenticatedMantleTx,
 };
+use lb_cryptarchia_sync::GetTipResponse;
 use lb_network_service::{
     NetworkService,
     backends::libp2p::{

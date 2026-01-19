@@ -1,10 +1,10 @@
 pub mod mock;
 
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_core::{
     mantle::{NoteId, SignedMantleTx, tx_builder::MantleTxBuilder},
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
+use lb_key_management_system_keys::keys::ZkPublicKey;
 
 #[async_trait::async_trait]
 pub trait SdpWalletAdapter {

@@ -7,14 +7,11 @@ use std::{
 
 use async_trait::async_trait;
 use backends::BlendBackend;
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use fork_stream::StreamExt as _;
 use futures::{
     FutureExt as _, Stream, StreamExt as _,
     future::{BoxFuture, join_all},
 };
-use lb_key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
-use network::NetworkAdapter;
 use lb_blend::{
     crypto::random_sized_bytes,
     message::{
@@ -44,14 +41,21 @@ use lb_blend::{
         stream::UninitializedFirstReadyStream,
     },
 };
+use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     codec::{DeserializeOp as _, SerializeOp as _},
     sdp::ActivityMetadata,
 };
+use lb_key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
 use lb_network_service::NetworkService;
 use lb_sdp_service::SdpMessage;
+use lb_services_utils::{
+    overwatch::{JsonFileBackend, RecoveryOperator},
+    wait_until_services_are_ready,
+};
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use lb_utils::blake_rng::BlakeRng;
+use network::NetworkAdapter;
 use overwatch::{
     OpaqueServiceResourcesHandle,
     overwatch::OverwatchHandle,
@@ -63,10 +67,6 @@ use overwatch::{
 };
 use rand::{RngCore, SeedableRng as _, seq::SliceRandom as _};
 use serde::{Deserialize, Serialize};
-use lb_services_utils::{
-    overwatch::{JsonFileBackend, RecoveryOperator},
-    wait_until_services_are_ready,
-};
 use tokio::sync::oneshot;
 use tracing::{error, info};
 

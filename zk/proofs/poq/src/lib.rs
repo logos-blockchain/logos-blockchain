@@ -14,10 +14,10 @@ pub use blend_inputs::{
 };
 pub use chain_inputs::{PoQChainInputs, PoQChainInputsData, PoQInputsFromDataError};
 pub use common_inputs::{PoQCommonInputs, PoQCommonInputsData};
+pub use inputs::{PoQVerifierInput, PoQVerifierInputData, PoQWitnessInputs};
 use lb_groth16::{
     CompressedGroth16Proof, Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser,
 };
-pub use inputs::{PoQVerifierInput, PoQVerifierInputData, PoQWitnessInputs};
 use thiserror::Error;
 pub use wallet_inputs::{
     AGED_NOTE_MERKLE_TREE_HEIGHT, NotePathAndSelectors, PoQWalletInputs, PoQWalletInputsData,

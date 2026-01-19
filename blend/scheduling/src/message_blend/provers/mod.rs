@@ -1,9 +1,9 @@
-use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
 use lb_blend_proofs::{
     quota::{VerifiedProofOfQuota, inputs::prove::public::CoreInputs},
     selection::VerifiedProofOfSelection,
 };
+use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 
 pub mod core;
 pub mod core_and_leader;

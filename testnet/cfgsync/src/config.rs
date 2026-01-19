@@ -273,10 +273,10 @@ mod cfgsync_tests {
         DAConnectionMonitorSettings, DAConnectionPolicySettings, ReplicationConfig,
     };
     use lb_libp2p::{Multiaddr, Protocol};
+    use lb_tests::topology::configs::da::DaParams;
     use lb_tracing_service::{
         ConsoleLayer, FilterLayer, LoggerLayer, MetricsLayer, TracingLayer, TracingSettings,
     };
-    use lb_tests::topology::configs::da::DaParams;
     use tracing::Level;
 
     use super::{Host, HostKind, create_node_configs};

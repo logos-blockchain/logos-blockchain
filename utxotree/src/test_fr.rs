@@ -1,5 +1,5 @@
-use num_bigint::BigUint;
 use lb_poseidon2::Fr;
+use num_bigint::BigUint;
 use rand::RngCore;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]

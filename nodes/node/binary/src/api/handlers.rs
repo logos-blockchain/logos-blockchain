@@ -11,22 +11,20 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse as _, Response},
 };
-use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_api_service::http::{
     consensus::{self, Cryptarchia},
     da::{self, BalancerMessageFactory, DaVerifier, MonitorMessageFactory},
     libp2p, mantle, mempool,
     storage::StorageAdapter,
 };
+use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
     da::{BlobId, DaVerifier as CoreDaVerifier, blob::Share},
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction},
     sdp::SessionNumber,
 };
-use lb_da_messages::http::da::{
-    DASharesCommitmentsRequest, DaSamplingRequest, GetSharesRequest,
-};
+use lb_da_messages::http::da::{DASharesCommitmentsRequest, DaSamplingRequest, GetSharesRequest};
 use lb_da_network_service::{
     NetworkService, api::ApiAdapter as ApiAdapterTrait, backends::NetworkBackend,
     sdp::SdpAdapter as SdpAdapterTrait,
@@ -44,21 +42,21 @@ use lb_libp2p::PeerId;
 use lb_network_service::backends::libp2p::Libp2p as Libp2pNetworkBackend;
 use lb_sdp_service::adapters::mempool::SdpMempoolAdapter;
 use lb_storage_service::{StorageService, api::da::DaConverter, backends::rocksdb::RocksBackend};
-use lb_wallet_service::api::{WalletApi, WalletServiceData};
-use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use lb_subnetworks_assignations::MembershipHandler;
-use tracing::error;
 use lb_tx_service::{
     TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
 };
+use lb_wallet_service::api::{WalletApi, WalletServiceData};
+use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use tracing::error;
 #[cfg(feature = "block-explorer")]
 use {
     crate::api::{queries::BlockRangeQuery, serializers::blocks::ApiBlock},
-    lb_chain_service::ConsensusMsg,
     futures::FutureExt as _,
     lb_api_service::http::DynError,
+    lb_chain_service::ConsensusMsg,
     lb_core::block::Block,
     lb_libp2p::libp2p::bytes::Bytes,
     lb_storage_service::api::chain::StorageChainApi,

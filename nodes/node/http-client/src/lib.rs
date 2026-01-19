@@ -1,12 +1,10 @@
 use std::{collections::HashSet, fmt::Debug, hash::Hash, sync::Arc};
 
+use futures::{Stream, StreamExt as _};
 use lb_chain_broadcast_service::BlockInfo;
 use lb_chain_service::CryptarchiaInfo;
-use futures::{Stream, StreamExt as _};
 use lb_core::{block::Block, da::blob::Share, header::HeaderId, mantle::SignedMantleTx};
-use lb_da_messages::http::da::{
-    DASharesCommitmentsRequest, DaSamplingRequest, GetSharesRequest,
-};
+use lb_da_messages::http::da::{DASharesCommitmentsRequest, DaSamplingRequest, GetSharesRequest};
 use lb_http_api_common::paths::{
     CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, DA_GET_LIGHT_SHARE, DA_GET_SHARES,
     DA_GET_STORAGE_SHARES_COMMITMENTS, MEMPOOL_ADD_TX, STORAGE_BLOCK,

@@ -5,11 +5,11 @@ use std::{
 };
 
 use lb_network_service::message::BackendNetworkMsg;
+use lb_services_utils::wait_until_services_are_ready;
 use overwatch::{
     overwatch::OverwatchHandle,
     services::{AsServiceId, ServiceData},
 };
-use lb_services_utils::wait_until_services_are_ready;
 
 use crate::{
     core::{network::NetworkAdapter, service_components::MessageComponents},

@@ -3,6 +3,13 @@ use std::task::{Context, Poll};
 use futures::{
     AsyncWriteExt as _, FutureExt as _, StreamExt as _, future::BoxFuture, stream::FuturesUnordered,
 };
+use lb_core::mantle::{Op, SignedMantleTx, ops::channel::blob::BlobOp};
+use lb_da_messages::{
+    common::Share,
+    dispersal,
+    packing::{pack_to_writer, unpack_from_reader},
+};
+use lb_subnetworks_assignations::MembershipHandler;
 use libp2p::{
     Multiaddr, PeerId, Stream,
     core::{Endpoint, transport::PortUse},
@@ -13,13 +20,6 @@ use libp2p::{
 };
 use libp2p_stream::IncomingStreams;
 use log::debug;
-use lb_core::mantle::{Op, SignedMantleTx, ops::channel::blob::BlobOp};
-use lb_da_messages::{
-    common::Share,
-    dispersal,
-    packing::{pack_to_writer, unpack_from_reader},
-};
-use lb_subnetworks_assignations::MembershipHandler;
 use thiserror::Error;
 
 use crate::{SubnetworkId, protocol::DISPERSAL_PROTOCOL};

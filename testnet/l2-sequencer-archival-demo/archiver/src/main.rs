@@ -3,9 +3,9 @@
 use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use clap::Parser as _;
+use futures::StreamExt as _;
 use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient};
 use lb_demo_sequencer::db::AccountDb;
-use futures::StreamExt as _;
 use owo_colors::OwoColorize as _;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;

@@ -1,21 +1,21 @@
 use std::{collections::HashSet, fmt::Debug, hash::Hash, marker::PhantomData};
 
+use futures::StreamExt as _;
 use lb_chain_service::{
     CryptarchiaInfo,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
-use lb_cryptarchia_sync::GetTipResponse;
-use futures::StreamExt as _;
 use lb_core::{
     block::Block,
     da,
     header::HeaderId,
     mantle::{AuthenticatedMantleTx, TxHash},
 };
+use lb_cryptarchia_sync::GetTipResponse;
 use lb_da_sampling_service::backend::DaSamplingServiceBackend;
+use lb_tx_service::backend::RecoverableMempool;
 use overwatch::DynError;
 use tracing::{debug, error};
-use lb_tx_service::backend::RecoverableMempool;
 
 use crate::{
     Error as ChainError, IbdConfig, SamplingRelay, blob,
@@ -419,11 +419,11 @@ mod tests {
         sync::Arc,
     };
 
-    use lb_cryptarchia_engine::{EpochConfig, Slot};
     use lb_core::{
         block::Proposal,
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
+    use lb_cryptarchia_engine::{EpochConfig, Slot};
     use lb_ledger::{
         LedgerState,
         mantle::sdp::{ServiceRewardsParameters, rewards},

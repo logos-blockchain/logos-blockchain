@@ -1,8 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use arc_swap::ArcSwap;
-use libp2p::{Multiaddr, PeerId};
 use lb_da_network_core::addressbook::AddressBookHandler;
+use libp2p::{Multiaddr, PeerId};
 
 pub type AddressBookSnapshot<Id> = HashMap<Id, Multiaddr>;
 

@@ -1,10 +1,8 @@
 use std::{collections::HashSet, time::Duration};
 
+use futures::StreamExt as _;
 use lb_chain_service::CryptarchiaInfo;
 use lb_common_http_client::Error;
-use lb_executor_http_client::ExecutorHttpClient;
-use futures::StreamExt as _;
-use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
 use lb_core::{
     block::Block,
     da::BlobId,
@@ -17,6 +15,8 @@ use lb_core::{
         },
     },
 };
+use lb_executor_http_client::ExecutorHttpClient;
+use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
 use reqwest::Url;
 
 use crate::{adjust_timeout, common::chain::scan_chain_until, nodes::executor::Executor};

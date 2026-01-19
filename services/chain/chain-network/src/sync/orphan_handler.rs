@@ -316,8 +316,8 @@ mod tests {
         time::Duration,
     };
 
-    use lb_cryptarchia_sync::GetTipResponse;
     use futures::stream;
+    use lb_cryptarchia_sync::GetTipResponse;
     use lb_network_service::{NetworkService, backends::mock::Mock, message::ChainSyncEvent};
     use overwatch::services::{ServiceData, relay::OutboundRelay};
     use tokio::time::timeout;

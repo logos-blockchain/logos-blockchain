@@ -6,9 +6,9 @@ use std::{
     pin::Pin,
 };
 
-use lb_cryptarchia_engine::Slot;
 use futures::Stream;
 use lb_core::{header::HeaderId, mantle::TxHash};
+use lb_cryptarchia_engine::Slot;
 use tokio::sync::oneshot::Sender;
 
 use crate::{

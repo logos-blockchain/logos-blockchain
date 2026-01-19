@@ -1,9 +1,9 @@
 use core::time::Duration;
 
-use libp2p::core::Endpoint;
 use lb_blend::{
     network::core::with_core::behaviour::NegotiatedPeerState, scheduling::membership::Node,
 };
+use libp2p::core::Endpoint;
 use test_log::test;
 use tokio::{select, time::sleep};
 

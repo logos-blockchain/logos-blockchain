@@ -10,15 +10,15 @@ pub mod tracing;
 use blend::GeneralBlendConfig;
 use consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_tx_with_declarations};
 use da::GeneralDaConfig;
-use lb_key_management_system_service::{
-    backend::preload::PreloadKMSBackendSettings, keys::Ed25519Key,
-};
-use network::GeneralNetworkConfig;
 use lb_core::{
     mantle::GenesisTx as _,
     sdp::{Locator, ServiceType},
 };
+use lb_key_management_system_service::{
+    backend::preload::PreloadKMSBackendSettings, keys::Ed25519Key,
+};
 use lb_utils::net::get_available_udp_port;
+use network::GeneralNetworkConfig;
 use rand::{Rng as _, thread_rng};
 use tracing::GeneralTracingConfig;
 

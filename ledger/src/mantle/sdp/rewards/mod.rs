@@ -5,14 +5,14 @@ mod test_utils;
 
 use std::collections::HashMap;
 
-use lb_groth16::{Fr, fr_from_bytes};
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_core::{
     block::BlockNumber,
     crypto::{ZkDigest, ZkHasher},
     mantle::{Note, TxHash, Utxo},
     sdp::{ActivityMetadata, ProviderId, ServiceParameters, ServiceType, SessionNumber},
 };
+use lb_groth16::{Fr, fr_from_bytes};
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use thiserror::Error;
 
 use super::SessionState;

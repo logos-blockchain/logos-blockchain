@@ -322,15 +322,13 @@ mod tests {
             chain_sync_protocol_name: StreamProtocol::new("/chainsync/test"),
             identify_config: lb_libp2p::IdentifySettings::default(),
             chain_sync_config: lb_cryptarchia_sync::Config::default(),
-            nat_config: lb_libp2p::NatSettings::Traversal(
-                lb_libp2p::TraversalSettings {
-                    autonat: lb_libp2p::AutonatClientSettings {
-                        probe_interval_millisecs: Some(1000),
-                        ..Default::default()
-                    },
+            nat_config: lb_libp2p::NatSettings::Traversal(lb_libp2p::TraversalSettings {
+                autonat: lb_libp2p::AutonatClientSettings {
+                    probe_interval_millisecs: Some(1000),
                     ..Default::default()
                 },
-            ),
+                ..Default::default()
+            }),
         }
     }
 

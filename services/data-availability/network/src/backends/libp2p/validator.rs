@@ -9,7 +9,6 @@ use futures::{
     Stream, StreamExt as _,
     future::{AbortHandle, Abortable},
 };
-use libp2p::PeerId;
 use lb_core::{
     da::BlobId,
     header::HeaderId,
@@ -25,10 +24,11 @@ use lb_da_network_core::{
     },
 };
 use lb_libp2p::ed25519;
+use lb_subnetworks_assignations::MembershipHandler;
 use lb_tracing::info_with_id;
+use libp2p::PeerId;
 use overwatch::{overwatch::handle::OverwatchHandle, services::state::NoState};
 use serde::Serialize;
-use lb_subnetworks_assignations::MembershipHandler;
 use tokio::sync::{broadcast, mpsc::UnboundedSender, oneshot};
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::instrument;

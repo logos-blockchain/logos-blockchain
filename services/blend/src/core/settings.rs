@@ -1,11 +1,11 @@
 use std::{num::NonZeroU64, path::PathBuf};
 
-use lb_key_management_system_service::backend::preload::KeyId;
 use lb_blend::scheduling::message_blend::crypto::SessionCryptographicProcessorSettings;
 use lb_core::blend::core_quota;
+use lb_key_management_system_service::backend::preload::KeyId;
+use lb_services_utils::overwatch::recovery::backends::FileBackendSettings;
 use lb_utils::math::NonNegativeF64;
 use serde::{Deserialize, Serialize};
-use lb_services_utils::overwatch::recovery::backends::FileBackendSettings;
 
 use crate::settings::TimingSettings;
 
@@ -27,9 +27,7 @@ impl<BackendSettings> BlendConfig<BackendSettings> {
             .session_quota(&self.crypto, &self.time, membership_size)
     }
 
-    pub(super) fn scheduler_settings(
-        &self,
-    ) -> lb_blend::scheduling::message_scheduler::Settings {
+    pub(super) fn scheduler_settings(&self) -> lb_blend::scheduling::message_scheduler::Settings {
         lb_blend::scheduling::message_scheduler::Settings {
             additional_safety_intervals: self.scheduler.cover.intervals_for_safety_buffer,
             expected_intervals_per_session: self.time.intervals_per_session(),

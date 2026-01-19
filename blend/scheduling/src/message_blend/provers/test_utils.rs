@@ -1,5 +1,4 @@
 use futures::future::ready;
-use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
 use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
 use lb_blend_proofs::quota::{
     self, VerifiedProofOfQuota,
@@ -10,6 +9,7 @@ use lb_blend_proofs::quota::{
     },
 };
 use lb_core::crypto::ZkHash;
+use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
 
 use crate::message_blend::CoreProofOfQuotaGenerator;
 

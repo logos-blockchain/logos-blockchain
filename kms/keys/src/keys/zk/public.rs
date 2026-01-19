@@ -1,8 +1,8 @@
 use lb_groth16::{Field as _, Fr, Groth16Input};
+use lb_zksign::{ZkSignError, ZkSignVerifierInputs};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use tracing::error;
-use lb_zksign::{ZkSignError, ZkSignVerifierInputs};
 
 use crate::keys::zk::{private::SecretKey, signature::Signature};
 

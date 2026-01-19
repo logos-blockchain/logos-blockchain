@@ -3,8 +3,6 @@ pub mod rewards;
 
 use std::collections::HashMap;
 
-use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
-use locked_notes::LockedNotes;
 use lb_blend_message::crypto::proofs::RealProofsVerifier;
 use lb_core::{
     block::BlockNumber,
@@ -17,6 +15,8 @@ use lb_core::{
         ServiceType, SessionNumber,
     },
 };
+use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
+use locked_notes::LockedNotes;
 use rewards::{Error as RewardsError, Rewards};
 
 use crate::{
@@ -672,9 +672,9 @@ impl SdpLedger {
 mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
+    use lb_core::crypto::ZkHash;
     use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
-    use lb_core::crypto::ZkHash;
     use lb_utils::math::NonNegativeF64;
     use num_bigint::BigUint;
 

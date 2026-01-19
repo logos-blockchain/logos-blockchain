@@ -1,10 +1,10 @@
 use std::{num::NonZero, pin::Pin};
 
+use futures::StreamExt as _;
 use lb_cryptarchia_engine::{
     EpochConfig, Slot,
     time::{SlotConfig, SlotTimer},
 };
-use futures::StreamExt as _;
 use time::OffsetDateTime;
 use tokio_stream::wrappers::IntervalStream;
 

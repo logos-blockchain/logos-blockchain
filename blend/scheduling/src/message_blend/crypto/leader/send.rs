@@ -138,11 +138,6 @@ where
 mod test {
     use std::num::NonZeroU64;
 
-    use lb_groth16::Field as _;
-    use lb_key_management_system_keys::keys::{
-        ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, UnsecuredEd25519Key,
-    };
-    use libp2p::{Multiaddr, PeerId};
     use lb_blend_message::crypto::{
         key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
     };
@@ -151,6 +146,11 @@ mod test {
         public::{CoreInputs, LeaderInputs},
     };
     use lb_core::crypto::ZkHash;
+    use lb_groth16::Field as _;
+    use lb_key_management_system_keys::keys::{
+        ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, UnsecuredEd25519Key,
+    };
+    use libp2p::{Multiaddr, PeerId};
 
     use super::SessionCryptographicProcessor;
     use crate::{

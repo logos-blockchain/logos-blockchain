@@ -1,8 +1,6 @@
 use std::{collections::HashMap, fmt::Debug, pin::Pin};
 
 use futures::{Stream, StreamExt as _};
-use lb_kzgrs_backend::common::share::{DaShare, DaSharesCommitments};
-use libp2p_identity::PeerId;
 use lb_core::{da::BlobId, header::HeaderId, sdp::SessionNumber};
 use lb_da_network_core::SubnetworkId;
 use lb_da_network_service::{
@@ -17,11 +15,13 @@ use lb_da_network_service::{
     membership::{MembershipAdapter, handler::DaMembershipHandler},
     sdp::SdpAdapter as SdpAdapterTrait,
 };
+use lb_kzgrs_backend::common::share::{DaShare, DaSharesCommitments};
+use lb_subnetworks_assignations::MembershipHandler;
+use libp2p_identity::PeerId;
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
 };
-use lb_subnetworks_assignations::MembershipHandler;
 use tokio::sync::oneshot;
 
 use crate::network::{CommitmentsEvent, NetworkAdapter, adapters::common::adapter_for};

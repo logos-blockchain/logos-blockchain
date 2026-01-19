@@ -9,10 +9,8 @@ use core::fmt::Debug;
 use std::{fmt::Display, hash::Hash, time::Duration};
 
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
-pub use lb_cryptarchia_engine::{Epoch, Slot};
 use futures::StreamExt as _;
-use network::NetworkAdapter;
+use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     block::{Block, Proposal},
     da::{self},
@@ -20,6 +18,7 @@ use lb_core::{
     mantle::{AuthenticatedMantleTx, Transaction, TxHash, genesis_tx::GenesisTx, ops::Op},
     sdp::ServiceType,
 };
+pub use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_da_sampling_service::{
     DaSamplingService, DaSamplingServiceMsg, backend::DaSamplingServiceBackend,
     mempool::DaMempoolAdapter,
@@ -27,7 +26,13 @@ use lb_da_sampling_service::{
 pub use lb_ledger::EpochState;
 use lb_ledger::LedgerState;
 use lb_network_service::NetworkService;
+use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::TimeService;
+use lb_tx_service::{
+    TxMempoolService, backend::RecoverableMempool,
+    network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
+};
+use network::NetworkAdapter;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -37,14 +42,9 @@ use overwatch::{
     },
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use lb_services_utils::wait_until_services_are_ready;
 use thiserror::Error;
 use tracing::{Level, debug, error, info, instrument, span};
 use tracing_futures::Instrument as _;
-use lb_tx_service::{
-    TxMempoolService, backend::RecoverableMempool,
-    network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
-};
 
 use crate::{
     blob::{HistoricBlobStrategy, RecentBlobStrategy},
@@ -256,7 +256,8 @@ where
     SamplingBackend::Share: Debug + Send + 'static,
     SamplingNetworkAdapter:
         lb_da_sampling_service::network::NetworkAdapter<RuntimeServiceId> + Send + Sync,
-    SamplingStorage: lb_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync,
+    SamplingStorage:
+        lb_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
     RuntimeServiceId: Debug

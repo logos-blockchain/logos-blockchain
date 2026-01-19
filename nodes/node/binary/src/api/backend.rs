@@ -15,11 +15,11 @@ use axum::{
     },
     routing,
 };
-use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_api_service::{
     Backend,
     http::{consensus::Cryptarchia, da::DaVerifier},
 };
+use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
     da::{
         BlobId, DaVerifier as CoreDaVerifier,
@@ -39,11 +39,14 @@ pub use lb_http_api_common::settings::AxumBackendSettings;
 use lb_http_api_common::{paths, utils::create_rate_limit_layer};
 use lb_libp2p::PeerId;
 use lb_sdp_service::adapters::mempool::SdpMempoolAdapter;
+use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::{StorageService, api::da::DaConverter, backends::rocksdb::RocksBackend};
+use lb_subnetworks_assignations::MembershipHandler;
+use lb_tx_service::{
+    MempoolMetrics, TxMempoolService, backend::Mempool, tx::service::openapi::Status,
+};
 use overwatch::{DynError, overwatch::handle::OverwatchHandle, services::AsServiceId};
 use serde::{Serialize, de::DeserializeOwned};
-use lb_services_utils::wait_until_services_are_ready;
-use lb_subnetworks_assignations::MembershipHandler;
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::{
@@ -51,9 +54,6 @@ use tower_http::{
     limit::RequestBodyLimitLayer,
     timeout::TimeoutLayer,
     trace::TraceLayer,
-};
-use lb_tx_service::{
-    MempoolMetrics, TxMempoolService, backend::Mempool, tx::service::openapi::Status,
 };
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -236,7 +236,8 @@ where
         + 'static,
     MempoolStorageAdapter::Error: Debug,
     SdpMempool: SdpMempoolAdapter + Send + Sync + 'static,
-    SamplingMempoolAdapter: lb_da_sampling_service::mempool::DaMempoolAdapter + Send + Sync + 'static,
+    SamplingMempoolAdapter:
+        lb_da_sampling_service::mempool::DaMempoolAdapter + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send

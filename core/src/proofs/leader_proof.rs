@@ -1,8 +1,8 @@
 use ark_ff::{Field as _, PrimeField as _};
 use generic_array::GenericArray;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
-use num_bigint::BigUint;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
+use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

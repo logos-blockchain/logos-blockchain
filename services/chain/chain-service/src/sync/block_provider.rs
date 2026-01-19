@@ -7,10 +7,10 @@ use std::{
 };
 
 use bytes::Bytes;
-use lb_cryptarchia_engine::{Branch, Slot};
-use lb_cryptarchia_sync::{BlocksResponse, ProviderResponse};
 use futures::{StreamExt as _, TryStreamExt as _, future, stream, stream::BoxStream};
 use lb_core::{block::Block, header::HeaderId};
+use lb_cryptarchia_engine::{Branch, Slot};
+use lb_cryptarchia_sync::{BlocksResponse, ProviderResponse};
 use lb_storage_service::{StorageMsg, api::chain::StorageChainApi, backends::StorageBackend};
 use overwatch::DynError;
 use serde::Serialize;
@@ -554,16 +554,16 @@ where
 mod tests {
     use std::{collections::BTreeMap, num::NonZero};
 
-    use lb_cryptarchia_engine::Config;
     use futures::StreamExt as _;
-    use lb_groth16::Fr;
-    use lb_key_management_system_keys::keys::Ed25519Key;
     use lb_core::{
         codec::DeserializeOp as _,
         mantle::{Note, SignedMantleTx, ledger::Utxo},
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
         utils::merkle::MerkleNode,
     };
+    use lb_cryptarchia_engine::Config;
+    use lb_groth16::Fr;
+    use lb_key_management_system_keys::keys::Ed25519Key;
     use lb_storage_service::{
         StorageService,
         backends::rocksdb::{RocksBackend, RocksBackendSettings},

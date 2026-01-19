@@ -51,11 +51,14 @@ use lb_node::{
     },
 };
 use lb_sdp_service::adapters::mempool::SdpMempoolAdapter;
+use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::{StorageService, api::da};
+use lb_subnetworks_assignations::MembershipHandler;
+use lb_tx_service::{
+    MempoolMetrics, TxMempoolService, backend::Mempool, tx::service::openapi::Status,
+};
 use overwatch::{DynError, overwatch::handle::OverwatchHandle, services::AsServiceId};
 use serde::{Serialize, de::DeserializeOwned};
-use lb_services_utils::wait_until_services_are_ready;
-use lb_subnetworks_assignations::MembershipHandler;
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::{
@@ -63,9 +66,6 @@ use tower_http::{
     limit::RequestBodyLimitLayer,
     timeout::TimeoutLayer,
     trace::TraceLayer,
-};
-use lb_tx_service::{
-    MempoolMetrics, TxMempoolService, backend::Mempool, tx::service::openapi::Status,
 };
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -304,7 +304,8 @@ where
         + Clone
         + 'static,
     MempoolStorageAdapter::Error: Debug,
-    SamplingMempoolAdapter: lb_da_sampling_service::mempool::DaMempoolAdapter + Send + Sync + 'static,
+    SamplingMempoolAdapter:
+        lb_da_sampling_service::mempool::DaMempoolAdapter + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send

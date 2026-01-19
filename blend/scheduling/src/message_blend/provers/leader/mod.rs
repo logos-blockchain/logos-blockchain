@@ -2,7 +2,6 @@ use core::pin::Pin;
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _, stream};
-use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_blend_message::crypto::{
     key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
 };
@@ -16,6 +15,7 @@ use lb_blend_proofs::{
     },
     selection::VerifiedProofOfSelection,
 };
+use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use tokio::task::spawn_blocking;
 
 use crate::message_blend::provers::{BlendLayerProof, ProofsGeneratorSettings};

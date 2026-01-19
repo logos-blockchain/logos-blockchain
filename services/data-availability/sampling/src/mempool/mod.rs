@@ -4,11 +4,11 @@ use std::pin::Pin;
 
 use futures::Stream;
 use lb_core::{da::BlobId, sdp::SessionNumber};
+use lb_tx_service::backend::MempoolError;
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
 };
-use lb_tx_service::backend::MempoolError;
 
 #[derive(thiserror::Error, Debug)]
 pub enum MempoolAdapterError {

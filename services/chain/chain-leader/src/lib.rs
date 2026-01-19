@@ -6,11 +6,8 @@ mod relays;
 use core::fmt::Debug;
 use std::{collections::BTreeSet, fmt::Display, iter, pin::Pin, time::Duration};
 
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
-use lb_cryptarchia_engine::{Epoch, Slot};
 use futures::{StreamExt as _, future, stream};
-use lb_key_management_system_keys::keys::Ed25519Key;
-pub use leadership::LeaderConfig;
+use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     block::{Block, Error as BlockError, MAX_TRANSACTIONS},
     da,
@@ -21,27 +18,30 @@ use lb_core::{
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
 };
+use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_da_sampling_service::{
     DaSamplingService, DaSamplingServiceMsg, backend::DaSamplingServiceBackend,
     mempool::DaMempoolAdapter,
 };
-use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
-use overwatch::{
-    DynError, OpaqueServiceResourcesHandle,
-    services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
-};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use lb_key_management_system_keys::keys::Ed25519Key;
 use lb_services_utils::wait_until_services_are_ready;
-use thiserror::Error;
-use tokio::sync::{oneshot, watch};
-use tracing::{Level, error, info, instrument, span};
-use tracing_futures::Instrument as _;
+use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use lb_tx_service::{
     TxMempoolService,
     backend::{MemPool, RecoverableMempool},
     network::NetworkAdapter as MempoolNetworkAdapter,
     storage::MempoolStorageAdapter,
 };
+pub use leadership::LeaderConfig;
+use overwatch::{
+    DynError, OpaqueServiceResourcesHandle,
+    services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
+};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use thiserror::Error;
+use tokio::sync::{oneshot, watch};
+use tracing::{Level, error, info, instrument, span};
+use tracing_futures::Instrument as _;
 
 use crate::{
     blend::BlendAdapter,

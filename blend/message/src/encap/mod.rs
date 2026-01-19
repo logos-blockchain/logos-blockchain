@@ -1,8 +1,8 @@
-use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use lb_blend_proofs::{
     quota::{ProofOfQuota, VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
+use lb_key_management_system_keys::keys::Ed25519PublicKey;
 
 use crate::crypto::proofs::PoQVerificationInputsMinusSigningKey;
 

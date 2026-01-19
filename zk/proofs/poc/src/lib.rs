@@ -37,10 +37,10 @@ use core::fmt::Debug;
 use std::error::Error;
 
 pub use chain_inputs::{PoCChainInputs, PoCChainInputsData};
+pub use inputs::PoCWitnessInputs;
 use lb_groth16::{
     CompressedGroth16Proof, Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser,
 };
-pub use inputs::PoCWitnessInputs;
 use thiserror::Error;
 pub use wallet_inputs::{PoCWalletInputs, PoCWalletInputsData};
 pub use witness::Witness;

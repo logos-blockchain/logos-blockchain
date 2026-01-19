@@ -1,8 +1,6 @@
 use std::time::Duration;
 
-use lb_libp2p::{
-    IdentifySettings, KademliaSettings, Multiaddr, NatSettings, ed25519, gossipsub,
-};
+use lb_libp2p::{IdentifySettings, KademliaSettings, Multiaddr, NatSettings, ed25519, gossipsub};
 use lb_node::config::network::serde::{BackendSettings, Config, SwarmConfig};
 use lb_utils::net::get_available_udp_port;
 

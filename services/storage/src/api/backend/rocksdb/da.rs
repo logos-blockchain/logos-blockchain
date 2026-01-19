@@ -2,13 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use libp2p_identity::PeerId;
-use multiaddr::Multiaddr;
 use lb_core::{
     codec::{DeserializeOp as _, SerializeOp as _},
     da::BlobId,
     sdp::{ProviderId, SessionNumber},
 };
+use libp2p_identity::PeerId;
+use multiaddr::Multiaddr;
 use rocksdb::Error;
 use tracing::{debug, error};
 

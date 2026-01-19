@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
-use lb_cryptarchia_engine::{Config as ConsensusConfig, EpochConfig};
 use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
+use lb_cryptarchia_engine::{Config as ConsensusConfig, EpochConfig};
 use serde::{Deserialize, Serialize};
 
 use crate::config::deployment::WellKnownDeployment;

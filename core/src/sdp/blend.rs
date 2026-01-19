@@ -1,9 +1,9 @@
-use lb_key_management_system_keys::keys::ED25519_PUBLIC_KEY_SIZE;
-use nom::{IResult, Parser as _, bytes::complete::take, number::complete::u8 as nom_u8};
 use lb_blend_proofs::{
     quota::{PROOF_OF_QUOTA_SIZE, ProofOfQuota},
     selection::{PROOF_OF_SELECTION_SIZE, ProofOfSelection},
 };
+use lb_key_management_system_keys::keys::ED25519_PUBLIC_KEY_SIZE;
+use nom::{IResult, Parser as _, bytes::complete::take, number::complete::u8 as nom_u8};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -112,8 +112,8 @@ fn parse_const_size_bytes<const N: usize>(input: &[u8]) -> IResult<&[u8], [u8; N
 
 #[cfg(test)]
 mod tests {
-    use lb_key_management_system_keys::keys::Ed25519Key;
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
+    use lb_key_management_system_keys::keys::Ed25519Key;
 
     use super::*;
     use crate::sdp::ActivityMetadata;

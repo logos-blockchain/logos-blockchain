@@ -2,7 +2,6 @@ use core::pin::Pin;
 
 use async_trait::async_trait;
 use futures::stream::{self, Stream, StreamExt as _};
-use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_blend_message::crypto::{
     key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
 };
@@ -10,6 +9,7 @@ use lb_blend_proofs::{
     quota::inputs::prove::{PublicInputs, public::LeaderInputs},
     selection::VerifiedProofOfSelection,
 };
+use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 
 use crate::message_blend::{
     CoreProofOfQuotaGenerator,

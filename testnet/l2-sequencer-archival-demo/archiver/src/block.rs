@@ -1,8 +1,7 @@
 use async_stream::stream;
+use futures::{Stream, StreamExt as _};
 use lb_chain_broadcast_service::BlockInfo;
 use lb_common_http_client::CommonHttpClient;
-use lb_demo_sequencer::{BlockData, db::AccountDb};
-use futures::{Stream, StreamExt as _};
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -10,6 +9,7 @@ use lb_core::{
         ops::channel::{ChannelId, inscribe::InscriptionOp},
     },
 };
+use lb_demo_sequencer::{BlockData, db::AccountDb};
 use owo_colors::OwoColorize as _;
 use serde::{Deserialize, Serialize};
 use tokio::select;

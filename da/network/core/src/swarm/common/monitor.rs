@@ -4,8 +4,8 @@ use std::{
 };
 
 use fixed::types::U57F7;
-use libp2p::PeerId;
 use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
+use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 
 use crate::{

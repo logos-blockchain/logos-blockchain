@@ -1,9 +1,9 @@
 use async_trait::async_trait;
-use lb_chain_service::Slot;
 use futures::{Stream, future::ready, stream::once};
-use lb_groth16::Field as _;
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
+use lb_chain_service::Slot;
 use lb_core::crypto::ZkHash;
+use lb_groth16::Field as _;
 use lb_ledger::EpochState;
 use overwatch::overwatch::OverwatchHandle;
 

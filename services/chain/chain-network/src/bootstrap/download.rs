@@ -6,8 +6,8 @@ use std::{
     time::Duration,
 };
 
-use lb_cryptarchia_sync::HeaderId;
 use futures::{Stream, StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
+use lb_cryptarchia_sync::HeaderId;
 use overwatch::DynError;
 use tracing::{debug, info};
 

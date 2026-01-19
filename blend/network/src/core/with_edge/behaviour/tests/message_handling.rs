@@ -1,12 +1,12 @@
 use core::time::Duration;
 
 use futures::{StreamExt as _, select};
-use libp2p::PeerId;
-use libp2p_stream::Behaviour as StreamBehaviour;
-use libp2p_swarm_test::SwarmExt as _;
 use lb_blend_message::encap::encapsulated::EncapsulatedMessage;
 use lb_blend_scheduling::serialize_encapsulated_message;
 use lb_libp2p::SwarmEvent;
+use libp2p::PeerId;
+use libp2p_stream::Behaviour as StreamBehaviour;
+use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
 
 use crate::{

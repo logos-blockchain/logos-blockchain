@@ -7,8 +7,8 @@ use crate::{LogosBlockchainNode, api::PointerResult, errors::OperationStatus};
 
 pub type InitializedLogosBlockchainNodeResult = PointerResult<LogosBlockchainNode, OperationStatus>;
 
-/// Creates and starts a Logos blockchain node based on the provided configuration file
-/// path.
+/// Creates and starts a Logos blockchain node based on the provided
+/// configuration file path.
 ///
 /// # Arguments
 ///
@@ -20,14 +20,16 @@ pub type InitializedLogosBlockchainNodeResult = PointerResult<LogosBlockchainNod
 /// An `InitializedLogosBlockchainNodeResult` containing either a pointer to the
 /// initialized `LogosBlockchainNode` or an error code.
 #[unsafe(no_mangle)]
-pub extern "C" fn start_lb_node(config_path: *const c_char) -> InitializedLogosBlockchainNodeResult {
+pub extern "C" fn start_lb_node(
+    config_path: *const c_char,
+) -> InitializedLogosBlockchainNodeResult {
     initialize_lb_node(config_path).map_or_else(
         InitializedLogosBlockchainNodeResult::from_error,
         InitializedLogosBlockchainNodeResult::from_value,
     )
 }
-/// Initializes and starts a Logos blockchain node based on the provided configuration file
-/// path.
+/// Initializes and starts a Logos blockchain node based on the provided
+/// configuration file path.
 ///
 /// # Arguments
 ///
@@ -36,7 +38,8 @@ pub extern "C" fn start_lb_node(config_path: *const c_char) -> InitializedLogosB
 ///
 /// # Returns
 ///
-/// A `Result` containing either the initialized `LogosBlockchainNode` or an error code.
+/// A `Result` containing either the initialized `LogosBlockchainNode` or an
+/// error code.
 fn initialize_lb_node(config_path: *const c_char) -> Result<LogosBlockchainNode, OperationStatus> {
     // TODO: Remove flags when dynamic run of services is implemented.
     let must_blend_service_group_start = true;
@@ -88,7 +91,8 @@ fn initialize_lb_node(config_path: *const c_char) -> Result<LogosBlockchainNode,
     Ok(LogosBlockchainNode::new(app, rt))
 }
 
-/// Stops and frees the resources associated with the given Logos blockchain node.
+/// Stops and frees the resources associated with the given Logos blockchain
+/// node.
 ///
 /// # Arguments
 ///

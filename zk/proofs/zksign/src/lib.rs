@@ -7,10 +7,10 @@ mod witness;
 
 use std::error::Error;
 
+pub use inputs::ZkSignWitnessInputs;
 use lb_groth16::{
     CompressedGroth16Proof, Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser,
 };
-pub use inputs::ZkSignWitnessInputs;
 pub use private::ZkSignPrivateKeysData;
 pub use public::ZkSignVerifierInputs;
 
@@ -64,9 +64,11 @@ pub fn prove(
     inputs: &ZkSignWitnessInputs,
 ) -> Result<(ZkSignProof, ZkSignVerifierInputs), ProveError> {
     let witness = witness::generate_witness(inputs).map_err(ProveError::Io)?;
-    let (proof, verifier_inputs) =
-        lb_circuits_prover::prover_from_contents(ZKSIGN_PROVING_KEY_PATH.as_path(), witness.as_ref())
-            .map_err(ProveError::Io)?;
+    let (proof, verifier_inputs) = lb_circuits_prover::prover_from_contents(
+        ZKSIGN_PROVING_KEY_PATH.as_path(),
+        witness.as_ref(),
+    )
+    .map_err(ProveError::Io)?;
     let proof: Groth16ProofJsonDeser = serde_json::from_slice(&proof).map_err(ProveError::Json)?;
     let verifier_inputs: ZkSignVerifierInputsJson =
         serde_json::from_slice(&verifier_inputs).map_err(ProveError::Json)?;
@@ -121,8 +123,8 @@ pub fn verify(
 #[cfg(test)]
 mod tests {
     use lb_groth16::Fr;
-    use num_bigint::BigUint;
     use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
+    use num_bigint::BigUint;
     use rand::RngCore as _;
 
     use super::*;

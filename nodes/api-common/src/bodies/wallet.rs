@@ -3,8 +3,8 @@ pub mod balance {
         http::StatusCode,
         response::{IntoResponse, Response},
     };
-    use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_core::{header::HeaderId, mantle::Value};
+    use lb_key_management_system_keys::keys::ZkPublicKey;
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize)]
@@ -26,11 +26,11 @@ pub mod transfer_funds {
         http::StatusCode,
         response::{IntoResponse, Response},
     };
-    use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_core::{
         header::HeaderId,
         mantle::{SignedMantleTx, Transaction as _, Value},
     };
+    use lb_key_management_system_keys::keys::ZkPublicKey;
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize)]

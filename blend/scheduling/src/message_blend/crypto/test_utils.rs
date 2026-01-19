@@ -2,7 +2,6 @@ use core::convert::Infallible;
 
 use async_trait::async_trait;
 use futures::future::ready;
-use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_blend_message::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey, encap::ProofsVerifier,
 };
@@ -16,6 +15,7 @@ use lb_blend_proofs::{
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
 use lb_core::crypto::ZkHash;
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 
 use crate::message_blend::{
     CoreProofOfQuotaGenerator,

@@ -8,7 +8,6 @@ use axum::{
     },
     routing::{get, post},
 };
-use lb_kzgrs_backend::common::share::DaShare;
 use lb_api_service::Backend;
 use lb_da_network_service::backends::libp2p::validator::DaNetworkValidatorBackend;
 use lb_da_sampling_service::{
@@ -22,6 +21,7 @@ use lb_http_api_common::{
     paths::{DA_GET_MEMBERSHIP, DA_HISTORIC_SAMPLING, MANTLE_SDP_DECLARATIONS},
     utils::create_rate_limit_layer,
 };
+use lb_kzgrs_backend::common::share::DaShare;
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 use overwatch::{DynError, overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;

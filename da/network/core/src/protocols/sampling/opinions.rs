@@ -1,5 +1,5 @@
-use libp2p::PeerId;
 use lb_core::sdp::SessionNumber;
+use libp2p::PeerId;
 
 #[derive(Debug, Clone)]
 pub enum Opinion {

@@ -137,16 +137,16 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier> DerefMut
 mod test {
     use std::num::NonZeroU64;
 
-    use lb_groth16::Field as _;
-    use lb_key_management_system_keys::keys::{
-        ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, UnsecuredEd25519Key,
-    };
-    use multiaddr::{Multiaddr, PeerId};
     use lb_blend_message::crypto::{
         key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
     };
     use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
     use lb_core::crypto::ZkHash;
+    use lb_groth16::Field as _;
+    use lb_key_management_system_keys::keys::{
+        ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, UnsecuredEd25519Key,
+    };
+    use multiaddr::{Multiaddr, PeerId};
 
     use super::SessionCryptographicProcessor;
     use crate::{

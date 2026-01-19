@@ -1,7 +1,6 @@
 use std::num::NonZeroU64;
 
 use derivative::Derivative;
-use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_blend_message::{
     Error,
     encap::{
@@ -9,6 +8,7 @@ use lb_blend_message::{
     },
 };
 use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
+use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 
 pub mod core_and_leader;
 pub use self::core_and_leader::{

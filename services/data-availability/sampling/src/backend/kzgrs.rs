@@ -4,12 +4,12 @@ use std::{
     sync::Arc,
 };
 
+use lb_core::da::BlobId;
+use lb_da_network_core::SubnetworkId;
 use lb_kzgrs_backend::common::{
     ShareIndex,
     share::{DaShare, DaSharesCommitments},
 };
-use lb_core::da::BlobId;
-use lb_da_network_core::SubnetworkId;
 use lb_tracing::info_with_id;
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -156,9 +156,9 @@ impl DaSamplingServiceBackend for KzgrsSamplingBackend {
 mod test {
     use std::collections::HashSet;
 
+    use lb_core::da::BlobId;
     use lb_kzgrs::Proof;
     use lb_kzgrs_backend::common::{Column, share::DaShare};
-    use lb_core::da::BlobId;
     use rand::prelude::*;
     use tokio::time::Duration;
 

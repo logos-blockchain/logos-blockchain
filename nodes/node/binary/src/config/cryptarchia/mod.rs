@@ -1,5 +1,5 @@
-use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
 use lb_blend_service::core::network::libp2p::Libp2pBroadcastSettings;
+use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
 use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
 use lb_libp2p::PeerId;
 

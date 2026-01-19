@@ -7,8 +7,8 @@ use lb_da_network_service::{
     backends::{NetworkBackend, libp2p::common::BroadcastValidationResultSender},
     sdp::SdpAdapter,
 };
-use overwatch::services::{ServiceData, relay::OutboundRelay};
 use lb_subnetworks_assignations::MembershipHandler;
+use overwatch::services::{ServiceData, relay::OutboundRelay};
 
 pub struct ValidationRequest<T> {
     pub item: T,

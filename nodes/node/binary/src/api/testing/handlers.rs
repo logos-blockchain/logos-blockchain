@@ -13,9 +13,9 @@ use lb_da_network_service::{
 use lb_da_sampling_service::{
     DaSamplingService, backend::DaSamplingServiceBackend, mempool::DaMempoolAdapter,
 };
+use lb_subnetworks_assignations::MembershipHandler;
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use serde::{Deserialize, Serialize};
-use lb_subnetworks_assignations::MembershipHandler;
 
 use super::backend::TestHttpCryptarchiaService;
 use crate::{

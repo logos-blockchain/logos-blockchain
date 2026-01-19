@@ -11,17 +11,6 @@ mod test {
     };
 
     use futures::StreamExt as _;
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
-    use lb_kzgrs_backend::testutils;
-    use libp2p::{
-        PeerId, Swarm,
-        identity::{Keypair, PublicKey},
-        multiaddr::multiaddr,
-        quic,
-        swarm::SwarmEvent,
-    };
-    use libp2p_swarm_test::SwarmExt as _;
-    use log::info;
     use lb_core::mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
         ledger::Tx as LedgerTx,
@@ -34,7 +23,18 @@ mod test {
         common::Share,
         replication::{ReplicationRequest, ReplicationResponseId},
     };
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use lb_kzgrs_backend::testutils;
     use lb_utils::net::get_available_udp_port;
+    use libp2p::{
+        PeerId, Swarm,
+        identity::{Keypair, PublicKey},
+        multiaddr::multiaddr,
+        quic,
+        swarm::SwarmEvent,
+    };
+    use libp2p_swarm_test::SwarmExt as _;
+    use log::info;
     use tokio::sync::mpsc;
     use tracing_subscriber::{EnvFilter, fmt::TestWriter};
 

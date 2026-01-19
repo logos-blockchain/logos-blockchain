@@ -2,14 +2,14 @@ use std::{
     collections::HashSet, env, path::PathBuf, str::FromStr as _, sync::LazyLock, time::Duration,
 };
 
-use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
 use lb_da_network_core::swarm::{
     DAConnectionMonitorSettings, DAConnectionPolicySettings, ReplicationConfig,
 };
+use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
 use lb_libp2p::{Multiaddr, PeerId, ed25519};
 use lb_node::LogosBlockchainDaMembership;
-use num_bigint::BigUint;
 use lb_subnetworks_assignations::MembershipHandler as _;
+use num_bigint::BigUint;
 
 use crate::secret_key_to_peer_id;
 

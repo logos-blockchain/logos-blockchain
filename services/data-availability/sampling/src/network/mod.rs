@@ -13,11 +13,11 @@ use lb_da_network_service::{
     },
     sdp::SdpAdapter,
 };
+use lb_subnetworks_assignations::MembershipHandler;
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
 };
-use lb_subnetworks_assignations::MembershipHandler;
 
 #[async_trait::async_trait]
 pub trait NetworkAdapter<RuntimeServiceId> {

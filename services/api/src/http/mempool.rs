@@ -3,10 +3,10 @@ use std::fmt::Display;
 
 use lb_core::{header::HeaderId, mantle::Transaction};
 use lb_network_service::backends::NetworkBackend;
+use lb_tx_service::{MempoolMsg, TxMempoolService, backend::Mempool, network::NetworkAdapter};
 use overwatch::{DynError, services::AsServiceId};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
-use lb_tx_service::{MempoolMsg, TxMempoolService, backend::Mempool, network::NetworkAdapter};
 
 pub async fn add_tx<
     MempoolNetworkBackend,

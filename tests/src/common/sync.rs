@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use lb_chain_service::CryptarchiaInfo;
 use futures_util::{StreamExt as _, stream};
+use lb_chain_service::CryptarchiaInfo;
 use tokio::time::timeout;
 
 use crate::nodes::validator::Validator;

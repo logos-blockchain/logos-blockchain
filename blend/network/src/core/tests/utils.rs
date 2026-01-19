@@ -6,12 +6,6 @@ use core::{
 };
 use std::time::Duration;
 
-use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
-use libp2p::{
-    PeerId, StreamProtocol, Swarm, Transport as _, core::transport::MemoryTransport,
-    identity::PublicKey, plaintext, swarm, tcp, yamux,
-};
-use libp2p_swarm_test::SwarmExt as _;
 use lb_blend_message::{
     PayloadType,
     crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
@@ -24,7 +18,15 @@ use lb_blend_proofs::{
 };
 use lb_blend_scheduling::message_blend::provers::BlendLayerProof;
 use lb_core::sdp::SessionNumber;
+use lb_key_management_system_keys::keys::{
+    Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key,
+};
 use lb_libp2p::{NetworkBehaviour, ed25519, upgrade::Version};
+use libp2p::{
+    PeerId, StreamProtocol, Swarm, Transport as _, core::transport::MemoryTransport,
+    identity::PublicKey, plaintext, swarm, tcp, yamux,
+};
+use libp2p_swarm_test::SwarmExt as _;
 
 pub const PROTOCOL_NAME: StreamProtocol = StreamProtocol::new("/blend/core-behaviour/test");
 

@@ -1,29 +1,29 @@
 use core::fmt::Debug;
 use std::fmt::Display;
 
+use futures::{Stream, StreamExt as _};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_chain_service::ConsensusMsg;
-use futures::{Stream, StreamExt as _};
 use lb_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction},
     sdp::Declaration,
 };
-use overwatch::services::AsServiceId;
-use tokio::sync::oneshot;
-use tokio_stream::wrappers::BroadcastStream;
 use lb_tx_service::{
     MempoolMetrics, MempoolMsg, TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
     tx::service::openapi::Status,
 };
+use overwatch::services::AsServiceId;
+use tokio::sync::oneshot;
+use tokio_stream::wrappers::BroadcastStream;
 #[cfg(feature = "block-explorer")]
 use {
     bytes::Bytes,
+    futures::future::join_all,
     lb_chain_service::Slot,
     lb_chain_service::storage::StorageAdapter as _,
     lb_chain_service::storage::adapters::StorageAdapter,
-    futures::future::join_all,
     lb_core::{block::Block, mantle::TxHash},
     lb_storage_service::{
         StorageMsg, StorageService,

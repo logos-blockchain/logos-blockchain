@@ -22,9 +22,11 @@ where
     async fn subscribe(&self) -> Result<SessionStream, SessionAdapterError> {
         let (sender, receiver) = oneshot::channel();
         self.relay
-            .send(lb_chain_broadcast_service::BlockBroadcastMsg::SubscribeDASession {
-                result_sender: sender,
-            })
+            .send(
+                lb_chain_broadcast_service::BlockBroadcastMsg::SubscribeDASession {
+                    result_sender: sender,
+                },
+            )
             .await
             .map_err(|(e, _)| SessionAdapterError::Channel(e.into()))?;
         let receiver_stream = receiver

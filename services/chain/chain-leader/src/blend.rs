@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
-use lb_chain_service_common::NetworkMessage as ChainNetworkMessage;
 use lb_blend_service::message::{NetworkMessage, ServiceMessage};
+use lb_chain_service_common::NetworkMessage as ChainNetworkMessage;
 use lb_core::{block::Proposal, codec::SerializeOp as _};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use tracing::error;

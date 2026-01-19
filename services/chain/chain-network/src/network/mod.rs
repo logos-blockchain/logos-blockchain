@@ -2,9 +2,9 @@ pub mod adapters;
 
 use std::collections::HashSet;
 
-use lb_cryptarchia_sync::GetTipResponse;
 use futures::Stream;
 use lb_core::header::HeaderId;
+use lb_cryptarchia_sync::GetTipResponse;
 use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
 use overwatch::{
     DynError,

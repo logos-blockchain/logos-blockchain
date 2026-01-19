@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bitvec::prelude::*;
-use libp2p::PeerId;
 use lb_core::sdp::{ActivityMetadata, ProviderId, SessionNumber, da::ActivityProof};
 use lb_da_network_core::{
     SubnetworkId,
     protocols::sampling::opinions::{Opinion, OpinionEvent},
 };
+use libp2p::PeerId;
 use overwatch::DynError;
 use thiserror::Error;
 
@@ -386,11 +386,11 @@ mod tests {
     use std::sync::Arc;
 
     use lb_key_management_system_keys::keys::Ed25519Key;
-    use rand::{RngCore, SeedableRng as _, rngs::SmallRng};
     use lb_subnetworks_assignations::{
         MembershipCreator as _, MembershipHandler as _,
         versions::history_aware_refill::HistoryAware,
     };
+    use rand::{RngCore, SeedableRng as _, rngs::SmallRng};
 
     use super::*;
     use crate::storage::adapters::mock::MockStorage;
