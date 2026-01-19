@@ -213,7 +213,7 @@ where
 
         // TODO: This will go once we do not need to pass the secret key anymore, i.e.,
         // when we have libp2p integration with KMS.
-        let non_ephemeral_signing_key = async {
+        let non_ephemeral_signing_key = {
             let (sender, receiver) = oneshot::channel();
             kms.execute(
                 settings.non_ephemeral_signing_key_id,
@@ -224,8 +224,7 @@ where
             receiver
                 .await
                 .expect("Failed to retrieve non-ephemeral signing key from KMS.")
-        }
-        .await;
+        };
 
         // Initialize membership stream for session and core-related public PoQ inputs.
         let session_stream = MembershipAdapter::new(
