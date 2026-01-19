@@ -11,7 +11,7 @@ repos:
       - id: clippy
         args: ["--all", "--all-targets", "--all-features", "--", "-D", "warnings"]
   - repo: https://github.com/EmbarkStudios/cargo-deny
-    rev: 0.18.2
+    rev: 0.19.0
     hooks:
       - id: cargo-deny
         args:
@@ -28,7 +28,7 @@ repos:
       - id: taplo-format
       - id: taplo-lint
   - repo: https://github.com/bnjbvr/cargo-machete
-    rev: ba1bcd4 # No tag yet with .pre-commit-hooks.yml
+    rev: v0.9.1 # No tag yet with .pre-commit-hooks.yml
     hooks:
       - id: cargo-machete
   - repo: local
