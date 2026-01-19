@@ -4,7 +4,7 @@ use ark_bls12_381::{Bls12_381, Fr};
 use ark_poly::{EvaluationDomain as _, GeneralEvaluationDomain, univariate::DensePolynomial};
 use ark_poly_commit::kzg10::KZG10;
 use divan::{Bencher, counter::ItemsCount};
-use lb_kzgrs::{
+use logos_blockchain_kzgrs::{
     BYTES_PER_FIELD_ELEMENT, ProvingKey, bytes_to_polynomial,
     fk20::{Toeplitz1Cache, fk20_batch_generate_elements_proofs},
 };
@@ -26,7 +26,7 @@ fn compute_fk20_proofs_for_size(bencher: Bencher, size: usize) {
     bencher
         .with_inputs(|| {
             let buff: Vec<_> = (0..BYTES_PER_FIELD_ELEMENT * size)
-                .map(|i| (i % 255) as u8)
+                .map(|i| i as u8 % 255)
                 .rev()
                 .collect();
             let domain = GeneralEvaluationDomain::new(size).unwrap();
@@ -50,7 +50,7 @@ fn compute_parallel_fk20_proofs_for_size(bencher: Bencher, size: usize) {
     bencher
         .with_inputs(|| {
             let buff: Vec<_> = (0..BYTES_PER_FIELD_ELEMENT * size)
-                .map(|i| (i % 255) as u8)
+                .map(|i| i as u8 % 255)
                 .rev()
                 .collect();
             let domain = GeneralEvaluationDomain::new(size).unwrap();
@@ -75,7 +75,7 @@ fn compute_fk20_proofs_for_size_with_cache(bencher: Bencher, size: usize) {
     bencher
         .with_inputs(|| {
             let buff: Vec<_> = (0..BYTES_PER_FIELD_ELEMENT * size)
-                .map(|i| (i % 255) as u8)
+                .map(|i| i as u8 % 255)
                 .rev()
                 .collect();
             let domain = GeneralEvaluationDomain::new(size).unwrap();
@@ -100,7 +100,7 @@ fn compute_parallel_fk20_proofs_for_size_with_cache(bencher: Bencher, size: usiz
     bencher
         .with_inputs(|| {
             let buff: Vec<_> = (0..BYTES_PER_FIELD_ELEMENT * size)
-                .map(|i| (i % 255) as u8)
+                .map(|i| i as u8 % 255)
                 .rev()
                 .collect();
             let domain = GeneralEvaluationDomain::new(size).unwrap();

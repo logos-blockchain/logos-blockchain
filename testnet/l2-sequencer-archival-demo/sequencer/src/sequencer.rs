@@ -1,11 +1,6 @@
 use std::{collections::HashSet, fs, io, path::Path, time::Duration};
 
 use lb_common_http_client::CommonHttpClient;
-use lb_demo_sequencer::{
-    BlockData, Transaction, TransferRequest, TransferResponse,
-    db::{AccountDb, DbError},
-};
-use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -17,6 +12,11 @@ use lb_core::{
         },
         tx::TxHash,
     },
+};
+use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
+use logos_blockchain_demo_sequencer::{
+    BlockData, Transaction, TransferRequest, TransferResponse,
+    db::{AccountDb, DbError},
 };
 use reqwest::Url;
 use serde::{Deserialize, Serialize};

@@ -5,7 +5,7 @@ mod sequencer;
 
 use std::sync::Arc;
 
-use lb_demo_sequencer::db::AccountDb;
+use logos_blockchain_demo_sequencer::db::AccountDb;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _};
@@ -50,7 +50,10 @@ async fn main() {
     info!("  Logos blockchain Node:     {}", config.node_endpoint);
     info!("  Database:                  {}", config.db_path);
     info!("  Channel ID:                {}", config.channel_id);
-    info!("  Initial funds:             {} tokens", config.initial_balance);
+    info!(
+        "  Initial funds:             {} tokens",
+        config.initial_balance
+    );
 
     // Initialize database
     let db = match AccountDb::new(&config.db_path, config.initial_balance) {

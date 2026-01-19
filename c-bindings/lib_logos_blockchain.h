@@ -152,7 +152,7 @@ void free_cryptarchia_info(struct CryptarchiaInfo *pointer);
  * An `InitializedLogosBlockchainNodeResult` containing either a pointer to the
  * initialized `LogosBlockchainNode` or an error code.
  */
-InitializedLogosBlockchainNodeResult start_logos_blockchain_node(const char *config_path);
+InitializedLogosBlockchainNodeResult start_lb_node(const char *config_path);
 
 /**
  * Stops and frees the resources associated with the given Logos blockchain node.

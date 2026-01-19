@@ -1,6 +1,6 @@
 use clap::Parser as _;
 use color_eyre::eyre::{Result, eyre};
-use lb_node::{
+use logos_blockchain_node::{
     Config,
     config::{CliArgs, ConfigDeserializationError, deserialize_config_at_path},
     get_services_to_start, run_node_from_config,

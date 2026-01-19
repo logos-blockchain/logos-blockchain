@@ -6,7 +6,7 @@ use lb_core::mantle::{
     ops::channel::ChannelId,
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
-use lb_tests::{
+use logos_blockchain_tests::{
     common::{chain::scan_chain_until, da::create_inscription_transaction_with_id},
     nodes::validator::Validator,
     topology::{Topology, TopologyConfig},

@@ -1,40 +1,40 @@
 use std::path::PathBuf;
 
-const lb_CIRCUITS_ENV_VAR: &str = "lb_CIRCUITS";
-const lb_CIRCUITS_DEFAULT_DIR: &str = ".logos-blockchain-circuits";
+const LOGOS_BLOCKCHAIN_CIRCUITS_ENV_VAR: &str = "LOGOS_BLOCKCHAIN_CIRCUITS";
+const LOGOS_BLOCKCHAIN_CIRCUITS_DEFAULT_DIR: &str = ".logos-blockchain-circuits";
 
 /// Get the logos-blockchain-circuits base directory.
 ///
-/// This function checks the `lb_CIRCUITS` environment variable
+/// This function checks the `LOGOS_BLOCKCHAIN_CIRCUITS` environment variable
 /// first, and falls back to `~/.logos-blockchain-circuits/` if not set.
 ///
 /// # Panics
 ///
 /// Panics if a logos-blockchain-circuits directory is not found
 #[must_use]
-pub fn lb_circuits_dir() -> PathBuf {
-    // Check lb_CIRCUITS env var first
-    if let Ok(path_str) = std::env::var(lb_CIRCUITS_ENV_VAR) {
+pub fn circuits_dir() -> PathBuf {
+    // Check LOGOS_BLOCKCHAIN_CIRCUITS env var first
+    if let Ok(path_str) = std::env::var(LOGOS_BLOCKCHAIN_CIRCUITS_ENV_VAR) {
         let path = PathBuf::from(path_str);
         if path.is_dir() {
             return path;
         }
         panic!(
-            "{lb_CIRCUITS_ENV_VAR} environment variable is set to '{}', but this path does not exist or is not a directory",
+            "{LOGOS_BLOCKCHAIN_CIRCUITS_ENV_VAR} environment variable is set to '{}', but this path does not exist or is not a directory",
             path.display()
         )
     }
     // Fall back to ~/.logos-blockchain-circuits/
     let path = dirs::home_dir()
         .expect("user does not have a home directory?")
-        .join(lb_CIRCUITS_DEFAULT_DIR);
+        .join(LOGOS_BLOCKCHAIN_CIRCUITS_DEFAULT_DIR);
 
     if path.is_dir() {
         path
     } else {
         panic!(
             "Could not find logos-blockchain-circuits directory. Please either:\n\
-             1. Set the {lb_CIRCUITS_ENV_VAR} environment variable to point to your logos-blockchain-circuits directory, or\n\
+             1. Set the {LOGOS_BLOCKCHAIN_CIRCUITS_ENV_VAR} environment variable to point to your logos-blockchain-circuits directory, or\n\
              2. Place the logos-blockchain-circuits release at {}\n",
             path.display()
         )
@@ -52,7 +52,7 @@ pub fn lb_circuits_dir() -> PathBuf {
 /// Panics if the witness generator binary is not found at the expected path.
 #[must_use]
 pub fn witness_generator_path(circuit_name: &str) -> PathBuf {
-    let base_dir = lb_circuits_dir();
+    let base_dir = circuits_dir();
     let witness_gen_path = base_dir.join(circuit_name).join("witness_generator");
 
     if witness_gen_path.is_file() {
@@ -77,7 +77,7 @@ pub fn witness_generator_path(circuit_name: &str) -> PathBuf {
 /// Panics if the proving key (.zkey file) is not found at the expected path.
 #[must_use]
 pub fn proving_key_path(circuit_name: &str) -> PathBuf {
-    let base_dir = lb_circuits_dir();
+    let base_dir = circuits_dir();
     let proving_key_path = base_dir.join(circuit_name).join("proving_key.zkey");
 
     if proving_key_path.is_file() {
@@ -102,7 +102,7 @@ pub fn proving_key_path(circuit_name: &str) -> PathBuf {
 /// Panics if the verification key JSON file is not found at the expected path.
 #[must_use]
 pub fn verification_key_path(circuit_name: &str) -> PathBuf {
-    let base_dir = lb_circuits_dir();
+    let base_dir = circuits_dir();
     let verification_key_path = base_dir.join(circuit_name).join("verification_key.json");
 
     if verification_key_path.is_file() {

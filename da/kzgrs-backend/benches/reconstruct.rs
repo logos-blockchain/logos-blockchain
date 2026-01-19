@@ -3,12 +3,12 @@ use std::{collections::HashSet, hint::black_box};
 use ark_bls12_381::Fr;
 use ark_poly::{EvaluationDomain as _, GeneralEvaluationDomain};
 use divan::{Bencher, counter::BytesCount};
+use lb_core::da::DaEncoder as _;
 use lb_kzgrs::{common::field_element_from_bytes_le, decode_unchecked, rs::points_to_bytes};
-use lb_kzgrs_backend::{
+use logos_blockchain_kzgrs_backend::{
     encoder::{DaEncoder, DaEncoderParams},
     kzg_keys::PROVING_KEY,
 };
-use lb_core::da::DaEncoder as _;
 use rand::{RngCore as _, prelude::IteratorRandom as _, thread_rng};
 
 fn main() {

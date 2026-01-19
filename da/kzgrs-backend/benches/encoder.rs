@@ -1,7 +1,7 @@
 use std::hint::black_box;
 
 use divan::{Bencher, counter::BytesCount};
-use lb_kzgrs_backend::{
+use logos_blockchain_kzgrs_backend::{
     encoder::{DaEncoder, DaEncoderParams},
     kzg_keys::PROVING_KEY,
 };

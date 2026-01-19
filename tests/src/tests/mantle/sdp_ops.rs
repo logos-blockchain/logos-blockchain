@@ -6,7 +6,7 @@ use lb_core::{
     sdp::{ActiveMessage, Declaration, Locator, ServiceType, SessionNumber, WithdrawMessage},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
-use lb_tests::{
+use logos_blockchain_tests::{
     adjust_timeout,
     common::mantle_tx::{
         create_sdp_active_tx, create_sdp_declare_tx, create_sdp_withdraw_tx,

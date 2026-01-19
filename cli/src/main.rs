@@ -1,6 +1,6 @@
 use clap::Parser as _;
-use lb_cli::Cli;
 use lb_tracing::logging::local::create_writer_layer;
+use logos_blockchain_cli::Cli;
 use tracing::{Level, level_filters::LevelFilter};
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 

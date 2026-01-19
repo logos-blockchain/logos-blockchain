@@ -16,27 +16,27 @@ use lb_network_service::{
     config::NetworkConfig,
     message::NetworkMsg,
 };
+use lb_services_utils::{
+    overwatch::{JsonFileBackend, recovery::operators::RecoveryBackend as _},
+    traits::FromSettings as _,
+};
 use lb_storage_service::{
     StorageService,
     backends::rocksdb::{self, RocksBackend},
 };
 use lb_tracing_service::{Tracing, TracingSettings};
 use lb_utils::noop_service::NoService;
-use overwatch::overwatch::OverwatchRunner;
-use overwatch_derive::*;
-use rand::distributions::{Alphanumeric, DistString as _};
-use lb_services_utils::{
-    overwatch::{JsonFileBackend, recovery::operators::RecoveryBackend as _},
-    traits::FromSettings as _,
-};
-use tempfile::TempDir;
-use lb_tx_service::{
+use logos_blockchain_tx_service::{
     MempoolMsg, TxMempoolSettings,
     backend::{Mempool, PoolRecoveryState},
     network::adapters::mock::{MOCK_TX_CONTENT_TOPIC, MockAdapter},
     storage::adapters::rocksdb::RocksStorageAdapter,
     tx::{service::GenericTxMempoolService, state::TxMempoolState},
 };
+use overwatch::overwatch::OverwatchRunner;
+use overwatch_derive::*;
+use rand::distributions::{Alphanumeric, DistString as _};
+use tempfile::TempDir;
 
 type MockRecoveryBackend = JsonFileBackend<
     TxMempoolState<PoolRecoveryState<HeaderId, MockTxId>, (), ()>,

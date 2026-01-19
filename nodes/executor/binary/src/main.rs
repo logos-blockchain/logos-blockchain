@@ -1,8 +1,5 @@
 use clap::Parser;
 use color_eyre::eyre::{Result, eyre};
-use lb_executor::{
-    LogosBlockchainExecutor, LogosBlockchainExecutorServiceSettings, RuntimeServiceId, config::Config as ExecutorConfig,
-};
 use lb_node::{
     CryptarchiaLeaderArgs, HttpArgs, LogArgs, NetworkArgs,
     config::{
@@ -13,6 +10,10 @@ use lb_node::{
     },
 };
 use lb_sdp_service::SdpSettings;
+use logos_blockchain_executor::{
+    LogosBlockchainExecutor, LogosBlockchainExecutorServiceSettings, RuntimeServiceId,
+    config::Config as ExecutorConfig,
+};
 use overwatch::overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner};
 use tracing::warn;
 

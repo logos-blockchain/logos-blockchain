@@ -4,7 +4,7 @@ use ark_bls12_381::{Bls12_381, Fr};
 use ark_poly::{EvaluationDomain as _, GeneralEvaluationDomain, univariate::DensePolynomial};
 use ark_poly_commit::kzg10::{KZG10, UniversalParams, VerifierKey};
 use divan::{Bencher, black_box, counter::ItemsCount};
-use lb_kzgrs::{
+use logos_blockchain_kzgrs::{
     common::bytes_to_polynomial_unchecked,
     kzg::{commit_polynomial, generate_element_proof, verify_element_proof},
     verification_key_proving_key,

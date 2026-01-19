@@ -4,7 +4,7 @@ use std::{
     sync::LazyLock,
 };
 
-use lb_circuits_utils::lb_circuits_dir;
+use lb_circuits_utils::circuits_dir;
 use tempfile::NamedTempFile;
 
 const BINARY_NAME: &str = "prover";
@@ -16,7 +16,7 @@ const BINARY_NAME: &str = "prover";
 /// Panics if the prover binary is not found at the expected path.
 fn prover_binary() -> PathBuf {
     // Get the logos-blockchain-circuits directory
-    let circuits_dir = lb_circuits_dir();
+    let circuits_dir = circuits_dir();
 
     // Check for prover binary at the root of logos-blockchain-circuits directory
     let prover_path = circuits_dir.join(BINARY_NAME);

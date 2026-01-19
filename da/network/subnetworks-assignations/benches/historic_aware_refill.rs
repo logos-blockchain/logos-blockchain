@@ -2,8 +2,9 @@ use std::collections::BTreeSet;
 
 use divan::{Bencher, black_box, counter::ItemsCount};
 use lb_utils::blake_rng::BlakeRng;
+use logos_blockchain_subnetworks_assignations::versions::history_aware_refill::assignations::HistoryAwareRefill;
 use rand::{RngCore as _, SeedableRng as _, prelude::IteratorRandom as _, thread_rng};
-use lb_subnetworks_assignations::versions::history_aware_refill::assignations::HistoryAwareRefill;
+
 fn main() {
     divan::main();
 }

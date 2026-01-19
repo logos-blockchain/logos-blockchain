@@ -2,11 +2,9 @@ use std::time::Duration;
 
 use futures::StreamExt as _;
 use lb_chain_service::StartingState;
-use lb_kzgrs_backend::{
-    common::share::DaShare, reconstruction::reconstruct_without_missing_data,
-};
+use lb_kzgrs_backend::{common::share::DaShare, reconstruction::reconstruct_without_missing_data};
 use lb_subnetworks_assignations::MembershipHandler as _;
-use lb_tests::{
+use logos_blockchain_tests::{
     common::da::{
         disseminate_with_metadata, setup_test_channel, wait_for_blob_onchain,
         wait_for_shares_number,

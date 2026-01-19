@@ -37,12 +37,12 @@ tracing            = { workspace = true }
 utoipa             = { optional = true, workspace = true }
 
 [dev-dependencies]
-lb-tracing-service = { workspace = true }
-lb-tx-service      = { features = ["mock", "rocksdb-backend"], path = ".", package = "logos-blockchain-tx-service" }
-lb-utils           = { workspace = true }
-overwatch-derive   = { workspace = true }
-tempfile           = "3"
-tokio              = { default-features = false, version = "1" }
+lb-tracing-service          = { workspace = true }
+lb-utils                    = { workspace = true }
+logos-blockchain-tx-service = { features = ["mock", "rocksdb-backend"], path = "." }
+overwatch-derive            = { workspace = true }
+tempfile                    = "3"
+tokio                       = { default-features = false, version = "1" }
 
 [features]
 default         = []

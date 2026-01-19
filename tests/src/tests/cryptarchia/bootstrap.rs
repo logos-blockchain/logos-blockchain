@@ -5,7 +5,7 @@ use std::{
 
 use futures::stream::{self, StreamExt as _};
 use lb_libp2p::PeerId;
-use lb_tests::{
+use logos_blockchain_tests::{
     adjust_timeout,
     common::sync::{wait_for_validators_mode, wait_for_validators_mode_and_height},
     nodes::validator::{Validator, create_validator_config},

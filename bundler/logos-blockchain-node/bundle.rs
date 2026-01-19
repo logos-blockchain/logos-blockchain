@@ -1,12 +1,12 @@
 use std::{env::set_var, path::PathBuf};
 
-use lb_bundler::utils::{
-    get_cargo_package_version, get_project_identifier, get_target_directory_for_current_profile,
-    get_workspace_root,
-};
 use clap::Parser;
 use dunce::canonicalize;
 use log::{debug, error, info};
+use logos_blockchain_bundler::utils::{
+    get_cargo_package_version, get_project_identifier, get_target_directory_for_current_profile,
+    get_workspace_root,
+};
 use tauri_bundler::{
     AppImageSettings, DebianSettings, DmgSettings, IosSettings, MacOsSettings, RpmSettings,
     WindowsSettings,
