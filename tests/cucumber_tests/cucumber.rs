@@ -41,7 +41,7 @@ async fn main() {
         .repeat_failed()
         .max_concurrent_scenarios(1)
         .fail_on_skipped()
-        .fail_fast()
+        // .fail_fast() // Remove comment to enable fail-fast behavior for development
         .with_writer(
             writer::Summarize::new(writer::Basic::new(
                 io::stdout(),
