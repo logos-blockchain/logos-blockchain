@@ -55,5 +55,6 @@ axum              = { default-features = false, features = ["http1", "http2", "j
 hyper             = { default-features = false, version = "1.0" }
 reqwest           = { default-features = false, workspace = true }
 serde             = { workspace = true }
+serde_json        = { workspace = true }
 tracing           = { workspace = true }
 utoipa-swagger-ui = { default-features = false, features = ["axum"], workspace = true }
