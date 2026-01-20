@@ -32,7 +32,6 @@ lb-time-service            = { workspace = true }
 lb-tx-service              = { features = ["libp2p", "mock", "openapi"], workspace = true }
 overwatch                  = { workspace = true }
 serde                      = { workspace = true }
-serde_json                 = { default-features = false, version = "1.0.140" }
 tokio                      = { default-features = false, features = ["net"], version = "1" }
 tokio-stream               = { default-features = false, version = "0.1" }
 tracing                    = { default-features = false, version = "0.1" }

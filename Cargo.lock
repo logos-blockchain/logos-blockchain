@@ -4558,6 +4558,7 @@ dependencies = [
  "quick-protobuf-codec",
  "rand 0.8.5",
  "regex",
+ "serde",
  "sha2",
  "tracing",
  "web-time",
@@ -4624,6 +4625,7 @@ dependencies = [
  "quick-protobuf",
  "quick-protobuf-codec",
  "rand 0.8.5",
+ "serde",
  "sha2",
  "smallvec",
  "thiserror 2.0.18",
@@ -4961,7 +4963,6 @@ dependencies = [
  "overwatch",
  "reqwest 0.12.28",
  "serde",
- "serde_json",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -5324,7 +5325,6 @@ name = "logos-blockchain-core"
 version = "0.1.0"
 dependencies = [
  "ark-ff 0.4.2",
- "async-trait",
  "bincode",
  "blake2",
  "bytes",
@@ -5758,10 +5758,8 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures",
- "libp2p-identity",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
- "multiaddr",
  "overwatch",
  "rocksdb",
  "serde",
@@ -6285,6 +6283,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b430e7953c29dd6a09afc29ff0bb69c6e306329ee6794700aee27b76a1aea8d"
 dependencies = [
  "core2",
+ "serde",
  "unsigned-varint 0.8.0",
 ]
 
