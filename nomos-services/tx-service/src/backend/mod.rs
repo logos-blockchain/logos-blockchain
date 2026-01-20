@@ -54,12 +54,8 @@ pub trait MemPool {
     where
         I: IntoIterator<Item = Self::Key> + Send;
 
-    /// Record that a set of items were included in a block
-    fn mark_in_block(&mut self, items: &[Self::Key], block: Self::BlockId);
-
-    /// Signal that a set of transactions can't be possibly requested anymore
-    /// and can be discarded.
-    async fn prune(&mut self, items: &[Self::Key]);
+    /// Remove items from the mempool..
+    async fn remove(&mut self, items: &[Self::Key]);
 
     fn pending_item_count(&self) -> usize;
     fn last_item_timestamp(&self) -> u64;
@@ -67,28 +63,16 @@ pub trait MemPool {
     // Return the status of a set of items.
     // This is a best effort attempt, and implementations are free to return
     // `Unknown` for all of them.
-    fn status(&self, items: &[Self::Key]) -> Vec<Status<Self::BlockId>>;
+    fn status(&self, items: &[Self::Key]) -> Vec<Status>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-pub enum Status<BlockId> {
+pub enum Status {
     /// Unknown status
     Unknown,
     /// Pending status
     Pending,
-    /// Rejected status
-    Rejected,
-    /// Accepted status
-    ///
-    /// The block id of the block that contains the item
-    #[cfg_attr(
-        feature = "openapi",
-        schema(
-            example = "e.g. 0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
-        )
-    )]
-    InBlock { block: BlockId },
 }
 
 /// Trait for mempools that can be recovered from saved state

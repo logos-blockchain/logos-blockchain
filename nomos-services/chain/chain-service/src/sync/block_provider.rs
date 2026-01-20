@@ -802,7 +802,7 @@ mod tests {
                         .cryptarchia
                         .receive_block(*header_id, *prev_header, *slot)
                         .expect("Failed to add block to cryptarchia")
-                        .0;
+                        .cryptarchia;
                 }
 
                 // Store in storage but NOT as immutable storage
@@ -840,7 +840,7 @@ mod tests {
                 .cryptarchia
                 .receive_block(header_id, prev_header, slot)
                 .expect("Failed to add block to cryptarchia")
-                .0;
+                .cryptarchia;
 
             self.store_block_in_storage(block, header_id, slot).await;
         }

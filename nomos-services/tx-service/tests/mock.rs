@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -38,10 +38,8 @@ use tx_service::{
     tx::{service::GenericTxMempoolService, state::TxMempoolState},
 };
 
-type MockRecoveryBackend = JsonFileBackend<
-    TxMempoolState<PoolRecoveryState<HeaderId, MockTxId>, (), ()>,
-    TxMempoolSettings<(), ()>,
->;
+type MockRecoveryBackend =
+    JsonFileBackend<TxMempoolState<PoolRecoveryState<MockTxId>, (), ()>, TxMempoolSettings<(), ()>>;
 
 type MockMempoolService = GenericTxMempoolService<
     Mempool<
@@ -77,24 +75,17 @@ fn get_test_random_path() -> PathBuf {
 
 #[test]
 fn test_mock_pool_recovery_state() {
-    let recovery_state = PoolRecoveryState::<HeaderId, MockTxId> {
+    let recovery_state = PoolRecoveryState::<MockTxId> {
         pending_items: BTreeSet::new(),
-        in_block_items: HashMap::new(),
-        in_block_items_by_id: HashMap::new(),
         last_item_timestamp: 1_234_567_890,
     };
 
     let serialized = recovery_state.to_bytes().expect("Should serialize");
 
-    let deserialized: PoolRecoveryState<HeaderId, MockTxId> =
+    let deserialized: PoolRecoveryState<MockTxId> =
         PoolRecoveryState::from_bytes(&serialized).expect("Should deserialize");
 
     assert_eq!(deserialized.pending_items, recovery_state.pending_items);
-    assert_eq!(deserialized.in_block_items, recovery_state.in_block_items);
-    assert_eq!(
-        deserialized.in_block_items_by_id,
-        recovery_state.in_block_items_by_id
-    );
     assert_eq!(
         deserialized.last_item_timestamp,
         recovery_state.last_item_timestamp
@@ -220,7 +211,6 @@ fn test_mock_mempool() {
             .load_state()
             .expect("Should not fail to load the state.");
         assert_eq!(recovered_state.pool().unwrap().pending_items.len(), 2);
-        assert_eq!(recovered_state.pool().unwrap().in_block_items.len(), 0);
         assert!(recovered_state.pool().unwrap().last_item_timestamp > 0);
 
         drop(app.runtime().handle().block_on(app.handle().shutdown()));

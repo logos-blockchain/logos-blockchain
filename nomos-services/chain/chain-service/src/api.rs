@@ -183,8 +183,12 @@ where
         })
     }
 
-    /// Apply a block through the chain service
-    pub async fn apply_block(&self, block: Block<Cryptarchia::Tx>) -> Result<(), ApiError> {
+    /// Apply a block through the chain service,
+    /// and return the tip and reorged txs if successful.
+    pub async fn apply_block(
+        &self,
+        block: Block<Cryptarchia::Tx>,
+    ) -> Result<(HeaderId, Vec<Cryptarchia::Tx>), ApiError> {
         let (tx, rx) = oneshot::channel();
 
         let boxed_block = Box::new(block);

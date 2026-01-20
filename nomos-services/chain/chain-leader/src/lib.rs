@@ -450,8 +450,12 @@ where
                                 Ok(block) => {
                                     // Process our own block first to ensure it's valid
                                     match cryptarchia_api.apply_block(block.clone()).await {
-                                        Ok(()) => {
-                                            // Block successfully processed, now publish it to the network
+                                        Ok((tip, reorged_txs)) => {
+                                            // Block successfully processed, now remove included txs from mempool and publish it to the network.
+                                            // Assert that the proposed block is added to the honest chain.
+                                            assert!(tip == block.header().id());
+                                            assert!(reorged_txs.is_empty());
+                                            Self::remove_txs_in_block_from_mempool(&block, &relays).await;
                                             let proposal = block.to_proposal();
                                             blend_adapter.publish_proposal(proposal).await;
                                         }
@@ -658,6 +662,38 @@ where
         );
 
         Ok(block)
+    }
+
+    /// A helper function to remove all transactions in the given block from the
+    /// mempool.
+    /// On error, logs the error instead of propagating it, to keep the caller
+    /// logic simple.
+    async fn remove_txs_in_block_from_mempool(
+        block: &Block<Mempool::Item>,
+        relays: &CryptarchiaConsensusRelays<
+            BlendService,
+            Mempool,
+            MempoolNetAdapter,
+            MempoolDaAdapter,
+            SamplingBackend,
+            RuntimeServiceId,
+        >,
+    ) {
+        if let Err(e) = relays
+            .mempool_adapter()
+            .remove_transactions(
+                &block
+                    .transactions()
+                    .map(Transaction::hash)
+                    .collect::<Vec<_>>(),
+            )
+            .await
+        {
+            error!(
+                "failed to remove txs included in block {:?} from mempool: {e:?}",
+                block.header().id()
+            );
+        }
     }
 }
 
