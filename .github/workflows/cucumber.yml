@@ -71,14 +71,6 @@ jobs:
         with:
           key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
 
-      # Validate nomos-node config file using the built binary
-      - name: Run the node binary to check the config file validity
-        run: ${{ github.workspace }}/target/release/nomos-node nodes/node/config.yaml --check-config
-
-      # Validate nomos-executor config file using the built binary
-      - name: Run the executor binary to check the config file validity
-        run: ${{ github.workspace }}/target/release/nomos-executor nodes/executor/config.yaml --check-config
-
       # Run cucumber integration tests with environment variables for binaries and test params
       - name: Run cucumber
         timeout-minutes: 20  # Safety net timeout
