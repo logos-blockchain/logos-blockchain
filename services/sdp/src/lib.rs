@@ -7,7 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::{Stream, StreamExt as _};
+use futures::Stream;
 use lb_core::{
     block::BlockNumber,
     mantle::{NoteId, SignedMantleTx, tx_builder::MantleTxBuilder},
@@ -26,7 +26,6 @@ use overwatch::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, oneshot};
-use tokio_stream::wrappers::BroadcastStream;
 
 use crate::adapters::{
     mempool::SdpMempoolAdapter,
@@ -73,11 +72,6 @@ pub struct Declaration {
 }
 
 pub enum SdpMessage {
-    ProcessNewBlock,
-    ProcessLibBlock,
-    Subscribe {
-        result_sender: oneshot::Sender<BlockUpdateStream>,
-    },
     PostDeclaration {
         declaration: Box<DeclarationMessage>,
         reply_channel: oneshot::Sender<Result<DeclarationId, DynError>>,
@@ -146,7 +140,7 @@ where
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
 
-        let wallet_adapter = MockWalletAdapter::new();
+        let wallet_adapter = MockWalletAdapter::new(());
         let mempool_relay = self
             .service_resources_handle
             .overwatch_handle
@@ -156,17 +150,6 @@ where
 
         while let Some(msg) = self.service_resources_handle.inbound_relay.recv().await {
             match msg {
-                SdpMessage::ProcessNewBlock | SdpMessage::ProcessLibBlock => {
-                    todo!()
-                }
-                SdpMessage::Subscribe { result_sender } => {
-                    let receiver = self.finalized_update_tx.subscribe();
-                    let stream = make_finalized_stream(receiver);
-
-                    if result_sender.send(stream).is_err() {
-                        tracing::error!("Error sending finalized updates receiver");
-                    }
-                }
                 SdpMessage::PostActivity { metadata, .. } => {
                     self.handle_post_activity(metadata, &wallet_adapter, &mempool_adapter)
                         .await;
@@ -215,7 +198,16 @@ where
     ) {
         let tx_builder = MantleTxBuilder::new();
 
-        let signed_tx = match wallet_adapter.declare_tx(tx_builder, declaration.clone()) {
+        let tip = todo!();
+        let change_pk = todo!();
+        let funding_pks = todo!();
+        let signed_tx = match wallet_adapter.declare_tx(
+            tip,
+            change_pk,
+            funding_pks,
+            tx_builder,
+            declaration.clone(),
+        ) {
             Ok(tx) => tx,
             Err(e) => {
                 tracing::error!("Failed to create declaration transaction: {:?}", e);
@@ -258,8 +250,12 @@ where
 
         let declaration = self.current_declaration.as_ref().unwrap();
 
+        let tip = todo!();
+        let change_pk = todo!();
+        let funding_pks = todo!();
         let signed_tx =
-            match wallet_adapter.active_tx(tx_builder, active_message, declaration.zk_id) {
+            match wallet_adapter.active_tx(tip, change_pk, funding_pks, tx_builder, active_message)
+            {
                 Ok(tx) => tx,
                 Err(e) => {
                     tracing::error!("Failed to create activity transaction: {:?}", e);
@@ -295,11 +291,15 @@ where
 
         let tx_builder = MantleTxBuilder::new();
 
+        let tip = todo!();
+        let change_pk = todo!();
+        let funding_pks = todo!();
         let signed_tx = match wallet_adapter.withdraw_tx(
+            tip,
+            change_pk,
+            funding_pks,
             tx_builder,
             withdraw_message,
-            declaration.zk_id,
-            declaration.locked_note_id,
         ) {
             Ok(tx) => tx,
             Err(e) => {
@@ -330,18 +330,4 @@ where
 
         Ok(())
     }
-}
-
-fn make_finalized_stream(receiver: broadcast::Receiver<BlockEvent>) -> BlockUpdateStream {
-    Box::pin(BroadcastStream::new(receiver).filter_map(|res| {
-        Box::pin(async move {
-            match res {
-                Ok(update) => Some(update),
-                Err(e) => {
-                    tracing::warn!("Lagging SDP subscriber: {e:?}");
-                    None
-                }
-            }
-        })
-    }))
 }
