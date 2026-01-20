@@ -393,10 +393,6 @@ where
                     let ed25519_sig = Self::sign_ed25519(tx_hash, inscribe_op.signer, kms).await?;
                     OpProof::Ed25519Sig(ed25519_sig)
                 }
-                Op::ChannelBlob(blob_op) => {
-                    let ed25519_sig = Self::sign_ed25519(tx_hash, blob_op.signer, kms).await?;
-                    OpProof::Ed25519Sig(ed25519_sig)
-                }
                 Op::ChannelSetKeys(set_keys_op) => {
                     let channel = ledger
                         .mantle_ledger()

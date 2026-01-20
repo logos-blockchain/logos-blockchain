@@ -105,28 +105,16 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
             },
             sdp_config: lb_node::config::cryptarchia::deployment::SdpConfig {
                 service_params: Arc::new(
-                    [
-                        (
-                            ServiceType::BlendNetwork,
-                            ServiceParameters {
-                                lock_period: 10,
-                                inactivity_period: 20,
-                                retention_period: 100,
-                                timestamp: 0,
-                                session_duration: 21_600,
-                            },
-                        ),
-                        (
-                            ServiceType::DataAvailability,
-                            ServiceParameters {
-                                lock_period: 10,
-                                inactivity_period: 20,
-                                retention_period: 100,
-                                timestamp: 0,
-                                session_duration: 1000,
-                            },
-                        ),
-                    ]
+                    [(
+                        ServiceType::BlendNetwork,
+                        ServiceParameters {
+                            lock_period: 10,
+                            inactivity_period: 20,
+                            retention_period: 100,
+                            timestamp: 0,
+                            session_duration: 21_600,
+                        },
+                    )]
                     .into(),
                 ),
                 min_stake: lb_core::sdp::MinStake {

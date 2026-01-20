@@ -1301,9 +1301,6 @@ where
                     ServiceType::BlendNetwork => {
                         broadcast_blend_session(broadcast_relay, update).boxed()
                     }
-                    ServiceType::DataAvailability => {
-                        broadcast_da_session(broadcast_relay, update).boxed()
-                    }
                 };
 
                 if let Err(e) = broadcast_future.await {
@@ -1337,12 +1334,3 @@ async fn broadcast_blend_session(
         .map_err(|(error, _)| Box::new(error) as DynError)
 }
 
-async fn broadcast_da_session(
-    broadcast_relay: &BroadcastRelay,
-    session: SessionUpdate,
-) -> Result<(), DynError> {
-    broadcast_relay
-        .send(BlockBroadcastMsg::BroadcastDASession(session))
-        .await
-        .map_err(|(error, _)| Box::new(error) as DynError)
-}

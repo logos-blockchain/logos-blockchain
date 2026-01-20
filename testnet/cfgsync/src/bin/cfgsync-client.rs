@@ -1,6 +1,5 @@
 use std::{env, fs, net::Ipv4Addr, process};
 
-use lb_executor::config::Config as ExecutorConfig;
 use lb_node::Config as ValidatorConfig;
 use logos_blockchain_cfgsync::client::get_config;
 use serde::{Serialize, de::DeserializeOwned};
@@ -37,28 +36,11 @@ async fn main() {
     let identifier =
         env::var("CFG_HOST_IDENTIFIER").unwrap_or_else(|_| "unidentified-node".to_owned());
 
-    let host_kind = env::var("CFG_HOST_KIND").unwrap_or_else(|_| "validator".to_owned());
+    let node_config_endpoint = format!("{server_addr}/validator");
 
-    let node_config_endpoint = match host_kind.as_str() {
-        "executor" => format!("{server_addr}/executor"),
-        _ => format!("{server_addr}/validator"),
-    };
-
-    let config_result = match host_kind.as_str() {
-        "executor" => {
-            pull_to_file::<ExecutorConfig>(ip, identifier, &node_config_endpoint, &config_file_path)
-                .await
-        }
-        _ => {
-            pull_to_file::<ValidatorConfig>(
-                ip,
-                identifier,
-                &node_config_endpoint,
-                &config_file_path,
-            )
-            .await
-        }
-    };
+    let config_result =
+        pull_to_file::<ValidatorConfig>(ip, identifier, &node_config_endpoint, &config_file_path)
+            .await;
 
     // Handle error if the config request fails
     if let Err(err) = config_result {

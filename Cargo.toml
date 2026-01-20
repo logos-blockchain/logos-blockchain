@@ -23,19 +23,12 @@ members = [
   "consensus/cryptarchia-engine",
   "consensus/cryptarchia-sync",
   "core",
-  "da/kzgrs",
-  "da/kzgrs-backend",
-  "da/network/core",
-  "da/network/messages",
-  "da/network/subnetworks-assignations",
   "kms/keys",
   "kms/macros",
   "ledger",
   "libp2p",
   "mmr",
   "nodes/api-common",
-  "nodes/executor/binary",
-  "nodes/executor/http-client",
   "nodes/node/binary",
   "nodes/node/http-client",
   "services/api",
@@ -45,10 +38,6 @@ members = [
   "services/chain/chain-leader",
   "services/chain/chain-network",
   "services/chain/chain-service",
-  "services/data-availability/dispersal",
-  "services/data-availability/network",
-  "services/data-availability/sampling",
-  "services/data-availability/verifier",
   "services/key-management-system",
   "services/network",
   "services/sdp",
@@ -106,23 +95,13 @@ lb-common-http-client            = { default-features = false, path = "./nodes/n
 lb-core                          = { default-features = false, path = "./core", package = "logos-blockchain-core" }
 lb-cryptarchia-engine            = { default-features = false, path = "./consensus/cryptarchia-engine", package = "logos-blockchain-cryptarchia-engine" }
 lb-cryptarchia-sync              = { default-features = false, path = "./consensus/cryptarchia-sync", package = "logos-blockchain-cryptarchia-sync" }
-lb-da-dispersal-service          = { default-features = false, path = "./services/data-availability/dispersal", package = "logos-blockchain-da-dispersal-service" }
-lb-da-messages                   = { default-features = false, path = "./da/network/messages", package = "logos-blockchain-da-messages" }
-lb-da-network-core               = { default-features = false, path = "./da/network/core", package = "logos-blockchain-da-network-core" }
-lb-da-network-service            = { default-features = false, path = "./services/data-availability/network", package = "logos-blockchain-da-network-service" }
-lb-da-sampling-service           = { default-features = false, path = "./services/data-availability/sampling", package = "logos-blockchain-da-sampling-service" }
-lb-da-verifier-service           = { default-features = false, path = "./services/data-availability/verifier", package = "logos-blockchain-da-verifier-service" }
 lb-demo-archiver                 = { default-features = false, path = "./testnet/l2-sequencer-archival-demo/archiver", package = "logos-blockchain-demo-archiver" }
 lb-demo-sequencer                = { default-features = false, path = "./testnet/l2-sequencer-archival-demo/sequencer", package = "logos-blockchain-demo-sequencer" }
-lb-executor                      = { default-features = false, path = "./nodes/executor/binary", package = "logos-blockchain-executor" }
-lb-executor-http-client          = { default-features = false, path = "./nodes/executor/http-client", package = "logos-blockchain-executor-http-client" }
 lb-groth16                       = { default-features = false, path = "./zk/groth16", package = "logos-blockchain-groth16" }
 lb-http-api-common               = { default-features = false, path = "./nodes/api-common", package = "logos-blockchain-http-api-common" }
 lb-key-management-system-keys    = { default-features = false, path = "./kms/keys", package = "logos-blockchain-key-management-system-keys" }
 lb-key-management-system-macros  = { default-features = false, path = "./kms/macros", package = "logos-blockchain-key-management-system-macros" }
 lb-key-management-system-service = { default-features = false, path = "./services/key-management-system", package = "logos-blockchain-key-management-system-service" }
-lb-kzgrs                         = { default-features = false, path = "./da/kzgrs", package = "logos-blockchain-kzgrs" }
-lb-kzgrs-backend                 = { default-features = false, path = "./da/kzgrs-backend", package = "logos-blockchain-kzgrs-backend" }
 lb-ledger                        = { default-features = false, path = "./ledger", package = "logos-blockchain-ledger" }
 lb-libp2p                        = { default-features = false, path = "./libp2p", package = "logos-blockchain-libp2p" }
 lb-mmr                           = { default-features = false, path = "./mmr", package = "logos-blockchain-mmr" }
@@ -135,7 +114,6 @@ lb-poseidon2                     = { default-features = false, path = "./zk/pose
 lb-sdp-service                   = { default-features = false, path = "./services/sdp", package = "logos-blockchain-sdp-service" }
 lb-services-utils                = { default-features = false, path = "./services/utils", package = "logos-blockchain-services-utils" }
 lb-storage-service               = { default-features = false, path = "./services/storage", package = "logos-blockchain-storage-service" }
-lb-subnetworks-assignations      = { default-features = false, path = "./da/network/subnetworks-assignations", package = "logos-blockchain-subnetworks-assignations" }
 lb-system-sig-service            = { default-features = false, path = "./services/system-sig", package = "logos-blockchain-system-sig-service" }
 lb-tests                         = { default-features = false, path = "./tests", package = "logos-blockchain-tests" }
 lb-time-service                  = { default-features = false, path = "./services/time", package = "logos-blockchain-time-service" }
