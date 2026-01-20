@@ -21,7 +21,7 @@ lb-libp2p           = { optional = true, workspace = true }
 overwatch           = { workspace = true }
 rand                = { features = ["std"], optional = true, workspace = true }
 rand_chacha         = { default-features = false, optional = true, version = "0.3" }
-serde               = { workspace = true, features = ["derive"] }
+serde               = { features = ["derive"], workspace = true }
 tokio               = { default-features = false, features = ["macros", "sync"], version = "1" }
 tokio-stream        = { default-features = false, version = "0.1" }
 tracing             = { workspace = true }

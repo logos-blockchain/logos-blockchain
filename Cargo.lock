@@ -1430,18 +1430,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "blst"
-version = "0.3.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcdb4c7013139a150f9fc55d123186dbfaba0d912817466282c73ac49e71fb45"
-dependencies = [
- "cc",
- "glob",
- "threadpool",
- "zeroize",
-]
-
-[[package]]
 name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4965,7 +4953,6 @@ dependencies = [
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
- "logos-blockchain-libp2p",
  "logos-blockchain-network-service",
  "logos-blockchain-sdp-service",
  "logos-blockchain-storage-service",
@@ -5181,7 +5168,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_path_to_error",
- "serde_with",
  "serde_yaml",
  "tokio",
  "tracing",
@@ -5323,12 +5309,7 @@ name = "logos-blockchain-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
- "hex",
- "logos-blockchain-core",
  "logos-blockchain-tracing",
- "reqwest 0.12.28",
- "serde_json",
- "tokio",
  "tracing",
  "tracing-subscriber 0.3.22",
 ]
@@ -5816,7 +5797,6 @@ name = "logos-blockchain-tests"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "blst",
  "futures",
  "futures-util",
  "hex",
@@ -9894,15 +9874,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "threadpool"
-version = "1.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d050e60b33d41c19108b32cea32164033a9013fe3b46cbd4457559bfbf77afaa"
-dependencies = [
- "num_cpus",
 ]
 
 [[package]]

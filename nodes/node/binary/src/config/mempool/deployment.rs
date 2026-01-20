@@ -11,7 +11,7 @@ impl From<WellKnownDeployment> for Settings {
     fn from(value: WellKnownDeployment) -> Self {
         match value {
             WellKnownDeployment::Mainnet => Self {
-                pubsub_topic: "mantle".to_owned(),
+                pubsub_topic: "/logos-blockchain/mempool/1.0.0".to_owned(),
             },
         }
     }

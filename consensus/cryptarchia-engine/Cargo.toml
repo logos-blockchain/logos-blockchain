@@ -19,7 +19,7 @@ workspace = true
 [dependencies]
 cfg_eval   = { optional = true, version = "0.1" }
 lb-utils   = { features = ["time"], optional = true, workspace = true }
-serde      = { workspace = true, optional = true }
+serde      = { optional = true, workspace = true }
 serde_with = { features = ["macros"], optional = true, workspace = true }
 thiserror  = "1"
 time       = { default-features = false, version = "0.3" }

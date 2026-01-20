@@ -23,7 +23,7 @@ repos:
           - -D
           - warnings
   - repo: https://github.com/ComPWA/taplo-pre-commit
-    rev: v0.9.3
+    rev: v0.10.0
     hooks:
       - id: taplo-format
       - id: taplo-lint

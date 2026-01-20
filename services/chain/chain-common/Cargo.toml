@@ -11,4 +11,4 @@ version     = { workspace = true }
 
 [dependencies]
 lb-core = { workspace = true }
-serde   = { workspace = true, features = ["derive"] }
+serde   = { features = ["derive"], workspace = true }

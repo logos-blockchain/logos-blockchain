@@ -31,6 +31,6 @@ tracing     = { workspace = true }
 
 [dev-dependencies]
 overwatch-derive = { workspace = true }
-serde            = { workspace = true, features = ["derive"] }
+serde            = { features = ["derive"], workspace = true }
 tokio            = { default-features = false, version = "1" }
 tracing          = { default-features = false, version = "0.1" }
