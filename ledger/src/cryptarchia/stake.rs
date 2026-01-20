@@ -37,25 +37,25 @@ impl StakeInference {
         total_stake_estimate: u64,
         measured_block_density: u64,
     ) -> u64 {
-        let learning_rate_with_precision: u128 = u128::from(self.learning_rate * PRECISION);
-        let slot_activation_coefficient_with_precision: u64 =
-            (self.slot_activation_coefficient * PRECISION as f64).trunc() as u64;
-        let total_stake_estimate_with_precision: u128 =
-            u128::from(total_stake_estimate) * u128::from(PRECISION);
-        let measured_block_density_with_precision: u128 =
-            u128::from(measured_block_density * PRECISION);
-        let expected_density_with_precision: u128 =
-            u128::from(self.period() * slot_activation_coefficient_with_precision);
-        let density_difference_with_precision: u128 =
-            expected_density_with_precision - measured_block_density_with_precision;
-        let slot_activation_error_with_precision: u128 = total_stake_estimate_with_precision
-            * density_difference_with_precision
-            / expected_density_with_precision;
-        let correction: u128 = learning_rate_with_precision * slot_activation_error_with_precision
-            / u128::from(PRECISION);
-        let new_total_stake_estimate = (total_stake_estimate_with_precision
-            .saturating_sub(correction))
-            / u128::from(PRECISION);
+        let learning_rate_with_precision: u64 = self.learning_rate * PRECISION;
+        let slot_activation_coefficient_with_precision: i128 =
+            (self.slot_activation_coefficient * PRECISION as f64).trunc() as i128;
+        let total_stake_estimate_with_precision: i128 =
+            i128::from(total_stake_estimate) * i128::from(PRECISION);
+        let measured_block_density_with_precision: i128 =
+            i128::from(measured_block_density) * i128::from(PRECISION);
+        let expected_density_with_precision: i128 =
+            i128::from(self.period()) * slot_activation_coefficient_with_precision;
+        let density_difference_with_precision: i128 = i128::from(expected_density_with_precision)
+            - i128::from(measured_block_density_with_precision);
+        let slot_activation_error_with_precision: i128 =
+            i128::from(total_stake_estimate_with_precision) * density_difference_with_precision
+                / i128::from(expected_density_with_precision);
+        let correction: i128 = (i128::from(learning_rate_with_precision)
+            * slot_activation_error_with_precision)
+            / i128::from(PRECISION);
+        let new_total_stake_estimate =
+            (i128::from(total_stake_estimate_with_precision) - correction) / i128::from(PRECISION);
         new_total_stake_estimate
             .max(1)
             .try_into()
@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn test_total_stake_inference_very_high_stake() {
         let inference = StakeInference::new(1, 1.0, 10);
-        let total_stake_estimate = u64::MAX / 2; //maximum stake suported is half
+        let total_stake_estimate = u64::MAX; //maximum stake suported is half
         let period_block_density = inference.period();
 
         let result = inference
