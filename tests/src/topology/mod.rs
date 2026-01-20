@@ -298,7 +298,8 @@ impl<'a> ReadinessCheck<'a> for NetworkReadiness<'a> {
     type Data = Vec<Libp2pInfo>;
 
     async fn collect(&'a self) -> Self::Data {
-        futures::future::join_all(self.topology.validators.iter().map(|v| v.network_info())).await
+        futures::future::join_all(self.topology.validators.iter().map(Validator::network_info))
+            .await
     }
 
     fn is_ready(&self, data: &Self::Data) -> bool {

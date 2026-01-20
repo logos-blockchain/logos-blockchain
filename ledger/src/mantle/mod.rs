@@ -326,7 +326,7 @@ mod tests {
             signer: verifying_key,
         };
 
-        let first_tx = create_signed_tx(Op::ChannelInscribe(first_inscribe.clone()), &signing_key);
+        let first_tx = create_signed_tx(Op::ChannelInscribe(first_inscribe), &signing_key);
         ledger_state = ledger_state
             .try_apply_tx::<MainnetGasConstants>(
                 0,

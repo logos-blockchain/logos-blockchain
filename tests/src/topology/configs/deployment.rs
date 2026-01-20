@@ -25,10 +25,6 @@ use lb_utils::math::NonNegativeF64;
 
 use crate::topology::configs::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Deployment settings are inherently verbose."
-)]
 #[must_use]
 pub fn default_e2e_deployment_settings() -> DeploymentSettings {
     let slot_duration_in_secs = std::env::var(CONSENSUS_SLOT_TIME_VAR)

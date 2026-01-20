@@ -21,7 +21,6 @@ use lb_tests::topology::{
     create_kms_configs,
 };
 use lb_tracing_service::{LoggerLayer, MetricsLayer, TracingLayer, TracingSettings};
-use lb_utils::net::get_available_udp_port;
 use rand::{Rng as _, thread_rng};
 
 const DEFAULT_LIBP2P_NETWORK_PORT: u16 = 3000;
@@ -61,10 +60,8 @@ pub fn create_node_configs(
     hosts: Vec<Host>,
 ) -> HashMap<Host, GeneralConfig> {
     let mut ids = vec![[0; 32]; hosts.len()];
-    let mut ports = vec![];
     for id in &mut ids {
         thread_rng().fill(id);
-        ports.push(get_available_udp_port().unwrap());
     }
 
     let mut consensus_configs = create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);

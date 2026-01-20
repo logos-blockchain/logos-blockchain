@@ -120,7 +120,7 @@ impl Op {
     }
 
     #[must_use]
-    pub fn execution_gas<Constants: GasConstants>(&self) -> Gas {
+    pub const fn execution_gas<Constants: GasConstants>(&self) -> Gas {
         match self {
             Self::ChannelInscribe(_) => Constants::CHANNEL_INSCRIBE,
             Self::ChannelSetKeys(_) => Constants::CHANNEL_SET_KEYS,

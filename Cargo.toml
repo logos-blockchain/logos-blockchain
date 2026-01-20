@@ -19,7 +19,6 @@ members = [
   "blend/scheduling",
   "bundler",
   "c-bindings",
-  "cli",
   "consensus/cryptarchia-engine",
   "consensus/cryptarchia-sync",
   "core",
@@ -90,7 +89,6 @@ lb-chain-service-common          = { default-features = false, package = "logos-
 lb-circuits-prover               = { default-features = false, package = "logos-blockchain-circuits-prover", path = "./zk/circuits/prover" }
 lb-circuits-utils                = { default-features = false, package = "logos-blockchain-circuits-utils", path = "./zk/circuits/utils" }
 lb-circuits-verifier             = { default-features = false, package = "logos-blockchain-circuits-verifier", path = "./zk/circuits/verifier" }
-lb-cli                           = { default-features = false, package = "logos-blockchain-cli", path = "./cli" }
 lb-common-http-client            = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
 lb-core                          = { default-features = false, package = "logos-blockchain-core", path = "./core" }
 lb-cryptarchia-engine            = { default-features = false, package = "logos-blockchain-cryptarchia-engine", path = "./consensus/cryptarchia-engine" }
