@@ -18,7 +18,7 @@ lb-groth16     = { workspace = true }
 lb-poq         = { workspace = true }
 lb-poseidon2   = { workspace = true }
 lb-utils       = { features = ["rng"], workspace = true }
-rs-merkle-tree = { default-features = false, version = "0.1", features = ["memory_store"] }
+rs-merkle-tree = { default-features = false, features = ["memory_store"], version = "0.1" }
 thiserror      = "1"
 
 [dev-dependencies]

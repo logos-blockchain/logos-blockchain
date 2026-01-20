@@ -31,7 +31,7 @@ lb-blend                         = { workspace = true }
 lb-blend-service                 = { features = ["libp2p"], workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
 lb-chain-leader-service          = { workspace = true }
-lb-chain-network-service         = { workspace = true, features = ["libp2p"] }
+lb-chain-network-service         = { features = ["libp2p"], workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
@@ -58,7 +58,7 @@ lb-time-service                  = { features = ["ntp", "serde"], workspace = tr
 lb-tracing                       = { workspace = true }
 lb-tracing-service               = { workspace = true }
 lb-tx-service                    = { features = ["rocksdb-backend"], workspace = true }
-lb-utils                         = { workspace = true, features = ["serde"] }
+lb-utils                         = { features = ["serde"], workspace = true }
 lb-wallet-service                = { workspace = true }
 num-bigint                       = { default-features = false, version = "0.4" }
 overwatch                        = { workspace = true }
@@ -85,13 +85,13 @@ tower-http = { default-features = false, features = ["cors", "limit", "timeout",
 [target.'cfg(windows)'.dependencies]
 # XCompiling from Unix has issues downloading assets. Use vendored instead.
 # This happens locally but might not on CI.
-utoipa-swagger-ui = { workspace = true, features = ["axum", "vendored"] }
+utoipa-swagger-ui = { features = ["axum", "vendored"], workspace = true }
 
 [target.'cfg(not(windows))'.dependencies]
-utoipa-swagger-ui = { workspace = true, features = ["axum"] }
+utoipa-swagger-ui = { features = ["axum"], workspace = true }
 
 [dev-dependencies]
-test-log = { default-features = false, version = "0.2.18", features = ["trace"] }
+test-log = { default-features = false, features = ["trace"], version = "0.2.18" }
 
 [features]
 block-explorer  = ["lb-api-service/block-explorer"]

@@ -22,7 +22,7 @@ lb-chain-service                 = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
 lb-groth16                       = { default-features = false, workspace = true }
-lb-key-management-system-service = { workspace = true, features = ["unsafe"] }
+lb-key-management-system-service = { features = ["unsafe"], workspace = true }
 lb-ledger                        = { workspace = true }
 lb-libp2p                        = { optional = true, workspace = true }
 lb-network-service               = { workspace = true }
@@ -47,7 +47,7 @@ lb-blend          = { features = ["unsafe-test-functions"], workspace = true }
 libp2p            = { default-features = false, features = ["plaintext", "tcp", "yamux"], workspace = true }
 libp2p-swarm-test = { default-features = false, version = "0.5.0" }
 tempfile          = { workspace = true }
-test-log          = { default-features = false, version = "0.2.18", features = ["trace"] }
+test-log          = { default-features = false, features = ["trace"], version = "0.2.18" }
 
 [features]
 default = []

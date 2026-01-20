@@ -1,9 +1,9 @@
 use std::{convert::Infallible, marker::PhantomData, str::FromStr as _};
 
 use ark_bn254::Fr;
-use groth16::fr_from_bytes;
-use key_management_system_keys::keys::UnsecuredZkKey;
-use nomos_core::{crypto::ZkHasher, mantle::ops::leader_claim::VoucherCm};
+use lb_core::{crypto::ZkHasher, mantle::ops::leader_claim::VoucherCm};
+use lb_groth16::fr_from_bytes;
+use lb_key_management_system_keys::keys::UnsecuredZkKey;
 use overwatch::services::state::{ServiceState, StateUpdater};
 use rand::{RngCore as _, rngs::OsRng};
 use serde::{Deserialize, Serialize};

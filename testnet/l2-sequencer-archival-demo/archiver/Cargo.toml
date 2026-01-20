@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 async-stream               = { default-features = false, version = "0.3.6" }
-axum                       = { default-features = false, version = "0.8.7", features = ["http2", "json", "tokio"] }
+axum                       = { default-features = false, features = ["http2", "json", "tokio"], version = "0.8.7" }
 clap                       = { default-features = false, features = ["derive", "env", "std"], version = "4.5.13" }
 futures                    = { default-features = false, version = "0.3" }
 hex                        = { default-features = false, features = ["alloc"], version = "0.4" }
@@ -31,5 +31,5 @@ thiserror                  = { workspace = true }
 tokio                      = { workspace = true }
 tokio-stream               = { default-features = false, version = "0.1" }
 tokio-util                 = { default-features = false, version = "0.7" }
-tower-http                 = { version = "0.6.8", features = ["cors"] }
+tower-http                 = { features = ["cors"], version = "0.6.8" }
 url                        = { default-features = false, version = "2.5.4" }

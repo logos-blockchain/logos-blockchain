@@ -57,10 +57,10 @@ utoipa                      = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 # XCompiling from Unix has issues downloading assets. Use vendored instead.
 # This happens locally but might not on CI.
-utoipa-swagger-ui = { workspace = true, features = ["axum", "vendored"] }
+utoipa-swagger-ui = { features = ["axum", "vendored"], workspace = true }
 
 [target.'cfg(not(windows))'.dependencies]
-utoipa-swagger-ui = { workspace = true, features = ["axum"] }
+utoipa-swagger-ui = { features = ["axum"], workspace = true }
 
 [features]
 default         = ["tracing"]

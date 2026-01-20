@@ -5338,6 +5338,7 @@ dependencies = [
 name = "logos-blockchain-chain-leader-service"
 version = "0.1.0"
 dependencies = [
+ "ark-bn254 0.4.0",
  "async-trait",
  "futures",
  "logos-blockchain-blend-service",
@@ -5346,6 +5347,7 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-da-sampling-service",
+ "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-ledger",
  "logos-blockchain-services-utils",
@@ -5353,6 +5355,7 @@ dependencies = [
  "logos-blockchain-tx-service",
  "logos-blockchain-wallet-service",
  "overwatch",
+ "rand 0.8.5",
  "serde",
  "thiserror 1.0.69",
  "tokio",
