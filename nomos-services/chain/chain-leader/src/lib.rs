@@ -438,7 +438,7 @@ where
                         winning_pol_slot_notifier.process_epoch(&eligible_utxos, &epoch_state);
 
                         if let Some(proof) = leader.build_proof_for(&eligible_utxos, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier).await {
-                            let voucher_cm = self.state.add_new_voucher_sk(leader.secret_key(), &self.service_resources_handle.state_updater);
+                            let voucher_cm = self.state.add_new_voucher_sk(&leader.secret_key(), &self.service_resources_handle.state_updater);
 
 
                             // TODO: spawn as a separate task?
@@ -565,7 +565,7 @@ where
     Wallet: nomos_wallet::api::WalletServiceData,
     RuntimeServiceId: Sync + Send + 'static,
 {
-    #[expect(clippy::allow_attributes_without_reason)]
+    #[expect(clippy::allow_attributes_without_reason, clippy::too_many_arguments)]
     #[instrument(
         level = "debug",
         skip(tx_selector, relays, ledger_state, ledger_config)
