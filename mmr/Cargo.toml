@@ -1,23 +1,23 @@
 [package]
-categories  = { workspace = true }
+categories = { workspace = true }
 description = { workspace = true }
-edition     = { workspace = true }
-keywords    = { workspace = true }
-license     = { workspace = true }
-name        = "mmr"
-readme      = { workspace = true }
-repository  = { workspace = true }
-version     = { workspace = true }
+edition = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+name = "mmr"
+readme = { workspace = true }
+repository = { workspace = true }
+version = { workspace = true }
 
 [dependencies]
-ark-ff    = { default-features = false, features = ["std"], version = "0.4" }
-groth16   = { workspace = true }
+ark-ff = { default-features = false, features = ["std"], version = "0.4" }
+groth16 = { workspace = true }
 poseidon2 = { workspace = true }
-rpds      = { default-features = false, version = "1.1.1" }
-serde     = { features = ["derive"], optional = true, workspace = true }
+rpds = { default-features = false, version = "1.1.1" }
+serde = { workspace = true, features = ["derive"], optional = true }
 
 [dev-dependencies]
-proptest       = { default-features = false, features = ["std"], version = "1.0" }
+proptest = { default-features = false, features = ["std"], version = "1.0" }
 proptest-macro = "0.2"
 
 [lints]
