@@ -188,7 +188,8 @@ jobs:
         with:
           command: test
           # We don't test benches as they take 6h+, leading to a timeout
-          args: --locked --all --lib --bins --tests --examples --all-features
+          # `cucumber` has its own action/workflow
+          args: --locked --all --lib --bins --tests --examples --all-features -- --skip cucumber
 
       - name: Upload integration tests results
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
