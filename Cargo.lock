@@ -3146,12 +3146,9 @@ dependencies = [
 
 [[package]]
 name = "fixed-slice-deque"
-version = "0.1.0-beta2"
+version = "0.1.0-beta3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eae2a0cf5db6443a1723e95f7798b97ff9f3e7e9dd789caee6e1e320ee2adf2a"
-dependencies = [
- "slice-deque",
-]
+checksum = "f087a2fe052611face480d8eeedc6f7e4bc9f94f7992128b64cadd7e779b45f6"
 
 [[package]]
 name = "flate2"
@@ -6518,15 +6515,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mach"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b823e83b2affd8f40a9ee8c29dbc56404c1e34cd2710921f2801e2cf29527afa"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "match-lookup"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9797,17 +9785,6 @@ name = "slab"
 version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2ae44ef20feb57a68b23d846850f861394c2e02dc425a50098ae8c90267589"
-
-[[package]]
-name = "slice-deque"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31ef6ee280cdefba6d2d0b4b78a84a1c1a3f3a4cec98c2d4231c8bc225de0f25"
-dependencies = [
- "libc",
- "mach",
- "winapi",
-]
 
 [[package]]
 name = "smallvec"
