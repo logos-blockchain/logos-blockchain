@@ -1,11 +1,13 @@
 use cryptarchia_engine::Slot;
 use fixed_slice_deque::FixedSliceDeque;
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone)]
 pub struct BlockDensity {
     // TODO: this can be optimized using a bitarray family data structure and shifting instead
     // current available option bitvec crate doesnt support fixed size structures so we go for this
     // instead for now.
+    #[cfg_attr(feature = "serde", serde(with = "fixed_slice_deque_serde"))]
     pub slots_window: FixedSliceDeque<bool>,
     current_slot: Slot,
 }
@@ -33,6 +35,28 @@ impl BlockDensity {
 
     pub fn current_block_density(&self) -> u64 {
         self.slots_window.iter().filter(|&&filled| filled).count() as u64
+    }
+}
+
+#[cfg(feature = "serde")]
+mod fixed_slice_deque_serde {
+    use fixed_slice_deque::FixedSliceDeque;
+    use serde::{Deserialize as _, Deserializer, Serialize as _, Serializer};
+
+    pub fn serialize<S>(slots: &FixedSliceDeque<bool>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let vec: Vec<bool> = slots.iter().copied().collect();
+        vec.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<FixedSliceDeque<bool>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let vec = Vec::<bool>::deserialize(deserializer)?;
+        Ok(vec.into_iter().collect())
     }
 }
 

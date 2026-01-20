@@ -27,7 +27,7 @@ nomos-utils                = { workspace = true }
 num-bigint                 = { default-features = false, version = "0.4" }
 rand                       = { workspace = true }
 rpds                       = { default-features = false, version = "1.1.1" }
-serde                      = { default-features = false, features = ["derive"], optional = true, version = "1.0" }
+serde                      = { workspace = true, default-features = false, features = ["derive"], optional = true }
 thiserror                  = "1"
 tracing                    = { workspace = true }
 utxotree                   = { workspace = true }
