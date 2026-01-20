@@ -1847,11 +1847,13 @@ dependencies = [
 name = "chain-leader"
 version = "0.1.0"
 dependencies = [
+ "ark-bn254 0.4.0",
  "async-trait",
  "chain-common 0.1.0",
  "chain-service 0.1.0",
  "cryptarchia-engine 0.1.0",
  "futures",
+ "groth16 0.1.0",
  "key-management-system-keys 0.1.0",
  "nomos-blend-service 0.1.0",
  "nomos-core 0.1.0",
@@ -1860,6 +1862,7 @@ dependencies = [
  "nomos-time 0.1.0",
  "nomos-wallet 0.1.0",
  "overwatch",
+ "rand 0.8.5",
  "serde",
  "services-utils 0.1.0",
  "thiserror 1.0.69",

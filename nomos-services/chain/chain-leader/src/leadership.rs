@@ -173,7 +173,7 @@ impl Leader {
         ))
     }
 
-    fn secret_key(&self) -> UnsecuredZkKey {
+    pub(crate) fn secret_key(&self) -> UnsecuredZkKey {
         self.sk.clone()
     }
 }

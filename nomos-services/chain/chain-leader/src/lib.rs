@@ -2,6 +2,7 @@ mod blend;
 mod leadership;
 mod mempool;
 mod relays;
+mod state;
 
 use core::fmt::Debug;
 use std::{collections::BTreeSet, fmt::Display, iter, pin::Pin, time::Duration};
@@ -139,6 +140,7 @@ pub struct CryptarchiaLeader<
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     winning_pol_epoch_slots_sender: watch::Sender<Option<WinningPolInfo>>,
+    state: <Self as ServiceData>::State,
 }
 
 impl<
@@ -193,7 +195,7 @@ where
     Wallet: nomos_wallet::api::WalletServiceData,
 {
     type Settings = LeaderSettings<TxS::Settings, BlendService::BroadcastSettings>;
-    type State = overwatch::services::state::NoState<Self::Settings>;
+    type State = state::LeaderState<Self::Settings>;
     type StateOperator = overwatch::services::state::NoOperator<Self::State>;
     type Message = LeaderMsg;
 }
@@ -294,13 +296,14 @@ where
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-        _initial_state: Self::State,
+        initial_state: Self::State,
     ) -> Result<Self, DynError> {
         let winning_pol_epoch_slots_sender = watch::Sender::new(None);
 
         Ok(Self {
             service_resources_handle,
             winning_pol_epoch_slots_sender,
+            state: initial_state,
         })
     }
 
@@ -435,6 +438,9 @@ where
                         winning_pol_slot_notifier.process_epoch(&eligible_utxos, &epoch_state);
 
                         if let Some(proof) = leader.build_proof_for(&eligible_utxos, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier).await {
+                            let voucher_cm = self.state.add_new_voucher_sk(leader.secret_key(), &self.service_resources_handle.state_updater);
+
+
                             // TODO: spawn as a separate task?
                             match Self::propose_block(
                                 parent,
@@ -444,6 +450,7 @@ where
                                 &relays,
                                 tip_state,
                                 &ledger_config,
+                                voucher_cm
                             )
                             .await
                             {
@@ -578,6 +585,7 @@ where
         >,
         mut ledger_state: nomos_ledger::LedgerState,
         ledger_config: &nomos_ledger::Config,
+        voucher_cm: VoucherCm,
     ) -> Result<Block<Mempool::Item>, Error> {
         let txs = relays.mempool_adapter().get_mempool_view([0; 32].into());
         let sampling_relay = relays.sampling_relay().clone();
@@ -602,7 +610,7 @@ where
             .try_apply_header::<Groth16LeaderProof, HeaderId>(
                 slot,
                 &proof,
-                VoucherCm::default(),
+                voucher_cm,
                 ledger_config,
             )?;
 
