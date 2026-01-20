@@ -69,7 +69,7 @@ impl From<WellKnownDeployment> for Settings {
                         .collect(),
                     ),
                 },
-                gossipsub_protocol: "/cryptarchia/proto".to_owned(),
+                gossipsub_protocol: "/logos-blockchain/cryptarchia/1.0.0".to_owned(),
             },
         }
     }
