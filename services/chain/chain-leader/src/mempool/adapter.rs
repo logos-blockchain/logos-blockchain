@@ -54,7 +54,7 @@ where
 
     async fn remove_transactions(&self, ids: &[TxHash]) -> Result<(), overwatch::DynError> {
         self.mempool_relay
-            .send(MempoolMsg::Prune { ids: ids.to_vec() })
+            .send(MempoolMsg::Remove { ids: ids.to_vec() })
             .await
             .map_err(|(e, _)| format!("Could not remove transactions from mempool: {e}"))?;
 

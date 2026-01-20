@@ -49,7 +49,7 @@ pub struct ChainNetworkRelays<
 {
     cryptarchia: CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     network_relay: NetworkRelay<NetworkAdapter::Backend, RuntimeServiceId>,
-    mempool_adapter: MempoolAdapter<Mempool::Item, Mempool::Item>,
+    mempool_adapter: MempoolAdapter<Mempool::Item>,
     sampling_relay: SamplingRelay<SamplingBackend::BlobId>,
     time_relay: TimeRelay,
     _mempool_adapter: PhantomData<MempoolNetAdapter>,
@@ -222,7 +222,7 @@ where
         &self.network_relay
     }
 
-    pub const fn mempool_adapter(&self) -> &MempoolAdapter<Mempool::Item, Mempool::Item> {
+    pub const fn mempool_adapter(&self) -> &MempoolAdapter<Mempool::Item> {
         &self.mempool_adapter
     }
 
