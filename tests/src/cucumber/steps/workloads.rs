@@ -22,13 +22,6 @@ fn tx_rate_with_users(world: &mut CucumberWorld, rate: u64, users: usize) -> Ste
     world.set_transactions_rate(rate, Some(users))
 }
 
-#[given(
-    expr = "data availability channel rate is {int} per block and blob rate is {int} per block"
-)]
-fn da_rates(world: &mut CucumberWorld, channel_rate: u64, blob_rate: u64) -> StepResult {
-    world.set_data_availability_rates(channel_rate, blob_rate)
-}
-
 #[given(expr = "expect consensus liveness")]
 const fn expect_consensus_liveness(world: &mut CucumberWorld) -> StepResult {
     world.enable_consensus_liveness()

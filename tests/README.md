@@ -119,7 +119,6 @@ the corresponding binaries:
 POL_PROOF_DEV_MODE=1
 NOMOS_KZGRS_PARAMS_PATH=/path-to/tests/kzgrs
 NOMOS_NODE_BIN=/path-to/target/release/nomos-node
-NOMOS_EXECUTOR_BIN=/path-to/target/release/nomos-executor
 ```
 
 Filtering based on tags can be done using the `--tags` option. For example, to run all tests tagged with `@normal_ci`, 

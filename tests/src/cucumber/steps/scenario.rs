@@ -22,7 +22,7 @@ fn auto_deployer(world: &mut CucumberWorld) -> StepResult {
     Ok(())
 }
 
-#[given(expr = "topology has {int} validators and {int} executors")]
-fn topology_has(world: &mut CucumberWorld, validators: usize, executors: usize) -> StepResult {
-    world.set_topology(validators, executors, NetworkKind::Star)
+#[given(expr = "topology has {int} validators")]
+fn topology_has(world: &mut CucumberWorld, validators: usize) -> StepResult {
+    world.set_topology(validators, NetworkKind::Star)
 }

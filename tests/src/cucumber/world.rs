@@ -30,14 +30,12 @@ pub struct ScenarioSpec {
     pub duration_secs: Option<u64>,
     pub wallets: Option<WalletSpec>,
     pub transactions: Option<TransactionSpec>,
-    pub data_availability: Option<DataAvailabilitySpec>,
     pub consensus_liveness: Option<ConsensusLivenessSpec>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct TopologySpec {
     pub validators: usize,
-    pub executors: usize,
     pub network: NetworkKind,
 }
 
@@ -51,12 +49,6 @@ pub struct WalletSpec {
 pub struct TransactionSpec {
     pub rate_per_block: u64,
     pub users: Option<usize>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct DataAvailabilitySpec {
-    pub channel_rate_per_block: u64,
-    pub blob_rate_per_block: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -109,15 +101,9 @@ impl CucumberWorld {
         Ok(())
     }
 
-    pub fn set_topology(
-        &mut self,
-        validators: usize,
-        executors: usize,
-        network: NetworkKind,
-    ) -> StepResult {
+    pub fn set_topology(&mut self, validators: usize, network: NetworkKind) -> StepResult {
         self.spec.topology = Some(TopologySpec {
             validators: positive_usize("validators", validators)?,
-            executors,
             network,
         });
         Ok(())
@@ -157,25 +143,6 @@ impl CucumberWorld {
             rate_per_block: positive_u64("transactions rate", rate_per_block)?,
             users,
         });
-        Ok(())
-    }
-
-    pub fn set_data_availability_rates(
-        &mut self,
-        channel_rate_per_block: u64,
-        blob_rate_per_block: u64,
-    ) -> StepResult {
-        if self.spec.data_availability.is_some() {
-            return Err(StepError::InvalidArgument {
-                message: "data availability workload already configured".to_owned(),
-            });
-        }
-
-        self.spec.data_availability = Some(DataAvailabilitySpec {
-            channel_rate_per_block: positive_u64("DA channel rate", channel_rate_per_block)?,
-            blob_rate_per_block: positive_u64("DA blob rate", blob_rate_per_block)?,
-        });
-
         Ok(())
     }
 
@@ -236,25 +203,12 @@ impl CucumberWorld {
                 .is_some_and(|p| p.is_file())
                 || shared_host_bin_path("nomos-node").is_file();
 
-            let requires_executor_bin = self
-                .spec
-                .topology
-                .is_some_and(|topology| topology.executors > 0);
-
-            let exec_ok = if requires_executor_bin {
-                env::var_os("NOMOS_EXECUTOR_BIN")
-                    .map(PathBuf::from)
-                    .is_some_and(|p| p.is_file())
-                    || shared_host_bin_path("nomos-executor").is_file()
-            } else {
-                true
-            };
-
-            if !(node_ok && exec_ok) {
+            if !(node_ok) {
                 return Err(StepError::Preflight {
-                    message: "Missing Logos host binaries. Set NOMOS_NODE_BIN (and NOMOS_EXECUTOR_BIN if your scenario \
-                    uses executors), or run `scripts/run/run-examples.sh host` to restore them into \
-                    `testing-framework/assets/stack/bin`.".to_owned(),
+                    message: "Missing Logos host binaries. Set NOMOS_NODE_BIN, or run \
+                    `scripts/run/run-examples.sh host` to restore them into \
+                    `testing-framework/assets/stack/bin`."
+                        .to_owned(),
                 });
             }
         }
@@ -295,13 +249,6 @@ impl CucumberWorld {
             });
         }
 
-        if let Some(da) = self.spec.data_availability {
-            builder = builder.da_with(|flow| {
-                flow.channel_rate(da.channel_rate_per_block)
-                    .blob_rate(da.blob_rate_per_block)
-            });
-        }
-
         if let Some(liveness) = self.spec.consensus_liveness {
             if let Some(lag) = liveness.lag_allowance {
                 builder =
@@ -321,7 +268,6 @@ fn make_builder(topology: TopologySpec) -> Builder<()> {
             NetworkKind::Star => t.network_star(),
         };
         base.validators(topology.validators)
-            .executors(topology.executors)
     })
 }
 

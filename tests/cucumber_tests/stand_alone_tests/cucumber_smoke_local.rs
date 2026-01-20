@@ -13,8 +13,6 @@ async fn cucumber_local_idle_smoke() {
     // - `NOMOS_NODE_BIN=...`
     // - `NOMOS_KZGRS_PARAMS_PATH=...` (path to KZG params directory/file, e.g.
     //   `tests/kzgrs`)
-    // - `NOMOS_EXECUTOR_BIN=...` (optional; only needed when the scenario uses
-    //   executors)
     // - `RUST_LOG=info` (optional; better visibility)
 
     init_logging_defaults();
