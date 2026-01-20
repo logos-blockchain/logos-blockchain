@@ -1,12 +1,7 @@
 use std::{collections::HashSet, fs, io, path::Path, time::Duration};
 
-use common_http_client::CommonHttpClient;
-use demo_sequencer::{
-    BlockData, Transaction, TransferRequest, TransferResponse,
-    db::{AccountDb, DbError},
-};
-use key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
-use nomos_core::{
+use lb_common_http_client::CommonHttpClient;
+use lb_core::{
     header::HeaderId,
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
@@ -17,6 +12,11 @@ use nomos_core::{
         },
         tx::TxHash,
     },
+};
+use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
+use logos_blockchain_demo_sequencer::{
+    BlockData, Transaction, TransferRequest, TransferResponse,
+    db::{AccountDb, DbError},
 };
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -29,7 +29,7 @@ pub enum SequencerError {
     #[error("Database error: {0}")]
     Db(#[from] Box<DbError>),
     #[error("HTTP client error: {0}")]
-    Http(#[from] common_http_client::Error),
+    Http(#[from] lb_common_http_client::Error),
     #[error("URL parse error: {0}")]
     Url(String),
     #[error("IO error: {0}")]
@@ -74,8 +74,8 @@ pub struct Sequencer {
 
 const MAX_DEPTH_PER_POLL: usize = 50;
 
-fn empty_ledger_signature(tx_hash: &TxHash) -> key_management_system_service::keys::ZkSignature {
-    key_management_system_service::keys::ZkKey::multi_sign(&[], tx_hash.as_ref())
+fn empty_ledger_signature(tx_hash: &TxHash) -> lb_key_management_system_service::keys::ZkSignature {
+    lb_key_management_system_service::keys::ZkKey::multi_sign(&[], tx_hash.as_ref())
         .expect("multi-sign with empty key set works")
 }
 
@@ -114,7 +114,7 @@ impl Sequencer {
         let node_url = Url::parse(node_endpoint).map_err(|e| SequencerError::Url(e.to_string()))?;
 
         let basic_auth = node_auth_username.map(|username| {
-            common_http_client::BasicAuthCredentials::new(username, node_auth_password)
+            lb_common_http_client::BasicAuthCredentials::new(username, node_auth_password)
         });
         let http_client = CommonHttpClient::new(basic_auth);
 
@@ -187,7 +187,7 @@ impl Sequencer {
             .sign_payload(tx_hash.as_signing_bytes().as_ref())
             .to_bytes();
         let signature =
-            key_management_system_service::keys::Ed25519Signature::from_bytes(&signature_bytes);
+            lb_key_management_system_service::keys::Ed25519Signature::from_bytes(&signature_bytes);
 
         SignedMantleTx {
             ops_proofs: vec![OpProof::Ed25519Sig(signature)],
@@ -212,7 +212,7 @@ impl Sequencer {
     }
 
     fn block_contains_inscription(
-        block: &nomos_core::block::Block<SignedMantleTx>,
+        block: &lb_core::block::Block<SignedMantleTx>,
         expected: &InscriptionOp,
         block_id: HeaderId,
     ) -> bool {

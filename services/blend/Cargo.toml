@@ -1,0 +1,54 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-blend-service"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait                      = "0.1"
+fork_stream                      = { workspace = true }
+futures                          = { default-features = false, version = "0.3" }
+lb-blend                         = { workspace = true }
+lb-chain-broadcast-service       = { workspace = true }
+lb-chain-service                 = { workspace = true }
+lb-core                          = { workspace = true }
+lb-cryptarchia-engine            = { workspace = true }
+lb-groth16                       = { default-features = false, workspace = true }
+lb-key-management-system-service = { workspace = true, features = ["unsafe"] }
+lb-ledger                        = { workspace = true }
+lb-libp2p                        = { optional = true, workspace = true }
+lb-network-service               = { workspace = true }
+lb-poq                           = { workspace = true }
+lb-sdp-service                   = { workspace = true }
+lb-services-utils                = { workspace = true }
+lb-time-service                  = { workspace = true }
+lb-utils                         = { features = ["serde"], workspace = true }
+libp2p                           = { optional = true, workspace = true }
+libp2p-stream                    = { optional = true, workspace = true }
+overwatch                        = { workspace = true }
+rand                             = { workspace = true }
+serde                            = { workspace = true }
+serde_with                       = { workspace = true }
+thiserror                        = { default-features = false, version = "1" }
+tokio                            = { default-features = false, version = "1" }
+tokio-stream                     = { default-features = false, version = "0.1" }
+tracing                          = { workspace = true }
+
+[dev-dependencies]
+lb-blend          = { features = ["unsafe-test-functions"], workspace = true }
+libp2p            = { default-features = false, features = ["plaintext", "tcp", "yamux"], workspace = true }
+libp2p-swarm-test = { default-features = false, version = "0.5.0" }
+tempfile          = { workspace = true }
+test-log          = { default-features = false, version = "0.2.18", features = ["trace"] }
+
+[features]
+default = []
+libp2p  = ["dep:lb-libp2p", "dep:libp2p", "dep:libp2p-stream", "lb-network-service/libp2p"]

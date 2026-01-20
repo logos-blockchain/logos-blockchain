@@ -1,6 +1,6 @@
 use std::{collections::HashSet, hash::BuildHasher};
 
-use nomos_core::{block::Block, header::HeaderId, mantle::SignedMantleTx};
+use lb_core::{block::Block, header::HeaderId, mantle::SignedMantleTx};
 
 /// Walk the chain backwards from `start`, visiting each block exactly once
 /// until either `visit_block` breaks or we reach genesis.

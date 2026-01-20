@@ -1,4 +1,4 @@
-name: "Install Nomos Dependencies"
+name: "Install Logos Blockchain Dependencies"
 
 inputs:
   github_token:
@@ -11,7 +11,7 @@ inputs:
     description: "The target triple to install dependencies for."
     required: true
 
-description: "Install dependencies for building and bundling Nomos."
+description: "Install dependencies for building and bundling Logos blockchain."
 
 runs:
   using: "composite"

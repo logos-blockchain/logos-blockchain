@@ -1,11 +1,9 @@
 use std::{collections::HashSet, time::Duration};
 
-use chain_service::CryptarchiaInfo;
-use common_http_client::Error;
-use executor_http_client::ExecutorHttpClient;
 use futures::StreamExt as _;
-use key_management_system_service::keys::{Ed25519Key, ZkKey};
-use nomos_core::{
+use lb_chain_service::CryptarchiaInfo;
+use lb_common_http_client::Error;
+use lb_core::{
     block::Block,
     da::BlobId,
     mantle::{
@@ -17,6 +15,8 @@ use nomos_core::{
         },
     },
 };
+use lb_executor_http_client::ExecutorHttpClient;
+use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
 use reqwest::Url;
 
 use crate::{adjust_timeout, common::chain::scan_chain_until, nodes::executor::Executor};

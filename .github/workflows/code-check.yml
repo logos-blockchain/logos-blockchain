@@ -163,13 +163,13 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: run
-          args: --locked -p nomos-node nodes/nomos-node/config.yaml --check-config
+          args: --locked -p logos-blockchain-node nodes/node/config.yaml --check-config
 
       - name: Run the executor binary to check the config file validity
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: run
-          args: --locked -p nomos-executor nodes/nomos-executor/config.yaml --check-config
+          args: --locked -p logos-blockchain-executor nodes/executor/config.yaml --check-config
 
       # This includes testing feature needed for tests
       - name: Build binaries with all features
@@ -183,8 +183,8 @@ jobs:
         env:
           POL_PROOF_DEV_MODE: true
           CONSENSUS_SLOT_TIME: 5
-          NOMOS_NODE_BIN: ${{ github.workspace }}/target/debug/nomos-node
-          NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
+          LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/debug/logos-blockchain-node
+          LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
         with:
           command: test
           # We don't test benches as they take 6h+, leading to a timeout

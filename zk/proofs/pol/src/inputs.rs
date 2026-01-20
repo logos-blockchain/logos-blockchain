@@ -1,4 +1,4 @@
-use groth16::{Fr, Groth16Input, Groth16InputDeser};
+use lb_groth16::{Fr, Groth16Input, Groth16InputDeser};
 use serde::{Deserialize, Serialize};
 
 use crate::{

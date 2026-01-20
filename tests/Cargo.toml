@@ -1,10 +1,12 @@
+# TODO: Re-enable commented out dependencies and tests once the nomos->logos-blockchain PR is merged and the testing framework updated accordingly.
+
 [package]
 categories  = { workspace = true }
 description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "tests"
+name        = "logos-blockchain-tests"
 publish     = false
 readme      = { workspace = true }
 repository  = { workspace = true }
@@ -14,59 +16,59 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                    = "0.1"
-blst                           = { version = "0.3.11" }
-broadcast-service              = { workspace = true }
-chain-leader                   = { workspace = true }
-chain-network                  = { workspace = true }
-chain-service                  = { workspace = true }
-common-http-client             = { workspace = true }
-cryptarchia-engine             = { features = ["serde"], workspace = true }
-cryptarchia-sync               = { workspace = true }
-cucumber                       = "=0.22.0"
-cucumber_ext                   = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
-executor-http-client           = { workspace = true }
-futures                        = { default-features = false, version = "0.3" }
-futures-util                   = { default-features = false, version = "0.3.31" }
-groth16                        = { workspace = true }
-hex                            = { default-features = false, version = "0.4.3" }
-key-management-system-service  = { workspace = true }
-kzgrs-backend                  = { workspace = true }
-nomos-api                      = { workspace = true }
-nomos-blend-service            = { features = ["libp2p"], workspace = true }
-nomos-core                     = { workspace = true }
-nomos-da-dispersal             = { workspace = true }
-nomos-da-network-core          = { workspace = true }
-nomos-da-network-service       = { workspace = true }
-nomos-da-sampling              = { workspace = true }
-nomos-da-verifier              = { workspace = true }
-nomos-executor                 = { default-features = false, features = ["testing", "tracing"], workspace = true }
-nomos-http-api-common          = { workspace = true }
-nomos-libp2p                   = { workspace = true }
-nomos-network                  = { features = ["libp2p"], workspace = true }
-nomos-node                     = { default-features = false, features = ["testing"], workspace = true }
-nomos-sdp                      = { workspace = true }
-nomos-time                     = { workspace = true }
-nomos-tracing                  = { workspace = true }
-nomos-tracing-service          = { workspace = true }
-nomos-utils                    = { workspace = true }
-nomos-wallet                   = { workspace = true }
-num-bigint                     = { default-features = false, version = "0.4" }
-rand                           = { workspace = true }
-reqwest                        = { features = ["json"], workspace = true }
-serde_json                     = "1.0"
-serde_yaml                     = "0.9"
-serial_test                    = "3.1.1"
-subnetworks-assignations       = { workspace = true }
-tempfile                       = { workspace = true }
-testing-framework-core         = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
-testing-framework-runner-local = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
-testing-framework-workflows    = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
-time                           = { default-features = false, version = "0.3" }
-tokio                          = "1"
-tracing                        = { workspace = true }
-tracing-subscriber             = { version = "0.3", features = ["env-filter", "fmt"] }
-tx-service                     = { features = ["libp2p", "mock"], workspace = true }
+async-trait = "0.1"
+blst        = { version = "0.3.11" }
+# cucumber    = "=0.22.0"
+# cucumber_ext                                   = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
+futures                          = { default-features = false, version = "0.3" }
+futures-util                     = { default-features = false, version = "0.3.31" }
+hex                              = { default-features = false, version = "0.4.3" }
+lb-api-service                   = { workspace = true }
+lb-blend-service                 = { features = ["libp2p"], workspace = true }
+lb-chain-broadcast-service       = { workspace = true }
+lb-chain-leader-service          = { workspace = true }
+lb-chain-network-service         = { workspace = true }
+lb-chain-service                 = { workspace = true }
+lb-common-http-client            = { workspace = true }
+lb-core                          = { workspace = true }
+lb-cryptarchia-engine            = { features = ["serde"], workspace = true }
+lb-cryptarchia-sync              = { workspace = true }
+lb-da-dispersal-service          = { workspace = true }
+lb-da-network-core               = { workspace = true }
+lb-da-network-service            = { workspace = true }
+lb-da-sampling-service           = { workspace = true }
+lb-da-verifier-service           = { workspace = true }
+lb-executor                      = { default-features = false, features = ["testing", "tracing"], workspace = true }
+lb-executor-http-client          = { workspace = true }
+lb-groth16                       = { workspace = true }
+lb-http-api-common               = { workspace = true }
+lb-key-management-system-service = { workspace = true }
+lb-kzgrs-backend                 = { workspace = true }
+lb-libp2p                        = { workspace = true }
+lb-network-service               = { features = ["libp2p"], workspace = true }
+lb-node                          = { default-features = false, features = ["testing"], workspace = true }
+lb-sdp-service                   = { workspace = true }
+lb-subnetworks-assignations      = { workspace = true }
+lb-time-service                  = { workspace = true }
+lb-tracing                       = { workspace = true }
+lb-tracing-service               = { workspace = true }
+lb-tx-service                    = { features = ["libp2p", "mock"], workspace = true }
+lb-utils                         = { workspace = true }
+lb-wallet-service                = { workspace = true }
+num-bigint                       = { default-features = false, version = "0.4" }
+rand                             = { workspace = true }
+reqwest                          = { features = ["json"], workspace = true }
+serde_json                       = "1.0"
+serde_yaml                       = "0.9"
+serial_test                      = "3.1.1"
+tempfile                         = { workspace = true }
+# testing-framework-core                         = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
+# testing-framework-runner-local                 = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
+# testing-framework-workflows                    = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
+time    = { default-features = false, version = "0.3" }
+tokio   = "1"
+tracing = { workspace = true }
+# tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [[test]]
 name = "test_cryptarchia_happy_path"
@@ -112,10 +114,10 @@ path = "src/tests/da/historic_sampling.rs"
 name = "test_mantle_sdp_ops"
 path = "src/tests/mantle/sdp_ops.rs"
 
-[[test]]
-name = "test_testing_framework_smoke_local"
-path = "src/tests/testing_framework/smoke_local.rs"
+# [[test]]
+# name = "test_testing_framework_smoke_local"
+# path = "src/tests/testing_framework/smoke_local.rs"
 
-[[test]]
-name = "test_testing_framework_cucumber_smoke_local"
-path = "src/tests/testing_framework/cucumber_smoke_local.rs"
+# [[test]]
+# name = "test_testing_framework_cucumber_smoke_local"
+# path = "src/tests/testing_framework/cucumber_smoke_local.rs"

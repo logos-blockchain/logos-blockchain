@@ -4,7 +4,7 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "wallet"
+name        = "logos-blockchain-wallet"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
@@ -13,17 +13,17 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-key-management-system-keys = { workspace = true }
-nomos-core                 = { workspace = true }
-nomos-ledger               = { workspace = true }
-num-bigint                 = { default-features = false, version = "0.4" }
-rpds                       = { default-features = false, version = "1.1.1" }
-thiserror                  = { workspace = true }
-tracing                    = { workspace = true }
+lb-core                       = { workspace = true }
+lb-key-management-system-keys = { workspace = true }
+lb-ledger                     = { workspace = true }
+num-bigint                    = { default-features = false, version = "0.4" }
+rpds                          = { default-features = false, version = "1.1.1" }
+thiserror                     = { workspace = true }
+tracing                       = { workspace = true }
 
 [dev-dependencies]
-cryptarchia-engine = { workspace = true }
-nomos-utils        = { workspace = true }
+lb-cryptarchia-engine = { workspace = true }
+lb-utils              = { workspace = true }
 
 [features]
 default = []

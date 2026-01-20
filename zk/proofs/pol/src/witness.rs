@@ -5,7 +5,7 @@ use crate::{PolWitnessInputs, inputs::PolInputsJson};
 const CIRCUIT_NAME: &str = "pol";
 
 static BINARY: LazyLock<PathBuf> =
-    LazyLock::new(|| circuits_utils::witness_generator_path(CIRCUIT_NAME));
+    LazyLock::new(|| lb_circuits_utils::witness_generator_path(CIRCUIT_NAME));
 
 /// Witness of the circuit.
 pub struct Witness(Vec<u8>);
@@ -32,5 +32,5 @@ pub fn generate_witness(inputs: &PolWitnessInputs) -> Result<Witness, std::io::E
     let pol_inputs_json: PolInputsJson = inputs.into();
     let str_inputs: String =
         serde_json::to_string(&pol_inputs_json).expect("Failed to serialize inputs");
-    witness_generator::generate_witness(&str_inputs, BINARY.as_path()).map(Witness)
+    lb_witness_generator::generate_witness(&str_inputs, BINARY.as_path()).map(Witness)
 }

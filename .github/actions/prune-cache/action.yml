@@ -20,7 +20,7 @@ runs:
         CACHE=$(curl  \
           -H "Accept: application/vnd.github.v3+json" \
           -H "Authorization: token ${{ inputs.github-token }}" \
-          https://api.github.com/repos/logos-co/nomos-node/actions/caches | jq '.actions_caches[] | select(.key | startswith("${{ inputs.key-prefix }}")) | .id')
+          https://api.github.com/repos/logos-blockchain/logos-blockchain/actions/caches | jq '.actions_caches[] | select(.key | startswith("${{ inputs.key-prefix }}")) | .id')
         echo "cache=$CACHE" >> "$GITHUB_OUTPUT"
       continue-on-error: true
     - name: Delete cache entry
@@ -30,5 +30,5 @@ runs:
         curl -X DELETE \
           -H "Accept: application/vnd.github.v3+json" \
           -H "Authorization: token ${{ inputs.github-token }}" \
-          https://api.github.com/repos/logos-co/nomos-node/actions/caches/${{ steps.fetch-outdated-cache.outputs.cache }}
+          https://api.github.com/repos/logos-blockchain/logos-blockchain/actions/caches/${{ steps.fetch-outdated-cache.outputs.cache }}
       continue-on-error: true

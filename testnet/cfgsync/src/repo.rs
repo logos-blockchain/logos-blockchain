@@ -4,8 +4,8 @@ use std::{
     time::Duration,
 };
 
-use nomos_tracing_service::TracingSettings;
-use tests::topology::configs::{GeneralConfig, da::DaParams};
+use lb_tests::topology::configs::{GeneralConfig, da::DaParams};
+use lb_tracing_service::TracingSettings;
 use tokio::{sync::oneshot::Sender, time::timeout};
 
 use crate::{

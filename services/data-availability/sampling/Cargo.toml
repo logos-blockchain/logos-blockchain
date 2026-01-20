@@ -1,0 +1,45 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-da-sampling-service"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait                 = "0.1"
+bytes                       = { workspace = true }
+either                      = { default-features = false, version = "1.15.0" }
+futures                     = { default-features = false, version = "0.3" }
+hex                         = { default-features = false, version = "0.4.3" }
+lb-core                     = { workspace = true }
+lb-da-network-core          = { workspace = true }
+lb-da-network-service       = { workspace = true }
+lb-kzgrs-backend            = { workspace = true }
+lb-services-utils           = { workspace = true }
+lb-storage-service          = { workspace = true }
+lb-subnetworks-assignations = { workspace = true }
+lb-tracing                  = { workspace = true }
+lb-tx-service               = { workspace = true }
+libp2p-identity             = { version = "0.2" }
+overwatch                   = { workspace = true }
+rand                        = { workspace = true }
+serde                       = { workspace = true }
+thiserror                   = "1.0"
+tokio                       = { default-features = false, features = ["test-util"], version = "1" }
+tokio-stream                = { default-features = false, version = "0.1.15" }
+tracing                     = { workspace = true }
+
+[dev-dependencies]
+lb-kzgrs = { workspace = true }
+
+[features]
+default         = ["libp2p"]
+libp2p          = []
+rocksdb-backend = ["lb-storage-service/rocksdb-backend"]

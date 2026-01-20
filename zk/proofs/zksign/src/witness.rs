@@ -5,7 +5,7 @@ use crate::inputs::{ZkSignWitnessInputs, ZkSignWitnessInputsJson};
 const CIRCUIT_NAME: &str = "zksign";
 
 static BINARY: LazyLock<PathBuf> =
-    LazyLock::new(|| circuits_utils::witness_generator_path(CIRCUIT_NAME));
+    LazyLock::new(|| lb_circuits_utils::witness_generator_path(CIRCUIT_NAME));
 
 /// Witness of the circuit.
 pub struct Witness(Vec<u8>);
@@ -27,5 +27,5 @@ pub fn generate_witness(inputs: &ZkSignWitnessInputs) -> Result<Witness, std::io
     let inputs_json: ZkSignWitnessInputsJson = inputs.into();
     let str_inputs: String =
         serde_json::to_string(&inputs_json).expect("Failed to serialize inputs");
-    witness_generator::generate_witness(&str_inputs, BINARY.as_path()).map(Witness)
+    lb_witness_generator::generate_witness(&str_inputs, BINARY.as_path()).map(Witness)
 }

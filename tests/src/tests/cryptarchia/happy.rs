@@ -1,11 +1,11 @@
 use std::{collections::HashSet, time::Duration};
 
 use futures::stream::{self, StreamExt as _};
-use serial_test::serial;
-use tests::{
+use logos_blockchain_tests::{
     adjust_timeout,
     topology::{Topology, TopologyConfig},
 };
+use serial_test::serial;
 
 // how many times more than the expected time to produce a predefined number of
 // blocks we wait before timing out

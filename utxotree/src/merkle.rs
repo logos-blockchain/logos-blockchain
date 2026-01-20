@@ -4,10 +4,10 @@ use std::{
 };
 
 use ark_ff::Field;
+use lb_core::utils::merkle::{MerkleNode, MerklePath};
 #[cfg(feature = "serde")]
-use groth16::serde::serde_fr;
-use nomos_core::utils::merkle::{MerkleNode, MerklePath};
-use poseidon2::{Digest, Fr};
+use lb_groth16::serde::serde_fr;
+use lb_poseidon2::{Digest, Fr};
 use rpds::RedBlackTreeSetSync;
 
 use crate::CompressedUtxoTree;
@@ -447,7 +447,7 @@ mod tests {
     use super::*;
     use crate::test_fr::TestFr;
 
-    type TestHash = poseidon2::Poseidon2Bn254Hasher;
+    type TestHash = lb_poseidon2::Poseidon2Bn254Hasher;
 
     #[test]
     fn test_empty_tree() {

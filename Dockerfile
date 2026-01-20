@@ -13,22 +13,22 @@ FROM rust:1.92.0-slim-bookworm AS builder
 ARG VERSION
 
 LABEL maintainer="augustinas@status.im" \
-    source="https://github.com/logos-co/nomos-node" \
-    description="Nomos node build image"
+    source="https://github.com/logos-blockchain/logos-blockchain" \
+    description="Logos blockchain node build image"
 
-WORKDIR /nomos
+WORKDIR /logos-blockchain
 COPY . .
 
 # Install dependencies needed for building RocksDB.
 RUN apt-get update && apt-get install -yq \
     git gcc g++ clang libssl-dev pkg-config ca-certificates curl
 
-RUN chmod +x scripts/setup-nomos-circuits.sh && \
-    scripts/setup-nomos-circuits.sh "$VERSION" "/opt/circuits"
+RUN chmod +x scripts/setup-logos-blockchain-circuits.sh && \
+    scripts/setup-logos-blockchain-circuits.sh "$VERSION" "/opt/circuits"
 
-ENV NOMOS_CIRCUITS=/opt/circuits
+ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 
-RUN cargo build --locked --release -p nomos-node
+RUN cargo build --locked --release -p logos-blockchain-node
 
 # ===========================
 # NODE IMAGE
@@ -39,8 +39,8 @@ FROM debian:bookworm-slim
 ARG VERSION
 
 LABEL maintainer="augustinas@status.im" \
-    source="https://github.com/logos-co/nomos-node" \
-    description="Nomos node image"
+    source="https://github.com/logos-blockchain/logos-blockchain" \
+    description="Logos blockchain node image"
 
 RUN apt-get update && apt-get install -yq \
     libstdc++6 \
@@ -49,10 +49,10 @@ RUN apt-get update && apt-get install -yq \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/circuits /opt/circuits
-COPY --from=builder /nomos/target/release/nomos-node /usr/local/bin/nomos-node
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-node /usr/local/bin/logos-blockchain-node
 
-ENV NOMOS_CIRCUITS=/opt/circuits
+ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 
 EXPOSE 3000 8080 9000 60000
 
-ENTRYPOINT ["nomos-node"]
+ENTRYPOINT ["logos-blockchain-node"]

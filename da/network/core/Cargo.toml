@@ -1,0 +1,47 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-da-network-core"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+cached                      = { workspace = true }
+fixed                       = { default-features = false, features = ["serde-str"], version = "1" }
+futures                     = { default-features = false, version = "0.3" }
+indexmap                    = { default-features = false, features = ["std"], version = "2.2" }
+lb-core                     = { workspace = true }
+lb-da-messages              = { workspace = true }
+lb-kzgrs-backend            = { workspace = true }
+lb-subnetworks-assignations = { workspace = true }
+lb-utils                    = { workspace = true }
+libp2p                      = { features = ["macros", "quic", "tokio"], workspace = true }
+libp2p-stream               = "0.3.0-alpha"
+log                         = "0.4"
+rand                        = { default-features = false, version = "0.9" }
+serde                       = { workspace = true }
+serde_with                  = { workspace = true }
+thiserror                   = "1.0"
+tokio                       = { version = "1" }
+tokio-stream                = { default-features = false, version = "0.1" }
+tracing                     = { workspace = true }
+tracing-subscriber          = { default-features = false, version = "0.3.18" }
+
+[dev-dependencies]
+bincode                       = "1.3"
+lb-key-management-system-keys = { workspace = true }
+lb-kzgrs                      = { workspace = true }
+lb-kzgrs-backend              = { features = ["testutils"], workspace = true }
+lb-utils                      = { workspace = true }
+libp2p                        = { features = ["plaintext", "yamux"], workspace = true }
+libp2p-swarm-test             = { default-features = false, features = ["tokio"], version = "0.5.0" }
+rstest                        = { default-features = false, version = "0.25" }
+tokio                         = { default-features = false, version = "1" }
+tracing-subscriber            = { default-features = false, features = ["env-filter", "fmt", "std"], version = "0.3" }

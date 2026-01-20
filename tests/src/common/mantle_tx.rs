@@ -1,7 +1,4 @@
-use key_management_system_service::keys::{
-    Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
-};
-use nomos_core::{
+use lb_core::{
     mantle::{
         MantleTx, NoteId, SignedMantleTx, Transaction as _,
         ledger::Tx as LedgerTx,
@@ -18,6 +15,9 @@ use nomos_core::{
         ActiveMessage, ActivityMetadata, DeclarationMessage, ServiceType, SessionNumber,
         WithdrawMessage, da,
     },
+};
+use lb_key_management_system_service::keys::{
+    Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
 
 fn empty_ledger_signature(tx_hash: &TxHash) -> ZkSignature {
@@ -144,14 +144,14 @@ pub fn create_channel_set_keys_tx(
 pub fn create_sdp_declare_tx(
     provider_signing_key: &Ed25519Key,
     service_type: ServiceType,
-    locators: Vec<nomos_core::sdp::Locator>,
+    locators: Vec<lb_core::sdp::Locator>,
     zk_id: ZkPublicKey,
     zk_sk: &ZkKey,
     locked_note_id: NoteId,
     note_sk: &ZkKey,
 ) -> (SignedMantleTx, DeclarationMessage) {
     let provider_pk_bytes = provider_signing_key.public_key().to_bytes();
-    let provider_id = nomos_core::sdp::ProviderId::try_from(provider_pk_bytes)
+    let provider_id = lb_core::sdp::ProviderId::try_from(provider_pk_bytes)
         .expect("Valid provider id from signing key");
 
     let declaration = DeclarationMessage {

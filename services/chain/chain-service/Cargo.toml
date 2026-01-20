@@ -1,0 +1,52 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-chain-service"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait                = "0.1"
+bytes                      = { workspace = true }
+futures                    = { default-features = false, version = "0.3" }
+lb-chain-broadcast-service = { workspace = true }
+lb-core                    = { workspace = true }
+lb-cryptarchia-engine      = { features = ["serde"], workspace = true }
+lb-cryptarchia-sync        = { workspace = true }
+lb-groth16                 = { workspace = true }
+lb-ledger                  = { features = ["serde"], workspace = true }
+lb-network-service         = { workspace = true }
+lb-services-utils          = { workspace = true }
+lb-storage-service         = { workspace = true }
+lb-time-service            = { workspace = true, features = ["ntp"] }
+lb-utils                   = { workspace = true }
+num-bigint                 = { default-features = false, version = "0.4" }
+overwatch                  = { workspace = true }
+serde                      = { workspace = true }
+serde_with                 = { workspace = true }
+strum                      = "0.27"
+thiserror                  = "1.0"
+tokio                      = { default-features = false, version = "1" }
+tracing                    = { workspace = true }
+tracing-futures            = { default-features = false, features = ["std-future"], version = "0.2" }
+utoipa                     = { optional = true, workspace = true }
+
+[dev-dependencies]
+lb-core                       = { features = ["mock"], workspace = true }
+lb-key-management-system-keys = { workspace = true }
+lb-network-service            = { features = ["mock"], workspace = true }
+lb-storage-service            = { features = ["rocksdb-backend"], workspace = true }
+tempfile                      = { default-features = false, version = "3" }
+
+[features]
+default         = []
+lb-pol-dev-mode = ["lb-core/pol-dev-mode"]
+libp2p          = ["lb-network-service/libp2p"]
+openapi         = ["dep:utoipa"]

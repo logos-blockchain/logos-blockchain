@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nomos_core::codec::{DeserializeOp as _, SerializeOp as _};
+use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 use redb::{
     CommitError, Database, DatabaseError, ReadableDatabase as _, ReadableTable as _, StorageError,
     TableDefinition, TableError, TransactionError,

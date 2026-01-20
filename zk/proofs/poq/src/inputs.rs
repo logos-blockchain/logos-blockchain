@@ -1,5 +1,5 @@
-use groth16::{Field as _, Fr, Groth16Input, Groth16InputDeser};
-use pol::compute_lottery_values;
+use lb_groth16::{Field as _, Fr, Groth16Input, Groth16InputDeser};
+use lb_pol::compute_lottery_values;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -51,9 +51,7 @@ impl PoQWitnessInputs {
                 transaction_hash: Fr::ZERO,
                 output_number: 0,
                 aged_path_and_selectors: [(Fr::ZERO, false); _],
-                slot_secret: Fr::ZERO,
-                slot_secret_path: [Fr::ZERO; _],
-                starting_slot: 0,
+                secret_key: Fr::ZERO,
             }),
         })
     }

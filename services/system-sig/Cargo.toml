@@ -1,0 +1,19 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-system-sig-service"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+async-ctrlc = "1.2"
+async-trait = "0.1"
+overwatch   = { workspace = true }
+tracing     = { default-features = false, version = "0.1" }

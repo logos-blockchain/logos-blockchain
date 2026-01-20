@@ -3,8 +3,8 @@ pub mod balance {
         http::StatusCode,
         response::{IntoResponse, Response},
     };
-    use key_management_system_keys::keys::ZkPublicKey;
-    use nomos_core::{header::HeaderId, mantle::Value};
+    use lb_core::{header::HeaderId, mantle::Value};
+    use lb_key_management_system_keys::keys::ZkPublicKey;
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize)]
@@ -26,11 +26,11 @@ pub mod transfer_funds {
         http::StatusCode,
         response::{IntoResponse, Response},
     };
-    use key_management_system_keys::keys::ZkPublicKey;
-    use nomos_core::{
+    use lb_core::{
         header::HeaderId,
         mantle::{SignedMantleTx, Transaction as _, Value},
     };
+    use lb_key_management_system_keys::keys::ZkPublicKey;
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize)]
@@ -44,7 +44,7 @@ pub mod transfer_funds {
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletTransferFundsResponseBody {
-        pub hash: nomos_core::mantle::tx::TxHash,
+        pub hash: lb_core::mantle::tx::TxHash,
     }
 
     impl From<SignedMantleTx> for WalletTransferFundsResponseBody {

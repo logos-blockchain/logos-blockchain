@@ -1,4 +1,4 @@
-use groth16::{Field as _, Fr, Groth16Input, Groth16InputDeser};
+use lb_groth16::{Field as _, Fr, Groth16Input, Groth16InputDeser};
 use serde::{Deserialize, Serialize};
 
 pub const CORE_MERKLE_TREE_HEIGHT: usize = 20;

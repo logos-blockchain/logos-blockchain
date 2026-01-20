@@ -1,0 +1,25 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-blend-crypto"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+blake2         = { workspace = true }
+lb-groth16     = { workspace = true }
+lb-poq         = { workspace = true }
+lb-poseidon2   = { workspace = true }
+lb-utils       = { features = ["rng"], workspace = true }
+rs-merkle-tree = { default-features = false, version = "0.1", features = ["memory_store"] }
+thiserror      = "1"
+
+[dev-dependencies]
+num-bigint = { default-features = false, version = "0.4" }

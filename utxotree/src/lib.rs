@@ -5,9 +5,9 @@ pub mod test_fr;
 
 use std::collections::BTreeMap;
 
+use lb_core::utils::merkle::MerklePath;
+use lb_poseidon2::{Digest, Fr};
 use merkle::DynamicMerkleTree;
-use nomos_core::utils::merkle::MerklePath;
-use poseidon2::{Digest, Fr};
 use rpds::HashTrieMapSync;
 use thiserror::Error;
 
@@ -105,6 +105,9 @@ where
         self.items.contains_key(key).then_some(())
     }
 
+    /// Computes the Merkle path for the key.
+    /// The path is ordered from leaf to root (excluded).
+    /// Returns `None` if the key does not exist or has been removed.
     pub fn path(&self, key: &Key) -> Option<MerklePath<Fr>> {
         let (_, pos) = self.items.get(key)?;
         self.merkle.path(*pos)
@@ -190,7 +193,7 @@ pub struct CompressedUtxoTree<Key, Item> {
 
 #[cfg(feature = "serde")]
 mod serde {
-    use poseidon2::{Digest, Fr};
+    use lb_poseidon2::{Digest, Fr};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     impl<Key, Item, Hash> Serialize for super::UtxoTree<Key, Item, Hash>
@@ -231,7 +234,7 @@ mod tests {
 
     use super::*;
     use crate::test_fr::TestFr;
-    type TestHash = poseidon2::Poseidon2Bn254Hasher;
+    type TestHash = lb_poseidon2::Poseidon2Bn254Hasher;
 
     #[test]
     fn test_empty_tree() {

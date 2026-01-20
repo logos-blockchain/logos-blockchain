@@ -3,9 +3,9 @@
 use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use clap::Parser as _;
-use common_http_client::{BasicAuthCredentials, CommonHttpClient};
-use demo_sequencer::db::AccountDb;
 use futures::StreamExt as _;
+use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient};
+use lb_demo_sequencer::db::AccountDb;
 use owo_colors::OwoColorize as _;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -29,7 +29,7 @@ mod output;
 #[tokio::main]
 async fn main() {
     let CliArgs {
-        nomos_node_http_endpoint,
+        lb_node_http_endpoint,
         username,
         password,
         channel_id,
@@ -42,7 +42,7 @@ async fn main() {
 
     let listen_address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port_number));
 
-    print_startup_banner(&nomos_node_http_endpoint, &channel_id, &listen_address);
+    print_startup_banner(&lb_node_http_endpoint, &channel_id, &listen_address);
 
     // Setup
 
@@ -73,7 +73,7 @@ async fn main() {
     let mut block_stream = Box::pin(BlockStream::create(
         cancellation_token,
         client,
-        &nomos_node_http_endpoint,
+        &lb_node_http_endpoint,
         &channel_id,
         token_name.as_str(),
     ));

@@ -4,24 +4,24 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "cryptarchia-sync"
+name        = "logos-blockchain-cryptarchia-sync"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-bytes              = { features = ["serde"], workspace = true }
-cryptarchia-engine = { workspace = true }
-futures            = { default-features = false, version = "0.3" }
-libp2p             = { optional = true, workspace = true }
-libp2p-stream      = { optional = true, workspace = true }
-nomos-core         = { workspace = true }
-rand               = { workspace = true }
-serde              = { workspace = true }
-serde_with         = { workspace = true }
-thiserror          = "1"
-tokio              = { default-features = false, version = "1" }
-tracing            = { default-features = false, version = "0.1" }
+bytes                 = { features = ["serde"], workspace = true }
+futures               = { default-features = false, version = "0.3" }
+lb-core               = { workspace = true }
+lb-cryptarchia-engine = { workspace = true }
+libp2p                = { optional = true, workspace = true }
+libp2p-stream         = { optional = true, workspace = true }
+rand                  = { workspace = true }
+serde                 = { workspace = true }
+serde_with            = { workspace = true }
+thiserror             = "1"
+tokio                 = { default-features = false, version = "1" }
+tracing               = { default-features = false, version = "0.1" }
 
 [dev-dependencies]
 libp2p            = { features = ["dns", "quic", "tokio"], workspace = true }
