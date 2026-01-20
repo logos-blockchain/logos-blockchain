@@ -6772,7 +6772,11 @@ dependencies = [
  "poq 0.1.0",
  "poseidon2 0.1.0",
  "rs-merkle-tree",
+ "serde",
+ "subtle",
  "thiserror 1.0.69",
+ "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -7716,6 +7720,7 @@ dependencies = [
  "clap",
  "color-eyre",
  "cryptarchia-engine 0.1.0",
+ "derivative",
  "futures",
  "groth16 0.1.0",
  "hex",
