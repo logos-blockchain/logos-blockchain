@@ -901,7 +901,8 @@ mod tests {
         let txhash = mantle_tx.hash();
         let sig = signing_key.sign_payload(&txhash.as_signing_bytes());
 
-        // Encode and decode roundtrip test (no hardcoded test vector since signatures are deterministic)
+        // Encode and decode roundtrip test (no hardcoded test vector since signatures
+        // are deterministic)
         let signed_tx = SignedMantleTx::new(
             mantle_tx,
             vec![OpProof::Ed25519Sig(sig), OpProof::Ed25519Sig(sig)],

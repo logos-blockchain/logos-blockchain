@@ -2,6 +2,7 @@ use std::{
     collections::HashSet,
     net::SocketAddr,
     process::{Child, Command, Stdio},
+    str::FromStr as _,
     time::Duration,
 };
 
@@ -29,7 +30,6 @@ use lb_tx_service::MempoolMetrics;
 use lb_utils::net::get_available_tcp_port;
 use lb_wallet_service::WalletServiceSettings;
 use reqwest::Url;
-use std::str::FromStr as _;
 use tempfile::NamedTempFile;
 use tokio::time::error::Elapsed;
 

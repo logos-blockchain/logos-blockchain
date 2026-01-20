@@ -192,8 +192,8 @@ pub fn create_sdp_withdraw_tx(
     }
 }
 
-/// Creates a valid inscription transaction using the same hardcoded key as the mock
-/// wallet adapter.
+/// Creates a valid inscription transaction using the same hardcoded key as the
+/// mock wallet adapter.
 #[must_use]
 pub fn create_inscription_transaction_with_id(id: ChannelId) -> SignedMantleTx {
     let signing_key = Ed25519Key::from_bytes(&TEST_SIGNING_KEY_BYTES);

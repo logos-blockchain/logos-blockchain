@@ -4,7 +4,6 @@ use std::{path::PathBuf, sync::LazyLock};
 
 use reqwest::Client;
 use tempfile::TempDir;
-
 pub use validator::{Pool, Validator, create_validator_config};
 
 const LOGS_PREFIX: &str = "__logs";
