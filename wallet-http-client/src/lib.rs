@@ -1,7 +1,6 @@
-use common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
-use key_management_system_keys::keys::ZkPublicKey;
-use nomos_core::{codec::SerializeOp as _, header::HeaderId};
-use nomos_http_api_common::{
+use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
+use lb_core::{codec::SerializeOp as _, header::HeaderId};
+use lb_http_api_common::{
     bodies::{
         NoopBody,
         wallet::{
@@ -11,6 +10,7 @@ use nomos_http_api_common::{
     },
     paths,
 };
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use url::Url;
 
 pub struct WalletHttpClient {
@@ -75,7 +75,7 @@ impl WalletHttpClient {
 
 #[cfg(test)]
 mod tests {
-    use nomos_core::codec::DeserializeOp as _;
+    use lb_core::codec::DeserializeOp as _;
 
     use super::*;
 

@@ -1,0 +1,47 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-kzgrs-backend"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+ark-ff        = "0.4"
+ark-poly      = "0.4.2"
+ark-serialize = "0.4.2"
+blake2        = { default-features = false, workspace = true }
+itertools     = { default-features = false, version = "0.12" }
+lb-core       = { workspace = true }
+lb-kzgrs      = { workspace = true }
+rand          = { default-features = false, features = ["std"], workspace = true }
+rayon         = { optional = true, version = "1.10.0" }
+serde         = { workspace = true }
+
+[dev-dependencies]
+ark-bls12-381 = { default-features = false, version = "0.4.0" }
+divan         = { default-features = false, version = "0.1" }
+
+[features]
+default   = []
+parallel  = ["dep:rayon", "lb-kzgrs/parallel"]
+single    = []
+testutils = []
+
+[[bench]]
+harness = false
+name    = "encoder"
+
+[[bench]]
+harness = false
+name    = "verifier"
+
+[[bench]]
+harness = false
+name    = "reconstruct"

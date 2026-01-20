@@ -4,7 +4,7 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "groth16"
+name        = "logos-blockchain-groth16"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }

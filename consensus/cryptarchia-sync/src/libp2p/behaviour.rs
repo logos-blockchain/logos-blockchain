@@ -4,6 +4,7 @@ use std::{
 };
 
 use futures::{AsyncWriteExt as _, FutureExt as _, StreamExt as _, future::BoxFuture};
+use lb_core::header::HeaderId;
 use libp2p::{
     Multiaddr, PeerId, Stream as Libp2pStream, Stream, StreamProtocol,
     core::{Endpoint, transport::PortUse},
@@ -14,7 +15,6 @@ use libp2p::{
     },
 };
 use libp2p_stream::{Behaviour as StreamBehaviour, Control, IncomingStreams};
-use nomos_core::header::HeaderId;
 use tokio::sync::{mpsc, mpsc::Sender, oneshot};
 use tracing::{debug, error};
 
@@ -522,11 +522,11 @@ impl NetworkBehaviour for Behaviour {
 mod tests {
     use std::{collections::HashSet, iter, time::Duration};
 
-    use cryptarchia_engine::Slot;
     use futures::StreamExt as _;
+    use lb_core::header::HeaderId;
+    use lb_cryptarchia_engine::Slot;
     use libp2p::{Multiaddr, PeerId, StreamProtocol, Swarm, bytes::Bytes, swarm::SwarmEvent};
     use libp2p_swarm_test::SwarmExt as _;
-    use nomos_core::header::HeaderId;
     use rand::{Rng, thread_rng};
     use tokio::sync::oneshot;
 

@@ -88,7 +88,7 @@ The script automates building binaries, managing data directories, and linking e
 
 ### Environment Setup
 
-You will need a running **Nomos Node** (L1). If you are running one locally, ensure the `TESTNET_ENDPOINT` in your `.env` points to your local node.
+You will need a running **Logos Blockchain Node** (L1). If you are running one locally, ensure the `TESTNET_ENDPOINT` in your `.env` points to your local node.
 
 ---
 

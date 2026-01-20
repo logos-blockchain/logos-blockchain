@@ -1,13 +1,13 @@
 use core::convert::Infallible;
 
 use clap::Parser;
-use nomos_core::mantle::ops::channel::ChannelId;
+use lb_core::mantle::ops::channel::ChannelId;
 use url::Url;
 
 #[derive(Parser, Debug)]
 pub struct CliArgs {
     #[clap(short = 'e', env = "TESTNET_ENDPOINT")]
-    pub nomos_node_http_endpoint: Url,
+    pub lb_node_http_endpoint: Url,
     #[clap(short = 'u', env = "TESTNET_USERNAME")]
     pub username: Option<String>,
     #[clap(short = 'p', env = "TESTNET_PASSWORD")]

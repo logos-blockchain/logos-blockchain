@@ -20,8 +20,8 @@
 #   ./run-local.sh all --env-file ~/Eng/offsite-sequencer-env/.env-local --clean
 #
 # Required env vars:
-#   SEQUENCER_NODE_ENDPOINT      - Nomos node HTTP endpoint for sequencer
-#   ARCHIVER_NODE_ENDPOINT       - Nomos node HTTP endpoint for archiver
+#   SEQUENCER_NODE_ENDPOINT      - Logos blockchain node HTTP endpoint for sequencer
+#   ARCHIVER_NODE_ENDPOINT       - Logos blockchain node HTTP endpoint for archiver
 #   TOKEN_NAME                   - Token name (e.g., "MEM")
 
 set -e
@@ -168,19 +168,19 @@ echo "  Data directory:     $DATA_DIR"
 echo ""
 
 # Check if binaries exist, if not build them
-SEQUENCER_BIN="$REPO_ROOT/target/release/demo-sequencer"
-ARCHIVER_BIN="$REPO_ROOT/target/release/logos-blockchain-archiver"
+SEQUENCER_BIN="$REPO_ROOT/target/release/logos-blockchain-demo-sequencer"
+ARCHIVER_BIN="$REPO_ROOT/target/release/logos-blockchain-demo-archiver"
 
 if [[ "$SERVICE" == "sequencer" || "$SERVICE" == "all" ]] && [ ! -f "$SEQUENCER_BIN" ]; then
     echo -e "${YELLOW}Building sequencer...${NC}"
     cd "$REPO_ROOT"
-    cargo build --release -p demo-sequencer
+    cargo build --release -p logos-blockchain-demo-sequencer
 fi
 
 if [[ "$SERVICE" == "archiver" || "$SERVICE" == "all" ]] && [ ! -f "$ARCHIVER_BIN" ]; then
     echo -e "${YELLOW}Building archiver...${NC}"
     cd "$REPO_ROOT"
-    cargo build --release -p logos-blockchain-archiver
+    cargo build --release -p logos-blockchain-demo-archiver
 fi
 
 # Run the selected service(s)

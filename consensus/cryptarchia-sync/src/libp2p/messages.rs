@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use nomos_core::header::HeaderId;
+use lb_core::header::HeaderId;
 use serde::{Deserialize, Serialize};
 
 use crate::SerialisedBlock;

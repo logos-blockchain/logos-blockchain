@@ -1,6 +1,6 @@
 use core::net::SocketAddr;
 
-use nomos_core::mantle::ops::channel::ChannelId;
+use lb_core::mantle::ops::channel::ChannelId;
 use owo_colors::OwoColorize as _;
 use url::Url;
 
@@ -17,7 +17,7 @@ pub fn print_startup_banner(endpoint: &Url, channel_id: &ChannelId, listen_addr:
     println!("{}", "═".repeat(70).dimmed());
     println!(
         "  {} {}",
-        "📡 Nomos Node:".bright_blue().bold(),
+        "📡 Logos Blockchain Node:".bright_blue().bold(),
         endpoint.white()
     );
     println!(

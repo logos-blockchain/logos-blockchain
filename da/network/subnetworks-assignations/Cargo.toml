@@ -1,0 +1,31 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-subnetworks-assignations"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+counter         = "0.6"
+lb-core         = { workspace = true }
+lb-utils        = { workspace = true }
+libp2p-identity = { default-features = false, features = ["peerid", "serde"], version = "0.2" }
+rand            = { default-features = false, features = ["std_rng"], workspace = true }
+serde           = { workspace = true }
+
+[dev-dependencies]
+divan           = { default-features = false, version = "0.1" }
+lb-utils        = { features = ["rng"], workspace = true }
+libp2p-identity = { default-features = false, features = ["peerid", "rand"], version = "0.2" }
+rand            = { default-features = false, features = ["small_rng", "std"], workspace = true }
+
+[[bench]]
+harness = false
+name    = "historic_aware_refill"

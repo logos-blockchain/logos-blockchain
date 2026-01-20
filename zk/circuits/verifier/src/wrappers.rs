@@ -4,21 +4,21 @@ use std::{
     sync::LazyLock,
 };
 
-use circuits_utils::nomos_circuits_dir;
+use lb_circuits_utils::circuits_dir;
 use tempfile::NamedTempFile;
 
 const BINARY_NAME: &str = "verifier";
 
-/// Path to the verifier binary in the `NOMOS_CIRCUITS` directory.
+/// Path to the verifier binary in the `LOGOS_BLOCKCHAIN_CIRCUITS` directory.
 ///
 /// # Panics
 ///
 /// Panics if the verifier binary is not found at the expected path.
 fn verifier_binary() -> PathBuf {
-    // Get the nomos-circuits directory
-    let circuits_dir = nomos_circuits_dir();
+    // Get the logos-blockchain-circuits directory
+    let circuits_dir = circuits_dir();
 
-    // Check for verifier binary at the root of nomos-circuits directory
+    // Check for verifier binary at the root of logos-blockchain-circuits directory
     let verifier_path = circuits_dir.join(BINARY_NAME);
     if verifier_path.is_file() {
         return verifier_path;
@@ -26,7 +26,7 @@ fn verifier_binary() -> PathBuf {
 
     panic!(
         "Could not find '{BINARY_NAME}' binary at expected path: {}\n\
-         Please ensure your nomos-circuits directory has the correct structure with the verifier binary at the root.",
+         Please ensure your logos-blockchain-circuits directory has the correct structure with the verifier binary at the root.",
         verifier_path.display()
     )
 }

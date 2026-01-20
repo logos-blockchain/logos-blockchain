@@ -1,19 +1,19 @@
 use std::{collections::HashSet, time::Duration};
 
-use common_http_client::CommonHttpClient;
-use key_management_system_service::keys::{ZkKey, ZkPublicKey};
-use nomos_core::mantle::{
+use lb_common_http_client::CommonHttpClient;
+use lb_core::mantle::{
     MantleTx, Note, SignedMantleTx, Transaction as _, TxHash, ledger::Tx as LedgerTx,
     ops::channel::ChannelId,
 };
-use num_bigint::BigUint;
-use reqwest::Url;
-use serial_test::serial;
-use tests::{
+use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
+use logos_blockchain_tests::{
     common::{chain::scan_chain_until, da::create_inscription_transaction_with_id},
     nodes::validator::Validator,
     topology::{Topology, TopologyConfig},
 };
+use num_bigint::BigUint;
+use reqwest::Url;
+use serial_test::serial;
 use tokio::time::timeout;
 
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
@@ -95,7 +95,7 @@ async fn wait_for_transactions_processing(
             |header_id| validator.get_block(header_id),
             |block| {
                 for tx in block.transactions() {
-                    let hash = nomos_core::mantle::Transaction::hash(tx);
+                    let hash = lb_core::mantle::Transaction::hash(tx);
                     if valid_tx_hashes.contains(&hash) {
                         found_valid_txs.insert(hash);
                     }

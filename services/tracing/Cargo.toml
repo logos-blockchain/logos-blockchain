@@ -1,0 +1,27 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-tracing-service"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[features]
+profiling = ["console-subscriber"]
+
+[dependencies]
+async-trait        = "0.1"
+lb-tracing         = { workspace = true }
+overwatch          = { workspace = true }
+serde              = { workspace = true }
+tracing            = { workspace = true }
+tracing-appender   = "0.2"
+tracing-subscriber = { default-features = false, version = "0.3" }
+
+console-subscriber = { default-features = false, optional = true, version = "0.4" }

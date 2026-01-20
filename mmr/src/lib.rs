@@ -2,8 +2,8 @@ use std::sync::OnceLock;
 
 use ark_ff::Field as _;
 #[cfg(feature = "serde")]
-use groth16::serde::serde_fr;
-use poseidon2::{Digest, Fr};
+use lb_groth16::serde::serde_fr;
+use lb_poseidon2::{Digest, Fr};
 use rpds::StackSync;
 
 const EMPTY_VALUE: Fr = Fr::ZERO;
@@ -159,7 +159,7 @@ mod test {
     use proptest_macro::property_test;
 
     use super::*;
-    type ZkHasher = poseidon2::Poseidon2Bn254Hasher;
+    type ZkHasher = lb_poseidon2::Poseidon2Bn254Hasher;
 
     struct TestFr(Fr);
     impl AsRef<Fr> for TestFr {

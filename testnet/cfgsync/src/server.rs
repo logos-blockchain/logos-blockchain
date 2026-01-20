@@ -1,17 +1,17 @@
 use std::{fs, net::Ipv4Addr, path::PathBuf, sync::Arc, time::Duration};
 
 use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
-use nomos_da_network_core::swarm::{
+use lb_da_network_core::swarm::{
     DAConnectionMonitorSettings, DAConnectionPolicySettings, ReplicationConfig,
 };
-use nomos_tracing_service::TracingSettings;
-use nomos_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
-use serde::{Deserialize, Serialize};
-use serde_with::serde_as;
-use tests::{
+use lb_tests::{
     nodes::{executor::create_executor_config, validator::create_validator_config},
     topology::configs::da::DaParams,
 };
+use lb_tracing_service::TracingSettings;
+use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
+use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use tokio::sync::oneshot::channel;
 
 use crate::{

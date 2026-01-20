@@ -4,7 +4,7 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "cfgsync"
+name        = "logos-blockchain-cfgsync"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
@@ -13,22 +13,22 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-axum                  = { default-features = false, features = ["http1", "http2", "json", "tokio"], version = "0.7.5" }
-clap                  = { default-features = false, version = "4" }
-nomos-core            = { workspace = true }
-nomos-da-network-core = { workspace = true }
-nomos-executor        = { workspace = true }
-nomos-libp2p          = { workspace = true }
-nomos-node            = { workspace = true }
-nomos-tracing-service = { workspace = true }
-nomos-utils           = { workspace = true }
-rand                  = { workspace = true }
-reqwest               = { workspace = true }
-serde                 = { workspace = true }
-serde_json            = { default-features = false, version = "1.0" }
-serde_path_to_error   = "0.1"
-serde_with            = { workspace = true }
-serde_yaml            = "0.9"
-tests                 = { workspace = true }
-tokio                 = { default-features = false, features = ["macros", "net", "rt-multi-thread"], version = "1" }
-tracing               = { workspace = true }
+axum                = { default-features = false, features = ["http1", "http2", "json", "tokio"], version = "0.7.5" }
+clap                = { default-features = false, version = "4" }
+lb-core             = { workspace = true }
+lb-da-network-core  = { workspace = true }
+lb-executor         = { workspace = true }
+lb-libp2p           = { workspace = true }
+lb-node             = { workspace = true }
+lb-tests            = { workspace = true }
+lb-tracing-service  = { workspace = true }
+lb-utils            = { workspace = true }
+rand                = { workspace = true }
+reqwest             = { workspace = true }
+serde               = { workspace = true }
+serde_json          = { default-features = false, version = "1.0" }
+serde_path_to_error = "0.1"
+serde_with          = { workspace = true }
+serde_yaml          = "0.9"
+tokio               = { default-features = false, features = ["macros", "net", "rt-multi-thread"], version = "1" }
+tracing             = { workspace = true }

@@ -1,0 +1,38 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-time-service"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait           = "0.1"
+cfg_eval              = { optional = true, version = "0.1" }
+futures               = { default-features = false, version = "0.3" }
+lb-cryptarchia-engine = { features = ["tokio"], workspace = true }
+lb-utils              = { optional = true, workspace = true }
+log                   = "0.4.22"
+overwatch             = { workspace = true }
+serde                 = { workspace = true, features = ["derive"], optional = true }
+serde_with            = { optional = true, workspace = true }
+sntpc                 = { default-features = false, features = ["std", "tokio-socket"], optional = true, version = "0.5" }
+thiserror             = { default-features = false, optional = true, version = "2.0" }
+time                  = { default-features = false, features = ["std"], version = "0.3" }
+tokio                 = { default-features = false, version = "1" }
+tokio-stream          = { default-features = false, version = "0.1" }
+tracing               = { default-features = false, version = "0.1" }
+
+[dev-dependencies]
+lb-utils = { workspace = true }
+
+[features]
+ntp       = ["dep:sntpc", "dep:thiserror", "tokio/net"]
+serde     = ["dep:cfg_eval", "dep:lb-utils", "dep:serde", "dep:serde_with", "lb-cryptarchia-engine/serde"]
+testutils = []

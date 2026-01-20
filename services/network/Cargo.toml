@@ -1,0 +1,40 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-network-service"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait         = "0.1"
+futures             = { default-features = false, version = "0.3" }
+lb-core             = { workspace = true }
+lb-cryptarchia-sync = { workspace = true }
+lb-libp2p           = { optional = true, workspace = true }
+overwatch           = { workspace = true }
+rand                = { features = ["std"], optional = true, workspace = true }
+rand_chacha         = { default-features = false, optional = true, version = "0.3" }
+serde               = { workspace = true, features = ["derive"] }
+tokio               = { default-features = false, features = ["macros", "sync"], version = "1" }
+tokio-stream        = { default-features = false, version = "0.1" }
+tracing             = { workspace = true }
+utoipa              = { optional = true, workspace = true }
+
+[dev-dependencies]
+chrono             = { default-features = false, features = ["now"], version = "0.4" }
+lb-utils           = { workspace = true }
+tokio              = { default-features = false, version = "1" }
+tracing-subscriber = { default-features = false, features = ["env-filter", "fmt", "std"], version = "0.3" }
+
+[features]
+default = []
+libp2p  = ["dep:lb-libp2p", "dep:rand", "dep:rand_chacha", "lb-cryptarchia-sync/libp2p"]
+mock    = ["dep:rand", "dep:rand_chacha"]
+openapi = ["dep:utoipa"]

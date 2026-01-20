@@ -5,19 +5,19 @@ services:
     build:
       context: .
       dockerfile: testnet/Dockerfile
-    image: nomos:latest
+    image: logos-blockchain:latest
     volumes:
-      - ./testnet:/etc/nomos
-    entrypoint: /etc/nomos/scripts/run_cfgsync.sh
+      - ./testnet:/etc/logos-blockchain
+    entrypoint: /etc/logos-blockchain/scripts/run_cfgsync.sh
 
-  nomos-node:
+  logos-blockchain-node:
     build:
       context: .
       dockerfile: testnet/Dockerfile
     volumes:
-      - ./testnet:/etc/nomos
+      - ./testnet:/etc/logos-blockchain
     deploy:
-      replicas: ${DOCKER_COMPOSE_LIBP2P_REPLICAS:-1} 
+      replicas: ${DOCKER_COMPOSE_LIBP2P_REPLICAS:-1}
     depends_on:
       - cfgsync
-    entrypoint: /etc/nomos/scripts/run_nomos_node.sh
+    entrypoint: /etc/logos-blockchain/scripts/run_logos_blockchain_node.sh

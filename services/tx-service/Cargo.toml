@@ -1,0 +1,55 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-tx-service"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[package.metadata.cargo-machete]
+# False positives.
+ignored = [
+  # Required by `utoipa`.
+  "serde_json",
+]
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait        = "0.1"
+futures            = { default-features = false, version = "0.3" }
+lb-core            = { workspace = true }
+lb-network-service = { workspace = true }
+lb-services-utils  = { workspace = true }
+lb-storage-service = { workspace = true }
+overwatch          = { workspace = true }
+rand               = { workspace = true }
+serde              = { workspace = true }
+serde_json         = { default-features = false, optional = true, version = "1" }
+thiserror          = "1.0"
+tokio              = { default-features = false, version = "1" }
+tokio-stream       = { default-features = false, version = "0.1" }
+tracing            = { workspace = true }
+utoipa             = { optional = true, workspace = true }
+
+[dev-dependencies]
+lb-tracing-service          = { workspace = true }
+lb-utils                    = { workspace = true }
+logos-blockchain-tx-service = { features = ["mock", "rocksdb-backend"], path = "." }
+overwatch-derive            = { workspace = true }
+tempfile                    = "3"
+tokio                       = { default-features = false, version = "1" }
+
+[features]
+default         = []
+instrumentation = []
+libp2p          = ["lb-network-service/libp2p"]
+mock            = ["lb-core/mock", "lb-network-service/mock"]
+rocksdb-backend = ["lb-storage-service/rocksdb-backend"]
+
+# enable to help generate OpenAPI
+openapi = ["dep:serde_json", "dep:utoipa"]

@@ -4,14 +4,14 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "circuits-verifier"
+name        = "logos-blockchain-circuits-verifier"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-circuits-utils = { workspace = true }
-tempfile       = { workspace = true }
+lb-circuits-utils = { workspace = true }
+tempfile          = { workspace = true }
 
 [lints]
 workspace = true

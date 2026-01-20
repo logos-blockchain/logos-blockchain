@@ -1,0 +1,26 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-bundler"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+clap          = { default-features = false, features = ["derive", "std"], version = "4.5.27" }
+dunce         = "1.0.5"
+env_logger    = { default-features = false, version = "0.11.6" }
+log           = "0.4.22"
+serde_json    = { default-features = false, version = "1.0.135" }
+tauri-bundler = "=2.7.4"
+tauri-utils   = "=2.8.1"
+
+[[bin]]
+name = "bundle-logos-blockchain-node"
+path = "logos-blockchain-node/bundle.rs"

@@ -1,11 +1,10 @@
 use std::time::Duration;
 
-use chain_service::StartingState;
 use futures::StreamExt as _;
-use kzgrs_backend::{common::share::DaShare, reconstruction::reconstruct_without_missing_data};
-use serial_test::serial;
-use subnetworks_assignations::MembershipHandler as _;
-use tests::{
+use lb_chain_service::StartingState;
+use lb_kzgrs_backend::{common::share::DaShare, reconstruction::reconstruct_without_missing_data};
+use lb_subnetworks_assignations::MembershipHandler as _;
+use logos_blockchain_tests::{
     common::da::{
         disseminate_with_metadata, setup_test_channel, wait_for_blob_onchain,
         wait_for_shares_number,
@@ -14,6 +13,7 @@ use tests::{
     secret_key_to_peer_id,
     topology::{Topology, TopologyConfig, configs::create_general_configs},
 };
+use serial_test::serial;
 use tokio::time::interval;
 
 #[ignore = "for manual usage, disseminate_retrieve_reconstruct is preferred for ci"]
@@ -152,7 +152,7 @@ async fn disseminate_from_non_membership() {
     tokio::time::timeout(Duration::from_secs(60), async {
         loop {
             if lone_executor
-                .da_get_membership(nomos_core::sdp::SessionNumber::from(0u64))
+                .da_get_membership(lb_core::sdp::SessionNumber::from(0u64))
                 .await
                 .is_ok()
             {

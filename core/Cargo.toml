@@ -1,0 +1,48 @@
+[package]
+authors     = ["Daniel Sanchez Quiros <danielsq@status.im>"]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-core"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+ark-ff                        = { default-features = false, version = "0.4" }
+async-trait                   = { version = "0.1" }
+bincode                       = "1.3"
+blake2                        = { default-features = false, version = "0.10" }
+bytes                         = { workspace = true }
+const-hex                     = { default-features = false, features = ["alloc"], version = "1" }
+futures                       = { version = "0.3", default-features = false, features = ["alloc"] }
+generic-array                 = "1.2.0"
+hex                           = { version = "0.4", default-features = false, features = ["alloc"] }
+lb-blend-proofs               = { workspace = true }
+lb-cryptarchia-engine         = { features = ["serde"], workspace = true }
+lb-groth16                    = { workspace = true, features = ["deser"] }
+lb-key-management-system-keys = { workspace = true }
+lb-pol                        = { workspace = true }
+lb-poseidon2                  = { workspace = true }
+lb-utils                      = { workspace = true }
+multiaddr                     = { default-features = false, version = "0.18" }
+nom                           = { version = "8", default-features = false, features = ["alloc"] }
+num-bigint                    = { version = "0.4", default-features = false }
+serde                         = { workspace = true }
+strum                         = { version = "0.27", features = ["derive"] }
+thiserror                     = "1.0"
+tracing                       = { workspace = true }
+
+[dev-dependencies]
+rand       = { workspace = true }
+serde_json = { default-features = false, features = ["alloc"], version = "1.0" }
+
+[features]
+default      = []
+mock         = []
+pol-dev-mode = []

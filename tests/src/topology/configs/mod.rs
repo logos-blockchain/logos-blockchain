@@ -10,13 +10,13 @@ pub mod tracing;
 use blend::GeneralBlendConfig;
 use consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_tx_with_declarations};
 use da::GeneralDaConfig;
-use key_management_system_service::backend::preload::PreloadKMSBackendSettings;
-use network::GeneralNetworkConfig;
-use nomos_core::{
+use lb_core::{
     mantle::GenesisTx as _,
     sdp::{Locator, ServiceType},
 };
-use nomos_utils::net::get_available_udp_port;
+use lb_key_management_system_service::backend::preload::PreloadKMSBackendSettings;
+use lb_utils::net::get_available_udp_port;
+use network::GeneralNetworkConfig;
 use rand::{Rng as _, thread_rng};
 use tracing::GeneralTracingConfig;
 
@@ -54,7 +54,7 @@ pub fn create_general_configs_with_network(
 pub fn create_general_configs_with_blend_core_subset(
     n_nodes: usize,
     // TODO: Instead of this, define a config struct for each node.
-    // That would be also useful for non-even token distributions: https://github.com/logos-co/nomos/issues/1888
+    // That would be also useful for non-even token distributions: https://github.com/logos-blockchain/logos-blockchain/issues/1888
     n_blend_core_nodes: usize,
     network_params: &NetworkParams,
 ) -> Vec<GeneralConfig> {

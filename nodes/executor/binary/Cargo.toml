@@ -1,0 +1,70 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-executor"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[package.metadata.cargo-machete]
+# False positives.
+ignored = [
+  # Required by Overwatch's `#[derive_services]` macro.
+  "tracing",
+  # Required by `wait_until_services_are_ready` macro.
+  "futures",
+]
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait                 = "0.1"
+axum                        = { default-features = false, features = ["http1", "http2", "json", "query", "tokio"], version = "0.7.5" }
+clap                        = { default-features = false, features = ["derive"], version = "4.5.13" }
+color-eyre                  = { default-features = false, version = "0.6.0" }
+futures                     = { default-features = false, version = "0.3" }
+lb-api-service              = { workspace = true }
+lb-chain-broadcast-service  = { workspace = true }
+lb-core                     = { workspace = true }
+lb-da-dispersal-service     = { workspace = true }
+lb-da-network-core          = { workspace = true }
+lb-da-network-service       = { workspace = true }
+lb-da-sampling-service      = { workspace = true }
+lb-da-verifier-service      = { workspace = true }
+lb-http-api-common          = { workspace = true }
+lb-kzgrs-backend            = { workspace = true }
+lb-libp2p                   = { workspace = true }
+lb-network-service          = { workspace = true }
+lb-node                     = { workspace = true }
+lb-sdp-service              = { workspace = true }
+lb-services-utils           = { workspace = true }
+lb-storage-service          = { workspace = true }
+lb-subnetworks-assignations = { workspace = true }
+lb-time-service             = { workspace = true }
+lb-tx-service               = { workspace = true }
+overwatch                   = { workspace = true }
+serde                       = { workspace = true }
+tokio                       = { features = ["net"], version = "1" }
+tower                       = { default-features = false, features = ["limit"], version = "0.4" }
+tower-http                  = { default-features = false, features = ["cors", "limit", "timeout", "trace"], version = "0.5" }
+tracing                     = { workspace = true }
+utoipa                      = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# XCompiling from Unix has issues downloading assets. Use vendored instead.
+# This happens locally but might not on CI.
+utoipa-swagger-ui = { workspace = true, features = ["axum", "vendored"] }
+
+[target.'cfg(not(windows))'.dependencies]
+utoipa-swagger-ui = { workspace = true, features = ["axum"] }
+
+[features]
+default         = ["tracing"]
+instrumentation = ["lb-node/instrumentation"]
+profiling       = ["lb-http-api-common/profiling", "lb-node/profiling"]
+testing         = ["lb-node/testing"]
+tracing         = ["lb-node/tracing"]
