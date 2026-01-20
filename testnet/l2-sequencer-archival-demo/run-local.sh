@@ -174,7 +174,7 @@ ARCHIVER_BIN="$REPO_ROOT/target/release/logos-blockchain-demo-archiver"
 if [[ "$SERVICE" == "sequencer" || "$SERVICE" == "all" ]] && [ ! -f "$SEQUENCER_BIN" ]; then
     echo -e "${YELLOW}Building sequencer...${NC}"
     cd "$REPO_ROOT"
-    cargo build --release -p demo-sequencer
+    cargo build --release -p logos-blockchain-demo-sequencer
 fi
 
 if [[ "$SERVICE" == "archiver" || "$SERVICE" == "all" ]] && [ ! -f "$ARCHIVER_BIN" ]; then
