@@ -1,7 +1,7 @@
 use std::num::NonZeroU64;
 
 use derivative::Derivative;
-use key_management_system_keys::keys::UnsecuredEd25519Key;
+use key_management_system_keys::operators::ed25519::derive_x25519::X25519PrivateKey;
 use nomos_blend_message::{
     Error,
     encap::{
@@ -21,13 +21,13 @@ pub use self::leader::send::SessionCryptographicProcessor as LeaderSenderOnlySes
 #[cfg(test)]
 mod test_utils;
 
-#[derive(Clone, Derivative, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Derivative)]
 #[derivative(Debug)]
 pub struct SessionCryptographicProcessorSettings {
-    /// The non-ephemeral signing key (NSK) corresponding to the public key
-    /// registered in the membership (SDP).
+    /// The non-ephemeral encryption key (NEK) derived from the secret key
+    /// corresponding to the public key registered in the membership (SDP).
     #[derivative(Debug = "ignore")]
-    pub non_ephemeral_signing_key: UnsecuredEd25519Key,
+    pub non_ephemeral_encryption_key: X25519PrivateKey,
     /// `ß_c`: number of blending operations for each locally generated message.
     pub num_blend_layers: NonZeroU64,
 }

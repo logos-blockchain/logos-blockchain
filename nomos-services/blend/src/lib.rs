@@ -7,6 +7,7 @@ use std::{
 
 use async_trait::async_trait;
 use futures::StreamExt as _;
+use key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
 pub use nomos_blend::message::{crypto::proofs::RealProofsVerifier, encap::ProofsVerifier};
 use nomos_blend::scheduling::session::UninitializedSessionEventStream;
 use nomos_network::NetworkService;
@@ -30,6 +31,7 @@ use crate::{
     },
     edge::service_components::ServiceComponents as EdgeServiceComponents,
     instance::{Instance, Mode},
+    kms::PreloadKmsService,
     membership::{Adapter as _, MembershipInfo},
     settings::{FIRST_STREAM_ITEM_READY_TIMEOUT, Settings},
 };
@@ -43,6 +45,7 @@ pub mod session;
 pub mod settings;
 
 mod instance;
+mod kms;
 mod modes;
 mod service_components;
 pub use self::service_components::ServiceComponents;
@@ -106,6 +109,7 @@ where
         + AsServiceId<CoreService>
         + AsServiceId<EdgeService>
         + AsServiceId<MembershipService<EdgeService>>
+        + AsServiceId<PreloadKmsService<RuntimeServiceId>>
         + AsServiceId<
             NetworkService<
                 NetworkBackendOfService<CoreService, RuntimeServiceId>,
@@ -147,19 +151,28 @@ where
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_secs(60)),
-            MembershipService<EdgeService>
+            MembershipService<EdgeService>,
+            PreloadKmsService<_>
         )
         .await?;
+
+        let kms = KmsServiceApi::<PreloadKmsService<_>, RuntimeServiceId>::new(
+            overwatch_handle.relay::<PreloadKmsService<_>>().await?,
+        );
+
+        let PublicKeyEncoding::Ed25519(non_ephemeral_signing_key_public) = kms
+            .public_key(settings.common.non_ephemeral_signing_key_id)
+            .await
+            .expect("KMS does not have key with the specified ID.")
+        else {
+            panic!("Non-ephemeral signing key must be an Ed25519 key");
+        };
 
         let membership_stream = <MembershipAdapter<EdgeService> as membership::Adapter>::new(
             overwatch_handle
                 .relay::<MembershipService<EdgeService>>()
                 .await?,
-            settings
-                .common
-                .crypto
-                .non_ephemeral_signing_key
-                .public_key(),
+            non_ephemeral_signing_key_public,
             // We don't need to generate secret zk info in the proxy service, so we ignore the
             // secret key at this level.
             None,

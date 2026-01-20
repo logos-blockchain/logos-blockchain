@@ -1,11 +1,10 @@
+use key_management_system_service::keys::UnsecuredEd25519Key;
 use nomos_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     scheduling::membership::Membership,
 };
 use overwatch::overwatch::handle::OverwatchHandle;
 use rand::RngCore;
-
-use crate::edge::settings::BlendConfig;
 
 #[cfg(feature = "libp2p")]
 pub mod libp2p;
@@ -19,10 +18,12 @@ where
     type Settings: Clone + Send + Sync + 'static;
 
     fn new<Rng>(
-        settings: BlendConfig<Self::Settings>,
+        settings: Self::Settings,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         membership: Membership<NodeId>,
         rng: Rng,
+        // TODO: This should go once we find a way to integrate KMS into libp2p.
+        non_ephemeral_signing_key: UnsecuredEd25519Key,
     ) -> Self
     where
         Rng: RngCore + Send + 'static;

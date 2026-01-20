@@ -41,7 +41,7 @@ where
     pub fn try_new_with_core_condition_check(
         membership: Membership<NodeId>,
         minimum_network_size: NonZeroU64,
-        settings: &SessionCryptographicProcessorSettings,
+        settings: SessionCryptographicProcessorSettings,
         public_info: PoQVerificationInputsMinusSigningKey,
         core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Result<Self, Error>
@@ -64,7 +64,7 @@ where
 
     fn new(
         membership: Membership<NodeId>,
-        settings: &SessionCryptographicProcessorSettings,
+        settings: SessionCryptographicProcessorSettings,
         public_info: PoQVerificationInputsMinusSigningKey,
         core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self {
@@ -276,7 +276,7 @@ mod tests {
         CoreCryptographicProcessor::<_, _, MockCoreAndLeaderProofsGenerator, MockProofsVerifier>::try_new_with_core_condition_check(
             membership(&core_nodes, local_id),
             NonZeroU64::new(1).unwrap(),
-            &settings(local_id),
+            settings(local_id),
             mock_verification_inputs(),
             ()
         )
@@ -295,7 +295,7 @@ mod tests {
         >::try_new_with_core_condition_check(
             membership(&core_nodes, local_id),
             NonZeroU64::new(2).unwrap(),
-            &settings(local_id),
+            settings(local_id),
             mock_verification_inputs(),
             (),
         );
@@ -314,7 +314,7 @@ mod tests {
         >::try_new_with_core_condition_check(
             membership(&core_nodes, local_id),
             NonZeroU64::new(1).unwrap(),
-            &settings(local_id),
+            settings(local_id),
             mock_verification_inputs(),
             (),
         );
@@ -339,7 +339,7 @@ mod tests {
             StaticFetchVerifier,
         >::new(
             membership,
-            &settings(local_id),
+            settings(local_id),
             mock_verification_inputs(),
             (),
         );
@@ -369,7 +369,7 @@ mod tests {
             StaticFetchVerifier,
         >::new(
             membership,
-            &settings(local_id),
+            settings(local_id),
             mock_verification_inputs(),
             (),
         );
@@ -403,7 +403,7 @@ mod tests {
             StaticFetchVerifier,
         >::new(
             membership,
-            &settings(local_id),
+            settings(local_id),
             mock_verification_inputs(),
             (),
         );
@@ -437,7 +437,7 @@ mod tests {
             StaticFetchVerifier,
         >::new(
             membership,
-            &settings(local_id),
+            settings(local_id),
             mock_verification_inputs(),
             (),
         );
@@ -475,7 +475,7 @@ mod tests {
 
     fn settings(local_id: NodeId) -> SessionCryptographicProcessorSettings {
         SessionCryptographicProcessorSettings {
-            non_ephemeral_signing_key: key(local_id).0,
+            non_ephemeral_encryption_key: key(local_id).0.derive_x25519(),
             num_blend_layers: NonZeroU64::new(1).unwrap(),
         }
     }

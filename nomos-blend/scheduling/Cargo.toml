@@ -19,7 +19,6 @@ fork_stream                = { workspace = true }
 futures                    = { default-features = false, version = "0.3" }
 key-management-system-keys = { workspace = true }
 multiaddr                  = { default-features = false, version = "0.18" }
-nomos-blend-crypto         = { workspace = true }
 nomos-blend-message        = { workspace = true }
 nomos-blend-proofs         = { workspace = true }
 nomos-core                 = { workspace = true }

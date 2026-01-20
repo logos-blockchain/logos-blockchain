@@ -42,7 +42,7 @@ where
 {
     #[must_use]
     pub fn new(
-        settings: &SessionCryptographicProcessorSettings,
+        settings: SessionCryptographicProcessorSettings,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
         core_proof_of_quota_generator: CorePoQGenerator,
@@ -138,13 +138,9 @@ mod test {
     use std::num::NonZeroU64;
 
     use groth16::Field as _;
-    use key_management_system_keys::keys::{
-        ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, UnsecuredEd25519Key,
-    };
+    use key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
     use multiaddr::{Multiaddr, PeerId};
-    use nomos_blend_message::crypto::{
-        key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
-    };
+    use nomos_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
     use nomos_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
     use nomos_core::crypto::ZkHash;
 
@@ -168,8 +164,8 @@ mod test {
             TestEpochChangeCoreAndLeaderProofsGenerator,
             TestEpochChangeProofsVerifier,
         >::new(
-            &SessionCryptographicProcessorSettings {
-                non_ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
+            SessionCryptographicProcessorSettings {
+                non_ephemeral_encryption_key: [0; _].into(),
                 num_blend_layers: NonZeroU64::new(1).unwrap(),
             },
             Membership::new_without_local(&[Node {

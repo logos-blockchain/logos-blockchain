@@ -41,7 +41,7 @@ where
 {
     pub historic_blob_validation: blob::Validation<blob::HistoricBlobStrategy>,
     pub cryptarchia: CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
-    pub mempool_adapter: MempoolAdapter<Mempool::Item, Mempool::Item>,
+    pub mempool_adapter: MempoolAdapter<Mempool::Item>,
     pub sampling_relay: SamplingRelay<SamplingBackend::BlobId>,
 }
 
@@ -419,7 +419,7 @@ mod tests {
         sync::Arc,
     };
 
-    use cryptarchia_engine::{EpochConfig, Slot};
+    use cryptarchia_engine::{EpochConfig, Slot, UpdatedCryptarchia};
     use nomos_core::{
         block::Proposal,
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -847,7 +847,10 @@ mod tests {
             // Add the block only to the consensus, not to the ledger state
             // because the mocked block doesn't have a proof.
             // It's enough because the tests doesn't check the ledger state.
-            let (consensus, _) = self
+            let UpdatedCryptarchia {
+                cryptarchia: consensus,
+                ..
+            } = self
                 .cryptarchia
                 .consensus
                 .receive_block(block.id, block.parent, block.slot)
