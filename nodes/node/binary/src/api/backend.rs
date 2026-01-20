@@ -13,10 +13,7 @@ use axum::{
     },
     routing,
 };
-use lb_api_service::{
-    Backend,
-    http::consensus::Cryptarchia,
-};
+use lb_api_service::{Backend, http::consensus::Cryptarchia};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
     header::HeaderId,
@@ -48,9 +45,8 @@ use {
 };
 
 use super::handlers::{
-    add_tx, block, cryptarchia_headers,
-    cryptarchia_info, cryptarchia_lib_stream, libp2p_info, mantle_metrics, mantle_status,
-    wallet,
+    add_tx, block, cryptarchia_headers, cryptarchia_info, cryptarchia_lib_stream, libp2p_info,
+    mantle_metrics, mantle_status, wallet,
 };
 use crate::{
     WalletService,
@@ -60,12 +56,7 @@ use crate::{
 pub(crate) type DaStorageBackend = RocksBackend;
 type DaStorageService<RuntimeServiceId> = StorageService<DaStorageBackend, RuntimeServiceId>;
 
-pub struct AxumBackend<
-    TimeBackend,
-    HttpStorageAdapter,
-    MempoolStorageAdapter,
-    SdpMempool,
-> {
+pub struct AxumBackend<TimeBackend, HttpStorageAdapter, MempoolStorageAdapter, SdpMempool> {
     settings: AxumBackendSettings,
     _time_backend: core::marker::PhantomData<TimeBackend>,
     _storage_adapter: core::marker::PhantomData<HttpStorageAdapter>,
@@ -74,31 +65,13 @@ pub struct AxumBackend<
 }
 
 #[derive(OpenApi)]
-#[openapi(
-    paths(
-    ),
-    components(
-        schemas(Status, MempoolMetrics)
-    ),
-    tags(
-    )
-)]
+#[openapi(paths(), components(schemas(Status, MempoolMetrics)), tags())]
 struct ApiDoc;
 
 #[async_trait::async_trait]
-impl<
-    TimeBackend,
-    StorageAdapter,
-    MempoolStorageAdapter,
-    SdpMempool,
-    RuntimeServiceId,
-> Backend<RuntimeServiceId>
-    for AxumBackend<
-        TimeBackend,
-        StorageAdapter,
-        MempoolStorageAdapter,
-        SdpMempool,
-    >
+impl<TimeBackend, StorageAdapter, MempoolStorageAdapter, SdpMempool, RuntimeServiceId>
+    Backend<RuntimeServiceId>
+    for AxumBackend<TimeBackend, StorageAdapter, MempoolStorageAdapter, SdpMempool>
 where
     TimeBackend: lb_time_service::backends::TimeBackend + Send + 'static,
     TimeBackend::Settings: Clone + Send + Sync,
@@ -247,12 +220,7 @@ where
             .route(
                 paths::wallet::BALANCE,
                 routing::get(
-                    wallet::get_balance::<
-                        WalletService,
-                        MempoolStorageAdapter,
-                        TimeBackend,
-                        _,
-                    >,
+                    wallet::get_balance::<WalletService, MempoolStorageAdapter, TimeBackend, _>,
                 ),
             )
             .route(

@@ -1225,5 +1225,4 @@ mod tests {
         assert!(active_session.declarations.contains_key(&declaration_id_1));
         assert!(active_session.declarations.contains_key(&declaration_id_2));
     }
-
 }

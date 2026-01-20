@@ -4,7 +4,9 @@ use lb_core::{
         ledger::Tx as LedgerTx,
         ops::{
             Op, OpProof,
-            channel::{ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp, set_keys::SetKeysOp},
+            channel::{
+                ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp, set_keys::SetKeysOp,
+            },
         },
         tx::TxHash,
     },

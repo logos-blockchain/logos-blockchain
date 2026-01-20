@@ -417,7 +417,10 @@ mod tests {
             signer: unauthorized_verifying_key,
         };
 
-        let second_tx = create_signed_tx(Op::ChannelInscribe(second_inscribe), &unauthorized_signing_key);
+        let second_tx = create_signed_tx(
+            Op::ChannelInscribe(second_inscribe),
+            &unauthorized_signing_key,
+        );
         let result = ledger_state.try_apply_tx::<MainnetGasConstants>(
             0,
             &test_config,

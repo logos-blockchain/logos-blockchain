@@ -44,20 +44,8 @@ pub struct ChainNetworkRelays<
     _mempool_adapter: PhantomData<MempoolNetAdapter>,
 }
 
-impl<
-    Cryptarchia,
-    Mempool,
-    MempoolNetAdapter,
-    NetworkAdapter,
-    RuntimeServiceId,
->
-    ChainNetworkRelays<
-        Cryptarchia,
-        Mempool,
-        MempoolNetAdapter,
-        NetworkAdapter,
-        RuntimeServiceId,
-    >
+impl<Cryptarchia, Mempool, MempoolNetAdapter, NetworkAdapter, RuntimeServiceId>
+    ChainNetworkRelays<Cryptarchia, Mempool, MempoolNetAdapter, NetworkAdapter, RuntimeServiceId>
 where
     Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
     Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash> + Send + Sync,
@@ -97,9 +85,7 @@ where
 
     #[expect(clippy::allow_attributes_without_reason)]
     #[expect(clippy::type_complexity)]
-    pub async fn from_service_resources_handle<
-        TimeBackend,
-    >(
+    pub async fn from_service_resources_handle<TimeBackend>(
         service_resources_handle: &OpaqueServiceResourcesHandle<
             ChainNetwork<
                 Cryptarchia,
@@ -149,11 +135,7 @@ where
             .await
             .expect("Relay connection with MempoolService should succeed");
 
-        Self::new(
-            cryptarchia,
-            network_relay,
-            mempool_relay,
-        )
+        Self::new(cryptarchia, network_relay, mempool_relay)
     }
 
     pub const fn cryptarchia(&self) -> &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId> {

@@ -21,12 +21,8 @@ use crate::mempool::adapter;
 type BlendRelay<BlendService> = OutboundRelay<<BlendService as ServiceData>::Message>;
 type TimeRelay = OutboundRelay<TimeServiceMessage>;
 
-pub struct CryptarchiaConsensusRelays<
-    BlendService,
-    Mempool,
-    MempoolNetAdapter,
-    RuntimeServiceId,
-> where
+pub struct CryptarchiaConsensusRelays<BlendService, Mempool, MempoolNetAdapter, RuntimeServiceId>
+where
     BlendService: ServiceData,
     Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash>,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId>,
@@ -34,17 +30,11 @@ pub struct CryptarchiaConsensusRelays<
     blend_relay: BlendRelay<BlendService>,
     mempool_adapter: adapter::MempoolAdapter<Mempool::Item, Mempool::Item>,
     time_relay: TimeRelay,
-    _mempool_adapter:
-        std::marker::PhantomData<(MempoolNetAdapter, RuntimeServiceId)>,
+    _mempool_adapter: std::marker::PhantomData<(MempoolNetAdapter, RuntimeServiceId)>,
 }
 
 impl<BlendService, Mempool, MempoolNetAdapter, RuntimeServiceId>
-    CryptarchiaConsensusRelays<
-        BlendService,
-        Mempool,
-        MempoolNetAdapter,
-        RuntimeServiceId,
-    >
+    CryptarchiaConsensusRelays<BlendService, Mempool, MempoolNetAdapter, RuntimeServiceId>
 where
     BlendService: ServiceData,
     Mempool: Send + Sync + RecoverableMempool<BlockId = HeaderId, Key = TxHash>,
@@ -80,11 +70,7 @@ where
     }
 
     #[expect(clippy::allow_attributes_without_reason)]
-    pub async fn from_service_resources_handle<
-        S,
-        TimeBackend,
-        CryptarchiaService,
-    >(
+    pub async fn from_service_resources_handle<S, TimeBackend, CryptarchiaService>(
         service_resources_handle: &OpaqueServiceResourcesHandle<S, RuntimeServiceId>,
     ) -> Self
     where

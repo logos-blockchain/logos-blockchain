@@ -18,8 +18,7 @@ use serde::Deserialize;
 use tracing::Level;
 
 use crate::{
-    ApiService, CryptarchiaService,
-    KeyManagementService, RuntimeServiceId, StorageService,
+    ApiService, CryptarchiaService, KeyManagementService, RuntimeServiceId, StorageService,
     config::{
         blend::serde::Config as BlendConfig, cryptarchia::serde::Config as CryptarchiaConfig,
         deployment::DeploymentSettings, mempool::serde::Config as MempoolConfig,

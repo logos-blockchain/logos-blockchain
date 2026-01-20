@@ -154,20 +154,11 @@ mod tests {
         };
 
         let locked_notes_once = locked_notes
-            .lock(
-                &min_stake,
-                ServiceType::BlendNetwork,
-                utxo.note,
-                &note_id,
-            )
+            .lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id)
             .unwrap();
 
-        let result = locked_notes_once.lock(
-            &min_stake,
-            ServiceType::BlendNetwork,
-            utxo.note,
-            &note_id,
-        );
+        let result =
+            locked_notes_once.lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id);
 
         assert!(result.is_err());
         assert_eq!(
@@ -244,5 +235,4 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), Error::NoteNotLocked(note_id));
     }
-
 }

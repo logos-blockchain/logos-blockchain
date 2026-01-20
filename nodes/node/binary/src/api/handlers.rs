@@ -524,12 +524,7 @@ pub mod wallet {
         (status = 500, description = "Internal server error", body = String),
     )
     )]
-    pub async fn get_balance<
-        WalletService,
-        MempoolStorageAdapter,
-        TimeBackend,
-        RuntimeServiceId,
-    >(
+    pub async fn get_balance<WalletService, MempoolStorageAdapter, TimeBackend, RuntimeServiceId>(
         State(handle): State<OverwatchHandle<RuntimeServiceId>>,
         Path(address): Path<ZkPublicKey>,
         Query(query): Query<TipQuery>,

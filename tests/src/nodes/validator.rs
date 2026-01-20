@@ -19,8 +19,7 @@ use lb_http_api_common::paths::{
 };
 use lb_network_service::backends::libp2p::Libp2pInfo;
 use lb_node::{
-    Config, HeaderId, RocksBackendSettings,
-    api::backend::AxumBackendSettings,
+    Config, HeaderId, RocksBackendSettings, api::backend::AxumBackendSettings,
     config::mempool::serde::Config as MempoolConfig,
 };
 use lb_sdp_service::SdpSettings;

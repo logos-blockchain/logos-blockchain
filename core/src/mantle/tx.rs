@@ -384,10 +384,7 @@ mod tests {
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 
     use super::*;
-    use crate::mantle::{
-        ledger::Tx as LedgerTx,
-        ops::channel::inscribe::InscriptionOp,
-    };
+    use crate::mantle::{ledger::Tx as LedgerTx, ops::channel::inscribe::InscriptionOp};
 
     fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
         MantleTx {

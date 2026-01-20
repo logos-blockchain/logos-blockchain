@@ -19,8 +19,8 @@ use rand::{Rng as _, thread_rng};
 use tracing::GeneralTracingConfig;
 
 use crate::topology::configs::{
-    api::GeneralApiConfig, consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD,
-    network::NetworkParams, time::GeneralTimeConfig,
+    api::GeneralApiConfig, consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD, network::NetworkParams,
+    time::GeneralTimeConfig,
 };
 
 #[derive(Clone)]

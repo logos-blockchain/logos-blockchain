@@ -46,9 +46,7 @@ use crate::{
         mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
         time::ServiceConfig as TimeConfig,
     },
-    generic_services::{
-        SdpMempoolAdapterGeneric, SdpService,
-    },
+    generic_services::{SdpMempoolAdapterGeneric, SdpService},
 };
 
 pub const MB16: usize = 1024 * 1024 * 16;
@@ -59,12 +57,9 @@ pub(crate) type TracingService = Tracing<RuntimeServiceId>;
 pub(crate) type NetworkService =
     lb_network_service::NetworkService<NetworkBackend, RuntimeServiceId>;
 
-pub(crate) type BlendCoreService =
-    generic_services::blend::BlendCoreService<RuntimeServiceId>;
-pub(crate) type BlendEdgeService =
-    generic_services::blend::BlendEdgeService<RuntimeServiceId>;
-pub(crate) type BlendService =
-    generic_services::blend::BlendService<RuntimeServiceId>;
+pub(crate) type BlendCoreService = generic_services::blend::BlendCoreService<RuntimeServiceId>;
+pub(crate) type BlendEdgeService = generic_services::blend::BlendEdgeService<RuntimeServiceId>;
+pub(crate) type BlendService = generic_services::blend::BlendService<RuntimeServiceId>;
 
 pub(crate) type BlockBroadcastService =
     lb_chain_broadcast_service::BlockBroadcastService<RuntimeServiceId>;
@@ -78,14 +73,10 @@ pub(crate) type WalletService =
 
 pub(crate) type CryptarchiaService = generic_services::CryptarchiaService<RuntimeServiceId>;
 
-pub(crate) type ChainNetworkService =
-    generic_services::ChainNetworkService<RuntimeServiceId>;
+pub(crate) type ChainNetworkService = generic_services::ChainNetworkService<RuntimeServiceId>;
 
-pub(crate) type CryptarchiaLeaderService = generic_services::CryptarchiaLeaderService<
-    CryptarchiaService,
-    WalletService,
-    RuntimeServiceId,
->;
+pub(crate) type CryptarchiaLeaderService =
+    generic_services::CryptarchiaLeaderService<CryptarchiaService, WalletService, RuntimeServiceId>;
 
 pub type TimeService = generic_services::TimeService<RuntimeServiceId>;
 

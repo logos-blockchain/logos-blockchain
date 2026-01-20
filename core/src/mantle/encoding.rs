@@ -603,10 +603,9 @@ fn encode_ops(ops: &[Op]) -> Vec<u8> {
 /// Encode proofs
 fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
     match (proof, op) {
-        (
-            OpProof::Ed25519Sig(sig),
-            Op::ChannelInscribe(_) | Op::ChannelSetKeys(_),
-        ) => encode_ed25519_signature(sig),
+        (OpProof::Ed25519Sig(sig), Op::ChannelInscribe(_) | Op::ChannelSetKeys(_)) => {
+            encode_ed25519_signature(sig)
+        }
         (
             OpProof::ZkAndEd25519Sigs {
                 zk_sig,

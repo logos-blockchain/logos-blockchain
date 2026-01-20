@@ -39,15 +39,15 @@ use thiserror::Error;
 use tracing::{Level, debug, error, info, instrument, span};
 use tracing_futures::Instrument as _;
 
+pub use crate::{
+    bootstrap::config::{BootstrapConfig, IbdConfig},
+    sync::config::{OrphanConfig, SyncConfig},
+};
 use crate::{
     bootstrap::ibd::InitialBlockDownload,
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::ChainNetworkRelays,
     sync::orphan_handler::OrphanBlocksDownloader,
-};
-pub use crate::{
-    bootstrap::config::{BootstrapConfig, IbdConfig},
-    sync::config::{OrphanConfig, SyncConfig},
 };
 
 const CRYPTARCHIA_ID: &str = "Cryptarchia";
@@ -121,14 +121,7 @@ pub struct ChainNetwork<
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
 }
 
-impl<
-    Cryptarchia,
-    NetAdapter,
-    Mempool,
-    MempoolNetAdapter,
-    TimeBackend,
-    RuntimeServiceId,
-> ServiceData
+impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId> ServiceData
     for ChainNetwork<
         Cryptarchia,
         NetAdapter,
@@ -160,14 +153,8 @@ where
 }
 
 #[async_trait::async_trait]
-impl<
-    Cryptarchia,
-    NetAdapter,
-    Mempool,
-    MempoolNetAdapter,
-    TimeBackend,
-    RuntimeServiceId,
-> ServiceCore<RuntimeServiceId>
+impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId>
+    ServiceCore<RuntimeServiceId>
     for ChainNetwork<
         Cryptarchia,
         NetAdapter,
@@ -378,22 +365,8 @@ where
     }
 }
 
-impl<
-    Cryptarchia,
-    NetAdapter,
-    Mempool,
-    MempoolNetAdapter,
-    TimeBackend,
-    RuntimeServiceId,
->
-    ChainNetwork<
-        Cryptarchia,
-        NetAdapter,
-        Mempool,
-        MempoolNetAdapter,
-        TimeBackend,
-        RuntimeServiceId,
-    >
+impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId>
+    ChainNetwork<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId>
 where
     Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Item>,
     NetAdapter: NetworkAdapter<RuntimeServiceId, Block = Block<Mempool::Item>, Proposal = Proposal>
@@ -519,12 +492,8 @@ where
 
         let block_id = block.header().id();
 
-        match process_block::<_, Mempool, _>(
-            block,
-            relays.cryptarchia(),
-            relays.mempool_adapter(),
-        )
-        .await
+        match process_block::<_, Mempool, _>(block, relays.cryptarchia(), relays.mempool_adapter())
+            .await
         {
             Ok(()) => {
                 orphan_downloader.remove_orphan(&block_id);
@@ -585,10 +554,7 @@ where
 /// Try to add a [`Block`] to [`Cryptarchia`].
 /// A [`Block`] is only added if it's valid
 #[expect(clippy::allow_attributes_without_reason)]
-#[instrument(
-    level = "debug",
-    skip(cryptarchia, mempool_adapter)
-)]
+#[instrument(level = "debug", skip(cryptarchia, mempool_adapter))]
 async fn process_block<Cryptarchia, Mempool, RuntimeServiceId>(
     block: Block<Cryptarchia::Tx>,
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,

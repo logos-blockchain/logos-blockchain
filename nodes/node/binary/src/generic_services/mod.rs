@@ -52,15 +52,14 @@ pub type MempoolBackend<RuntimeServiceId> = Mempool<
 pub type CryptarchiaService<RuntimeServiceId> =
     CryptarchiaConsensus<SignedMantleTx, RocksBackend, NtpTimeBackend, RuntimeServiceId>;
 
-pub type ChainNetworkService<RuntimeServiceId> =
-    lb_chain_network_service::ChainNetwork<
-        CryptarchiaService<RuntimeServiceId>,
-        LibP2pAdapter<SignedMantleTx, RuntimeServiceId>,
-        MempoolBackend<RuntimeServiceId>,
-        MempoolAdapter<RuntimeServiceId>,
-        NtpTimeBackend,
-        RuntimeServiceId,
-    >;
+pub type ChainNetworkService<RuntimeServiceId> = lb_chain_network_service::ChainNetwork<
+    CryptarchiaService<RuntimeServiceId>,
+    LibP2pAdapter<SignedMantleTx, RuntimeServiceId>,
+    MempoolBackend<RuntimeServiceId>,
+    MempoolAdapter<RuntimeServiceId>,
+    NtpTimeBackend,
+    RuntimeServiceId,
+>;
 
 pub type KeyManagementService<RuntimeServiceId> =
     lb_key_management_system_service::KMSService<PreloadKMSBackend, RuntimeServiceId>;
@@ -73,17 +72,16 @@ pub type WalletService<Cryptarchia, RuntimeServiceId> = lb_wallet_service::Walle
     RuntimeServiceId,
 >;
 
-pub type CryptarchiaLeaderService<Cryptarchia, Wallet, RuntimeServiceId> =
-    CryptarchiaLeader<
-        BlendService<RuntimeServiceId>,
-        MempoolBackend<RuntimeServiceId>,
-        MempoolAdapter<RuntimeServiceId>,
-        lb_core::mantle::select::FillSize<MB16, SignedMantleTx>,
-        NtpTimeBackend,
-        Cryptarchia,
-        Wallet,
-        RuntimeServiceId,
-    >;
+pub type CryptarchiaLeaderService<Cryptarchia, Wallet, RuntimeServiceId> = CryptarchiaLeader<
+    BlendService<RuntimeServiceId>,
+    MempoolBackend<RuntimeServiceId>,
+    MempoolAdapter<RuntimeServiceId>,
+    lb_core::mantle::select::FillSize<MB16, SignedMantleTx>,
+    NtpTimeBackend,
+    Cryptarchia,
+    Wallet,
+    RuntimeServiceId,
+>;
 
 pub type SdpMempoolAdapterGeneric<RuntimeServiceId> = SdpMempoolNetworkAdapter<
     lb_tx_service::network::adapters::libp2p::Libp2pAdapter<

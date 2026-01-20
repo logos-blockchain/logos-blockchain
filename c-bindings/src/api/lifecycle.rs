@@ -65,12 +65,10 @@ fn initialize_lb_node(config_path: *const c_char) -> Result<LogosBlockchainNode,
     let app_handle = app.handle();
 
     rt.block_on(async {
-        let services_to_start = get_services_to_start(&app)
-            .await
-            .map_err(|e| {
-                eprintln!("Could not get services to start: {e}");
-                OperationStatus::InitializationError
-            })?;
+        let services_to_start = get_services_to_start(&app).await.map_err(|e| {
+            eprintln!("Could not get services to start: {e}");
+            OperationStatus::InitializationError
+        })?;
         app_handle
             .start_service_sequence(services_to_start)
             .await

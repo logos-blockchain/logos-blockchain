@@ -40,8 +40,7 @@ where
     pub mempool_adapter: MempoolAdapter<Mempool::Item>,
 }
 
-impl<Cryptarchia, Mempool, RuntimeServiceId>
-    IbdBlockProcessor<Block<Cryptarchia::Tx>>
+impl<Cryptarchia, Mempool, RuntimeServiceId> IbdBlockProcessor<Block<Cryptarchia::Tx>>
     for ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, RuntimeServiceId>
 where
     Cryptarchia: CryptarchiaServiceData,
@@ -55,16 +54,12 @@ where
     }
 
     async fn process_block(&mut self, block: Block<Cryptarchia::Tx>) -> Result<(), Error> {
-        crate::process_block::<_, Mempool, _>(
-            block,
-            &self.cryptarchia,
-            &self.mempool_adapter,
-        )
-        .await
-        .map_err(|e| {
-            error!("Error processing block during IBD: {:?}", e);
-            Error::from(e)
-        })
+        crate::process_block::<_, Mempool, _>(block, &self.cryptarchia, &self.mempool_adapter)
+            .await
+            .map_err(|e| {
+                error!("Error processing block during IBD: {:?}", e);
+                Error::from(e)
+            })
     }
 
     async fn has_processed_block(&self, block_id: HeaderId) -> Result<bool, Error> {
@@ -1097,18 +1092,16 @@ mod tests {
             },
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
-                    [
-                        (
-                            ServiceType::BlendNetwork,
-                            ServiceParameters {
-                                lock_period: 10,
-                                inactivity_period: 20,
-                                retention_period: 100,
-                                timestamp: 0,
-                                session_duration: 10,
-                            },
-                        ),
-                    ]
+                    [(
+                        ServiceType::BlendNetwork,
+                        ServiceParameters {
+                            lock_period: 10,
+                            inactivity_period: 20,
+                            retention_period: 100,
+                            timestamp: 0,
+                            session_duration: 10,
+                        },
+                    )]
                     .into(),
                 ),
                 service_rewards_params: ServiceRewardsParameters {

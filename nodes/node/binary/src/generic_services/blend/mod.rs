@@ -68,8 +68,7 @@ pub type BlendService<RuntimeServiceId> = lb_blend_service::BlendService<
 pub struct PolInfoProvider;
 
 #[async_trait]
-impl<RuntimeServiceId> PolInfoProviderTrait<RuntimeServiceId>
-    for PolInfoProvider
+impl<RuntimeServiceId> PolInfoProviderTrait<RuntimeServiceId> for PolInfoProvider
 where
     RuntimeServiceId: AsServiceId<
             CryptarchiaLeaderService<
