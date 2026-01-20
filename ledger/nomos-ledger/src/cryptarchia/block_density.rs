@@ -69,17 +69,6 @@ mod tests {
         BlockDensity::new(period, Slot::from(current_slot))
     }
 
-    // Helper method to fill window with a specific number of blocks and empty slots
-    fn fill_window(inference: &mut BlockDensity, blocks: &[bool]) {
-        for &has_block in blocks {
-            if has_block {
-                inference.slots_window.push_back(true);
-            } else {
-                inference.slots_window.push_back(false);
-            }
-        }
-    }
-
     #[test]
     fn test_initial_block_density_is_zero() {
         let inference = create_inference(10, 0);
