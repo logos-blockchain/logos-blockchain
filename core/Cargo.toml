@@ -20,21 +20,21 @@ bincode                       = "1.3"
 blake2                        = { default-features = false, version = "0.10" }
 bytes                         = { workspace = true }
 const-hex                     = { default-features = false, features = ["alloc"], version = "1" }
-futures                       = { version = "0.3", default-features = false, features = ["alloc"] }
+futures                       = { default-features = false, features = ["alloc"], version = "0.3" }
 generic-array                 = "1.2.0"
-hex                           = { version = "0.4", default-features = false, features = ["alloc"] }
+hex                           = { default-features = false, features = ["alloc"], version = "0.4" }
 lb-blend-proofs               = { workspace = true }
 lb-cryptarchia-engine         = { features = ["serde"], workspace = true }
-lb-groth16                    = { workspace = true, features = ["deser"] }
+lb-groth16                    = { features = ["deser"], workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-pol                        = { workspace = true }
 lb-poseidon2                  = { workspace = true }
 lb-utils                      = { workspace = true }
 multiaddr                     = { default-features = false, version = "0.18" }
-nom                           = { version = "8", default-features = false, features = ["alloc"] }
-num-bigint                    = { version = "0.4", default-features = false }
+nom                           = { default-features = false, features = ["alloc"], version = "8" }
+num-bigint                    = { default-features = false, version = "0.4" }
 serde                         = { workspace = true }
-strum                         = { version = "0.27", features = ["derive"] }
+strum                         = { features = ["derive"], version = "0.27" }
 thiserror                     = "1.0"
 tracing                       = { workspace = true }
 
