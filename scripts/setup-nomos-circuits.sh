@@ -101,11 +101,13 @@ check_existing_installation() {
 # Download and extract the release
 download_release() {
     local platform="$1"
-    local artifact="nomos-circuits-${VERSION}-${platform}.tar.gz"
+    local repo_basename
+    repo_basename=$(basename "$REPO")
+    local artifact="${repo_basename}-${VERSION}-${platform}.tar.gz"
     local url="https://github.com/${REPO}/releases/download/${VERSION}/${artifact}"
     local temp_dir=$(mktemp -d)
 
-    print_info "Downloading nomos-circuits ${VERSION} for ${platform}..."
+    print_info "Downloading ${repo_basename} ${VERSION} for ${platform}..."
     print_info "URL: $url"
 
     # Build curl command with optional authentication
@@ -175,7 +177,7 @@ main() {
     echo
     print_success "Installation complete!"
     echo
-    print_info "nomos-circuits ${VERSION} is now installed at: $INSTALL_DIR"
+    print_info "${repo_basename} ${VERSION} is now installed at: $INSTALL_DIR"
     print_info "The following circuits are available:"
 
     # Discover circuits by finding directories that contain a witness_generator
