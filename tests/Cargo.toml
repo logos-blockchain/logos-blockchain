@@ -17,7 +17,6 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1"
-blst        = { version = "0.3.11" }
 # cucumber    = "=0.22.0"
 # cucumber_ext                                   = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
 futures                          = { default-features = false, version = "0.3" }
