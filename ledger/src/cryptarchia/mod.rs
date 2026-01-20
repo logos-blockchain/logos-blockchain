@@ -6,17 +6,17 @@ use std::sync::{Arc, LazyLock};
 use derivative::Derivative;
 use lb_core::{
     crypto::{ZkDigest, ZkHasher},
-    mantle::{gas::GasConstants, AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value},
+    mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value, gas::GasConstants},
     proofs::leader_proof::{self, LeaderPublic},
     utils::merkle::MerklePath,
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_groth16::{fr_from_bytes, Fr};
+use lb_groth16::{Fr, fr_from_bytes};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
 use crate::cryptarchia::{
     block_density::BlockDensity,
-    stake::{StakeInference, LEARNING_RATE},
+    stake::{LEARNING_RATE, PRECISION, StakeInference},
 };
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
@@ -126,7 +126,7 @@ impl LedgerState {
         let mut block_density_inference = self.block_density.clone();
         block_density_inference.increment_block_density(slot);
         // infere new total stake
-        let total_stake = self.stake_inference.total_stake_inference(
+        let total_stake = self.stake_inference.total_stake_inference::<PRECISION>(
             self.epoch_state.total_stake,
             block_density_inference.current_block_density(),
         );
@@ -388,8 +388,8 @@ pub mod tests {
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
-            gas::MainnetGasConstants, ledger::Tx as LedgerTx, ops::leader_claim::VoucherCm,
             GasCost as _, MantleTx, Note, SignedMantleTx, Transaction as _,
+            gas::MainnetGasConstants, ledger::Tx as LedgerTx, ops::leader_claim::VoucherCm,
         },
         sdp::ServiceParameters,
     };
@@ -398,13 +398,13 @@ pub mod tests {
     use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkKey};
     use lb_utils::math::NonNegativeF64;
     use num_bigint::BigUint;
-    use rand::{thread_rng, RngCore as _};
+    use rand::{RngCore as _, thread_rng};
 
     use super::*;
     use crate::{
-        leader_proof::LeaderProof,
-        mantle::sdp::{rewards, ServiceRewardsParameters},
         Ledger,
+        leader_proof::LeaderProof,
+        mantle::sdp::{ServiceRewardsParameters, rewards},
     };
 
     type HeaderId = [u8; 32];

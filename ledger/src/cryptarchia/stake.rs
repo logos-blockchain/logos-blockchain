@@ -1,7 +1,8 @@
-use std::ops::{Div as _, Mul as _};
+use std::ops::Div as _;
 
 /// Current learning rate as per [especification](https://nomos-tech.notion.site/Total-Stake-Inference-22d261aa09df8051a454caa46ec54b34), this is not configurable.
 pub const LEARNING_RATE: u64 = 1;
+pub const PRECISION: u64 = 1000;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Copy, Clone)]
@@ -31,15 +32,32 @@ impl StakeInference {
             .floor() as u64
     }
 
-    pub fn total_stake_inference(
+    pub fn total_stake_inference<const PRECISION: u64>(
         &self,
         total_stake_estimate: u64,
-        period_block_density: u64,
+        measured_block_density: u64,
     ) -> u64 {
-        let slot_activation_error: u64 =
-            1 - period_block_density / (self.period() * self.slot_activation_coefficient as u64);
-        let coefficient = self.learning_rate.mul(total_stake_estimate);
-        total_stake_estimate - coefficient * slot_activation_error
+        let learning_rate_with_precision: u64 = self.learning_rate * PRECISION;
+        let slot_activation_coefficient_with_precision: u64 =
+            (self.slot_activation_coefficient * PRECISION as f64).trunc() as u64;
+        let total_stake_estimate_with_precision: u64 = total_stake_estimate * PRECISION;
+        let measured_block_density_with_precision: u64 = measured_block_density * PRECISION;
+        let expected_density_with_precision: u64 =
+            self.period() * slot_activation_coefficient_with_precision;
+        let density_difference_with_precision: i128 = i128::from(expected_density_with_precision)
+            - i128::from(measured_block_density_with_precision);
+        let slot_activation_error_with_precision: i128 =
+            i128::from(total_stake_estimate_with_precision) * density_difference_with_precision
+                / i128::from(expected_density_with_precision);
+        let correction: i128 = (i128::from(learning_rate_with_precision)
+            * slot_activation_error_with_precision)
+            / i128::from(PRECISION);
+        let new_total_stake_estimate =
+            (i128::from(total_stake_estimate_with_precision) - correction) / i128::from(PRECISION);
+        new_total_stake_estimate
+            .max(1)
+            .try_into()
+            .expect("After precision it should fit in a u64")
     }
 }
 
