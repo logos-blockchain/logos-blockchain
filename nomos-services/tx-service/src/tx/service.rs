@@ -350,11 +350,8 @@ where
                     tracing::debug!("Failed to send transactions reply");
                 }
             }
-            MempoolMsg::MarkInBlock { ids, block } => {
-                pool.mark_in_block(&ids, block);
-            }
-            MempoolMsg::Prune { ids } => {
-                pool.prune(&ids).await;
+            MempoolMsg::Remove { ids } => {
+                pool.remove(&ids).await;
             }
             MempoolMsg::Metrics { reply_channel } => {
                 Self::handle_metrics_message(pool, reply_channel);
@@ -441,7 +438,7 @@ where
     fn handle_status_message(
         pool: &Pool,
         items: &[Pool::Key],
-        reply_channel: oneshot::Sender<Vec<backend::Status<Pool::BlockId>>>,
+        reply_channel: oneshot::Sender<Vec<backend::Status>>,
     ) {
         let statuses = pool.status(items);
 

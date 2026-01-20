@@ -1,6 +1,9 @@
 use itertools::Itertools as _;
-use key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key};
-use nomos_blend_crypto::{cipher::Cipher, keys::SharedKey};
+use key_management_system_keys::{
+    keys::{Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key},
+    operators::ed25519::derive_x25519::SharedKey,
+};
+use nomos_blend_crypto::cipher::Cipher;
 use nomos_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},
     selection::{self, VerifiedProofOfSelection, inputs::VerifyInputs},
@@ -10,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Error, PayloadType,
-    crypto::domains,
+    crypto::{domains, key_ext::SharedKeyExt as _},
     encap::{
         ProofsVerifier,
         decapsulated::{PartDecapsulationOutput, PrivateHeaderDecapsulationOutput},

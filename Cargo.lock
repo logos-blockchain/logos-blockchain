@@ -5297,6 +5297,7 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tracing",
+ "x25519-dalek",
  "zeroize",
  "zksign 0.1.0",
 ]
@@ -6771,11 +6772,7 @@ dependencies = [
  "poq 0.1.0",
  "poseidon2 0.1.0",
  "rs-merkle-tree",
- "serde",
- "subtle",
  "thiserror 1.0.69",
- "x25519-dalek",
- "zeroize",
 ]
 
 [[package]]
@@ -6926,7 +6923,6 @@ dependencies = [
  "key-management-system-keys 0.1.0",
  "libp2p",
  "multiaddr",
- "nomos-blend-crypto 0.1.0",
  "nomos-blend-message 0.1.0",
  "nomos-blend-proofs 0.1.0",
  "nomos-core 0.1.0",
@@ -7050,6 +7046,7 @@ dependencies = [
  "nomos-wallet 0.1.0",
  "num-bigint",
  "overwatch",
+ "serde_json",
  "serde_yaml",
  "tokio",
 ]
@@ -7719,7 +7716,6 @@ dependencies = [
  "clap",
  "color-eyre",
  "cryptarchia-engine 0.1.0",
- "derivative",
  "futures",
  "groth16 0.1.0",
  "hex",

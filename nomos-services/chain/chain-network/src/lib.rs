@@ -11,7 +11,7 @@ use std::{fmt::Display, hash::Hash, time::Duration};
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 pub use cryptarchia_engine::{Epoch, Slot};
-use futures::StreamExt as _;
+use futures::{StreamExt as _, future::join_all};
 use network::NetworkAdapter;
 use nomos_core::{
     block::{Block, Proposal},
@@ -696,7 +696,7 @@ async fn process_block<BlobStrategy, Cryptarchia, Mempool, SamplingBackend, Runt
     block: Block<Cryptarchia::Tx>,
     blob_validation: Option<&blob::Validation<BlobStrategy>>,
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
-    mempool_adapter: &MempoolAdapter<Mempool::Item, Mempool::Item>,
+    mempool_adapter: &MempoolAdapter<Mempool::Item>,
     sampling_relay: &SamplingRelay<SamplingBackend::BlobId>,
 ) -> Result<(), Error>
 where
@@ -710,26 +710,37 @@ where
 {
     debug!("received proposal {:?}", block);
 
-    let header = block.header();
-    let id = header.id();
-
     if let Some(blob_validation) = blob_validation {
         blob_validation.validate(&block).await?;
     }
 
-    cryptarchia.apply_block(block.clone()).await?;
+    let (tip, reorged_txs) = cryptarchia.apply_block(block.clone()).await?;
 
-    // remove included content from mempool
-    mempool_adapter
-        .mark_transactions_in_block(
-            &block
-                .transactions()
-                .map(Transaction::hash)
-                .collect::<Vec<_>>(),
-            id,
-        )
-        .await
-        .unwrap_or_else(|e| error!("Could not mark transactions in block: {e}"));
+    // Remove included content from mempool if the block was applied to the honest
+    // chain. Otherwise, we keep them in mempool, so they can be included to the
+    // honest chain later when this node proposes blocks.
+    if tip == block.header().id() {
+        mempool_adapter
+            .remove_transactions(
+                &block
+                    .transactions()
+                    .map(Transaction::hash)
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .unwrap_or_else(|e| error!("Could not mark transactions in block: {e}"));
+    }
+
+    // Re-insert reorged txs back into the mempool.
+    join_all(reorged_txs.into_iter().map(|tx| {
+        let mempool_adapter = mempool_adapter.clone();
+        async move {
+            if let Err(e) = mempool_adapter.add_transaction(tx).await {
+                error!("Could not reinsert a reorged tx into mempool: {e:?}");
+            }
+        }
+    }))
+    .await;
 
     let blob_ids: Vec<da::BlobId> = block
         .transactions()
@@ -763,12 +774,11 @@ async fn mark_blob_in_block<BlobId: Debug + Send>(
 }
 
 /// Reconstruct a Block from a Proposal by looking up transactions from mempool
-async fn reconstruct_block_from_proposal<Payload, Item>(
+async fn reconstruct_block_from_proposal<Item>(
     proposal: Proposal,
-    mempool: &MempoolAdapter<Payload, Item>,
+    mempool: &MempoolAdapter<Item>,
 ) -> Result<Block<Item>, Error>
 where
-    Payload: Send + Sync,
     Item: AuthenticatedMantleTx<Hash = TxHash> + Clone + Send + Sync + 'static,
 {
     let mempool_hashes: Vec<TxHash> = proposal.mempool_transactions().to_vec();

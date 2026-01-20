@@ -1,11 +1,13 @@
-use key_management_system_keys::keys::UnsecuredEd25519Key;
-use nomos_blend_crypto::{keys::X25519PrivateKey, random_sized_bytes};
+use key_management_system_keys::{
+    keys::UnsecuredEd25519Key, operators::ed25519::derive_x25519::X25519PrivateKey,
+};
+use nomos_blend_crypto::random_sized_bytes;
 use nomos_blend_proofs::{quota::VerifiedProofOfQuota, selection::inputs::VerifyInputs};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     Error, MessageIdentifier, PaddedPayloadBody, PayloadType,
-    crypto::key_ext::{Ed25519PublicKeyExt as _, Ed25519SecretKeyExt as _},
+    crypto::key_ext::Ed25519SecretKeyExt as _,
     encap::{
         ProofsVerifier,
         decapsulated::{DecapsulatedMessage, DecapsulationOutput, PartDecapsulationOutput},

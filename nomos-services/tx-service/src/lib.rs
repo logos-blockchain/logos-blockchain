@@ -66,19 +66,15 @@ pub enum MempoolMsg<BlockId, Payload, Item, Key> {
         hashes: Vec<Key>,
         reply_channel: Sender<Result<TransactionsByHashesResponse<Item, Key>, MempoolError>>,
     },
-    Prune {
+    Remove {
         ids: Vec<Key>,
-    },
-    MarkInBlock {
-        ids: Vec<Key>,
-        block: BlockId,
     },
     Metrics {
         reply_channel: Sender<MempoolMetrics>,
     },
     Status {
         items: Vec<Key>,
-        reply_channel: Sender<Vec<Status<BlockId>>>,
+        reply_channel: Sender<Vec<Status>>,
     },
     Subscribe {
         reply_channel: Sender<broadcast::Receiver<Item>>,
@@ -104,13 +100,7 @@ where
                 )
             }
             Self::Add { payload, .. } => write!(f, "MempoolMsg::Add{{payload: {payload:?}}}"),
-            Self::Prune { ids } => write!(f, "MempoolMsg::Prune{{ids: {ids:?}}}"),
-            Self::MarkInBlock { ids, block } => {
-                write!(
-                    f,
-                    "MempoolMsg::MarkInBlock{{ids: {ids:?}, block: {block:?}}}"
-                )
-            }
+            Self::Remove { ids } => write!(f, "MempoolMsg::Prune{{ids: {ids:?}}}"),
             Self::Metrics { .. } => write!(f, "MempoolMsg::Metrics"),
             Self::Status { items, .. } => write!(f, "MempoolMsg::Status{{items: {items:?}}}"),
             Self::Subscribe { .. } => write!(f, "MempoolMsg::Subscribe"),

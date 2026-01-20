@@ -13,10 +13,7 @@ use configs::{
     tracing::create_tracing_configs,
 };
 use futures::future::join_all;
-use key_management_system_service::{
-    backend::preload::PreloadKMSBackendSettings,
-    keys::{Ed25519Key, ZkKey},
-};
+use key_management_system_service::{backend::preload::PreloadKMSBackendSettings, keys::ZkKey};
 use nomos_core::{
     mantle::{GenesisTx as _, Note, NoteId},
     sdp::{Locator, ServiceType, SessionNumber},
@@ -207,9 +204,9 @@ impl Topology {
             })
             .collect();
         providers.extend(blend_configs.iter().enumerate().map(
-            |(i, (blend_conf, zk_secret_key))| ProviderInfo {
+            |(i, (blend_conf, private_key, zk_secret_key))| ProviderInfo {
                 service_type: ServiceType::BlendNetwork,
-                provider_sk: blend_conf.non_ephemeral_signing_key.clone().into(),
+                provider_sk: private_key.clone(),
                 zk_sk: zk_secret_key.clone(),
                 locator: Locator(blend_conf.core.backend.listening_address.clone()),
                 note: consensus_configs[0].blend_notes[i].clone(),
@@ -789,13 +786,11 @@ pub fn create_kms_configs(
         .iter()
         .zip(blend_configs.iter())
         .map(
-            |(da_conf, (blend_conf, zk_secret_key))| PreloadKMSBackendSettings {
+            |(da_conf, (blend_conf, private_key, zk_secret_key))| PreloadKMSBackendSettings {
                 keys: [
                     (
-                        key_id_for_preload_backend(
-                            &Ed25519Key::from(blend_conf.non_ephemeral_signing_key.clone()).into(),
-                        ),
-                        Ed25519Key::from(blend_conf.non_ephemeral_signing_key.clone()).into(),
+                        blend_conf.non_ephemeral_signing_key_id.clone(),
+                        private_key.clone().into(),
                     ),
                     (
                         blend_conf.core.zk.secret_key_kms_id.clone(),

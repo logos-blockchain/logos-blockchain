@@ -15,10 +15,10 @@ use std::{
 
 use broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo, SessionUpdate};
 use bytes::Bytes;
-use cryptarchia_engine::PrunedBlocks;
 pub use cryptarchia_engine::{Epoch, Slot};
+use cryptarchia_engine::{PrunedBlocks, ReorgedBlocks, UpdatedCryptarchia};
 use cryptarchia_sync::{GetTipResponse, ProviderResponse};
-use futures::{FutureExt as _, StreamExt as _};
+use futures::{FutureExt as _, StreamExt as _, future::join_all};
 use nomos_core::{
     block::Block,
     header::HeaderId,
@@ -125,9 +125,11 @@ pub enum ConsensusMsg<Tx> {
         slot: Slot,
         tx: oneshot::Sender<Option<EpochState>>,
     },
+    /// Apply a block to the chain,
+    /// and return the tip and reorged txs if successful.
     ApplyBlock {
         block: Box<Block<Tx>>,
-        tx: oneshot::Sender<Result<(), Error>>,
+        tx: oneshot::Sender<Result<(HeaderId, Vec<Tx>), Error>>,
     },
     /// Forward chain sync events from the network to chain-service.
     /// Chain-service will handle these directly and respond via the embedded
@@ -235,7 +237,7 @@ impl Cryptarchia {
         &self,
         block: &Block<Tx>,
         current_slot: Slot,
-    ) -> Result<(Self, PrunedBlocks<HeaderId>), Error>
+    ) -> Result<(Self, PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>), Error>
     where
         Tx: AuthenticatedMantleTx,
     {
@@ -270,16 +272,20 @@ impl Cryptarchia {
                 },
                 err => Error::Ledger(err),
             })?;
-        let (consensus, pruned_blocks) =
-            self.consensus
-                .receive_block(id, parent, slot)
-                .map_err(|err| match err {
-                    cryptarchia_engine::Error::ParentMissing(parent) => Error::ParentMissing {
-                        parent,
-                        info: self.info(),
-                    },
-                    err => Error::Consensus(err),
-                })?;
+        let UpdatedCryptarchia {
+            cryptarchia: consensus,
+            pruned_blocks,
+            reorged_blocks,
+        } = self
+            .consensus
+            .receive_block(id, parent, slot)
+            .map_err(|err| match err {
+                cryptarchia_engine::Error::ParentMissing(parent) => Error::ParentMissing {
+                    parent,
+                    info: self.info(),
+                },
+                err => Error::Consensus(err),
+            })?;
 
         let mut cryptarchia = Self {
             ledger,
@@ -289,7 +295,7 @@ impl Cryptarchia {
         // Prune the ledger states of all the pruned blocks.
         cryptarchia.prune_ledger_states(pruned_blocks.all());
 
-        Ok((cryptarchia, pruned_blocks))
+        Ok((cryptarchia, pruned_blocks, reorged_blocks))
     }
 
     fn epoch_state_for_slot(&self, slot: Slot) -> Option<&EpochState> {
@@ -583,10 +589,10 @@ where
                                         &self.lib_subscription_sender,
                                         &self.service_resources_handle.state_updater,
                                     ).await {
-                                    Ok((new_cryptarchia, new_storage_blocks_to_remove)) => {
+                                    Ok((new_cryptarchia, new_storage_blocks_to_remove, reorged_txs)) => {
                                         cryptarchia = new_cryptarchia;
                                         storage_blocks_to_remove = new_storage_blocks_to_remove;
-                                        tx.send(Ok(())).unwrap_or_else(|_| {
+                                        tx.send(Ok((cryptarchia.tip(), reorged_txs))).unwrap_or_else(|_| {
                                             error!("Could not send process block result through channel");
                                         });
                                     }
@@ -803,8 +809,8 @@ where
         new_block_subscription_sender: &broadcast::Sender<HeaderId>,
         lib_subscription_sender: &broadcast::Sender<LibUpdate>,
         state_updater: &StateUpdater<Option<CryptarchiaConsensusState>>,
-    ) -> Result<(Cryptarchia, HashSet<HeaderId>), Error> {
-        let (cryptarchia, pruned_blocks) = Self::process_block(
+    ) -> Result<(Cryptarchia, HashSet<HeaderId>, Vec<Tx>), Error> {
+        let (cryptarchia, pruned_blocks, reorged_txs) = Self::process_block(
             cryptarchia,
             block,
             current_slot,
@@ -827,7 +833,7 @@ where
             state_updater,
         );
 
-        Ok((cryptarchia, storage_blocks_to_remove))
+        Ok((cryptarchia, storage_blocks_to_remove, reorged_txs))
     }
 
     fn update_state(
@@ -859,7 +865,7 @@ where
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
         new_block_subscription_sender: &broadcast::Sender<HeaderId>,
         lib_broadcaster: &broadcast::Sender<LibUpdate>,
-    ) -> Result<(Cryptarchia, PrunedBlocks<HeaderId>), Error> {
+    ) -> Result<(Cryptarchia, PrunedBlocks<HeaderId>, Vec<Tx>), Error> {
         debug!("received proposal {:?}", block);
 
         let header = block.header();
@@ -873,7 +879,8 @@ where
             }
         };
 
-        let (cryptarchia, pruned_blocks) = cryptarchia.try_apply_block(&block, current_slot)?;
+        let (cryptarchia, pruned_blocks, reorged_blocks) =
+            cryptarchia.try_apply_block(&block, current_slot)?;
         let new_lib = cryptarchia.lib();
 
         relays
@@ -929,7 +936,18 @@ where
             .await;
         }
 
-        Ok((cryptarchia, pruned_blocks))
+        let reorged_txs: Vec<_> = join_all(
+            reorged_blocks
+                .iter()
+                .map(|id| relays.storage_adapter().get_block(id)),
+        )
+        .await
+        .into_iter()
+        .flatten()
+        .flat_map(Block::into_transactions)
+        .collect();
+
+        Ok((cryptarchia, pruned_blocks, reorged_txs))
     }
 
     /// Retrieves the blocks in the range from `from` to `to` from the storage.
@@ -1041,7 +1059,7 @@ where
             )
             .await
             {
-                Ok((new_cryptarchia, new_pruned_blocks)) => {
+                Ok((new_cryptarchia, new_pruned_blocks, _)) => {
                     cryptarchia = new_cryptarchia;
                     pruned_blocks.extend(&new_pruned_blocks);
                 }

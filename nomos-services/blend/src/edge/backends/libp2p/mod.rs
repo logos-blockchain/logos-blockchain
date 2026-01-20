@@ -2,11 +2,13 @@ mod settings;
 mod swarm;
 
 use futures::future::{AbortHandle, Abortable};
+use key_management_system_service::keys::UnsecuredEd25519Key;
 use libp2p::PeerId;
 use nomos_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     scheduling::membership::Membership,
 };
+use nomos_libp2p::ed25519::Keypair;
 use overwatch::overwatch::OverwatchHandle;
 use rand::RngCore;
 pub use settings::Libp2pBlendBackendSettings;
@@ -14,7 +16,6 @@ use swarm::BlendSwarm;
 use tokio::sync::mpsc;
 
 use super::BlendBackend;
-use crate::edge::settings::BlendConfig;
 
 const LOG_TARGET: &str = "blend::service::edge::backend::libp2p";
 
@@ -33,21 +34,27 @@ impl<RuntimeServiceId> BlendBackend<PeerId, RuntimeServiceId> for Libp2pBlendBac
     type Settings = Libp2pBlendBackendSettings;
 
     fn new<Rng>(
-        settings: BlendConfig<Self::Settings>,
+        settings: Self::Settings,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         membership: Membership<PeerId>,
         rng: Rng,
+        non_ephemeral_signing_key: UnsecuredEd25519Key,
     ) -> Self
     where
         Rng: RngCore + Send + 'static,
     {
         let (swarm_command_sender, swarm_command_receiver) = mpsc::channel(CHANNEL_SIZE);
+        let swarm_identity = {
+            let mut non_ephemeral_signing_key_bytes = non_ephemeral_signing_key.to_bytes();
+            Keypair::try_from_bytes(&mut non_ephemeral_signing_key_bytes[..])
+                .expect("Cryptographic secret key should be a valid Ed25519 private key.")
+        };
         let swarm = BlendSwarm::new(
-            &settings,
+            settings,
             membership,
             rng,
             swarm_command_receiver,
-            settings.backend.protocol_name.clone().into_inner(),
+            swarm_identity.into(),
         );
 
         let (swarm_task_abort_handle, swarm_task_abort_registration) = AbortHandle::new_pair();
