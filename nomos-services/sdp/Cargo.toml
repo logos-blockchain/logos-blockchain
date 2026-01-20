@@ -18,7 +18,7 @@ futures                    = { default-features = false, version = "0.3" }
 key-management-system-keys = { workspace = true }
 nomos-core                 = { workspace = true }
 overwatch                  = { workspace = true }
-serde                      = { workspace = true, features = ["derive"] }
+serde                      = { features = ["derive"], workspace = true }
 thiserror                  = { workspace = true }
 tokio                      = { default-features = false, version = "1" }
 tokio-stream               = { default-features = false, version = "0.1" }

@@ -21,20 +21,20 @@ blake2                     = { default-features = false, version = "0.10" }
 bytes                      = { workspace = true }
 const-hex                  = { default-features = false, features = ["alloc"], version = "1" }
 cryptarchia-engine         = { features = ["serde"], workspace = true }
-futures                    = { version = "0.3", default-features = false, features = ["alloc"] }
+futures                    = { default-features = false, features = ["alloc"], version = "0.3" }
 generic-array              = "1.2.0"
-groth16                    = { workspace = true, features = ["deser"] }
-hex                        = { version = "0.4", default-features = false, features = ["alloc"] }
+groth16                    = { features = ["deser"], workspace = true }
+hex                        = { default-features = false, features = ["alloc"], version = "0.4" }
 key-management-system-keys = { workspace = true }
 multiaddr                  = { default-features = false, version = "0.18" }
-nom                        = { version = "8", default-features = false, features = ["alloc"] }
+nom                        = { default-features = false, features = ["alloc"], version = "8" }
 nomos-blend-proofs         = { workspace = true }
 nomos-utils                = { workspace = true }
-num-bigint                 = { version = "0.4", default-features = false }
+num-bigint                 = { default-features = false, version = "0.4" }
 pol                        = { workspace = true }
 poseidon2                  = { workspace = true }
 serde                      = { workspace = true }
-strum                      = { version = "0.27", features = ["derive"] }
+strum                      = { features = ["derive"], version = "0.27" }
 thiserror                  = "1.0"
 tracing                    = { workspace = true }
 

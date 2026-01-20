@@ -28,7 +28,7 @@ tracing                    = { workspace = true }
 [dev-dependencies]
 async-trait            = { version = "0.1" }
 groth16                = { default-features = false, workspace = true }
-libp2p                 = { default-features = false, workspace = true, features = ["plaintext", "tcp", "yamux"] }
+libp2p                 = { default-features = false, features = ["plaintext", "tcp", "yamux"], workspace = true }
 libp2p-stream          = { workspace = true }
 libp2p-swarm-test      = { default-features = false, features = ["tokio"], version = "0.5.0" }
 nomos-blend-message    = { features = ["unsafe-test-functions"], workspace = true }

@@ -15,7 +15,7 @@ workspace = true
 [dependencies]
 async-trait                  = { default-features = false, version = "0.1" }
 bytes                        = { workspace = true }
-ed25519-dalek                = { workspace = true, features = ["rand_core", "serde", "zeroize"] }
+ed25519-dalek                = { features = ["rand_core", "serde", "zeroize"], workspace = true }
 generic-array                = { default-features = false, version = "1.2.0" }
 groth16                      = { workspace = true }
 key-management-system-macros = { workspace = true }
@@ -27,7 +27,7 @@ rand_core                    = { default-features = false, version = "0.6.4" }
 serde                        = { default-features = false, features = ["derive"], version = "1" }
 subtle                       = { workspace = true }
 thiserror                    = { default-features = false, version = "2" }
-tokio                        = { default-features = false, version = "1", features = ["rt"] }
+tokio                        = { default-features = false, features = ["rt"], version = "1" }
 tracing                      = { default-features = false, version = "0.1" }
 zeroize                      = { workspace = true }
 zksign                       = { workspace = true }

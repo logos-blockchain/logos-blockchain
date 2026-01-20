@@ -18,11 +18,11 @@ groth16        = { workspace = true }
 nomos-utils    = { features = ["rng"], workspace = true }
 poq            = { workspace = true }
 poseidon2      = { workspace = true }
-rs-merkle-tree = { default-features = false, version = "0.1", features = ["memory_store"] }
+rs-merkle-tree = { default-features = false, features = ["memory_store"], version = "0.1" }
 serde          = { workspace = true }
 subtle         = { workspace = true }
 thiserror      = "1"
-x25519-dalek   = { workspace = true, features = ["serde", "static_secrets", "zeroize"] }
+x25519-dalek   = { features = ["serde", "static_secrets", "zeroize"], workspace = true }
 zeroize        = { workspace = true }
 
 [dev-dependencies]

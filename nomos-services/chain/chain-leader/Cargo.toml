@@ -13,11 +13,13 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
+ark-bn254                  = "0.4.0"
 async-trait                = "0.1"
 chain-common               = { workspace = true }
 chain-service              = { workspace = true }
 cryptarchia-engine         = { workspace = true }
 futures                    = { default-features = false, version = "0.3" }
+groth16                    = { workspace = true }
 key-management-system-keys = { workspace = true }
 nomos-blend-service        = { workspace = true }
 nomos-core                 = { workspace = true }
@@ -26,7 +28,7 @@ nomos-ledger               = { features = ["serde"], workspace = true }
 nomos-time                 = { workspace = true }
 nomos-wallet               = { workspace = true }
 overwatch                  = { workspace = true }
-groth16                    = { workspace = true }
+rand                       = "0.8.5"
 serde                      = { workspace = true }
 services-utils             = { workspace = true }
 thiserror                  = "1.0"
@@ -34,8 +36,6 @@ tokio                      = { default-features = false, version = "1" }
 tracing                    = { workspace = true }
 tracing-futures            = { default-features = false, version = "0.2" }
 tx-service                 = { workspace = true }
-rand = "0.8.5"
-ark-bn254 = "0.4.0"
 
 [features]
 default      = []

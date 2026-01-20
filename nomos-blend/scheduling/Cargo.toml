@@ -23,7 +23,7 @@ nomos-blend-crypto         = { workspace = true }
 nomos-blend-message        = { workspace = true }
 nomos-blend-proofs         = { workspace = true }
 nomos-core                 = { workspace = true }
-nomos-utils                = { workspace = true, features = ["rng"] }
+nomos-utils                = { features = ["rng"], workspace = true }
 rand                       = { features = ["alloc"], workspace = true }
 serde                      = { workspace = true }
 thiserror                  = { default-features = false, version = "1" }
@@ -34,9 +34,9 @@ tracing                    = { workspace = true }
 [dev-dependencies]
 groth16             = { workspace = true }
 libp2p              = { workspace = true }
-nomos-blend-message = { workspace = true, features = ["unsafe-test-functions"] }
-nomos-blend-proofs  = { workspace = true, features = ["unsafe-test-functions"] }
-test-log            = { default-features = false, version = "0.2.18", features = ["trace"] }
+nomos-blend-message = { features = ["unsafe-test-functions"], workspace = true }
+nomos-blend-proofs  = { features = ["unsafe-test-functions"], workspace = true }
+test-log            = { default-features = false, features = ["trace"], version = "0.2.18" }
 
 [features]
 unsafe-test-functions = []
