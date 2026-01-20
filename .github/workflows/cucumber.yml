@@ -73,11 +73,11 @@ jobs:
 
       # Validate nomos-node config file using the built binary
       - name: Run the node binary to check the config file validity
-        run: ${{ github.workspace }}/target/release/nomos-node nodes/nomos-node/config.yaml --check-config
+        run: ${{ github.workspace }}/target/release/nomos-node nodes/node/config.yaml --check-config
 
       # Validate nomos-executor config file using the built binary
       - name: Run the executor binary to check the config file validity
-        run: ${{ github.workspace }}/target/release/nomos-executor nodes/nomos-executor/config.yaml --check-config
+        run: ${{ github.workspace }}/target/release/nomos-executor nodes/executor/config.yaml --check-config
 
       # Run cucumber integration tests with environment variables for binaries and test params
       - name: Run cucumber
@@ -91,7 +91,7 @@ jobs:
           NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
         with:
           command: test
-          args: --release --locked --test cucumber -- --tags "@normal_ci"
+          args: --release --locked --all --all-features -p logos-blockchain-tests --test cucumber -- --tags "@normal_ci"
 
       # Always upload JUnit test results for reporting, even if tests fail
       - name: Upload cucumber JUnit results

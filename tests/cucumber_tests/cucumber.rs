@@ -12,7 +12,7 @@
 use std::{fs, io};
 
 use cucumber::{World as _, WriterExt as _, writer, writer::Verbosity};
-use tests::cucumber::{
+use logos_blockchain_tests::cucumber::{
     defaults::{
         create_scenario_output_dir, get_feature_path, init_logging_defaults,
         init_node_log_dir_defaults, init_tracing,

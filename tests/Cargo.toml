@@ -16,10 +16,9 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait = "0.1"
-blst        = { version = "0.3.11" }
-# cucumber    = "=0.22.0"
-# cucumber_ext                                   = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
+async-trait                      = "0.1"
+blst                             = { version = "0.3.11" }
+cucumber                         = { version = "=0.22.0", features = ["output-junit"] }
 futures                          = { default-features = false, version = "0.3" }
 futures-util                     = { default-features = false, version = "0.3.31" }
 hex                              = { default-features = false, version = "0.4.3" }
@@ -62,13 +61,15 @@ serde_json                       = "1.0"
 serde_yaml                       = "0.9"
 serial_test                      = "3.1.1"
 tempfile                         = { workspace = true }
-# testing-framework-core                         = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
-# testing-framework-runner-local                 = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
-# testing-framework-workflows                    = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
-time    = { default-features = false, version = "0.3" }
-tokio   = "1"
-tracing = { workspace = true }
-# tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+testing-framework-core           = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
+testing-framework-runner-compose = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
+testing-framework-runner-local   = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
+testing-framework-workflows      = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
+thiserror                        = { default-features = false, version = "2.0" }
+time                             = { default-features = false, version = "0.3" }
+tokio                            = "1"
+tracing                          = { workspace = true }
+tracing-subscriber               = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [[test]]
 name = "test_cryptarchia_happy_path"
@@ -114,9 +115,9 @@ path = "src/tests/da/historic_sampling.rs"
 name = "test_mantle_sdp_ops"
 path = "src/tests/mantle/sdp_ops.rs"
 
-# [[test]]
-# name = "test_testing_framework_smoke_local"
-# path = "src/tests/testing_framework/smoke_local.rs"
+[[test]]
+name = "test_testing_framework_smoke_local"
+path = "src/tests/testing_framework/smoke_local.rs"
 
 [[test]]
 name = "test_testing_framework_cucumber_smoke_local"
