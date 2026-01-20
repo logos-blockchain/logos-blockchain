@@ -18,7 +18,7 @@ A real-time block archiver that subscribes to a Logos Blockchain node's Last Imm
 ## Building
 
 ```bash
-cargo build --release -p logos-blockchain-archiver
+cargo build --release -p logos-blockchain-demo-archiver
 ```
 
 ## Running
@@ -38,7 +38,7 @@ cargo build --release -p logos-blockchain-archiver
 ### Using CLI Flags
 
 ```bash
-./target/release/logos-blockchain-archiver \
+./target/release/logos-blockchain-demo-archiver \
   -e http://localhost:8080 \
   -c 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
   -t DEMO
@@ -47,7 +47,7 @@ cargo build --release -p logos-blockchain-archiver
 With optional authentication:
 
 ```bash
-./target/release/logos-blockchain-archiver \
+./target/release/logos-blockchain-demo-archiver \
   -e http://localhost:8080 \
   -u admin \
   -p secret \
@@ -70,7 +70,7 @@ export TESTNET_PASSWORD=secret
 export INITIAL_BALANCE=1000
 export PORT_NUMBER=8090
 
-./target/release/logos-blockchain-archiver
+./target/release/logos-blockchain-demo-archiver
 ```
 
 ### Using a `.env` File
@@ -92,7 +92,7 @@ PORT_NUMBER=8090
 Then run with a tool like `dotenv`:
 
 ```bash
-dotenv ./target/release/logos-blockchain-archiver
+dotenv ./target/release/logos-blockchain-demo-archiver
 ```
 
 ## HTTP API
@@ -179,7 +179,7 @@ Example:
 /_/   \_\_|  \___|_| |_|_| \_/ \___|_|   |____/ \___|_| |_| |_|\___/
 
 ══════════════════════════════════════════════════════════════════════
-  📡 Nomos Node: http://localhost:8080
+  📡 Logos Blockchain Node: http://localhost:8080
   📺 Channel ID: 0123456789abcdef...
   🌐 HTTP Server: http://0.0.0.0:8090/blocks
 ══════════════════════════════════════════════════════════════════════

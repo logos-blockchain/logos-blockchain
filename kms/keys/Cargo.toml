@@ -1,0 +1,37 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-key-management-system-keys"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait                     = { default-features = false, version = "0.1" }
+bytes                           = { workspace = true }
+ed25519-dalek                   = { workspace = true, features = ["rand_core", "serde", "zeroize"] }
+generic-array                   = { default-features = false, version = "1.2.0" }
+lb-blend-proofs                 = { workspace = true }
+lb-groth16                      = { workspace = true }
+lb-key-management-system-macros = { workspace = true }
+lb-poseidon2                    = { workspace = true }
+lb-utils                        = { features = ["rng", "serde", "types"], workspace = true }
+lb-zksign                       = { workspace = true }
+num-bigint                      = { default-features = false, version = "0.4.6" }
+rand_core                       = { default-features = false, version = "0.6.4" }
+serde                           = { default-features = false, features = ["derive"], version = "1" }
+subtle                          = { workspace = true }
+thiserror                       = { default-features = false, version = "2" }
+tokio                           = { default-features = false, version = "1", features = ["rt"] }
+tracing                         = { default-features = false, version = "0.1" }
+x25519-dalek                    = { workspace = true, features = ["serde", "static_secrets", "zeroize"] }
+zeroize                         = { workspace = true }
+
+[features]
+unsafe = []

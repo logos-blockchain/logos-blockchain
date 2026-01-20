@@ -1,0 +1,37 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-ledger"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lb-blend-crypto               = { workspace = true }
+lb-blend-message              = { workspace = true }
+lb-blend-proofs               = { workspace = true }
+lb-core                       = { workspace = true }
+lb-cryptarchia-engine         = { workspace = true }
+lb-groth16                    = { workspace = true }
+lb-key-management-system-keys = { workspace = true }
+lb-mmr                        = { features = ["serde"], workspace = true }
+lb-utils                      = { workspace = true }
+lb-utxotree                   = { workspace = true }
+num-bigint                    = { default-features = false, version = "0.4" }
+rand                          = { workspace = true }
+rpds                          = { default-features = false, version = "1.1.1" }
+serde                         = { default-features = false, features = ["derive"], optional = true, version = "1.0" }
+thiserror                     = "1"
+tracing                       = { workspace = true }
+
+[dev-dependencies]
+rand = { features = ["std", "std_rng"], workspace = true }
+
+[features]
+serde = ["dep:serde", "lb-cryptarchia-engine/serde", "lb-groth16/deser", "lb-utils/serde", "lb-utxotree/serde"]

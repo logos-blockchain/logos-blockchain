@@ -1,0 +1,34 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-da-dispersal-service"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait                   = "0.1"
+futures                       = { default-features = false, version = "0.3" }
+lb-chain-broadcast-service    = { workspace = true }
+lb-core                       = { workspace = true }
+lb-da-network-core            = { workspace = true }
+lb-da-network-service         = { workspace = true }
+lb-key-management-system-keys = { workspace = true }
+lb-kzgrs-backend              = { workspace = true }
+lb-services-utils             = { workspace = true }
+lb-subnetworks-assignations   = { workspace = true }
+lb-tracing                    = { workspace = true }
+lb-utils                      = { workspace = true }
+overwatch                     = { workspace = true }
+serde                         = { workspace = true }
+serde_with                    = { workspace = true }
+thiserror                     = { workspace = true }
+tokio                         = "1"
+tokio-stream                  = { default-features = false, version = "0.1.15" }
+tracing                       = { workspace = true }

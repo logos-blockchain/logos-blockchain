@@ -1,0 +1,28 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-blend"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lb-blend-crypto     = { workspace = true }
+lb-blend-message    = { workspace = true }
+lb-blend-network    = { workspace = true }
+lb-blend-proofs     = { workspace = true }
+lb-blend-scheduling = { workspace = true }
+
+[features]
+unsafe-test-functions = [
+  "lb-blend-message/unsafe-test-functions",
+  "lb-blend-network/unsafe-test-functions",
+  "lb-blend-proofs/unsafe-test-functions",
+  "lb-blend-scheduling/unsafe-test-functions",
+]

@@ -1,13 +1,13 @@
 use futures::StreamExt as _;
-use nomos_core::{da::BlobId, sdp::SessionNumber};
-use nomos_utils::net::get_available_udp_port;
-use rand::{Rng as _, thread_rng};
-use serial_test::serial;
-use tests::{
+use lb_core::{da::BlobId, sdp::SessionNumber};
+use lb_utils::net::get_available_udp_port;
+use logos_blockchain_tests::{
     common::da::{disseminate_with_metadata, setup_test_channel, wait_for_blob_onchain},
     nodes::executor::Executor,
     topology::{Topology, TopologyConfig},
 };
+use rand::{Rng as _, thread_rng};
+use serial_test::serial;
 
 #[ignore = "TODO: Enable when SDP Declarations are processed"]
 #[tokio::test]

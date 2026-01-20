@@ -4,26 +4,26 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "pol"
+name        = "logos-blockchain-pol"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-circuits-prover   = { workspace = true }
-circuits-utils    = { workspace = true }
-groth16           = { features = ["deser"], workspace = true }
-num-bigint        = "0.4"
-num-traits        = "0.2.19"
-serde             = { features = ["derive", "std"], workspace = true }
-serde_json        = { version = "1.0" }
-thiserror         = "2.0"
-witness-generator = { workspace = true }
+lb-circuits-prover   = { workspace = true }
+lb-circuits-utils    = { workspace = true }
+lb-groth16           = { features = ["deser"], workspace = true }
+lb-witness-generator = { workspace = true }
+num-bigint           = "0.4"
+num-traits           = "0.2.19"
+serde                = { features = ["derive", "std"], workspace = true }
+serde_json           = { version = "1.0" }
+thiserror            = "2.0"
 
 [dev-dependencies]
 
 [build-dependencies]
-circuits-utils = { workspace = true }
+lb-circuits-utils = { workspace = true }
 
 [lints]
 workspace = true

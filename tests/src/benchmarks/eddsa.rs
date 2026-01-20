@@ -19,7 +19,7 @@ mod tests {
 
         let mut csprng = OsRng;
         let signing_key: SigningKey = SigningKey::generate(&mut csprng);
-        let message: &[u8] = b"Nomos will rule the world someday.";
+        let message: &[u8] = b"Logos blockchain will rule the world someday.";
         let signature: Signature = signing_key.sign(message);
 
         let t0 = unsafe { core::arch::x86_64::_rdtsc() };

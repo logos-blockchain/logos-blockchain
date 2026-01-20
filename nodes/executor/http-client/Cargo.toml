@@ -1,0 +1,21 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-executor-http-client"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+futures               = { default-features = false, version = "0.3.31" }
+lb-common-http-client = { workspace = true }
+lb-core               = { workspace = true }
+lb-http-api-common    = { workspace = true }
+reqwest               = { workspace = true }
+serde                 = { workspace = true }

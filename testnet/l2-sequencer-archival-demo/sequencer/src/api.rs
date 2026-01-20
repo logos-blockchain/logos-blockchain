@@ -7,7 +7,7 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use demo_sequencer::{Transaction, TransferRequest, db::DbError};
+use logos_blockchain_demo_sequencer::{Transaction, TransferRequest, db::DbError};
 use reqwest::{Method, header};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{Any, CorsLayer};

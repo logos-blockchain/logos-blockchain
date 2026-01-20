@@ -1,0 +1,21 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-key-management-system-macros"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { default-features = false, version = "1" }
+quote       = { default-features = false, version = "1" }
+syn         = { version = "2", features = ["full"] }
+
+[lints]
+workspace = true

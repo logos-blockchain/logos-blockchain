@@ -1,12 +1,10 @@
 use core::{num::NonZeroUsize, time::Duration};
 use std::collections::HashSet;
 
-use chain_leader::LeaderConfig;
-use chain_network::{IbdConfig, OrphanConfig, SyncConfig};
-use chain_service::{OfflineGracePeriodConfig, StartingState};
-use groth16::CompressedGroth16Proof;
-use key_management_system_service::keys::{Ed25519Key, ZkKey, ZkPublicKey, ZkSignature};
-use nomos_core::{
+use lb_chain_leader_service::LeaderConfig;
+use lb_chain_network_service::{IbdConfig, OrphanConfig, SyncConfig};
+use lb_chain_service::{OfflineGracePeriodConfig, StartingState};
+use lb_core::{
     mantle::{
         MantleTx, Note, OpProof, Utxo,
         genesis_tx::GenesisTx,
@@ -18,7 +16,9 @@ use nomos_core::{
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
-use nomos_node::{
+use lb_groth16::CompressedGroth16Proof;
+use lb_key_management_system_service::keys::{Ed25519Key, ZkKey, ZkPublicKey, ZkSignature};
+use lb_node::{
     SignedMantleTx, Transaction as _,
     config::cryptarchia::serde::{Config, NetworkConfig, ServiceConfig},
 };
@@ -145,7 +145,7 @@ pub fn create_consensus_configs(
                     sk: sk.into_unsecured(),
                 },
                 network: NetworkConfig {
-                    bootstrap: chain_network::BootstrapConfig {
+                    bootstrap: lb_chain_network_service::BootstrapConfig {
                         ibd: IbdConfig {
                             delay_before_new_download: Duration::from_secs(10),
                             peers: HashSet::new(),
@@ -159,7 +159,7 @@ pub fn create_consensus_configs(
                     },
                 },
                 service: ServiceConfig {
-                    bootstrap: chain_service::BootstrapConfig {
+                    bootstrap: lb_chain_service::BootstrapConfig {
                         force_bootstrap: false,
                         offline_grace_period: OfflineGracePeriodConfig {
                             grace_period: Duration::from_secs(20 * 60),

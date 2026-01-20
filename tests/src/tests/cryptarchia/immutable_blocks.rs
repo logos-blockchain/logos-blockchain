@@ -1,12 +1,12 @@
 use std::{num::NonZero, time::Duration};
 
 use futures_util::StreamExt as _;
-use serial_test::serial;
-use tests::{
+use logos_blockchain_tests::{
     adjust_timeout,
     nodes::validator::{Validator, create_validator_config},
     topology::configs::create_general_configs,
 };
+use serial_test::serial;
 
 const IMMUTABLE_BLOCK_COUNT: u64 = 5;
 const TEST_DURATION_SECS: u64 = 120;

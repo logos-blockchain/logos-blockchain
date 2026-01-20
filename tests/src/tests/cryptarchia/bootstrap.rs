@@ -4,9 +4,8 @@ use std::{
 };
 
 use futures::stream::{self, StreamExt as _};
-use nomos_libp2p::PeerId;
-use serial_test::serial;
-use tests::{
+use lb_libp2p::PeerId;
+use logos_blockchain_tests::{
     adjust_timeout,
     common::sync::{wait_for_validators_mode, wait_for_validators_mode_and_height},
     nodes::validator::{Validator, create_validator_config},
@@ -16,6 +15,7 @@ use tests::{
         network::{Libp2pNetworkLayout, NetworkParams},
     },
 };
+use serial_test::serial;
 
 #[tokio::test]
 #[serial]
@@ -52,7 +52,7 @@ async fn test_ibd_behind_nodes() {
     );
     wait_for_validators_mode_and_height(
         &initial_validators,
-        cryptarchia_engine::State::Online,
+        lb_cryptarchia_engine::State::Online,
         minimum_height,
         adjust_timeout(Duration::from_secs(300)),
     )
@@ -90,7 +90,7 @@ async fn test_ibd_behind_nodes() {
     println!("Behind node started, waiting for it to finish IBD and switch to online mode...");
     wait_for_validators_mode(
         &[&behind_node],
-        cryptarchia_engine::State::Online,
+        lb_cryptarchia_engine::State::Online,
         adjust_timeout(Duration::from_secs(10)),
     )
     .await;

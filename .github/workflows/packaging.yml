@@ -83,16 +83,16 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        name: Build Nomos Node
+        name: Build Logos blockchain node
         with:
           command: build
-          args: --package nomos-node --release --no-default-features --target ${{ matrix.platform.target_triple }}
+          args: --package logos-blockchain-node --release --no-default-features --target ${{ matrix.platform.target_triple }}
 
       - uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        name: Build Nomos Node Bundler
+        name: Build Logos blockchain node bundler
         with:
           command: build
-          args: --bin bundle-nomos-node --release --target ${{ matrix.platform.target_triple }}
+          args: --bin bundle-logos-blockchain-node --release --target ${{ matrix.platform.target_triple }}
 
       - name: Bundle
         shell: bash
@@ -113,72 +113,72 @@ jobs:
             EXTENSION=""
           fi
   
-          "target/${{ matrix.platform.target_triple }}/release/bundle-nomos-node$EXTENSION" $PARAMETER
+          "target/${{ matrix.platform.target_triple }}/release/bundle-logos-blockchain-node$EXTENSION" $PARAMETER
 
       - name: Flatten Linux bundles
         if: matrix.platform.os == 'linux'
         run: |
-          mv target/${{ matrix.platform.target_triple }}/release/bundle/rpm/nomos-node-${{ env.VERSION }}-1.x86_64.rpm nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.rpm
-          mv target/${{ matrix.platform.target_triple }}/release/bundle/deb/nomos-node_${{ env.VERSION }}_amd64.deb nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.deb
-          mv target/${{ matrix.platform.target_triple }}/release/bundle/appimage/nomos-node_${{ env.VERSION }}_amd64.AppImage nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.AppImage
+          mv target/${{ matrix.platform.target_triple }}/release/bundle/rpm/logos-blockchain-node-${{ env.VERSION }}-1.x86_64.rpm logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.rpm
+          mv target/${{ matrix.platform.target_triple }}/release/bundle/deb/logos-blockchain-node_${{ env.VERSION }}_amd64.deb logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.deb
+          mv target/${{ matrix.platform.target_triple }}/release/bundle/appimage/logos-blockchain-node_${{ env.VERSION }}_amd64.AppImage logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.AppImage
 
       - name: Upload RPM (${{ matrix.platform.arch }})
         if: matrix.platform.os == 'linux'
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
-          name: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.rpm
-          path: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.rpm
+          name: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.rpm
+          path: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.rpm
           if-no-files-found: error
 
       - name: Upload DEB (${{ matrix.platform.arch }})
         if: matrix.platform.os == 'linux'
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
-          name: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.deb
-          path: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.deb
+          name: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.deb
+          path: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.deb
           if-no-files-found: error
 
       - name: Upload AppImage (${{ matrix.platform.arch }})
         if: matrix.platform.os == 'linux'
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
-          name: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.AppImage
-          path: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.AppImage
+          name: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.AppImage
+          path: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.AppImage
           if-no-files-found: error
 
       - name: Flatten MacOS bundles
         if: matrix.platform.os == 'macos'
         run: |
-          mv target/${{ matrix.platform.target_triple }}/release/bundle/dmg/nomos-node_${{ env.VERSION }}_${{ matrix.platform.arch }}.dmg nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.dmg
+          mv target/${{ matrix.platform.target_triple }}/release/bundle/dmg/logos-blockchain-node_${{ env.VERSION }}_${{ matrix.platform.arch }}.dmg logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.dmg
 
       - name: Upload DMG (${{ matrix.platform.arch }})
         if: matrix.platform.os == 'macos'
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
-          name: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.dmg
-          path: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.dmg
+          name: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.dmg
+          path: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.dmg
           if-no-files-found: error
 
       - name: Flatten Windows bundles
         if: matrix.platform.os == 'windows'
         run: |
-          mv target/${{ matrix.platform.target_triple }}/release/bundle/msi/nomos-node_${{ env.VERSION }}_x64_en-US.msi nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.msi
-          mv target/${{ matrix.platform.target_triple }}/release/bundle/nsis/nomos-node_${{ env.VERSION }}_x64-setup.exe nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.exe
+          mv target/${{ matrix.platform.target_triple }}/release/bundle/msi/logos-blockchain-node_${{ env.VERSION }}_x64_en-US.msi logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.msi
+          mv target/${{ matrix.platform.target_triple }}/release/bundle/nsis/logos-blockchain-node_${{ env.VERSION }}_x64-setup.exe logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.exe
 
       - name: Upload MSI (${{ matrix.platform.arch }})
         if: matrix.platform.os == 'windows'
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
-          name: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.msi
-          path: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.msi
+          name: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.msi
+          path: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.msi
           if-no-files-found: error
 
       - name: Upload EXE (${{ matrix.platform.arch }})
         if: matrix.platform.os == 'windows'
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
-          name: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.exe
-          path: nomos_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.exe
+          name: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.exe
+          path: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.exe
           if-no-files-found: error
 
   create-release:
@@ -201,9 +201,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ env.VERSION }}
-          release_name: Nomos Node ${{ env.VERSION }}
+          release_name: Logos Blockchain Node ${{ env.VERSION }}
           body: |
-            This is a release of Nomos Node ${{ env.VERSION }}.
+            This is a release of Logos Blockchain Node ${{ env.VERSION }}.
             ## Changelog
             - feature(X): new feature
             - fix(Y): bug description
@@ -254,7 +254,7 @@ jobs:
 
     env:
       UPLOAD_URL: ${{ needs.create-release.outputs.upload_url }}
-      BINARY_NAME: nomos_node-${{ needs.setup.outputs.version }}-${{ matrix.platform.arch }}.${{ matrix.platform.extension }}
+      BINARY_NAME: logos_blockchain_node-${{ needs.setup.outputs.version }}-${{ matrix.platform.arch }}.${{ matrix.platform.extension }}
       DOWNLOAD_DIRECTORY: artifacts
     steps:
       - name: Download Artifact

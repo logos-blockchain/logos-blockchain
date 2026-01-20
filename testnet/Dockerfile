@@ -11,7 +11,7 @@ FROM rust:1.92.0-slim-bookworm AS builder
 
 ARG VERSION
 
-WORKDIR /nomos
+WORKDIR /logos-blockchain
 COPY . .
 
 # Install dependencies needed for building RocksDB.
@@ -23,14 +23,14 @@ RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:$PATH"
 
 # Build Frontend Webapp
-WORKDIR /nomos/testnet/l2-sequencer-archival-demo/webapp
+WORKDIR /logos-blockchain/testnet/l2-sequencer-archival-demo/webapp
 RUN bun install --frozen-lockfile
 RUN VITE_SEQUENCER_URL=/api/sequencer VITE_ARCHIVER_URL=/api/archiver bun run build
 
 # Build Rust Binaries & Circuits
-WORKDIR /nomos
-ENV NOMOS_CIRCUITS=/opt/circuits
-RUN scripts/setup-nomos-circuits.sh "$VERSION" "$NOMOS_CIRCUITS"
+WORKDIR /logos-blockchain
+ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
+RUN scripts/setup-logos-blockchain-circuits.sh "$VERSION" "$LOGOS_BLOCKCHAIN_CIRCUITS"
 RUN cargo build --locked --release --all-features
 
 # ===========================
@@ -41,7 +41,7 @@ FROM debian:bookworm-slim
 ARG VERSION
 
 LABEL maintainer="augustinas@status.im" \
-    source="https://github.com/logos-co/nomos-node" \
+    source="https://github.com/logos-blockchain/logos-blockchain" \
     description="Logos Blockchain node and other binaries image"
 
 RUN apt-get update && apt-get install -yq \
@@ -50,20 +50,20 @@ RUN apt-get update && apt-get install -yq \
 
 # Copy Circuits
 COPY --from=builder /opt/circuits /opt/circuits
-ENV NOMOS_CIRCUITS=/opt/circuits
+ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 
 # Copy Binaries
-COPY --from=builder /nomos/target/release/nomos-node /usr/bin/
-COPY --from=builder /nomos/target/release/nomos-executor /usr/bin/
-COPY --from=builder /nomos/target/release/nomos-cli /usr/bin/
-COPY --from=builder /nomos/target/release/cfgsync-server /usr/bin/
-COPY --from=builder /nomos/target/release/cfgsync-client /usr/bin/
-COPY --from=builder /nomos/target/release/demo-sequencer /usr/bin/
-COPY --from=builder /nomos/target/release/logos-blockchain-archiver /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-node /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-executor /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-cli /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/cfgsync-server /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/cfgsync-client /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/demo-sequencer /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-archiver /usr/bin/
 
 # Copy Frontend & Nginx config
-COPY --from=builder /nomos/testnet/l2-sequencer-archival-demo/webapp/dist /var/www/l2-demo
-COPY --from=builder /nomos/testnet/l2-sequencer-archival-demo/nginx/nginx.conf /etc/nginx/nginx.conf
+COPY --from=builder /logos-blockchain/testnet/l2-sequencer-archival-demo/webapp/dist /var/www/l2-demo
+COPY --from=builder /logos-blockchain/testnet/l2-sequencer-archival-demo/nginx/nginx.conf /etc/nginx/nginx.conf
 
 EXPOSE 80 3000 8080 8090 9000 18080 60000
-ENTRYPOINT ["/usr/bin/nomos-node"]
+ENTRYPOINT ["/usr/bin/logos-blockchain-node"]

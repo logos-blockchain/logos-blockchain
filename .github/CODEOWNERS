@@ -1,21 +1,21 @@
 # Consensus
 /consensus/ @youngjoon-lee @danielSanchezQ
-/nomos-services/chain @youngjoon-lee @danielSanchezQ
+/services/chain @youngjoon-lee @danielSanchezQ
 
 # Mantle
 /ledger/ @danielSanchezQ @youngjoon-lee @bacv
 
 # Blend
-/nomos-blend/  @youngjoon-lee @ntn-x2 @danielSanchezQ
-/nomos-services/blend @youngjoon-lee @ntn-x2 @danielSanchezQ
+/blend/  @youngjoon-lee @ntn-x2 @danielSanchezQ
+/services/blend @youngjoon-lee @ntn-x2 @danielSanchezQ
 
 # DA
-/nomos-services/data-availability @danielSanchezQ @bacv @pradovic
-/nomos-da/ @danielSanchezQ @bacv @pradovic
+/da/ @danielSanchezQ @bacv @pradovic
+/services/data-availability @danielSanchezQ @bacv @pradovic
 
 # SDP
-/nomos-sdp/ @bacv @pradovic @danielSanchezQ
-/nomos-services/sdp @bacv @pradovic @danielSanchezQ
+/sdp/ @bacv @pradovic @danielSanchezQ
+/services/sdp @bacv @pradovic @danielSanchezQ
 
 # This file
 /.github/CODEOWNERS @danielSanchezQ

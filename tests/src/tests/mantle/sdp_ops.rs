@@ -1,14 +1,12 @@
 use std::{collections::HashSet, time::Duration};
 
-use common_http_client::CommonHttpClient;
-use key_management_system_service::keys::{Ed25519Key, ZkKey};
-use nomos_core::{
+use lb_common_http_client::CommonHttpClient;
+use lb_core::{
     mantle::{Note, NoteId, Transaction as _},
     sdp::{ActiveMessage, Declaration, Locator, ServiceType, SessionNumber, WithdrawMessage},
 };
-use num_bigint::BigUint;
-use serial_test::serial;
-use tests::{
+use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
+use logos_blockchain_tests::{
     adjust_timeout,
     common::mantle_tx::{
         create_sdp_active_tx, create_sdp_declare_tx, create_sdp_withdraw_tx,
@@ -17,6 +15,8 @@ use tests::{
     nodes::validator::Validator,
     topology::{GenesisNoteSpec, Topology, TopologyConfig},
 };
+use num_bigint::BigUint;
+use serial_test::serial;
 use tokio::time::{sleep, timeout};
 
 /// High-level SDP flow covered by this E2E:

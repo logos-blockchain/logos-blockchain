@@ -1,14 +1,11 @@
 use std::{collections::HashSet, time::Duration};
 
-use common_http_client::CommonHttpClient;
 use futures_util::stream::StreamExt as _;
-use kzgrs_backend::common::share::DaShare;
-use nomos_core::{da::blob::LightShare as _, sdp::SessionNumber};
-use nomos_libp2p::ed25519;
-use rand::{RngCore as _, rngs::OsRng};
-use reqwest::Url;
-use serial_test::serial;
-use tests::{
+use lb_common_http_client::CommonHttpClient;
+use lb_core::{da::blob::LightShare as _, sdp::SessionNumber};
+use lb_kzgrs_backend::common::share::DaShare;
+use lb_libp2p::ed25519;
+use logos_blockchain_tests::{
     adjust_timeout,
     common::da::{
         DA_TESTS_TIMEOUT, disseminate_with_metadata, setup_test_channel, wait_for_blob_onchain,
@@ -17,6 +14,9 @@ use tests::{
     secret_key_to_peer_id,
     topology::{Topology, TopologyConfig, configs::create_general_configs},
 };
+use rand::{RngCore as _, rngs::OsRng};
+use reqwest::Url;
+use serial_test::serial;
 
 #[tokio::test]
 #[serial]

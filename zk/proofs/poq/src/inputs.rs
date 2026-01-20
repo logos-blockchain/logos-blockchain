@@ -1,5 +1,5 @@
-use groth16::{Field as _, Fr, Groth16Input, Groth16InputDeser};
-use pol::compute_lottery_values;
+use lb_groth16::{Field as _, Fr, Groth16Input, Groth16InputDeser};
+use lb_pol::compute_lottery_values;
 use serde::{Deserialize, Serialize};
 
 use crate::{

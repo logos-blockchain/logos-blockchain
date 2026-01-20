@@ -4,20 +4,20 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "utxotree"
+name        = "logos-blockchain-utxotree"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-ark-ff     = { default-features = false, version = "0.4" }
-groth16    = { features = ["deser"], workspace = true }
-nomos-core = { workspace = true }
-num-bigint = { default-features = false, version = "0.4" }
-poseidon2  = { workspace = true }
-rpds       = { default-features = false, features = ["serde"], version = "1" }
-serde      = { workspace = true, features = ["alloc", "derive", "rc"], optional = true }
-thiserror  = "1.0"
+ark-ff       = { default-features = false, version = "0.4" }
+lb-core      = { workspace = true }
+lb-groth16   = { features = ["deser"], workspace = true }
+lb-poseidon2 = { workspace = true }
+num-bigint   = { default-features = false, version = "0.4" }
+rpds         = { default-features = false, features = ["serde"], version = "1" }
+serde        = { workspace = true, features = ["alloc", "derive", "rc"], optional = true }
+thiserror    = "1.0"
 
 [dev-dependencies]
 quickcheck        = { default-features = false, version = "1.0" }

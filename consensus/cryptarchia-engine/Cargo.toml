@@ -4,28 +4,28 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "cryptarchia-engine"
+name        = "logos-blockchain-cryptarchia-engine"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
 
 [package.metadata.cargo-machete]
 # False positives.
-ignored = ["nomos-utils"]
+ignored = ["logos-blockchain-utils"]
 
 [lints]
 workspace = true
 
 [dependencies]
-cfg_eval    = { optional = true, version = "0.1" }
-nomos-utils = { features = ["time"], optional = true, workspace = true }
-serde       = { workspace = true, optional = true }
-serde_with  = { features = ["macros"], optional = true, workspace = true }
-thiserror   = "1"
-time        = { default-features = false, version = "0.3" }
-tokio       = { default-features = false, features = ["time"], optional = true, version = "1" }
-tracing     = { workspace = true }
+cfg_eval   = { optional = true, version = "0.1" }
+lb-utils   = { features = ["time"], optional = true, workspace = true }
+serde      = { workspace = true, optional = true }
+serde_with = { features = ["macros"], optional = true, workspace = true }
+thiserror  = "1"
+time       = { default-features = false, version = "0.3" }
+tokio      = { default-features = false, features = ["time"], optional = true, version = "1" }
+tracing    = { workspace = true }
 
 [features]
-serde = ["dep:cfg_eval", "dep:nomos-utils", "dep:serde", "dep:serde_with"]
+serde = ["dep:cfg_eval", "dep:lb-utils", "dep:serde", "dep:serde_with"]
 tokio = ["dep:tokio"]

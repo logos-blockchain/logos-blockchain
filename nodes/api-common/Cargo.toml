@@ -4,7 +4,7 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "nomos-http-api-common"
+name        = "logos-blockchain-http-api-common"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
@@ -13,16 +13,16 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-axum                       = { default-features = false, features = ["http1", "http2", "json", "query", "tokio"], version = "0.7.5" }
-governor                   = { default-features = false, version = "0.6" }
-key-management-system-keys = { workspace = true }
-nomos-core                 = { workspace = true }
-serde                      = { workspace = true, features = ["alloc", "derive"] }
-serde_json                 = { workspace = true }
-serde_with                 = { default-features = false, features = ["macros"], workspace = true }
-tokio                      = { default-features = false, features = ["time"], optional = true, version = "1" }
-tower_governor             = { default-features = false, features = ["axum"], version = "0.3" }
-tracing                    = { default-features = false, optional = true, workspace = true }
+axum                          = { default-features = false, features = ["http1", "http2", "json", "query", "tokio"], version = "0.7.5" }
+governor                      = { default-features = false, version = "0.6" }
+lb-core                       = { workspace = true }
+lb-key-management-system-keys = { workspace = true }
+serde                         = { workspace = true, features = ["alloc", "derive"] }
+serde_json                    = { workspace = true }
+serde_with                    = { default-features = false, features = ["macros"], workspace = true }
+tokio                         = { default-features = false, features = ["time"], optional = true, version = "1" }
+tower_governor                = { default-features = false, features = ["axum"], version = "0.3" }
+tracing                       = { default-features = false, optional = true, workspace = true }
 
 [target.'cfg(not(windows))'.dependencies]
 pprof = { default-features = false, features = [

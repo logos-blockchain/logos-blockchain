@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+// TODO: Re-enable these once the nomos->logos-blockchain PR is merged and the
+// testing framework updated accordingly.
 
 use cucumber::World as _;
 use tests::cucumber::{
@@ -30,3 +31,8 @@ async fn cucumber_local_idle_smoke() {
 
     CucumberWorld::cucumber().run_and_exit(feature_path).await;
 }
+
+//     TestingFrameworkWorld::cucumber()
+//         .run_and_exit(feature_path)
+//         .await;
+// }

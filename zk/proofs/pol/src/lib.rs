@@ -37,10 +37,10 @@ mod witness;
 use std::error::Error;
 
 pub use chain_inputs::{PolChainInputs, PolChainInputsData};
-use groth16::{
+pub use inputs::{PolVerifierInput, PolWitnessInputs, PolWitnessInputsData};
+use lb_groth16::{
     CompressedGroth16Proof, Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser,
 };
-pub use inputs::{PolVerifierInput, PolWitnessInputs, PolWitnessInputsData};
 use thiserror::Error;
 pub use wallet_inputs::{PolWalletInputs, PolWalletInputsData};
 pub use witness::Witness;
@@ -84,7 +84,7 @@ pub enum ProveError {
 pub fn prove(inputs: &PolWitnessInputs) -> Result<(PoLProof, PolVerifierInput), ProveError> {
     let witness = witness::generate_witness(inputs).map_err(ProveError::Io)?;
     let (proof, verifier_inputs) =
-        circuits_prover::prover_from_contents(POL_PROVING_KEY_PATH.as_path(), witness.as_ref())
+        lb_circuits_prover::prover_from_contents(POL_PROVING_KEY_PATH.as_path(), witness.as_ref())
             .map_err(ProveError::Io)?;
     let proof: Groth16ProofJsonDeser = serde_json::from_slice(&proof).map_err(ProveError::Json)?;
     let verifier_inputs: PolVerifierInputJson =
@@ -127,7 +127,7 @@ pub enum VerifyError {
 pub fn verify(proof: &PoLProof, public_inputs: &PolVerifierInput) -> Result<bool, VerifyError> {
     let inputs = public_inputs.to_inputs();
     let expanded_proof = Groth16Proof::try_from(proof).map_err(|_| VerifyError::Expansion)?;
-    groth16::groth16_verify(verification_key::POL_VK.as_ref(), &expanded_proof, &inputs)
+    lb_groth16::groth16_verify(verification_key::POL_VK.as_ref(), &expanded_proof, &inputs)
         .map_err(|e| VerifyError::ProofVerify(Box::new(e)))
 }
 
@@ -135,7 +135,7 @@ pub fn verify(proof: &PoLProof, public_inputs: &PolVerifierInput) -> Result<bool
 mod tests {
     use std::str::FromStr as _;
 
-    use groth16::Fr;
+    use lb_groth16::Fr;
     use num_bigint::BigUint;
 
     use super::*;

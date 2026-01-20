@@ -17,7 +17,8 @@ pub trait Digest {
     /// padding and apply the Poseidon2 hash function.
     ///
     /// This can only be used for protocols where the inputs is always of size
-    /// 2. In Nomos it's reserved for Merkle tree computations including
+    /// 2. In Logos blockchain it's reserved for Merkle tree computations
+    ///    including
     /// Merkle roots and Merkle proofs.
     fn compress(inputs: &[Fr; 2]) -> ZkHash;
 

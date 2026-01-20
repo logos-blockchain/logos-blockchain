@@ -4,7 +4,7 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "circuits-utils"
+name        = "logos-blockchain-circuits-utils"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }

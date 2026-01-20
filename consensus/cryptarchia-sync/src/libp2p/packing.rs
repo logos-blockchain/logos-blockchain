@@ -1,7 +1,7 @@
 use std::io;
 
 use futures::{AsyncReadExt, AsyncWriteExt};
-use nomos_core::codec::{self, DeserializeOp as _, SerializeOp as _};
+use lb_core::codec::{self, DeserializeOp as _, SerializeOp as _};
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 

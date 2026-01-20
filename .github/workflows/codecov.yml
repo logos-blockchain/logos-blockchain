@@ -11,7 +11,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: 0
       RUSTFLAGS: "-C instrument-coverage"
-      LLVM_PROFILE_FILE: "nomos-node-%p-%m.profraw"
+      LLVM_PROFILE_FILE: "logos-blockchain-node-%p-%m.profraw"
     runs-on: self-hosted
     steps:
       - name: Checkout repository
@@ -22,14 +22,14 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: build
-          args: --all-features -p nomos-node -p nomos-executor
+          args: --all-features -p logos-blockchain-node -p logos-blockchain-executor
       - name: Run tests
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
           POL_PROOF_DEV_MODE: true
           CONSENSUS_SLOT_TIME: 5
-          NOMOS_NODE_BIN: ${{ github.workspace }}/target/debug/nomos-node
-          NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
+          LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/debug/logos-blockchain-node
+          LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
         with:
           command: test
           args: --all --all-features
@@ -49,4 +49,4 @@ jobs:
         uses: codecov/codecov-action@ea99328d1c4d5f39fda7cbffe104afd6906c50b0  # Version 5.4.0
         with:
           directory: /tmp/coverage/
-          name: nomos-node-codecov
+          name: logos-blockchain-node-codecov

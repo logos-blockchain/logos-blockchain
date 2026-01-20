@@ -1,6 +1,6 @@
-# Contributing to Nomos Node
+# Contributing to Logos Blockchain Node
 
-We're glad you're interested in contributing to Nomos Node!
+We're glad you're interested in contributing to Logos Blockchain Node!
 
 This document describes the guidelines for contributing to the project. We will be updating it as we grow and we figure
 out what works best for us.

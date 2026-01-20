@@ -4,29 +4,29 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "zksign"
+name        = "logos-blockchain-zksign"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-circuits-prover   = { workspace = true }
-circuits-utils    = { workspace = true }
-groth16           = { features = ["deser"], workspace = true }
-num-bigint        = { default-features = false, version = "0.4" }
-poseidon2         = { workspace = true }
-serde             = { features = ["derive"], workspace = true }
-serde_json        = { workspace = true }
-thiserror         = { workspace = true }
-witness-generator = { workspace = true }
+lb-circuits-prover   = { workspace = true }
+lb-circuits-utils    = { workspace = true }
+lb-groth16           = { features = ["deser"], workspace = true }
+lb-poseidon2         = { workspace = true }
+lb-witness-generator = { workspace = true }
+num-bigint           = { default-features = false, version = "0.4" }
+serde                = { features = ["derive"], workspace = true }
+serde_json           = { workspace = true }
+thiserror            = { workspace = true }
 
 [dev-dependencies]
-num-bigint = "0.4"
-poseidon2  = { workspace = true }
-rand       = "0.8"
+lb-poseidon2 = { workspace = true }
+num-bigint   = "0.4"
+rand         = "0.8"
 
 [build-dependencies]
-circuits-utils = { workspace = true }
+lb-circuits-utils = { workspace = true }
 
 [lints]
 workspace = true
