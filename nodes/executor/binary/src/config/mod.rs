@@ -115,7 +115,7 @@ pub fn update_http(
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "testing", derive(serde::Serialize))]
 pub struct RunConfig {
-    #[serde(flatten)]
+    #[cfg_attr(feature = "testing", serde(flatten))]
     pub user: UserConfig,
     pub deployment: DeploymentSettings,
 }

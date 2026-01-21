@@ -81,7 +81,7 @@ network:
             nanos: 0
     initial_peers: []
 blend:
-  non_ephemeral_signing_key: 639c9a4a96b667ceee5fb8e871822f5de870734d55a7b30ff023cf1e84663a35
+  non_ephemeral_signing_key_id: 639c9a4a96b667ceee5fb8e871822f5de870734d55a7b30ff023cf1e84663a35
   recovery_path_prefix: ./recovery/blend
   core:
     backend:
