@@ -20,7 +20,6 @@ lb-wallet-service             = { workspace = true }
 num-bigint                    = { default-features = false, version = "0.4" }
 overwatch                     = { workspace = true }
 serde_json                    = { workspace = true }
-serde_yaml                    = { default-features = false, workspace = true }
 tokio                         = { default-features = false, features = ["rt-multi-thread"], workspace = true }
 
 [build-dependencies]
