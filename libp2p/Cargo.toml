@@ -39,7 +39,7 @@ natpmp = { features = ["tokio"], version = "0.5" }
 netdev = { default-features = false, version = "0.31" }
 num_enum = { default-features = false, version = "0.7.4" }
 rand = { default-features = false, version = "0.8" }
-serde = { workspace = true, features = ["derive"] }
+serde = { features = ["derive"], workspace = true }
 serde_with = { workspace = true }
 thiserror = "1.0.40"
 tokio = { features = ["macros", "test-util", "time"], version = "1" }

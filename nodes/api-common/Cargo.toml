@@ -17,7 +17,7 @@ axum                          = { default-features = false, features = ["http1",
 governor                      = { default-features = false, version = "0.6" }
 lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-serde                         = { workspace = true, features = ["alloc", "derive"] }
+serde                         = { features = ["alloc", "derive"], workspace = true }
 serde_json                    = { workspace = true }
 serde_with                    = { default-features = false, features = ["macros"], workspace = true }
 tokio                         = { default-features = false, features = ["time"], optional = true, version = "1" }

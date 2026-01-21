@@ -30,7 +30,7 @@ jobs:
           command: fmt
           args: --all --check
       - name: Install taplo CLI
-        run: cargo install taplo-cli --locked --version 0.9.3
+        run: cargo install taplo-cli --locked --version 0.10.0
       - name: Run taplo lint
         run: taplo lint
       - name: Run taplo fmt

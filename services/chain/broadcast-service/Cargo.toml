@@ -18,7 +18,7 @@ derivative   = { default-features = false, version = "2" }
 futures      = { default-features = false, version = "0.3" }
 lb-core      = { workspace = true }
 overwatch    = { workspace = true }
-serde        = { workspace = true, features = ["derive"] }
+serde        = { features = ["derive"], workspace = true }
 tokio        = { default-features = false, version = "1" }
 tokio-stream = { default-features = false, version = "0.1" }
 tracing      = { workspace = true }

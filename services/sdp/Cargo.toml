@@ -19,7 +19,7 @@ lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-tx-service                 = { workspace = true }
 overwatch                     = { workspace = true }
-serde                         = { workspace = true, features = ["derive"] }
+serde                         = { features = ["derive"], workspace = true }
 thiserror                     = { workspace = true }
 tokio                         = { default-features = false, version = "1" }
 tokio-stream                  = { default-features = false, version = "0.1" }

@@ -38,7 +38,7 @@ log                         = "0.4.22"
 multiaddr                   = { default-features = false, version = "0.18" }
 overwatch                   = { workspace = true }
 rand                        = { workspace = true }
-serde                       = { workspace = true, features = ["derive"] }
+serde                       = { features = ["derive"], workspace = true }
 thiserror                   = "1"
 tokio                       = { default-features = false, features = ["macros", "sync"], version = "1" }
 tokio-stream                = { default-features = false, version = "0.1" }
