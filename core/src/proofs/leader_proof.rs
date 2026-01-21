@@ -267,22 +267,16 @@ impl LeaderPrivate {
             latest_root: public.latest_root,
             leader_pk,
         };
+        let (aged_path, aged_selector) = merkle_path_to_witness(aged_path);
+        let (latest_path, latest_selector) = merkle_path_to_witness(latest_path);
         let wallet = lb_pol::PolWalletInputsData {
             note_value: note.note.value,
             transaction_hash: *note.tx_hash.as_ref(),
             output_number: note.output_index as u64,
-            aged_path: aged_path.iter().map(|n| *n.item()).collect(),
-            aged_selector: aged_path
-                .iter()
-                .rev() // PoL circuit expects the reverse order for selectors
-                .map(|n| matches!(n, MerkleNode::Left(_)))
-                .collect(),
-            latest_path: latest_path.iter().map(|n| *n.item()).collect(),
-            latest_selector: latest_path
-                .iter()
-                .rev() // PoL circuit expects the reverse order for selectors
-                .map(|n| matches!(n, MerkleNode::Left(_)))
-                .collect(),
+            aged_path,
+            aged_selector,
+            latest_path,
+            latest_selector,
             secret_key,
         };
         let input = lb_pol::PolWitnessInputsData::from_chain_and_wallet_data(chain, wallet);
@@ -335,6 +329,21 @@ fn ed25519_pk_to_fr_tuple(pk: &Ed25519PublicKey) -> (Fr, Fr) {
         fr_from_bytes(&pk_bytes[0..16]).unwrap(),
         fr_from_bytes(&pk_bytes[16..32]).unwrap(),
     )
+}
+
+/// Converts a [`MerklePath`] to the witness format expected by the circuit.
+fn merkle_path_to_witness<T: Copy>(path: &MerklePath<T>) -> (Vec<T>, Vec<bool>) {
+    let n = path.len();
+    let mut items = Vec::with_capacity(n);
+    let mut selectors = vec![false; n];
+
+    for (i, node) in path.iter().enumerate() {
+        items.push(*node.item());
+        // PoL circuit expects the reverse order for selectors
+        selectors[n - 1 - i] = matches!(node, MerkleNode::Left(_)); // 1 if sibling is on the left
+    }
+
+    (items, selectors)
 }
 
 #[cfg(test)]
