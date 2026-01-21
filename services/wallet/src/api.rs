@@ -9,7 +9,7 @@ use overwatch::{
     services::{AsServiceId, ServiceData, relay::OutboundRelay},
 };
 use tokio::sync::oneshot;
-
+use lb_core::mantle::ops::leader_claim::VoucherCm;
 use crate::{WalletMsg, WalletService, WalletServiceSettings};
 
 pub trait WalletServiceData:
@@ -118,5 +118,12 @@ where
             .map_err(|e| format!("Failed to send get_leader_aged_notes request: {e:?}"))?;
 
         Ok(rx.await??)
+    }
+
+    pub async fn receive_voucher_cm_from_wallet(&self) -> Result<VoucherCm, DynError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::GenerateNewVoucherSecret { resp_tx }).await.map_err(|e| format!("Failed to send generate new voucher secret request: {e:?}"))?;
+        Ok(rx.await?)
     }
 }

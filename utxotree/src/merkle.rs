@@ -273,7 +273,7 @@ impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
         self.root.size()
     }
 
-    pub(crate) fn insert(&self, item: Item) -> (Self, usize) {
+    pub fn insert(&self, item: Item) -> (Self, usize) {
         assert!(
             self.size() < self.root.capacity(),
             "max capacity reached, cannot insert more items"
@@ -320,7 +320,7 @@ impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
     /// Computes the Merkle path for the item at the given index.
     /// The path is ordered from leaf to root (excluded).
     /// Returns `None` if the index does not exist or has been removed.
-    pub(crate) fn path(&self, index: usize) -> Option<MerklePath<Fr>> {
+    pub fn path(&self, index: usize) -> Option<MerklePath<Fr>> {
         self.root.path::<Hash>(index).inspect(|path| {
             assert_eq!(
                 path.len(),

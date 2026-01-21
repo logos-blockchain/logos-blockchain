@@ -435,6 +435,13 @@ where
                         winning_pol_slot_notifier.process_epoch(&eligible_utxos, &epoch_state);
 
                         if let Some(proof) = leader.build_proof_for(&eligible_utxos, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier).await {
+                            let voucher_cm = match wallet_api.receive_voucher_cm_from_wallet().await {
+                                Ok(voucher_cm) => voucher_cm,
+                                Err(e) => {
+                                    error!("Failed to get the voucher cm: {:?}, e");
+                                    continue;
+                                }
+                            };
                             // TODO: spawn as a separate task?
                             match Self::propose_block(
                                 parent,
@@ -444,6 +451,7 @@ where
                                 &relays,
                                 tip_state,
                                 &ledger_config,
+                                voucher_cm,
                             )
                             .await
                             {
@@ -489,6 +497,10 @@ where
 
         Ok(())
     }
+}
+
+fn receive_voucher_cm_from_wallet() -> _ {
+
 }
 
 impl<
@@ -582,6 +594,7 @@ where
         >,
         mut ledger_state: lb_ledger::LedgerState,
         ledger_config: &lb_ledger::Config,
+        voucher_cm: VoucherCm,
     ) -> Result<Block<Mempool::Item>, Error> {
         let txs = relays.mempool_adapter().get_mempool_view([0; 32].into());
         let sampling_relay = relays.sampling_relay().clone();
@@ -606,7 +619,7 @@ where
             .try_apply_header::<Groth16LeaderProof, HeaderId>(
                 slot,
                 &proof,
-                VoucherCm::default(),
+                voucher_cm,
                 ledger_config,
             )?;
 

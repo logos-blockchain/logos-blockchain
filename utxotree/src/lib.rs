@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use lb_core::utils::merkle::MerklePath;
 use lb_poseidon2::{Digest, Fr};
-use merkle::DynamicMerkleTree;
+pub use merkle::DynamicMerkleTree;
 use rpds::HashTrieMapSync;
 use thiserror::Error;
 

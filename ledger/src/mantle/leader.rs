@@ -1,11 +1,14 @@
 use std::cmp::Ordering;
-
+use rpds::HashTrieMapSync;
+use lb_core::crypto::ZkHash;
 use lb_core::mantle::{
     Value,
     ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier},
 };
+use lb_core::utils::merkle::MerklePath;
 use lb_cryptarchia_engine::Epoch;
 use lb_mmr::MerkleMountainRange;
+use lb_utxotree::DynamicMerkleTree;
 
 use crate::Balance;
 
@@ -15,8 +18,7 @@ pub struct LeaderState {
     // current epoch
     epoch: Epoch,
     // vouchers that can be claimed in this epoch
-    // this is updated once at the start of each epoch from the root of
-    // the vouchers merkle tree
+    // this is updated once at the start of each epoch
     claimable_vouchers_root: RewardsRoot,
     n_claimable_vouchers: u64,
     // nullifiers of vouchers that have been claimed since genesis
@@ -26,9 +28,15 @@ pub struct LeaderState {
     // that have been collected in the previous epoch.
     // unclaimed rewards are carried over to the next epoch.
     claimable_rewards: Value,
-    // Merkle tree of vouchers, vouchers can only be claimed with a delay
-    // of one epoch.
-    vouchers: MerkleMountainRange<VoucherCm, lb_core::crypto::ZkHasher>,
+    // Merkle tree vouchers that can be claimed in this epoch
+    // this is updated once at the start of each epoch
+    // TODO: this needs to be replaced by a MMR and Merkle proof needs to
+    // TODO: be maintained in the wallet.
+    vouchers: DynamicMerkleTree<VoucherCm, lb_core::crypto::ZkHasher>,
+    voucher_indices: HashTrieMapSync<VoucherCm, usize>,
+    // List of vouchers that are waiting to be added at the start of
+    // the next epoch
+    pending_vouchers: Vec<VoucherCm>,
 }
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
@@ -56,11 +64,13 @@ impl LeaderState {
             n_claimable_vouchers: 0,
             nfs: rpds::HashTrieSetSync::new_sync(),
             claimable_rewards: 0,
-            vouchers: MerkleMountainRange::new(),
+            vouchers: DynamicMerkleTree::new(),
+            voucher_indices: HashTrieMapSync<VoucherCm, usize>::new(),
+            pending_vouchers: Vec::new(),
         }
     }
 
-    pub fn try_apply_header(self, epoch: Epoch, voucher_cm: VoucherCm) -> Result<Self, Error> {
+    pub fn try_apply_header(self, epoch: Epoch, voucher_cm: VoucherCm) -> Result<(), Error> {
         Ok(self.update_epoch_state(epoch)?.add_voucher(voucher_cm))
     }
 
@@ -73,7 +83,13 @@ impl LeaderState {
             }),
             Ordering::Greater => {
                 self.epoch = epoch;
-                self.claimable_vouchers_root = self.vouchers.frontier_root().into();
+                for &voucher_cm in &self.pending_vouchers {
+                    let (new_vouchers, index) = self.vouchers.insert(voucher_cm);
+                    self.vouchers = new_vouchers;
+                    self.voucher_indices = self.voucher_indices.insert(voucher_cm, index);
+                }
+                self.pending_vouchers = Vec::new();
+                self.claimable_vouchers_root = self.vouchers.root().into();
                 self.n_claimable_vouchers = self.vouchers.len() as u64;
                 // TODO: increase rewards, what about epoch jumps?
                 Ok(self)
@@ -81,11 +97,13 @@ impl LeaderState {
         }
     }
 
-    fn add_voucher(self, voucher_cm: VoucherCm) -> Self {
-        Self {
-            vouchers: self.vouchers.push(voucher_cm),
-            ..self
-        }
+    fn add_voucher(mut self, voucher_cm: VoucherCm) {
+        self.pending_vouchers.push(voucher_cm)
+    }
+
+    fn voucher_merkle_path(&self, voucher_cm: VoucherCm) -> Option<MerklePath<ZkHash>> {
+        let index = self.voucher_indices.get(&voucher_cm)?;
+        self.vouchers.path(*index)
     }
 
     /// Claim the reward associated with a voucher.
@@ -121,6 +139,7 @@ impl LeaderState {
                 nfs,
                 claimable_rewards,
                 vouchers: self.vouchers.clone(),
+                pending_vouchers: self.pending_vouchers,
             },
             Balance::from(reward_amount),
         ))

@@ -1,6 +1,6 @@
 pub mod api;
 
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, time::Duration, str::FromStr as _};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -19,7 +19,7 @@ use lb_core::{
         tx_builder::MantleTxBuilder,
     },
 };
-use lb_groth16::fr_to_bytes;
+use lb_groth16::{fr_from_bytes, fr_to_bytes, Fr};
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::preload::PreloadKMSBackend,
@@ -29,6 +29,7 @@ use lb_key_management_system_service::{
     },
 };
 use lb_ledger::LedgerState;
+use rand::{RngCore as _, rngs::OsRng};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
 use lb_wallet::{Wallet, WalletBlock, WalletError};
@@ -42,6 +43,8 @@ use overwatch::{
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, trace};
+use lb_core::crypto::{ZkHash, ZkHasher};
+use lb_core::mantle::ops::leader_claim::VoucherCm;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletServiceError {
@@ -94,15 +97,19 @@ pub enum WalletMsg {
         tip: HeaderId,
         resp_tx: oneshot::Sender<Result<Vec<Utxo>, WalletServiceError>>,
     },
+    GenerateNewVoucherSecret {
+        resp_tx: oneshot::Sender<VoucherCm>,
+    }
 }
 
 impl WalletMsg {
     #[must_use]
-    pub const fn tip(&self) -> HeaderId {
+    pub const fn tip(&self) -> Option<HeaderId> {
         match self {
             Self::GetBalance { tip, .. }
             | Self::FundAndSignTx { tip, .. }
-            | Self::GetLeaderAgedNotes { tip, .. } => *tip,
+            | Self::GetLeaderAgedNotes { tip, .. } => Some(*tip),
+            | Self::GenerateNewVoucherSecret { .. } => None,
         }
     }
 }
@@ -114,6 +121,7 @@ pub struct WalletServiceSettings {
 
 pub struct WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
+    voucher_secrets: Vec<Fr>,
     _marker: std::marker::PhantomData<(Kms, Cryptarchia, Tx, Storage)>,
 }
 
@@ -242,7 +250,7 @@ where
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Self::handle_wallet_message(msg, &mut wallet, &storage_adapter, &cryptarchia_api, &kms).await;
+                    self.handle_wallet_message(msg, &mut wallet, &storage_adapter, &cryptarchia_api, &kms).await;
                 }
 
                 Ok(header_id) = new_block_receiver.recv() => {
@@ -287,16 +295,19 @@ where
         AsServiceId<Cryptarchia> + AsServiceId<Kms> + std::fmt::Debug + std::fmt::Display + Sync,
 {
     async fn handle_wallet_message(
+        &mut self,
         msg: WalletMsg,
         wallet: &mut Wallet,
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) {
-        if let Err(err) =
-            Self::backfill_if_not_in_sync(msg.tip(), wallet, storage, cryptarchia).await
-        {
-            error!(err=?err, "Failed backfilling wallet to message tip, will attempt to continue processing the message {msg:?}");
+        if let Some(tip) = msg.tip() {
+            if let Err(err) =
+                Self::backfill_if_not_in_sync(tip, wallet, storage, cryptarchia).await
+            {
+                error!(err=?err, "Failed backfilling wallet to message tip, will attempt to continue processing the message {msg:?}");
+            }
         }
 
         match msg {
@@ -339,6 +350,9 @@ where
             }
             WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
                 Self::get_leader_aged_notes(tip, resp_tx, wallet, cryptarchia).await;
+            }
+            WalletMsg::GenerateNewVoucherSecret {resp_tx} => {
+                self.generate_new_voucher_secret(resp_tx).await;
             }
         }
     }
@@ -464,7 +478,9 @@ where
                     OpProof::ZkSig(zk_sig)
                 }
                 Op::LeaderClaim(_claim_op) => {
-                    todo!("LeaderClaim proof not yet implemented")
+                    let voucher_secret = todo!();
+                    let path = ledger.mantle_ledger().voucher_merkle_path(voucher_cm);
+                    todo!("LeaderClaim PoC not yet implemented")
                 }
             };
             ops_proofs.push(proof);
@@ -561,6 +577,28 @@ where
 
         if tx.send(Ok(eligible_utxos)).is_err() {
             error!("Failed to respond to GetLeaderAgedNotes");
+        }
+    }
+
+    // TODO: Do this in KMS. DO NOT RESTART THE NODE TO NOT LOSE REWARDS FOR NOW
+    async fn generate_new_voucher_secret(
+        &mut self,
+        resp_tx: oneshot::Sender<VoucherCm>,
+    )  {
+        let mut voucher_secret_bytes = [0u8; 31];
+        OsRng.fill_bytes(&mut voucher_secret_bytes);
+        let voucher_secret = fr_from_bytes(&voucher_secret_bytes).unwrap();
+        let mut hash = ZkHasher::new();
+        hash.compress(&[
+            Fr::from_str("1668646695034522932676805048878418").unwrap(),
+            voucher_secret.clone(),
+        ]);
+        let voucher_cm = VoucherCm::from(hash.finalize());
+
+        self.voucher_secrets.push(voucher_secret);
+
+        if let Err(e) = resp_tx.send(voucher_cm) {
+            error!("Failed to send voucher secret: {e:?}");
         }
     }
 

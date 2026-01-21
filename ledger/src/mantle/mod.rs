@@ -12,6 +12,7 @@ use lb_core::{
     },
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
 };
+use lb_core::utils::merkle::MerklePath;
 use sdp::{Error as SdpLedgerError, locked_notes::LockedNotes};
 
 use crate::{Balance, Config, EpochState, UtxoTree};
@@ -119,6 +120,10 @@ impl LedgerState {
     #[must_use]
     pub fn sdp_declarations(&self) -> Vec<(DeclarationId, Declaration)> {
         self.sdp.declarations()
+    }
+
+    pub fn voucher_merkle_path(&self, voucher_cm: VoucherCm) -> Option<MerklePath<ZkHash>> {
+        self.leaders.voucher_merkle_path(voucher_cm)
     }
 
     pub fn try_apply_header(

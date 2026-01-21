@@ -3,7 +3,9 @@ use lb_network_service::message::ChainSyncEvent;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
-
+use lb_core::mantle::ops::leader_claim::VoucherCm;
+use lb_core::utils::merkle::MerklePath;
+use lb_groth16::Fr;
 use crate::{ConsensusMsg, CryptarchiaInfo, LibUpdate};
 
 pub trait CryptarchiaServiceData:
