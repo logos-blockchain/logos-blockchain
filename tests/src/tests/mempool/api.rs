@@ -14,7 +14,7 @@ async fn test_post_mantle_tx() {
     let validator_url = Url::parse(
         format!(
             "http://{}",
-            validator.config().http.backend_settings.address
+            validator.config().user.http.backend_settings.address
         )
         .as_str(),
     )

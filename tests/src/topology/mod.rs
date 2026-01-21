@@ -392,10 +392,11 @@ impl Topology {
         // Get num_subnets from first executor's config (all nodes have same num_subnets
         // in tests)
         let expected_subnets = if let Some(executor) = self.executors.first() {
-            executor.config().da_network.backend.num_subnets as usize
+            executor.config().user.da_network.backend.num_subnets as usize
         } else if let Some(validator) = self.validators.first() {
             validator
                 .config()
+                .user
                 .da_network
                 .backend
                 .subnets_settings
@@ -450,11 +451,11 @@ impl Topology {
     fn node_listen_ports(&self) -> Vec<u16> {
         self.validators
             .iter()
-            .map(|node| node.config().network.backend.swarm.port)
+            .map(|node| node.config().user.network.backend.swarm.port)
             .chain(
                 self.executors
                     .iter()
-                    .map(|node| node.config().network.backend.swarm.port),
+                    .map(|node| node.config().user.network.backend.swarm.port),
             )
             .collect()
     }
@@ -464,6 +465,7 @@ impl Topology {
             .iter()
             .map(|node| {
                 node.config()
+                    .user
                     .network
                     .backend
                     .initial_peers
@@ -473,6 +475,7 @@ impl Topology {
             })
             .chain(self.executors.iter().map(|node| {
                 node.config()
+                    .user
                     .network
                     .backend
                     .initial_peers
@@ -490,13 +493,13 @@ impl Topology {
             .map(|(idx, node)| {
                 format!(
                     "validator#{idx}@{}",
-                    node.config().network.backend.swarm.port
+                    node.config().user.network.backend.swarm.port
                 )
             })
             .chain(self.executors.iter().enumerate().map(|(idx, node)| {
                 format!(
                     "executor#{idx}@{}",
-                    node.config().network.backend.swarm.port
+                    node.config().user.network.backend.swarm.port
                 )
             }))
             .collect()

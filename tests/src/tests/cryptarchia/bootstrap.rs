@@ -61,13 +61,14 @@ async fn test_ibd_behind_nodes() {
     println!("Starting a behind node with IBD peers...");
 
     let mut config = create_validator_config(general_configs[n_initial_validators].clone());
-    config.cryptarchia.network.bootstrap.ibd.peers = initial_peer_ids.clone();
+    config.user.cryptarchia.network.bootstrap.ibd.peers = initial_peer_ids.clone();
     // Shorten the delay to quickly catching up with peers that grow during IBD.
     // e.g. We start a download only for peer1 because two peers have the same tip
     //      at the moment. But, the peer2 may grow faster than peer1 before IBD is
     // done.      So, we want to check peer1's progress frequently with a very
     // short delay.
     config
+        .user
         .cryptarchia
         .network
         .bootstrap
@@ -78,6 +79,7 @@ async fn test_ibd_behind_nodes() {
     // as soon as it finishes IBD.
     // Currently, checking the mode is only one way to check if IBD is done.
     config
+        .user
         .cryptarchia
         .service
         .bootstrap

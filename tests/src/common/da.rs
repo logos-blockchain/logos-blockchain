@@ -32,7 +32,7 @@ pub async fn disseminate_with_metadata(
     data: &[u8],
 ) -> Result<BlobId, Error> {
     let executor_config = executor.config();
-    let backend_address = executor_config.http.backend_settings.address;
+    let backend_address = executor_config.user.http.backend_settings.address;
     let client = ExecutorHttpClient::new(None);
     let exec_url = Url::parse(&format!("http://{backend_address}")).unwrap();
 

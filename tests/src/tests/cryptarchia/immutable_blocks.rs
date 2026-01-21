@@ -20,6 +20,7 @@ async fn immutable_blocks_two_nodes() {
             let mut config = create_validator_config(c);
             config.deployment.time.slot_duration = Duration::from_secs(3);
             config
+                .user
                 .cryptarchia
                 .service
                 .bootstrap

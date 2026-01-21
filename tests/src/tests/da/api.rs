@@ -159,7 +159,7 @@ async fn test_get_shares() {
 
     let executor = &topology.executors()[0];
     let (channel_id, parent_msg_id) = setup_test_channel(executor).await;
-    let num_subnets = executor.config().da_network.backend.num_subnets as usize;
+    let num_subnets = executor.config().user.da_network.backend.num_subnets as usize;
 
     let data = [1u8; 31];
     let blob_id = disseminate_with_metadata(executor, channel_id, parent_msg_id, &data)
@@ -173,7 +173,7 @@ async fn test_get_shares() {
 
     let exec_url = Url::parse(&format!(
         "http://{}",
-        executor.config().http.backend_settings.address
+        executor.config().user.http.backend_settings.address
     ))
     .unwrap();
     let client = CommonHttpClient::new(None);

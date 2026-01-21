@@ -37,7 +37,10 @@ use lb_da_verifier_service::{
     backend::{kzgrs::KzgrsDaVerifierSettings, trigger::MempoolPublishTriggerConfig},
     storage::adapters::rocksdb::RocksAdapterSettings as VerifierStorageAdapterSettings,
 };
-use lb_executor::{api::backend::AxumBackendSettings, config::UserConfig};
+use lb_executor::{
+    api::backend::AxumBackendSettings,
+    config::{RunConfig, UserConfig},
+};
 use lb_http_api_common::paths::{
     CRYPTARCHIA_INFO, DA_BALANCER_STATS, DA_BLACKLISTED_PEERS, DA_BLOCK_PEER, DA_GET_MEMBERSHIP,
     DA_GET_SHARES_COMMITMENTS, DA_HISTORIC_SAMPLING, DA_MONITOR_STATS, DA_UNBLOCK_PEER,
@@ -72,7 +75,7 @@ pub struct Executor {
     testing_http_addr: SocketAddr,
     tempdir: tempfile::TempDir,
     child: Child,
-    config: UserConfig,
+    config: RunConfig,
     http_client: CommonHttpClient,
 }
 
@@ -91,22 +94,23 @@ impl Drop for Executor {
 }
 
 impl Executor {
-    pub async fn spawn(mut config: UserConfig) -> Self {
+    pub async fn spawn(mut config: RunConfig) -> Self {
         let dir = create_tempdir().unwrap();
         let mut file = NamedTempFile::new().unwrap();
         let config_path = file.path().to_owned();
 
         if !*IS_DEBUG_TRACING {
             // setup logging so that we can intercept it later in testing
-            config.tracing.logger = LoggerLayer::File(FileConfig {
+            config.user.tracing.logger = LoggerLayer::File(FileConfig {
                 directory: dir.path().to_owned(),
                 prefix: Some(LOGS_PREFIX.into()),
             });
         }
 
-        config.storage.db_path = dir.path().join("db");
+        config.user.storage.db_path = dir.path().join("db");
         dir.path().clone_into(
             &mut config
+                .user
                 .da_verifier
                 .storage_adapter_settings
                 .blob_storage_directory,
@@ -121,8 +125,8 @@ impl Executor {
             .spawn()
             .unwrap();
         let node = Self {
-            addr: config.http.backend_settings.address,
-            testing_http_addr: config.testing_http.backend_settings.address,
+            addr: config.user.http.backend_settings.address,
+            testing_http_addr: config.user.testing_http.backend_settings.address,
             child,
             tempdir: dir,
             config,
@@ -192,7 +196,7 @@ impl Executor {
     }
 
     #[must_use]
-    pub const fn config(&self) -> &UserConfig {
+    pub const fn config(&self) -> &RunConfig {
         &self.config
     }
 
@@ -358,16 +362,14 @@ impl Executor {
 
 #[must_use]
 #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
-pub fn create_executor_config(config: GeneralConfig) -> UserConfig {
+pub fn create_executor_config(config: GeneralConfig) -> RunConfig {
     let testing_http_address = format!("127.0.0.1:{}", get_available_tcp_port().unwrap())
         .parse()
         .unwrap();
-    let custom_deployment_config = default_e2e_deployment_settings();
 
-    UserConfig {
+    let user_config = UserConfig {
         network: config.network_config,
         blend: config.blend_config.0,
-        deployment: custom_deployment_config,
         time: config.time_config,
         cryptarchia: config.consensus_config.user_config().clone(),
         mempool: MempoolConfig {
@@ -474,5 +476,11 @@ pub fn create_executor_config(config: GeneralConfig) -> UserConfig {
                 ..Default::default()
             },
         },
+    };
+    let deployment_config = default_e2e_deployment_settings();
+
+    RunConfig {
+        deployment: deployment_config,
+        user: user_config,
     }
 }

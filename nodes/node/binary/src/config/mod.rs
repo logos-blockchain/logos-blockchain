@@ -347,7 +347,10 @@ impl UserConfig {
             }
         }?;
 
-        Ok(RunConfig::new(self, deployment_settings))
+        Ok(RunConfig {
+            deployment: deployment_settings,
+            user: self,
+        })
     }
 }
 
@@ -526,30 +529,12 @@ where
 #[cfg_attr(feature = "testing", derive(serde::Serialize))]
 pub struct RunConfig {
     #[cfg_attr(feature = "testing", serde(flatten))]
-    user: UserConfig,
-    deployment: DeploymentSettings,
-}
-
-impl RunConfig {
-    #[must_use]
-    pub const fn new(user: UserConfig, deployment: DeploymentSettings) -> Self {
-        Self { user, deployment }
-    }
-
-    #[must_use]
-    pub fn into_components(self) -> (UserConfig, DeploymentSettings) {
-        (self.user, self.deployment)
-    }
+    pub user: UserConfig,
+    pub deployment: DeploymentSettings,
 }
 
 impl From<RunConfig> for UserConfig {
     fn from(value: RunConfig) -> Self {
         value.user
-    }
-}
-
-impl AsRef<UserConfig> for RunConfig {
-    fn as_ref(&self) -> &UserConfig {
-        &self.user
     }
 }

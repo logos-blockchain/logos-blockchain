@@ -70,7 +70,12 @@ async fn disseminate_retrieve_reconstruct() {
 
     let executor = &topology.executors()[0];
     let (channel_id, mut parent_msg_id) = setup_test_channel(executor).await;
-    let num_samples = executor.config().da_sampling.sampling_settings.num_samples as usize;
+    let num_samples = executor
+        .config()
+        .user
+        .da_sampling
+        .sampling_settings
+        .num_samples as usize;
     let data = [1u8; 31 * ITERATIONS];
 
     for i in 0..ITERATIONS {
@@ -126,12 +131,14 @@ async fn disseminate_from_non_membership() {
     let (channel_id, mut parent_msg_id) = setup_test_channel(membership_executor).await;
     let num_samples = membership_executor
         .config()
+        .user
         .da_sampling
         .sampling_settings
         .num_samples as usize;
 
     let StartingState::Genesis { genesis_tx } = membership_executor
         .config()
+        .user
         .cryptarchia
         .service
         .starting_state
@@ -206,13 +213,13 @@ async fn four_subnets_disseminate_retrieve_reconstruct() {
     const ITERATIONS: usize = 10;
 
     let topology = Topology::spawn(TopologyConfig::validators_and_executor(3, 4, 2)).await;
-    let membership = &topology.validators()[0].config().da_network.membership;
+    let membership = &topology.validators()[0].config().user.da_network.membership;
 
     let validator_subnet_0 = topology
         .validators()
         .iter()
         .find(|v| {
-            let node_key = v.config().da_network.backend.node_key.clone();
+            let node_key = v.config().user.da_network.backend.node_key.clone();
             let peer_id = secret_key_to_peer_id(node_key);
             let subnets = membership.membership(&peer_id);
             subnets.contains(&0)
@@ -223,7 +230,7 @@ async fn four_subnets_disseminate_retrieve_reconstruct() {
         .validators()
         .iter()
         .find(|v| {
-            let node_key = v.config().da_network.backend.node_key.clone();
+            let node_key = v.config().user.da_network.backend.node_key.clone();
             let peer_id = secret_key_to_peer_id(node_key);
             let subnets = membership.membership(&peer_id);
             subnets.contains(&1)
@@ -298,7 +305,7 @@ async fn disseminate_same_data() {
     topology.wait_da_network_ready().await;
 
     let executor = &topology.executors()[0];
-    let num_subnets = executor.config().da_network.backend.num_subnets as usize;
+    let num_subnets = executor.config().user.da_network.backend.num_subnets as usize;
 
     let (test_channel_id, mut parent_msg_id) = setup_test_channel(executor).await;
 
@@ -331,7 +338,7 @@ async fn disseminate_same_data() {
 async fn local_testnet_one_node() {
     let topology = Topology::spawn(TopologyConfig::one_validator()).await;
     let validator = &topology.validators()[0];
-    let addr = validator.config().http.backend_settings.address;
+    let addr = validator.config().user.http.backend_settings.address;
     println!("Validator http addr {addr:?}, example test url: http://{addr:?}/cryptarchia/info");
 
     let mut interval = interval(Duration::from_secs(10));
