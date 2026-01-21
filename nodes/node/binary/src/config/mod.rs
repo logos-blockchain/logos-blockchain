@@ -24,7 +24,7 @@ use crate::{
     config::{
         blend::serde::Config as BlendConfig,
         cryptarchia::serde::Config as CryptarchiaConfig,
-        deployment::{DeploymentSettings, MAINNET, WellKnownDeployment},
+        deployment::{DeploymentSettings, WellKnownDeployment},
         mempool::serde::Config as MempoolConfig,
         network::serde::Config as NetworkConfig,
         time::serde::Config as TimeConfig,
@@ -256,7 +256,7 @@ pub enum DeploymentType {
 
 impl Default for DeploymentType {
     fn default() -> Self {
-        WellKnownDeployment::Mainnet.into()
+        WellKnownDeployment::default().into()
     }
 }
 
@@ -276,9 +276,9 @@ impl From<PathBuf> for DeploymentType {
 impl From<DeploymentType> for OsStr {
     fn from(value: DeploymentType) -> Self {
         match value {
-            DeploymentType::WellKnown(well_known_deployment) => match well_known_deployment {
-                WellKnownDeployment::Mainnet => MAINNET.into(),
-            },
+            DeploymentType::WellKnown(well_known_deployment) => {
+                well_known_deployment.to_string().into()
+            }
             DeploymentType::Custom(path) => path.to_str().unwrap().to_owned().into(),
         }
     }
@@ -288,10 +288,8 @@ impl FromStr for DeploymentType {
     type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            MAINNET => Ok(WellKnownDeployment::Mainnet.into()),
-            path => Ok(PathBuf::from(path).into()),
-        }
+        Ok(s.parse::<WellKnownDeployment>()
+            .map_or_else(|()| PathBuf::from(s).into(), Into::into))
     }
 }
 
@@ -500,14 +498,14 @@ pub enum ConfigDeserializationError<UserConfig> {
     SerdeError(#[from] serde_yaml::Error),
 }
 
-pub fn deserialize_config_at_path<UserConfig>(
+pub fn deserialize_config_at_path<Config>(
     config_path: &Path,
-) -> Result<UserConfig, ConfigDeserializationError<UserConfig>>
+) -> Result<Config, ConfigDeserializationError<Config>>
 where
-    UserConfig: for<'de> Deserialize<'de>,
+    Config: for<'de> Deserialize<'de>,
 {
     let mut ignored_fields = Vec::new();
-    let config = serde_ignored::deserialize::<_, _, UserConfig>(
+    let config = serde_ignored::deserialize::<_, _, Config>(
         serde_yaml::Deserializer::from_reader(std::fs::File::open(config_path)?),
         |path| {
             ignored_fields.push(path.to_string());
@@ -527,7 +525,7 @@ where
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "testing", derive(serde::Serialize))]
 pub struct RunConfig {
-    #[serde(flatten)]
+    #[cfg_attr(feature = "testing", serde(flatten))]
     user: UserConfig,
     deployment: DeploymentSettings,
 }
