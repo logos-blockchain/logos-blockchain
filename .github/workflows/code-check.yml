@@ -55,7 +55,7 @@ jobs:
         run: cargo install cargo-deny --locked --version 0.19.0
 
       - name: Run cargo-deny
-        run: cargo-deny --locked check --hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings
+        run: cargo-deny --locked --all-features check --hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings
 
   features:
     name: Check packages feature combinations
