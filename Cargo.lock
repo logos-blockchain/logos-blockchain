@@ -4963,6 +4963,7 @@ dependencies = [
  "overwatch",
  "reqwest 0.12.28",
  "serde",
+ "serde_json",
  "tokio",
  "tokio-stream",
  "tracing",
