@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use ark_ff::{Field as _, PrimeField as _};
 use generic_array::GenericArray;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
@@ -235,9 +237,12 @@ impl LeaderPublic {
     }
 
     fn ticket(note_id: Fr, sk: Fr, epoch_nonce: Fr, slot: Fr) -> Fr {
-        Poseidon2Bn254Hasher::digest(&[note_id, sk, epoch_nonce, slot])
+        Poseidon2Bn254Hasher::digest(&[*LEAD_V1, epoch_nonce, slot, note_id, sk])
     }
 }
+
+static LEAD_V1: LazyLock<Fr> =
+    LazyLock::new(|| fr_from_bytes(b"LEAD_V1").expect("BigUint should load from constant string"));
 
 #[derive(Debug, Clone)]
 pub struct LeaderPrivate {
@@ -348,9 +353,12 @@ fn merkle_path_to_witness<T: Copy>(path: &MerklePath<T>) -> (Vec<T>, Vec<bool>) 
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr as _;
+
     use rand::RngCore as _;
 
     use super::*;
+
     /// Compute the Hoeffding sample size:
     ///     n >= (1 / (2 * eps^2)) * ln(2/alpha)
     /// <https://en.wikipedia.org/wiki/Hoeffding's_inequality>
@@ -400,6 +408,26 @@ mod tests {
         let note = Fr::from(rng.next_u64()); // note value
         let sk = Fr::from(rng.next_u64()); // secret key
         (public, note, sk)
+    }
+
+    /// Check that ticket is derived correctly with known values.
+    ///
+    /// NOTE: This test must be updated if the ticket derivation changes.
+    #[test]
+    fn test_ticket_derivation() {
+        let ticket = LeaderPublic::ticket(
+            fr_from_bytes(b"node_id").unwrap(),
+            fr_from_bytes(b"sk").unwrap(),
+            fr_from_bytes(b"epoch_nonce").unwrap(),
+            fr_from_bytes(b"slot").unwrap(),
+        );
+        assert_eq!(
+            ticket,
+            Fr::from_str(
+                "10938646954300723195015130306902300454523545182210299629143086933853387042384"
+            )
+            .unwrap()
+        );
     }
 
     #[cfg(feature = "pol-dev-mode")]
