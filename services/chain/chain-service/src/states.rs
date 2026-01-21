@@ -121,7 +121,7 @@ mod tests {
         let security_param: NonZero<u32> = 2.try_into().unwrap();
         let cryptarchia_engine_config = lb_cryptarchia_engine::Config {
             security_param,
-            active_slot_coeff: 0f64,
+            active_slot_coeff: 1f64,
         };
         let ledger_config = lb_ledger::Config {
             epoch_config: lb_cryptarchia_engine::EpochConfig {

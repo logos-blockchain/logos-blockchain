@@ -46,16 +46,16 @@ impl StakeInference {
             i128::from(measured_block_density) * i128::from(PRECISION);
         let expected_density_with_precision: i128 =
             i128::from(self.period()) * slot_activation_coefficient_with_precision;
-        let density_difference_with_precision: i128 = i128::from(expected_density_with_precision)
-            - i128::from(measured_block_density_with_precision);
-        let slot_activation_error_with_precision: i128 =
-            i128::from(total_stake_estimate_with_precision) * density_difference_with_precision
-                / i128::from(expected_density_with_precision);
+        let density_difference_with_precision: i128 =
+            expected_density_with_precision - measured_block_density_with_precision;
+        let slot_activation_error_with_precision: i128 = total_stake_estimate_with_precision
+            * density_difference_with_precision
+            / expected_density_with_precision;
         let correction: i128 = (i128::from(learning_rate_with_precision)
             * slot_activation_error_with_precision)
             / i128::from(PRECISION);
         let new_total_stake_estimate =
-            (i128::from(total_stake_estimate_with_precision) - correction) / i128::from(PRECISION);
+            (total_stake_estimate_with_precision - correction) / i128::from(PRECISION);
         new_total_stake_estimate
             .max(1)
             .try_into()
