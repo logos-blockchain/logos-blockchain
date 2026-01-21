@@ -338,3 +338,153 @@ impl<'service> WinningPoLSlotNotifier<'service> {
         }
     }
 }
+
+#[cfg(not(feature = "pol-dev-mode"))]
+#[cfg(test)]
+mod pol_tests {
+    use std::{num::NonZero, sync::Arc};
+
+    use lb_core::{
+        mantle::ledger::{Note, Tx},
+        proofs::leader_proof::LeaderProof,
+        sdp::{MinStake, ServiceParameters, ServiceType},
+    };
+    use lb_cryptarchia_engine::EpochConfig;
+    use lb_groth16::Fr;
+    use lb_ledger::mantle::sdp::{
+        Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
+    };
+    use lb_utils::math::NonNegativeF64;
+    use tokio::sync::watch;
+
+    use super::*;
+
+    /// Test that [`Leader::build_proof_for`] generates `PoL` which can be
+    /// verified successfully.
+    #[tokio::test]
+    async fn test_build_proof_for() {
+        // Create secret key and leader
+        let sk = UnsecuredZkKey::new(Fr::from(12345u64));
+        let pk = sk.to_public_key();
+        let leader = Leader::new(sk, test_config());
+
+        // Create a UTXO
+        let utxo = Tx::new(vec![], vec![Note::new(1000u64, pk)])
+            .utxo_by_index(0)
+            .unwrap();
+
+        // Create aged/latest UTXO trees
+        let aged_tree = UtxoTree::new().insert(utxo.id(), utxo).0;
+        let latest_tree = UtxoTree::new().insert(utxo.id(), utxo).0;
+
+        // Create EpochState
+        let epoch_state = EpochState {
+            epoch: 1.into(),
+            nonce: Fr::from(999u64),
+            utxos: aged_tree.clone(),
+            total_stake: utxo.note.value,
+        };
+
+        // Create notifier channel (not used in this test)
+        let (sender, _receiver) = watch::channel(None);
+        let notifier = WinningPoLSlotNotifier::new(&leader, &sender);
+
+        // Find a winning slot by calling `build_proof_for` until it succeeds
+        let (proof, winning_slot) = find_winning_slot_and_build_proof(
+            (0..1000).map(Slot::from),
+            &leader,
+            utxo.clone(),
+            &epoch_state,
+            &latest_tree,
+            &notifier,
+        )
+        .await
+        .expect("should find a winning slot and build a proof");
+
+        // Verify proof
+        let public_inputs = LeaderPublic::new(
+            aged_tree.root(),
+            latest_tree.root(),
+            epoch_state.nonce,
+            winning_slot.into(),
+            utxo.note.value,
+        );
+        assert!(
+            proof.verify(&public_inputs),
+            "proof verification should succeed"
+        );
+    }
+
+    /// Find a winning slot by calling `build_proof_for` until it succeeds
+    async fn find_winning_slot_and_build_proof(
+        slots: impl Iterator<Item = Slot>,
+        leader: &Leader,
+        utxo: Utxo,
+        epoch_state: &EpochState,
+        latest_tree: &UtxoTree,
+        notifier: &WinningPoLSlotNotifier<'_>,
+    ) -> Option<(Groth16LeaderProof, Slot)> {
+        for slot in slots {
+            if let Some(proof) = leader
+                .build_proof_for(&[utxo], latest_tree, epoch_state, slot, &notifier)
+                .await
+            {
+                return Some((proof, slot));
+            }
+        }
+        None
+    }
+
+    fn test_config() -> lb_ledger::Config {
+        lb_ledger::Config {
+            epoch_config: EpochConfig {
+                epoch_stake_distribution_stabilization: NonZero::new(3u8).unwrap(),
+                epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
+                epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
+            },
+            consensus_config: lb_cryptarchia_engine::Config {
+                security_param: NonZero::new(5).unwrap(),
+                active_slot_coeff: 0.05,
+            },
+            sdp_config: SdpConfig {
+                service_params: Arc::new(
+                    [
+                        (
+                            ServiceType::BlendNetwork,
+                            ServiceParameters {
+                                lock_period: 10,
+                                inactivity_period: 20,
+                                retention_period: 100,
+                                timestamp: 0,
+                                session_duration: 10,
+                            },
+                        ),
+                        (
+                            ServiceType::DataAvailability,
+                            ServiceParameters {
+                                lock_period: 10,
+                                inactivity_period: 20,
+                                retention_period: 100,
+                                timestamp: 0,
+                                session_duration: 10,
+                            },
+                        ),
+                    ]
+                    .into(),
+                ),
+                service_rewards_params: ServiceRewardsParameters {
+                    blend: RewardsParameters {
+                        rounds_per_session: NonZero::new(10u64).unwrap(),
+                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        num_blend_layers: NonZero::new(3u64).unwrap(),
+                        minimum_network_size: NonZero::new(1u64).unwrap(),
+                    },
+                },
+                min_stake: MinStake {
+                    threshold: 1,
+                    timestamp: 0,
+                },
+            },
+        }
+    }
+}
