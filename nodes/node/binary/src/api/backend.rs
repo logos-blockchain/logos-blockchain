@@ -53,8 +53,8 @@ use crate::{
     api::handlers::{post_activity, post_declaration, post_withdrawal},
 };
 
-pub(crate) type DaStorageBackend = RocksBackend;
-type DaStorageService<RuntimeServiceId> = StorageService<DaStorageBackend, RuntimeServiceId>;
+pub(crate) type BlockStorageBackend = RocksBackend;
+type BlockStorageService<RuntimeServiceId> = StorageService<BlockStorageBackend, RuntimeServiceId>;
 
 pub struct AxumBackend<TimeBackend, HttpStorageAdapter, MempoolStorageAdapter, SdpMempool> {
     settings: AxumBackendSettings,
@@ -101,7 +101,7 @@ where
                 RuntimeServiceId,
             >,
         >
-        + AsServiceId<DaStorageService<RuntimeServiceId>>
+        + AsServiceId<BlockStorageService<RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
                 lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
@@ -148,7 +148,7 @@ where
             Some(Duration::from_secs(60)),
             Cryptarchia<_>,
             lb_network_service::NetworkService<_, _>,
-            DaStorageService<_>,
+            BlockStorageService<_>,
             TxMempoolService<_, _, _,  _>
         )
         .await?;
@@ -228,7 +228,7 @@ where
                 routing::post(
                     wallet::post_transactions_transfer_funds::<
                         WalletService,
-                        DaStorageBackend,
+                        BlockStorageBackend,
                         MempoolStorageAdapter,
                         TimeBackend,
                         _,
@@ -240,13 +240,13 @@ where
         let app = app
             .route(
                 paths::BLOCKS,
-                routing::get(blocks::<DaStorageBackend, RuntimeServiceId>),
+                routing::get(blocks::<BlockStorageBackend, RuntimeServiceId>),
             )
             .route(
                 paths::BLOCKS_STREAM,
                 routing::get(
                     blocks_stream::<
-                        DaStorageBackend,
+                        BlockStorageBackend,
                         CryptarchiaConsensus<_, _, _, _>,
                         RuntimeServiceId,
                     >,
