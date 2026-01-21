@@ -1,4 +1,4 @@
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, eyre};
 use lb_node::{
     CryptarchiaLeaderArgs, HttpArgs, LogArgs, NetworkArgs,
     config::{
@@ -13,6 +13,7 @@ use lb_node::{
 };
 use overwatch::services::ServiceData;
 use serde::Deserialize;
+use tracing::warn;
 
 use crate::{
     ApiService, DaDispersalService, DaNetworkService, DaSamplingService, DaVerifierService,
@@ -76,16 +77,22 @@ impl UserConfig {
         update_time(&mut self.time, time_args)?;
 
         let deployment_settings = match deployment_args.deployment_type() {
-            DeploymentType::WellKnown(well_known_deployment) => {
-                Ok::<_, ConfigDeserializationError<Self>>((*well_known_deployment).into())
-            }
+            DeploymentType::WellKnown(well_known_deployment) => (*well_known_deployment).into(),
             DeploymentType::Custom(custom_deployment_config_path) => {
-                let deployment_settings = deserialize_config_at_path::<DeploymentSettings>(
+                match deserialize_config_at_path::<DeploymentSettings>(
                     custom_deployment_config_path,
-                )?;
-                Ok(deployment_settings)
+                ) {
+                    Ok(deployment_settings) => deployment_settings,
+                    Err(ConfigDeserializationError::UnrecognizedFields { fields, config }) => {
+                        warn!(
+                            "The following unrecognized fields were found in the deployment config file: {fields:?}. They won't have any effects on the node."
+                        );
+                        config
+                    }
+                    Err(e) => return Err(eyre!(e)),
+                }
             }
-        }?;
+        };
 
         Ok(RunConfig {
             deployment: deployment_settings,

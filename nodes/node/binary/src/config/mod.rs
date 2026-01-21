@@ -16,7 +16,7 @@ use lb_tracing_service::{LoggerLayer, Tracing};
 use num_bigint::BigUint;
 use overwatch::services::ServiceData;
 use serde::Deserialize;
-use tracing::Level;
+use tracing::{Level, warn};
 
 use crate::{
     ApiService, CryptarchiaService, DaNetworkService, DaSamplingService, DaVerifierService,
@@ -102,6 +102,11 @@ impl CliArgs {
     /// service groups are flagged to start.
     const fn must_all_service_groups_start(&self) -> bool {
         !self.blend.start_blend_at_boot && !self.da.start_da_at_boot
+    }
+
+    #[must_use]
+    pub const fn deployment_type(&self) -> &DeploymentType {
+        &self.deployment.deployment_type
     }
 }
 
@@ -287,6 +292,7 @@ impl From<DeploymentType> for OsStr {
 impl FromStr for DeploymentType {
     type Err = Infallible;
 
+    // Try to parse as a well-known deployment first, otherwise treat as a path.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(s.parse::<WellKnownDeployment>()
             .map_or_else(|()| PathBuf::from(s).into(), Into::into))
@@ -335,17 +341,23 @@ impl UserConfig {
         update_cryptarchia_leader_consensus(&mut self.cryptarchia.leader, cryptarchia_leader_args)?;
         update_time(&mut self.time, &time_args)?;
 
-        let deployment_settings = match deployment_args.deployment_type {
-            DeploymentType::WellKnown(well_known_deployment) => {
-                Ok::<_, ConfigDeserializationError<Self>>(well_known_deployment.into())
-            }
+        let deployment_settings = match deployment_args.deployment_type() {
+            DeploymentType::WellKnown(well_known_deployment) => (*well_known_deployment).into(),
             DeploymentType::Custom(custom_deployment_config_path) => {
-                let deployment_settings = deserialize_config_at_path::<DeploymentSettings>(
-                    &custom_deployment_config_path,
-                )?;
-                Ok(deployment_settings)
+                match deserialize_config_at_path::<DeploymentSettings>(
+                    custom_deployment_config_path,
+                ) {
+                    Ok(deployment_settings) => deployment_settings,
+                    Err(ConfigDeserializationError::UnrecognizedFields { fields, config }) => {
+                        warn!(
+                            "The following unrecognized fields were found in the deployment config file: {fields:?}. They won't have any effects on the node."
+                        );
+                        config
+                    }
+                    Err(e) => return Err(eyre!(e)),
+                }
             }
-        }?;
+        };
 
         Ok(RunConfig {
             deployment: deployment_settings,
@@ -489,12 +501,9 @@ pub fn update_time(time: &mut TimeConfig, time_args: &TimeArgs) -> Result<()> {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum ConfigDeserializationError<UserConfig> {
+pub enum ConfigDeserializationError<Config> {
     #[error("Unrecognized fields in config: {fields:?}")]
-    UnrecognizedFields {
-        fields: Vec<String>,
-        config: UserConfig,
-    },
+    UnrecognizedFields { fields: Vec<String>, config: Config },
     #[error(transparent)]
     IoError(#[from] std::io::Error),
     #[error(transparent)]
@@ -525,6 +534,8 @@ where
     }
 }
 
+/// Configuration for a running node. It is the combination of user-provided and
+/// deployment-specific settings.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "testing", derive(serde::Serialize))]
 pub struct RunConfig {

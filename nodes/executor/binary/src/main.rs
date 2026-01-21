@@ -3,16 +3,17 @@ use color_eyre::eyre::{Result, eyre};
 use lb_node::{
     CryptarchiaLeaderArgs, HttpArgs, LogArgs, NetworkArgs,
     config::{
-        BlendArgs, ConfigDeserializationError, DeploymentArgs, TimeArgs,
+        BlendArgs, ConfigDeserializationError, DeploymentArgs, DeploymentType, TimeArgs,
         blend::ServiceConfig as BlendConfig, cryptarchia::ServiceConfig as CryptarchiaConfig,
-        deserialize_config_at_path, mempool::ServiceConfig as MempoolConfig,
-        network::ServiceConfig as NetworkConfig, time::ServiceConfig as TimeConfig,
+        deployment::DeploymentSettings, deserialize_config_at_path,
+        mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
+        time::ServiceConfig as TimeConfig,
     },
 };
 use lb_sdp_service::SdpSettings;
 use logos_blockchain_executor::{
     LogosBlockchainExecutor, LogosBlockchainExecutorServiceSettings, RuntimeServiceId,
-    config::UserConfig as ExecutorConfig,
+    config::UserConfig,
 };
 use overwatch::overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner};
 use tracing::warn;
@@ -61,40 +62,51 @@ async fn main() -> Result<()> {
         check_config_only,
     } = Args::parse();
 
-    let run_config = match (
-        deserialize_config_at_path::<ExecutorConfig>(&config),
-        check_config_only,
-    ) {
-        (Ok(_), true) => {
-            #[expect(
-                clippy::non_ascii_literal,
-                reason = "Use of green checkmark for better UX."
-            )]
-            {
-                println!("Config file is valid! ✅");
-            };
-            return Ok(());
+    // If we are dry-running the binary, fail in case unknown keys in one of the
+    // configs are found or exit successfully if deserializations succeed.
+    if check_config_only {
+        // Check user config.
+        drop(deserialize_config_at_path::<UserConfig>(config.as_path())?);
+        // If custom, check deployment config.
+        if let DeploymentType::Custom(custom_deployment_config_file) =
+            deployment_args.deployment_type()
+        {
+            drop(deserialize_config_at_path::<DeploymentSettings>(
+                custom_deployment_config_file,
+            )?);
         }
-        (Ok(config), false) => Ok(config),
-        (Err(ConfigDeserializationError::UnrecognizedFields { config, fields }), true) => {
-            Err(ConfigDeserializationError::UnrecognizedFields { config, fields })
-        }
-        (Err(ConfigDeserializationError::UnrecognizedFields { config, fields }), false) => {
-            warn!(
-                "The following unrecognized fields were found in the config file: {fields:?}. They won't have any effects on the node."
-            );
-            Ok(config)
-        }
-        (Err(e), _) => Err(e),
-    }?.update_from_args(
-        log_args,
-        network_args,
-        blend_args,
-        http_args,
-        cryptarchia_args,
-        &time_args,
-        &deployment_args
-    )?;
+        #[expect(
+            clippy::non_ascii_literal,
+            reason = "Use of green checkmark for better UX."
+        )]
+        {
+            println!("Configs are valid! ✅");
+        };
+        // Early return since we are dry-running.
+        return Ok(());
+    }
+
+    let run_config = {
+        let user_config = match deserialize_config_at_path::<UserConfig>(config.as_path()) {
+            Ok(config) => config,
+            Err(ConfigDeserializationError::UnrecognizedFields { fields, config }) => {
+                warn!(
+                    "The following unrecognized fields were found in the user config file: {fields:?}. They won't have any effects on the node."
+                );
+                config
+            }
+            Err(e) => return Err(eyre!(e)),
+        };
+        user_config.update_from_args(
+            log_args,
+            network_args,
+            blend_args,
+            http_args,
+            cryptarchia_args,
+            &time_args,
+            &deployment_args,
+        )?
+    };
 
     let time_service_config = TimeConfig {
         user: run_config.user.time,
