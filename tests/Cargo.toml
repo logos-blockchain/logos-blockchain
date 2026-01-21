@@ -1,5 +1,3 @@
-# TODO: Re-enable commented out dependencies and tests once the nomos->logos-blockchain PR is merged and the testing framework updated accordingly.
-
 [package]
 categories  = { workspace = true }
 description = { workspace = true }
@@ -72,7 +70,9 @@ tracing                          = { workspace = true }
 tracing-subscriber               = { features = ["env-filter", "fmt"], version = "0.3" }
 
 [features]
-cucumber = []
+cucumber             = []
+cucumber_stand_alone = []
+testing_framework    = []
 
 [[test]]
 name = "test_cryptarchia_happy_path"
@@ -119,13 +119,14 @@ name = "test_mantle_sdp_ops"
 path = "src/tests/mantle/sdp_ops.rs"
 
 [[test]]
-name = "test_testing_framework_smoke_local"
-path = "src/tests/testing_framework/smoke_local.rs"
+name              = "test_testing_framework_smoke_local"
+path              = "src/tests/testing_framework/smoke_local.rs"
+required-features = ["testing_framework"]
 
 [[test]]
 name              = "test_testing_framework_cucumber_smoke_local"
 path              = "cucumber_tests/stand_alone_tests/cucumber_smoke_local.rs"
-required-features = ["cucumber"]
+required-features = ["cucumber_stand_alone"]
 
 [[test]]
 harness           = false                        # Cucumber will have its own main() function to run tests.
