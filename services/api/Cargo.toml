@@ -57,7 +57,7 @@ utoipa-swagger-ui = { workspace = true }
 [dev-dependencies]
 axum              = { default-features = false, features = ["http1", "http2", "json", "query", "tokio"], version = "0.7.5" }
 hyper             = { default-features = false, version = "1.0" }
-reqwest           = { default-features = false, workspace = true }
+reqwest           = { default-features = false, features = ["blocking"], workspace = true }
 serde             = { workspace = true }
 tracing           = { workspace = true }
 utoipa-swagger-ui = { default-features = false, features = ["axum"], workspace = true }
