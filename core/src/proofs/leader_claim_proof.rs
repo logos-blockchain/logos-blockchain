@@ -37,7 +37,7 @@ impl Groth16LeaderClaimProof {
         Ok(Self {
             proof,
             voucher_nf: VoucherNullifier::from(voucher_nf),
-            #[cfg(feature = "pol-dev-mode")]
+            #[cfg(feature = "poc-dev-mode")]
             public,
         })
     }
@@ -157,7 +157,7 @@ impl LeaderClaimPrivate {
             voucher_merkle_path: voucher_path.iter().map(|n| *n.item()).collect(),
             voucher_merkle_path_selectors: voucher_path
                 .iter()
-                .rev() // PoL circuit expects the reverse order for selectors
+                .rev() // PoC circuit expects the reverse order for selectors
                 .map(|n| matches!(n, MerkleNode::Right(_)))
                 .collect(),
         };
@@ -184,14 +184,14 @@ impl From<LeaderClaimPrivate> for lb_poc::PoCWitnessInputsData {
 mod proof_serde {
     use serde::{Deserialize, Deserializer, Serializer};
 
-    pub fn serialize<S>(item: &lb_pol::PoLProof, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(item: &lb_poc::PoCProof, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         serializer.serialize_bytes(&item.to_bytes())
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<lb_pol::PoLProof, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<lb_poc::PoCProof, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -199,6 +199,6 @@ mod proof_serde {
         let proof_array: [u8; 128] = proof_bytes
             .try_into()
             .map_err(|_| serde::de::Error::custom("Expected exactly 128 bytes"))?;
-        Ok(lb_pol::PoLProof::from_bytes(&proof_array))
+        Ok(lb_poc::PoCProof::from_bytes(&proof_array))
     }
 }
