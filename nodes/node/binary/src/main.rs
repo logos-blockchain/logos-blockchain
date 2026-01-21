@@ -1,7 +1,7 @@
 use clap::Parser as _;
 use color_eyre::eyre::{Result, eyre};
 use logos_blockchain_node::{
-    Config,
+    UserConfig,
     config::{CliArgs, ConfigDeserializationError, deserialize_config_at_path},
     get_services_to_start, run_node_from_config,
 };
@@ -19,7 +19,7 @@ async fn main() -> Result<()> {
     // In case of a non dry run, print a warning and do not fail if unknown keys are
     // found.
     let config = match (
-        deserialize_config_at_path::<Config>(cli_args.config_path()),
+        deserialize_config_at_path::<UserConfig>(cli_args.config_path()),
         is_dry_run,
     ) {
         (Ok(_), true) => {

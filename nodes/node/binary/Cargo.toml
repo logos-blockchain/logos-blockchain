@@ -21,7 +21,7 @@ workspace = true
 
 [dependencies]
 async-trait                      = "0.1"
-clap                             = { default-features = false, features = ["derive", "env", "std"], version = "4" }
+clap                             = { default-features = false, features = ["derive", "env", "std", "string"], version = "4" }
 color-eyre                       = { default-features = false, version = "0.6.0" }
 futures                          = { default-features = false, version = "0.3" }
 hex                              = { default-features = false, version = "0.4.3" }

@@ -32,7 +32,6 @@ blend:
     backend:
       max_dial_attempts_per_peer_per_message: 1
       replication_factor: 1
-deployment: mainnet
 da_network:
   backend:
     node_key: ea1e1dcc31612bd20987f017f0ca435cd2a59a4bd9fd6e14883b4803ae3b803d

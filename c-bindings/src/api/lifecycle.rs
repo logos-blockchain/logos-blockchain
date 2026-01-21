@@ -1,6 +1,6 @@
 use std::ffi::c_char;
 
-use lb_node::{Config, get_services_to_start, run_node_from_config};
+use lb_node::{UserConfig, get_services_to_start, run_node_from_config};
 use tokio::runtime::Runtime;
 
 use crate::{LogosBlockchainNode, api::PointerResult, errors::OperationStatus};
@@ -54,7 +54,7 @@ fn initialize_lb_node(config_path: *const c_char) -> Result<LogosBlockchainNode,
         eprintln!("Could not open config file: {e}");
         OperationStatus::InitializationError
     })?;
-    let config = serde_yaml::from_reader::<_, Config>(config_reader).map_err(|e| {
+    let config = serde_yaml::from_reader::<_, UserConfig>(config_reader).map_err(|e| {
         eprintln!("Could not parse config file: {e}");
         OperationStatus::InitializationError
     })?;

@@ -59,13 +59,13 @@ use overwatch::{
     overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
 };
 
-pub use crate::config::{Config, CryptarchiaLeaderArgs, HttpArgs, LogArgs, NetworkArgs};
+pub use crate::config::{CryptarchiaLeaderArgs, HttpArgs, LogArgs, NetworkArgs, UserConfig};
 use crate::{
     api::backend::AxumBackend,
     config::{
-        blend::ServiceConfig as BlendConfig, cryptarchia::ServiceConfig as CryptarchiaConfig,
-        mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
-        time::ServiceConfig as TimeConfig,
+        RunConfig, blend::ServiceConfig as BlendConfig,
+        cryptarchia::ServiceConfig as CryptarchiaConfig, mempool::ServiceConfig as MempoolConfig,
+        network::ServiceConfig as NetworkConfig, time::ServiceConfig as TimeConfig,
     },
     generic_services::{
         DaMembershipAdapter, DaMembershipStorageGeneric, SdpMempoolAdapterGeneric, SdpService,
@@ -240,36 +240,38 @@ pub struct LogosBlockchain {
     testing_http: TestingApiService<RuntimeServiceId>,
 }
 
-pub fn run_node_from_config(config: Config) -> Result<Overwatch<RuntimeServiceId>, DynError> {
+pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServiceId>, DynError> {
+    let (user_config, deployment_config) = config.into_components();
+
     let time_service_config = TimeConfig {
-        user: config.time,
-        deployment: config.deployment.time,
+        user: user_config.time,
+        deployment: deployment_config.time,
     }
-    .into_time_service_settings(&config.deployment.cryptarchia);
+    .into_time_service_settings(&deployment_config.cryptarchia);
 
     let (chain_service_config, chain_network_config, chain_leader_config) = CryptarchiaConfig {
-        user: config.cryptarchia,
-        deployment: config.deployment.cryptarchia,
+        user: user_config.cryptarchia,
+        deployment: deployment_config.cryptarchia,
     }
-    .into_cryptarchia_services_settings(&config.deployment.blend);
+    .into_cryptarchia_services_settings(&deployment_config.blend);
 
     let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
-        user: config.blend,
-        deployment: config.deployment.blend,
+        user: user_config.blend,
+        deployment: deployment_config.blend,
     }
     .into();
 
     let mempool_service_config = MempoolConfig {
-        user: config.mempool,
-        deployment: config.deployment.mempool,
+        user: user_config.mempool,
+        deployment: deployment_config.mempool,
     }
     .into();
 
     let app = OverwatchRunner::<LogosBlockchain>::run(
         LogosBlockchainServiceSettings {
             network: NetworkConfig {
-                user: config.network,
-                deployment: config.deployment.network,
+                user: user_config.network,
+                deployment: deployment_config.network,
             }
             .into(),
             blend: blend_config,
@@ -277,23 +279,23 @@ pub fn run_node_from_config(config: Config) -> Result<Overwatch<RuntimeServiceId
             blend_edge: blend_edge_config,
             block_broadcast: (),
             #[cfg(feature = "tracing")]
-            tracing: config.tracing,
-            http: config.http,
+            tracing: user_config.tracing,
+            http: user_config.http,
             mempool: mempool_service_config,
-            da_network: config.da_network,
-            da_sampling: config.da_sampling,
-            da_verifier: config.da_verifier,
+            da_network: user_config.da_network,
+            da_sampling: user_config.da_sampling,
+            da_verifier: user_config.da_verifier,
             cryptarchia: chain_service_config,
             chain_network: chain_network_config,
             cryptarchia_leader: chain_leader_config,
             time: time_service_config,
-            storage: config.storage,
+            storage: user_config.storage,
             system_sig: (),
-            key_management: config.key_management,
+            key_management: user_config.key_management,
             sdp: SdpSettings { declaration: None },
-            wallet: config.wallet,
+            wallet: user_config.wallet,
             #[cfg(feature = "testing")]
-            testing_http: config.testing_http,
+            testing_http: user_config.testing_http,
         },
         None,
     )

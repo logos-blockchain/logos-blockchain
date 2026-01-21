@@ -41,7 +41,7 @@ use lb_http_api_common::paths::{
 use lb_kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
 use lb_network_service::backends::libp2p::Libp2pInfo;
 use lb_node::{
-    Config, HeaderId, RocksBackendSettings,
+    UserConfig, HeaderId, RocksBackendSettings,
     api::{
         backend::AxumBackendSettings, handlers::GetCommitmentsRequest,
         testing::handlers::HistoricSamplingRequest,
@@ -78,7 +78,7 @@ pub struct Validator {
     testing_http_addr: SocketAddr,
     tempdir: tempfile::TempDir,
     child: Child,
-    config: Config,
+    config: UserConfig,
     http_client: CommonHttpClient,
 }
 
@@ -120,7 +120,7 @@ impl Validator {
         .is_ok()
     }
 
-    pub async fn spawn(mut config: Config) -> Result<Self, Elapsed> {
+    pub async fn spawn(mut config: UserConfig) -> Result<Self, Elapsed> {
         let dir = create_tempdir().unwrap();
         let mut file = NamedTempFile::new().unwrap();
         let config_path = file.path().to_owned();
@@ -297,7 +297,7 @@ impl Validator {
     }
 
     #[must_use]
-    pub const fn config(&self) -> &Config {
+    pub const fn config(&self) -> &UserConfig {
         &self.config
     }
 
@@ -457,14 +457,14 @@ impl Validator {
 
 #[must_use]
 #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
-pub fn create_validator_config(config: GeneralConfig) -> Config {
+pub fn create_validator_config(config: GeneralConfig) -> UserConfig {
     let testing_http_address = format!("127.0.0.1:{}", get_available_tcp_port().unwrap())
         .parse()
         .unwrap();
     let custom_deployment_config = default_e2e_deployment_settings();
 
     let da_policy_settings = config.da_config.policy_settings;
-    Config {
+    UserConfig {
         network: config.network_config,
         blend: config.blend_config.0,
         deployment: custom_deployment_config,

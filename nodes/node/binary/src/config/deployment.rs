@@ -8,8 +8,11 @@ use crate::config::{
     time::deployment::Settings as TimeDeploymentSettings,
 };
 
+pub const MAINNET: &str = "mainnet";
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum WellKnownDeployment {
+    // Must match the `MAINNET` definition above.
     #[serde(rename = "mainnet")]
     Mainnet,
 }

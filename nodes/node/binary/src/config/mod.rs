@@ -1,3 +1,4 @@
+use core::{convert::Infallible, str::FromStr};
 use std::{
     net::{IpAddr, SocketAddr, ToSocketAddrs as _},
     path::{Path, PathBuf},
@@ -21,9 +22,12 @@ use crate::{
     ApiService, CryptarchiaService, DaNetworkService, DaSamplingService, DaVerifierService,
     KeyManagementService, RuntimeServiceId, StorageService,
     config::{
-        blend::serde::Config as BlendConfig, cryptarchia::serde::Config as CryptarchiaConfig,
-        deployment::DeploymentSettings, mempool::serde::Config as MempoolConfig,
-        network::serde::Config as NetworkConfig, time::serde::Config as TimeConfig,
+        blend::serde::Config as BlendConfig,
+        cryptarchia::serde::Config as CryptarchiaConfig,
+        deployment::{DeploymentSettings, MAINNET, WellKnownDeployment},
+        mempool::serde::Config as MempoolConfig,
+        network::serde::Config as NetworkConfig,
+        time::serde::Config as TimeConfig,
     },
     generic_services::{SdpService, WalletService},
 };
@@ -65,6 +69,8 @@ pub struct CliArgs {
     da: DaArgs,
     #[clap(flatten)]
     time: TimeArgs,
+    #[clap(flatten)]
+    deployment: DeploymentArgs,
 }
 
 impl CliArgs {
@@ -229,12 +235,64 @@ pub struct DaArgs {
     start_da_at_boot: bool,
 }
 
+#[derive(Parser, Debug, Clone)]
+pub struct DeploymentArgs {
+    #[clap(long = "deployment", env = "DEPLOYMENT", default_value = DeploymentType::default())]
+    deployment_type: DeploymentType,
+}
+
+#[derive(Debug, Clone)]
+pub enum DeploymentType {
+    WellKnown(WellKnownDeployment),
+    Custom(PathBuf),
+}
+
+impl Default for DeploymentType {
+    fn default() -> Self {
+        WellKnownDeployment::Mainnet.into()
+    }
+}
+
+impl From<WellKnownDeployment> for DeploymentType {
+    fn from(deployment: WellKnownDeployment) -> Self {
+        Self::WellKnown(deployment)
+    }
+}
+
+impl From<PathBuf> for DeploymentType {
+    fn from(path: PathBuf) -> Self {
+        Self::Custom(path)
+    }
+}
+
+#[expect(clippy::fallible_impl_from, reason = "`From` impl required by clap.")]
+impl From<DeploymentType> for OsStr {
+    fn from(value: DeploymentType) -> Self {
+        match value {
+            DeploymentType::WellKnown(well_known_deployment) => match well_known_deployment {
+                WellKnownDeployment::Mainnet => MAINNET.into(),
+            },
+            DeploymentType::Custom(path) => path.to_str().unwrap().to_owned().into(),
+        }
+    }
+}
+
+impl FromStr for DeploymentType {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            MAINNET => Ok(WellKnownDeployment::Mainnet.into()),
+            path => Ok(PathBuf::from(path).into()),
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone)]
 #[cfg_attr(feature = "testing", derive(serde::Serialize))]
-pub struct Config {
+pub struct UserConfig {
     pub network: NetworkConfig,
     pub blend: BlendConfig,
-    pub deployment: DeploymentSettings,
     pub cryptarchia: CryptarchiaConfig,
     pub time: TimeConfig,
     pub mempool: MempoolConfig,
@@ -253,8 +311,8 @@ pub struct Config {
     pub testing_http: <ApiService as ServiceData>::Settings,
 }
 
-impl Config {
-    pub fn update_from_args(mut self, args: CliArgs) -> Result<Self> {
+impl UserConfig {
+    pub fn update_from_args(mut self, args: CliArgs) -> Result<RunConfig> {
         let CliArgs {
             log: log_args,
             http: http_args,
@@ -262,6 +320,7 @@ impl Config {
             blend: blend_args,
             cryptarchia_leader: cryptarchia_leader_args,
             time: time_args,
+            deployment: deployment_args,
             ..
         } = args;
         update_tracing(&mut self.tracing, log_args)?;
@@ -270,7 +329,20 @@ impl Config {
         update_http(&mut self.http, http_args)?;
         update_cryptarchia_leader_consensus(&mut self.cryptarchia.leader, cryptarchia_leader_args)?;
         update_time(&mut self.time, &time_args)?;
-        Ok(self)
+
+        let deployment_settings = match deployment_args.deployment_type {
+            DeploymentType::WellKnown(well_known_deployment) => {
+                Ok::<_, ConfigDeserializationError<Self>>(well_known_deployment.into())
+            }
+            DeploymentType::Custom(custom_deployment_config_path) => {
+                let deployment_settings = deserialize_config_at_path::<DeploymentSettings>(
+                    &custom_deployment_config_path,
+                )?;
+                Ok(deployment_settings)
+            }
+        }?;
+
+        Ok(RunConfig::new(self, deployment_settings))
     }
 }
 
@@ -409,23 +481,26 @@ pub fn update_time(time: &mut TimeConfig, time_args: &TimeArgs) -> Result<()> {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum ConfigDeserializationError<Config> {
+pub enum ConfigDeserializationError<UserConfig> {
     #[error("Unrecognized fields in config: {fields:?}")]
-    UnrecognizedFields { fields: Vec<String>, config: Config },
+    UnrecognizedFields {
+        fields: Vec<String>,
+        config: UserConfig,
+    },
     #[error(transparent)]
     IoError(#[from] std::io::Error),
     #[error(transparent)]
     SerdeError(#[from] serde_yaml::Error),
 }
 
-pub fn deserialize_config_at_path<Config>(
+pub fn deserialize_config_at_path<UserConfig>(
     config_path: &Path,
-) -> Result<Config, ConfigDeserializationError<Config>>
+) -> Result<UserConfig, ConfigDeserializationError<UserConfig>>
 where
-    Config: for<'de> Deserialize<'de>,
+    UserConfig: for<'de> Deserialize<'de>,
 {
     let mut ignored_fields = Vec::new();
-    let config = serde_ignored::deserialize::<_, _, Config>(
+    let config = serde_ignored::deserialize::<_, _, UserConfig>(
         serde_yaml::Deserializer::from_reader(std::fs::File::open(config_path)?),
         |path| {
             ignored_fields.push(path.to_string());
@@ -439,5 +514,37 @@ where
             fields: ignored_fields,
             config,
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "testing", derive(serde::Serialize))]
+pub struct RunConfig {
+    #[serde(flatten)]
+    user: UserConfig,
+    deployment: DeploymentSettings,
+}
+
+impl RunConfig {
+    #[must_use]
+    pub const fn new(user: UserConfig, deployment: DeploymentSettings) -> Self {
+        Self { user, deployment }
+    }
+
+    #[must_use]
+    pub fn into_components(self) -> (UserConfig, DeploymentSettings) {
+        (self.user, self.deployment)
+    }
+}
+
+impl From<RunConfig> for UserConfig {
+    fn from(value: RunConfig) -> Self {
+        value.user
+    }
+}
+
+impl AsRef<UserConfig> for RunConfig {
+    fn as_ref(&self) -> &UserConfig {
+        &self.user
     }
 }
