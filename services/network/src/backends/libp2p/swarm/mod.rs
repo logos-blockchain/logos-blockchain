@@ -206,6 +206,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 let counters = network_info.connection_counters();
                 let info = Libp2pInfo {
                     listen_addresses: swarm.listeners().cloned().collect(),
+                    peer_id: *swarm.local_peer_id(),
                     n_peers: network_info.num_peers(),
                     n_connections: counters.num_connections(),
                     n_pending_connections: counters.num_pending(),
