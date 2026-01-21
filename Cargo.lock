@@ -5349,7 +5349,6 @@ dependencies = [
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-ledger",
- "logos-blockchain-poseidon2",
  "logos-blockchain-services-utils",
  "logos-blockchain-time-service",
  "logos-blockchain-tx-service",
