@@ -149,7 +149,7 @@ services:
       - SEQUENCER_INITIAL_BALANCE=1000
     volumes:
       - l2-sequencer-data:/data
-    entrypoint: [ "/usr/bin/demo-sequencer" ]
+    entrypoint: [ "/usr/bin/logos-blockchain-demo-sequencer" ]
 
   l2-archiver:
     container_name: l2_archiver

@@ -58,7 +58,7 @@ COPY --from=builder /logos-blockchain/target/release/logos-blockchain-executor /
 COPY --from=builder /logos-blockchain/target/release/logos-blockchain-cli /usr/bin/
 COPY --from=builder /logos-blockchain/target/release/cfgsync-server /usr/bin/
 COPY --from=builder /logos-blockchain/target/release/cfgsync-client /usr/bin/
-COPY --from=builder /logos-blockchain/target/release/demo-sequencer /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-sequencer /usr/bin/
 COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-archiver /usr/bin/
 
 # Copy Frontend & Nginx config
