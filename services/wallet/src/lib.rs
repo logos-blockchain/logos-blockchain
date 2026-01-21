@@ -18,6 +18,8 @@ use lb_core::{
         ops::{Op, OpProof, channel::ChannelId},
         tx_builder::MantleTxBuilder,
     },
+    proofs::leader_claim_proof::{ Groth16LeaderClaimProof,
+    }
 };
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::{
@@ -463,7 +465,9 @@ where
 
                     OpProof::ZkSig(zk_sig)
                 }
-                Op::LeaderClaim(_claim_op) => {
+                Op::LeaderClaim(claim_op) => {
+                    let poc = Groth16LeaderClaimProof::prove(claim_op.)
+
                     todo!("LeaderClaim proof not yet implemented")
                 }
             };

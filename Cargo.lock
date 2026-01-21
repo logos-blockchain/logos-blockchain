@@ -5506,6 +5506,7 @@ dependencies = [
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
+ "logos-blockchain-poc",
  "logos-blockchain-pol",
  "logos-blockchain-poseidon2",
  "logos-blockchain-utils",

@@ -8,14 +8,16 @@ use core::fmt::Debug;
 use std::{collections::BTreeSet, fmt::Display, iter, pin::Pin, time::Duration};
 
 use futures::{StreamExt as _, future, stream};
+use lb_blend_service::settings::Settings;
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     block::{Block, Error as BlockError, MAX_TRANSACTIONS},
     da,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, Op, Transaction, TxHash, TxSelect, gas::MainnetGasConstants,
-        ops::leader_claim::VoucherCm,
+        AuthenticatedMantleTx, Op, Transaction, TxHash, TxSelect,
+        gas::MainnetGasConstants,
+        ops::leader_claim::{LeaderClaimOp, VoucherCm},
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
 };
@@ -438,8 +440,8 @@ where
                         winning_pol_slot_notifier.process_epoch(&eligible_utxos, &epoch_state);
 
                         if let Some(proof) = leader.build_proof_for(&eligible_utxos, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier).await {
-                            let voucher_cm = self.state.add_new_voucher_sk(&leader.secret_key(), &self.service_resources_handle.state_updater);
 
+                            let voucher_cm = self.state.add_new_voucher_sk(&leader.secret_key(), &self.service_resources_handle.state_updater);
 
                             // TODO: spawn as a separate task?
                             match Self::propose_block(
@@ -702,6 +704,25 @@ where
                 block.header().id()
             );
         }
+    }
+
+    /// A function to generate a PoC.
+    async fn generate_leader_claim(&mut self, claim_op: LeaderClaimOp) {
+        let LeaderSettings {
+            config: ledger_config,
+            transaction_selector_settings,
+            leader_config,
+            blend_broadcast_settings,
+        } = self
+            .service_resources_handle
+            .settings_handle
+            .notifier()
+            .get_updated_settings();
+
+        let voucher_sk = self
+            .state
+            .consume_voucher_sk(&self.service_resources_handle.state_updater)
+            .await;
     }
 }
 

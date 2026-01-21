@@ -6,12 +6,12 @@ use crate::mantle::TxHash;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 pub struct RewardsRoot(#[serde(with = "serde_fr")] ZkHash);
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 pub struct VoucherNullifier(#[serde(with = "serde_fr")] ZkHash);
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 pub struct VoucherCm(#[serde(with = "serde_fr")] ZkHash);
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 pub struct LeaderClaimOp {
     pub rewards_root: RewardsRoot,
     pub voucher_nullifier: VoucherNullifier,
