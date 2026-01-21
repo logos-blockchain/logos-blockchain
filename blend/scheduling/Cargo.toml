@@ -21,7 +21,7 @@ lb-blend-message              = { workspace = true }
 lb-blend-proofs               = { workspace = true }
 lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-lb-utils                      = { workspace = true, features = ["rng"] }
+lb-utils                      = { features = ["rng"], workspace = true }
 multiaddr                     = { default-features = false, version = "0.18" }
 rand                          = { features = ["alloc"], workspace = true }
 serde                         = { workspace = true }
@@ -31,11 +31,11 @@ tokio-stream                  = { default-features = false, version = "0.1" }
 tracing                       = { workspace = true }
 
 [dev-dependencies]
-lb-blend-message = { workspace = true, features = ["unsafe-test-functions"] }
-lb-blend-proofs  = { workspace = true, features = ["unsafe-test-functions"] }
+lb-blend-message = { features = ["unsafe-test-functions"], workspace = true }
+lb-blend-proofs  = { features = ["unsafe-test-functions"], workspace = true }
 lb-groth16       = { workspace = true }
 libp2p           = { workspace = true }
-test-log         = { default-features = false, version = "0.2.18", features = ["trace"] }
+test-log         = { default-features = false, features = ["trace"], version = "0.2.18" }
 
 [features]
 unsafe-test-functions = []

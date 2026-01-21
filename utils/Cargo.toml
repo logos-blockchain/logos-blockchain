@@ -19,8 +19,8 @@ cipher      = { version = "0.4" }
 const-hex   = { default-features = false, version = "1" }
 humantime   = { optional = true, version = "2.1" }
 overwatch   = { workspace = true }
-rand        = { workspace = true, features = ["getrandom"] }
-serde       = { workspace = true, features = ["derive"], optional = true }
+rand        = { features = ["getrandom"], workspace = true }
+serde       = { features = ["derive"], optional = true, workspace = true }
 serde_with  = { optional = true, workspace = true }
 time        = { default-features = false, features = ["serde-human-readable"], optional = true, version = "0.3" }
 
