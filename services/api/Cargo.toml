@@ -32,6 +32,7 @@ lb-time-service            = { workspace = true }
 lb-tx-service              = { features = ["libp2p", "mock", "openapi"], workspace = true }
 overwatch                  = { workspace = true }
 serde                      = { workspace = true }
+serde_json                 = { workspace = true }
 tokio                      = { default-features = false, features = ["net"], version = "1" }
 tokio-stream               = { default-features = false, version = "0.1" }
 tracing                    = { default-features = false, version = "0.1" }
@@ -55,6 +56,5 @@ axum              = { default-features = false, features = ["http1", "http2", "j
 hyper             = { default-features = false, version = "1.0" }
 reqwest           = { default-features = false, workspace = true }
 serde             = { workspace = true }
-serde_json        = { workspace = true }
 tracing           = { workspace = true }
 utoipa-swagger-ui = { default-features = false, features = ["axum"], workspace = true }
