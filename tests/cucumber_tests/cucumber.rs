@@ -54,8 +54,8 @@ async fn main() {
         .before(move |feature, _rule, scenario, world| {
             Box::pin(async move {
                 println!(
-                    "\nStarting '{}' : '{}' : '{}'\n",
-                    feature.name, scenario.keyword, scenario.name
+                    "\nStarting - {}: {} ({}: {})\n",
+                    scenario.keyword, scenario.name, feature.keyword, feature.name,
                 ); // This will be printed into the stdout_buffer
                 if let Err(e) = world.set_deployer(deployer) {
                     panic!("Failed to set deployer: {e}");

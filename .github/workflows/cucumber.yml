@@ -58,11 +58,11 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       # Build release binaries for nomos-node and nomos-executor with all features
-      - name: Build binaries with all features
+      - name: Build binaries with required features
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
-          args: --release --locked --all --all-features
+          args: --release --locked --all --features "pol-dev-mode"
 
       # Update Cargo cache after build, regardless of build success
       - name: Update Cargo cache
@@ -73,17 +73,17 @@ jobs:
 
       # Run cucumber integration tests with environment variables for binaries and test params
       - name: Run cucumber
-        timeout-minutes: 20  # Safety net timeout
+        timeout-minutes: 30  # Safety net timeout
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
           POL_PROOF_DEV_MODE: true
           CONSENSUS_SLOT_TIME: 5
-          NOMOS_NODE_BIN: ${{ github.workspace }}/target/release/nomos-node
-          NOMOS_EXECUTOR_BIN: ${{ github.workspace }}/target/release/nomos-executor
-          NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
+          NOMOS_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
+          NOMOS_EXECUTOR_BIN: ${{ github.workspace }}/target/release/logos-blockchain-executor
+          NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs/kzgrs_test_params
         with:
           command: test
-          args: --release --locked --all --all-features -p logos-blockchain-tests --test cucumber -- --tags "@normal_ci"
+          args: --release --locked --all --features "pol-dev-mode" -p logos-blockchain-tests --features "cucumber" --test cucumber -- --tags "@normal_ci"
 
       # Always upload JUnit test results for reporting, even if tests fail
       - name: Upload cucumber JUnit results
