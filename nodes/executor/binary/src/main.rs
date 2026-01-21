@@ -3,7 +3,7 @@ use color_eyre::eyre::{Result, eyre};
 use lb_node::{
     CryptarchiaLeaderArgs, HttpArgs, LogArgs, NetworkArgs,
     config::{
-        BlendArgs, ConfigDeserializationError, DeploymentArgs, DeploymentType, TimeArgs,
+        BlendArgs, DeploymentArgs, DeploymentType, OnUnknownKeys, TimeArgs,
         blend::ServiceConfig as BlendConfig, cryptarchia::ServiceConfig as CryptarchiaConfig,
         deployment::DeploymentSettings, deserialize_config_at_path,
         mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
@@ -16,7 +16,6 @@ use logos_blockchain_executor::{
     config::UserConfig,
 };
 use overwatch::overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner};
-use tracing::warn;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -66,13 +65,17 @@ async fn main() -> Result<()> {
     // configs are found or exit successfully if deserializations succeed.
     if check_config_only {
         // Check user config.
-        drop(deserialize_config_at_path::<UserConfig>(config.as_path())?);
+        drop(deserialize_config_at_path::<UserConfig>(
+            config.as_path(),
+            OnUnknownKeys::Fail,
+        )?);
         // If custom, check deployment config.
         if let DeploymentType::Custom(custom_deployment_config_file) =
             deployment_args.deployment_type()
         {
             drop(deserialize_config_at_path::<DeploymentSettings>(
                 custom_deployment_config_file,
+                OnUnknownKeys::Fail,
             )?);
         }
         #[expect(
@@ -87,16 +90,8 @@ async fn main() -> Result<()> {
     }
 
     let run_config = {
-        let user_config = match deserialize_config_at_path::<UserConfig>(config.as_path()) {
-            Ok(config) => config,
-            Err(ConfigDeserializationError::UnrecognizedFields { fields, config }) => {
-                warn!(
-                    "The following unrecognized fields were found in the user config file: {fields:?}. They won't have any effects on the node."
-                );
-                config
-            }
-            Err(e) => return Err(eyre!(e)),
-        };
+        let user_config =
+            deserialize_config_at_path::<UserConfig>(config.as_path(), OnUnknownKeys::Warn)?;
         user_config.update_from_args(
             log_args,
             network_args,

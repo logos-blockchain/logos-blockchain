@@ -3,12 +3,11 @@ use color_eyre::eyre::{Result, eyre};
 use logos_blockchain_node::{
     UserConfig,
     config::{
-        CliArgs, ConfigDeserializationError, DeploymentType, deployment::DeploymentSettings,
+        CliArgs, DeploymentType, OnUnknownKeys, deployment::DeploymentSettings,
         deserialize_config_at_path,
     },
     get_services_to_start, run_node_from_config,
 };
-use tracing::warn;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -23,11 +22,13 @@ async fn main() -> Result<()> {
         // Check user config.
         drop(deserialize_config_at_path::<UserConfig>(
             cli_args.config_path(),
+            OnUnknownKeys::Fail,
         )?);
         // If custom, check deployment config.
         if let DeploymentType::Custom(custom_deployment_config_file) = cli_args.deployment_type() {
             drop(deserialize_config_at_path::<DeploymentSettings>(
                 custom_deployment_config_file,
+                OnUnknownKeys::Fail,
             )?);
         }
         #[expect(
@@ -42,16 +43,8 @@ async fn main() -> Result<()> {
     }
 
     let run_config = {
-        let user_config = match deserialize_config_at_path::<UserConfig>(cli_args.config_path()) {
-            Ok(config) => config,
-            Err(ConfigDeserializationError::UnrecognizedFields { fields, config }) => {
-                warn!(
-                    "The following unrecognized fields were found in the user config file: {fields:?}. They won't have any effects on the node."
-                );
-                config
-            }
-            Err(e) => return Err(eyre!(e)),
-        };
+        let user_config =
+            deserialize_config_at_path::<UserConfig>(cli_args.config_path(), OnUnknownKeys::Warn)?;
         user_config.update_from_args(cli_args)?
     };
 

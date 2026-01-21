@@ -344,18 +344,10 @@ impl UserConfig {
         let deployment_settings = match deployment_args.deployment_type() {
             DeploymentType::WellKnown(well_known_deployment) => (*well_known_deployment).into(),
             DeploymentType::Custom(custom_deployment_config_path) => {
-                match deserialize_config_at_path::<DeploymentSettings>(
+                deserialize_config_at_path::<DeploymentSettings>(
                     custom_deployment_config_path,
-                ) {
-                    Ok(deployment_settings) => deployment_settings,
-                    Err(ConfigDeserializationError::UnrecognizedFields { fields, config }) => {
-                        warn!(
-                            "The following unrecognized fields were found in the deployment config file: {fields:?}. They won't have any effects on the node."
-                        );
-                        config
-                    }
-                    Err(e) => return Err(eyre!(e)),
-                }
+                    OnUnknownKeys::Warn,
+                )?
             }
         };
 
@@ -510,8 +502,14 @@ pub enum ConfigDeserializationError<Config> {
     SerdeError(#[from] serde_yaml::Error),
 }
 
+pub enum OnUnknownKeys {
+    Fail,
+    Warn,
+}
+
 pub fn deserialize_config_at_path<Config>(
     config_path: &Path,
+    unknown_keys_strategy: OnUnknownKeys,
 ) -> Result<Config, ConfigDeserializationError<Config>>
 where
     Config: for<'de> Deserialize<'de>,
@@ -524,13 +522,20 @@ where
         },
     )?;
 
-    if ignored_fields.is_empty() {
-        Ok(config)
-    } else {
-        Err(ConfigDeserializationError::UnrecognizedFields {
-            fields: ignored_fields,
-            config,
-        })
+    match (ignored_fields, unknown_keys_strategy) {
+        (ignored_fields, _) if ignored_fields.is_empty() => Ok(config),
+        (ignored_fields, OnUnknownKeys::Warn) => {
+            warn!(
+                "The following unrecognized fields were found in the config file: {ignored_fields:?}."
+            );
+            Ok(config)
+        }
+        (ignored_fields, OnUnknownKeys::Fail) => {
+            Err(ConfigDeserializationError::UnrecognizedFields {
+                fields: ignored_fields,
+                config,
+            })
+        }
     }
 }
 

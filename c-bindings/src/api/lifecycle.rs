@@ -3,7 +3,7 @@ use std::{ffi::c_char, path::PathBuf};
 use lb_node::{
     UserConfig,
     config::{
-        DeploymentType, RunConfig,
+        DeploymentType, OnUnknownKeys, RunConfig,
         deployment::{DeploymentSettings, WellKnownDeployment},
         deserialize_config_at_path,
     },
@@ -106,10 +106,11 @@ fn get_user_config(config_path: *const c_char) -> Result<UserConfig, OperationSt
             eprintln!("Could not convert the config path to string: {e}");
             OperationStatus::InitializationError
         })?;
-    deserialize_config_at_path::<UserConfig>(user_config_path.as_ref()).map_err(|e| {
-        eprintln!("Could not parse config file: {e}");
-        OperationStatus::InitializationError
-    })
+    deserialize_config_at_path::<UserConfig>(user_config_path.as_ref(), OnUnknownKeys::Warn)
+        .map_err(|e| {
+            eprintln!("Could not parse config file: {e}");
+            OperationStatus::InitializationError
+        })
 }
 
 fn get_deployment_config(
@@ -133,10 +134,11 @@ fn get_deployment_config(
     match deployment_type {
         DeploymentType::WellKnown(well_known_deployment) => Ok(well_known_deployment.into()),
         DeploymentType::Custom(path) => {
-            deserialize_config_at_path::<DeploymentSettings>(path.as_ref()).map_err(|e| {
-                eprintln!("Could not parse deployment file: {e}");
-                OperationStatus::InitializationError
-            })
+            deserialize_config_at_path::<DeploymentSettings>(path.as_ref(), OnUnknownKeys::Warn)
+                .map_err(|e| {
+                    eprintln!("Could not parse deployment file: {e}");
+                    OperationStatus::InitializationError
+                })
         }
     }
 }
