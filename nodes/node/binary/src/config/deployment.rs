@@ -10,7 +10,7 @@ use crate::config::{
 
 pub const MAINNET: &str = "mainnet";
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum WellKnownDeployment {
     // Must match the `MAINNET` definition above.
     #[serde(rename = "mainnet")]
@@ -68,11 +68,11 @@ impl DeploymentSettings {
 impl From<WellKnownDeployment> for DeploymentSettings {
     fn from(value: WellKnownDeployment) -> Self {
         Self {
-            blend: value.clone().into(),
-            cryptarchia: value.clone().into(),
-            network: value.clone().into(),
-            time: value.clone().into(),
-            mempool: value.clone().into(),
+            blend: value.into(),
+            cryptarchia: value.into(),
+            network: value.into(),
+            time: value.into(),
+            mempool: value.into(),
             well_known: Some(value),
         }
     }

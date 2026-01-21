@@ -3,16 +3,16 @@ use color_eyre::eyre::{Result, eyre};
 use lb_node::{
     CryptarchiaLeaderArgs, HttpArgs, LogArgs, NetworkArgs,
     config::{
-        BlendArgs, ConfigDeserializationError, TimeArgs, blend::ServiceConfig as BlendConfig,
-        cryptarchia::ServiceConfig as CryptarchiaConfig, deserialize_config_at_path,
-        mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
-        time::ServiceConfig as TimeConfig,
+        BlendArgs, ConfigDeserializationError, DeploymentArgs, TimeArgs,
+        blend::ServiceConfig as BlendConfig, cryptarchia::ServiceConfig as CryptarchiaConfig,
+        deserialize_config_at_path, mempool::ServiceConfig as MempoolConfig,
+        network::ServiceConfig as NetworkConfig, time::ServiceConfig as TimeConfig,
     },
 };
 use lb_sdp_service::SdpSettings;
 use logos_blockchain_executor::{
     LogosBlockchainExecutor, LogosBlockchainExecutorServiceSettings, RuntimeServiceId,
-    config::Config as ExecutorConfig,
+    config::UserConfig as ExecutorConfig,
 };
 use overwatch::overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner};
 use tracing::warn;
@@ -42,6 +42,8 @@ struct Args {
     cryptarchia_leader: CryptarchiaLeaderArgs,
     #[clap(flatten)]
     time: TimeArgs,
+    #[clap(flatten)]
+    deployment: DeploymentArgs,
 }
 
 #[tokio::main]
@@ -55,10 +57,11 @@ async fn main() -> Result<()> {
         blend: blend_args,
         cryptarchia_leader: cryptarchia_args,
         time: time_args,
+        deployment: deployment_args,
         check_config_only,
     } = Args::parse();
 
-    let config = match (
+    let (user_config, deployment_config) = match (
         deserialize_config_at_path::<ExecutorConfig>(&config),
         check_config_only,
     ) {
@@ -90,37 +93,38 @@ async fn main() -> Result<()> {
         http_args,
         cryptarchia_args,
         &time_args,
-    )?;
+        &deployment_args
+    )?.into_components();
 
     let time_service_config = TimeConfig {
-        user: config.time,
-        deployment: config.deployment.time,
+        user: user_config.time,
+        deployment: deployment_config.time,
     }
-    .into_time_service_settings(&config.deployment.cryptarchia);
+    .into_time_service_settings(&deployment_config.cryptarchia);
 
     let (chain_service_config, chain_network_config, chain_leader_config) = CryptarchiaConfig {
-        user: config.cryptarchia,
-        deployment: config.deployment.cryptarchia,
+        user: user_config.cryptarchia,
+        deployment: deployment_config.cryptarchia,
     }
-    .into_cryptarchia_services_settings(&config.deployment.blend);
+    .into_cryptarchia_services_settings(&deployment_config.blend);
 
     let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
-        user: config.blend,
-        deployment: config.deployment.blend,
+        user: user_config.blend,
+        deployment: deployment_config.blend,
     }
     .into();
 
     let mempool_service_config = MempoolConfig {
-        user: config.mempool,
-        deployment: config.deployment.mempool,
+        user: user_config.mempool,
+        deployment: deployment_config.mempool,
     }
     .into();
 
     let app = OverwatchRunner::<LogosBlockchainExecutor>::run(
         LogosBlockchainExecutorServiceSettings {
             network: NetworkConfig {
-                user: config.network,
-                deployment: config.deployment.network,
+                user: user_config.network,
+                deployment: deployment_config.network,
             }
             .into(),
             blend: blend_config,
@@ -128,24 +132,24 @@ async fn main() -> Result<()> {
             blend_edge: blend_edge_config,
             block_broadcast: (),
             #[cfg(feature = "tracing")]
-            tracing: config.tracing,
-            http: config.http,
+            tracing: user_config.tracing,
+            http: user_config.http,
             mempool: mempool_service_config,
-            da_dispersal: config.da_dispersal,
-            da_network: config.da_network,
-            da_sampling: config.da_sampling,
-            da_verifier: config.da_verifier,
+            da_dispersal: user_config.da_dispersal,
+            da_network: user_config.da_network,
+            da_sampling: user_config.da_sampling,
+            da_verifier: user_config.da_verifier,
             cryptarchia: chain_service_config,
             chain_network: chain_network_config,
             cryptarchia_leader: chain_leader_config,
             time: time_service_config,
-            storage: config.storage,
+            storage: user_config.storage,
             system_sig: (),
             sdp: SdpSettings { declaration: None },
-            wallet: config.wallet,
-            key_management: config.key_management,
+            wallet: user_config.wallet,
+            key_management: user_config.key_management,
             #[cfg(feature = "testing")]
-            testing_http: config.testing_http,
+            testing_http: user_config.testing_http,
         },
         None,
     )

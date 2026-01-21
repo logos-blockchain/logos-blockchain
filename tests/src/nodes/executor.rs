@@ -37,7 +37,7 @@ use lb_da_verifier_service::{
     backend::{kzgrs::KzgrsDaVerifierSettings, trigger::MempoolPublishTriggerConfig},
     storage::adapters::rocksdb::RocksAdapterSettings as VerifierStorageAdapterSettings,
 };
-use lb_executor::{api::backend::AxumBackendSettings, config::Config};
+use lb_executor::{api::backend::AxumBackendSettings, config::UserConfig};
 use lb_http_api_common::paths::{
     CRYPTARCHIA_INFO, DA_BALANCER_STATS, DA_BLACKLISTED_PEERS, DA_BLOCK_PEER, DA_GET_MEMBERSHIP,
     DA_GET_SHARES_COMMITMENTS, DA_HISTORIC_SAMPLING, DA_MONITOR_STATS, DA_UNBLOCK_PEER,
@@ -72,7 +72,7 @@ pub struct Executor {
     testing_http_addr: SocketAddr,
     tempdir: tempfile::TempDir,
     child: Child,
-    config: Config,
+    config: UserConfig,
     http_client: CommonHttpClient,
 }
 
@@ -91,7 +91,7 @@ impl Drop for Executor {
 }
 
 impl Executor {
-    pub async fn spawn(mut config: Config) -> Self {
+    pub async fn spawn(mut config: UserConfig) -> Self {
         let dir = create_tempdir().unwrap();
         let mut file = NamedTempFile::new().unwrap();
         let config_path = file.path().to_owned();
@@ -192,7 +192,7 @@ impl Executor {
     }
 
     #[must_use]
-    pub const fn config(&self) -> &Config {
+    pub const fn config(&self) -> &UserConfig {
         &self.config
     }
 
@@ -358,13 +358,13 @@ impl Executor {
 
 #[must_use]
 #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
-pub fn create_executor_config(config: GeneralConfig) -> Config {
+pub fn create_executor_config(config: GeneralConfig) -> UserConfig {
     let testing_http_address = format!("127.0.0.1:{}", get_available_tcp_port().unwrap())
         .parse()
         .unwrap();
     let custom_deployment_config = default_e2e_deployment_settings();
 
-    Config {
+    UserConfig {
         network: config.network_config,
         blend: config.blend_config.0,
         deployment: custom_deployment_config,

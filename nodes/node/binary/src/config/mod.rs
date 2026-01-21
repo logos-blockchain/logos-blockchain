@@ -241,6 +241,13 @@ pub struct DeploymentArgs {
     deployment_type: DeploymentType,
 }
 
+impl DeploymentArgs {
+    #[must_use]
+    pub const fn deployment_type(&self) -> &DeploymentType {
+        &self.deployment_type
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum DeploymentType {
     WellKnown(WellKnownDeployment),
