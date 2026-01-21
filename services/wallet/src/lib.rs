@@ -1,6 +1,6 @@
 pub mod api;
 
-use std::{collections::HashSet, time::Duration, str::FromStr as _};
+use std::{collections::HashSet, str::FromStr as _, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -11,15 +11,22 @@ use lb_chain_service::{
 };
 use lb_core::{
     block::Block,
+    crypto::ZkHasher,
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, SignedMantleTx, Transaction as _, TxHash, Utxo, Value,
         gas::MainnetGasConstants,
-        ops::{Op, OpProof, channel::ChannelId},
+        ops::{
+            Op, OpProof,
+            channel::ChannelId,
+            leader_claim::{RewardsRoot, VoucherCm},
+        },
         tx_builder::MantleTxBuilder,
     },
+    proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
+    utils::merkle::MerklePath,
 };
-use lb_groth16::{fr_from_bytes, fr_to_bytes, Fr};
+use lb_groth16::{Fr, fr_from_bytes, fr_to_bytes};
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::preload::PreloadKMSBackend,
@@ -29,7 +36,6 @@ use lb_key_management_system_service::{
     },
 };
 use lb_ledger::LedgerState;
-use rand::{RngCore as _, rngs::OsRng};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
 use lb_wallet::{Wallet, WalletBlock, WalletError};
@@ -40,11 +46,10 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
+use rand::{RngCore as _, rngs::OsRng};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, trace};
-use lb_core::crypto::{ZkHash, ZkHasher};
-use lb_core::mantle::ops::leader_claim::VoucherCm;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletServiceError {
@@ -77,6 +82,9 @@ pub enum WalletServiceError {
 
     #[error("Locked note {0:?} is missing in ledger")]
     MissingLockedNote(lb_core::mantle::NoteId),
+
+    #[error("PoC generation failed: {0:?}")]
+    PoCGenerationFailed(lb_core::proofs::leader_claim_proof::Error),
 }
 
 #[derive(Debug)]
@@ -99,7 +107,7 @@ pub enum WalletMsg {
     },
     GenerateNewVoucherSecret {
         resp_tx: oneshot::Sender<VoucherCm>,
-    }
+    },
 }
 
 impl WalletMsg {
@@ -109,7 +117,7 @@ impl WalletMsg {
             Self::GetBalance { tip, .. }
             | Self::FundAndSignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. } => Some(*tip),
-            | Self::GenerateNewVoucherSecret { .. } => None,
+            Self::GenerateNewVoucherSecret { .. } => None,
         }
     }
 }
@@ -160,6 +168,7 @@ where
     ) -> Result<Self, DynError> {
         Ok(Self {
             service_resources_handle,
+            voucher_secrets: Vec::new(),
             _marker: std::marker::PhantomData,
         })
     }
@@ -250,7 +259,7 @@ where
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    self.handle_wallet_message(msg, &mut wallet, &storage_adapter, &cryptarchia_api, &kms).await;
+                    Self::handle_wallet_message(&mut self.voucher_secrets, msg, &mut wallet, &storage_adapter, &cryptarchia_api, &kms).await;
                 }
 
                 Ok(header_id) = new_block_receiver.recv() => {
@@ -295,7 +304,7 @@ where
         AsServiceId<Cryptarchia> + AsServiceId<Kms> + std::fmt::Debug + std::fmt::Display + Sync,
 {
     async fn handle_wallet_message(
-        &mut self,
+        voucher_secrets: &mut Vec<Fr>,
         msg: WalletMsg,
         wallet: &mut Wallet,
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
@@ -303,8 +312,7 @@ where
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) {
         if let Some(tip) = msg.tip() {
-            if let Err(err) =
-                Self::backfill_if_not_in_sync(tip, wallet, storage, cryptarchia).await
+            if let Err(err) = Self::backfill_if_not_in_sync(tip, wallet, storage, cryptarchia).await
             {
                 error!(err=?err, "Failed backfilling wallet to message tip, will attempt to continue processing the message {msg:?}");
             }
@@ -346,13 +354,13 @@ where
                     }
                 };
 
-                Self::handle_sign_tx(funded, ledger, resp_tx, kms).await;
+                Self::handle_sign_tx(voucher_secrets, funded, ledger, resp_tx, kms).await;
             }
             WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
                 Self::get_leader_aged_notes(tip, resp_tx, wallet, cryptarchia).await;
             }
-            WalletMsg::GenerateNewVoucherSecret {resp_tx} => {
-                self.generate_new_voucher_secret(resp_tx).await;
+            WalletMsg::GenerateNewVoucherSecret { resp_tx } => {
+                Self::generate_new_voucher_secret(voucher_secrets, resp_tx).await;
             }
         }
     }
@@ -373,12 +381,13 @@ where
     }
 
     async fn handle_sign_tx(
+        voucher_secrets: &mut Vec<Fr>,
         tx_builder: MantleTxBuilder,
         ledger: LedgerState,
         resp_tx: oneshot::Sender<Result<SignedMantleTx, WalletServiceError>>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) {
-        let signed_tx_res = Self::sign_tx(tx_builder, ledger, kms).await;
+        let signed_tx_res = Self::sign_tx(voucher_secrets, tx_builder, ledger, kms).await;
 
         if resp_tx.send(signed_tx_res).is_err() {
             error!("Failed to respond to FundAndSignTx");
@@ -386,6 +395,7 @@ where
     }
 
     async fn sign_tx(
+        voucher_secrets: &mut Vec<Fr>,
         tx_builder: MantleTxBuilder,
         ledger: LedgerState,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
@@ -477,10 +487,29 @@ where
 
                     OpProof::ZkSig(zk_sig)
                 }
-                Op::LeaderClaim(_claim_op) => {
-                    let voucher_secret = todo!();
-                    let path = ledger.mantle_ledger().voucher_merkle_path(voucher_cm);
-                    todo!("LeaderClaim PoC not yet implemented")
+                Op::LeaderClaim(claim_op) => {
+                    let voucher_secret = voucher_secrets.pop().expect("No voucher secret left");
+                    let mut hash = ZkHasher::new();
+                    hash.compress(&[
+                        Fr::from_str("1668646695034522932676805048878418").unwrap(),
+                        voucher_secret.clone(),
+                    ]);
+                    let voucher_cm = VoucherCm::from(hash.finalize());
+                    let path = ledger
+                        .mantle_ledger()
+                        .voucher_merkle_path(voucher_cm)
+                        .expect("Merkle path not found");
+
+                    // TODO: This should happen in KMS
+                    let poc = Self::generate_poc(
+                        voucher_secret,
+                        path,
+                        claim_op.rewards_root,
+                        claim_op.mantle_tx_hash,
+                    )
+                    .await?;
+
+                    OpProof::PoC(poc)
                 }
             };
             ops_proofs.push(proof);
@@ -543,6 +572,27 @@ where
         Ok(zk_sig)
     }
 
+    async fn generate_poc(
+        voucher_secret: Fr,
+        path: MerklePath<Fr>,
+        rewards_root: RewardsRoot,
+        tx_hash: TxHash,
+    ) -> Result<Groth16LeaderClaimProof, WalletServiceError> {
+        let result = Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
+            LeaderClaimPublic {
+                voucher_root: rewards_root.into(),
+                mantle_tx_hash: tx_hash.into(),
+            },
+            &path,
+            voucher_secret,
+        ));
+
+        match result {
+            Ok(poc) => Ok(poc),
+            Err(e) => Err(WalletServiceError::PoCGenerationFailed(e)),
+        }
+    }
+
     async fn get_leader_aged_notes(
         tip: HeaderId,
         tx: oneshot::Sender<Result<Vec<Utxo>, WalletServiceError>>,
@@ -582,9 +632,9 @@ where
 
     // TODO: Do this in KMS. DO NOT RESTART THE NODE TO NOT LOSE REWARDS FOR NOW
     async fn generate_new_voucher_secret(
-        &mut self,
+        voucher_secrets: &mut Vec<Fr>,
         resp_tx: oneshot::Sender<VoucherCm>,
-    )  {
+    ) {
         let mut voucher_secret_bytes = [0u8; 31];
         OsRng.fill_bytes(&mut voucher_secret_bytes);
         let voucher_secret = fr_from_bytes(&voucher_secret_bytes).unwrap();
@@ -595,7 +645,7 @@ where
         ]);
         let voucher_cm = VoucherCm::from(hash.finalize());
 
-        self.voucher_secrets.push(voucher_secret);
+        voucher_secrets.push(voucher_secret);
 
         if let Err(e) = resp_tx.send(voucher_cm) {
             error!("Failed to send voucher secret: {e:?}");

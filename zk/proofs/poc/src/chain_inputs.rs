@@ -7,6 +7,7 @@ pub struct PoCChainInputs {
     mantle_tx_hash: Groth16Input,
 }
 
+#[derive(Clone, Debug)]
 pub struct PoCChainInputsData {
     pub voucher_root: Fr,
     pub mantle_tx_hash: Fr,

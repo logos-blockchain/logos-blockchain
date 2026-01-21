@@ -54,7 +54,7 @@ use tokio::{
 };
 use tracing::{Level, debug, error, info, instrument, span, warn};
 use tracing_futures::Instrument as _;
-use lb_core::utils::merkle::MerklePath;
+
 pub use crate::bootstrap::config::{BootstrapConfig, OfflineGracePeriodConfig};
 use crate::{
     bootstrap::state::choose_engine_state,

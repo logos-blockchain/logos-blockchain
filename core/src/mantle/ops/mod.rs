@@ -22,9 +22,12 @@ use super::{
         sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     },
 };
-use crate::mantle::{
-    encoding::{decode_op, encode_op},
-    ops::internal::{OpDe, OpSer},
+use crate::{
+    mantle::{
+        encoding::{decode_op, encode_op},
+        ops::internal::{OpDe, OpSer},
+    },
+    proofs::leader_claim_proof::Groth16LeaderClaimProof,
 };
 
 /// Core set of supported Mantle operations.
@@ -58,6 +61,7 @@ pub enum OpProof {
         zk_sig: ZkSignature,
         ed25519_sig: Ed25519Signature,
     },
+    PoC(Groth16LeaderClaimProof),
 }
 
 /// Delegates serialization through the [`OpInternal`] representation.

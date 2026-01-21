@@ -6,13 +6,14 @@ use std::collections::HashMap;
 
 use lb_core::{
     block::BlockNumber,
+    crypto::ZkHash,
     mantle::{
         AuthenticatedMantleTx, GasConstants, GenesisTx, NoteId, TxHash, Utxo,
         ops::{Op, OpProof, leader_claim::VoucherCm},
     },
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
+    utils::merkle::MerklePath,
 };
-use lb_core::utils::merkle::MerklePath;
 use sdp::{Error as SdpLedgerError, locked_notes::LockedNotes};
 
 use crate::{Balance, Config, EpochState, UtxoTree};
@@ -132,7 +133,8 @@ impl LedgerState {
         voucher: VoucherCm,
         config: &Config,
     ) -> Result<(Self, Vec<Utxo>), Error> {
-        self.leaders = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
+        let leaders = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
+        self.leaders = leaders;
         let (new_sdp, reward_utxos) = self.sdp.try_apply_header(&config.sdp_config, epoch_state)?;
         self.sdp = new_sdp;
         Ok((self, reward_utxos))

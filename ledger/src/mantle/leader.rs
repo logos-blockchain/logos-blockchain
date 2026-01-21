@@ -1,14 +1,16 @@
 use std::cmp::Ordering;
-use rpds::HashTrieMapSync;
-use lb_core::crypto::ZkHash;
-use lb_core::mantle::{
-    Value,
-    ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier},
+
+use lb_core::{
+    crypto::ZkHash,
+    mantle::{
+        Value,
+        ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier},
+    },
+    utils::merkle::MerklePath,
 };
-use lb_core::utils::merkle::MerklePath;
 use lb_cryptarchia_engine::Epoch;
-use lb_mmr::MerkleMountainRange;
 use lb_utxotree::DynamicMerkleTree;
+use rpds::HashTrieMapSync;
 
 use crate::Balance;
 
@@ -65,13 +67,14 @@ impl LeaderState {
             nfs: rpds::HashTrieSetSync::new_sync(),
             claimable_rewards: 0,
             vouchers: DynamicMerkleTree::new(),
-            voucher_indices: HashTrieMapSync<VoucherCm, usize>::new(),
+            voucher_indices: HashTrieMapSync::new_sync(),
             pending_vouchers: Vec::new(),
         }
     }
 
-    pub fn try_apply_header(self, epoch: Epoch, voucher_cm: VoucherCm) -> Result<(), Error> {
-        Ok(self.update_epoch_state(epoch)?.add_voucher(voucher_cm))
+    pub fn try_apply_header(self, epoch: Epoch, voucher_cm: VoucherCm) -> Result<Self, Error> {
+        let self_ = self.update_epoch_state(epoch)?;
+        Ok(self_.add_voucher(voucher_cm))
     }
 
     fn update_epoch_state(mut self, epoch: Epoch) -> Result<Self, Error> {
@@ -90,18 +93,19 @@ impl LeaderState {
                 }
                 self.pending_vouchers = Vec::new();
                 self.claimable_vouchers_root = self.vouchers.root().into();
-                self.n_claimable_vouchers = self.vouchers.len() as u64;
+                self.n_claimable_vouchers = self.vouchers.size() as u64;
                 // TODO: increase rewards, what about epoch jumps?
                 Ok(self)
             }
         }
     }
 
-    fn add_voucher(mut self, voucher_cm: VoucherCm) {
-        self.pending_vouchers.push(voucher_cm)
+    fn add_voucher(mut self, voucher_cm: VoucherCm) -> Self {
+        self.pending_vouchers.push(voucher_cm);
+        self
     }
 
-    fn voucher_merkle_path(&self, voucher_cm: VoucherCm) -> Option<MerklePath<ZkHash>> {
+    pub(crate) fn voucher_merkle_path(&self, voucher_cm: VoucherCm) -> Option<MerklePath<ZkHash>> {
         let index = self.voucher_indices.get(&voucher_cm)?;
         self.vouchers.path(*index)
     }
@@ -139,7 +143,8 @@ impl LeaderState {
                 nfs,
                 claimable_rewards,
                 vouchers: self.vouchers.clone(),
-                pending_vouchers: self.pending_vouchers,
+                voucher_indices: self.voucher_indices.clone(),
+                pending_vouchers: self.pending_vouchers.clone(),
             },
             Balance::from(reward_amount),
         ))

@@ -438,7 +438,7 @@ where
                             let voucher_cm = match wallet_api.receive_voucher_cm_from_wallet().await {
                                 Ok(voucher_cm) => voucher_cm,
                                 Err(e) => {
-                                    error!("Failed to get the voucher cm: {:?}, e");
+                                    error!("Failed to get the voucher cm: {:?}", e);
                                     continue;
                                 }
                             };
@@ -497,10 +497,6 @@ where
 
         Ok(())
     }
-}
-
-fn receive_voucher_cm_from_wallet() -> _ {
-
 }
 
 impl<

@@ -1,13 +1,14 @@
 use lb_groth16::{Field as _, Fr, Groth16Input, Groth16InputDeser};
 use serde::Serialize;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PoCWalletInputs {
     secret_voucher: Groth16Input,
     voucher_merkle_path: Vec<Groth16Input>,
     voucher_merkle_path_selectors: Vec<Groth16Input>,
 }
 
+#[derive(Clone, Debug)]
 pub struct PoCWalletInputsData {
     pub secret_voucher: Fr,
     pub voucher_merkle_path: Vec<Fr>,
