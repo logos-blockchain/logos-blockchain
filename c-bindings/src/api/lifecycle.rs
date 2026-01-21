@@ -62,9 +62,10 @@ fn initialize_lb_node(
     let must_blend_service_group_start = true;
     let must_da_service_group_start = true;
 
-    let user_config = get_user_config(config_path)?;
-    let deployment_config = get_deployment_config(deployment_arg)?;
-    let run_config = RunConfig::new(user_config, deployment_config);
+    let run_config = RunConfig {
+        deployment: get_deployment_config(deployment_arg)?,
+        user: get_user_config(config_path)?,
+    };
 
     let rt = Runtime::new().unwrap();
     let app = run_node_from_config(run_config).map_err(|e| {
