@@ -17,7 +17,7 @@ pub struct Groth16LeaderClaimProof {
     proof: lb_poc::PoCProof,
     voucher_nf: VoucherNullifier,
     #[cfg(feature = "poc-dev-mode")]
-    public: LeaderPublic,
+    public: LeaderClaimPublic,
 }
 
 #[derive(Debug, Error)]

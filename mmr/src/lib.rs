@@ -71,8 +71,6 @@ where
         }
     }
 
-
-
     #[must_use]
     pub fn push(&self, elem: T) -> Self {
         let root = Hash::digest(&[*elem.as_ref()]);
