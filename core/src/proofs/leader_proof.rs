@@ -1,6 +1,7 @@
 use std::sync::LazyLock;
 
 use ark_ff::{Field as _, PrimeField as _};
+#[cfg(feature = "pol-dev-mode")]
 use generic_array::GenericArray;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
