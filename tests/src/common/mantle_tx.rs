@@ -5,20 +5,18 @@ use lb_core::{
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, Ed25519PublicKey, MsgId, blob::BlobOp, inscribe::InscriptionOp,
-                set_keys::SetKeysOp,
+                ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp, set_keys::SetKeysOp,
             },
         },
         tx::TxHash,
     },
-    sdp::{
-        ActiveMessage, ActivityMetadata, DeclarationMessage, ServiceType, SessionNumber,
-        WithdrawMessage, da,
-    },
+    sdp::{ActiveMessage, DeclarationMessage, ServiceType, WithdrawMessage},
 };
 use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
+
+const TEST_SIGNING_KEY_BYTES: [u8; 32] = [0u8; 32];
 
 fn empty_ledger_signature(tx_hash: &TxHash) -> ZkSignature {
     ZkKey::multi_sign(&[], tx_hash.as_ref()).expect("multi-sign with empty key set works")
@@ -64,48 +62,6 @@ pub fn create_channel_inscribe_tx(
         ops_proofs: vec![OpProof::Ed25519Sig(signature)],
         ledger_tx_proof: empty_ledger_signature(&tx_hash),
         mantle_tx: inscribe_tx,
-    }
-}
-
-#[must_use]
-pub fn create_channel_blob_tx(
-    signing_key: &Ed25519Key,
-    channel_id: ChannelId,
-    session: SessionNumber,
-    blob: [u8; 32],
-    blob_size: u64,
-    parent: MsgId,
-) -> SignedMantleTx {
-    let verifying_key_bytes = signing_key.public_key().to_bytes();
-    let verifying_key = Ed25519PublicKey::from_bytes(&verifying_key_bytes).unwrap();
-
-    let blob_op = BlobOp {
-        channel: channel_id,
-        session,
-        blob,
-        blob_size,
-        da_storage_gas_price: 0,
-        parent,
-        signer: verifying_key,
-    };
-
-    let blob_tx = MantleTx {
-        ops: vec![Op::ChannelBlob(blob_op)],
-        ledger_tx: LedgerTx::new(vec![], vec![]),
-        storage_gas_price: 0,
-        execution_gas_price: 0,
-    };
-
-    let tx_hash = blob_tx.hash();
-    let signature_bytes = signing_key
-        .sign_payload(tx_hash.as_signing_bytes().as_ref())
-        .to_bytes();
-    let signature = Ed25519Signature::from_bytes(&signature_bytes);
-
-    SignedMantleTx {
-        ops_proofs: vec![OpProof::Ed25519Sig(signature)],
-        ledger_tx_proof: empty_ledger_signature(&tx_hash),
-        mantle_tx: blob_tx,
     }
 }
 
@@ -236,11 +192,34 @@ pub fn create_sdp_withdraw_tx(
     }
 }
 
+/// Creates a valid inscription transaction using the same hardcoded key as the
+/// mock wallet adapter.
 #[must_use]
-pub const fn empty_da_activity_proof() -> ActivityMetadata {
-    ActivityMetadata::DataAvailability(da::ActivityProof {
-        current_session: 0,
-        previous_session_opinions: vec![],
-        current_session_opinions: vec![],
-    })
+pub fn create_inscription_transaction_with_id(id: ChannelId) -> SignedMantleTx {
+    let signing_key = Ed25519Key::from_bytes(&TEST_SIGNING_KEY_BYTES);
+    let signer = signing_key.public_key();
+
+    let inscription_op = InscriptionOp {
+        channel_id: id,
+        inscription: format!("Test channel inscription {id:?}").into_bytes(),
+        parent: MsgId::root(),
+        signer,
+    };
+
+    let mantle_tx = MantleTx {
+        ops: vec![Op::ChannelInscribe(inscription_op)],
+        ledger_tx: LedgerTx::new(vec![], vec![]),
+        storage_gas_price: 0,
+        execution_gas_price: 0,
+    };
+
+    let tx_hash = mantle_tx.hash();
+    let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+
+    SignedMantleTx::new(
+        mantle_tx,
+        vec![OpProof::Ed25519Sig(signature)],
+        ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
+    )
+    .unwrap()
 }

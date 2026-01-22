@@ -18,8 +18,6 @@ bytes                 = { features = ["serde"], workspace = true }
 futures               = { default-features = false, version = "0.3" }
 lb-core               = { workspace = true }
 lb-cryptarchia-engine = { workspace = true }
-libp2p-identity       = { default-features = false, features = ["serde"], version = "0.2" }
-multiaddr             = { default-features = false, version = "0.18" }
 overwatch             = { workspace = true }
 rocksdb               = { default-features = false, features = ["bindgen-runtime"], optional = true, version = "0.24" }
 serde                 = { workspace = true }

@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/doublify/pre-commit-rust
-    rev: v1.0
+    rev: eeee35a89e69d5772bdee97db1a6a898467b686e # 1.0
     hooks:
       - id: fmt
         # We're running `fmt` with `--all` and `pass_filenames: false` to format the entire workspace at once.
@@ -11,10 +11,13 @@ repos:
       - id: clippy
         args: ["--all", "--all-targets", "--all-features", "--", "-D", "warnings"]
   - repo: https://github.com/EmbarkStudios/cargo-deny
-    rev: 0.18.2
+    rev: 09faadcea2d0d1742492e6872b743d1e4d151a27 # 0.19.0
     hooks:
       - id: cargo-deny
         args:
+          - --locked
+          - --target
+          - x86_64-unknown-linux-gnu
           - check
           - --hide-inclusion-graph
           - -c
@@ -23,12 +26,12 @@ repos:
           - -D
           - warnings
   - repo: https://github.com/ComPWA/taplo-pre-commit
-    rev: v0.10.0
+    rev: 6355f0e9a28a910b80c91f7f6521c03d0ea50fba # 0.9.3 # Can't update until: https://github.com/tamasfe/taplo/issues/805
     hooks:
       - id: taplo-format
       - id: taplo-lint
   - repo: https://github.com/bnjbvr/cargo-machete
-    rev: ba1bcd4 # No tag yet with .pre-commit-hooks.yml
+    rev: 78beac95c8fd7c25bdfb194415128523e41512d5 # 0.19.1
     hooks:
       - id: cargo-machete
   - repo: local

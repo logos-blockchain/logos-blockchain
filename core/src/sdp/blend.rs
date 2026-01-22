@@ -189,9 +189,7 @@ mod tests {
 
         assert_eq!(metadata, decoded);
 
-        let ActivityMetadata::Blend(decoded_proof) = decoded else {
-            panic!("Unexpected ActivityMetadata variant");
-        };
+        let ActivityMetadata::Blend(decoded_proof) = decoded;
         assert_eq!(proof, *decoded_proof);
     }
 

@@ -1,36 +1,21 @@
-use std::{
-    error::Error,
-    fmt::{Debug, Display},
-    hash::Hash,
-};
+use std::fmt::{Debug, Display};
 
 use axum::{
     Json,
-    body::Body,
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse as _, Response},
 };
 use lb_api_service::http::{
     consensus::{self, Cryptarchia},
-    da::{self, BalancerMessageFactory, DaVerifier, MonitorMessageFactory},
     libp2p, mantle, mempool,
     storage::StorageAdapter,
 };
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
-    da::{BlobId, DaVerifier as CoreDaVerifier, blob::Share},
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction},
-    sdp::SessionNumber,
 };
-use lb_da_messages::http::da::{DASharesCommitmentsRequest, DaSamplingRequest, GetSharesRequest};
-use lb_da_network_service::{
-    NetworkService, api::ApiAdapter as ApiAdapterTrait, backends::NetworkBackend,
-    sdp::SdpAdapter as SdpAdapterTrait,
-};
-use lb_da_sampling_service::{DaSamplingService, backend::DaSamplingServiceBackend};
-use lb_da_verifier_service::{backend::VerifierBackend, mempool::DaMempoolAdapter};
 use lb_http_api_common::{
     bodies::wallet::{
         balance::WalletBalanceResponseBody,
@@ -38,18 +23,16 @@ use lb_http_api_common::{
     },
     paths,
 };
-use lb_libp2p::PeerId;
 use lb_network_service::backends::libp2p::Libp2p as Libp2pNetworkBackend;
 use lb_sdp_service::adapters::mempool::SdpMempoolAdapter;
-use lb_storage_service::{StorageService, api::da::DaConverter, backends::rocksdb::RocksBackend};
-use lb_subnetworks_assignations::MembershipHandler;
+use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
 use lb_tx_service::{
     TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
 };
 use lb_wallet_service::api::{WalletApi, WalletServiceData};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::Deserialize;
 use tracing::error;
 #[cfg(feature = "block-explorer")]
 use {
@@ -61,10 +44,11 @@ use {
     lb_libp2p::libp2p::bytes::Bytes,
     lb_storage_service::api::chain::StorageChainApi,
     overwatch::services::ServiceData,
+    serde::Serialize,
     tokio_stream::StreamExt as _,
 };
 
-use crate::api::{backend::DaStorageBackend, responses, responses::overwatch::get_relay_or_500};
+use crate::api::{responses, responses::overwatch::get_relay_or_500};
 
 #[macro_export]
 macro_rules! make_request_and_return_response {
@@ -264,216 +248,6 @@ where
 }
 
 #[utoipa::path(
-    post,
-    path = paths::DA_ADD_SHARE,
-    responses(
-        (status = 200, description = "Share to be published received"),
-        (status = 500, description = "Internal server error", body = String),
-    )
-)]
-pub async fn add_share<S, N, VB, StorageConverter, VerifierMempoolAdapter, RuntimeServiceId>(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(share): Json<S>,
-) -> Response
-where
-    S: Share + Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-    <S as Share>::BlobId: Clone + Send + Sync + 'static,
-    <S as Share>::ShareIndex: Clone + Hash + Eq + Send + Sync + 'static,
-    <S as Share>::LightShare: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-    <S as Share>::SharesCommitments: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-    N: lb_da_verifier_service::network::NetworkAdapter<RuntimeServiceId>,
-    N::Settings: Clone,
-    VB: VerifierBackend + CoreDaVerifier<DaShare = S>,
-    <VB as VerifierBackend>::Settings: Clone,
-    <VB as CoreDaVerifier>::Error: Error,
-    StorageConverter:
-        DaConverter<DaStorageBackend, Share = S, Tx = SignedMantleTx> + Send + Sync + 'static,
-    VerifierMempoolAdapter: DaMempoolAdapter + Send + Sync + 'static,
-    RuntimeServiceId: Debug
-        + Sync
-        + Display
-        + 'static
-        + AsServiceId<
-            DaVerifier<S, N, VB, StorageConverter, VerifierMempoolAdapter, RuntimeServiceId>,
-        >,
-{
-    make_request_and_return_response!(da::add_share::<
-        S,
-        N,
-        VB,
-        StorageConverter,
-        VerifierMempoolAdapter,
-        RuntimeServiceId,
-    >(&handle, share))
-}
-
-#[utoipa::path(
-    post,
-    path = paths::DA_BLOCK_PEER,
-    responses(
-        (status = 200, description = "Block a peer", body = bool),
-        (status = 500, description = "Internal server error", body = String),
-    )
-)]
-pub async fn block_peer<
-    Backend,
-    Membership,
-    MembershipAdapter,
-    MembershipStorage,
-    ApiAdapter,
-    SdpAdapter,
-    RuntimeServiceId,
->(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(peer_id): Json<PeerId>,
-) -> Response
-where
-    Backend: NetworkBackend<RuntimeServiceId> + Send + 'static,
-    Backend::Message: MonitorMessageFactory,
-    Membership: MembershipHandler + Clone + Send + Sync + 'static,
-    Membership::Id: Send + Sync + 'static,
-    Membership::NetworkId: Send + Sync + 'static,
-    ApiAdapter: ApiAdapterTrait + Send + Sync + 'static,
-    SdpAdapter: SdpAdapterTrait<RuntimeServiceId> + Send + Sync + 'static,
-    RuntimeServiceId: Debug
-        + Sync
-        + Display
-        + 'static
-        + AsServiceId<
-            NetworkService<
-                Backend,
-                Membership,
-                MembershipAdapter,
-                MembershipStorage,
-                ApiAdapter,
-                SdpAdapter,
-                RuntimeServiceId,
-            >,
-        >,
-{
-    make_request_and_return_response!(da::block_peer::<
-        Backend,
-        Membership,
-        MembershipAdapter,
-        MembershipStorage,
-        ApiAdapter,
-        SdpAdapter,
-        RuntimeServiceId,
-    >(&handle, peer_id))
-}
-
-#[utoipa::path(
-    post,
-    path = paths::DA_UNBLOCK_PEER,
-    responses(
-        (status = 200, description = "Unblock a peer", body = bool),
-        (status = 500, description = "Internal server error", body = String),
-    )
-)]
-
-pub async fn unblock_peer<
-    Backend,
-    Membership,
-    MembershipAdapter,
-    MembershipStorage,
-    ApiAdapter,
-    SdpAdapter,
-    RuntimeServiceId,
->(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(peer_id): Json<PeerId>,
-) -> Response
-where
-    Backend: NetworkBackend<RuntimeServiceId> + Send + 'static,
-    Backend::Message: MonitorMessageFactory,
-    Membership: MembershipHandler + Clone + Send + Sync + 'static,
-    Membership::Id: Send + Sync + 'static,
-    Membership::NetworkId: Send + Sync + 'static,
-    ApiAdapter: ApiAdapterTrait + Send + Sync + 'static,
-    SdpAdapter: SdpAdapterTrait<RuntimeServiceId> + Send + Sync + 'static,
-    RuntimeServiceId: Debug
-        + Sync
-        + Send
-        + Display
-        + 'static
-        + AsServiceId<
-            NetworkService<
-                Backend,
-                Membership,
-                MembershipAdapter,
-                MembershipStorage,
-                ApiAdapter,
-                SdpAdapter,
-                RuntimeServiceId,
-            >,
-        >,
-{
-    make_request_and_return_response!(da::unblock_peer::<
-        Backend,
-        Membership,
-        MembershipAdapter,
-        MembershipStorage,
-        ApiAdapter,
-        SdpAdapter,
-        RuntimeServiceId,
-    >(&handle, peer_id))
-}
-
-#[utoipa::path(
-    get,
-    path = paths::DA_BLACKLISTED_PEERS,
-    responses(
-        (status = 200, description = "Get the blacklisted peers", body = Vec<PeerId>),
-        (status = 500, description = "Internal server error", body = String),
-    )
-)]
-pub async fn blacklisted_peers<
-    Backend,
-    Membership,
-    MembershipAdapter,
-    MembershipStorage,
-    ApiAdapter,
-    SdpAdapter,
-    RuntimeServiceId,
->(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-) -> Response
-where
-    Backend: NetworkBackend<RuntimeServiceId> + Send + 'static,
-    Backend::Message: MonitorMessageFactory,
-    Membership: MembershipHandler + Clone + Send + Sync + 'static,
-    Membership::Id: Send + Sync + 'static,
-    Membership::NetworkId: Send + Sync + 'static,
-    ApiAdapter: ApiAdapterTrait + Send + Sync + 'static,
-    SdpAdapter: SdpAdapterTrait<RuntimeServiceId> + Send + Sync + 'static,
-    RuntimeServiceId: Debug
-        + Sync
-        + Display
-        + 'static
-        + AsServiceId<
-            NetworkService<
-                Backend,
-                Membership,
-                MembershipAdapter,
-                MembershipStorage,
-                ApiAdapter,
-                SdpAdapter,
-                RuntimeServiceId,
-            >,
-        >,
-{
-    make_request_and_return_response!(da::blacklisted_peers::<
-        Backend,
-        Membership,
-        MembershipAdapter,
-        MembershipStorage,
-        ApiAdapter,
-        SdpAdapter,
-        RuntimeServiceId,
-    >(&handle))
-}
-
-#[utoipa::path(
     get,
     path = paths::NETWORK_INFO,
     responses(
@@ -521,294 +295,6 @@ where
         Err(error_response) => return error_response,
     };
     make_request_and_return_response!(HttpStorageAdapter::get_block::<SignedMantleTx>(relay, id))
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct GetCommitmentsRequest<DaBlobId> {
-    pub blob_id: DaBlobId,
-    pub session: SessionNumber,
-}
-
-#[utoipa::path(
-    get,
-    path = paths::DA_GET_SHARES_COMMITMENTS,
-    responses(
-        (status = 200, description = "Request the commitments for an specific `BlobId` that the node stores locally or otherwise requests from the subnetwork peers", body = DASharesCommitmentsRequest<DaShare>),
-        (status = 500, description = "Internal server error", body = String),
-    )
-)]
-pub async fn da_get_commitments<
-    DaBlobId,
-    SamplingBackend,
-    SamplingNetwork,
-    SamplingStorage,
-    SamplingMempoolAdapter,
-    RuntimeServiceId,
->(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(req): Json<GetCommitmentsRequest<DaBlobId>>,
-) -> Response
-where
-    DaBlobId: Serialize + for<'de> Deserialize<'de> + Send + 'static,
-    SamplingBackend: DaSamplingServiceBackend<BlobId = DaBlobId>,
-    SamplingNetwork: lb_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: lb_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
-    SamplingMempoolAdapter: lb_da_sampling_service::mempool::DaMempoolAdapter,
-    RuntimeServiceId: Debug
-        + Sync
-        + Display
-        + AsServiceId<
-            DaSamplingService<
-                SamplingBackend,
-                SamplingNetwork,
-                SamplingStorage,
-                SamplingMempoolAdapter,
-                RuntimeServiceId,
-            >,
-        >,
-{
-    make_request_and_return_response!(da::get_commitments::<
-        SamplingBackend,
-        SamplingNetwork,
-        SamplingMempoolAdapter,
-        SamplingStorage,
-        RuntimeServiceId,
-    >(&handle, req.blob_id, req.session))
-}
-
-#[utoipa::path(
-    get,
-    path = paths::DA_GET_STORAGE_SHARES_COMMITMENTS,
-    responses(
-        (status = 200, description = "Request the commitments for an specific `BlobId` that the node stores locally", body = DASharesCommitmentsRequest<DaShare>),
-        (status = 500, description = "Internal server error", body = String),
-    )
-)]
-pub async fn da_get_storage_commitments<
-    DaStorageConverter,
-    HttpStorageAdapter,
-    DaShare,
-    RuntimeServiceId,
->(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(req): Json<DASharesCommitmentsRequest<DaShare>>,
-) -> Response
-where
-    DaShare: Share,
-    <DaShare as Share>::BlobId: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-    <DaShare as Share>::SharesCommitments: Serialize + DeserializeOwned + Send + Sync + 'static,
-    DaStorageConverter: DaConverter<DaStorageBackend, Share = DaShare> + Send + Sync + 'static,
-    HttpStorageAdapter: StorageAdapter<RuntimeServiceId>,
-    RuntimeServiceId: AsServiceId<StorageService<DaStorageBackend, RuntimeServiceId>>
-        + Debug
-        + Sync
-        + Display
-        + 'static,
-{
-    let relay = match get_relay_or_500(&handle).await {
-        Ok(relay) => relay,
-        Err(error_response) => return error_response,
-    };
-    make_request_and_return_response!(HttpStorageAdapter::get_shared_commitments::<
-        DaStorageConverter,
-        DaShare,
-    >(relay, req.blob_id))
-}
-
-#[utoipa::path(
-    get,
-    path = paths::DA_GET_LIGHT_SHARE,
-    responses(
-        (status = 200, description = "Get blob by blob id", body = DaSamplingRequest<DaShare>),
-        (status = 500, description = "Internal server error", body = String),
-    )
-)]
-pub async fn da_get_light_share<DaStorageConverter, HttpStorageAdapter, DaShare, RuntimeServiceId>(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(request): Json<DaSamplingRequest<DaShare>>,
-) -> Response
-where
-    DaShare: Share + Clone + Send + Sync + 'static,
-    <DaShare as Share>::BlobId: Clone + DeserializeOwned + Send + Sync + 'static,
-    <DaShare as Share>::ShareIndex: Clone + DeserializeOwned + Send + Sync + 'static,
-    DaShare::LightShare: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-    DaStorageConverter: DaConverter<RocksBackend, Share = DaShare> + Send + Sync + 'static,
-    HttpStorageAdapter: StorageAdapter<RuntimeServiceId>,
-    RuntimeServiceId: AsServiceId<StorageService<RocksBackend, RuntimeServiceId>>
-        + Debug
-        + Sync
-        + Display
-        + 'static,
-{
-    let relay = match get_relay_or_500(&handle).await {
-        Ok(relay) => relay,
-        Err(error_response) => return error_response,
-    };
-    make_request_and_return_response!(HttpStorageAdapter::get_light_share::<
-        DaStorageConverter,
-        DaShare,
-    >(relay, request.blob_id, request.share_idx))
-}
-
-#[utoipa::path(
-    get,
-    path = paths::DA_GET_LIGHT_SHARE,
-    responses(
-        (status = 200, description = "Request shares for a blob", body = GetSharesRequest<DaBlob>),
-        (status = 500, description = "Internal server error", body = StreamBody),
-    )
-)]
-pub async fn da_get_shares<DaStorageConverter, HttpStorageAdapter, DaShare, RuntimeServiceId>(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(request): Json<GetSharesRequest<DaShare>>,
-) -> Response
-where
-    DaShare: Share + 'static,
-    <DaShare as Share>::BlobId: Clone + Send + Sync + 'static,
-    <DaShare as Share>::ShareIndex: Serialize + DeserializeOwned + Hash + Eq + Send + Sync,
-    <DaShare as Share>::LightShare: Serialize + DeserializeOwned + Send + Sync + 'static,
-    DaStorageConverter: DaConverter<RocksBackend, Share = DaShare> + Send + Sync + 'static,
-    HttpStorageAdapter: StorageAdapter<RuntimeServiceId> + 'static,
-    RuntimeServiceId: Debug
-        + Sync
-        + Display
-        + 'static
-        + AsServiceId<StorageService<RocksBackend, RuntimeServiceId>>,
-{
-    let relay = match get_relay_or_500(&handle).await {
-        Ok(relay) => relay,
-        Err(error_response) => return error_response,
-    };
-    match HttpStorageAdapter::get_shares::<DaStorageConverter, DaShare>(
-        relay,
-        request.blob_id,
-        request.requested_shares,
-        request.filter_shares,
-        request.return_available,
-    )
-    .await
-    {
-        Ok(shares) => {
-            let body = Body::from_stream(shares);
-            match Response::builder()
-                .status(StatusCode::OK)
-                .header("content-type", "application/json")
-                .body(body)
-            {
-                Ok(response) => response,
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-            }
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-#[utoipa::path(
-    get,
-    path = paths::DA_BALANCER_STATS,
-    responses(
-        (status = 200, description = "Get balancer stats", body = String),
-        (status = 500, description = "Internal server error", body = String),
-    )
-)]
-pub async fn balancer_stats<
-    Backend,
-    Membership,
-    MembershipAdapter,
-    MembershipStorage,
-    ApiAdapter,
-    SdpAdapter,
-    RuntimeServiceId,
->(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-) -> Response
-where
-    Backend: NetworkBackend<RuntimeServiceId> + Send + 'static,
-    Backend::Message: BalancerMessageFactory,
-    Membership: MembershipHandler + Clone + Send + Sync + 'static,
-    Membership::Id: Send + Sync + 'static,
-    Membership::NetworkId: Send + Sync + 'static,
-    ApiAdapter: ApiAdapterTrait + Send + Sync + 'static,
-    SdpAdapter: SdpAdapterTrait<RuntimeServiceId> + Send + Sync + 'static,
-    RuntimeServiceId: Debug
-        + Sync
-        + Display
-        + 'static
-        + AsServiceId<
-            NetworkService<
-                Backend,
-                Membership,
-                MembershipAdapter,
-                MembershipStorage,
-                ApiAdapter,
-                SdpAdapter,
-                RuntimeServiceId,
-            >,
-        >,
-{
-    make_request_and_return_response!(da::balancer_stats::<
-        Backend,
-        Membership,
-        MembershipAdapter,
-        MembershipStorage,
-        ApiAdapter,
-        SdpAdapter,
-        RuntimeServiceId,
-    >(&handle))
-}
-
-#[utoipa::path(
-    get,
-    path = paths::DA_BALANCER_STATS,
-    responses(
-        (status = 200, description = "Get monitor stats", body = String),
-        (status = 500, description = "Internal server error", body = String),
-    )
-)]
-pub async fn monitor_stats<
-    Backend,
-    Membership,
-    MembershipAdapter,
-    MembershipStorage,
-    ApiAdapter,
-    SdpAdapter,
-    RuntimeServiceId,
->(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-) -> Response
-where
-    Backend: NetworkBackend<RuntimeServiceId> + Send + 'static,
-    Backend::Message: MonitorMessageFactory,
-    Membership: MembershipHandler + Clone + Send + Sync + 'static,
-    Membership::Id: Send + Sync + 'static,
-    Membership::NetworkId: Send + Sync + 'static,
-    ApiAdapter: ApiAdapterTrait + Send + Sync + 'static,
-    SdpAdapter: SdpAdapterTrait<RuntimeServiceId> + Send + Sync + 'static,
-    RuntimeServiceId: Debug
-        + Sync
-        + Display
-        + 'static
-        + AsServiceId<
-            NetworkService<
-                Backend,
-                Membership,
-                MembershipAdapter,
-                MembershipStorage,
-                ApiAdapter,
-                SdpAdapter,
-                RuntimeServiceId,
-            >,
-        >,
-{
-    make_request_and_return_response!(da::monitor_stats::<
-        Backend,
-        Membership,
-        MembershipAdapter,
-        MembershipStorage,
-        ApiAdapter,
-        SdpAdapter,
-        RuntimeServiceId,
-    >(&handle))
 }
 
 #[utoipa::path(
@@ -1038,27 +524,13 @@ pub mod wallet {
         (status = 500, description = "Internal server error", body = String),
     )
     )]
-    pub async fn get_balance<
-        WalletService,
-        SamplingBackend,
-        SamplingNetworkAdapter,
-        SamplingStorage,
-        MempoolStorageAdapter,
-        TimeBackend,
-        RuntimeServiceId,
-    >(
+    pub async fn get_balance<WalletService, MempoolStorageAdapter, TimeBackend, RuntimeServiceId>(
         State(handle): State<OverwatchHandle<RuntimeServiceId>>,
         Path(address): Path<ZkPublicKey>,
         Query(query): Query<TipQuery>,
     ) -> Response
     where
         WalletService: WalletServiceData + 'static,
-        SamplingBackend: DaSamplingServiceBackend<BlobId = BlobId> + Send,
-        SamplingBackend::Settings: Clone,
-        SamplingBackend::Share: Debug + 'static,
-        SamplingBackend::BlobId: Debug + 'static,
-        SamplingNetworkAdapter: lb_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
-        SamplingStorage: lb_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
         MempoolStorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
                 RuntimeServiceId,
                 Key = <SignedMantleTx as Transaction>::Hash,
@@ -1128,9 +600,6 @@ pub mod wallet {
     pub async fn post_transactions_transfer_funds<
         WalletService,
         StorageBackend,
-        SamplingBackend,
-        SamplingNetworkAdapter,
-        SamplingStorage,
         MempoolStorageAdapter,
         TimeBackend,
         RuntimeServiceId,
@@ -1141,12 +610,6 @@ pub mod wallet {
     where
         WalletService: WalletServiceData + 'static,
         StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-        SamplingBackend: DaSamplingServiceBackend<BlobId = BlobId> + Send,
-        SamplingBackend::Settings: Clone,
-        SamplingBackend::Share: Debug + 'static,
-        SamplingBackend::BlobId: Debug + 'static,
-        SamplingNetworkAdapter: lb_da_sampling_service::network::NetworkAdapter<RuntimeServiceId>,
-        SamplingStorage: lb_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId>,
         MempoolStorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
                 RuntimeServiceId,
                 Key = <SignedMantleTx as Transaction>::Hash,
