@@ -41,9 +41,6 @@ pub extern "C" fn start_lb_node(
 /// A `Result` containing either the initialized `LogosBlockchainNode` or an
 /// error code.
 fn initialize_lb_node(config_path: *const c_char) -> Result<LogosBlockchainNode, OperationStatus> {
-    // TODO: Remove flags when dynamic run of services is implemented.
-    let must_blend_service_group_start = true;
-    let must_da_service_group_start = true;
     let config_path = unsafe { std::ffi::CStr::from_ptr(config_path) }
         .to_str()
         .map_err(|e| {
@@ -68,13 +65,7 @@ fn initialize_lb_node(config_path: *const c_char) -> Result<LogosBlockchainNode,
     let app_handle = app.handle();
 
     rt.block_on(async {
-        let services_to_start = get_services_to_start(
-            &app,
-            must_blend_service_group_start,
-            must_da_service_group_start,
-        )
-        .await
-        .map_err(|e| {
+        let services_to_start = get_services_to_start(&app).await.map_err(|e| {
             eprintln!("Could not get services to start: {e}");
             OperationStatus::InitializationError
         })?;

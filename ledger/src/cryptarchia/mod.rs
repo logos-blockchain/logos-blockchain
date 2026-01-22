@@ -489,16 +489,6 @@ pub mod tests {
     pub fn config() -> Config {
         let mut service_params = std::collections::HashMap::new();
         service_params.insert(
-            lb_core::sdp::ServiceType::DataAvailability,
-            ServiceParameters {
-                lock_period: 10,
-                inactivity_period: 20,
-                retention_period: 100,
-                timestamp: 0,
-                session_duration: 10,
-            },
-        );
-        service_params.insert(
             lb_core::sdp::ServiceType::BlendNetwork,
             ServiceParameters {
                 lock_period: 10,

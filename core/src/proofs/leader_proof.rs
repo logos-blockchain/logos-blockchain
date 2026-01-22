@@ -380,17 +380,17 @@ fn ed25519_pk_to_fr_tuple(pk: &Ed25519PublicKey) -> (Fr, Fr) {
 
 /// Converts a [`MerklePath`] to the witness format expected by the circuit.
 fn merkle_path_to_witness<T: Copy>(path: &MerklePath<T>) -> (Vec<T>, Vec<bool>) {
-    let n = path.len();
-    let mut items = Vec::with_capacity(n);
-    let mut selectors = vec![false; n];
-
-    for (i, node) in path.iter().enumerate() {
-        items.push(*node.item());
+    path.iter()
         // PoL circuit expects the reverse order for selectors
-        selectors[n - 1 - i] = matches!(node, MerkleNode::Left(_)); // 1 if sibling is on the left
-    }
-
-    (items, selectors)
+        .zip(path.iter().rev())
+        .map(|(node, rev_node)| {
+            (
+                *node.item(),
+                // 1 if sibling is on the left
+                matches!(rev_node, MerkleNode::Left(_)),
+            )
+        })
+        .unzip()
 }
 
 #[cfg(test)]
@@ -493,5 +493,28 @@ mod tests {
             let (public, note_id, sk) = rand_inputs();
             public.check_winning(1, note_id, sk)
         });
+    }
+
+    #[test]
+    fn test_merkle_path_to_witness() {
+        let path: Vec<MerkleNode<i32>> = vec![
+            MerkleNode::Left(1),
+            MerkleNode::Right(2),
+            MerkleNode::Left(3),
+            MerkleNode::Right(4),
+        ];
+        let (items, selectors) = merkle_path_to_witness(&path);
+        // Items should be in forward order.
+        assert_eq!(items, vec![1, 2, 3, 4]);
+        // Selectors should be in reverse order.
+        assert_eq!(selectors, vec![false, true, false, true]);
+    }
+
+    #[test]
+    fn test_merkle_path_to_witness_empty() {
+        let path: Vec<MerkleNode<i32>> = vec![];
+        let (items, selectors) = merkle_path_to_witness(&path);
+        assert!(items.is_empty());
+        assert!(selectors.is_empty());
     }
 }
