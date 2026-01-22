@@ -25,6 +25,7 @@ runs:
           cargo-hack-check/${{ runner.os }}/main
           cargo-hack-check/${{ runner.os }}
 
+    # TODO: Improvement: Restore keys should not be `main` but the branch we're merging into.
     - name: Restore Cargo Hack Keys (PR)
       if: github.event_name == 'pull_request'
       uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # Version 4.2.3

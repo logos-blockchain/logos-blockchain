@@ -322,7 +322,7 @@ class CargoHackCheckEntry:
         # Changing this doesn't void the cache.
         # TODO: Consider adding the command line options to the cache key.
         return [
-            "cargo", "hack", "check", "--feature-powerset", "--all-targets", "--no-dev-deps", "--manifest-path", self.manifest_path_posix
+            "cargo", "hack", "check", "--feature-powerset", "--all-targets", "--manifest-path", self.manifest_path_posix
         ]
 
 
