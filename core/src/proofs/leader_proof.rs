@@ -10,6 +10,42 @@ use thiserror::Error;
 
 pub const POL_PROOF_DEV_MODE: &str = "POL_PROOF_DEV_MODE";
 
+/// Macro to conditionally execute code based on `PoL` dev mode.
+///
+/// This macro checks both the `pol-dev-mode` feature flag (compile-time) and
+/// the `POL_PROOF_DEV_MODE` environment variable (runtime). The dev code path
+/// is only taken when both conditions are met.
+///
+/// When the `pol-dev-mode` feature is disabled, the dev code is completely
+/// eliminated at compile time.
+///
+/// # Example
+/// ```ignore
+/// let result = if_pol_dev_mode!(
+///     // Dev mode code
+///     compute_dev_result(),
+///     // Normal mode code
+///     compute_normal_result()
+/// );
+/// ```
+#[macro_export]
+macro_rules! if_pol_dev_mode {
+    ($dev:expr, $normal:expr) => {{
+        #[cfg(feature = "pol-dev-mode")]
+        {
+            if std::env::var($crate::proofs::leader_proof::POL_PROOF_DEV_MODE).is_ok() {
+                $dev
+            } else {
+                $normal
+            }
+        }
+        #[cfg(not(feature = "pol-dev-mode"))]
+        {
+            $normal
+        }
+    }};
+}
+
 use crate::{
     mantle::{
         ledger::Utxo,
@@ -68,21 +104,24 @@ impl Groth16LeaderProof {
     }
 
     fn generate_proof(private: LeaderPrivate) -> Result<(lb_pol::PoLProof, Fr), Error> {
-        if cfg!(feature = "pol-dev-mode") && std::env::var(POL_PROOF_DEV_MODE).is_ok() {
-            tracing::warn!(
-                "Proofs are being generated in dev mode. This should never be used in production."
-            );
-            let proof = lb_groth16::CompressedGroth16Proof::new(
-                GenericArray::default(),
-                GenericArray::default(),
-                GenericArray::default(),
-            );
-
-            return Ok((proof, Fr::ZERO));
-        }
-        let (proof, verif_inputs) =
-            lb_pol::prove(&private.input.into()).map_err(Error::PoLProofFailed)?;
-        Ok((proof, verif_inputs.entropy_contribution.into_inner()))
+        if_pol_dev_mode!(
+            {
+                tracing::warn!(
+                    "Proofs are being generated in dev mode. This should never be used in production."
+                );
+                let proof = lb_groth16::CompressedGroth16Proof::new(
+                    GenericArray::default(),
+                    GenericArray::default(),
+                    GenericArray::default(),
+                );
+                Ok((proof, Fr::ZERO))
+            },
+            {
+                let (proof, verif_inputs) =
+                    lb_pol::prove(&private.input.into()).map_err(Error::PoLProofFailed)?;
+                Ok((proof, verif_inputs.entropy_contribution.into_inner()))
+            }
+        )
     }
 
     #[must_use]
@@ -107,28 +146,30 @@ pub trait LeaderProof {
 
 impl LeaderProof for Groth16LeaderProof {
     fn verify(&self, public_inputs: &LeaderPublic) -> bool {
-        #[cfg(feature = "pol-dev-mode")]
-        if std::env::var(POL_PROOF_DEV_MODE).is_ok() {
-            tracing::warn!(
-                "Proofs are being verified in dev mode. This should never be used in production."
-            );
-            return &self.public == public_inputs;
-        }
-
-        let leader_pk = ed25519_pk_to_fr_tuple(self.leader_key());
-        lb_pol::verify(
-            &self.proof,
-            &lb_pol::PolVerifierInput::new(
-                self.entropy(),
-                public_inputs.slot,
-                public_inputs.epoch_nonce,
-                public_inputs.aged_root,
-                public_inputs.latest_root,
-                public_inputs.total_stake,
-                leader_pk,
-            ),
+        if_pol_dev_mode!(
+            {
+                tracing::warn!(
+                    "Proofs are being verified in dev mode. This should never be used in production."
+                );
+                &self.public == public_inputs
+            },
+            {
+                let leader_pk = ed25519_pk_to_fr_tuple(self.leader_key());
+                lb_pol::verify(
+                    &self.proof,
+                    &lb_pol::PolVerifierInput::new(
+                        self.entropy(),
+                        public_inputs.slot,
+                        public_inputs.epoch_nonce,
+                        public_inputs.aged_root,
+                        public_inputs.latest_root,
+                        public_inputs.total_stake,
+                        leader_pk,
+                    ),
+                )
+                .is_ok()
+            }
         )
-        .is_ok()
     }
 
     fn verify_genesis(&self) -> bool {

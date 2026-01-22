@@ -1,4 +1,5 @@
 use lb_core::{
+    if_pol_dev_mode,
     mantle::{Utxo, ops::leader_claim::VoucherCm},
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
 };
@@ -50,16 +51,15 @@ impl Leader {
             let note_id = utxo.id().0;
             let secret_key = self.secret_key();
 
-            #[cfg(feature = "pol-dev-mode")]
-            let winning = public_inputs.check_winning_dev(
-                utxo.note.value,
-                note_id,
-                *secret_key.as_fr(),
-                self.config.consensus_config.active_slot_coeff,
+            let winning = if_pol_dev_mode!(
+                public_inputs.check_winning_dev(
+                    utxo.note.value,
+                    note_id,
+                    *secret_key.as_fr(),
+                    self.config.consensus_config.active_slot_coeff,
+                ),
+                public_inputs.check_winning(utxo.note.value, note_id, *secret_key.as_fr())
             );
-            #[cfg(not(feature = "pol-dev-mode"))]
-            let winning =
-                public_inputs.check_winning(utxo.note.value, note_id, *secret_key.as_fr());
 
             if winning {
                 tracing::debug!(
@@ -120,14 +120,6 @@ impl Leader {
         None
     }
 
-    #[cfg_attr(
-        feature = "pol-dev-mode",
-        expect(
-            clippy::unnecessary_wraps,
-            reason = "Return value is always Some in dev mode"
-        ),
-        expect(unused_variables, reason = "Some variables are unused in dev mode")
-    )]
     fn private_inputs_for_winning_utxo_and_slot(
         &self,
         utxo: &Utxo,
@@ -135,30 +127,16 @@ impl Leader {
         public_inputs: LeaderPublic,
         latest_tree: &UtxoTree,
     ) -> Result<LeaderPrivate, PrivateInputsError> {
-        let aged_path = {
-            #[cfg(not(feature = "pol-dev-mode"))]
-            {
-                epoch_state
-                    .utxo_merkle_path(utxo)
-                    .ok_or(PrivateInputsError::AgedNoteNotFound)?
-            }
-            #[cfg(feature = "pol-dev-mode")]
-            {
-                Vec::new()
-            }
-        };
-        let latest_path = {
-            #[cfg(not(feature = "pol-dev-mode"))]
-            {
-                latest_tree
-                    .path(&utxo.id())
-                    .ok_or(PrivateInputsError::LatestNoteNotFound)?
-            }
-            #[cfg(feature = "pol-dev-mode")]
-            {
-                Vec::new()
-            }
-        };
+        let aged_path = if_pol_dev_mode!(Vec::new(), {
+            epoch_state
+                .utxo_merkle_path(utxo)
+                .ok_or(PrivateInputsError::AgedNoteNotFound)?
+        });
+        let latest_path = if_pol_dev_mode!(Vec::new(), {
+            latest_tree
+                .path(&utxo.id())
+                .ok_or(PrivateInputsError::LatestNoteNotFound)?
+        });
         let secret_key = *self.sk.as_fr();
         let leader_signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let leader_pk = leader_signing_key.public_key(); // TODO: get actual leader public key
@@ -192,10 +170,6 @@ fn public_inputs_for_slot(
     )
 }
 
-#[cfg_attr(
-    feature = "pol-dev-mode",
-    expect(unused, reason = "used only in non-dev mode currently")
-)]
 #[derive(thiserror::Error, Debug)]
 enum PrivateInputsError {
     #[error("Aged note not found from merkle tree")]
@@ -339,14 +313,13 @@ impl<'service> WinningPoLSlotNotifier<'service> {
     }
 }
 
-#[cfg(not(feature = "pol-dev-mode"))]
 #[cfg(test)]
 mod pol_tests {
     use std::{num::NonZero, sync::Arc};
 
     use lb_core::{
         mantle::ledger::{Note, Tx},
-        proofs::leader_proof::LeaderProof,
+        proofs::leader_proof::LeaderProof as _,
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::EpochConfig;
@@ -363,6 +336,14 @@ mod pol_tests {
     /// verified successfully.
     #[tokio::test]
     async fn test_build_proof_for() {
+        if_pol_dev_mode!(
+            {
+                println!("Skipping test in pol dev mode");
+                return;
+            },
+            ()
+        );
+
         // Create secret key and leader
         let sk = UnsecuredZkKey::new(Fr::from(12345u64));
         let pk = sk.to_public_key();
@@ -393,7 +374,7 @@ mod pol_tests {
         let (proof, winning_slot) = find_winning_slot_and_build_proof(
             (0..1000).map(Slot::from),
             &leader,
-            utxo.clone(),
+            utxo,
             &epoch_state,
             &latest_tree,
             &notifier,
@@ -426,7 +407,7 @@ mod pol_tests {
     ) -> Option<(Groth16LeaderProof, Slot)> {
         for slot in slots {
             if let Some(proof) = leader
-                .build_proof_for(&[utxo], latest_tree, epoch_state, slot, &notifier)
+                .build_proof_for(&[utxo], latest_tree, epoch_state, slot, notifier)
                 .await
             {
                 return Some((proof, slot));

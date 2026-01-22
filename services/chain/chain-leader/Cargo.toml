@@ -39,7 +39,6 @@ lb-groth16 = { workspace = true }
 lb-utils   = { workspace = true }
 
 [features]
-build-verification-key = ["lb-core/build-verification-key"]
-default                = []
-libp2p                 = ["lb-blend-service/libp2p"]
-pol-dev-mode           = ["lb-core/pol-dev-mode"]
+default      = []
+libp2p       = ["lb-blend-service/libp2p"]
+pol-dev-mode = ["lb-core/pol-dev-mode"]
