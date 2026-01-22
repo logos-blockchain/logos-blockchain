@@ -50,7 +50,15 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Build release binaries for nomos-node and nomos-executor with all features
+      # Set environment variables for circuits path - expand $HOME first since GitHub Actions env: blocks don't expand
+      # shell variables
+      - name: Set circuits path environment variable (new)
+        run: echo "LOGOS_BLOCKCHAIN_CIRCUITS=$HOME/.logos-blockchain-circuits" >> $GITHUB_ENV
+      # TODO: Remove this when the test runners removed all direct references to `NOMOS_CIRCUITS`
+      - name: Set circuits path environment variable (old)
+        run: echo "NOMOS_CIRCUITS=$HOME/.logos-blockchain-circuits" >> $GITHUB_ENV
+
+      # Build release binaries for nomos-node and nomos-executor (so runtimes can be reduced) with required test features
       - name: Build binaries with required features
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
@@ -70,12 +78,13 @@ jobs:
           # TODO: Remove this when the test framework removed all direct references to `NOMOS_EXECUTOR_BIN`
           NOMOS_EXECUTOR_BIN: ${{ github.workspace }}/target/release/logos-blockchain-executor
           LOGOS_BLOCKCHAIN_EXECUTOR_BIN: ${{ github.workspace }}/target/release/logos-blockchain-executor
-          # TODO: Remove this when the test framework removed all direct references to `NOMOS_KZGRS_PARAMS_PATH`or
+          # TODO: Remove this when the test framework removed all direct references to `NOMOS_KZGRS_PARAMS_PATH`
           NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs/kzgrs_test_params
           LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs/kzgrs_test_params
         with:
           command: test
-          args: --release --locked --all --features "pol-dev-mode" -p logos-blockchain-tests --features "cucumber" --test cucumber -- --tags "@normal_ci"
+          # The test binary can be debug mode to increase build times
+          args: --locked --all --features "pol-dev-mode" -p logos-blockchain-tests --features "cucumber" --test cucumber -- --tags "@normal_ci"
 
       # Always upload JUnit test results for reporting, even if tests fail
       - name: Upload cucumber JUnit results
