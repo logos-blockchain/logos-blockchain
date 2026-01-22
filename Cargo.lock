@@ -3146,9 +3146,9 @@ dependencies = [
 
 [[package]]
 name = "fixed-slice-deque"
-version = "0.1.0-beta3"
+version = "0.1.0-beta4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f087a2fe052611face480d8eeedc6f7e4bc9f94f7992128b64cadd7e779b45f6"
+checksum = "a1d998545f368efd73f9047b0f6b9519408bb7ed6bc9f6d6204bc42b36f929a9"
 
 [[package]]
 name = "flate2"
