@@ -35,8 +35,8 @@ tracing                       = { workspace = true }
 tracing-futures               = { default-features = false, version = "0.2" }
 
 [dev-dependencies]
-lb-groth16   = { workspace = true }
-lb-utils     = { workspace = true }
+lb-groth16 = { workspace = true }
+lb-utils   = { workspace = true }
 
 [features]
 build-verification-key = ["lb-core/build-verification-key"]
