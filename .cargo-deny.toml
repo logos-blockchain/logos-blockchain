@@ -56,8 +56,7 @@ name          = "ring"
 [sources]
 allow-git = [
   "https://github.com/EspressoSystems/jellyfish.git",
-  # TODO: Re-enable this once the nomos->logos-blockchain PR is merged and the testing framework updated accordingly.
-  # "https://github.com/logos-blockchain/logos-blockchain-testing.git",
+  "https://github.com/logos-blockchain/logos-blockchain-testing.git",
 ]
 unknown-git = "deny"
 unknown-registry = "deny"

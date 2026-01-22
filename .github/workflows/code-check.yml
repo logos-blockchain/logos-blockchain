@@ -55,7 +55,7 @@ jobs:
         run: cargo install cargo-deny --locked --version 0.19.0
 
       - name: Run cargo-deny
-        run: cargo-deny --locked check --hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings
+        run: cargo-deny --locked --all-features check --hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings
 
   features:
     name: Check packages feature combinations
@@ -178,24 +178,31 @@ jobs:
           command: run
           args: --locked -p logos-blockchain-node --features testing -- nodes/node/config-one-node.yaml --check-config --deployment nodes/node/one-node-custom-deployment.yaml
 
-      # This includes testing feature needed for tests
-      - name: Build binaries with all features
+      # Build binaries then use them - this includes testing feature needed for unit tests
+      - name: Build binaries with required test features
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
-          args: --locked --all-features
+          # We specify necessary features only, as `--all-features` will include features intended for cucumber and \
+          # integration framework tests.
+          args: --locked --features pol-dev-mode
 
       - name: Cargo test
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
           POL_PROOF_DEV_MODE: true
           CONSENSUS_SLOT_TIME: 5
+          # TODO: Remove this when the test framework removed all direct references to `NOMOS_NODE_BIN`
+          NOMOS_NODE_BIN: ${{ github.workspace }}/target/debug/logos-blockchain-node
           LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/debug/logos-blockchain-node
+          # TODO: Remove this when the test framework removed all direct references to `NOMOS_KZGRS_PARAMS_PATH`
+          NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
           LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
         with:
           command: test
-          # We don't test benches as they take 6h+, leading to a timeout
-          args: --locked --all --lib --bins --tests --examples --all-features
+          # - We don't test benches as they take 6h+, leading to a timeout
+          # - `cucumber` has its own action/workflow gated by `--features cucumber`
+          args: --locked --all --lib --bins --tests --examples --features pol-dev-mode
 
       - name: Upload integration tests results
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2

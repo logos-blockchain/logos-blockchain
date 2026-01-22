@@ -15,6 +15,7 @@ sim_config.json
 .env
 .idea/
 .vscode/
+null
 
 # Integration test temp dirs
 tests/.tmp*
@@ -29,3 +30,4 @@ c-bindings/lib_logos_blockchain.h
 # Demo sequencer related ignores
 node_modules
 *.database
+/tests/cucumber_tests/temp/

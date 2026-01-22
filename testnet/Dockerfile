@@ -2,7 +2,7 @@
 # check=skip=SecretsUsedInArgOrEnv
 # Ignore warnings about sensitive information as this is test data.
 
-ARG VERSION=v0.3.1
+ARG VERSION=v0.3.2
 
 # ===========================
 # BUILD IMAGE
@@ -57,7 +57,7 @@ COPY --from=builder /logos-blockchain/target/release/logos-blockchain-node /usr/
 COPY --from=builder /logos-blockchain/target/release/logos-blockchain-cli /usr/bin/
 COPY --from=builder /logos-blockchain/target/release/cfgsync-server /usr/bin/
 COPY --from=builder /logos-blockchain/target/release/cfgsync-client /usr/bin/
-COPY --from=builder /logos-blockchain/target/release/demo-sequencer /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-sequencer /usr/bin/
 COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-archiver /usr/bin/
 
 # Copy Frontend & Nginx config

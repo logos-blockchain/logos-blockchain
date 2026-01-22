@@ -1,0 +1,117 @@
+on:
+  pull_request:
+  push:
+    branches: [ master ]
+
+name: Cucumber integration tests
+
+# Ensure only one workflow run per branch/workflow is active at a time.
+# Cancels any in-progress runs for the same group to avoid overlap.
+concurrency:
+  group: ${{ github.workflow }}@${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Run cucumber integration tests, not long running
+
+    # Only run if not a WIP or DO NOT MERGE PR
+    if: >
+      ${{
+        github.event_name != 'pull_request' ||
+        (
+          !startsWith(github.event.pull_request.title, '[WIP]') &&
+          !contains(toJson(github.event.pull_request.labels), 'DO NOT MERGE')
+        )
+      }}
+
+    strategy:
+      # All OSes should be tested even if one fails (default: true)
+      fail-fast: false
+      matrix:
+        # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
+        os:
+          - [self-hosted, Linux]
+          - [self-hosted, macOS]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # Remove any rustup override to ensure default toolchain is used
+      - name: Disable rustup override
+        run: rustup override unset
+
+      # Checkout the repository code
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+
+      # Set up custom circuits required for tests
+      - name: Setup Circuits
+        uses: ./.github/actions/setup-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Set environment variables for circuits path - expand $HOME first since GitHub Actions env: blocks don't expand
+      # shell variables
+      - name: Set circuits path environment variable (new)
+        run: echo "LOGOS_BLOCKCHAIN_CIRCUITS=$HOME/.logos-blockchain-circuits" >> $GITHUB_ENV
+      # TODO: Remove this when the test runners removed all direct references to `NOMOS_CIRCUITS`
+      - name: Set circuits path environment variable (old)
+        run: echo "NOMOS_CIRCUITS=$HOME/.logos-blockchain-circuits" >> $GITHUB_ENV
+
+      # Build release binaries for nomos-node and nomos-executor (so runtimes can be reduced) with required test features
+      - name: Build binaries with required features
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+        with:
+          command: build
+          args: --release --locked --all --features "pol-dev-mode"
+
+      # Run cucumber integration tests with environment variables for binaries and test params
+      - name: Run cucumber
+        timeout-minutes: 40  # Safety net timeout - this needs to be adjusted as more tests are added
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+        env:
+          POL_PROOF_DEV_MODE: true
+          CONSENSUS_SLOT_TIME: 5
+          # TODO: Remove this when the test framework removed all direct references to `NOMOS_NODE_BIN`
+          NOMOS_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
+          LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
+          # TODO: Remove this when the test framework removed all direct references to `NOMOS_KZGRS_PARAMS_PATH`
+          NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs/kzgrs_test_params
+          LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs/kzgrs_test_params
+        with:
+          command: test
+          # The test binary can be debug mode to increase build times
+          args: --locked --all --features "pol-dev-mode" -p logos-blockchain-tests --features "cucumber" --test cucumber -- --tags "@normal_ci"
+
+      # Always upload JUnit test results for reporting, even if tests fail
+      - name: Upload cucumber JUnit results
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
+        with:
+          name: cucumber-junit-${{ runner.os }}  # ✅ Unique per OS
+          path: cucumber_tests/temp/cucumber-output-junit.xml
+          if-no-files-found: warn
+
+      # On failure, upload cucumber logs and artifacts for debugging
+      - name: Upload cucumber logs on failure
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
+        with:
+          name: cucumber-artifacts-${{ runner.os }}  # ✅ Unique per OS
+          include-hidden-files: true
+          path: |
+            cucumber_tests/temp/**
+            cucumber_tests/temp/node-logs/**
+
+      # Always publish a test report for visibility, do not fail workflow if this step fails
+      - name: Publish cucumber test report
+        if: always()
+        continue-on-error: true
+        uses: dorny/test-reporter@v1
+        with:
+          name: Cucumber-${{ runner.os }}  # Optional: distinguish Linux vs macOS
+          path: cucumber_tests/temp/cucumber-output-junit.xml
+          reporter: java-junit
+

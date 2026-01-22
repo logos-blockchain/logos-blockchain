@@ -1,5 +1,3 @@
-# TODO: Re-enable commented out dependencies and tests once the nomos->logos-blockchain PR is merged and the testing framework updated accordingly.
-
 [package]
 categories  = { workspace = true }
 description = { workspace = true }
@@ -16,9 +14,8 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait = "0.1"
-# cucumber    = "=0.22.0"
-# cucumber_ext                                   = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
+async-trait                      = "0.1"
+cucumber                         = { features = ["output-junit"], version = "=0.22.0" }
 futures                          = { default-features = false, version = "0.3" }
 futures-util                     = { default-features = false, version = "0.3.31" }
 hex                              = { default-features = false, version = "0.4.3" }
@@ -53,13 +50,20 @@ serde_json                       = "1.0"
 serde_yaml                       = "0.9"
 serial_test                      = "3.1.1"
 tempfile                         = { workspace = true }
-# testing-framework-core                         = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
-# testing-framework-runner-local                 = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
-# testing-framework-workflows                    = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
-time    = { default-features = false, version = "0.3" }
-tokio   = "1"
-tracing = { workspace = true }
-# tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+testing-framework-core           = { branch = "master", git = "https://github.com/logos-blockchain/logos-blockchain-testing.git" }
+testing-framework-runner-compose = { branch = "master", git = "https://github.com/logos-blockchain/logos-blockchain-testing.git" }
+testing-framework-runner-local   = { branch = "master", git = "https://github.com/logos-blockchain/logos-blockchain-testing.git" }
+testing-framework-workflows      = { branch = "master", git = "https://github.com/logos-blockchain/logos-blockchain-testing.git" }
+thiserror                        = { default-features = false, version = "2.0" }
+time                             = { default-features = false, version = "0.3" }
+tokio                            = "1"
+tracing                          = { workspace = true }
+tracing-subscriber               = { features = ["env-filter", "fmt"], version = "0.3" }
+
+[features]
+cucumber             = []
+cucumber_stand_alone = []
+testing_framework    = []
 
 [[test]]
 name = "test_cryptarchia_happy_path"
@@ -89,10 +93,18 @@ path = "src/tests/mempool/api.rs"
 name = "test_mantle_sdp_ops"
 path = "src/tests/mantle/sdp_ops.rs"
 
-# [[test]]
-# name = "test_testing_framework_smoke_local"
-# path = "src/tests/testing_framework/smoke_local.rs"
+[[test]]
+name              = "test_testing_framework_smoke_local"
+path              = "src/tests/testing_framework/smoke_local.rs"
+required-features = ["testing_framework"]
 
-# [[test]]
-# name = "test_testing_framework_cucumber_smoke_local"
-# path = "src/tests/testing_framework/cucumber_smoke_local.rs"
+[[test]]
+name              = "test_testing_framework_cucumber_smoke_local"
+path              = "cucumber_tests/stand_alone_tests/cucumber_smoke_local.rs"
+required-features = ["cucumber_stand_alone"]
+
+[[test]]
+harness           = false                        # Cucumber will have its own main() function to run tests.
+name              = "cucumber"
+path              = "cucumber_tests/cucumber.rs"
+required-features = ["cucumber"]
