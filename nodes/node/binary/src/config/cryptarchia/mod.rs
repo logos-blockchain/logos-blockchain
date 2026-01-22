@@ -55,7 +55,6 @@ impl ServiceConfig {
         };
         let chain_network_settings = lb_chain_network_service::ChainNetworkSettings {
             bootstrap: self.user.network.bootstrap,
-            config: ledger_config.clone(),
             network_adapter_settings: LibP2pAdapterSettings {
                 topic: self.deployment.gossipsub_protocol.clone(),
             },

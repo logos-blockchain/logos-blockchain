@@ -339,15 +339,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arc-swap"
-version = "1.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51d03449bb8ca2cc2ef70869af31463d1ae5ccc8fa3e334b307203fbf815207e"
-dependencies = [
- "rustversion",
-]
-
-[[package]]
 name = "archery"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -378,18 +369,6 @@ dependencies = [
  "cpufeatures",
  "password-hash",
  "zeroize",
-]
-
-[[package]]
-name = "ark-bls12-381"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c775f0d12169cba7aae4caeb547bb6a50781c7449a8aa53793827c9ec4abf488"
-dependencies = [
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-serialize 0.4.2",
- "ark-std 0.4.0",
 ]
 
 [[package]]
@@ -446,7 +425,6 @@ dependencies = [
  "hashbrown 0.13.2",
  "itertools 0.10.5",
  "num-traits",
- "rayon",
  "zeroize",
 ]
 
@@ -487,7 +465,6 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "paste",
- "rayon",
  "rustc_version",
  "zeroize",
 ]
@@ -584,7 +561,6 @@ dependencies = [
  "ark-std 0.4.0",
  "derivative",
  "hashbrown 0.13.2",
- "rayon",
 ]
 
 [[package]]
@@ -600,24 +576,6 @@ dependencies = [
  "educe",
  "fnv",
  "hashbrown 0.15.5",
-]
-
-[[package]]
-name = "ark-poly-commit"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a741492629ffcd228337676dc223a28551aa6792eedb8a2a22c767f00df6c89"
-dependencies = [
- "ark-crypto-primitives",
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-poly 0.4.2",
- "ark-relations",
- "ark-serialize 0.4.2",
- "ark-std 0.4.0",
- "derivative",
- "digest",
- "rayon",
 ]
 
 [[package]]
@@ -699,7 +657,6 @@ checksum = "94893f1e0c6eeab764ade8dc4c0db24caf4fe7cbbaafc0eba0a9030f447b5185"
 dependencies = [
  "num-traits",
  "rand 0.8.5",
- "rayon",
 ]
 
 [[package]]
@@ -1244,12 +1201,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "az"
-version = "1.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b7e4c2464d97fe331d41de9d5db0def0a96f4d823b8b32a2efd503578988973"
-
-[[package]]
 name = "backon"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1479,18 +1430,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "blst"
-version = "0.3.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcdb4c7013139a150f9fc55d123186dbfaba0d912817466282c73ac49e71fb45"
-dependencies = [
- "cc",
- "glob",
- "threadpool",
- "zeroize",
-]
-
-[[package]]
 name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1581,18 +1520,6 @@ checksum = "225bff33b2141874fe80d71e07d6eec4f85c5c216453dd96388240f96e1acc14"
 dependencies = [
  "cc",
  "pkg-config",
-]
-
-[[package]]
-name = "cached"
-version = "0.55.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0839c297f8783316fcca9d90344424e968395413f0662a5481f79c6648bbc14"
-dependencies = [
- "hashbrown 0.14.5",
- "once_cell",
- "thiserror 2.0.18",
- "web-time",
 ]
 
 [[package]]
@@ -1876,12 +1803,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "condtype"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baf0a07a401f374238ab8e2f11a104d2851bf9ce711ec69804834de8af45c7af"
-
-[[package]]
 name = "console"
 version = "0.15.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2026,15 +1947,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b49ba7ef1ad6107f8824dbe97de947cbaac53c44e7f9756a1fba0d37c1eec505"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "counter"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f009fcafa949dc1fc46a762dae84d0c2687d3b550906b633c4979d58d2c6ae52"
-dependencies = [
- "num-traits",
 ]
 
 [[package]]
@@ -2624,31 +2536,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "divan"
-version = "0.1.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a405457ec78b8fe08b0e32b4a3570ab5dff6dd16eb9e76a5ee0a9d9cbd898933"
-dependencies = [
- "cfg-if",
- "clap",
- "condtype",
- "divan-macros",
- "libc",
- "regex-lite",
-]
-
-[[package]]
-name = "divan-macros"
-version = "0.1.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9556bc800956545d6420a640173e5ba7dfa82f38d3ea5a167eb555bc69ac3323"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
-]
-
-[[package]]
 name = "dlopen2"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3129,19 +3016,6 @@ dependencies = [
  "lazy_static",
  "libc",
  "winapi",
-]
-
-[[package]]
-name = "fixed"
-version = "1.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "707070ccf8c4173548210893a0186e29c266901b71ed20cd9e2ca0193dfe95c3"
-dependencies = [
- "az",
- "bytemuck",
- "half",
- "serde",
- "typenum",
 ]
 
 [[package]]
@@ -4320,15 +4194,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
@@ -4693,6 +4558,7 @@ dependencies = [
  "quick-protobuf-codec",
  "rand 0.8.5",
  "regex",
+ "serde",
  "sha2",
  "tracing",
  "web-time",
@@ -4759,6 +4625,7 @@ dependencies = [
  "quick-protobuf",
  "quick-protobuf-codec",
  "rand 0.8.5",
+ "serde",
  "sha2",
  "smallvec",
  "thiserror 2.0.18",
@@ -5088,17 +4955,9 @@ dependencies = [
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
- "logos-blockchain-da-dispersal-service",
- "logos-blockchain-da-network-core",
- "logos-blockchain-da-network-service",
- "logos-blockchain-da-sampling-service",
- "logos-blockchain-da-verifier-service",
- "logos-blockchain-kzgrs-backend",
- "logos-blockchain-libp2p",
  "logos-blockchain-network-service",
  "logos-blockchain-sdp-service",
  "logos-blockchain-storage-service",
- "logos-blockchain-subnetworks-assignations",
  "logos-blockchain-time-service",
  "logos-blockchain-tx-service",
  "overwatch",
@@ -5301,19 +5160,15 @@ dependencies = [
  "axum 0.7.9",
  "clap",
  "logos-blockchain-core",
- "logos-blockchain-da-network-core",
- "logos-blockchain-executor",
  "logos-blockchain-libp2p",
  "logos-blockchain-node",
  "logos-blockchain-tests",
  "logos-blockchain-tracing-service",
- "logos-blockchain-utils",
  "rand 0.8.5",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "serde_path_to_error",
- "serde_with",
  "serde_yaml",
  "tokio",
  "tracing",
@@ -5345,7 +5200,6 @@ dependencies = [
  "logos-blockchain-chain-service-common",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-da-sampling-service",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-ledger",
  "logos-blockchain-services-utils",
@@ -5371,7 +5225,6 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-cryptarchia-sync",
- "logos-blockchain-da-sampling-service",
  "logos-blockchain-ledger",
  "logos-blockchain-network-service",
  "logos-blockchain-services-utils",
@@ -5453,23 +5306,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "logos-blockchain-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "hex",
- "logos-blockchain-core",
- "logos-blockchain-executor-http-client",
- "logos-blockchain-kzgrs-backend",
- "logos-blockchain-tracing",
- "reqwest 0.12.28",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber 0.3.22",
-]
-
-[[package]]
 name = "logos-blockchain-common-http-client"
 version = "0.1.0"
 dependencies = [
@@ -5477,7 +5313,6 @@ dependencies = [
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
- "logos-blockchain-da-messages",
  "logos-blockchain-http-api-common",
  "reqwest 0.12.28",
  "serde",
@@ -5491,7 +5326,6 @@ name = "logos-blockchain-core"
 version = "0.1.0"
 dependencies = [
  "ark-ff 0.4.2",
- "async-trait",
  "bincode",
  "blake2",
  "bytes",
@@ -5551,166 +5385,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "logos-blockchain-da-dispersal-service"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "futures",
- "logos-blockchain-chain-broadcast-service",
- "logos-blockchain-core",
- "logos-blockchain-da-network-core",
- "logos-blockchain-da-network-service",
- "logos-blockchain-key-management-system-keys",
- "logos-blockchain-kzgrs-backend",
- "logos-blockchain-services-utils",
- "logos-blockchain-subnetworks-assignations",
- "logos-blockchain-tracing",
- "logos-blockchain-utils",
- "overwatch",
- "serde",
- "serde_with",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tracing",
-]
-
-[[package]]
-name = "logos-blockchain-da-messages"
-version = "0.1.0"
-dependencies = [
- "blake2",
- "futures",
- "logos-blockchain-core",
- "logos-blockchain-kzgrs-backend",
- "serde",
- "tokio",
-]
-
-[[package]]
-name = "logos-blockchain-da-network-core"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "cached",
- "fixed",
- "futures",
- "indexmap 2.13.0",
- "libp2p",
- "libp2p-stream",
- "libp2p-swarm-test",
- "log",
- "logos-blockchain-core",
- "logos-blockchain-da-messages",
- "logos-blockchain-key-management-system-keys",
- "logos-blockchain-kzgrs",
- "logos-blockchain-kzgrs-backend",
- "logos-blockchain-subnetworks-assignations",
- "logos-blockchain-utils",
- "rand 0.9.2",
- "rstest",
- "serde",
- "serde_with",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
- "tracing-subscriber 0.3.22",
-]
-
-[[package]]
-name = "logos-blockchain-da-network-service"
-version = "0.1.0"
-dependencies = [
- "arc-swap",
- "async-trait",
- "bitvec",
- "blake2",
- "futures",
- "libp2p",
- "libp2p-identity",
- "log",
- "logos-blockchain-chain-broadcast-service",
- "logos-blockchain-common-http-client",
- "logos-blockchain-core",
- "logos-blockchain-da-messages",
- "logos-blockchain-da-network-core",
- "logos-blockchain-key-management-system-keys",
- "logos-blockchain-kzgrs-backend",
- "logos-blockchain-libp2p",
- "logos-blockchain-sdp-service",
- "logos-blockchain-services-utils",
- "logos-blockchain-storage-service",
- "logos-blockchain-subnetworks-assignations",
- "logos-blockchain-tracing",
- "logos-blockchain-utils",
- "multiaddr",
- "overwatch",
- "rand 0.8.5",
- "serde",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "logos-blockchain-da-sampling-service"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "either",
- "futures",
- "hex",
- "libp2p-identity",
- "logos-blockchain-core",
- "logos-blockchain-da-network-core",
- "logos-blockchain-da-network-service",
- "logos-blockchain-kzgrs",
- "logos-blockchain-kzgrs-backend",
- "logos-blockchain-services-utils",
- "logos-blockchain-storage-service",
- "logos-blockchain-subnetworks-assignations",
- "logos-blockchain-tracing",
- "logos-blockchain-tx-service",
- "overwatch",
- "rand 0.8.5",
- "serde",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
-]
-
-[[package]]
-name = "logos-blockchain-da-verifier-service"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "futures",
- "libp2p",
- "logos-blockchain-core",
- "logos-blockchain-da-network-core",
- "logos-blockchain-da-network-service",
- "logos-blockchain-kzgrs-backend",
- "logos-blockchain-services-utils",
- "logos-blockchain-storage-service",
- "logos-blockchain-subnetworks-assignations",
- "logos-blockchain-tracing",
- "logos-blockchain-tx-service",
- "logos-blockchain-utils",
- "overwatch",
- "serde",
- "serde_with",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
-]
-
-[[package]]
 name = "logos-blockchain-demo-archiver"
 version = "0.1.0"
 dependencies = [
@@ -5757,56 +5431,6 @@ dependencies = [
  "tower-http 0.6.8",
  "tracing",
  "tracing-subscriber 0.3.22",
-]
-
-[[package]]
-name = "logos-blockchain-executor"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "axum 0.7.9",
- "clap",
- "color-eyre",
- "futures",
- "logos-blockchain-api-service",
- "logos-blockchain-chain-broadcast-service",
- "logos-blockchain-core",
- "logos-blockchain-da-dispersal-service",
- "logos-blockchain-da-network-core",
- "logos-blockchain-da-network-service",
- "logos-blockchain-da-sampling-service",
- "logos-blockchain-da-verifier-service",
- "logos-blockchain-http-api-common",
- "logos-blockchain-kzgrs-backend",
- "logos-blockchain-libp2p",
- "logos-blockchain-network-service",
- "logos-blockchain-node",
- "logos-blockchain-sdp-service",
- "logos-blockchain-services-utils",
- "logos-blockchain-storage-service",
- "logos-blockchain-subnetworks-assignations",
- "logos-blockchain-time-service",
- "logos-blockchain-tx-service",
- "overwatch",
- "serde",
- "tokio",
- "tower 0.4.13",
- "tower-http 0.5.2",
- "tracing",
- "utoipa",
- "utoipa-swagger-ui",
-]
-
-[[package]]
-name = "logos-blockchain-executor-http-client"
-version = "0.1.0"
-dependencies = [
- "futures",
- "logos-blockchain-common-http-client",
- "logos-blockchain-core",
- "logos-blockchain-http-api-common",
- "reqwest 0.12.28",
- "serde",
 ]
 
 [[package]]
@@ -5894,44 +5518,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "logos-blockchain-kzgrs"
-version = "0.1.0"
-dependencies = [
- "ark-bls12-381",
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-poly 0.4.2",
- "ark-poly-commit",
- "ark-serialize 0.4.2",
- "blake2",
- "blst",
- "divan",
- "num-bigint",
- "num-traits",
- "rand 0.8.5",
- "rayon",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "logos-blockchain-kzgrs-backend"
-version = "0.1.0"
-dependencies = [
- "ark-bls12-381",
- "ark-ff 0.4.2",
- "ark-poly 0.4.2",
- "ark-serialize 0.4.2",
- "blake2",
- "divan",
- "itertools 0.12.1",
- "logos-blockchain-core",
- "logos-blockchain-kzgrs",
- "rand 0.8.5",
- "rayon",
- "serde",
 ]
 
 [[package]]
@@ -6042,15 +5628,9 @@ dependencies = [
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-da-messages",
- "logos-blockchain-da-network-core",
- "logos-blockchain-da-network-service",
- "logos-blockchain-da-sampling-service",
- "logos-blockchain-da-verifier-service",
  "logos-blockchain-groth16",
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
- "logos-blockchain-kzgrs-backend",
  "logos-blockchain-ledger",
  "logos-blockchain-libp2p",
  "logos-blockchain-network-service",
@@ -6059,7 +5639,6 @@ dependencies = [
  "logos-blockchain-sdp-service",
  "logos-blockchain-services-utils",
  "logos-blockchain-storage-service",
- "logos-blockchain-subnetworks-assignations",
  "logos-blockchain-system-sig-service",
  "logos-blockchain-time-service",
  "logos-blockchain-tracing",
@@ -6180,10 +5759,8 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures",
- "libp2p-identity",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
- "multiaddr",
  "overwatch",
  "rocksdb",
  "serde",
@@ -6191,19 +5768,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "logos-blockchain-subnetworks-assignations"
-version = "0.1.0"
-dependencies = [
- "counter",
- "divan",
- "libp2p-identity",
- "logos-blockchain-core",
- "logos-blockchain-utils",
- "rand 0.8.5",
- "serde",
 ]
 
 [[package]]
@@ -6221,11 +5785,11 @@ name = "logos-blockchain-tests"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "blst",
  "futures",
  "futures-util",
  "hex",
  "logos-blockchain-api-service",
+ "logos-blockchain-blend-proofs",
  "logos-blockchain-blend-service",
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-chain-leader-service",
@@ -6235,22 +5799,13 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-cryptarchia-sync",
- "logos-blockchain-da-dispersal-service",
- "logos-blockchain-da-network-core",
- "logos-blockchain-da-network-service",
- "logos-blockchain-da-sampling-service",
- "logos-blockchain-da-verifier-service",
- "logos-blockchain-executor",
- "logos-blockchain-executor-http-client",
  "logos-blockchain-groth16",
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
- "logos-blockchain-kzgrs-backend",
  "logos-blockchain-libp2p",
  "logos-blockchain-network-service",
  "logos-blockchain-node",
  "logos-blockchain-sdp-service",
- "logos-blockchain-subnetworks-assignations",
  "logos-blockchain-time-service",
  "logos-blockchain-tracing",
  "logos-blockchain-tracing-service",
@@ -6729,6 +6284,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b430e7953c29dd6a09afc29ff0bb69c6e306329ee6794700aee27b76a1aea8d"
 dependencies = [
  "core2",
+ "serde",
  "unsigned-varint 0.8.0",
 ]
 
@@ -7288,9 +6844,9 @@ checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
 
 [[package]]
 name = "openssl-probe"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f50d9b3dabb09ecd771ad0aa242ca6894994c130308ca3d7684634df8037391"
+checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "opentelemetry"
@@ -8710,22 +8266,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "regex-lite"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d942b98df5e658f56f20d592c7f868833fe38115e65c33003d8cd224b0155da"
-
-[[package]]
 name = "regex-syntax"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
-
-[[package]]
-name = "relative-path"
-version = "1.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba39f3699c378cd8970968dcbff9c43159ea4cfbd88d43c00b22f2ef10a435d2"
 
 [[package]]
 name = "reqwest"
@@ -8949,33 +8493,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rstest"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fc39292f8613e913f7df8fa892b8944ceb47c247b78e1b1ae2f09e019be789d"
-dependencies = [
- "rstest_macros",
- "rustc_version",
-]
-
-[[package]]
-name = "rstest_macros"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f168d99749d307be9de54d23fd226628d99768225ef08f6ffb52e0182a27746"
-dependencies = [
- "cfg-if",
- "glob",
- "proc-macro2",
- "quote",
- "regex",
- "relative-path",
- "rustc_version",
- "syn 2.0.114",
- "unicode-ident",
-]
-
-[[package]]
 name = "rtnetlink"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9170,7 +8687,7 @@ version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "612460d5f7bea540c490b2b6395d8e34a953e52b491accd6c86c8164c5932a63"
 dependencies = [
- "openssl-probe 0.2.0",
+ "openssl-probe 0.2.1",
  "rustls-pki-types",
  "schannel",
  "security-framework 3.5.1",
@@ -10346,15 +9863,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "threadpool"
-version = "1.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d050e60b33d41c19108b32cea32164033a9013fe3b46cbd4457559bfbf77afaa"
-dependencies = [
- "num_cpus",
 ]
 
 [[package]]
@@ -12366,9 +11874,9 @@ checksum = "40990edd51aae2c2b6907af74ffb635029d5788228222c4bb811e9351c0caad3"
 
 [[package]]
 name = "zmij"
-version = "1.0.15"
+version = "1.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94f63c051f4fe3c1509da62131a678643c5b6fbdc9273b2b79d4378ebda003d2"
+checksum = "dfcd145825aace48cff44a8844de64bf75feec3080e0aa5cdbde72961ae51a65"
 
 [[package]]
 name = "zopfli"

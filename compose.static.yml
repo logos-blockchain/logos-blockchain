@@ -61,7 +61,7 @@ services:
     ports:
       - "3003:3000/udp"
       - "18083:18080/tcp"
-    entrypoint: /etc/logos-blockchain/scripts/run_logos_blockchain_executor.sh
+    entrypoint: /etc/logos-blockchain/scripts/run_logos_blockchain_node.sh
 
   prometheus:
     container_name: prometheus
@@ -149,7 +149,7 @@ services:
       - SEQUENCER_INITIAL_BALANCE=1000
     volumes:
       - l2-sequencer-data:/data
-    entrypoint: [ "/usr/bin/demo-sequencer" ]
+    entrypoint: [ "/usr/bin/logos-blockchain-demo-sequencer" ]
 
   l2-archiver:
     container_name: l2_archiver

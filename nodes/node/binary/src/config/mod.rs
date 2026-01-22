@@ -18,8 +18,7 @@ use serde::Deserialize;
 use tracing::Level;
 
 use crate::{
-    ApiService, CryptarchiaService, DaNetworkService, DaSamplingService, DaVerifierService,
-    KeyManagementService, RuntimeServiceId, StorageService,
+    ApiService, CryptarchiaService, KeyManagementService, RuntimeServiceId, StorageService,
     config::{
         blend::serde::Config as BlendConfig, cryptarchia::serde::Config as CryptarchiaConfig,
         deployment::DeploymentSettings, mempool::serde::Config as MempoolConfig,
@@ -62,8 +61,6 @@ pub struct CliArgs {
     #[clap(flatten)]
     cryptarchia_leader: CryptarchiaLeaderArgs,
     #[clap(flatten)]
-    da: DaArgs,
-    #[clap(flatten)]
     time: TimeArgs,
 }
 
@@ -73,29 +70,9 @@ impl CliArgs {
         &self.config
     }
 
-    /// If flags the blend service group to start if either all service groups
-    /// are flagged to start or the blend service group is.
     #[must_use]
     pub const fn dry_run(&self) -> bool {
         self.check_config_only
-    }
-
-    #[must_use]
-    pub const fn must_blend_service_group_start(&self) -> bool {
-        self.must_all_service_groups_start() || self.blend.start_blend_at_boot
-    }
-
-    /// If flags the DA service group to start if either all service groups are
-    /// flagged to start or the DA service group is.
-    #[must_use]
-    pub const fn must_da_service_group_start(&self) -> bool {
-        self.must_all_service_groups_start() || self.da.start_da_at_boot
-    }
-
-    /// If no "start" flag is explicitly set for any service group, then all
-    /// service groups are flagged to start.
-    const fn must_all_service_groups_start(&self) -> bool {
-        !self.blend.start_blend_at_boot && !self.da.start_da_at_boot
     }
 }
 
@@ -173,8 +150,6 @@ pub struct NetworkArgs {
 pub struct BlendArgs {
     #[clap(long = "blend-addr", env = "BLEND_ADDR")]
     blend_addr: Option<Multiaddr>,
-    #[clap(long = "blend-service-group", action)]
-    start_blend_at_boot: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -223,12 +198,6 @@ impl TimeArgs {
     }
 }
 
-#[derive(Parser, Debug, Clone)]
-pub struct DaArgs {
-    #[clap(long = "da-service-group", action)]
-    start_da_at_boot: bool,
-}
-
 #[derive(Deserialize, Debug, Clone)]
 #[cfg_attr(feature = "testing", derive(serde::Serialize))]
 pub struct Config {
@@ -240,10 +209,7 @@ pub struct Config {
     pub mempool: MempoolConfig,
 
     pub tracing: <Tracing<RuntimeServiceId> as ServiceData>::Settings,
-    pub da_network: <DaNetworkService as ServiceData>::Settings,
-    pub da_verifier: <DaVerifierService as ServiceData>::Settings,
     pub sdp: <SdpService<RuntimeServiceId> as ServiceData>::Settings,
-    pub da_sampling: <DaSamplingService as ServiceData>::Settings,
     pub http: <ApiService as ServiceData>::Settings,
     pub storage: <StorageService as ServiceData>::Settings,
     pub key_management: <KeyManagementService as ServiceData>::Settings,
@@ -348,7 +314,7 @@ pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) ->
 }
 
 pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) -> Result<()> {
-    let BlendArgs { blend_addr, .. } = blend_args;
+    let BlendArgs { blend_addr } = blend_args;
 
     if let Some(addr) = blend_addr {
         blend.set_listening_address(addr);

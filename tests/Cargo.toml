@@ -17,13 +17,13 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1"
-blst        = { version = "0.3.11" }
 # cucumber    = "=0.22.0"
 # cucumber_ext                                   = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
 futures                          = { default-features = false, version = "0.3" }
 futures-util                     = { default-features = false, version = "0.3.31" }
 hex                              = { default-features = false, version = "0.4.3" }
 lb-api-service                   = { workspace = true }
+lb-blend-proofs                  = { workspace = true }
 lb-blend-service                 = { features = ["libp2p"], workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
 lb-chain-leader-service          = { workspace = true }
@@ -33,22 +33,13 @@ lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { features = ["serde"], workspace = true }
 lb-cryptarchia-sync              = { workspace = true }
-lb-da-dispersal-service          = { workspace = true }
-lb-da-network-core               = { workspace = true }
-lb-da-network-service            = { workspace = true }
-lb-da-sampling-service           = { workspace = true }
-lb-da-verifier-service           = { workspace = true }
-lb-executor                      = { default-features = false, features = ["testing", "tracing"], workspace = true }
-lb-executor-http-client          = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
-lb-kzgrs-backend                 = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-network-service               = { features = ["libp2p"], workspace = true }
 lb-node                          = { default-features = false, features = ["testing"], workspace = true }
 lb-sdp-service                   = { workspace = true }
-lb-subnetworks-assignations      = { workspace = true }
 lb-time-service                  = { workspace = true }
 lb-tracing                       = { workspace = true }
 lb-tracing-service               = { workspace = true }
@@ -91,24 +82,8 @@ name = "test_invalid_tx_handling"
 path = "src/tests/cryptarchia/invalid_tx_handling.rs"
 
 [[test]]
-name = "test_da"
-path = "src/tests/da/disperse.rs"
-
-[[test]]
-name = "test_da_api"
-path = "src/tests/da/api.rs"
-
-[[test]]
 name = "test_mempool_api"
 path = "src/tests/mempool/api.rs"
-
-[[test]]
-name = "test_membership_disperse"
-path = "src/tests/membership/disperse.rs"
-
-[[test]]
-name = "test_da_historic_sampling"
-path = "src/tests/da/historic_sampling.rs"
 
 [[test]]
 name = "test_mantle_sdp_ops"

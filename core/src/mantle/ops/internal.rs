@@ -2,11 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Op,
-    channel::{blob::BlobOp, inscribe::InscriptionOp, set_keys::SetKeysOp},
+    channel::{inscribe::InscriptionOp, set_keys::SetKeysOp},
     leader_claim::LeaderClaimOp,
-    opcode::{
-        BLOB, INSCRIBE, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, SET_CHANNEL_KEYS,
-    },
+    opcode::{INSCRIBE, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, SET_CHANNEL_KEYS},
     sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     serde_,
 };
@@ -18,9 +16,6 @@ pub enum OpSer<'a> {
     ChannelInscribe(
         #[serde(serialize_with = "serde_::serialize_op_variant::<{INSCRIBE}, InscriptionOp, _>")]
         &'a InscriptionOp,
-    ),
-    ChannelBlob(
-        #[serde(serialize_with = "serde_::serialize_op_variant::<{BLOB}, BlobOp, _>")] &'a BlobOp,
     ),
     ChannelSetKeys(
         #[serde(
@@ -54,7 +49,6 @@ impl<'a> From<&'a Op> for OpSer<'a> {
     fn from(value: &'a Op) -> Self {
         match value {
             Op::ChannelInscribe(op) => OpSer::ChannelInscribe(op),
-            Op::ChannelBlob(op) => OpSer::ChannelBlob(op),
             Op::ChannelSetKeys(op) => OpSer::ChannelSetKeys(op),
             Op::SDPDeclare(op) => OpSer::SDPDeclare(op),
             Op::SDPWithdraw(op) => OpSer::SDPWithdraw(op),
@@ -73,9 +67,6 @@ pub enum OpDe {
             deserialize_with = "serde_::deserialize_op_variant::<{INSCRIBE}, InscriptionOp, _>"
         )]
         InscriptionOp,
-    ),
-    ChannelBlob(
-        #[serde(deserialize_with = "serde_::deserialize_op_variant::<{BLOB}, BlobOp, _>")] BlobOp,
     ),
     ChannelSetKeys(
         #[serde(
@@ -113,7 +104,6 @@ impl From<OpDe> for Op {
     fn from(value: OpDe) -> Self {
         match value {
             OpDe::ChannelInscribe(inscribe) => Self::ChannelInscribe(inscribe),
-            OpDe::ChannelBlob(blob) => Self::ChannelBlob(blob),
             OpDe::ChannelSetKeys(channel_set_keys) => Self::ChannelSetKeys(channel_set_keys),
             OpDe::SDPDeclare(sdp_declare) => Self::SDPDeclare(sdp_declare),
             OpDe::SDPWithdraw(sdp_withdraw) => Self::SDPWithdraw(sdp_withdraw),

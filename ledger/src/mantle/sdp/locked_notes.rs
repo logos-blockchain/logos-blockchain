@@ -141,27 +141,6 @@ mod tests {
                 .map(|ln| &ln.services),
             Some(&HashSet::from([ServiceType::BlendNetwork]))
         );
-
-        let locked_notes_both = locked_notes_bn
-            .lock(
-                &min_stake,
-                ServiceType::DataAvailability,
-                utxo.note,
-                &note_id,
-            )
-            .expect("Should be able to lock for DA service");
-
-        assert!(locked_notes_both.contains(&note_id));
-        assert_eq!(
-            locked_notes_both
-                .locked_notes
-                .get(&note_id)
-                .map(|ln| &ln.services),
-            Some(&HashSet::from([
-                ServiceType::BlendNetwork,
-                ServiceType::DataAvailability
-            ]))
-        );
     }
 
     #[test]
@@ -175,27 +154,18 @@ mod tests {
         };
 
         let locked_notes_once = locked_notes
-            .lock(
-                &min_stake,
-                ServiceType::DataAvailability,
-                utxo.note,
-                &note_id,
-            )
+            .lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id)
             .unwrap();
 
-        let result = locked_notes_once.lock(
-            &min_stake,
-            ServiceType::DataAvailability,
-            utxo.note,
-            &note_id,
-        );
+        let result =
+            locked_notes_once.lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id);
 
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
             Error::NoteAlreadyUsedForService {
                 note_id,
-                service_type: ServiceType::DataAvailability
+                service_type: ServiceType::BlendNetwork
             }
         );
     }
@@ -237,36 +207,6 @@ mod tests {
         assert!(result.is_ok());
     }
     #[test]
-    fn test_unlock_one_of_two_services() {
-        let utxo = utxo();
-        let note_id = utxo.id();
-        let min_stake = MinStake {
-            threshold: 1,
-            timestamp: 0,
-        };
-        let mut locked = LockedNotes::new()
-            .lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id)
-            .unwrap()
-            .lock(
-                &min_stake,
-                ServiceType::DataAvailability,
-                utxo.note,
-                &note_id,
-            )
-            .unwrap();
-
-        locked
-            .unlock(ServiceType::BlendNetwork, &note_id)
-            .expect("Should unlock BN service");
-
-        assert!(locked.contains(&note_id));
-        assert_eq!(
-            locked.locked_notes.get(&note_id).map(|ln| &ln.services),
-            Some(&HashSet::from([ServiceType::DataAvailability]))
-        );
-    }
-
-    #[test]
     fn test_unlock_last_service_removes_note() {
         let utxo = utxo();
         let note_id = utxo.id();
@@ -294,29 +234,5 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), Error::NoteNotLocked(note_id));
-    }
-
-    #[test]
-    fn test_unlock_fail_if_not_locked_for_specific_service() {
-        let utxo = utxo();
-        let note_id = utxo.id();
-        let min_stake = MinStake {
-            threshold: 1,
-            timestamp: 0,
-        };
-        let mut locked_for_bn = LockedNotes::new()
-            .lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id)
-            .unwrap();
-
-        let result = locked_for_bn.unlock(ServiceType::DataAvailability, &note_id);
-
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err(),
-            Error::NoteNotLockedForService {
-                note_id,
-                service_type: ServiceType::DataAvailability
-            }
-        );
     }
 }

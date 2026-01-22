@@ -11,8 +11,6 @@ use tracing::warn;
 async fn main() -> Result<()> {
     let cli_args = CliArgs::parse();
     let is_dry_run = cli_args.dry_run();
-    let must_blend_service_group_start = cli_args.must_blend_service_group_start();
-    let must_da_service_group_start = cli_args.must_da_service_group_start();
 
     // If we are dry-running the binary, fail in case unknown keys in the config are
     // found or exit successfully if deserialization succeeds.
@@ -46,12 +44,7 @@ async fn main() -> Result<()> {
     }?.update_from_args(cli_args)?;
 
     let app = run_node_from_config(config).map_err(|e| eyre!("{e}"))?;
-    let services_to_start = get_services_to_start(
-        &app,
-        must_blend_service_group_start,
-        must_da_service_group_start,
-    )
-    .await?;
+    let services_to_start = get_services_to_start(&app).await?;
 
     drop(app.handle().start_service_sequence(services_to_start).await);
 

@@ -44,12 +44,10 @@ impl LedgerState {
     pub fn new(config: &Config, epoch_state: &EpochState) -> Self {
         Self {
             channels: channel::Channels::new(),
-            sdp: sdp::SdpLedger::new()
-                .with_blend_service(
-                    config.sdp_config.service_rewards_params.blend.clone(),
-                    epoch_state,
-                )
-                .with_da_service(),
+            sdp: sdp::SdpLedger::new().with_blend_service(
+                config.sdp_config.service_rewards_params.blend.clone(),
+                epoch_state,
+            ),
             leaders: leader::LeaderState::new(),
         }
     }
@@ -147,11 +145,6 @@ impl LedgerState {
                 // The signature for channel ops can be verified before reaching this point,
                 // as you only need the signer's public key and tx hash
                 // Callers are expected to validate the proof before calling this function.
-                (Op::ChannelBlob(op), _) => {
-                    self.channels =
-                        self.channels
-                            .apply_msg(op.channel, &op.parent, op.id(), &op.signer)?;
-                }
                 (Op::ChannelInscribe(op), _) => {
                     self.channels =
                         self.channels
@@ -214,9 +207,7 @@ mod tests {
         MantleTx, SignedMantleTx, Transaction as _,
         gas::MainnetGasConstants,
         ledger::Tx as LedgerTx,
-        ops::channel::{
-            ChannelId, MsgId, blob::BlobOp, inscribe::InscriptionOp, set_keys::SetKeysOp,
-        },
+        ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp, set_keys::SetKeysOp},
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey};
 
@@ -259,34 +250,6 @@ mod tests {
 
         SignedMantleTx::new(mantle_tx, ops_proofs, ledger_tx_proof)
             .expect("Test transaction should have valid signatures")
-    }
-
-    #[test]
-    fn test_channel_blob_operation() {
-        let cryptarchia_state = genesis_state(&[utxo()]);
-        let test_config = config();
-        let ledger_state = LedgerState::new(&test_config, cryptarchia_state.epoch_state());
-        let (signing_key, verifying_key) = create_test_keys();
-        let channel_id = ChannelId::from([1; 32]);
-
-        let blob_op = BlobOp {
-            channel: channel_id,
-            session: 0u64,
-            blob: [42; 32],
-            blob_size: 1024,
-            da_storage_gas_price: 10,
-            parent: MsgId::root(),
-            signer: verifying_key,
-        };
-
-        let tx = create_signed_tx(Op::ChannelBlob(blob_op), &signing_key);
-        let result = ledger_state.try_apply_tx::<MainnetGasConstants>(
-            0,
-            &test_config,
-            cryptarchia_state.latest_utxos(),
-            tx,
-        );
-        assert!(result.is_ok());
     }
 
     #[test]
@@ -356,17 +319,14 @@ mod tests {
         let channel_id = ChannelId::from([5; 32]);
 
         // First, create a channel with one message
-        let first_blob = BlobOp {
-            channel: channel_id,
-            session: 0u64,
-            blob: [1; 32],
-            blob_size: 512,
-            da_storage_gas_price: 5,
+        let first_inscribe = InscriptionOp {
+            channel_id,
+            inscription: vec![1, 2, 3],
             parent: MsgId::root(),
             signer: verifying_key,
         };
 
-        let first_tx = create_signed_tx(Op::ChannelBlob(first_blob), &signing_key);
+        let first_tx = create_signed_tx(Op::ChannelInscribe(first_inscribe), &signing_key);
         ledger_state = ledger_state
             .try_apply_tx::<MainnetGasConstants>(
                 0,
@@ -379,17 +339,14 @@ mod tests {
 
         // Now try to add a message with wrong parent
         let wrong_parent = MsgId::from([99; 32]);
-        let second_blob = BlobOp {
-            channel: channel_id,
-            session: 0u64,
-            blob: [2; 32],
-            blob_size: 512,
-            da_storage_gas_price: 5,
+        let second_inscribe = InscriptionOp {
+            channel_id,
+            inscription: vec![4, 5, 6],
             parent: wrong_parent,
             signer: verifying_key,
         };
 
-        let second_tx = create_signed_tx(Op::ChannelBlob(second_blob), &signing_key);
+        let second_tx = create_signed_tx(Op::ChannelInscribe(second_inscribe), &signing_key);
         let result = ledger_state.clone().try_apply_tx::<MainnetGasConstants>(
             0,
             &test_config,
@@ -403,17 +360,14 @@ mod tests {
 
         // Writing into an empty channel with a parent != MsgId::root() should also fail
         let empty_channel_id = ChannelId::from([8; 32]);
-        let empty_blob = BlobOp {
-            channel: empty_channel_id,
-            session: 0u64,
-            blob: [3; 32],
-            blob_size: 512,
-            da_storage_gas_price: 5,
+        let empty_inscribe = InscriptionOp {
+            channel_id: empty_channel_id,
+            inscription: vec![7, 8, 9],
             parent: MsgId::from([1; 32]), // non-root parent
             signer: verifying_key,
         };
 
-        let empty_tx = create_signed_tx(Op::ChannelBlob(empty_blob), &signing_key);
+        let empty_tx = create_signed_tx(Op::ChannelInscribe(empty_inscribe), &signing_key);
         let empty_result = ledger_state.try_apply_tx::<MainnetGasConstants>(
             0,
             &test_config,
@@ -436,18 +390,15 @@ mod tests {
         let channel_id = ChannelId::from([6; 32]);
 
         // First, create a channel with authorized signer
-        let first_blob = BlobOp {
-            channel: channel_id,
-            session: 0u64,
-            blob: [1; 32],
-            blob_size: 512,
-            da_storage_gas_price: 5,
+        let first_inscribe = InscriptionOp {
+            channel_id,
+            inscription: vec![1, 2, 3],
             parent: MsgId::root(),
             signer: verifying_key,
         };
 
-        let correct_parent = first_blob.id();
-        let first_tx = create_signed_tx(Op::ChannelBlob(first_blob), &signing_key);
+        let correct_parent = first_inscribe.id();
+        let first_tx = create_signed_tx(Op::ChannelInscribe(first_inscribe), &signing_key);
         ledger_state = ledger_state
             .try_apply_tx::<MainnetGasConstants>(
                 0,
@@ -459,17 +410,17 @@ mod tests {
             .0;
 
         // Now try to add a message with unauthorized signer
-        let second_blob = BlobOp {
-            channel: channel_id,
-            session: 0u64,
-            blob: [2; 32],
-            blob_size: 512,
-            da_storage_gas_price: 5,
+        let second_inscribe = InscriptionOp {
+            channel_id,
+            inscription: vec![4, 5, 6],
             parent: correct_parent,
             signer: unauthorized_verifying_key,
         };
 
-        let second_tx = create_signed_tx(Op::ChannelBlob(second_blob), &unauthorized_signing_key);
+        let second_tx = create_signed_tx(
+            Op::ChannelInscribe(second_inscribe),
+            &unauthorized_signing_key,
+        );
         let result = ledger_state.try_apply_tx::<MainnetGasConstants>(
             0,
             &test_config,
@@ -512,10 +463,10 @@ mod tests {
     fn test_multiple_operations_in_transaction() {
         let cryptarchia_state = genesis_state(&[utxo()]);
         let test_config = config();
-        // Create channel 1 by posting a blob
+        // Create channel 1 by posting an inscription
         // Create channel 2 by posting an inscription
         // Change the keys for channel 1
-        // Post another blob in channel 1
+        // Post another inscription in channel 1
         let ledger_state = LedgerState::new(&test_config, cryptarchia_state.epoch_state());
         let (sk1, vk1) = create_test_keys_with_seed(1);
         let (sk2, vk2) = create_test_keys_with_seed(2);
@@ -525,19 +476,16 @@ mod tests {
         let channel1 = ChannelId::from([10; 32]);
         let channel2 = ChannelId::from([20; 32]);
 
-        let blob_op = BlobOp {
-            channel: channel1,
-            session: 0u64,
-            blob: [42; 32],
-            blob_size: 1024,
-            da_storage_gas_price: 10,
+        let inscribe_op1 = InscriptionOp {
+            channel_id: channel1,
+            inscription: vec![1, 2, 3],
             parent: MsgId::root(),
             signer: vk1,
         };
 
-        let inscribe_op = InscriptionOp {
+        let inscribe_op2 = InscriptionOp {
             channel_id: channel2,
-            inscription: vec![1, 2, 3, 4],
+            inscription: vec![4, 5, 6],
             parent: MsgId::root(),
             signer: vk2,
         };
@@ -547,21 +495,18 @@ mod tests {
             keys: vec![vk3, vk4],
         };
 
-        let blob_op2 = BlobOp {
-            channel: channel1,
-            session: 0u64,
-            blob: [43; 32],
-            blob_size: 2048,
-            da_storage_gas_price: 20,
-            parent: blob_op.id(),
+        let inscribe_op3 = InscriptionOp {
+            channel_id: channel1,
+            inscription: vec![7, 8, 9],
+            parent: inscribe_op1.id(),
             signer: vk4,
         };
 
         let ops = vec![
-            Op::ChannelBlob(blob_op),
-            Op::ChannelInscribe(inscribe_op),
+            Op::ChannelInscribe(inscribe_op1),
+            Op::ChannelInscribe(inscribe_op2),
             Op::ChannelSetKeys(set_keys_op),
-            Op::ChannelBlob(blob_op2.clone()),
+            Op::ChannelInscribe(inscribe_op3.clone()),
         ];
         let tx = create_multi_signed_tx(ops, vec![&sk1, &sk2, &sk1, &sk4]);
 
@@ -579,7 +524,7 @@ mod tests {
         assert!(result.channels.channels.contains_key(&channel2));
         assert_eq!(
             result.channels.channels.get(&channel1).unwrap().tip,
-            blob_op2.id()
+            inscribe_op3.id()
         );
     }
 
