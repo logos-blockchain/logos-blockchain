@@ -44,13 +44,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
-      # Restore or initialize Cargo cache for dependencies and build artifacts
-      - name: Set up Cargo cache
-        uses: ./.github/actions/setup-cargo-cache
-        with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       # Set up custom circuits required for tests
       - name: Setup Circuits
         uses: ./.github/actions/setup-circuits
@@ -64,16 +57,9 @@ jobs:
           command: build
           args: --release --locked --all --features "pol-dev-mode"
 
-      # Update Cargo cache after build, regardless of build success
-      - name: Update Cargo cache
-        if: success() || failure()
-        uses: ./.github/actions/update-cargo-cache
-        with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
-
       # Run cucumber integration tests with environment variables for binaries and test params
       - name: Run cucumber
-        timeout-minutes: 30  # Safety net timeout
+        timeout-minutes: 40  # Safety net timeout - this needs to be adjusted as more tests are added
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
           POL_PROOF_DEV_MODE: true
