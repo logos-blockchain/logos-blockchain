@@ -267,22 +267,16 @@ impl LeaderPrivate {
             latest_root: public.latest_root,
             leader_pk,
         };
+        let (aged_path, aged_selector) = merkle_path_to_witness(aged_path);
+        let (latest_path, latest_selector) = merkle_path_to_witness(latest_path);
         let wallet = lb_pol::PolWalletInputsData {
             note_value: note.note.value,
             transaction_hash: *note.tx_hash.as_ref(),
             output_number: note.output_index as u64,
-            aged_path: aged_path.iter().map(|n| *n.item()).collect(),
-            aged_selector: aged_path
-                .iter()
-                .rev() // PoL circuit expects the reverse order for selectors
-                .map(|n| matches!(n, MerkleNode::Right(_)))
-                .collect(),
-            latest_path: latest_path.iter().map(|n| *n.item()).collect(),
-            latest_selector: latest_path
-                .iter()
-                .rev() // PoL circuit expects the reverse order for selectors
-                .map(|n| matches!(n, MerkleNode::Right(_)))
-                .collect(),
+            aged_path,
+            aged_selector,
+            latest_path,
+            latest_selector,
             secret_key,
         };
         let input = lb_pol::PolWitnessInputsData::from_chain_and_wallet_data(chain, wallet);
@@ -335,6 +329,21 @@ fn ed25519_pk_to_fr_tuple(pk: &Ed25519PublicKey) -> (Fr, Fr) {
         fr_from_bytes(&pk_bytes[0..16]).unwrap(),
         fr_from_bytes(&pk_bytes[16..32]).unwrap(),
     )
+}
+
+/// Converts a [`MerklePath`] to the witness format expected by the circuit.
+fn merkle_path_to_witness<T: Copy>(path: &MerklePath<T>) -> (Vec<T>, Vec<bool>) {
+    path.iter()
+        // PoL circuit expects the reverse order for selectors
+        .zip(path.iter().rev())
+        .map(|(node, rev_node)| {
+            (
+                *node.item(),
+                // 1 if sibling is on the left
+                matches!(rev_node, MerkleNode::Left(_)),
+            )
+        })
+        .unzip()
 }
 
 #[cfg(test)]
@@ -414,5 +423,28 @@ mod tests {
             let (public, note_id, sk) = rand_inputs();
             public.check_winning(1, note_id, sk)
         });
+    }
+
+    #[test]
+    fn test_merkle_path_to_witness() {
+        let path: Vec<MerkleNode<i32>> = vec![
+            MerkleNode::Left(1),
+            MerkleNode::Right(2),
+            MerkleNode::Left(3),
+            MerkleNode::Right(4),
+        ];
+        let (items, selectors) = merkle_path_to_witness(&path);
+        // Items should be in forward order.
+        assert_eq!(items, vec![1, 2, 3, 4]);
+        // Selectors should be in reverse order.
+        assert_eq!(selectors, vec![false, true, false, true]);
+    }
+
+    #[test]
+    fn test_merkle_path_to_witness_empty() {
+        let path: Vec<MerkleNode<i32>> = vec![];
+        let (items, selectors) = merkle_path_to_witness(&path);
+        assert!(items.is_empty());
+        assert!(selectors.is_empty());
     }
 }

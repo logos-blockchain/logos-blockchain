@@ -16,8 +16,7 @@ repos:
       - id: cargo-deny
         args:
           - --locked
-          - --target
-          - x86_64-unknown-linux-gnu
+          - --all-features
           - check
           - --hide-inclusion-graph
           - -c

@@ -43,29 +43,16 @@ impl From<WellKnownDeployment> for Settings {
                         timestamp: 0,
                     },
                     service_params: Arc::new(
-                        [
-                            (
-                                ServiceType::BlendNetwork,
-                                ServiceParameters {
-                                    inactivity_period: 20,
-                                    lock_period: 10,
-                                    retention_period: 100,
-                                    session_duration: 21_600,
-                                    timestamp: 0,
-                                },
-                            ),
-                            (
-                                ServiceType::DataAvailability,
-                                ServiceParameters {
-                                    inactivity_period: 20,
-                                    lock_period: 10,
-                                    retention_period: 100,
-                                    session_duration: 1_000,
-                                    timestamp: 0,
-                                },
-                            ),
-                        ]
-                        .into_iter()
+                        std::iter::once((
+                            ServiceType::BlendNetwork,
+                            ServiceParameters {
+                                inactivity_period: 20,
+                                lock_period: 10,
+                                retention_period: 100,
+                                session_duration: 21_600,
+                                timestamp: 0,
+                            },
+                        ))
                         .collect(),
                     ),
                 },

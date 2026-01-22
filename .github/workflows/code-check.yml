@@ -55,7 +55,7 @@ jobs:
         run: cargo install cargo-deny --locked --version 0.19.0
 
       - name: Run cargo-deny
-        run: cargo-deny --locked check --hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings
+        run: cargo-deny --locked --all-features check --hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings
 
   features:
     name: Check packages feature combinations
@@ -171,12 +171,6 @@ jobs:
         with:
           command: run
           args: --locked -p logos-blockchain-node nodes/node/config.yaml --check-config
-
-      - name: Run the executor binary to check the config file validity
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: run
-          args: --locked -p logos-blockchain-executor nodes/executor/config.yaml --check-config
 
       # Build binaries then use them - this includes testing feature needed for unit tests
       - name: Build binaries with required test features
