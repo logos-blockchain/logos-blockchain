@@ -7,18 +7,16 @@ use lb_chain_service::{
 };
 use lb_core::{
     block::Block,
-    da,
     header::HeaderId,
     mantle::{AuthenticatedMantleTx, TxHash},
 };
 use lb_cryptarchia_sync::GetTipResponse;
-use lb_da_sampling_service::backend::DaSamplingServiceBackend;
 use lb_tx_service::backend::RecoverableMempool;
 use overwatch::DynError;
 use tracing::{debug, error};
 
 use crate::{
-    Error as ChainError, IbdConfig, SamplingRelay, blob,
+    Error as ChainError, IbdConfig,
     bootstrap::download::{Delay, Download, Downloads, DownloadsOutput},
     mempool::adapter::MempoolAdapter,
     network::NetworkAdapter,
@@ -30,30 +28,25 @@ pub trait IbdBlockProcessor<B> {
     async fn has_processed_block(&self, header: HeaderId) -> Result<bool, Error>;
 }
 
-pub struct ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, SamplingBackend, RuntimeServiceId>
+pub struct ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, RuntimeServiceId>
 where
     Cryptarchia: CryptarchiaServiceData,
     Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
-    SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId>,
     RuntimeServiceId: Send + Sync,
 {
-    pub historic_blob_validation: blob::Validation<blob::HistoricBlobStrategy>,
     pub cryptarchia: CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     pub mempool_adapter: MempoolAdapter<Mempool::Item>,
-    pub sampling_relay: SamplingRelay<SamplingBackend::BlobId>,
 }
 
-impl<Cryptarchia, Mempool, SamplingBackend, RuntimeServiceId>
-    IbdBlockProcessor<Block<Cryptarchia::Tx>>
-    for ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, SamplingBackend, RuntimeServiceId>
+impl<Cryptarchia, Mempool, RuntimeServiceId> IbdBlockProcessor<Block<Cryptarchia::Tx>>
+    for ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, RuntimeServiceId>
 where
     Cryptarchia: CryptarchiaServiceData,
     Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
-    SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId>,
     RuntimeServiceId: Send + Sync,
 {
     async fn info(&self) -> Result<CryptarchiaInfo, Error> {
@@ -61,18 +54,12 @@ where
     }
 
     async fn process_block(&mut self, block: Block<Cryptarchia::Tx>) -> Result<(), Error> {
-        crate::process_block::<_, _, Mempool, SamplingBackend, _>(
-            block,
-            Some(&self.historic_blob_validation),
-            &self.cryptarchia,
-            &self.mempool_adapter,
-            &self.sampling_relay,
-        )
-        .await
-        .map_err(|e| {
-            error!("Error processing block during IBD: {:?}", e);
-            Error::from(e)
-        })
+        crate::process_block::<_, Mempool, _>(block, &self.cryptarchia, &self.mempool_adapter)
+            .await
+            .map_err(|e| {
+                error!("Error processing block during IBD: {:?}", e);
+                Error::from(e)
+            })
     }
 
     async fn has_processed_block(&self, block_id: HeaderId) -> Result<bool, Error> {
@@ -1105,28 +1092,16 @@ mod tests {
             },
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
-                    [
-                        (
-                            ServiceType::BlendNetwork,
-                            ServiceParameters {
-                                lock_period: 10,
-                                inactivity_period: 20,
-                                retention_period: 100,
-                                timestamp: 0,
-                                session_duration: 10,
-                            },
-                        ),
-                        (
-                            ServiceType::DataAvailability,
-                            ServiceParameters {
-                                lock_period: 10,
-                                inactivity_period: 20,
-                                retention_period: 100,
-                                timestamp: 0,
-                                session_duration: 10,
-                            },
-                        ),
-                    ]
+                    [(
+                        ServiceType::BlendNetwork,
+                        ServiceParameters {
+                            lock_period: 10,
+                            inactivity_period: 20,
+                            retention_period: 100,
+                            timestamp: 0,
+                            session_duration: 10,
+                        },
+                    )]
                     .into(),
                 ),
                 service_rewards_params: ServiceRewardsParameters {

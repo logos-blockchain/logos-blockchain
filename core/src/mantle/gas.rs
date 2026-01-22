@@ -18,12 +18,6 @@ pub trait GasConstants {
     /// Verify the inscription signature.
     const CHANNEL_INSCRIBE: Gas;
 
-    /// Verify blob availability and signature.
-    const CHANNEL_BLOB_BASE: Gas;
-
-    /// Store the message in a blob.
-    const CHANNEL_BLOB_SIZED: Gas;
-
     /// Verify the administrator signature.
     const CHANNEL_SET_KEYS: Gas;
 
@@ -45,8 +39,6 @@ pub struct MainnetGasConstants;
 impl GasConstants for MainnetGasConstants {
     const LEDGER_TX: Gas = 2705;
     const CHANNEL_INSCRIBE: Gas = 22;
-    const CHANNEL_BLOB_BASE: Gas = 800;
-    const CHANNEL_BLOB_SIZED: Gas = 100;
     const CHANNEL_SET_KEYS: Gas = 22;
     const SDP_DECLARE: Gas = 2727;
     const SDP_WITHDRAW: Gas = 2705;

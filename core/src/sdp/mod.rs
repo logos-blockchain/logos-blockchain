@@ -1,5 +1,4 @@
 pub mod blend;
-pub mod da;
 
 use std::hash::Hash;
 
@@ -18,7 +17,6 @@ use crate::{
 pub type SessionNumber = u64;
 pub type StakeThreshold = u64;
 
-const ACTIVE_METADATA_DA_TYPE: u8 = 0x00;
 const ACTIVE_METADATA_BLEND_TYPE: u8 = 0x01;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -64,15 +62,12 @@ impl AsRef<Multiaddr> for Locator {
 pub enum ServiceType {
     #[serde(rename = "BN")]
     BlendNetwork,
-    #[serde(rename = "DA")]
-    DataAvailability,
 }
 
 impl AsRef<str> for ServiceType {
     fn as_ref(&self) -> &str {
         match self {
             Self::BlendNetwork => "BN",
-            Self::DataAvailability => "DA",
         }
     }
 }
@@ -81,7 +76,6 @@ impl From<ServiceType> for usize {
     fn from(service_type: ServiceType) -> Self {
         match service_type {
             ServiceType::BlendNetwork => 0,
-            ServiceType::DataAvailability => 1,
         }
     }
 }
@@ -174,7 +168,6 @@ impl DeclarationMessage {
         let mut hasher = Blake2b::new();
         let service = match self.service_type {
             ServiceType::BlendNetwork => "BN",
-            ServiceType::DataAvailability => "DA",
         };
 
         // From the
@@ -209,7 +202,6 @@ pub struct ActiveMessage {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ActivityMetadata {
-    DataAvailability(da::ActivityProof),
     Blend(Box<blend::ActivityProof>),
 }
 
@@ -217,7 +209,6 @@ impl ActivityMetadata {
     #[must_use]
     pub fn to_metadata_bytes(&self) -> Vec<u8> {
         match self {
-            Self::DataAvailability(proof) => proof.to_metadata_bytes(),
             Self::Blend(proof) => proof.to_metadata_bytes(),
         }
     }
@@ -231,10 +222,6 @@ impl ActivityMetadata {
         let metadata_type = bytes[0];
 
         match metadata_type {
-            ACTIVE_METADATA_DA_TYPE => {
-                let proof_opt = da::ActivityProof::from_metadata_bytes(bytes)?;
-                Ok(Self::DataAvailability(proof_opt))
-            }
             ACTIVE_METADATA_BLEND_TYPE => {
                 let proof_opt = blend::ActivityProof::from_metadata_bytes(bytes)?;
                 Ok(Self::Blend(Box::new(proof_opt)))
@@ -255,7 +242,6 @@ fn parse_session_number(input: &[u8]) -> IResult<&[u8], SessionNumber> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mantle::encoding::encode_sdp_active;
 
     #[test]
     fn test_activity_metadata_empty_bytes() {
@@ -274,33 +260,5 @@ mod tests {
                 .to_string()
                 .contains("Unknown metadata type")
         );
-    }
-
-    #[test]
-    fn test_active_message_with_metadata() {
-        let proof = da::ActivityProof {
-            current_session: 100,
-            previous_session_opinions: vec![0x01, 0x02],
-            current_session_opinions: vec![0x03, 0x04],
-        };
-        let metadata = ActivityMetadata::DataAvailability(proof);
-
-        let message = ActiveMessage {
-            declaration_id: DeclarationId([0xAA; 32]),
-            nonce: 42,
-            metadata,
-        };
-
-        let bytes = encode_sdp_active(&message);
-
-        // Verify structure: declaration_id(32) + nonce(8) + metadata
-        assert!(bytes.len() > 40); // At least 32 + 8 + some metadata
-
-        // Verify declaration_id
-        assert_eq!(&bytes[..32], &[0xAA; 32]);
-
-        // Verify nonce
-        let nonce_bytes: [u8; 8] = bytes[32..40].try_into().unwrap();
-        assert_eq!(u64::from_le_bytes(nonce_bytes), 42);
     }
 }

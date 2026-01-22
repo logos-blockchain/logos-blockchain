@@ -1,5 +1,4 @@
 pub mod blend;
-pub mod da;
 #[cfg(test)]
 mod test_utils;
 

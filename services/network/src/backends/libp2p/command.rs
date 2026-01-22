@@ -38,6 +38,7 @@ pub struct Dial {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Libp2pInfo {
     pub listen_addresses: Vec<Multiaddr>,
+    pub peer_id: PeerId,
     pub n_peers: usize,
     pub n_connections: u32,
     pub n_pending_connections: u32,
