@@ -19,17 +19,13 @@ use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSigna
 use locked_notes::LockedNotes;
 use rewards::{Error as RewardsError, Rewards};
 
-use crate::{
-    EpochState, UtxoTree,
-    mantle::sdp::rewards::{blend, da},
-};
+use crate::{EpochState, UtxoTree, mantle::sdp::rewards::blend};
 
 type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
 enum Service {
-    DataAvailability(ServiceState<da::Rewards>),
     BlendNetwork(ServiceState<blend::Rewards<RealProofsVerifier>>),
 }
 
@@ -41,10 +37,6 @@ impl Service {
         config: &ServiceParameters,
     ) -> (Self, Vec<Utxo>) {
         match self {
-            Self::DataAvailability(state) => {
-                let (new_state, utxos) = state.try_apply_header(block_number, epoch_state, config);
-                (Self::DataAvailability(new_state), utxos)
-            }
             Self::BlendNetwork(state) => {
                 let (new_state, utxos) = state.try_apply_header(block_number, epoch_state, config);
                 (Self::BlendNetwork(new_state), utxos)
@@ -54,7 +46,6 @@ impl Service {
 
     fn declare(&mut self, id: DeclarationId, declaration: Declaration) -> Result<(), Error> {
         match self {
-            Self::DataAvailability(state) => state.declare(id, declaration),
             Self::BlendNetwork(state) => state.declare(id, declaration),
         }
     }
@@ -68,9 +59,6 @@ impl Service {
         tx_hash: TxHash,
     ) -> Result<(), Error> {
         match self {
-            Self::DataAvailability(state) => {
-                state.active(active, block_number, locked_notes, sig, tx_hash)
-            }
             Self::BlendNetwork(state) => {
                 state.active(active, block_number, locked_notes, sig, tx_hash)
             }
@@ -87,9 +75,6 @@ impl Service {
         config: &ServiceParameters,
     ) -> Result<(), Error> {
         match self {
-            Self::DataAvailability(state) => {
-                state.withdraw(withdraw, block_number, locked_notes, sig, tx_hash, config)
-            }
             Self::BlendNetwork(state) => {
                 state.withdraw(withdraw, block_number, locked_notes, sig, tx_hash, config)
             }
@@ -98,14 +83,12 @@ impl Service {
 
     fn contains(&self, declaration_id: &DeclarationId) -> bool {
         match self {
-            Self::DataAvailability(state) => state.contains(declaration_id),
             Self::BlendNetwork(state) => state.contains(declaration_id),
         }
     }
 
     const fn active_session(&self) -> &SessionState {
         match self {
-            Self::DataAvailability(state) => &state.active,
             Self::BlendNetwork(state) => &state.active,
         }
     }
@@ -113,14 +96,12 @@ impl Service {
     #[cfg(test)]
     const fn forming_session(&self) -> &SessionState {
         match self {
-            Self::DataAvailability(state) => &state.forming,
             Self::BlendNetwork(state) => &state.forming,
         }
     }
 
     const fn declarations(&self) -> &Declarations {
         match self {
-            Self::DataAvailability(state) => &state.declarations,
             Self::BlendNetwork(state) => &state.declarations,
         }
     }
@@ -381,8 +362,7 @@ impl SdpLedger {
         ops: impl Iterator<Item = (&'a SDPDeclareOp, &'a OpProof)> + 'a,
     ) -> Result<Self, Error> {
         let mut sdp = Self::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), epoch_state)
-            .with_da_service();
+            .with_blend_service(config.service_rewards_params.blend.clone(), epoch_state);
 
         for (op, proof) in ops {
             let OpProof::ZkAndEd25519Sigs {
@@ -403,29 +383,11 @@ impl SdpLedger {
             .get_mut(&ServiceType::BlendNetwork)
             .expect("SDP initialized with Blend in this method");
 
-        if let Service::BlendNetwork(state) = blend {
-            state.active.declarations = state.declarations.clone();
-            state.forming.declarations = state.declarations.clone();
-        }
-
-        let da = sdp
-            .services
-            .get_mut(&ServiceType::DataAvailability)
-            .expect("SDP initialized with DA in this method");
-
-        if let Service::DataAvailability(state) = da {
-            state.active.declarations = state.declarations.clone();
-            state.forming.declarations = state.declarations.clone();
-        }
+        let Service::BlendNetwork(state) = blend;
+        state.active.declarations = state.declarations.clone();
+        state.forming.declarations = state.declarations.clone();
 
         Ok(sdp)
-    }
-
-    #[must_use]
-    pub fn with_da_service(mut self) -> Self {
-        let service = Service::DataAvailability(Self::new_service_state(da::Rewards::default()));
-        self.services = self.services.insert(ServiceType::DataAvailability, service);
-        self
     }
 
     #[must_use]
@@ -622,7 +584,6 @@ impl SdpLedger {
     pub fn get_declaration(&self, declaration_id: &DeclarationId) -> Option<&Declaration> {
         self.services.iter().find_map(|(_, service)| {
             let declarations = match service {
-                Service::DataAvailability(state) => &state.declarations,
                 Service::BlendNetwork(state) => &state.declarations,
             };
             declarations.get(declaration_id)
@@ -693,17 +654,6 @@ mod tests {
                 session_duration: 10,
             },
         );
-        params.insert(
-            ServiceType::DataAvailability,
-            ServiceParameters {
-                inactivity_period: 10,
-                lock_period: 5,
-                retention_period: 100,
-                timestamp: 0,
-                session_duration: 5,
-            },
-        );
-
         Config {
             service_params: Arc::new(params),
             service_rewards_params: ServiceRewardsParameters {
@@ -727,46 +677,6 @@ mod tests {
 
     fn create_signing_key() -> Ed25519Key {
         Ed25519Key::from_bytes(&[0; 32])
-    }
-
-    fn gc_test_config() -> Config {
-        let mut params = HashMap::new();
-        params.insert(
-            ServiceType::DataAvailability,
-            ServiceParameters {
-                inactivity_period: 1,
-                lock_period: 5,
-                retention_period: 4,
-                timestamp: 0,
-                session_duration: 5,
-            },
-        );
-        params.insert(
-            ServiceType::BlendNetwork,
-            ServiceParameters {
-                inactivity_period: 9,
-                lock_period: 5,
-                retention_period: 1,
-                timestamp: 0,
-                session_duration: 5,
-            },
-        );
-
-        Config {
-            service_params: Arc::new(params),
-            service_rewards_params: ServiceRewardsParameters {
-                blend: blend::RewardsParameters {
-                    rounds_per_session: NonZeroU64::new(864_000).unwrap(),
-                    message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
-                    num_blend_layers: NonZeroU64::new(3).unwrap(),
-                    minimum_network_size: NonZeroU64::new(1).unwrap(),
-                },
-            },
-            min_stake: MinStake {
-                threshold: 1,
-                timestamp: 0,
-            },
-        }
     }
 
     fn apply_declare_with_dummies(
@@ -985,34 +895,23 @@ mod tests {
     #[test]
     fn test_promote_one_service() {
         let config = setup();
-        let service_a = ServiceType::BlendNetwork; // session_duration = 10
-        let service_b = ServiceType::DataAvailability; // session_duration = 5
+        let service = ServiceType::BlendNetwork; // session_duration = 10
 
-        // Initialize ledger with both services
+        // Initialize ledger with Blend service
         let epoch_state = dummy_epoch_state();
         let mut sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state)
-            .with_da_service();
+            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
 
-        // Apply headers to reach block 6
-        // At block 5, DataAvailability promotes (5/5=1, active.session_n=0, so 1==0+1)
-        // At block 6, BlendNetwork hasn't promoted yet (6/10=0, active.session_n=0, so
-        // 0!=0+1)
-        for _ in 0..6 {
+        // Apply headers to reach block 10 (session boundary for BlendNetwork)
+        for _ in 0..10 {
             (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
         }
 
-        // Check DataAvailability is promoted to session 1
-        let active_session_b = sdp_ledger.get_active_session(service_b).unwrap();
-        assert_eq!(active_session_b.session_n, 1);
-        let forming_session_b = sdp_ledger.get_forming_session(service_b).unwrap();
-        assert_eq!(forming_session_b.session_n, 2);
-
-        // Check BlendNetwork is still in session 0
-        let active_session_a = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session_a.session_n, 0);
-        let forming_session_a = sdp_ledger.get_forming_session(service_a).unwrap();
-        assert_eq!(forming_session_a.session_n, 1);
+        // Check BlendNetwork is promoted to session 1
+        let active_session = sdp_ledger.get_active_session(service).unwrap();
+        assert_eq!(active_session.session_n, 1);
+        let forming_session = sdp_ledger.get_forming_session(service).unwrap();
+        assert_eq!(forming_session.session_n, 2);
     }
 
     #[test]
@@ -1325,117 +1224,5 @@ mod tests {
         assert_eq!(active_session.session_n, 3);
         assert!(active_session.declarations.contains_key(&declaration_id_1));
         assert!(active_session.declarations.contains_key(&declaration_id_2));
-    }
-
-    #[test]
-    fn test_garbage_collection_different_services() {
-        // Tests: multiple services with different retention periods
-        // blocks DA config: retention_period=10, session_duration=5 → effective
-        let config = gc_test_config();
-        let service_da = ServiceType::DataAvailability;
-        let service_bn = ServiceType::BlendNetwork;
-        let signing_key = create_signing_key();
-        let zk_key = create_zk_key(0);
-        let zk_key_2 = create_zk_key(1);
-
-        let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger = SdpLedger::new()
-            .with_da_service()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
-
-        // Create 1 Blend declaration at block 0
-        let declare_op_bn = &SDPDeclareOp {
-            service_type: service_bn,
-            locked_note_id: utxo().id(),
-            zk_id: zk_key.to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
-        };
-        let declaration_id_bn = declare_op_bn.id();
-
-        // Create 2 DA declarations at block 0
-        let declare_op_da = &SDPDeclareOp {
-            service_type: service_da,
-            locked_note_id: utxo().id(),
-            zk_id: zk_key.to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
-        };
-        let declaration_id_da = declare_op_da.id();
-        let (sk, utxo) = utxo_with_sk();
-        let declare_op_da_2 = &SDPDeclareOp {
-            service_type: service_da,
-            locked_note_id: utxo.id(),
-            zk_id: zk_key_2.to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
-        };
-        let declaration_id_da_2 = declare_op_da_2.id();
-
-        sdp_ledger =
-            apply_declare_with_dummies(sdp_ledger, declare_op_bn, &zk_key, &config).unwrap();
-        sdp_ledger =
-            apply_declare_with_dummies(sdp_ledger, declare_op_da, &zk_key, &config).unwrap();
-        sdp_ledger =
-            apply_declare_with_dummies(sdp_ledger, declare_op_da_2, &zk_key_2, &config).unwrap();
-
-        // Move to block 25 (past DA's 20-block retention, at session boundary)
-        for _ in 1..26 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-
-        // Both declarations are still present, DA expires at 26 but next session
-        // boundary is at 30
-        let declarations_bn = sdp_ledger.get_declarations(service_bn).unwrap();
-        assert!(declarations_bn.contains_key(&declaration_id_bn));
-        let declarations_da = sdp_ledger.get_declarations(service_da).unwrap();
-        assert!(declarations_da.contains_key(&declaration_id_da));
-        assert!(declarations_da.contains_key(&declaration_id_da_2));
-
-        // Send active message to update the declaration's active field to block 25
-        let active_op = SDPActiveOp {
-            declaration_id: declaration_id_da_2,
-            nonce: 1,
-            metadata: lb_core::sdp::ActivityMetadata::DataAvailability(
-                lb_core::sdp::da::ActivityProof {
-                    current_session: 4,
-                    previous_session_opinions: vec![0b00_11u8],
-                    current_session_opinions: vec![0b00_11u8],
-                },
-            ),
-        };
-
-        let tx_hash = TxHash(Fr::from(2u8));
-        let zk_sig = ZkKey::multi_sign(&[sk, zk_key_2], &tx_hash.0).unwrap();
-
-        sdp_ledger = sdp_ledger
-            .apply_active_msg(&active_op, &zk_sig, tx_hash, &config)
-            .unwrap();
-
-        // Move to block 30
-        for _ in 26..31 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-
-        assert_eq!(sdp_ledger.block_number, 30);
-        let declarations_bn = sdp_ledger.get_declarations(service_bn).unwrap();
-        assert!(declarations_bn.contains_key(&declaration_id_bn));
-        let declarations_da = sdp_ledger.get_declarations(service_da).unwrap();
-        assert!(!declarations_da.contains_key(&declaration_id_da));
-        // Second DA declaration should still be present due to active msg
-        assert!(declarations_da.contains_key(&declaration_id_da_2));
-
-        // Move to block 55
-        for _ in 31..56 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-
-        assert_eq!(sdp_ledger.block_number, 55);
-        // Now also BN declaration and second DA declaration should be removed
-        let declarations_bn = sdp_ledger.get_declarations(service_bn).unwrap();
-        assert!(!declarations_bn.contains_key(&declaration_id_bn));
-        let declarations_da = sdp_ledger.get_declarations(service_da).unwrap();
-        assert!(!declarations_da.contains_key(&declaration_id_da));
-        assert!(!declarations_da.contains_key(&declaration_id_da_2));
     }
 }

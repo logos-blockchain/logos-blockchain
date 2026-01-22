@@ -11,17 +11,6 @@ use lb_libp2p::{Multiaddr, PeerId, multiaddr};
 static IS_SLOW_TEST_ENV: LazyLock<bool> =
     LazyLock::new(|| env::var("SLOW_TEST_ENV").is_ok_and(|s| s == "true"));
 
-pub static GLOBAL_PARAMS_PATH: LazyLock<String> = LazyLock::new(|| {
-    let relative_path = "./kzgrs/kzgrs_test_params";
-    let current_dir = env::current_dir().expect("Failed to get current directory");
-    current_dir
-        .join(relative_path)
-        .canonicalize()
-        .expect("Failed to resolve absolute path")
-        .to_string_lossy()
-        .to_string()
-});
-
 /// Global flag indicating whether debug tracing configuration is enabled to
 /// send traces to local grafana stack.
 pub static IS_DEBUG_TRACING: LazyLock<bool> = LazyLock::new(|| {

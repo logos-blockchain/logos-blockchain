@@ -595,28 +595,16 @@ mod tests {
             },
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
-                    [
-                        (
-                            ServiceType::BlendNetwork,
-                            ServiceParameters {
-                                lock_period: 10,
-                                inactivity_period: 20,
-                                retention_period: 100,
-                                timestamp: 0,
-                                session_duration: 10,
-                            },
-                        ),
-                        (
-                            ServiceType::DataAvailability,
-                            ServiceParameters {
-                                lock_period: 10,
-                                inactivity_period: 20,
-                                retention_period: 100,
-                                timestamp: 0,
-                                session_duration: 10,
-                            },
-                        ),
-                    ]
+                    [(
+                        ServiceType::BlendNetwork,
+                        ServiceParameters {
+                            lock_period: 10,
+                            inactivity_period: 20,
+                            retention_period: 100,
+                            timestamp: 0,
+                            session_duration: 10,
+                        },
+                    )]
                     .into(),
                 ),
                 service_rewards_params: ServiceRewardsParameters {

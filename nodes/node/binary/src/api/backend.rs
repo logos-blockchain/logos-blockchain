@@ -1,9 +1,7 @@
 #![allow(clippy::needless_for_each, reason = "Utoipa implementation")]
 
 use std::{
-    error::Error,
     fmt::{Debug, Display},
-    hash::Hash,
     time::Duration,
 };
 
@@ -15,38 +13,21 @@ use axum::{
     },
     routing,
 };
-use lb_api_service::{
-    Backend,
-    http::{consensus::Cryptarchia, da::DaVerifier},
-};
+use lb_api_service::{Backend, http::consensus::Cryptarchia};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
-    da::{
-        BlobId, DaVerifier as CoreDaVerifier,
-        blob::{LightShare, Share},
-    },
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction},
 };
-use lb_da_network_core::SubnetworkId;
-use lb_da_network_service::{
-    backends::libp2p::validator::DaNetworkValidatorBackend, membership::MembershipAdapter,
-    sdp::SdpAdapter as SdpAdapterTrait, storage::MembershipStorageAdapter,
-};
-use lb_da_sampling_service::{DaSamplingService, backend::DaSamplingServiceBackend};
-use lb_da_verifier_service::{backend::VerifierBackend, mempool::DaMempoolAdapter};
 pub use lb_http_api_common::settings::AxumBackendSettings;
 use lb_http_api_common::{paths, utils::create_rate_limit_layer};
-use lb_libp2p::PeerId;
 use lb_sdp_service::adapters::mempool::SdpMempoolAdapter;
 use lb_services_utils::wait_until_services_are_ready;
-use lb_storage_service::{StorageService, api::da::DaConverter, backends::rocksdb::RocksBackend};
-use lb_subnetworks_assignations::MembershipHandler;
+use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
 use lb_tx_service::{
     MempoolMetrics, TxMempoolService, backend::Mempool, tx::service::openapi::Status,
 };
 use overwatch::{DynError, overwatch::handle::OverwatchHandle, services::AsServiceId};
-use serde::{Serialize, de::DeserializeOwned};
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::{
@@ -64,168 +45,38 @@ use {
 };
 
 use super::handlers::{
-    add_share, add_tx, balancer_stats, blacklisted_peers, block, block_peer, cryptarchia_headers,
-    cryptarchia_info, cryptarchia_lib_stream, da_get_commitments, da_get_light_share,
-    da_get_shares, da_get_storage_commitments, libp2p_info, mantle_metrics, mantle_status,
-    monitor_stats, unblock_peer, wallet,
+    add_tx, block, cryptarchia_headers, cryptarchia_info, cryptarchia_lib_stream, libp2p_info,
+    mantle_metrics, mantle_status, wallet,
 };
 use crate::{
     WalletService,
     api::handlers::{post_activity, post_declaration, post_withdrawal},
 };
 
-pub(crate) type DaStorageBackend = RocksBackend;
-type DaStorageService<RuntimeServiceId> = StorageService<DaStorageBackend, RuntimeServiceId>;
+pub(crate) type BlockStorageBackend = RocksBackend;
+type BlockStorageService<RuntimeServiceId> = StorageService<BlockStorageBackend, RuntimeServiceId>;
 
-pub struct AxumBackend<
-    DaShare,
-    Membership,
-    DaMembershipAdapter,
-    DaMembershipStorage,
-    DaVerifierBackend,
-    DaVerifierNetwork,
-    DaVerifierStorage,
-    DaStorageConverter,
-    SamplingBackend,
-    SamplingNetworkAdapter,
-    SamplingMempoolAdapter,
-    SamplingStorage,
-    VerifierMempoolAdapter,
-    TimeBackend,
-    ApiAdapter,
-    SdpAdapter,
-    HttpStorageAdapter,
-    MempoolStorageAdapter,
-    SdpMempool,
-> {
+pub struct AxumBackend<TimeBackend, HttpStorageAdapter, MempoolStorageAdapter, SdpMempool> {
     settings: AxumBackendSettings,
-    _share: core::marker::PhantomData<DaShare>,
-    _membership: core::marker::PhantomData<Membership>,
-    _verifier_backend: core::marker::PhantomData<DaVerifierBackend>,
-    _verifier_network: core::marker::PhantomData<DaVerifierNetwork>,
-    _verifier_storage: core::marker::PhantomData<DaVerifierStorage>,
-    _storage_converter: core::marker::PhantomData<DaStorageConverter>,
-    _sampling_backend: core::marker::PhantomData<SamplingBackend>,
-    _sampling_network_adapter: core::marker::PhantomData<SamplingNetworkAdapter>,
-    _sampling_storage: core::marker::PhantomData<SamplingStorage>,
     _time_backend: core::marker::PhantomData<TimeBackend>,
-    _api_adapter: core::marker::PhantomData<ApiAdapter>,
     _storage_adapter: core::marker::PhantomData<HttpStorageAdapter>,
-    _sdp_adapter: core::marker::PhantomData<SdpAdapter>,
     _mempool_storage_adapter: core::marker::PhantomData<MempoolStorageAdapter>,
-    _da_membership: core::marker::PhantomData<(DaMembershipAdapter, DaMembershipStorage)>,
-    _verifier_mempool_adapter: core::marker::PhantomData<VerifierMempoolAdapter>,
-    _sampling_mempool_adapter: core::marker::PhantomData<SamplingMempoolAdapter>,
     _sdp_mempool_adapter: core::marker::PhantomData<SdpMempool>,
 }
 
 #[derive(OpenApi)]
-#[openapi(
-    paths(
-    ),
-    components(
-        schemas(Status, MempoolMetrics)
-    ),
-    tags(
-        (name = "da", description = "data availibility related APIs")
-    )
-)]
+#[openapi(paths(), components(schemas(Status, MempoolMetrics)), tags())]
 struct ApiDoc;
 
 #[async_trait::async_trait]
-impl<
-    DaShare,
-    Membership,
-    DaMembershipAdapter,
-    DaMembershipStorage,
-    DaVerifierBackend,
-    DaVerifierNetwork,
-    DaVerifierStorage,
-    DaStorageConverter,
-    SamplingBackend,
-    SamplingNetworkAdapter,
-    SamplingMempoolAdapter,
-    SamplingStorage,
-    VerifierMempoolAdapter,
-    TimeBackend,
-    ApiAdapter,
-    SdpAdapter,
-    StorageAdapter,
-    MempoolStorageAdapter,
-    SdpMempool,
-    RuntimeServiceId,
-> Backend<RuntimeServiceId>
-    for AxumBackend<
-        DaShare,
-        Membership,
-        DaMembershipAdapter,
-        DaMembershipStorage,
-        DaVerifierBackend,
-        DaVerifierNetwork,
-        DaVerifierStorage,
-        DaStorageConverter,
-        SamplingBackend,
-        SamplingNetworkAdapter,
-        SamplingMempoolAdapter,
-        SamplingStorage,
-        VerifierMempoolAdapter,
-        TimeBackend,
-        ApiAdapter,
-        SdpAdapter,
-        StorageAdapter,
-        MempoolStorageAdapter,
-        SdpMempool,
-    >
+impl<TimeBackend, StorageAdapter, MempoolStorageAdapter, SdpMempool, RuntimeServiceId>
+    Backend<RuntimeServiceId>
+    for AxumBackend<TimeBackend, StorageAdapter, MempoolStorageAdapter, SdpMempool>
 where
-    DaShare: Share + Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-    <DaShare as Share>::BlobId: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
-    <DaShare as Share>::ShareIndex: Serialize + DeserializeOwned + Send + Sync + 'static,
-    DaShare::LightShare: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-    DaShare::SharesCommitments: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-    Membership: MembershipHandler<NetworkId = SubnetworkId, Id = PeerId>
-        + Clone
-        + Debug
-        + Send
-        + Sync
-        + 'static,
-    DaMembershipAdapter: MembershipAdapter + Send + Sync + 'static,
-    DaMembershipStorage: MembershipStorageAdapter<PeerId, SubnetworkId> + Send + Sync + 'static,
-    DaVerifierBackend: VerifierBackend + CoreDaVerifier<DaShare = DaShare> + Send + Sync + 'static,
-    <DaVerifierBackend as VerifierBackend>::Settings: Clone,
-    <DaVerifierBackend as CoreDaVerifier>::Error: Error,
-    DaVerifierNetwork:
-        lb_da_verifier_service::network::NetworkAdapter<RuntimeServiceId> + Send + Sync + 'static,
-    DaVerifierStorage:
-        lb_da_verifier_service::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
-    SamplingBackend: DaSamplingServiceBackend<BlobId = BlobId> + Send + 'static,
-    SamplingBackend::Settings: Clone,
-    SamplingBackend::Share: Debug + 'static,
-    SamplingBackend::BlobId: Debug + 'static,
-    SamplingMempoolAdapter: lb_da_sampling_service::mempool::DaMempoolAdapter,
-    DaShare::LightShare: LightShare<ShareIndex = <DaShare as Share>::ShareIndex>
-        + Serialize
-        + DeserializeOwned
-        + Clone
-        + Send
-        + Sync
-        + 'static,
-    <DaShare as Share>::ShareIndex: Clone + Hash + Eq + Send + Sync + 'static,
-    DaShare::LightShare: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-    DaShare::SharesCommitments: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-    SamplingNetworkAdapter:
-        lb_da_sampling_service::network::NetworkAdapter<RuntimeServiceId> + Send + Sync + 'static,
-    SamplingStorage:
-        lb_da_sampling_service::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
-    DaVerifierNetwork::Settings: Clone,
-    VerifierMempoolAdapter: DaMempoolAdapter + Send + Sync + 'static,
     TimeBackend: lb_time_service::backends::TimeBackend + Send + 'static,
     TimeBackend::Settings: Clone + Send + Sync,
-    ApiAdapter: lb_da_network_service::api::ApiAdapter + Send + Sync + 'static,
-    DaStorageConverter:
-        DaConverter<DaStorageBackend, Share = DaShare, Tx = SignedMantleTx> + Send + Sync + 'static,
     StorageAdapter:
         lb_api_service::http::storage::StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
-    SdpAdapter: SdpAdapterTrait<RuntimeServiceId> + Send + Sync + 'static,
     MempoolStorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
             Item = SignedMantleTx,
@@ -236,8 +87,6 @@ where
         + 'static,
     MempoolStorageAdapter::Error: Debug,
     SdpMempool: SdpMempoolAdapter + Send + Sync + 'static,
-    SamplingMempoolAdapter:
-        lb_da_sampling_service::mempool::DaMempoolAdapter + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -247,33 +96,12 @@ where
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + AsServiceId<BlockBroadcastService<RuntimeServiceId>>
         + AsServiceId<
-            DaVerifier<
-                DaShare,
-                DaVerifierNetwork,
-                DaVerifierBackend,
-                DaStorageConverter,
-                VerifierMempoolAdapter,
-                RuntimeServiceId,
-            >,
-        >
-        + AsServiceId<
-            lb_da_network_service::NetworkService<
-                DaNetworkValidatorBackend<Membership>,
-                Membership,
-                DaMembershipAdapter,
-                DaMembershipStorage,
-                ApiAdapter,
-                SdpAdapter,
-                RuntimeServiceId,
-            >,
-        >
-        + AsServiceId<
             lb_network_service::NetworkService<
                 lb_network_service::backends::libp2p::Libp2p,
                 RuntimeServiceId,
             >,
         >
-        + AsServiceId<DaStorageService<RuntimeServiceId>>
+        + AsServiceId<BlockStorageService<RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
                 lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
@@ -292,15 +120,6 @@ where
                 RuntimeServiceId,
             >,
         >
-        + AsServiceId<
-            DaSamplingService<
-                SamplingBackend,
-                SamplingNetworkAdapter,
-                SamplingStorage,
-                SamplingMempoolAdapter,
-                RuntimeServiceId,
-            >,
-        >
         + AsServiceId<lb_sdp_service::SdpService<SdpMempool, RuntimeServiceId>>
         + AsServiceId<WalletService>,
 {
@@ -313,23 +132,9 @@ where
     {
         Ok(Self {
             settings,
-            _share: core::marker::PhantomData,
-            _membership: core::marker::PhantomData,
-            _verifier_backend: core::marker::PhantomData,
-            _verifier_network: core::marker::PhantomData,
-            _verifier_storage: core::marker::PhantomData,
-            _storage_converter: core::marker::PhantomData,
-            _sampling_backend: core::marker::PhantomData,
-            _sampling_network_adapter: core::marker::PhantomData,
-            _sampling_storage: core::marker::PhantomData,
             _time_backend: core::marker::PhantomData,
-            _api_adapter: core::marker::PhantomData,
             _storage_adapter: core::marker::PhantomData,
-            _sdp_adapter: core::marker::PhantomData,
             _mempool_storage_adapter: core::marker::PhantomData,
-            _da_membership: core::marker::PhantomData,
-            _verifier_mempool_adapter: core::marker::PhantomData,
-            _sampling_mempool_adapter: core::marker::PhantomData,
             _sdp_mempool_adapter: core::marker::PhantomData,
         })
     }
@@ -342,10 +147,8 @@ where
             &overwatch_handle,
             Some(Duration::from_secs(60)),
             Cryptarchia<_>,
-            DaVerifier<_, _, _, _, _, _>,
-            lb_da_network_service::NetworkService<_, _, _, _, _, _, _>,
             lb_network_service::NetworkService<_, _>,
-            DaStorageService<_>,
+            BlockStorageService<_>,
             TxMempoolService<_, _, _,  _>
         )
         .await?;
@@ -391,61 +194,6 @@ where
                 routing::get(cryptarchia_lib_stream::<RuntimeServiceId>),
             )
             .route(
-                paths::DA_ADD_SHARE,
-                routing::post(
-                    add_share::<
-                        DaShare,
-                        DaVerifierNetwork,
-                        DaVerifierBackend,
-                        DaStorageConverter,
-                        VerifierMempoolAdapter,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::DA_BLOCK_PEER,
-                routing::post(
-                    block_peer::<
-                        DaNetworkValidatorBackend<Membership>,
-                        Membership,
-                        DaMembershipAdapter,
-                        DaMembershipStorage,
-                        ApiAdapter,
-                        SdpAdapter,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::DA_UNBLOCK_PEER,
-                routing::post(
-                    unblock_peer::<
-                        DaNetworkValidatorBackend<Membership>,
-                        Membership,
-                        DaMembershipAdapter,
-                        DaMembershipStorage,
-                        ApiAdapter,
-                        SdpAdapter,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::DA_BLACKLISTED_PEERS,
-                routing::get(
-                    blacklisted_peers::<
-                        DaNetworkValidatorBackend<Membership>,
-                        Membership,
-                        DaMembershipAdapter,
-                        DaMembershipStorage,
-                        ApiAdapter,
-                        SdpAdapter,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
                 paths::NETWORK_INFO,
                 routing::get(libp2p_info::<RuntimeServiceId>),
             )
@@ -456,75 +204,6 @@ where
             .route(
                 paths::MEMPOOL_ADD_TX,
                 routing::post(add_tx::<MempoolStorageAdapter, RuntimeServiceId>),
-            )
-            .route(
-                paths::DA_GET_SHARES_COMMITMENTS,
-                routing::post(
-                    da_get_commitments::<
-                        BlobId,
-                        SamplingBackend,
-                        SamplingNetworkAdapter,
-                        SamplingStorage,
-                        SamplingMempoolAdapter,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::DA_GET_STORAGE_SHARES_COMMITMENTS,
-                routing::get(
-                    da_get_storage_commitments::<
-                        DaStorageConverter,
-                        StorageAdapter,
-                        DaShare,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::DA_GET_LIGHT_SHARE,
-                routing::get(
-                    da_get_light_share::<
-                        DaStorageConverter,
-                        StorageAdapter,
-                        DaShare,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::DA_GET_SHARES,
-                routing::get(
-                    da_get_shares::<DaStorageConverter, StorageAdapter, DaShare, RuntimeServiceId>,
-                ),
-            )
-            .route(
-                paths::DA_BALANCER_STATS,
-                routing::get(
-                    balancer_stats::<
-                        DaNetworkValidatorBackend<Membership>,
-                        Membership,
-                        DaMembershipAdapter,
-                        DaMembershipStorage,
-                        ApiAdapter,
-                        SdpAdapter,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::DA_MONITOR_STATS,
-                routing::get(
-                    monitor_stats::<
-                        DaNetworkValidatorBackend<Membership>,
-                        Membership,
-                        DaMembershipAdapter,
-                        DaMembershipStorage,
-                        ApiAdapter,
-                        SdpAdapter,
-                        RuntimeServiceId,
-                    >,
-                ),
             )
             .route(
                 paths::SDP_POST_DECLARATION,
@@ -541,15 +220,7 @@ where
             .route(
                 paths::wallet::BALANCE,
                 routing::get(
-                    wallet::get_balance::<
-                        WalletService,
-                        SamplingBackend,
-                        SamplingNetworkAdapter,
-                        SamplingStorage,
-                        MempoolStorageAdapter,
-                        TimeBackend,
-                        _,
-                    >,
+                    wallet::get_balance::<WalletService, MempoolStorageAdapter, TimeBackend, _>,
                 ),
             )
             .route(
@@ -557,10 +228,7 @@ where
                 routing::post(
                     wallet::post_transactions_transfer_funds::<
                         WalletService,
-                        DaStorageBackend,
-                        SamplingBackend,
-                        SamplingNetworkAdapter,
-                        SamplingStorage,
+                        BlockStorageBackend,
                         MempoolStorageAdapter,
                         TimeBackend,
                         _,
@@ -572,13 +240,13 @@ where
         let app = app
             .route(
                 paths::BLOCKS,
-                routing::get(blocks::<DaStorageBackend, RuntimeServiceId>),
+                routing::get(blocks::<BlockStorageBackend, RuntimeServiceId>),
             )
             .route(
                 paths::BLOCKS_STREAM,
                 routing::get(
                     blocks_stream::<
-                        DaStorageBackend,
+                        BlockStorageBackend,
                         CryptarchiaConsensus<_, _, _, _>,
                         RuntimeServiceId,
                     >,
