@@ -45,9 +45,6 @@ allow = [
   "Unicode-3.0",
   "Zlib",
 ]
-exceptions = [
-  { allow = ["LicenseRef-Custom"], name = "fixed-slice-deque" }, # It has a free licencese
-]
 private = { ignore = false }
 unused-allowed-license = "deny"
 
