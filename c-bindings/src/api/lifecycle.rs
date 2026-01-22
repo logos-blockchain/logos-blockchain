@@ -48,7 +48,9 @@ pub extern "C" fn start_lb_node(
 ///
 /// - `config_path`: A pointer to a string representing the path to the
 ///   configuration file.
-/// - `deployment`: A pointer to a string for the deployment (can be null).
+/// - `deployment`: A pointer to a string representing either a well-known
+///   deployment name (e.g., "mainnet") or a path to a deployment YAML file. If
+///   null, defaults to "mainnet".
 ///
 /// # Returns
 ///
@@ -56,10 +58,10 @@ pub extern "C" fn start_lb_node(
 /// error code.
 fn initialize_lb_node(
     config_path: *const c_char,
-    deployment_arg: *const c_char,
+    deployment: *const c_char,
 ) -> Result<LogosBlockchainNode, OperationStatus> {
     let run_config = RunConfig {
-        deployment: get_deployment_config(deployment_arg)?,
+        deployment: get_deployment_config(deployment)?,
         user: get_user_config(config_path)?,
     };
 
