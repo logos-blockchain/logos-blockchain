@@ -207,7 +207,7 @@ jobs:
           # but the dev mode logic is not actually enabled
           # because POL_PROOF_DEV_MODE is not set.
           # TODO: Enable all tests after adapting them to PoL
-          args: leadership::pol_tests --all-features
+          args: leadership::pol_tests --lib --all-features
 
       - name: Upload integration tests results
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
