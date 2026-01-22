@@ -311,11 +311,10 @@ where
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) {
-        if let Some(tip) = msg.tip() {
-            if let Err(err) = Self::backfill_if_not_in_sync(tip, wallet, storage, cryptarchia).await
-            {
-                error!(err=?err, "Failed backfilling wallet to message tip, will attempt to continue processing the message {msg:?}");
-            }
+        if let Some(tip) = msg.tip()
+            && let Err(err) = Self::backfill_if_not_in_sync(tip, wallet, storage, cryptarchia).await
+        {
+            error!(err=?err, "Failed backfilling wallet to message tip, will attempt to continue processing the message {msg:?}");
         }
 
         match msg {
@@ -360,7 +359,7 @@ where
                 Self::get_leader_aged_notes(tip, resp_tx, wallet, cryptarchia).await;
             }
             WalletMsg::GenerateNewVoucherSecret { resp_tx } => {
-                Self::generate_new_voucher_secret(voucher_secrets, resp_tx).await;
+                Self::generate_new_voucher_secret(voucher_secrets, resp_tx);
             }
         }
     }
@@ -394,6 +393,7 @@ where
         }
     }
 
+    #[expect(clippy::too_many_lines, reason = "it nearly fits")]
     async fn sign_tx(
         voucher_secrets: &mut Vec<Fr>,
         tx_builder: MantleTxBuilder,
@@ -492,7 +492,7 @@ where
                     let mut hash = ZkHasher::new();
                     hash.compress(&[
                         Fr::from_str("1668646695034522932676805048878418").unwrap(),
-                        voucher_secret.clone(),
+                        voucher_secret,
                     ]);
                     let voucher_cm = VoucherCm::from(hash.finalize());
                     let path = ledger
@@ -503,11 +503,10 @@ where
                     // TODO: This should happen in KMS
                     let poc = Self::generate_poc(
                         voucher_secret,
-                        path,
+                        &path,
                         claim_op.rewards_root,
                         claim_op.mantle_tx_hash,
-                    )
-                    .await?;
+                    )?;
 
                     OpProof::PoC(poc)
                 }
@@ -572,9 +571,9 @@ where
         Ok(zk_sig)
     }
 
-    async fn generate_poc(
+    fn generate_poc(
         voucher_secret: Fr,
-        path: MerklePath<Fr>,
+        path: &MerklePath<Fr>,
         rewards_root: RewardsRoot,
         tx_hash: TxHash,
     ) -> Result<Groth16LeaderClaimProof, WalletServiceError> {
@@ -583,7 +582,7 @@ where
                 voucher_root: rewards_root.into(),
                 mantle_tx_hash: tx_hash.into(),
             },
-            &path,
+            path,
             voucher_secret,
         ));
 
@@ -631,7 +630,7 @@ where
     }
 
     // TODO: Do this in KMS. DO NOT RESTART THE NODE TO NOT LOSE REWARDS FOR NOW
-    async fn generate_new_voucher_secret(
+    fn generate_new_voucher_secret(
         voucher_secrets: &mut Vec<Fr>,
         resp_tx: oneshot::Sender<VoucherCm>,
     ) {
@@ -641,7 +640,7 @@ where
         let mut hash = ZkHasher::new();
         hash.compress(&[
             Fr::from_str("1668646695034522932676805048878418").unwrap(),
-            voucher_secret.clone(),
+            voucher_secret,
         ]);
         let voucher_cm = VoucherCm::from(hash.finalize());
 

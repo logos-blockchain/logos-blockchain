@@ -123,6 +123,7 @@ impl LedgerState {
         self.sdp.declarations()
     }
 
+    #[must_use]
     pub fn voucher_merkle_path(&self, voucher_cm: VoucherCm) -> Option<MerklePath<ZkHash>> {
         self.leaders.voucher_merkle_path(voucher_cm)
     }

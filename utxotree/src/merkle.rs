@@ -244,12 +244,16 @@ impl<Item: AsRef<Fr>> Node<Item> {
     }
 }
 
+#[expect(
+    clippy::too_long_first_doc_paragraph,
+    reason = "to have enough context"
+)]
 /// A dynamic persistent Merkle tree that supports insertion and removal of
 /// items. Removed items are replaced with an empty leaf node, which prevents
 /// the whole tree reordering and their position is recorded for future
 /// insertions. Compared to a MPT, the height of this tree is predictable and
 /// bounded by the number of items, allowing for efficient and simple proof of
-/// memberships for Proof of Leadership.
+/// memberships for `PoL`.
 #[derive(Debug, Clone)]
 pub struct DynamicMerkleTree<Item, Hash> {
     root: Arc<Node<Item>>,
@@ -257,8 +261,8 @@ pub struct DynamicMerkleTree<Item, Hash> {
     _hash: PhantomData<Hash>,
 }
 
-impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
-    pub fn new() -> Self {
+impl<Item: AsRef<Fr>, Hash: Digest> Default for DynamicMerkleTree<Item, Hash> {
+    fn default() -> Self {
         let holes = RedBlackTreeSetSync::new_sync();
         Self {
             root: Arc::new(Node::Empty {
@@ -268,7 +272,15 @@ impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
             _hash: PhantomData,
         }
     }
+}
 
+impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
     pub fn size(&self) -> usize {
         self.root.size()
     }
@@ -307,6 +319,7 @@ impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
         }
     }
 
+    #[must_use]
     pub fn root(&self) -> Fr {
         match self.root.as_ref() {
             Node::Inner { value, .. } => *value,
@@ -320,6 +333,7 @@ impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
     /// Computes the Merkle path for the item at the given index.
     /// The path is ordered from leaf to root (excluded).
     /// Returns `None` if the index does not exist or has been removed.
+    #[must_use]
     pub fn path(&self, index: usize) -> Option<MerklePath<Fr>> {
         self.root.path::<Hash>(index).inspect(|path| {
             assert_eq!(

@@ -153,7 +153,7 @@ impl LeaderClaimPrivate {
             mantle_tx_hash: public.mantle_tx_hash,
         };
         let wallet = lb_poc::PoCWalletInputsData {
-            secret_voucher: secret_voucher,
+            secret_voucher,
             voucher_merkle_path: voucher_path.iter().map(|n| *n.item()).collect(),
             voucher_merkle_path_selectors: voucher_path
                 .iter()
