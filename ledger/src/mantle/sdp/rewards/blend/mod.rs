@@ -79,9 +79,7 @@ where
                 current_session_tracker,
                 settings,
             } => {
-                let ActivityMetadata::Blend(proof) = metadata else {
-                    return Err(Error::InvalidProofType);
-                };
+                let ActivityMetadata::Blend(proof) = metadata;
 
                 let (zk_id, hamming_distance) = target_session_state.verify_proof(
                     &provider_id,

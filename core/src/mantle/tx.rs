@@ -169,11 +169,8 @@ impl GasCost for MantleTx {
             .sum::<Gas>()
             + self.ledger_tx.execution_gas::<Constants>();
         let storage_gas = self.signed_serialized_size();
-        let da_gas_cost = self.ops.iter().map(Op::da_gas_cost).sum::<Gas>();
 
-        execution_gas * self.execution_gas_price
-            + storage_gas * self.storage_gas_price
-            + da_gas_cost
+        execution_gas * self.execution_gas_price + storage_gas * self.storage_gas_price
     }
 }
 
@@ -245,8 +242,6 @@ impl SignedMantleTx {
     /// present and valid.
     ///
     /// This enforces at construction time that:
-    /// - `ChannelBlob` operations have a valid Ed25519 signature from the
-    ///   declared signer
     /// - `ChannelInscribe` operations have a valid Ed25519 signature from the
     ///   declared signer
     pub fn new(
@@ -300,13 +295,6 @@ impl SignedMantleTx {
             .enumerate()
         {
             match (op, proof) {
-                (Op::ChannelBlob(blob_op), OpProof::Ed25519Sig(sig)) => {
-                    // Blob operations require an Ed25519 signature
-                    blob_op
-                        .signer
-                        .verify(tx_hash_bytes.as_ref(), sig)
-                        .map_err(|_| VerificationError::InvalidSignature { op_index: idx })?;
-                }
                 (Op::ChannelInscribe(inscribe_op), OpProof::Ed25519Sig(sig)) => {
                     // Inscription operations require an Ed25519 signature
                     inscribe_op
@@ -314,7 +302,7 @@ impl SignedMantleTx {
                         .verify(tx_hash_bytes.as_ref(), sig)
                         .map_err(|_| VerificationError::InvalidSignature { op_index: idx })?;
                 }
-                v @ (Op::ChannelBlob(_) | Op::ChannelInscribe(_), OpProof::ZkSig(_)) => {
+                v @ (Op::ChannelInscribe(_), OpProof::ZkSig(_)) => {
                     return Err(VerificationError::IncorrectProofType {
                         op_type: v.0.as_str(),
                         op_index: idx,
@@ -367,11 +355,9 @@ impl GasCost for SignedMantleTx {
             .sum::<Gas>()
             + self.mantle_tx.ledger_tx.execution_gas::<Constants>();
         let storage_gas = self.gas_storage_size();
-        let da_gas_cost = self.mantle_tx.ops.iter().map(Op::da_gas_cost).sum::<Gas>();
 
         execution_gas * self.mantle_tx.execution_gas_price
             + storage_gas * self.mantle_tx.storage_gas_price
-            + da_gas_cost
     }
 }
 
@@ -398,10 +384,7 @@ mod tests {
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 
     use super::*;
-    use crate::mantle::{
-        ledger::Tx as LedgerTx,
-        ops::channel::{blob::BlobOp, inscribe::InscriptionOp},
-    };
+    use crate::mantle::{ledger::Tx as LedgerTx, ops::channel::inscribe::InscriptionOp};
 
     fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
         MantleTx {
@@ -412,18 +395,6 @@ mod tests {
         }
     }
 
-    fn create_test_blob_op(signing_key: &Ed25519Key) -> BlobOp {
-        BlobOp {
-            channel: [0; 32].into(),
-            session: 0u64,
-            blob: [0; 32],
-            blob_size: 0,
-            da_storage_gas_price: 0,
-            parent: [0; 32].into(),
-            signer: signing_key.public_key(),
-        }
-    }
-
     fn create_test_inscribe_op(signing_key: &Ed25519Key) -> InscriptionOp {
         InscriptionOp {
             channel_id: [0; 32].into(),
@@ -431,25 +402,6 @@ mod tests {
             parent: [0; 32].into(),
             signer: signing_key.public_key(),
         }
-    }
-
-    #[test]
-    fn test_signed_mantle_tx_new_with_valid_blob_proof() {
-        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
-        let blob_op = create_test_blob_op(&signing_key);
-        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelBlob(blob_op)]);
-
-        // Sign the transaction hash
-        let tx_hash = mantle_tx.hash();
-        let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
-
-        let result = SignedMantleTx::new(
-            mantle_tx,
-            vec![OpProof::Ed25519Sig(signature)],
-            ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
-        );
-
-        assert!(result.is_ok());
     }
 
     #[test]
@@ -490,29 +442,6 @@ mod tests {
     }
 
     #[test]
-    fn test_signed_mantle_tx_new_invalid_blob_signature() {
-        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
-        let wrong_signing_key = Ed25519Key::from_bytes(&[2; 32]);
-        let blob_op = create_test_blob_op(&signing_key);
-        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelBlob(blob_op)]);
-
-        // Sign with wrong key
-        let tx_hash = mantle_tx.hash();
-        let signature = wrong_signing_key.sign_payload(&tx_hash.as_signing_bytes());
-
-        let result = SignedMantleTx::new(
-            mantle_tx,
-            vec![OpProof::Ed25519Sig(signature)],
-            ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
-        );
-
-        assert!(matches!(
-            result,
-            Err(VerificationError::InvalidSignature { op_index: 0 })
-        ));
-    }
-
-    #[test]
     fn test_signed_mantle_tx_new_invalid_inscribe_signature() {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let wrong_signing_key = Ed25519Key::from_bytes(&[2; 32]);
@@ -532,27 +461,6 @@ mod tests {
         assert!(matches!(
             result,
             Err(VerificationError::InvalidSignature { op_index: 0 })
-        ));
-    }
-
-    #[test]
-    fn test_signed_mantle_tx_new_incorrect_blob_proof_type() {
-        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
-        let blob_op = create_test_blob_op(&signing_key);
-        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelBlob(blob_op)]);
-
-        // Use wrong proof type
-        let tx_hash = mantle_tx.hash();
-        let zk_sig = OpProof::ZkSig(ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap());
-        let ledger_tx_proof = ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap();
-        let result = SignedMantleTx::new(mantle_tx, vec![zk_sig], ledger_tx_proof);
-
-        assert!(matches!(
-            result,
-            Err(VerificationError::IncorrectProofType {
-                op_type: "ChannelBlob",
-                op_index: 0
-            })
         ));
     }
 
@@ -582,12 +490,12 @@ mod tests {
         let signing_key1 = Ed25519Key::from_bytes(&[1; 32]);
         let signing_key2 = Ed25519Key::from_bytes(&[2; 32]);
 
-        let blob_op = create_test_blob_op(&signing_key1);
-        let inscribe_op = create_test_inscribe_op(&signing_key2);
+        let inscribe_op1 = create_test_inscribe_op(&signing_key1);
+        let inscribe_op2 = create_test_inscribe_op(&signing_key2);
 
         let mantle_tx = create_test_mantle_tx(vec![
-            Op::ChannelBlob(blob_op),
-            Op::ChannelInscribe(inscribe_op),
+            Op::ChannelInscribe(inscribe_op1),
+            Op::ChannelInscribe(inscribe_op2),
         ]);
 
         let tx_hash = mantle_tx.hash();
@@ -609,12 +517,12 @@ mod tests {
         let signing_key2 = Ed25519Key::from_bytes(&[2; 32]);
         let wrong_key = Ed25519Key::from_bytes(&[3; 32]);
 
-        let blob_op = create_test_blob_op(&signing_key1);
-        let inscribe_op = create_test_inscribe_op(&signing_key2);
+        let inscribe_op1 = create_test_inscribe_op(&signing_key1);
+        let inscribe_op2 = create_test_inscribe_op(&signing_key2);
 
         let mantle_tx = create_test_mantle_tx(vec![
-            Op::ChannelBlob(blob_op),
-            Op::ChannelInscribe(inscribe_op),
+            Op::ChannelInscribe(inscribe_op1),
+            Op::ChannelInscribe(inscribe_op2),
         ]);
 
         let tx_hash = mantle_tx.hash();
@@ -636,8 +544,8 @@ mod tests {
     #[test]
     fn test_signed_mantle_tx_deserialize_with_valid_proof() {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
-        let blob_op = create_test_blob_op(&signing_key);
-        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelBlob(blob_op)]);
+        let inscribe_op = create_test_inscribe_op(&signing_key);
+        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
 
         let tx_hash = mantle_tx.hash();
         let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
@@ -660,8 +568,8 @@ mod tests {
     #[test]
     fn test_signed_mantle_tx_deserialize_with_missing_proof() {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
-        let blob_op = create_test_blob_op(&signing_key);
-        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelBlob(blob_op)]);
+        let inscribe_op = create_test_inscribe_op(&signing_key);
+        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
 
         let ledger_tx_proof = ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap();
         let helper = SignedMantleTx {
@@ -685,8 +593,8 @@ mod tests {
     fn test_signed_mantle_tx_deserialize_with_invalid_signature() {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let wrong_key = Ed25519Key::from_bytes(&[2; 32]);
-        let blob_op = create_test_blob_op(&signing_key);
-        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelBlob(blob_op)]);
+        let inscribe_op = create_test_inscribe_op(&signing_key);
+        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
 
         let tx_hash = mantle_tx.hash();
         let wrong_signature = wrong_key.sign_payload(&tx_hash.as_signing_bytes());
@@ -708,8 +616,8 @@ mod tests {
     #[test]
     fn test_signed_mantle_tx_new_proof_count_mismatch() {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
-        let blob_op = create_test_blob_op(&signing_key);
-        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelBlob(blob_op)]);
+        let inscribe_op = create_test_inscribe_op(&signing_key);
+        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
         let tx_hash = mantle_tx.hash();
         let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 

@@ -151,7 +151,7 @@ mod tests {
     use crate::{
         mantle::{
             ledger::{Note, Tx as LedgerTx, Utxo, Value},
-            ops::channel::{Ed25519PublicKey, blob::BlobOp},
+            ops::channel::Ed25519PublicKey,
         },
         sdp::{ProviderId, ServiceType},
     };
@@ -180,18 +180,6 @@ mod tests {
             zk_id: ZkPublicKey::new(BigUint::from(zk_id_value).into()),
             provider_id: ProviderId(verifying_key),
             locators: [].into(),
-        }
-    }
-
-    fn blob_op(channel_id: ChannelId, verifying_key: Ed25519PublicKey) -> BlobOp {
-        BlobOp {
-            channel: channel_id,
-            session: 0u64,
-            blob: [42; 32],
-            blob_size: 1024,
-            da_storage_gas_price: 10,
-            parent: MsgId::root(),
-            signer: verifying_key,
         }
     }
 
@@ -282,12 +270,6 @@ mod tests {
                 Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             )
         };
-        let blob_op = || {
-            blob_op(
-                ChannelId::from([0; 32]),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
-            )
-        };
 
         // Test cases: (operations, expected_error)
         let test_cases = [
@@ -304,16 +286,6 @@ mod tests {
                 Some(Error::UnsupportedGenesisOp(vec![Op::ChannelInscribe(
                     inscription_op(),
                 )])),
-            ),
-            // Invalid non-SDP combinations
-            (
-                vec![
-                    Op::ChannelInscribe(inscription_op()),
-                    Op::ChannelBlob(blob_op()),
-                ],
-                Some(Error::UnsupportedGenesisOp(vec![
-                    Op::ChannelBlob(blob_op()),
-                ])),
             ),
         ];
 
@@ -344,12 +316,6 @@ mod tests {
         let sdp_declare_op_helper = |utxo_to_use: Utxo, zk_id_value: u8| {
             sdp_declare_op(utxo_to_use, zk_id_value, verifying_key)
         };
-        let blob_op = || {
-            blob_op(
-                ChannelId::from([0; 32]),
-                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
-            )
-        };
 
         // Test cases: (operations, expected_error)
         let test_cases = [
@@ -373,17 +339,6 @@ mod tests {
                     Op::SDPDeclare(sdp_declare_op_helper(utxo2, 1)),
                 ],
                 None,
-            ),
-            // Invalid mixed combinations
-            (
-                vec![
-                    Op::ChannelInscribe(inscription_op()),
-                    Op::SDPDeclare(sdp_declare_op_helper(utxo1, 0)),
-                    Op::ChannelBlob(blob_op()),
-                ],
-                Some(Error::UnsupportedGenesisOp(vec![
-                    Op::ChannelBlob(blob_op()),
-                ])),
             ),
         ];
 

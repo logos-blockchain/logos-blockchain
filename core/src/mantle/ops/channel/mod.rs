@@ -1,4 +1,3 @@
-pub mod blob;
 pub mod inscribe;
 pub mod set_keys;
 

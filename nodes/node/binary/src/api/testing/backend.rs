@@ -6,22 +6,10 @@ use axum::{
         HeaderValue,
         header::{CONTENT_TYPE, USER_AGENT},
     },
-    routing::{get, post},
+    routing::get,
 };
 use lb_api_service::Backend;
-use lb_da_network_service::backends::libp2p::validator::DaNetworkValidatorBackend;
-use lb_da_sampling_service::{
-    backend::kzgrs::KzgrsSamplingBackend,
-    network::adapters::validator::Libp2pAdapter as SamplingLibp2pAdapter,
-    storage::adapters::rocksdb::{
-        RocksAdapter as SamplingStorageAdapter, converter::DaStorageConverter,
-    },
-};
-use lb_http_api_common::{
-    paths::{DA_GET_MEMBERSHIP, DA_HISTORIC_SAMPLING, MANTLE_SDP_DECLARATIONS},
-    utils::create_rate_limit_layer,
-};
-use lb_kzgrs_backend::common::share::DaShare;
+use lb_http_api_common::{paths::MANTLE_SDP_DECLARATIONS, utils::create_rate_limit_layer};
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 use overwatch::{DynError, overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;
@@ -34,40 +22,12 @@ use tower_http::{
 };
 
 use crate::{
-    DaMembershipStorage, DaNetworkApiAdapter, LogosBlockchainDaMembership,
-    api::{
-        backend::AxumBackendSettings,
-        testing::handlers::{da_get_membership, da_historic_sampling, get_sdp_declarations},
-    },
-    generic_services::{
-        self, DaMembershipAdapter, SamplingMempoolAdapter, SdpService, SdpServiceAdapterGeneric,
-    },
+    api::{backend::AxumBackendSettings, testing::handlers::get_sdp_declarations},
+    generic_services::{self, SdpService},
 };
 pub struct TestAxumBackend {
     settings: AxumBackendSettings,
 }
-
-type TestDaNetworkService<RuntimeServiceId> = lb_da_network_service::NetworkService<
-    DaNetworkValidatorBackend<LogosBlockchainDaMembership>,
-    LogosBlockchainDaMembership,
-    DaMembershipAdapter<RuntimeServiceId>,
-    DaMembershipStorage,
-    DaNetworkApiAdapter,
-    SdpServiceAdapterGeneric<RuntimeServiceId>,
-    RuntimeServiceId,
->;
-
-type TestDaSamplingService<RuntimeServiceId> = generic_services::DaSamplingService<
-    SamplingLibp2pAdapter<
-        LogosBlockchainDaMembership,
-        DaMembershipAdapter<RuntimeServiceId>,
-        DaMembershipStorage,
-        DaNetworkApiAdapter,
-        SdpServiceAdapterGeneric<RuntimeServiceId>,
-        RuntimeServiceId,
-    >,
-    RuntimeServiceId,
->;
 
 type TestCryptarchiaService<RuntimeServiceId> =
     generic_services::CryptarchiaService<RuntimeServiceId>;
@@ -84,8 +44,6 @@ where
         + Debug
         + Clone
         + 'static
-        + AsServiceId<TestDaNetworkService<RuntimeServiceId>>
-        + AsServiceId<TestDaSamplingService<RuntimeServiceId>>
         + AsServiceId<TestCryptarchiaService<RuntimeServiceId>>
         + AsServiceId<TestHttpCryptarchiaService<RuntimeServiceId>>
         + AsServiceId<SdpService<RuntimeServiceId>>
@@ -125,39 +83,6 @@ where
 
         // Simple router with ONLY testing endpoints
         let app = Router::new()
-            .route(
-                DA_GET_MEMBERSHIP,
-                post(
-                    da_get_membership::<
-                        DaNetworkValidatorBackend<LogosBlockchainDaMembership>,
-                        LogosBlockchainDaMembership,
-                        DaMembershipAdapter<RuntimeServiceId>,
-                        DaMembershipStorage,
-                        DaNetworkApiAdapter,
-                        SdpServiceAdapterGeneric<RuntimeServiceId>,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                DA_HISTORIC_SAMPLING,
-                post(
-                    da_historic_sampling::<
-                        KzgrsSamplingBackend,
-                        lb_da_sampling_service::network::adapters::validator::Libp2pAdapter<
-                            LogosBlockchainDaMembership,
-                            DaMembershipAdapter<RuntimeServiceId>,
-                            DaMembershipStorage,
-                            DaNetworkApiAdapter,
-                            SdpServiceAdapterGeneric<RuntimeServiceId>,
-                            RuntimeServiceId,
-                        >,
-                        SamplingStorageAdapter<DaShare, DaStorageConverter>,
-                        SamplingMempoolAdapter<RuntimeServiceId>,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
             .route(
                 MANTLE_SDP_DECLARATIONS,
                 get(get_sdp_declarations::<RuntimeServiceId>),
