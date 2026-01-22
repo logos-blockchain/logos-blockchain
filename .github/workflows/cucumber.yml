@@ -75,9 +75,6 @@ jobs:
           # TODO: Remove this when the test framework removed all direct references to `NOMOS_NODE_BIN`
           NOMOS_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
           LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
-          # TODO: Remove this when the test framework removed all direct references to `NOMOS_EXECUTOR_BIN`
-          NOMOS_EXECUTOR_BIN: ${{ github.workspace }}/target/release/logos-blockchain-executor
-          LOGOS_BLOCKCHAIN_EXECUTOR_BIN: ${{ github.workspace }}/target/release/logos-blockchain-executor
           # TODO: Remove this when the test framework removed all direct references to `NOMOS_KZGRS_PARAMS_PATH`
           NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs/kzgrs_test_params
           LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs/kzgrs_test_params
