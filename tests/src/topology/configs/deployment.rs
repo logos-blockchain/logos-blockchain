@@ -25,10 +25,6 @@ use lb_utils::math::NonNegativeF64;
 
 use crate::topology::configs::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Deployment settings are inherently verbose."
-)]
 #[must_use]
 pub fn default_e2e_deployment_settings() -> DeploymentSettings {
     let slot_duration_in_secs = std::env::var(CONSENSUS_SLOT_TIME_VAR)
@@ -105,28 +101,16 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
             },
             sdp_config: lb_node::config::cryptarchia::deployment::SdpConfig {
                 service_params: Arc::new(
-                    [
-                        (
-                            ServiceType::BlendNetwork,
-                            ServiceParameters {
-                                lock_period: 10,
-                                inactivity_period: 20,
-                                retention_period: 100,
-                                timestamp: 0,
-                                session_duration: 21_600,
-                            },
-                        ),
-                        (
-                            ServiceType::DataAvailability,
-                            ServiceParameters {
-                                lock_period: 10,
-                                inactivity_period: 20,
-                                retention_period: 100,
-                                timestamp: 0,
-                                session_duration: 1000,
-                            },
-                        ),
-                    ]
+                    [(
+                        ServiceType::BlendNetwork,
+                        ServiceParameters {
+                            lock_period: 10,
+                            inactivity_period: 20,
+                            retention_period: 100,
+                            timestamp: 0,
+                            session_duration: 21_600,
+                        },
+                    )]
                     .into(),
                 ),
                 min_stake: lb_core::sdp::MinStake {

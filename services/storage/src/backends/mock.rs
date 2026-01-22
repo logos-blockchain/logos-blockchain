@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     num::NonZeroUsize,
     ops::RangeInclusive,
 };
@@ -7,8 +7,6 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use lb_cryptarchia_engine::Slot;
-use libp2p_identity::PeerId;
-use multiaddr::Multiaddr;
 use lb_core::{
     block::{BlockNumber, SessionNumber},
     header::HeaderId,
@@ -19,7 +17,7 @@ use thiserror::Error;
 
 use super::{StorageBackend, StorageTransaction};
 use crate::api::{
-    StorageBackendApi, chain::StorageChainApi, da::StorageDaApi, membership::StorageMembershipApi,
+    StorageBackendApi, chain::StorageChainApi, membership::StorageMembershipApi,
 };
 
 #[derive(Debug, Error)]
@@ -151,117 +149,6 @@ impl StorageChainApi for MockStorage {
         _slot_range: RangeInclusive<Slot>,
         _limit: NonZeroUsize,
     ) -> Result<Vec<HeaderId>, Self::Error> {
-        unimplemented!()
-    }
-}
-
-#[async_trait]
-impl StorageDaApi for MockStorage {
-    type Error = MockStorageError;
-    type BlobId = [u8; 32];
-    type Share = Bytes;
-    type Commitments = Bytes;
-    type Tx = ();
-    type ShareIndex = [u8; 2];
-    type Id = PeerId;
-    type NetworkId = u16;
-
-    async fn get_light_share(
-        &mut self,
-        _blob_id: Self::BlobId,
-        _share_idx: Self::ShareIndex,
-    ) -> Result<Option<Self::Share>, Self::Error> {
-        unimplemented!()
-    }
-
-    async fn get_blob_share_indices(
-        &mut self,
-        _blob_id: Self::BlobId,
-    ) -> Result<Option<HashSet<Self::ShareIndex>>, Self::Error> {
-        unimplemented!()
-    }
-
-    async fn store_light_share(
-        &mut self,
-        _blob_id: Self::BlobId,
-        _share_idx: Self::ShareIndex,
-        _light_share: Self::Share,
-    ) -> Result<(), Self::Error> {
-        unimplemented!()
-    }
-
-    async fn get_shared_commitments(
-        &mut self,
-        _blob_id: Self::BlobId,
-    ) -> Result<Option<Self::Commitments>, Self::Error> {
-        unimplemented!()
-    }
-
-    async fn store_shared_commitments(
-        &mut self,
-        _blob_id: Self::BlobId,
-        _shared_commitments: Self::Commitments,
-    ) -> Result<(), Self::Error> {
-        unimplemented!()
-    }
-
-    async fn get_blob_light_shares(
-        &mut self,
-        _blob_id: Self::BlobId,
-    ) -> Result<Option<Vec<Self::Share>>, Self::Error> {
-        unimplemented!()
-    }
-
-    async fn store_assignations(
-        &mut self,
-        _session_id: SessionNumber,
-        _assignations: HashMap<Self::NetworkId, HashSet<Self::Id>>,
-    ) -> Result<(), Self::Error> {
-        unimplemented!()
-    }
-
-    async fn store_providerid_mappings(
-        &mut self,
-        _mappings: HashMap<Self::Id, ProviderId>,
-    ) -> Result<(), Self::Error> {
-        unimplemented!()
-    }
-
-    async fn get_assignations(
-        &mut self,
-        _session_id: SessionNumber,
-    ) -> Result<Option<HashMap<Self::NetworkId, HashSet<Self::Id>>>, Self::Error> {
-        unimplemented!()
-    }
-
-    async fn get_provider_id(&mut self, _id: Self::Id) -> Result<Option<ProviderId>, Self::Error> {
-        unimplemented!()
-    }
-
-    async fn store_addresses(
-        &mut self,
-        _ids: HashMap<Self::Id, Multiaddr>,
-    ) -> Result<(), Self::Error> {
-        unimplemented!()
-    }
-
-    async fn get_address(&mut self, _id: Self::Id) -> Result<Option<Multiaddr>, Self::Error> {
-        unimplemented!()
-    }
-
-    async fn get_tx(
-        &mut self,
-        _blob_id: Self::BlobId,
-    ) -> Result<Option<(u16, Self::Tx)>, Self::Error> {
-        unimplemented!()
-    }
-
-    async fn store_tx(
-        &mut self,
-        _blob_id: Self::BlobId,
-        _assignations: u16,
-        _tx: Self::Tx,
-    ) -> Result<(), Self::Error> {
         unimplemented!()
     }
 }

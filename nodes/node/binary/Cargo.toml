@@ -35,15 +35,9 @@ lb-chain-network-service         = { features = ["libp2p"], workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
-lb-da-messages                   = { workspace = true }
-lb-da-network-core               = { workspace = true }
-lb-da-network-service            = { workspace = true }
-lb-da-sampling-service           = { features = ["libp2p", "rocksdb-backend"], workspace = true }
-lb-da-verifier-service           = { features = ["libp2p"], workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
-lb-kzgrs-backend                 = { workspace = true }
 lb-ledger                        = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-network-service               = { workspace = true }
@@ -52,7 +46,6 @@ lb-poq                           = { workspace = true }
 lb-sdp-service                   = { workspace = true }
 lb-services-utils                = { workspace = true }
 lb-storage-service               = { workspace = true }
-lb-subnetworks-assignations      = { workspace = true }
 lb-system-sig-service            = { workspace = true }
 lb-time-service                  = { features = ["ntp", "serde"], workspace = true }
 lb-tracing                       = { workspace = true }

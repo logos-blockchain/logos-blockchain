@@ -12,6 +12,9 @@ version     = { workspace = true }
 [lints]
 workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["serde_json"]
+
 [features]
 axum            = ["dep:axum", "dep:hyper", "utoipa-swagger-ui/axum"]
 block-explorer  = []
@@ -19,31 +22,23 @@ default         = ["axum"]
 instrumentation = []
 
 [dependencies]
-async-trait                 = "0.1"
-bytes                       = { workspace = true }
-futures                     = { default-features = false, version = "0.3.31" }
-lb-chain-broadcast-service  = { workspace = true }
-lb-chain-service            = { features = ["libp2p"], workspace = true }
-lb-core                     = { workspace = true }
-lb-da-dispersal-service     = { workspace = true }
-lb-da-network-core          = { workspace = true }
-lb-da-network-service       = { workspace = true }
-lb-da-sampling-service      = { workspace = true }
-lb-da-verifier-service      = { features = ["rocksdb-backend"], workspace = true }
-lb-kzgrs-backend            = { workspace = true }
-lb-libp2p                   = { workspace = true }
-lb-network-service          = { workspace = true }
-lb-sdp-service              = { workspace = true }
-lb-storage-service          = { features = ["rocksdb-backend"], workspace = true }
-lb-subnetworks-assignations = { workspace = true }
-lb-time-service             = { workspace = true }
-lb-tx-service               = { features = ["libp2p", "mock", "openapi"], workspace = true }
-overwatch                   = { workspace = true }
-serde                       = { workspace = true }
-serde_json                  = { default-features = false, version = "1.0.140" }
-tokio                       = { default-features = false, features = ["net"], version = "1" }
-tokio-stream                = { default-features = false, version = "0.1" }
-tracing                     = { default-features = false, version = "0.1" }
+async-trait                = "0.1"
+bytes                      = { workspace = true }
+futures                    = { default-features = false, version = "0.3.31" }
+lb-chain-broadcast-service = { workspace = true }
+lb-chain-service           = { features = ["libp2p"], workspace = true }
+lb-core                    = { workspace = true }
+lb-network-service         = { workspace = true }
+lb-sdp-service             = { workspace = true }
+lb-storage-service         = { features = ["rocksdb-backend"], workspace = true }
+lb-time-service            = { workspace = true }
+lb-tx-service              = { features = ["libp2p", "mock", "openapi"], workspace = true }
+overwatch                  = { workspace = true }
+serde                      = { workspace = true }
+serde_json                 = { workspace = true }
+tokio                      = { default-features = false, features = ["net"], version = "1" }
+tokio-stream               = { default-features = false, version = "0.1" }
+tracing                    = { default-features = false, version = "0.1" }
 
 # axum related dependencies
 axum = { default-features = false, features = [
@@ -62,7 +57,7 @@ utoipa-swagger-ui = { workspace = true }
 [dev-dependencies]
 axum              = { default-features = false, features = ["http1", "http2", "json", "query", "tokio"], version = "0.7.5" }
 hyper             = { default-features = false, version = "1.0" }
-reqwest           = { default-features = false, workspace = true }
+reqwest           = { default-features = false, features = ["blocking"], workspace = true }
 serde             = { workspace = true }
 tracing           = { workspace = true }
 utoipa-swagger-ui = { default-features = false, features = ["axum"], workspace = true }

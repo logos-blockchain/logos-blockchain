@@ -12,20 +12,19 @@ use rpds::RedBlackTreeSetSync;
 
 use crate::CompressedUtxoTree;
 
-const TREE_HEIGHT: usize = 32;
-const PATH_LENGTH: usize = TREE_HEIGHT - 1; // Exclude the root
+const TREE_HEIGHT_EXCEPT_ROOT: usize = 32;
 
 const EMPTY_VALUE: Fr = <Fr as Field>::ZERO;
 
 fn empty_subtree_root<Hash: Digest>(height: usize) -> Fr {
-    static PRECOMPUTED_EMPTY_ROOTS: OnceLock<[Fr; TREE_HEIGHT]> = OnceLock::new();
+    static PRECOMPUTED_EMPTY_ROOTS: OnceLock<[Fr; TREE_HEIGHT_EXCEPT_ROOT + 1]> = OnceLock::new();
     assert!(
-        height < TREE_HEIGHT,
-        "Height must be less than {TREE_HEIGHT}: {height}"
+        height <= TREE_HEIGHT_EXCEPT_ROOT,
+        "Height{height} must be <={TREE_HEIGHT_EXCEPT_ROOT}"
     );
     PRECOMPUTED_EMPTY_ROOTS.get_or_init(|| {
-        let mut hashes = [EMPTY_VALUE; TREE_HEIGHT];
-        for i in 1..TREE_HEIGHT {
+        let mut hashes = [EMPTY_VALUE; TREE_HEIGHT_EXCEPT_ROOT + 1];
+        for i in 1..=TREE_HEIGHT_EXCEPT_ROOT {
             hashes[i] = Hash::compress(&[hashes[i - 1], hashes[i - 1]]);
         }
         hashes
@@ -215,13 +214,13 @@ impl<Item: AsRef<Fr>> Node<Item> {
                 if index < left.capacity() {
                     // Going down left subtree, store right sibling hash
                     let mut path = left.path::<Hash>(index)?;
-                    assert!(path.len() < PATH_LENGTH, "Path length exceeded");
+                    assert!(path.len() < TREE_HEIGHT_EXCEPT_ROOT, "Path length exceeded");
                     path.push(MerkleNode::Right(right.value::<Hash>()));
                     Some(path)
                 } else {
                     // Going down right subtree, store left sibling hash
                     let mut path = right.path::<Hash>(index - left.capacity())?;
-                    assert!(path.len() < PATH_LENGTH, "Path length exceeded");
+                    assert!(path.len() < TREE_HEIGHT_EXCEPT_ROOT, "Path length exceeded");
                     path.push(MerkleNode::Left(left.value::<Hash>()));
                     Some(path)
                 }
@@ -262,7 +261,7 @@ impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
         let holes = RedBlackTreeSetSync::new_sync();
         Self {
             root: Arc::new(Node::Empty {
-                height: TREE_HEIGHT - 1,
+                height: TREE_HEIGHT_EXCEPT_ROOT,
             }),
             holes,
             _hash: PhantomData,
@@ -324,8 +323,8 @@ impl<Item: AsRef<Fr>, Hash: Digest> DynamicMerkleTree<Item, Hash> {
         self.root.path::<Hash>(index).inspect(|path| {
             assert_eq!(
                 path.len(),
-                PATH_LENGTH,
-                "Path length({}) must be {PATH_LENGTH}",
+                TREE_HEIGHT_EXCEPT_ROOT,
+                "Path length({}) must be {TREE_HEIGHT_EXCEPT_ROOT}",
                 path.len()
             );
         })
@@ -453,7 +452,11 @@ mod tests {
     fn test_empty_tree() {
         let tree: DynamicMerkleTree<TestFr, TestHash> = DynamicMerkleTree::new();
         assert_eq!(tree.size(), 0);
-        assert_eq!(tree.root(), empty_subtree_root::<TestHash>(TREE_HEIGHT - 1));
+        assert_eq!(
+            tree.root(),
+            empty_subtree_root::<TestHash>(TREE_HEIGHT_EXCEPT_ROOT)
+        );
+        assert_eq!(tree.root.height(), TREE_HEIGHT_EXCEPT_ROOT);
     }
 
     #[test]
@@ -643,7 +646,7 @@ mod tests {
         let (tree, idx) = tree.insert(item);
 
         let path = tree.path(idx).unwrap();
-        assert_eq!(path.len(), PATH_LENGTH);
+        assert_eq!(path.len(), TREE_HEIGHT_EXCEPT_ROOT);
 
         // Verify the path can reconstruct the root
         verify_path(item, &path, tree.root());
@@ -683,12 +686,12 @@ mod tests {
 
         // Test path for idx0 (leftmost item)
         let path0 = tree.path(idx0).unwrap();
-        assert_eq!(path0.len(), PATH_LENGTH);
+        assert_eq!(path0.len(), TREE_HEIGHT_EXCEPT_ROOT);
         verify_path(item0, &path0, tree.root());
 
         // Test path for idx1 (second item, right sibling of idx0 at the leaf level)
         let path1 = tree.path(idx1).unwrap();
-        assert_eq!(path1.len(), PATH_LENGTH);
+        assert_eq!(path1.len(), TREE_HEIGHT_EXCEPT_ROOT);
         verify_path(item1, &path1, tree.root());
         // For idx1, the first sibling (at leaf level) should be idx0 (left sibling)
         assert!(matches!(path1.first().unwrap(), MerkleNode::Left(_)));
@@ -696,7 +699,7 @@ mod tests {
 
         // Test path for idx2 (third item)
         let path2 = tree.path(idx2).unwrap();
-        assert_eq!(path2.len(), PATH_LENGTH);
+        assert_eq!(path2.len(), TREE_HEIGHT_EXCEPT_ROOT);
         verify_path(item2, &path2, tree.root());
     }
 

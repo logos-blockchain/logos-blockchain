@@ -20,7 +20,6 @@ lb-chain-service-common = { workspace = true }
 lb-core                 = { workspace = true }
 lb-cryptarchia-engine   = { features = ["serde"], workspace = true }
 lb-cryptarchia-sync     = { workspace = true }
-lb-da-sampling-service  = { workspace = true }
 lb-ledger               = { features = ["serde"], workspace = true }
 lb-network-service      = { workspace = true }
 lb-services-utils       = { workspace = true }

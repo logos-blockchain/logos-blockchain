@@ -61,7 +61,7 @@ services:
     ports:
       - "3003:3000/udp"
       - "18083:18080/tcp"
-    entrypoint: /etc/logos-blockchain/scripts/run_logos_blockchain_executor.sh
+    entrypoint: /etc/logos-blockchain/scripts/run_logos_blockchain_node.sh
 
   prometheus:
     container_name: prometheus

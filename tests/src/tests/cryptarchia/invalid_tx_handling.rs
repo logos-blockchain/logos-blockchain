@@ -7,7 +7,7 @@ use lb_core::mantle::{
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use logos_blockchain_tests::{
-    common::{chain::scan_chain_until, da::create_inscription_transaction_with_id},
+    common::{chain::scan_chain_until, mantle_tx::create_inscription_transaction_with_id},
     nodes::validator::Validator,
     topology::{Topology, TopologyConfig},
 };
@@ -23,7 +23,7 @@ const PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
 #[tokio::test]
 #[serial]
 async fn invalid_transactions_are_handled() {
-    let topology = Topology::spawn(TopologyConfig::validator_and_executor()).await;
+    let topology = Topology::spawn(TopologyConfig::two_validators()).await;
     let validator = &topology.validators()[0];
 
     let validator_url = Url::parse(

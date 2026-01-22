@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use lb_tests::topology::configs::{GeneralConfig, da::DaParams};
+use lb_tests::topology::configs::GeneralConfig;
 use lb_tracing_service::TracingSettings;
 use tokio::{sync::oneshot::Sender, time::timeout};
 
@@ -21,19 +21,16 @@ pub enum RepoResponse {
 pub struct ConfigRepo {
     waiting_hosts: Mutex<HashMap<Host, Sender<RepoResponse>>>,
     n_hosts: usize,
-    da_params: DaParams,
     tracing_settings: TracingSettings,
     timeout_duration: Duration,
 }
 
 impl From<CfgSyncConfig> for Arc<ConfigRepo> {
     fn from(config: CfgSyncConfig) -> Self {
-        let da_params = config.to_da_params();
         let tracing_settings = config.to_tracing_settings();
 
         ConfigRepo::new(
             config.n_hosts,
-            da_params,
             tracing_settings,
             Duration::from_secs(config.timeout),
         )
@@ -44,14 +41,12 @@ impl ConfigRepo {
     #[must_use]
     pub fn new(
         n_hosts: usize,
-        da_params: DaParams,
         tracing_settings: TracingSettings,
         timeout_duration: Duration,
     ) -> Arc<Self> {
         let repo = Arc::new(Self {
             waiting_hosts: Mutex::new(HashMap::new()),
             n_hosts,
-            da_params,
             tracing_settings,
             timeout_duration,
         });
@@ -78,7 +73,7 @@ impl ConfigRepo {
             let mut waiting_hosts = self.waiting_hosts.lock().unwrap();
             let hosts = waiting_hosts.keys().cloned().collect();
 
-            let configs = create_node_configs(&self.da_params, &self.tracing_settings, hosts);
+            let configs = create_node_configs(&self.tracing_settings, hosts);
 
             for (host, sender) in waiting_hosts.drain() {
                 let config = configs.get(&host).expect("host should have a config");
