@@ -324,6 +324,7 @@ impl<'service> WinningPoLSlotNotifier<'service> {
     }
 }
 
+#[cfg(not(feature = "pol-dev-mode"))]
 #[cfg(test)]
 mod pol_tests {
     use std::{num::NonZero, sync::Arc};
@@ -347,14 +348,6 @@ mod pol_tests {
     /// verified successfully.
     #[tokio::test]
     async fn test_build_proof_for() {
-        if_pol_dev_mode!(
-            {
-                println!("Skipping test in pol dev mode");
-                return;
-            },
-            ()
-        );
-
         // Create secret key and leader
         let sk = UnsecuredZkKey::new(Fr::from(12345u64));
         let pk = sk.to_public_key();
