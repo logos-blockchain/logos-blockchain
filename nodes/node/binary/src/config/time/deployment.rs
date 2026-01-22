@@ -15,9 +15,18 @@ pub struct Settings {
 impl From<WellKnownDeployment> for Settings {
     fn from(value: WellKnownDeployment) -> Self {
         match value {
-            WellKnownDeployment::Mainnet => Self {
-                slot_duration: Duration::from_secs(1),
-            },
+            WellKnownDeployment::Mainnet => mainnet_settings(),
+            WellKnownDeployment::Testnet => testnet_settings(),
         }
     }
+}
+
+const fn mainnet_settings() -> Settings {
+    Settings {
+        slot_duration: Duration::from_secs(1),
+    }
+}
+
+const fn testnet_settings() -> Settings {
+    mainnet_settings()
 }

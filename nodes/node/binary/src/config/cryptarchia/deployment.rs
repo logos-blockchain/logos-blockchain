@@ -23,41 +23,49 @@ pub struct SdpConfig {
     pub min_stake: MinStake,
 }
 
-#[expect(clippy::fallible_impl_from, reason = "Well-known values.")]
 impl From<WellKnownDeployment> for Settings {
     fn from(value: WellKnownDeployment) -> Self {
         match value {
-            WellKnownDeployment::Mainnet => Self {
-                epoch_config: EpochConfig {
-                    epoch_period_nonce_buffer: 3.try_into().unwrap(),
-                    epoch_period_nonce_stabilization: 4.try_into().unwrap(),
-                    epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
-                },
-                consensus_config: ConsensusConfig {
-                    active_slot_coeff: 0.9,
-                    security_param: 10.try_into().unwrap(),
-                },
-                sdp_config: SdpConfig {
-                    min_stake: MinStake {
-                        threshold: 1,
-                        timestamp: 0,
-                    },
-                    service_params: Arc::new(
-                        std::iter::once((
-                            ServiceType::BlendNetwork,
-                            ServiceParameters {
-                                inactivity_period: 20,
-                                lock_period: 10,
-                                retention_period: 100,
-                                session_duration: 21_600,
-                                timestamp: 0,
-                            },
-                        ))
-                        .collect(),
-                    ),
-                },
-                gossipsub_protocol: "/logos-blockchain/cryptarchia/1.0.0".to_owned(),
-            },
+            WellKnownDeployment::Mainnet => mainnet_settings(),
+            WellKnownDeployment::Testnet => testnet_settings(),
         }
     }
+}
+
+fn mainnet_settings() -> Settings {
+    Settings {
+        epoch_config: EpochConfig {
+            epoch_period_nonce_buffer: 3.try_into().unwrap(),
+            epoch_period_nonce_stabilization: 4.try_into().unwrap(),
+            epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
+        },
+        consensus_config: ConsensusConfig {
+            active_slot_coeff: 0.9,
+            security_param: 10.try_into().unwrap(),
+        },
+        sdp_config: SdpConfig {
+            min_stake: MinStake {
+                threshold: 1,
+                timestamp: 0,
+            },
+            service_params: Arc::new(
+                std::iter::once((
+                    ServiceType::BlendNetwork,
+                    ServiceParameters {
+                        inactivity_period: 20,
+                        lock_period: 10,
+                        retention_period: 100,
+                        session_duration: 21_600,
+                        timestamp: 0,
+                    },
+                ))
+                .collect(),
+            ),
+        },
+        gossipsub_protocol: "/logos-blockchain/cryptarchia/1.0.0".to_owned(),
+    }
+}
+
+fn testnet_settings() -> Settings {
+    mainnet_settings()
 }

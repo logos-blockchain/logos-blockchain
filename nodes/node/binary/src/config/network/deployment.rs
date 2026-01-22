@@ -13,13 +13,20 @@ pub struct Settings {
 impl From<WellKnownDeployment> for Settings {
     fn from(value: WellKnownDeployment) -> Self {
         match value {
-            WellKnownDeployment::Mainnet => Self {
-                identify_protocol_name: StreamProtocol::new("/logos-blockchain/identify/1.0.0"),
-                kademlia_protocol_name: StreamProtocol::new("/logos-blockchain/kad/1.0.0"),
-                chain_sync_protocol_name: StreamProtocol::new(
-                    "/logos-blockchain/cryptarchia/sync/1.0.0",
-                ),
-            },
+            WellKnownDeployment::Mainnet => mainnet_settings(),
+            WellKnownDeployment::Testnet => testnet_settings(),
         }
     }
+}
+
+const fn mainnet_settings() -> Settings {
+    Settings {
+        identify_protocol_name: StreamProtocol::new("/logos-blockchain/identify/1.0.0"),
+        kademlia_protocol_name: StreamProtocol::new("/logos-blockchain/kad/1.0.0"),
+        chain_sync_protocol_name: StreamProtocol::new("/logos-blockchain/cryptarchia/sync/1.0.0"),
+    }
+}
+
+const fn testnet_settings() -> Settings {
+    mainnet_settings()
 }
