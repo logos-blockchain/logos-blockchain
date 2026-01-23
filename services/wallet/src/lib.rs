@@ -47,7 +47,7 @@ use overwatch::{
 };
 use rand::{RngCore as _, rngs::OsRng};
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, task::JoinError};
 use tracing::{debug, error, info, trace};
 
 #[derive(Debug, thiserror::Error)]
@@ -84,6 +84,9 @@ pub enum WalletServiceError {
 
     #[error("PoC generation failed: {0:?}")]
     PoCGenerationFailed(lb_core::proofs::leader_claim_proof::Error),
+
+    #[error("blocking task failed: {0}")]
+    Join(#[from] JoinError),
 }
 
 #[derive(Debug)]
@@ -493,13 +496,14 @@ where
                         .voucher_merkle_path(voucher_cm)
                         .expect("Merkle path not found");
 
+                    let rewards_root = claim_op.rewards_root;
+                    let mantle_tx_hash = claim_op.mantle_tx_hash;
+
                     // TODO: This should happen in KMS
-                    let poc = Self::generate_poc(
-                        voucher_secret,
-                        &path,
-                        claim_op.rewards_root,
-                        claim_op.mantle_tx_hash,
-                    )?;
+                    let poc = tokio::task::spawn_blocking(move || {
+                        Self::generate_poc(voucher_secret, &path, rewards_root, mantle_tx_hash)
+                    })
+                    .await??;
 
                     OpProof::PoC(poc)
                 }
