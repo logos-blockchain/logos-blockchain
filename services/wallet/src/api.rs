@@ -120,7 +120,7 @@ where
         Ok(rx.await??)
     }
 
-    pub async fn receive_voucher_cm_from_wallet(&self) -> Result<VoucherCm, DynError> {
+    pub async fn generate_new_voucher(&self) -> Result<VoucherCm, DynError> {
         let (resp_tx, rx) = oneshot::channel();
         self.relay
             .send(WalletMsg::GenerateNewVoucherSecret { resp_tx })

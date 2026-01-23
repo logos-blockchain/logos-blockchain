@@ -1,8 +1,10 @@
+use std::str::FromStr as _;
+
 use lb_groth16::{fr_to_bytes, serde::serde_fr};
 use lb_poseidon2::{Fr, ZkHash};
 use serde::{Deserialize, Serialize};
 
-use crate::mantle::TxHash;
+use crate::{crypto::ZkHasher, mantle::TxHash};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 pub struct RewardsRoot(#[serde(with = "serde_fr")] ZkHash);
@@ -64,5 +66,15 @@ impl VoucherCm {
     #[must_use]
     pub fn to_bytes(&self) -> [u8; 32] {
         fr_to_bytes(&self.0)
+    }
+
+    #[must_use]
+    pub fn from_secret(voucher_secret: Fr) -> Self {
+        let mut hash = ZkHasher::new();
+        hash.compress(&[
+            Fr::from_str("1668646695034522932676805048878418").unwrap(),
+            voucher_secret,
+        ]);
+        hash.finalize().into()
     }
 }

@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use lb_core::utils::merkle::MerklePath;
 use lb_poseidon2::{Digest, Fr};
+// TODO: Change this back to private once we adopt MMR for vouchers in the wallet service.
 pub use merkle::DynamicMerkleTree;
 use rpds::HashTrieMapSync;
 use thiserror::Error;

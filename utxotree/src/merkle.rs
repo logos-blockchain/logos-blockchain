@@ -244,12 +244,10 @@ impl<Item: AsRef<Fr>> Node<Item> {
     }
 }
 
-#[expect(
-    clippy::too_long_first_doc_paragraph,
-    reason = "to have enough context"
-)]
 /// A dynamic persistent Merkle tree that supports insertion and removal of
-/// items. Removed items are replaced with an empty leaf node, which prevents
+/// items.
+///
+/// Removed items are replaced with an empty leaf node, which prevents
 /// the whole tree reordering and their position is recorded for future
 /// insertions. Compared to a MPT, the height of this tree is predictable and
 /// bounded by the number of items, allowing for efficient and simple proof of

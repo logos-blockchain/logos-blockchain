@@ -1,6 +1,6 @@
 pub mod api;
 
-use std::{collections::HashSet, str::FromStr as _, time::Duration};
+use std::{collections::HashSet, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -11,7 +11,6 @@ use lb_chain_service::{
 };
 use lb_core::{
     block::Block,
-    crypto::ZkHasher,
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, SignedMantleTx, Transaction as _, TxHash, Utxo, Value,
@@ -393,7 +392,6 @@ where
         }
     }
 
-    #[expect(clippy::too_many_lines, reason = "it nearly fits")]
     async fn sign_tx(
         voucher_secrets: &mut Vec<Fr>,
         tx_builder: MantleTxBuilder,
@@ -489,12 +487,7 @@ where
                 }
                 Op::LeaderClaim(claim_op) => {
                     let voucher_secret = voucher_secrets.pop().expect("No voucher secret left");
-                    let mut hash = ZkHasher::new();
-                    hash.compress(&[
-                        Fr::from_str("1668646695034522932676805048878418").unwrap(),
-                        voucher_secret,
-                    ]);
-                    let voucher_cm = VoucherCm::from(hash.finalize());
+                    let voucher_cm = VoucherCm::from_secret(voucher_secret);
                     let path = ledger
                         .mantle_ledger()
                         .voucher_merkle_path(voucher_cm)
@@ -637,12 +630,7 @@ where
         let mut voucher_secret_bytes = [0u8; 31];
         OsRng.fill_bytes(&mut voucher_secret_bytes);
         let voucher_secret = fr_from_bytes(&voucher_secret_bytes).unwrap();
-        let mut hash = ZkHasher::new();
-        hash.compress(&[
-            Fr::from_str("1668646695034522932676805048878418").unwrap(),
-            voucher_secret,
-        ]);
-        let voucher_cm = VoucherCm::from(hash.finalize());
+        let voucher_cm = VoucherCm::from_secret(voucher_secret);
 
         voucher_secrets.push(voucher_secret);
 

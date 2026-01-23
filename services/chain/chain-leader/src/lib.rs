@@ -435,7 +435,7 @@ where
                         winning_pol_slot_notifier.process_epoch(&eligible_utxos, &epoch_state);
 
                         if let Some(proof) = leader.build_proof_for(&eligible_utxos, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier).await {
-                            let voucher_cm = match wallet_api.receive_voucher_cm_from_wallet().await {
+                            let voucher_cm = match wallet_api.generate_new_voucher().await {
                                 Ok(voucher_cm) => voucher_cm,
                                 Err(e) => {
                                     error!("Failed to get the voucher cm: {:?}", e);
