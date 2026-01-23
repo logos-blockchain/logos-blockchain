@@ -85,15 +85,8 @@ impl LeaderState {
                 incoming: epoch,
             }),
             Ordering::Greater => {
+                self = self.update_vouchers();
                 self.epoch = epoch;
-                for &voucher_cm in &self.pending_vouchers {
-                    let (new_vouchers, index) = self.vouchers.insert(voucher_cm);
-                    self.vouchers = new_vouchers;
-                    self.voucher_indices = self.voucher_indices.insert(voucher_cm, index);
-                }
-                self.pending_vouchers = Vec::new();
-                self.claimable_vouchers_root = self.vouchers.root().into();
-                self.n_claimable_vouchers = self.vouchers.size() as u64;
                 // TODO: increase rewards, what about epoch jumps?
                 Ok(self)
             }
@@ -102,6 +95,18 @@ impl LeaderState {
 
     fn add_voucher(mut self, voucher_cm: VoucherCm) -> Self {
         self.pending_vouchers.push(voucher_cm);
+        self
+    }
+
+    fn update_vouchers(mut self) -> Self {
+        for &voucher_cm in &self.pending_vouchers {
+            let (new_vouchers, index) = self.vouchers.insert(voucher_cm);
+            self.vouchers = new_vouchers;
+            self.voucher_indices = self.voucher_indices.insert(voucher_cm, index);
+        }
+        self.pending_vouchers = Vec::new();
+        self.claimable_vouchers_root = self.vouchers.root().into();
+        self.n_claimable_vouchers = self.vouchers.size() as u64;
         self
     }
 
