@@ -6,6 +6,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey, ZkPublicKey};
 use lb_ledger::{EpochState, UtxoTree};
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch::Sender;
 
@@ -32,8 +33,8 @@ impl Leader {
         clippy::cognitive_complexity,
         reason = "TODO: Address this at some point"
     )]
-    /// Return a leadership proof if the current slot is a winning one, and
-    /// notifies consumers of winning slot info.
+    /// Return a leadership proof and signing key if the current slot is a
+    /// winning one, and notifies consumers of winning slot info.
     ///
     /// If the slot is not a winning one, it returns `None` and no consumer is
     /// notified.
@@ -44,7 +45,7 @@ impl Leader {
         epoch_state: &EpochState,
         slot: Slot,
         winning_pol_info_notifier: &WinningPoLSlotNotifier<'_>,
-    ) -> Option<Groth16LeaderProof> {
+    ) -> Option<(Groth16LeaderProof, Ed25519Key)> {
         for utxo in utxos {
             let public_inputs = public_inputs_for_slot(epoch_state, slot, latest_tree);
 
@@ -69,13 +70,14 @@ impl Leader {
                     epoch_state.total_stake()
                 );
 
-                let private_inputs = match self.private_inputs_for_winning_utxo_and_slot(
-                    utxo,
-                    epoch_state,
-                    public_inputs,
-                    latest_tree,
-                ) {
-                    Ok(private_inputs) => private_inputs,
+                let (private_inputs, leader_signing_key) = match self
+                    .private_inputs_for_winning_utxo_and_slot(
+                        utxo,
+                        epoch_state,
+                        public_inputs,
+                        latest_tree,
+                    ) {
+                    Ok(result) => result,
                     Err(e) => {
                         tracing::error!(
                             "Failed to build private inputs for winning utxo {:?} for {slot:?}: {e:?}",
@@ -99,7 +101,7 @@ impl Leader {
                 })
                 .await;
                 match res {
-                    Ok(Ok(proof)) => return Some(proof),
+                    Ok(Ok(proof)) => return Some((proof, leader_signing_key)),
                     Ok(Err(e)) => {
                         tracing::error!("Failed to build proof: {:?}", e);
                     }
@@ -126,7 +128,7 @@ impl Leader {
         epoch_state: &EpochState,
         public_inputs: LeaderPublic,
         latest_tree: &UtxoTree,
-    ) -> Result<LeaderPrivate, PrivateInputsError> {
+    ) -> Result<(LeaderPrivate, Ed25519Key), PrivateInputsError> {
         let aged_path = if_pol_dev_mode!(Vec::new(), {
             epoch_state
                 .utxo_merkle_path(utxo)
@@ -138,16 +140,20 @@ impl Leader {
                 .ok_or(PrivateInputsError::LatestNoteNotFound)?
         });
         let secret_key = *self.sk.as_fr();
-        let leader_signing_key = Ed25519Key::from_bytes(&[0; 32]);
-        let leader_pk = leader_signing_key.public_key(); // TODO: get actual leader public key
+        // Generate a random one-time Ed25519 key for P_LEAD (as per PoL spec)
+        let leader_signing_key = Ed25519Key::generate(&mut OsRng);
+        let leader_pk = leader_signing_key.public_key();
 
-        Ok(LeaderPrivate::new(
-            public_inputs,
-            *utxo,
-            &aged_path,
-            &latest_path,
-            secret_key,
-            &leader_pk,
+        Ok((
+            LeaderPrivate::new(
+                public_inputs,
+                *utxo,
+                &aged_path,
+                &latest_path,
+                secret_key,
+                &leader_pk,
+            ),
+            leader_signing_key,
         ))
     }
 
@@ -252,13 +258,18 @@ impl<'service> WinningPoLSlotNotifier<'service> {
                 }
                 tracing::debug!("Found winning utxo with ID {:?} for slot {slot}", utxo.id());
 
-                let leader_private = match self.leader.private_inputs_for_winning_utxo_and_slot(
-                    utxo,
-                    epoch_state,
-                    public_inputs,
-                    &latest_tree,
-                ) {
-                    Ok(leader_private) => leader_private,
+                // Note: We discard the signing key here since this is just for pre-computing
+                // winning slots. The actual signing key will be generated when building the
+                // proof.
+                let (leader_private, _signing_key) = match self
+                    .leader
+                    .private_inputs_for_winning_utxo_and_slot(
+                        utxo,
+                        epoch_state,
+                        public_inputs,
+                        &latest_tree,
+                    ) {
+                    Ok(result) => result,
                     Err(e) => {
                         tracing::error!(
                             "Failed to build private inputs for winning utxo {:?} for {slot:?}: {e:?}",
@@ -399,7 +410,7 @@ mod pol_tests {
         notifier: &WinningPoLSlotNotifier<'_>,
     ) -> Option<(Groth16LeaderProof, Slot)> {
         for slot in slots {
-            if let Some(proof) = leader
+            if let Some((proof, _signing_key)) = leader
                 .build_proof_for(&[utxo], latest_tree, epoch_state, slot, notifier)
                 .await
             {

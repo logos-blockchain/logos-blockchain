@@ -29,7 +29,7 @@ async fn invalid_transactions_are_handled() {
     let validator_url = Url::parse(
         format!(
             "http://{}",
-            validator.config().http.backend_settings.address
+            validator.config().user.http.backend_settings.address
         )
         .as_str(),
     )

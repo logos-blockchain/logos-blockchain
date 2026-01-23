@@ -1,6 +1,6 @@
 use std::{env, fs, net::Ipv4Addr, process};
 
-use lb_node::Config as ValidatorConfig;
+use lb_node::UserConfig as ValidatorConfig;
 use logos_blockchain_cfgsync::client::get_config;
 use serde::{Serialize, de::DeserializeOwned};
 

@@ -376,12 +376,13 @@ where
                         // If it's a new epoch or the service just started, pre-compute the first winning slot and notify consumers.
                         winning_pol_slot_notifier.process_epoch(&eligible_utxos, &epoch_state);
 
-                        if let Some(proof) = leader.build_proof_for(&eligible_utxos, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier).await {
+                        if let Some((proof, signing_key)) = leader.build_proof_for(&eligible_utxos, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier).await {
                             // TODO: spawn as a separate task?
                             match Self::propose_block(
                                 parent,
                                 slot,
                                 proof,
+                                &signing_key,
                                 tx_selector.clone(),
                                 &relays,
                                 tip_state,
@@ -491,6 +492,10 @@ where
     RuntimeServiceId: Sync + Send + 'static,
 {
     #[expect(clippy::allow_attributes_without_reason)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "All arguments are required for proposing a block"
+    )]
     #[instrument(
         level = "debug",
         skip(tx_selector, relays, ledger_state, ledger_config)
@@ -499,6 +504,7 @@ where
         parent: HeaderId,
         slot: Slot,
         proof: Groth16LeaderProof,
+        signing_key: &Ed25519Key,
         tx_selector: TxS,
         relays: &CryptarchiaConsensusRelays<
             BlendService,
@@ -565,10 +571,7 @@ where
         let selected_txs_stream = tx_selector.select_tx_from(valid_tx_stream);
         let txs: Vec<_> = selected_txs_stream.take(MAX_TRANSACTIONS).collect().await;
 
-        // TODO: use PoL signing key
-        let dummy_signing_key = Ed25519Key::from_bytes(&[0u8; 32]);
-
-        let block = Block::create(parent, slot, proof, txs, &dummy_signing_key)?;
+        let block = Block::create(parent, slot, proof, txs, signing_key)?;
 
         info!(
             "proposed block with id {:?} containing {} transactions ({} removed)",

@@ -1,3 +1,8 @@
+use core::{
+    fmt::{self, Display, Formatter},
+    str::FromStr,
+};
+
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
@@ -8,33 +13,43 @@ use crate::config::{
     time::deployment::Settings as TimeDeploymentSettings,
 };
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+const MAINNET: &str = "mainnet";
+const TESTNET: &str = "testnet";
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
 pub enum WellKnownDeployment {
+    // Must match the `MAINNET` definition above.
     #[serde(rename = "mainnet")]
     Mainnet,
+    // Must match the `TESTNET` definition above.
+    #[serde(rename = "testnet")]
+    #[default]
+    Testnet,
 }
 
-/// Well-known deployments supported by the Logos blockchain binary.
-///
-/// Any deployment different than any of the well-known falls under the `Custom`
-/// category.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(untagged)]
-pub enum SerdeSettings {
-    WellKnown(WellKnownDeployment),
-    Custom {
-        blend: Box<BlendDeploymentSettings>,
-        network: NetworkDeploymentSettings,
-        cryptarchia: CryptarchiaDeploymentSettings,
-        time: TimeDeploymentSettings,
-        mempool: MempoolDeploymentSettings,
-    },
+impl FromStr for WellKnownDeployment {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            MAINNET => Ok(Self::Mainnet),
+            TESTNET => Ok(Self::Testnet),
+            _ => Err(()),
+        }
+    }
+}
+
+impl Display for WellKnownDeployment {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Mainnet => write!(f, "{MAINNET}"),
+            Self::Testnet => write!(f, "{TESTNET}"),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(from = "SerdeSettings", into = "SerdeSettings")]
 pub struct DeploymentSettings {
-    well_known: Option<WellKnownDeployment>,
     pub blend: BlendDeploymentSettings,
     pub network: NetworkDeploymentSettings,
     pub cryptarchia: CryptarchiaDeploymentSettings,
@@ -42,74 +57,14 @@ pub struct DeploymentSettings {
     pub mempool: MempoolDeploymentSettings,
 }
 
-impl DeploymentSettings {
-    #[must_use]
-    pub const fn new_custom(
-        blend: BlendDeploymentSettings,
-        network: NetworkDeploymentSettings,
-        cryptarchia: CryptarchiaDeploymentSettings,
-        time: TimeDeploymentSettings,
-        mempool: MempoolDeploymentSettings,
-    ) -> Self {
-        Self {
-            well_known: None,
-            blend,
-            network,
-            cryptarchia,
-            time,
-            mempool,
-        }
-    }
-}
-
 impl From<WellKnownDeployment> for DeploymentSettings {
     fn from(value: WellKnownDeployment) -> Self {
         Self {
-            blend: value.clone().into(),
-            cryptarchia: value.clone().into(),
-            network: value.clone().into(),
-            time: value.clone().into(),
-            mempool: value.clone().into(),
-            well_known: Some(value),
+            blend: value.into(),
+            cryptarchia: value.into(),
+            network: value.into(),
+            time: value.into(),
+            mempool: value.into(),
         }
-    }
-}
-
-impl From<SerdeSettings> for DeploymentSettings {
-    fn from(value: SerdeSettings) -> Self {
-        match value {
-            SerdeSettings::WellKnown(well_known_deployment) => well_known_deployment.into(),
-            SerdeSettings::Custom {
-                blend,
-                cryptarchia,
-                network,
-                time,
-                mempool,
-            } => Self::new_custom(*blend, network, cryptarchia, time, mempool),
-        }
-    }
-}
-
-impl From<DeploymentSettings> for SerdeSettings {
-    fn from(
-        DeploymentSettings {
-            blend,
-            cryptarchia,
-            network,
-            time,
-            mempool,
-            well_known,
-        }: DeploymentSettings,
-    ) -> Self {
-        well_known.map_or_else(
-            || Self::Custom {
-                blend: Box::new(blend),
-                cryptarchia,
-                network,
-                time,
-                mempool,
-            },
-            Self::WellKnown,
-        )
     }
 }

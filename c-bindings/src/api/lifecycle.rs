@@ -1,6 +1,14 @@
-use std::ffi::c_char;
+use std::{ffi::c_char, path::PathBuf};
 
-use lb_node::{Config, get_services_to_start, run_node_from_config};
+use lb_node::{
+    UserConfig,
+    config::{
+        DeploymentType, OnUnknownKeys, RunConfig,
+        deployment::{DeploymentSettings, WellKnownDeployment},
+        deserialize_config_at_path,
+    },
+    get_services_to_start, run_node_from_config,
+};
 use tokio::runtime::Runtime;
 
 use crate::{LogosBlockchainNode, api::PointerResult, errors::OperationStatus};
@@ -14,6 +22,9 @@ pub type InitializedLogosBlockchainNodeResult = PointerResult<LogosBlockchainNod
 ///
 /// - `config_path`: A pointer to a string representing the path to the
 ///   configuration file.
+/// - `deployment`: A pointer to a string representing either a well-known
+///   deployment name (e.g., "mainnet") or a path to a deployment YAML file. If
+///   null, defaults to "testnet".
 ///
 /// # Returns
 ///
@@ -22,12 +33,14 @@ pub type InitializedLogosBlockchainNodeResult = PointerResult<LogosBlockchainNod
 #[unsafe(no_mangle)]
 pub extern "C" fn start_lb_node(
     config_path: *const c_char,
+    deployment: *const c_char,
 ) -> InitializedLogosBlockchainNodeResult {
-    initialize_lb_node(config_path).map_or_else(
+    initialize_lb_node(config_path, deployment).map_or_else(
         InitializedLogosBlockchainNodeResult::from_error,
         InitializedLogosBlockchainNodeResult::from_value,
     )
 }
+
 /// Initializes and starts a Logos blockchain node based on the provided
 /// configuration file path.
 ///
@@ -35,29 +48,25 @@ pub extern "C" fn start_lb_node(
 ///
 /// - `config_path`: A pointer to a string representing the path to the
 ///   configuration file.
+/// - `deployment`: A pointer to a string representing either a well-known
+///   deployment name (e.g., "mainnet") or a path to a deployment YAML file. If
+///   null, defaults to "testnet".
 ///
 /// # Returns
 ///
 /// A `Result` containing either the initialized `LogosBlockchainNode` or an
 /// error code.
-fn initialize_lb_node(config_path: *const c_char) -> Result<LogosBlockchainNode, OperationStatus> {
-    let config_path = unsafe { std::ffi::CStr::from_ptr(config_path) }
-        .to_str()
-        .map_err(|e| {
-            eprintln!("Could not convert the config path to string: {e}");
-            OperationStatus::InitializationError
-        })?;
-    let config_reader = std::fs::File::open(config_path).map_err(|e| {
-        eprintln!("Could not open config file: {e}");
-        OperationStatus::InitializationError
-    })?;
-    let config = serde_yaml::from_reader::<_, Config>(config_reader).map_err(|e| {
-        eprintln!("Could not parse config file: {e}");
-        OperationStatus::InitializationError
-    })?;
+fn initialize_lb_node(
+    config_path: *const c_char,
+    deployment: *const c_char,
+) -> Result<LogosBlockchainNode, OperationStatus> {
+    let run_config = RunConfig {
+        deployment: get_deployment_config(deployment)?,
+        user: get_user_config(config_path)?,
+    };
 
     let rt = Runtime::new().unwrap();
-    let app = run_node_from_config(config).map_err(|e| {
+    let app = run_node_from_config(run_config).map_err(|e| {
         eprintln!("Could not initialize Overwatch: {e}");
         OperationStatus::InitializationError
     })?;
@@ -80,6 +89,50 @@ fn initialize_lb_node(config_path: *const c_char) -> Result<LogosBlockchainNode,
     })?;
 
     Ok(LogosBlockchainNode::new(app, rt))
+}
+
+fn get_user_config(config_path: *const c_char) -> Result<UserConfig, OperationStatus> {
+    let user_config_path = unsafe { std::ffi::CStr::from_ptr(config_path) }
+        .to_str()
+        .map_err(|e| {
+            eprintln!("Could not convert the config path to string: {e}");
+            OperationStatus::InitializationError
+        })?;
+    deserialize_config_at_path::<UserConfig>(user_config_path.as_ref(), OnUnknownKeys::Warn)
+        .map_err(|e| {
+            eprintln!("Could not parse config file: {e}");
+            OperationStatus::InitializationError
+        })
+}
+
+fn get_deployment_config(
+    deployment_arg: *const c_char,
+) -> Result<DeploymentSettings, OperationStatus> {
+    let deployment_type: DeploymentType = if deployment_arg.is_null() {
+        WellKnownDeployment::default().into()
+    } else {
+        let deployment_str = unsafe { std::ffi::CStr::from_ptr(deployment_arg) }
+            .to_str()
+            .map_err(|e| {
+                eprintln!("Could not convert deployment to string: {e}");
+                OperationStatus::InitializationError
+            })?;
+        deployment_str.parse::<WellKnownDeployment>().map_or_else(
+            |()| PathBuf::from(deployment_str).into(),
+            DeploymentType::from,
+        )
+    };
+
+    match deployment_type {
+        DeploymentType::WellKnown(well_known_deployment) => Ok(well_known_deployment.into()),
+        DeploymentType::Custom(path) => {
+            deserialize_config_at_path::<DeploymentSettings>(path.as_ref(), OnUnknownKeys::Warn)
+                .map_err(|e| {
+                    eprintln!("Could not parse deployment file: {e}");
+                    OperationStatus::InitializationError
+                })
+        }
+    }
 }
 
 /// Stops and frees the resources associated with the given Logos blockchain

@@ -38,13 +38,13 @@ use overwatch::{
     overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
 };
 
-pub use crate::config::{Config, CryptarchiaLeaderArgs, HttpArgs, LogArgs, NetworkArgs};
+pub use crate::config::{CryptarchiaLeaderArgs, HttpArgs, LogArgs, NetworkArgs, UserConfig};
 use crate::{
     api::backend::AxumBackend,
     config::{
-        blend::ServiceConfig as BlendConfig, cryptarchia::ServiceConfig as CryptarchiaConfig,
-        mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
-        time::ServiceConfig as TimeConfig,
+        RunConfig, blend::ServiceConfig as BlendConfig,
+        cryptarchia::ServiceConfig as CryptarchiaConfig, mempool::ServiceConfig as MempoolConfig,
+        network::ServiceConfig as NetworkConfig, time::ServiceConfig as TimeConfig,
     },
     generic_services::{SdpMempoolAdapterGeneric, SdpService},
 };
@@ -125,27 +125,27 @@ pub struct LogosBlockchain {
     testing_http: TestingApiService<RuntimeServiceId>,
 }
 
-pub fn run_node_from_config(config: Config) -> Result<Overwatch<RuntimeServiceId>, DynError> {
+pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServiceId>, DynError> {
     let time_service_config = TimeConfig {
-        user: config.time,
+        user: config.user.time,
         deployment: config.deployment.time,
     }
     .into_time_service_settings(&config.deployment.cryptarchia);
 
     let (chain_service_config, chain_network_config, chain_leader_config) = CryptarchiaConfig {
-        user: config.cryptarchia,
+        user: config.user.cryptarchia,
         deployment: config.deployment.cryptarchia,
     }
     .into_cryptarchia_services_settings(&config.deployment.blend);
 
     let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
-        user: config.blend,
+        user: config.user.blend,
         deployment: config.deployment.blend,
     }
     .into();
 
     let mempool_service_config = MempoolConfig {
-        user: config.mempool,
+        user: config.user.mempool,
         deployment: config.deployment.mempool,
     }
     .into();
@@ -153,7 +153,7 @@ pub fn run_node_from_config(config: Config) -> Result<Overwatch<RuntimeServiceId
     let app = OverwatchRunner::<LogosBlockchain>::run(
         LogosBlockchainServiceSettings {
             network: NetworkConfig {
-                user: config.network,
+                user: config.user.network,
                 deployment: config.deployment.network,
             }
             .into(),
@@ -162,20 +162,20 @@ pub fn run_node_from_config(config: Config) -> Result<Overwatch<RuntimeServiceId
             blend_edge: blend_edge_config,
             block_broadcast: (),
             #[cfg(feature = "tracing")]
-            tracing: config.tracing,
-            http: config.http,
+            tracing: config.user.tracing,
+            http: config.user.http,
             mempool: mempool_service_config,
             cryptarchia: chain_service_config,
             chain_network: chain_network_config,
             cryptarchia_leader: chain_leader_config,
             time: time_service_config,
-            storage: config.storage,
+            storage: config.user.storage,
             system_sig: (),
-            key_management: config.key_management,
+            key_management: config.user.key_management,
             sdp: SdpSettings { declaration: None },
-            wallet: config.wallet,
+            wallet: config.user.wallet,
             #[cfg(feature = "testing")]
-            testing_http: config.testing_http,
+            testing_http: config.user.testing_http,
         },
         None,
     )

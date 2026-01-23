@@ -232,7 +232,7 @@ impl Topology {
     fn node_listen_ports(&self) -> Vec<u16> {
         self.validators
             .iter()
-            .map(|node| node.config().network.backend.swarm.port)
+            .map(|node| node.config().user.network.backend.swarm.port)
             .collect()
     }
 
@@ -241,6 +241,7 @@ impl Topology {
             .iter()
             .map(|v| {
                 v.config()
+                    .user
                     .network
                     .backend
                     .initial_peers

@@ -1,3 +1,4 @@
+use core::{convert::Infallible, str::FromStr};
 use std::{
     net::{IpAddr, SocketAddr, ToSocketAddrs as _},
     path::{Path, PathBuf},
@@ -15,14 +16,17 @@ use lb_tracing_service::{LoggerLayer, Tracing};
 use num_bigint::BigUint;
 use overwatch::services::ServiceData;
 use serde::Deserialize;
-use tracing::Level;
+use tracing::{Level, warn};
 
 use crate::{
     ApiService, CryptarchiaService, KeyManagementService, RuntimeServiceId, StorageService,
     config::{
-        blend::serde::Config as BlendConfig, cryptarchia::serde::Config as CryptarchiaConfig,
-        deployment::DeploymentSettings, mempool::serde::Config as MempoolConfig,
-        network::serde::Config as NetworkConfig, time::serde::Config as TimeConfig,
+        blend::serde::Config as BlendConfig,
+        cryptarchia::serde::Config as CryptarchiaConfig,
+        deployment::{DeploymentSettings, WellKnownDeployment},
+        mempool::serde::Config as MempoolConfig,
+        network::serde::Config as NetworkConfig,
+        time::serde::Config as TimeConfig,
     },
     generic_services::{SdpService, WalletService},
 };
@@ -62,6 +66,8 @@ pub struct CliArgs {
     cryptarchia_leader: CryptarchiaLeaderArgs,
     #[clap(flatten)]
     time: TimeArgs,
+    #[clap(flatten)]
+    deployment: DeploymentArgs,
 }
 
 impl CliArgs {
@@ -73,6 +79,11 @@ impl CliArgs {
     #[must_use]
     pub const fn dry_run(&self) -> bool {
         self.check_config_only
+    }
+
+    #[must_use]
+    pub const fn deployment_type(&self) -> &DeploymentType {
+        &self.deployment.deployment_type
     }
 }
 
@@ -198,12 +209,70 @@ impl TimeArgs {
     }
 }
 
+#[derive(Parser, Debug, Clone)]
+pub struct DeploymentArgs {
+    #[clap(long = "deployment", env = "DEPLOYMENT", default_value = DeploymentType::default())]
+    deployment_type: DeploymentType,
+}
+
+impl DeploymentArgs {
+    #[must_use]
+    pub const fn deployment_type(&self) -> &DeploymentType {
+        &self.deployment_type
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum DeploymentType {
+    WellKnown(WellKnownDeployment),
+    Custom(PathBuf),
+}
+
+impl Default for DeploymentType {
+    fn default() -> Self {
+        WellKnownDeployment::default().into()
+    }
+}
+
+impl From<WellKnownDeployment> for DeploymentType {
+    fn from(deployment: WellKnownDeployment) -> Self {
+        Self::WellKnown(deployment)
+    }
+}
+
+impl From<PathBuf> for DeploymentType {
+    fn from(path: PathBuf) -> Self {
+        Self::Custom(path)
+    }
+}
+
+#[expect(clippy::fallible_impl_from, reason = "`From` impl required by clap.")]
+impl From<DeploymentType> for OsStr {
+    fn from(value: DeploymentType) -> Self {
+        match value {
+            DeploymentType::WellKnown(well_known_deployment) => {
+                well_known_deployment.to_string().into()
+            }
+            DeploymentType::Custom(path) => path.to_str().unwrap().to_owned().into(),
+        }
+    }
+}
+
+impl FromStr for DeploymentType {
+    type Err = Infallible;
+
+    // Try to parse as a well-known deployment first, otherwise treat as a path.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(s.parse::<WellKnownDeployment>()
+            .map_or_else(|()| PathBuf::from(s).into(), Into::into))
+    }
+}
+
 #[derive(Deserialize, Debug, Clone)]
 #[cfg_attr(feature = "testing", derive(serde::Serialize))]
-pub struct Config {
+pub struct UserConfig {
     pub network: NetworkConfig,
     pub blend: BlendConfig,
-    pub deployment: DeploymentSettings,
     pub cryptarchia: CryptarchiaConfig,
     pub time: TimeConfig,
     pub mempool: MempoolConfig,
@@ -219,8 +288,8 @@ pub struct Config {
     pub testing_http: <ApiService as ServiceData>::Settings,
 }
 
-impl Config {
-    pub fn update_from_args(mut self, args: CliArgs) -> Result<Self> {
+impl UserConfig {
+    pub fn update_from_args(mut self, args: CliArgs) -> Result<RunConfig> {
         let CliArgs {
             log: log_args,
             http: http_args,
@@ -228,6 +297,7 @@ impl Config {
             blend: blend_args,
             cryptarchia_leader: cryptarchia_leader_args,
             time: time_args,
+            deployment: deployment_args,
             ..
         } = args;
         update_tracing(&mut self.tracing, log_args)?;
@@ -236,7 +306,21 @@ impl Config {
         update_http(&mut self.http, http_args)?;
         update_cryptarchia_leader_consensus(&mut self.cryptarchia.leader, cryptarchia_leader_args)?;
         update_time(&mut self.time, &time_args)?;
-        Ok(self)
+
+        let deployment_settings = match deployment_args.deployment_type() {
+            DeploymentType::WellKnown(well_known_deployment) => (*well_known_deployment).into(),
+            DeploymentType::Custom(custom_deployment_config_path) => {
+                deserialize_config_at_path::<DeploymentSettings>(
+                    custom_deployment_config_path,
+                    OnUnknownKeys::Warn,
+                )?
+            }
+        };
+
+        Ok(RunConfig {
+            deployment: deployment_settings,
+            user: self,
+        })
     }
 }
 
@@ -384,8 +468,14 @@ pub enum ConfigDeserializationError<Config> {
     SerdeError(#[from] serde_yaml::Error),
 }
 
+pub enum OnUnknownKeys {
+    Fail,
+    Warn,
+}
+
 pub fn deserialize_config_at_path<Config>(
     config_path: &Path,
+    unknown_keys_strategy: OnUnknownKeys,
 ) -> Result<Config, ConfigDeserializationError<Config>>
 where
     Config: for<'de> Deserialize<'de>,
@@ -398,12 +488,35 @@ where
         },
     )?;
 
-    if ignored_fields.is_empty() {
-        Ok(config)
-    } else {
-        Err(ConfigDeserializationError::UnrecognizedFields {
-            fields: ignored_fields,
-            config,
-        })
+    match (ignored_fields, unknown_keys_strategy) {
+        (ignored_fields, _) if ignored_fields.is_empty() => Ok(config),
+        (ignored_fields, OnUnknownKeys::Warn) => {
+            warn!(
+                "The following unrecognized fields were found in the config file: {ignored_fields:?}."
+            );
+            Ok(config)
+        }
+        (ignored_fields, OnUnknownKeys::Fail) => {
+            Err(ConfigDeserializationError::UnrecognizedFields {
+                fields: ignored_fields,
+                config,
+            })
+        }
+    }
+}
+
+/// Configuration for a running node. It is the combination of user-provided and
+/// deployment-specific settings.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "testing", derive(serde::Serialize))]
+pub struct RunConfig {
+    #[cfg_attr(feature = "testing", serde(flatten))]
+    pub user: UserConfig,
+    pub deployment: DeploymentSettings,
+}
+
+impl From<RunConfig> for UserConfig {
+    fn from(value: RunConfig) -> Self {
+        value.user
     }
 }

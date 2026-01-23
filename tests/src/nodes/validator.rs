@@ -15,13 +15,16 @@ use lb_core::{
     mantle::{SignedMantleTx, Transaction as _, TxHash},
     sdp::Declaration,
 };
-use lb_http_api_common::paths::{
-    CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, MANTLE_SDP_DECLARATIONS, NETWORK_INFO, STORAGE_BLOCK,
+use lb_http_api_common::{
+    paths::{
+        CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, MANTLE_SDP_DECLARATIONS, NETWORK_INFO, STORAGE_BLOCK,
+    },
+    settings::AxumBackendSettings,
 };
 use lb_network_service::backends::libp2p::Libp2pInfo;
 use lb_node::{
-    Config, HeaderId, RocksBackendSettings, api::backend::AxumBackendSettings,
-    config::mempool::serde::Config as MempoolConfig,
+    HeaderId, RocksBackendSettings, UserConfig,
+    config::{RunConfig, mempool::serde::Config as MempoolConfig},
 };
 use lb_sdp_service::SdpSettings;
 use lb_tracing::logging::local::FileConfig;
@@ -52,7 +55,7 @@ pub struct Validator {
     testing_http_addr: SocketAddr,
     tempdir: tempfile::TempDir,
     child: Child,
-    config: Config,
+    config: RunConfig,
     http_client: CommonHttpClient,
 }
 
@@ -94,20 +97,20 @@ impl Validator {
         .is_ok()
     }
 
-    pub async fn spawn(mut config: Config) -> Result<Self, Elapsed> {
+    pub async fn spawn(mut config: RunConfig) -> Result<Self, Elapsed> {
         let dir = create_tempdir().unwrap();
         let mut file = NamedTempFile::new().unwrap();
         let config_path = file.path().to_owned();
 
         if !*IS_DEBUG_TRACING {
             // setup logging so that we can intercept it later in testing
-            config.tracing.logger = LoggerLayer::File(FileConfig {
+            config.user.tracing.logger = LoggerLayer::File(FileConfig {
                 directory: dir.path().to_owned(),
                 prefix: Some(LOGS_PREFIX.into()),
             });
         }
 
-        config.storage.db_path = dir.path().join("db");
+        config.user.storage.db_path = dir.path().join("db");
 
         serde_yaml::to_writer(&mut file, &config).unwrap();
         let exe_path = get_exe_path(BIN_PATH_DEBUG, BIN_PATH_RELEASE);
@@ -119,8 +122,8 @@ impl Validator {
             .spawn()
             .unwrap();
         let node = Self {
-            addr: config.http.backend_settings.address,
-            testing_http_addr: config.testing_http.backend_settings.address,
+            addr: config.user.http.backend_settings.address,
+            testing_http_addr: config.user.testing_http.backend_settings.address,
             child,
             tempdir: dir,
             config,
@@ -221,7 +224,7 @@ impl Validator {
     }
 
     #[must_use]
-    pub const fn config(&self) -> &Config {
+    pub const fn config(&self) -> &RunConfig {
         &self.config
     }
 
@@ -315,16 +318,14 @@ impl Validator {
 }
 
 #[must_use]
-pub fn create_validator_config(config: GeneralConfig) -> Config {
+pub fn create_validator_config(config: GeneralConfig) -> RunConfig {
     let testing_http_address = format!("127.0.0.1:{}", get_available_tcp_port().unwrap())
         .parse()
         .unwrap();
-    let custom_deployment_config = default_e2e_deployment_settings();
 
-    Config {
+    let user_config = UserConfig {
         network: config.network_config,
         blend: config.blend_config.0,
-        deployment: custom_deployment_config,
         time: config.time_config,
         cryptarchia: config.consensus_config.user_config().clone(),
         mempool: MempoolConfig {
@@ -359,5 +360,11 @@ pub fn create_validator_config(config: GeneralConfig) -> Config {
                 ..Default::default()
             },
         },
+    };
+    let deployment_config = default_e2e_deployment_settings();
+
+    RunConfig {
+        deployment: deployment_config,
+        user: user_config,
     }
 }

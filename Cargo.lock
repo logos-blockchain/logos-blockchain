@@ -5857,7 +5857,6 @@ dependencies = [
  "num-bigint",
  "overwatch",
  "serde_json",
- "serde_yaml",
  "tokio",
 ]
 
@@ -5917,6 +5916,7 @@ dependencies = [
  "logos-blockchain-utils",
  "logos-blockchain-wallet-service",
  "overwatch",
+ "rand 0.8.5",
  "serde",
  "thiserror 1.0.69",
  "tokio",

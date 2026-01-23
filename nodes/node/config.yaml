@@ -32,7 +32,6 @@ blend:
     backend:
       max_dial_attempts_per_peer_per_message: 1
       replication_factor: 1
-deployment: mainnet
 http:
   backend_settings:
     address: 127.0.0.1:8722
