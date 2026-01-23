@@ -81,7 +81,7 @@ jobs:
         with:
           command: test
           # The test binary can be debug mode to increase build times
-          args: --locked --all --features "pol-dev-mode" -p logos-blockchain-tests --features "cucumber" --test cucumber -- --tags "@normal_ci"
+          args: --locked -p logos-blockchain-tests --features "cucumber" --test cucumber -- --tags "@normal_ci"
 
       # Always upload JUnit test results for reporting, even if tests fail
       - name: Upload cucumber JUnit results

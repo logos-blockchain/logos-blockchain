@@ -172,13 +172,35 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: run
-          args: --locked -p logos-blockchain-node nodes/node/config.yaml --check-config
+          args: --locked -p logos-blockchain-node -- nodes/node/config.yaml --check-config
 
       - name: Run the node binary with the testing feature to check the one-node config files validity
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: run
           args: --locked -p logos-blockchain-node --features testing -- nodes/node/config-one-node.yaml --check-config --deployment nodes/node/one-node-custom-deployment.yaml
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35
+        with:
+          tool: cargo-nextest
+
+      - name: Cargo test without PoL
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        env:
+          POL_PROOF_DEV_MODE: true
+          CONSENSUS_SLOT_TIME: 5
+        with:
+          command: nextest
+          # - We don't test benches as they take 6h+, leading to a timeout
+          args: run --workspace --locked --lib --bins --examples --tests --all-features --no-fail-fast --exclude logos-blockchain-tests
+
+      - name: Cargo test with PoL
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: nextest
+          # TODO: Enable all tests after adapting them to PoL
+          args: leadership::pol_tests --features build-verification-key
 
       # Build binaries then use them - this includes testing feature needed for unit tests
       - name: Build binaries with required test features
@@ -189,12 +211,7 @@ jobs:
           # integration framework tests.
           args: --locked --features pol-dev-mode
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35
-        with:
-          tool: cargo-nextest
-
-      - name: Cargo test without PoL
+      - name: End-to-end integration tests
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
           POL_PROOF_DEV_MODE: true
@@ -208,15 +225,7 @@ jobs:
         with:
           command: nextest
           # - We don't test benches as they take 6h+, leading to a timeout
-          # - `cucumber` has its own action/workflow gated by `--features cucumber`
-          args: run --locked --all --lib --bins --tests --examples --features pol-dev-mode --no-fail-fast
-
-      - name: Cargo test with PoL
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: nextest
-          # TODO: Enable all tests after adapting them to PoL
-          args: run leadership::pol_tests --features build-verification-key --no-fail-fast
+          args: run --locked -p logos-blockchain-tests --no-fail-fast
 
       - name: Upload integration tests results
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
