@@ -181,6 +181,11 @@ jobs:
           # integration framework tests.
           args: --locked --features pol-dev-mode
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35
+        with:
+          tool: cargo-nextest
+
       - name: Cargo test without PoL
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
@@ -193,17 +198,17 @@ jobs:
           NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
           LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
         with:
-          command: test
+          command: nextest
           # - We don't test benches as they take 6h+, leading to a timeout
           # - `cucumber` has its own action/workflow gated by `--features cucumber`
-          args: --locked --all --lib --bins --tests --examples --features pol-dev-mode
+          args: run --locked --all --lib --bins --tests --examples --features pol-dev-mode --no-fail-fast
 
       - name: Cargo test with PoL
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
-          command: test
+          command: nextest
           # TODO: Enable all tests after adapting them to PoL
-          args: leadership::pol_tests --features build-verification-key
+          args: run leadership::pol_tests --features build-verification-key --no-fail-fast
 
       - name: Upload integration tests results
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
