@@ -1,62 +1,30 @@
-use fixed_slice_deque::FixedSliceDeque;
+use std::ops::RangeInclusive;
+
 use lb_cryptarchia_engine::Slot;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone)]
 pub struct BlockDensity {
-    // TODO: this can be optimized using a bitarray family data structure and shifting instead
-    // current available option bitvec crate doesnt support fixed size structures so we go for this
-    // instead for now.
-    #[cfg_attr(feature = "serde", serde(with = "fixed_slice_deque_serde"))]
-    pub slots_window: FixedSliceDeque<bool>,
-    current_slot: Slot,
+    period_range: RangeInclusive<Slot>,
+    density: u64,
 }
 
 impl BlockDensity {
-    pub fn new(period: u64, current_slot: Slot) -> Self {
-        let slots_window = FixedSliceDeque::new(period as usize);
+    pub fn new(period: u64, starting_slot: Slot) -> Self {
         Self {
-            slots_window,
-            current_slot,
+            period_range: starting_slot..=starting_slot + period,
+            density: 0,
         }
     }
 
     pub fn increment_block_density(&mut self, new_slot: Slot) {
-        let slot_difference = new_slot.saturating_sub(self.current_slot).into_inner();
-        // fill back empty slots
-        for _ in 1..slot_difference {
-            self.slots_window.push_back(false);
+        if self.period_range.contains(&new_slot) {
+            self.density += 1;
         }
-        // fill incoming slot
-        self.slots_window.push_back(true);
-        // set new current slot
-        self.current_slot = new_slot;
     }
 
-    pub fn current_block_density(&self) -> u64 {
-        self.slots_window.iter().filter(|&&filled| filled).count() as u64
-    }
-}
-
-#[cfg(feature = "serde")]
-mod fixed_slice_deque_serde {
-    use fixed_slice_deque::FixedSliceDeque;
-    use serde::{Deserialize as _, Deserializer, Serialize as _, Serializer};
-
-    pub fn serialize<S>(slots: &FixedSliceDeque<bool>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let vec: Vec<bool> = slots.iter().copied().collect();
-        vec.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<FixedSliceDeque<bool>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let vec = Vec::<bool>::deserialize(deserializer)?;
-        Ok(vec.into_iter().collect())
+    pub const fn current_block_density(&self) -> u64 {
+        self.density
     }
 }
 

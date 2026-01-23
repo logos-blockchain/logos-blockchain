@@ -14,7 +14,6 @@ workspace = true
 
 [dependencies]
 derivative                    = "2.2.0"
-fixed-slice-deque             = "0.1.0-beta5"
 lb-blend-crypto               = { workspace = true }
 lb-blend-message              = { workspace = true }
 lb-blend-proofs               = { workspace = true }

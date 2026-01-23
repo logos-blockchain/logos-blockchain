@@ -153,6 +153,7 @@ impl LedgerState {
             })
         } else if new_epoch == current_epoch + 1 {
             // case 2)
+            let block_density = BlockDensity::new(self.stake_inference.period(), slot);
             let epoch_state = self.next_epoch_state.clone();
             let next_epoch_state = EpochState {
                 epoch: new_epoch + 1,
@@ -164,11 +165,12 @@ impl LedgerState {
                 slot,
                 next_epoch_state,
                 epoch_state,
-                block_density: block_density_inference,
+                block_density,
                 ..self
             })
         } else {
             // case 3)
+            let block_density = BlockDensity::new(self.stake_inference.period(), slot);
             let epoch_state = EpochState {
                 epoch: new_epoch,
                 nonce: self.nonce,
@@ -185,7 +187,7 @@ impl LedgerState {
                 slot,
                 next_epoch_state,
                 epoch_state,
-                block_density: block_density_inference,
+                block_density,
                 ..self
             })
         }
