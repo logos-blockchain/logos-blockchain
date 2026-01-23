@@ -18,6 +18,7 @@ use network::GeneralNetworkConfig;
 use rand::{Rng as _, thread_rng};
 use tracing::GeneralTracingConfig;
 
+use crate::common::kms::key_id_for_preload_backend;
 use crate::topology::configs::{
     api::GeneralApiConfig, consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD, network::NetworkParams,
     time::GeneralTimeConfig,
@@ -105,8 +106,9 @@ pub fn create_general_configs_with_blend_core_subset(
     // Set Blend keys in KMS of each node config.
     let kms_configs: Vec<_> = blend_configs
         .iter()
+        .enumerate()
         .map(
-            |(blend_conf, private_key, zk_secret_key)| PreloadKMSBackendSettings {
+            |(i, (blend_conf, private_key, zk_secret_key))| PreloadKMSBackendSettings {
                 keys: [
                     (
                         blend_conf.non_ephemeral_signing_key_id.clone(),
@@ -115,6 +117,13 @@ pub fn create_general_configs_with_blend_core_subset(
                     (
                         blend_conf.core.zk.secret_key_kms_id.clone(),
                         zk_secret_key.clone().into(),
+                    ),
+                    // SDP funding secret key - used by wallet for signing SDP transactions
+                    (
+                        key_id_for_preload_backend(
+                            &consensus_configs[i].sdp_notes[i].sk.clone().into(),
+                        ),
+                        consensus_configs[i].sdp_notes[i].sk.clone().into(),
                     ),
                 ]
                 .into(),

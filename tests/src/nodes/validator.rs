@@ -12,7 +12,7 @@ use lb_chain_service::CryptarchiaInfo;
 use lb_common_http_client::CommonHttpClient;
 use lb_core::{
     block::Block,
-    mantle::{SignedMantleTx, Transaction as _, TxHash},
+    mantle::{SignedMantleTx, Transaction as _, TxHash, Value},
     sdp::Declaration,
 };
 use lb_http_api_common::{
@@ -346,7 +346,13 @@ pub fn create_validator_config(config: GeneralConfig) -> RunConfig {
             read_only: false,
             column_family: Some("blocks".into()),
         },
-        sdp: SdpSettings { declaration: None },
+        sdp: SdpSettings {
+            declaration: None,
+            wallet_config: lb_sdp_service::wallet::SdpWalletConfig {
+                max_tx_fee: Value::MAX,
+                funding_pk: config.consensus_config.funding_pk,
+            },
+        },
         wallet: WalletServiceSettings {
             known_keys: HashSet::from_iter([config.consensus_config.user_config().leader.pk]),
         },

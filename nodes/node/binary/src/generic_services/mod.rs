@@ -10,7 +10,6 @@ use lb_sdp_service::adapters::mempool::sdp::SdpMempoolNetworkAdapter;
 use lb_storage_service::backends::rocksdb::RocksBackend;
 use lb_time_service::backends::NtpTimeBackend;
 use lb_tx_service::{backend::pool::Mempool, storage::adapters::rocksdb::RocksStorageAdapter};
-use lb_wallet_service::api::WalletApiError;
 
 use crate::{
     MB16,
@@ -108,7 +107,7 @@ pub type SdpService<RuntimeServiceId> = lb_sdp_service::SdpService<
     SdpMempoolAdapterGeneric<RuntimeServiceId>,
     SdpWalletAdapter<
         WalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>,
-        WalletApiError,
+        RuntimeServiceId,
     >,
     RuntimeServiceId,
 >;

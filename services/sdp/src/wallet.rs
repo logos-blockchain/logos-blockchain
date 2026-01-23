@@ -3,20 +3,17 @@ use lb_core::{
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use overwatch::services::{ServiceData, relay::OutboundRelay};
+use overwatch::{
+    DynError,
+    services::{ServiceData, relay::OutboundRelay},
+};
 
 #[derive(Debug, thiserror::Error)]
-pub enum SdpWalletError<WalletError> {
+pub enum SdpWalletError {
     #[error(transparent)]
-    WalletApi(Box<WalletError>),
+    WalletApi(DynError),
     #[error("Transaction fee exceeded the configured max fee. tx_fee={tx_fee} > max_fee={max_fee}")]
     TxFeeExceedsMaxFee { max_fee: Value, tx_fee: Value },
-}
-
-impl<WalletError> From<WalletError> for SdpWalletError<WalletError> {
-    fn from(err: WalletError) -> Self {
-        Self::WalletApi(Box::new(err))
-    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -32,7 +29,6 @@ pub struct SdpWalletConfig {
 #[async_trait::async_trait]
 pub trait SdpWalletAdapter {
     type WalletService: ServiceData;
-    type WalletError;
 
     fn new(outbound_relay: OutboundRelay<<Self::WalletService as ServiceData>::Message>) -> Self;
 
@@ -41,19 +37,19 @@ pub trait SdpWalletAdapter {
         tx_builder: MantleTxBuilder,
         declaration: DeclarationMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedMantleTx, SdpWalletError<Self::WalletError>>;
+    ) -> Result<SignedMantleTx, SdpWalletError>;
 
     async fn active_tx(
         &self,
         tx_builder: MantleTxBuilder,
         active_message: ActiveMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedMantleTx, SdpWalletError<Self::WalletError>>;
+    ) -> Result<SignedMantleTx, SdpWalletError>;
 
     async fn withdraw_tx(
         &self,
         tx_builder: MantleTxBuilder,
         withdraw: WithdrawMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedMantleTx, SdpWalletError<Self::WalletError>>;
+    ) -> Result<SignedMantleTx, SdpWalletError>;
 }

@@ -106,7 +106,6 @@ impl<MempoolAdapter, WalletAdapter, RuntimeServiceId> ServiceCore<RuntimeService
 where
     MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx> + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
-    WalletAdapter::WalletError: Debug,
     RuntimeServiceId: Debug
         + AsServiceId<Self>
         + AsServiceId<MempoolAdapter::MempoolService>
@@ -189,7 +188,6 @@ impl<MempoolAdapter, WalletAdapter, RuntimeServiceId>
 where
     MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx> + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
-    WalletAdapter::WalletError: Debug,
     RuntimeServiceId: Debug
         + AsServiceId<Self>
         + AsServiceId<MempoolAdapter::MempoolService>

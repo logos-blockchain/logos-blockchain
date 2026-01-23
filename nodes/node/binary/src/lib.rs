@@ -32,7 +32,6 @@ pub use lb_tx_service::{
     },
     tx::settings::TxMempoolSettings,
 };
-use lb_wallet_service::api::WalletApiError;
 use overwatch::{
     DynError, derive_services,
     overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
@@ -89,7 +88,7 @@ pub type ApiService = lb_api_service::ApiService<
         ApiStorageAdapter<RuntimeServiceId>,
         RocksStorageAdapter<SignedMantleTx, TxHash>,
         SdpMempoolAdapterGeneric<RuntimeServiceId>,
-        SdpWalletAdapter<WalletService, WalletApiError>,
+        SdpWalletAdapter<WalletService, RuntimeServiceId>,
     >,
     RuntimeServiceId,
 >;

@@ -3,9 +3,12 @@ use lb_core::{
     mantle::{Note, SignedMantleTx, Utxo, Value, tx_builder::MantleTxBuilder},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
-use overwatch::services::{
-    AsServiceId, ServiceData,
-    relay::{OutboundRelay, RelayError},
+use overwatch::{
+    overwatch::OverwatchHandle,
+    services::{
+        AsServiceId, ServiceData,
+        relay::{OutboundRelay, RelayError},
+    },
 };
 use tokio::sync::oneshot::{self, error::RecvError};
 
@@ -67,6 +70,12 @@ where
             relay,
             _id: std::marker::PhantomData,
         }
+    }
+
+    #[must_use]
+    pub async fn from_overwatch_handle(handle: &OverwatchHandle<RuntimeServiceId>) -> Self {
+        let relay = handle.relay::<Wallet>().await.unwrap();
+        Self::new(relay)
     }
 
     pub async fn get_balance(
