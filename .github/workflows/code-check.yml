@@ -57,8 +57,8 @@ jobs:
       matrix:
         os:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - [self-hosted, Linux]
-          - [self-hosted, macOS]
+          - [ self-hosted, Linux ]
+          - [ self-hosted, macOS ]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
@@ -135,7 +135,7 @@ jobs:
         uses: ./.github/actions/update-cargo-cache
         with:
           key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
- 
+
   tests:
     name: Run test suite
     if: ${{ !startsWith(github.event.pull_request.title, '[WIP]') && !contains(github.event.label.name,  'DO NOT MERGE') }}
@@ -144,8 +144,8 @@ jobs:
       matrix:
         os:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - [self-hosted, Linux]
-          - [self-hosted, macOS]
+          - [ self-hosted, Linux ]
+          - [ self-hosted, macOS ]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Disable rustup override
@@ -181,7 +181,7 @@ jobs:
       - name: Cargo test
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
-          POL_PROOF_DEV_MODE: true
+          PROOF_DEV_MODE: true
           CONSENSUS_SLOT_TIME: 5
           LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/debug/logos-blockchain-node
           LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
