@@ -9,7 +9,7 @@
 // #[tokio::test]
 // async fn cucumber_local_idle_smoke() {
 //     // Required env vars (set on the command line when running this test):
-//     // - `POL_PROOF_DEV_MODE=true`
+//     // - `PROOF_DEV_MODE=true`
 //     // - `NODE_BIN=...`
 //     // - `KZGRS_PARAMS_PATH=...` (path to KZG params
 // directory/file, e.g.     //   `tests/kzgrs`)

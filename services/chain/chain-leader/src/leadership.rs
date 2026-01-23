@@ -50,14 +50,14 @@ impl Leader {
             let note_id = utxo.id().0;
             let secret_key = self.secret_key();
 
-            #[cfg(feature = "pol-dev-mode")]
+            #[cfg(feature = "proof-dev-mode")]
             let winning = public_inputs.check_winning_dev(
                 utxo.note.value,
                 note_id,
                 *secret_key.as_fr(),
                 self.config.consensus_config.active_slot_coeff,
             );
-            #[cfg(not(feature = "pol-dev-mode"))]
+            #[cfg(not(feature = "proof-dev-mode"))]
             let winning =
                 public_inputs.check_winning(utxo.note.value, note_id, *secret_key.as_fr());
 
@@ -121,7 +121,7 @@ impl Leader {
     }
 
     #[cfg_attr(
-        feature = "pol-dev-mode",
+        feature = "proof-dev-mode",
         expect(
             clippy::unnecessary_wraps,
             reason = "Return value is always Some in dev mode"
@@ -136,25 +136,25 @@ impl Leader {
         latest_tree: &UtxoTree,
     ) -> Result<LeaderPrivate, PrivateInputsError> {
         let aged_path = {
-            #[cfg(not(feature = "pol-dev-mode"))]
+            #[cfg(not(feature = "proof-dev-mode"))]
             {
                 epoch_state
                     .utxo_merkle_path(utxo)
                     .ok_or(PrivateInputsError::AgedNoteNotFound)?
             }
-            #[cfg(feature = "pol-dev-mode")]
+            #[cfg(feature = "proof-dev-mode")]
             {
                 Vec::new()
             }
         };
         let latest_path = {
-            #[cfg(not(feature = "pol-dev-mode"))]
+            #[cfg(not(feature = "proof-dev-mode"))]
             {
                 latest_tree
                     .path(&utxo.id())
                     .ok_or(PrivateInputsError::LatestNoteNotFound)?
             }
-            #[cfg(feature = "pol-dev-mode")]
+            #[cfg(feature = "proof-dev-mode")]
             {
                 Vec::new()
             }
@@ -193,7 +193,7 @@ fn public_inputs_for_slot(
 }
 
 #[cfg_attr(
-    feature = "pol-dev-mode",
+    feature = "proof-dev-mode",
     expect(unused, reason = "used only in non-dev mode currently")
 )]
 #[derive(thiserror::Error, Debug)]

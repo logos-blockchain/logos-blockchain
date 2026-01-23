@@ -10,7 +10,7 @@
 // #[tokio::test]
 // async fn smoke_two_validators_run_30s() -> Result<(), Box<dyn
 // std::error::Error + Send + Sync>> {     // Required env vars (set on the
-// command line when running this test):     // - `POL_PROOF_DEV_MODE=true`
+// command line when running this test):     // - `PROOF_DEV_MODE=true`
 // (required for local proof generation)     // - `NODE_BIN=...
 // ` (path to `logos-blockchain-node` binary)     // -
 // `EXECUTOR_BIN=. ..` (optional; only needed if the scenario

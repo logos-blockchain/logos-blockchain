@@ -8,7 +8,7 @@ export CFG_FILE_PATH="/config.yaml" \
        CFG_HOST_KIND="executor" \
        CFG_HOST_IDENTIFIER="executor-$(hostname -i)" \
        LOG_LEVEL="INFO" \
-       POL_PROOF_DEV_MODE=true
+       PROOF_DEV_MODE=true
 
 /usr/bin/cfgsync-client && \
     exec /usr/bin/logos-blockchain-executor /config.yaml

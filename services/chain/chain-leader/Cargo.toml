@@ -35,6 +35,6 @@ tracing                       = { workspace = true }
 tracing-futures               = { default-features = false, version = "0.2" }
 
 [features]
-default      = []
-libp2p       = ["lb-blend-service/libp2p"]
-pol-dev-mode = ["lb-core/pol-dev-mode"]
+default        = []
+libp2p         = ["lb-blend-service/libp2p"]
+proof-dev-mode = ["lb-core/proof-dev-mode"]

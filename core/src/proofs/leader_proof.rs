@@ -6,7 +6,7 @@ use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const POL_PROOF_DEV_MODE: &str = "POL_PROOF_DEV_MODE";
+pub const PROOF_DEV_MODE: &str = "PROOF_DEV_MODE";
 
 use crate::{
     mantle::{
@@ -24,7 +24,7 @@ pub struct Groth16LeaderProof {
     entropy_contribution: Fr,
     leader_key: Ed25519PublicKey,
     voucher_cm: VoucherCm,
-    #[cfg(feature = "pol-dev-mode")]
+    #[cfg(feature = "proof-dev-mode")]
     public: LeaderPublic,
 }
 
@@ -37,7 +37,7 @@ pub enum Error {
 impl Groth16LeaderProof {
     pub fn prove(witness: LeaderPrivate, voucher_cm: VoucherCm) -> Result<Self, Error> {
         let start_t = std::time::Instant::now();
-        #[cfg(feature = "pol-dev-mode")]
+        #[cfg(feature = "proof-dev-mode")]
         let public = witness.public;
         let leader_key = witness.pk;
         let (proof, entropy_contribution) = Self::generate_proof(witness)?;
@@ -48,7 +48,7 @@ impl Groth16LeaderProof {
             entropy_contribution,
             leader_key,
             voucher_cm,
-            #[cfg(feature = "pol-dev-mode")]
+            #[cfg(feature = "proof-dev-mode")]
             public,
         })
     }
@@ -60,13 +60,13 @@ impl Groth16LeaderProof {
             entropy_contribution: Fr::ZERO,
             leader_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
-            #[cfg(feature = "pol-dev-mode")]
+            #[cfg(feature = "proof-dev-mode")]
             public: LeaderPublic::new(Fr::ZERO, Fr::ZERO, Fr::ZERO, 0, 0),
         }
     }
 
     fn generate_proof(private: LeaderPrivate) -> Result<(lb_pol::PoLProof, Fr), Error> {
-        if cfg!(feature = "pol-dev-mode") && std::env::var(POL_PROOF_DEV_MODE).is_ok() {
+        if cfg!(feature = "proof-dev-mode") && std::env::var(PROOF_DEV_MODE).is_ok() {
             tracing::warn!(
                 "Proofs are being generated in dev mode. This should never be used in production."
             );
@@ -105,8 +105,8 @@ pub trait LeaderProof {
 
 impl LeaderProof for Groth16LeaderProof {
     fn verify(&self, public_inputs: &LeaderPublic) -> bool {
-        #[cfg(feature = "pol-dev-mode")]
-        if std::env::var(POL_PROOF_DEV_MODE).is_ok() {
+        #[cfg(feature = "proof-dev-mode")]
+        if std::env::var(PROOF_DEV_MODE).is_ok() {
             tracing::warn!(
                 "Proofs are being verified in dev mode. This should never be used in production."
             );
@@ -189,7 +189,7 @@ impl LeaderPublic {
     }
 
     #[must_use]
-    #[cfg(feature = "pol-dev-mode")]
+    #[cfg(feature = "proof-dev-mode")]
     pub fn check_winning_dev(
         &self,
         value: u64,
@@ -211,7 +211,7 @@ impl LeaderPublic {
         (t0, t1)
     }
 
-    #[cfg(feature = "pol-dev-mode")]
+    #[cfg(feature = "proof-dev-mode")]
     fn scaled_phi_approx_dev(&self, active_slot_coeff: f64) -> (BigUint, BigUint) {
         let total_stake = BigUint::from(self.total_stake);
         let total_stake_sq = &total_stake * &total_stake;
@@ -243,7 +243,7 @@ impl LeaderPublic {
 pub struct LeaderPrivate {
     input: lb_pol::PolWitnessInputsData,
     pk: Ed25519PublicKey,
-    #[cfg(feature = "pol-dev-mode")]
+    #[cfg(feature = "proof-dev-mode")]
     public: LeaderPublic,
 }
 
@@ -289,7 +289,7 @@ impl LeaderPrivate {
         Self {
             input,
             pk: public_key,
-            #[cfg(feature = "pol-dev-mode")]
+            #[cfg(feature = "proof-dev-mode")]
             public,
         }
     }
@@ -393,7 +393,7 @@ mod tests {
         (public, note, sk)
     }
 
-    #[cfg(feature = "pol-dev-mode")]
+    #[cfg(feature = "proof-dev-mode")]
     #[test]
     fn test_check_winning_dev() {
         // winning rate of all the stake should be ~ active slot coeff

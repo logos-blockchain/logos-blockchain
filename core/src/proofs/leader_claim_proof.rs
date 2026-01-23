@@ -4,7 +4,7 @@ use lb_groth16::{Fr, serde::serde_fr};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const POC_PROOF_DEV_MODE: &str = "POC_PROOF_DEV_MODE";
+pub const PROOF_DEV_MODE: &str = "PROOF_DEV_MODE";
 
 use crate::{
     mantle::ops::leader_claim::VoucherNullifier,
@@ -16,7 +16,7 @@ pub struct Groth16LeaderClaimProof {
     #[serde(with = "proof_serde")]
     proof: lb_poc::PoCProof,
     voucher_nf: VoucherNullifier,
-    #[cfg(feature = "poc-dev-mode")]
+    #[cfg(feature = "proof-dev-mode")]
     public: LeaderClaimPublic,
 }
 
@@ -29,7 +29,7 @@ pub enum Error {
 impl Groth16LeaderClaimProof {
     pub fn prove(witness: LeaderClaimPrivate) -> Result<Self, Error> {
         let start_t = std::time::Instant::now();
-        #[cfg(feature = "poc-dev-mode")]
+        #[cfg(feature = "proof-dev-mode")]
         let public = witness.public;
         let (proof, voucher_nf) = Self::generate_proof(witness)?;
         tracing::debug!("groth16 prover time: {:.2?}", start_t.elapsed(),);
@@ -37,7 +37,7 @@ impl Groth16LeaderClaimProof {
         Ok(Self {
             proof,
             voucher_nf: VoucherNullifier::from(voucher_nf),
-            #[cfg(feature = "poc-dev-mode")]
+            #[cfg(feature = "proof-dev-mode")]
             public,
         })
     }
@@ -47,13 +47,13 @@ impl Groth16LeaderClaimProof {
         Self {
             proof: lb_poc::PoCProof::from_bytes(&[0u8; 128]),
             voucher_nf: VoucherNullifier::default(),
-            #[cfg(feature = "poc-dev-mode")]
+            #[cfg(feature = "proof-dev-mode")]
             public: LeaderClaimPublic::new(Fr::ZERO, Fr::ZERO),
         }
     }
 
     fn generate_proof(private: LeaderClaimPrivate) -> Result<(lb_poc::PoCProof, Fr), Error> {
-        if cfg!(feature = "poc-dev-mode") && std::env::var(POC_PROOF_DEV_MODE).is_ok() {
+        if cfg!(feature = "proof-dev-mode") && std::env::var(PROOF_DEV_MODE).is_ok() {
             tracing::warn!(
                 "Proofs are being generated in dev mode. This should never be used in production."
             );
@@ -87,8 +87,8 @@ pub trait LeaderClaimProof {
 
 impl LeaderClaimProof for Groth16LeaderClaimProof {
     fn verify(&self, public_inputs: &LeaderClaimPublic) -> bool {
-        #[cfg(feature = "poc-dev-mode")]
-        if std::env::var(POC_PROOF_DEV_MODE).is_ok() {
+        #[cfg(feature = "proof-dev-mode")]
+        if std::env::var(PROOF_DEV_MODE).is_ok() {
             tracing::warn!(
                 "Proofs are being verified in dev mode. This should never be used in production."
             );
@@ -137,7 +137,7 @@ impl LeaderClaimPublic {
 #[derive(Debug, Clone)]
 pub struct LeaderClaimPrivate {
     input: lb_poc::PoCWitnessInputsData,
-    #[cfg(feature = "poc-dev-mode")]
+    #[cfg(feature = "proof-dev-mode")]
     public: LeaderClaimPublic,
 }
 
@@ -164,7 +164,7 @@ impl LeaderClaimPrivate {
         let input = lb_poc::PoCWitnessInputsData::from_chain_and_wallet_data(chain, wallet);
         Self {
             input,
-            #[cfg(feature = "poc-dev-mode")]
+            #[cfg(feature = "proof-dev-mode")]
             public,
         }
     }

@@ -1,8 +1,10 @@
 # Logos Blockchain
 
-Logos blockchain is a component of the Logos technology stack, providing a privacy-preserving and censorship-resistant framework for decentralized network states.
+Logos blockchain is a component of the Logos technology stack, providing a privacy-preserving and censorship-resistant
+framework for decentralized network states.
 
-This monorepo serves as a unified codebase for the Logos blockchain ecosystem, housing all core components, services, and tools
+This monorepo serves as a unified codebase for the Logos blockchain ecosystem, housing all core components, services,
+and tools
 necessary for running and interacting with the Logos blockchain. Key features include:
 
 - Consensus mechanisms for secure and scalable network agreement
@@ -16,42 +18,42 @@ necessary for running and interacting with the Logos blockchain. Key features in
 ## Table of Contents
 
 - [Logos blockchain](#logos-blockchain)
-  - [Table of Contents](#table-of-contents)
-  - [Requirements](#requirements)
-  - [Setting Up Zero-Knowledge Circuits](#setting-up-zero-knowledge-circuits)
-    - [Quick Setup (Recommended)](#quick-setup-recommended)
-      - [Linux](#linux)
-      - [Windows](#windows)
-    - [Custom Installation](#custom-installation)
-      - [Linux](#linux-1)
-      - [Windows](#windows-1)
-    - [macOS Users](#macos-users)
-    - [Verifying Installation](#verifying-installation)
-  - [Design Goals](#design-goals)
-    - [Service Architecture](#service-architecture)
-    - [Static Dispatching](#static-dispatching)
-  - [Project Structure](#project-structure)
-  - [Development Workflow](#development-workflow)
-    - [Feature exclusions](#feature-exclusions)
-    - [Building the Image](#building-the-image)
-      - [Docker](#docker)
-      - [Command line](#command-line)
-    - [Setting `chain_start_time` timestamp](#setting-chain_start_time-timestamp)
-      - [Manually set chain start time in config](#manually-set-chain-start-time-in-config)
-    - [Running a Logos blockchain Node](#running-a-logos-blockchain-node)
-      - [Docker](#docker-1)
-      - [Running Logos Blockchain Node locally](#running-logos-blockchain-node-locally)
-      - [Running Logos Blockchain Node with integration test](#running-logos-blockchain-node-with-integration-test)
-  - [Running Tests](#running-tests)
-  - [Generating Documentation](#generating-documentation)
-  - [Dependency Graph Visualization](#dependency-graph-visualization)
-    - [Installation](#installation)
-    - [Generating the Graph](#generating-the-graph)
-    - [Rendering the Graph](#rendering-the-graph)
-    - [Alternative: Online Visualization](#alternative-online-visualization)
-  - [Contributing](#contributing)
-  - [License](#license)
-  - [Community](#community)
+    - [Table of Contents](#table-of-contents)
+    - [Requirements](#requirements)
+    - [Setting Up Zero-Knowledge Circuits](#setting-up-zero-knowledge-circuits)
+        - [Quick Setup (Recommended)](#quick-setup-recommended)
+            - [Linux](#linux)
+            - [Windows](#windows)
+        - [Custom Installation](#custom-installation)
+            - [Linux](#linux-1)
+            - [Windows](#windows-1)
+        - [macOS Users](#macos-users)
+        - [Verifying Installation](#verifying-installation)
+    - [Design Goals](#design-goals)
+        - [Service Architecture](#service-architecture)
+        - [Static Dispatching](#static-dispatching)
+    - [Project Structure](#project-structure)
+    - [Development Workflow](#development-workflow)
+        - [Feature exclusions](#feature-exclusions)
+        - [Building the Image](#building-the-image)
+            - [Docker](#docker)
+            - [Command line](#command-line)
+        - [Setting `chain_start_time` timestamp](#setting-chain_start_time-timestamp)
+            - [Manually set chain start time in config](#manually-set-chain-start-time-in-config)
+        - [Running a Logos blockchain Node](#running-a-logos-blockchain-node)
+            - [Docker](#docker-1)
+            - [Running Logos Blockchain Node locally](#running-logos-blockchain-node-locally)
+            - [Running Logos Blockchain Node with integration test](#running-logos-blockchain-node-with-integration-test)
+    - [Running Tests](#running-tests)
+    - [Generating Documentation](#generating-documentation)
+    - [Dependency Graph Visualization](#dependency-graph-visualization)
+        - [Installation](#installation)
+        - [Generating the Graph](#generating-the-graph)
+        - [Rendering the Graph](#rendering-the-graph)
+        - [Alternative: Online Visualization](#alternative-online-visualization)
+    - [Contributing](#contributing)
+    - [License](#license)
+    - [Community](#community)
 
 ## Requirements
 
@@ -61,11 +63,13 @@ necessary for running and interacting with the Logos blockchain. Key features in
 
 ## Setting Up Zero-Knowledge Circuits
 
-Logos blockchain uses zero-knowledge circuits for various cryptographic operations. To set up the required circuit binaries and keys:
+Logos blockchain uses zero-knowledge circuits for various cryptographic operations. To set up the required circuit
+binaries and keys:
 
 ### Quick Setup (Recommended)
 
-Run the setup script to download and install the latest logos-blockchain-circuits release, which will install circuits to 
+Run the setup script to download and install the latest logos-blockchain-circuits release, which will install circuits
+to
 `~/.logos-blockchain-circuits/` (`Linux`) or `$env:USERPROFILE\.logos-blockchain-circuits` (`Windows`) by default.:
 
 #### Linux
@@ -80,7 +84,7 @@ Run the setup script to download and install the latest logos-blockchain-circuit
 .\scripts\setup-logos-blockchain-circuits.ps1
 ```
 
-Also make sure that Visual Studio build tools with LLVM (or other LLVM with clang) are installed with the 
+Also make sure that Visual Studio build tools with LLVM (or other LLVM with clang) are installed with the
 `LIBCLANG_PATH` environment variable specified and pointing to the 64-bit `libclang.dll` folder, for example
 `setx LIBCLANG_PATH "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin"`
 
@@ -122,7 +126,7 @@ $env:LOGOS_BLOCKCHAIN_CIRCUITS="$env:USERPROFILE\circuits"
 
 ### macOS Users
 
-Since we don't yet have code-signing implemented on macOS, the setup script automatically removes quarantine attributes 
+Since we don't yet have code-signing implemented on macOS, the setup script automatically removes quarantine attributes
 from downloaded binaries. This allows the binaries to run without manual authorization through System Settings.
 
 ### Verifying Installation
@@ -138,7 +142,8 @@ cargo test -p circuits-prover -p circuits-verifier --lib
 
 ### Service Architecture
 
-Logos blockchain services follow a consistent design pattern: a front layer handles the `Overwatch` service, while a back layer
+Logos blockchain services follow a consistent design pattern: a front layer handles the `Overwatch` service, while a
+back layer
 implements the actual service logic.
 
 This modular approach allows for easy replacement of components in a declarative manner.
@@ -191,30 +196,32 @@ cargo build --release
 
 ### Setting `chain_start_time` timestamp
 
-When running a node locally with a custom config or `config-one-node.yaml`, you may encounter the following error if the 
+When running a node locally with a custom config or `config-one-node.yaml`, you may encounter the following error if the
 configuration's start time is too far in the past:
+
 ```
 ERROR chain_leader: trying to propose a block for slot XXXX but epoch state is not available
 ```
 
-To resolve this, you must manually update the chain_start_time in the config file to a recent timestamp (ideally within 
-a few minutes of your current system time) before launching the node, **or use a command-line flag to start the node** 
+To resolve this, you must manually update the chain_start_time in the config file to a recent timestamp (ideally within
+a few minutes of your current system time) before launching the node, **or use a command-line flag to start the node**
 with the chain start time set to the current time:
 
 ```bash
-CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true logos-blockchain-node nodes/node/config-one-node.yaml --dev-mode-reset-chain-clock
+CONSENSUS_SLOT_TIME=5 PROOF_DEV_MODE=true logos-blockchain-node nodes/node/config-one-node.yaml --dev-mode-reset-chain-clock
 ```
 
 #### Manually set chain start time in config
 
 You can generate a timestamp in the required format using the following command in your terminal:
 Bash
+
 ```bash
 # For macOS/Linux
 date -u +"%Y-%m-%d %H:%M:%S.000000 +00:00:00"
 ```
 
-Open nodes/node/config-one-node.yaml and locate the time section. Replace the `chain_start_time` value with the 
+Open nodes/node/config-one-node.yaml and locate the time section. Replace the `chain_start_time` value with the
 output from the command above:
 YAML
 
@@ -232,7 +239,8 @@ Once updated, restart the node.
 
 #### Docker
 
-To run a docker container with the Logos blockchain node you need to mount both `config.yml` and `global_params_path` specified in
+To run a docker container with the Logos blockchain node you need to mount both `config.yml` and `global_params_path`
+specified in
 the configuration.
 
 ```bash
@@ -254,29 +262,31 @@ docker run -v "$(pwd)/nodes/node/config.yaml:/etc/logos-blockchain/config.yml" \
 #### Running Logos Blockchain Node locally
 
 When the node is built locally, it can be run with example config for one node network:
+
 ```bash
 # Build logos blockchain binaries.
 cargo build --all-features --all-targets
 
 # Run node without connecting to any other node.
-CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true target/debug/logos-blockchain-node nodes/node/config-one-node.yaml
+CONSENSUS_SLOT_TIME=5 PROOF_DEV_MODE=true target/debug/logos-blockchain-node nodes/node/config-one-node.yaml
 ```
 
-Node stores its state inside the `db` directory. If there are any issues when restarting the node, please try removing 
+Node stores its state inside the `db` directory. If there are any issues when restarting the node, please try removing
 `db` directory.
 
 **Notes**
 
-- To use an example configuration located at `nodes/node/config.yaml`, first run the test that generates the 
-random kzgrs file (`kzgrs_test_params`), leave it in `./tests/kzgrs/kzgrs_test_params` or place it in a convenient 
-location:
+- To use an example configuration located at `nodes/node/config.yaml`, first run the test that generates the
+  random kzgrs file (`kzgrs_test_params`), leave it in `./tests/kzgrs/kzgrs_test_params` or place it in a convenient
+  location:
 
 ```bash
 cargo test --package kzgrs-backend write_random_kzgrs_params_to_file -- --ignored
 ```
 
-- To run the Logos blockchain node directly from the command line, edit the `global_params_path:` key in `/path/to/config.yaml` to 
-point to the kzgrs file (`kzgrs_test_params`) and run with:
+- To run the Logos blockchain node directly from the command line, edit the `global_params_path:` key in
+  `/path/to/config.yaml` to
+  point to the kzgrs file (`kzgrs_test_params`) and run with:
 
 ```bash
 cargo run --package logos-blockchain-node -- /path/to/config.yaml
@@ -288,16 +298,16 @@ or copy the executable and run the binary directly:
 ./logos-blockchain-node /path/to/config.yaml
 ```
 
-
 #### Running Logos Blockchain Node with integration test
 
 To run the node programatically, one can use `local_testnet_one_node` integration test.
+
 ```bash
 # Build logos blockchain binaries.
 cargo build --all-features --all-targets
 
 # Integration test uses binaries built in a previous step.
-CONSENSUS_SLOT_TIME=5 POL_PROOF_DEV_MODE=true cargo test --all-features local_testnet_one_node -- --ignored --nocapture
+CONSENSUS_SLOT_TIME=5 PROOF_DEV_MODE=true cargo test --all-features local_testnet_one_node -- --ignored --nocapture
 ```
 
 ## Running Tests
@@ -361,6 +371,7 @@ dot -Tsvg dependencies_graph.dot -o dependencies_graph.svg
 ### Alternative: Online Visualization
 
 You can also visualize the DOT file online using tools like:
+
 - [Graphviz Online](https://dreampuf.github.io/GraphvizOnline/)
 - [WebGraphviz](http://www.webgraphviz.com/)
 
