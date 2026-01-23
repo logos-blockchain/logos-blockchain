@@ -1,4 +1,5 @@
 pub mod adapters;
+pub mod wallet;
 
 use std::{
     collections::BTreeSet,
@@ -25,14 +26,12 @@ use overwatch::{
     },
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::oneshot;
 
-use crate::adapters::{
-    mempool::SdpMempoolAdapter,
-    wallet::{SdpWalletAdapter as _, mock::MockWalletAdapter},
+use crate::{
+    adapters::mempool::SdpMempoolAdapter,
+    wallet::{SdpWalletAdapter, SdpWalletConfig},
 };
-
-const BROADCAST_CHANNEL_SIZE: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeclarationState {
@@ -60,8 +59,9 @@ pub type BlockUpdateStream = Pin<Box<dyn Stream<Item = BlockEvent> + Send + Sync
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SdpSettings {
     /// Declaration info for this node (set after posting declaration and
-    /// restarting)
+    /// restarting).
     pub declaration: Option<Declaration>,
+    pub wallet_config: SdpWalletConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -84,15 +84,15 @@ pub enum SdpMessage {
     },
 }
 
-pub struct SdpService<MempoolAdapter, RuntimeServiceId> {
+pub struct SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    finalized_update_tx: broadcast::Sender<BlockEvent>,
     current_declaration: Option<Declaration>,
     nonce: u64,
+    wallet_config: SdpWalletConfig,
 }
 
-impl<MempoolAdapter, RuntimeServiceId> ServiceData
-    for SdpService<MempoolAdapter, RuntimeServiceId>
+impl<MempoolAdapter, WalletAdapter, RuntimeServiceId> ServiceData
+    for SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>
 {
     type Settings = SdpSettings;
     type State = NoState<Self::Settings>;
@@ -101,13 +101,16 @@ impl<MempoolAdapter, RuntimeServiceId> ServiceData
 }
 
 #[async_trait]
-impl<MempoolAdapter, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for SdpService<MempoolAdapter, RuntimeServiceId>
+impl<MempoolAdapter, WalletAdapter, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>
 where
     MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx> + Send + Sync + 'static,
+    WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
+    WalletAdapter::WalletError: Debug,
     RuntimeServiceId: Debug
         + AsServiceId<Self>
         + AsServiceId<MempoolAdapter::MempoolService>
+        + AsServiceId<WalletAdapter::WalletService>
         + Clone
         + Display
         + Send
@@ -123,13 +126,11 @@ where
             .notifier()
             .get_updated_settings();
 
-        let (finalized_update_tx, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
-
         Ok(Self {
             current_declaration: settings.declaration,
             service_resources_handle,
-            finalized_update_tx,
             nonce: 0,
+            wallet_config: settings.wallet_config,
         })
     }
 
@@ -140,13 +141,19 @@ where
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
 
-        let wallet_adapter = MockWalletAdapter::new(());
         let mempool_relay = self
             .service_resources_handle
             .overwatch_handle
             .relay::<MempoolAdapter::MempoolService>()
             .await?;
         let mempool_adapter = MempoolAdapter::new(mempool_relay);
+
+        let wallet_relay = self
+            .service_resources_handle
+            .overwatch_handle
+            .relay::<WalletAdapter::WalletService>()
+            .await?;
+        let wallet_adapter = WalletAdapter::new(wallet_relay);
 
         while let Some(msg) = self.service_resources_handle.inbound_relay.recv().await {
             match msg {
@@ -177,9 +184,12 @@ where
     }
 }
 
-impl<MempoolAdapter, RuntimeServiceId> SdpService<MempoolAdapter, RuntimeServiceId>
+impl<MempoolAdapter, WalletAdapter, RuntimeServiceId>
+    SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>
 where
     MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx> + Send + Sync + 'static,
+    WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
+    WalletAdapter::WalletError: Debug,
     RuntimeServiceId: Debug
         + AsServiceId<Self>
         + AsServiceId<MempoolAdapter::MempoolService>
@@ -192,25 +202,20 @@ where
     async fn handle_post_declaration(
         &self,
         declaration: Box<DeclarationMessage>,
-        wallet_adapter: &MockWalletAdapter,
+        wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
         reply_channel: oneshot::Sender<Result<DeclarationId, DynError>>,
     ) {
         let tx_builder = MantleTxBuilder::new();
+        let declaration_id = declaration.id();
 
-        let tip = todo!();
-        let change_pk = todo!();
-        let funding_pks = todo!();
-        let signed_tx = match wallet_adapter.declare_tx(
-            tip,
-            change_pk,
-            funding_pks,
-            tx_builder,
-            declaration.clone(),
-        ) {
+        let signed_tx = match wallet_adapter
+            .declare_tx(tx_builder, *declaration, &self.wallet_config)
+            .await
+        {
             Ok(tx) => tx,
             Err(e) => {
-                tracing::error!("Failed to create declaration transaction: {:?}", e);
+                tracing::error!("Failed to create activity transaction: {:?}", e);
                 return;
             }
         };
@@ -220,7 +225,7 @@ where
             return;
         }
 
-        if let Err(e) = reply_channel.send(Ok(declaration.id())) {
+        if let Err(e) = reply_channel.send(Ok(declaration_id)) {
             tracing::error!("Failed to send post declaration response: {:?}", e);
         }
     }
@@ -228,7 +233,7 @@ where
     async fn handle_post_activity(
         &mut self,
         metadata: ActivityMetadata,
-        wallet_adapter: &MockWalletAdapter,
+        wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
     ) {
         // Check if we have a declaration_id
@@ -248,20 +253,16 @@ where
 
         let tx_builder = MantleTxBuilder::new();
 
-        let declaration = self.current_declaration.as_ref().unwrap();
-
-        let tip = todo!();
-        let change_pk = todo!();
-        let funding_pks = todo!();
-        let signed_tx =
-            match wallet_adapter.active_tx(tip, change_pk, funding_pks, tx_builder, active_message)
-            {
-                Ok(tx) => tx,
-                Err(e) => {
-                    tracing::error!("Failed to create activity transaction: {:?}", e);
-                    return;
-                }
-            };
+        let signed_tx = match wallet_adapter
+            .active_tx(tx_builder, active_message, &self.wallet_config)
+            .await
+        {
+            Ok(tx) => tx,
+            Err(e) => {
+                tracing::error!("Failed to create activity transaction: {:?}", e);
+                return;
+            }
+        };
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
             tracing::error!("Failed to post activity to mempool: {:?}", e);
@@ -271,7 +272,7 @@ where
     async fn handle_post_withdrawal(
         &mut self,
         declaration_id: DeclarationId,
-        wallet_adapter: &MockWalletAdapter,
+        wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
     ) {
         if let Err(e) = self.validate_withdrawal(&declaration_id) {
@@ -291,16 +292,10 @@ where
 
         let tx_builder = MantleTxBuilder::new();
 
-        let tip = todo!();
-        let change_pk = todo!();
-        let funding_pks = todo!();
-        let signed_tx = match wallet_adapter.withdraw_tx(
-            tip,
-            change_pk,
-            funding_pks,
-            tx_builder,
-            withdraw_message,
-        ) {
+        let signed_tx = match wallet_adapter
+            .withdraw_tx(tx_builder, withdraw_message, &self.wallet_config)
+            .await
+        {
             Ok(tx) => tx,
             Err(e) => {
                 tracing::error!("Failed to create withdrawal transaction: {:?}", e);
