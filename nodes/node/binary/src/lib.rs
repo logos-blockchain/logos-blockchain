@@ -16,7 +16,6 @@ pub use lb_core::{
     mantle::{SignedMantleTx, Transaction, TxHash, select::FillSize as FillSizeWithTx},
 };
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
-use lb_sdp_service::SdpSettings;
 pub use lb_storage_service::backends::{
     SerdeOp,
     rocksdb::{RocksBackend, RocksBackendSettings},
@@ -33,6 +32,7 @@ pub use lb_tx_service::{
     },
     tx::settings::TxMempoolSettings,
 };
+use lb_wallet_service::api::WalletApiError;
 use overwatch::{
     DynError, derive_services,
     overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
@@ -46,7 +46,7 @@ use crate::{
         cryptarchia::ServiceConfig as CryptarchiaConfig, mempool::ServiceConfig as MempoolConfig,
         network::ServiceConfig as NetworkConfig, time::ServiceConfig as TimeConfig,
     },
-    generic_services::{SdpMempoolAdapterGeneric, SdpService},
+    generic_services::{SdpMempoolAdapterGeneric, SdpService, sdp::SdpWalletAdapter},
 };
 
 pub const MB16: usize = 1024 * 1024 * 16;
@@ -89,6 +89,7 @@ pub type ApiService = lb_api_service::ApiService<
         ApiStorageAdapter<RuntimeServiceId>,
         RocksStorageAdapter<SignedMantleTx, TxHash>,
         SdpMempoolAdapterGeneric<RuntimeServiceId>,
+        SdpWalletAdapter<WalletService, WalletApiError>,
     >,
     RuntimeServiceId,
 >;
@@ -172,7 +173,7 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
             storage: config.user.storage,
             system_sig: (),
             key_management: config.user.key_management,
-            sdp: SdpSettings { declaration: None },
+            sdp: config.user.sdp,
             wallet: config.user.wallet,
             #[cfg(feature = "testing")]
             testing_http: config.user.testing_http,

@@ -365,7 +365,7 @@ where
                             }
                         };
 
-                        let eligible_utxos = match wallet_api.get_leader_aged_notes(parent).await {
+                        let eligible_utxos = match wallet_api.get_leader_aged_notes(Some(parent)).await {
                             Ok(utxos) => utxos,
                             Err(e) => {
                                 error!("Failed to fetch leader aged notes from wallet: {:?}", e);
@@ -374,9 +374,9 @@ where
                         };
 
                         // If it's a new epoch or the service just started, pre-compute the first winning slot and notify consumers.
-                        winning_pol_slot_notifier.process_epoch(&eligible_utxos, &epoch_state);
+                        winning_pol_slot_notifier.process_epoch(&eligible_utxos.response, &epoch_state);
 
-                        if let Some((proof, signing_key)) = leader.build_proof_for(&eligible_utxos, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier).await {
+                        if let Some((proof, signing_key)) = leader.build_proof_for(&eligible_utxos.response, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier).await {
                             // TODO: spawn as a separate task?
                             match Self::propose_block(
                                 parent,

@@ -10,10 +10,15 @@ use lb_sdp_service::adapters::mempool::sdp::SdpMempoolNetworkAdapter;
 use lb_storage_service::backends::rocksdb::RocksBackend;
 use lb_time_service::backends::NtpTimeBackend;
 use lb_tx_service::{backend::pool::Mempool, storage::adapters::rocksdb::RocksStorageAdapter};
+use lb_wallet_service::api::WalletApiError;
 
-use crate::{MB16, generic_services::blend::BlendService};
+use crate::{
+    MB16,
+    generic_services::{blend::BlendService, sdp::SdpWalletAdapter},
+};
 
 pub mod blend;
+pub mod sdp;
 
 pub type TxMempoolService<RuntimeServiceId> = lb_tx_service::TxMempoolService<
     lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
@@ -99,5 +104,11 @@ pub type SdpMempoolAdapterGeneric<RuntimeServiceId> = SdpMempoolNetworkAdapter<
     RuntimeServiceId,
 >;
 
-pub type SdpService<RuntimeServiceId> =
-    lb_sdp_service::SdpService<SdpMempoolAdapterGeneric<RuntimeServiceId>, RuntimeServiceId>;
+pub type SdpService<RuntimeServiceId> = lb_sdp_service::SdpService<
+    SdpMempoolAdapterGeneric<RuntimeServiceId>,
+    SdpWalletAdapter<
+        WalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>,
+        WalletApiError,
+    >,
+    RuntimeServiceId,
+>;
