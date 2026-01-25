@@ -1,4 +1,4 @@
-pub mod adapters;
+pub mod mempool;
 pub mod wallet;
 
 use std::{
@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 use crate::{
-    adapters::mempool::SdpMempoolAdapter,
+    mempool::SdpMempoolAdapter,
     wallet::{SdpWalletAdapter, SdpWalletConfig},
 };
 

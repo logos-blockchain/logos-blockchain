@@ -24,7 +24,7 @@ use lb_http_api_common::{
     paths,
 };
 use lb_network_service::backends::libp2p::Libp2p as Libp2pNetworkBackend;
-use lb_sdp_service::{adapters::mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
+use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
 use lb_tx_service::{
     TxMempoolService, backend::Mempool,

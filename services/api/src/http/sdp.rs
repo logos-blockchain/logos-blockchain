@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display};
 
 use lb_core::sdp::{ActivityMetadata, DeclarationId, DeclarationMessage};
-use lb_sdp_service::{SdpService, adapters::mempool::SdpMempoolAdapter};
+use lb_sdp_service::{SdpService, mempool::SdpMempoolAdapter};
 use overwatch::{DynError, overwatch::OverwatchHandle};
 
 pub async fn post_declaration_handler<MempoolAdapter, WalletAdapter, RuntimeServiceId>(

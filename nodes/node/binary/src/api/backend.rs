@@ -21,7 +21,7 @@ use lb_core::{
 };
 pub use lb_http_api_common::settings::AxumBackendSettings;
 use lb_http_api_common::{paths, utils::create_rate_limit_layer};
-use lb_sdp_service::{adapters::mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
+use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
 use lb_tx_service::{

@@ -45,7 +45,7 @@ use crate::{
         cryptarchia::ServiceConfig as CryptarchiaConfig, mempool::ServiceConfig as MempoolConfig,
         network::ServiceConfig as NetworkConfig, time::ServiceConfig as TimeConfig,
     },
-    generic_services::{SdpMempoolAdapterGeneric, SdpService, sdp::SdpWalletAdapter},
+    generic_services::{SdpMempoolAdapter, SdpService, SdpWalletAdapter},
 };
 
 pub const MB16: usize = 1024 * 1024 * 16;
@@ -87,8 +87,8 @@ pub type ApiService = lb_api_service::ApiService<
         NtpTimeBackend,
         ApiStorageAdapter<RuntimeServiceId>,
         RocksStorageAdapter<SignedMantleTx, TxHash>,
-        SdpMempoolAdapterGeneric<RuntimeServiceId>,
-        SdpWalletAdapter<WalletService, RuntimeServiceId>,
+        SdpMempoolAdapter<RuntimeServiceId>,
+        SdpWalletAdapter<RuntimeServiceId>,
     >,
     RuntimeServiceId,
 >;
