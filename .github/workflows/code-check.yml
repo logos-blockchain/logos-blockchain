@@ -62,11 +62,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
+        platform:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - [self-hosted, Linux]
-          - [self-hosted, macOS]
-    runs-on: ${{ matrix.os }}
+          - os: [self-hosted, Linux]
+            label: self-hosted-linux
+          - os: [self-hosted, macOS]
+            label: self-hosted-macos
+    runs-on: ${{ matrix.platform.os }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
@@ -83,8 +85,8 @@ jobs:
       - name: Set up Cargo cache
         uses: ./.github/actions/setup-cargo-cache
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: code-check/feature-combinations/${{ matrix.platform.label }}
 
       - name: Run Cargo Hack Check (Cache-Aware)
         uses: ./.github/actions/cargo-hack-check-cached
@@ -93,7 +95,8 @@ jobs:
         if: success() || failure()
         uses: ./.github/actions/update-cargo-cache
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: code-check/feature-combinations/${{ matrix.platform.label }}
 
   unused-deps:
     name: Check for unused dependencies
@@ -125,25 +128,30 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+
       - name: Set up Cargo cache
         uses: ./.github/actions/setup-cargo-cache
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: code-check/lints/${{ matrix.os }}
+
       - name: Setup Circuits
         uses: ./.github/actions/setup-circuits
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run cargo clippy on workspace
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: clippy
           args: --locked --all --all-targets --all-features
+
       - name: Update Cargo cache
         if: success() || failure()
         uses: ./.github/actions/update-cargo-cache
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: code-check/lints/${{ matrix.os }}
  
   tests:
     name: Run test suite
