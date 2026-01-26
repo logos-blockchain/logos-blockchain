@@ -28,3 +28,11 @@ serde_path_to_error = "0.1"
 serde_yaml          = "0.9"
 tokio               = { default-features = false, features = ["macros", "net", "rt-multi-thread"], version = "1" }
 tracing             = { workspace = true }
+
+[[bin]]
+name = "logos-blockchain-cfgsync-client"
+path = "src/bin/cfgsync-client.rs"
+
+[[bin]]
+name = "logos-blockchain-cfgsync-server"
+path = "src/bin/cfgsync-server.rs"

@@ -22,5 +22,5 @@ tauri-bundler = "=2.7.4"
 tauri-utils   = "=2.8.1"
 
 [[bin]]
-name = "bundle-logos-blockchain-node"
+name = "logos-blockchain-bundle-node"
 path = "logos-blockchain-node/bundle.rs"
