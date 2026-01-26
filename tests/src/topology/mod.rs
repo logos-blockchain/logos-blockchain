@@ -388,10 +388,8 @@ pub fn create_kms_configs(
                     ),
                     // SDP funding secret key - used by wallet for signing SDP transactions
                     (
-                        key_id_for_preload_backend(
-                            &consensus_configs[i].sdp_notes[i].sk.clone().into(),
-                        ),
-                        consensus_configs[i].sdp_notes[i].sk.clone().into(),
+                        key_id_for_preload_backend(&consensus_configs[i].funding_sk.clone().into()),
+                        consensus_configs[i].funding_sk.clone().into(),
                     ),
                 ]
                 .into(),

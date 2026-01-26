@@ -55,8 +55,7 @@ pub struct GeneralConsensusConfig {
     genesis_tx: GenesisTx,
     pub utxos: Vec<Utxo>,
     pub blend_notes: Vec<ServiceNote>,
-    pub sdp_notes: Vec<ServiceNote>,
-    pub funding_pk: ZkPublicKey,
+    pub funding_sk: ZkKey,
 }
 
 impl GeneralConsensusConfig {
@@ -138,10 +137,9 @@ pub fn create_consensus_configs(
         .enumerate()
         .map(|(i, (pk, sk))| GeneralConsensusConfig {
             blend_notes: blend_notes.clone(),
-            sdp_notes: sdp_notes.clone(),
             genesis_tx: genesis_tx.clone(),
             utxos: utxos.clone(),
-            funding_pk: sdp_notes[i].pk,
+            funding_sk: sdp_notes[i].sk.clone(),
             user_config: Config {
                 leader: LeaderConfig {
                     pk,
