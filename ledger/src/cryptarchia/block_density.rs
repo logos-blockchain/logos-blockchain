@@ -103,8 +103,8 @@ mod tests {
     fn test_large_slot_jump() {
         let mut inference = create_inference(5, 0);
         inference.increment_block_density(Slot::from(100));
-        // 100 empty slots pushed (only last 4 remain in window) + 1 filled = 1 block
-        assert_eq!(inference.current_block_density(), 1);
+        // 100 empty slots pushed, more than period, so block density is 0
+        assert_eq!(inference.current_block_density(), 0);
     }
 
     #[test]
