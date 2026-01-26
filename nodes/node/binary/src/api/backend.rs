@@ -15,6 +15,7 @@ use axum::{
 };
 use lb_api_service::{Backend, http::consensus::Cryptarchia};
 use lb_chain_broadcast_service::BlockBroadcastService;
+use lb_chain_service::CryptarchiaConsensus;
 use lb_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction},
@@ -38,15 +39,13 @@ use tower_http::{
 };
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
-use lb_chain_service::CryptarchiaConsensus;
 
+#[cfg(feature = "block-explorer")]
+use super::handlers::blocks;
 use super::handlers::{
     add_tx, block, blocks_stream, cryptarchia_headers, cryptarchia_info, cryptarchia_lib_stream,
     libp2p_info, mantle_metrics, mantle_status, wallet,
 };
-
-#[cfg(feature = "block-explorer")]
-use super::handlers::blocks;
 use crate::{
     WalletService,
     api::handlers::{post_activity, post_declaration, post_withdrawal},

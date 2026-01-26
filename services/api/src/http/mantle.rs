@@ -1,30 +1,29 @@
 use core::fmt::Debug;
 use std::fmt::Display;
 
+use bytes::Bytes;
 use futures::{Stream, StreamExt as _};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
-use lb_chain_service::{ConsensusMsg, ProcessedBlockEvent};
+use lb_chain_service::{
+    ConsensusMsg, ProcessedBlockEvent,
+    storage::{StorageAdapter as _, adapters::StorageAdapter},
+};
 use lb_core::{
+    block::Block,
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction},
+    mantle::{SignedMantleTx, Transaction, TxHash},
     sdp::Declaration,
 };
+use lb_storage_service::{StorageService, api::chain::StorageChainApi};
 use lb_tx_service::{
     MempoolMetrics, MempoolMsg, TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
     tx::service::openapi::Status,
 };
-use overwatch::services::AsServiceId;
+use overwatch::services::{AsServiceId, ServiceData};
+use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::BroadcastStream;
-use bytes::Bytes;
-use lb_chain_service::storage::StorageAdapter as _;
-use lb_chain_service::storage::adapters::StorageAdapter;
-use lb_core::{block::Block, mantle::TxHash};
-use lb_storage_service::{StorageService, api::chain::StorageChainApi};
-use overwatch::services::ServiceData;
-use serde::{Serialize, de::DeserializeOwned};
-
 #[cfg(feature = "block-explorer")]
 use {
     futures::future::join_all,
@@ -36,8 +35,9 @@ use {
     std::{num::NonZeroUsize, ops::RangeInclusive},
 };
 
-/// A block along with the current chain state (tip and LIB) at the time it was processed.
-/// This allows clients to track the canonical chain without needing to poll /cryptarchia/info.
+/// A block along with the current chain state (tip and LIB) at the time it was
+/// processed. This allows clients to track the canonical chain without needing
+/// to poll /cryptarchia/info.
 pub struct BlockWithChainState<Tx> {
     /// The processed block.
     pub block: Block<Tx>,
