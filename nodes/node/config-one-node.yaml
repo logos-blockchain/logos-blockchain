@@ -509,6 +509,10 @@ tracing:
   level: DEBUG
 sdp:
   declaration: null
+  wallet_config:
+    max_tx_fee: 18446744073709551615  # u64::MAX
+    # SDP funding public key - matches the genesis note pk used for SDP transaction fees
+    funding_pk: "89b7314f5184bae9eb7fa511098eb321b97b8fbbdec611dda591e0c01e18331d"
 http:
   backend_settings:
     address: 127.0.0.1:8080
@@ -528,9 +532,15 @@ key_management:
   keys:
     187359ffb6702225bc14949af2a6b1bf510658b30617dcc21c9724632667fb1f: !Zk cc1b3d7f1793f2af6bc332f810e953d79c7913224e951141ba4f44ec711a200f
     cf1b3d4fd373987b1f155f65eaa1ef4fb48297a67166026a3730d98fca054da0: !Ed25519 639c9a4a96b667ceee5fb8e871822f5de870734d55a7b30ff023cf1e84663a35
+    # SDP funding secret key - KMS provides this to the wallet for signing SDP transactions
+    89b7314f5184bae9eb7fa511098eb321b97b8fbbdec611dda591e0c01e18331d: !Zk '3930000000000000000000000000000000000000000000000000000000000000'
+    # Ed25519 signing key (key_id is the public key)
+    43974097c741b4831ba37499135a1bbdb449346cc2ca66cd00d3324703a4c881: !Ed25519 af610d87a6a59ac0a533c452b93c578a39616d74bdad7752c0446799af0206ef
 wallet:
   known_keys:
   - ccb73728a6f1363670aec7daf9500f95f90e2fdcf21932492ac806e887f89c09
+  # SDP funding public key - wallet must track this to use the SDP funding note
+  - "89b7314f5184bae9eb7fa511098eb321b97b8fbbdec611dda591e0c01e18331d"
 testing_http:
   backend_settings:
     address: 127.0.0.1:50897
