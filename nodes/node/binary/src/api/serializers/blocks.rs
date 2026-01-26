@@ -1,3 +1,4 @@
+use lb_api_service::http::mantle::BlockWithChainState;
 use lb_chain_service::Slot;
 use lb_core::{
     block::Block,
@@ -33,11 +34,36 @@ pub struct ApiHeaderSerializer {
     proof_of_leadership: Groth16LeaderProof,
 }
 
+#[cfg(feature = "block-explorer")]
 #[derive(Serialize)]
 pub struct ApiBlock(#[serde(with = "ApiBlockSerializer")] Block<SignedMantleTx>);
 
+#[cfg(feature = "block-explorer")]
 impl From<Block<SignedMantleTx>> for ApiBlock {
     fn from(value: Block<SignedMantleTx>) -> Self {
         Self(value)
+    }
+}
+
+/// API response type for processed block events.
+/// Includes the full block along with the current chain state (tip and LIB).
+#[derive(Serialize)]
+pub struct ApiProcessedBlockEvent {
+    /// The processed block.
+    #[serde(with = "ApiBlockSerializer")]
+    pub block: Block<SignedMantleTx>,
+    /// The current canonical tip after processing this block.
+    pub tip: HeaderId,
+    /// The current Last Irreversible Block after processing this block.
+    pub lib: HeaderId,
+}
+
+impl From<BlockWithChainState<SignedMantleTx>> for ApiProcessedBlockEvent {
+    fn from(value: BlockWithChainState<SignedMantleTx>) -> Self {
+        Self {
+            block: value.block,
+            tip: value.tip,
+            lib: value.lib,
+        }
     }
 }

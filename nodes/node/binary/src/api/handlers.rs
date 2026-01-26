@@ -32,20 +32,22 @@ use lb_tx_service::{
 };
 use lb_wallet_service::api::{WalletApi, WalletServiceData};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
-use serde::Deserialize;
+use lb_chain_service::ConsensusMsg;
+use lb_core::block::Block;
+use lb_libp2p::libp2p::bytes::Bytes;
+use lb_storage_service::api::chain::StorageChainApi;
+use overwatch::services::ServiceData;
+use serde::{Deserialize, Serialize};
+use tokio_stream::StreamExt as _;
 use tracing::error;
+
+use crate::api::serializers::blocks::ApiProcessedBlockEvent;
+
 #[cfg(feature = "block-explorer")]
 use {
     crate::api::{queries::BlockRangeQuery, serializers::blocks::ApiBlock},
     futures::FutureExt as _,
     lb_api_service::http::DynError,
-    lb_chain_service::ConsensusMsg,
-    lb_core::block::Block,
-    lb_libp2p::libp2p::bytes::Bytes,
-    lb_storage_service::api::chain::StorageChainApi,
-    overwatch::services::ServiceData,
-    serde::Serialize,
-    tokio_stream::StreamExt as _,
 };
 
 use crate::api::{responses, responses::overwatch::get_relay_or_500};
@@ -471,12 +473,11 @@ where
     make_request_and_return_response!(api_blocks)
 }
 
-#[cfg(feature = "block-explorer")]
 #[utoipa::path(
     get,
     path = paths::BLOCKS_STREAM,
     responses(
-        (status = 200, description = "Get blocks"),
+        (status = 200, description = "Stream of processed blocks with chain state"),
         (status = 500, description = "Internal server error", body = String),
     )
 )]
@@ -499,7 +500,7 @@ where
 {
     let stream = mantle::get_new_blocks_stream::<_, _, ConsensusService, _>(&handle)
         .await
-        .map(|stream| stream.map(ApiBlock::from));
+        .map(|stream| stream.map(ApiProcessedBlockEvent::from));
     match stream {
         Ok(stream) => responses::ndjson::from_stream(stream),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),

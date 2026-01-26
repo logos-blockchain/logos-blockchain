@@ -4,7 +4,7 @@ use overwatch::services::{ServiceData, relay::OutboundRelay};
 use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
 
-use crate::{ConsensusMsg, CryptarchiaInfo, LibUpdate};
+use crate::{ConsensusMsg, CryptarchiaInfo, LibUpdate, ProcessedBlockEvent};
 
 pub trait CryptarchiaServiceData:
     ServiceData<Message = ConsensusMsg<Self::Tx>> + Send + 'static
@@ -82,7 +82,9 @@ where
     }
 
     /// Subscribe to new blocks
-    pub async fn subscribe_new_blocks(&self) -> Result<broadcast::Receiver<HeaderId>, ApiError> {
+    pub async fn subscribe_new_blocks(
+        &self,
+    ) -> Result<broadcast::Receiver<ProcessedBlockEvent>, ApiError> {
         let (sender, receiver) = oneshot::channel();
 
         self.relay

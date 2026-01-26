@@ -53,14 +53,17 @@ pub fn subscribe_to_new_blocks_sync(
                 runtime_handler.spawn(async move {
                     loop {
                         let relay = storage_relay.clone();
-                        if let Ok(header) = block_stream.recv().await {
+                        if let Ok(event) = block_stream.recv().await {
                             let res: Result<Option<CoreBlock<SignedMantleTx>>, _> =
-                                ApiStorageAdapter::<RuntimeServiceId>::get_block(relay, header)
-                                    .await;
+                                ApiStorageAdapter::<RuntimeServiceId>::get_block(
+                                    relay,
+                                    event.block_id,
+                                )
+                                .await;
                             if let Ok(Some(block)) = res {
                                 callback_per_block(Block::from(block).0.as_ptr());
                             } else {
-                                eprintln!("Failed to get block {header} from storage");
+                                eprintln!("Failed to get block {:?} from storage", event.block_id);
                             }
                         }
                     }

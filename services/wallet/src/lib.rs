@@ -245,9 +245,9 @@ where
                     Self::handle_wallet_message(msg, &mut wallet, &storage_adapter, &cryptarchia_api, &kms).await;
                 }
 
-                Ok(header_id) = new_block_receiver.recv() => {
-                    let Some(block) = storage_adapter.get_block(&header_id).await else {
-                        error!(block_id=?header_id, "Missing block in storage");
+                Ok(event) = new_block_receiver.recv() => {
+                    let Some(block) = storage_adapter.get_block(&event.block_id).await else {
+                        error!(block_id=?event.block_id, "Missing block in storage");
                         continue;
                     };
                     let wallet_block = WalletBlock::from(block);

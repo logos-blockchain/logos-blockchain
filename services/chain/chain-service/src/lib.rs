@@ -106,7 +106,7 @@ pub enum ConsensusMsg<Tx> {
         tx: oneshot::Sender<CryptarchiaInfo>,
     },
     NewBlockSubscribe {
-        sender: oneshot::Sender<broadcast::Receiver<HeaderId>>,
+        sender: oneshot::Sender<broadcast::Receiver<ProcessedBlockEvent>>,
     },
     LibSubscribe {
         sender: oneshot::Sender<broadcast::Receiver<LibUpdate>>,
@@ -166,6 +166,20 @@ pub struct LibUpdate {
 pub struct PrunedBlocksInfo {
     pub stale_blocks: Vec<HeaderId>,
     pub immutable_blocks: BTreeMap<Slot, HeaderId>,
+}
+
+/// Event emitted when a block is processed by cryptarchia.
+/// Includes the current tip and LIB so clients can track the canonical chain
+/// without polling /cryptarchia/info.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ProcessedBlockEvent {
+    /// The ID of the block that was just processed.
+    pub block_id: HeaderId,
+    /// The current canonical tip after processing this block.
+    pub tip: HeaderId,
+    /// The current Last Irreversible Block after processing this block.
+    pub lib: HeaderId,
 }
 
 impl PrunedBlocksInfo {
@@ -422,7 +436,7 @@ where
     TimeBackend: lb_time_service::backends::TimeBackend,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    new_block_subscription_sender: broadcast::Sender<HeaderId>,
+    new_block_subscription_sender: broadcast::Sender<ProcessedBlockEvent>,
     lib_subscription_sender: broadcast::Sender<LibUpdate>,
     state: <Self as ServiceData>::State,
 }
@@ -710,7 +724,7 @@ where
 
     fn process_message(
         cryptarchia: &Cryptarchia,
-        new_block_channel: &broadcast::Sender<HeaderId>,
+        new_block_channel: &broadcast::Sender<ProcessedBlockEvent>,
         lib_channel: &broadcast::Sender<LibUpdate>,
         msg: ConsensusMsg<Tx>,
     ) {
@@ -808,7 +822,7 @@ where
         current_slot: Slot,
         storage_blocks_to_remove: &HashSet<HeaderId>,
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
-        new_block_subscription_sender: &broadcast::Sender<HeaderId>,
+        new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_subscription_sender: &broadcast::Sender<LibUpdate>,
         state_updater: &StateUpdater<Option<CryptarchiaConsensusState>>,
     ) -> Result<(Cryptarchia, HashSet<HeaderId>, Vec<Tx>), Error> {
@@ -865,7 +879,7 @@ where
         block: Block<Tx>,
         current_slot: Slot,
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
-        new_block_subscription_sender: &broadcast::Sender<HeaderId>,
+        new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_broadcaster: &broadcast::Sender<LibUpdate>,
     ) -> Result<(Cryptarchia, PrunedBlocks<HeaderId>, Vec<Tx>), Error> {
         debug!("received proposal {:?}", block);
@@ -898,7 +912,12 @@ where
             .await
             .map_err(|e| Error::Storage(format!("Failed to store immutable block ids: {e}")))?;
 
-        if let Err(e) = new_block_subscription_sender.send(header.id()) {
+        let processed_block_event = ProcessedBlockEvent {
+            block_id: header.id(),
+            tip: cryptarchia.tip(),
+            lib: cryptarchia.lib(),
+        };
+        if let Err(e) = new_block_subscription_sender.send(processed_block_event) {
             error!("Could not notify new block to services {e}");
         }
 
@@ -1044,7 +1063,12 @@ where
 
         // Stream the already applied state.
         let init_tip = cryptarchia.tip();
-        if let Err(e) = self.new_block_subscription_sender.send(init_tip) {
+        let init_event = ProcessedBlockEvent {
+            block_id: init_tip,
+            tip: init_tip,
+            lib: cryptarchia.lib(),
+        };
+        if let Err(e) = self.new_block_subscription_sender.send(init_event) {
             error!("Could not notify new block to services {e}");
         }
         Self::broadcast_session_updates_for_block(&cryptarchia, &init_tip, relays, None).await;
