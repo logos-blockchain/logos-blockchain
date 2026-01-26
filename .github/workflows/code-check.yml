@@ -211,7 +211,7 @@ jobs:
         with:
           command: test
           # TODO: Enable all tests after adapting them to PoL
-          args: leadership::pol_tests --features build-verification-key
+          args: leadership::pol_tests
 
       - name: Upload integration tests results
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2

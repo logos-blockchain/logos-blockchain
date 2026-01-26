@@ -6234,6 +6234,7 @@ dependencies = [
 name = "logos-blockchain-ledger"
 version = "0.1.0"
 dependencies = [
+ "derivative",
  "logos-blockchain-blend-crypto",
  "logos-blockchain-blend-message",
  "logos-blockchain-blend-proofs",
