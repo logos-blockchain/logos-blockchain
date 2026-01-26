@@ -169,8 +169,6 @@ pub struct PrunedBlocksInfo {
 }
 
 /// Event emitted when a block is processed by cryptarchia.
-/// Includes the current tip and LIB so clients can track the canonical chain
-/// without polling /cryptarchia/info.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ProcessedBlockEvent {
