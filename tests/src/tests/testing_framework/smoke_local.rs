@@ -10,7 +10,7 @@ async fn smoke_two_validators_run_30s() -> Result<(), Box<dyn std::error::Error 
     // - `POL_PROOF_DEV_MODE=true` (required for local proof generation)
     // - `LOGOS_BLOCKCHAIN_NODE_BIN=...` (path to `nomos-node` binary)
     // TODO: Remove this when the test framework removed all direct references to
-    // `NOMOS_NODE_BIN`
+    // TODO: `NOMOS_NODE_BIN`
     // - `NOMOS_NODE_BIN=...` (path to `nomos-node` binary)
     // - `RUST_LOG=info` (optional; better visibility)
     let _init_result = tracing_subscriber::fmt()
