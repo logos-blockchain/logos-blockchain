@@ -18,10 +18,12 @@ use network::GeneralNetworkConfig;
 use rand::{Rng as _, thread_rng};
 use tracing::GeneralTracingConfig;
 
-use crate::common::kms::key_id_for_preload_backend;
-use crate::topology::configs::{
-    api::GeneralApiConfig, consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD, network::NetworkParams,
-    time::GeneralTimeConfig,
+use crate::{
+    common::kms::key_id_for_preload_backend,
+    topology::configs::{
+        api::GeneralApiConfig, consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD, network::NetworkParams,
+        time::GeneralTimeConfig,
+    },
 };
 
 #[derive(Clone)]
