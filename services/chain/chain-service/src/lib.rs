@@ -170,9 +170,10 @@ pub struct PrunedBlocksInfo {
 
 /// Event emitted when a block is processed by cryptarchia.
 ///
-/// Note: The first message after subscribing may be an initial snapshot of the current state.
-/// In this case, `block_id` can equal the current `tip` and does not represent a newly processed
-/// block. Clients should handle events idempotently.
+/// Note: The first message after subscribing may be an initial snapshot of the
+/// current state. In this case, `block_id` can equal the current `tip` and does
+/// not represent a newly processed block. Clients should handle events
+/// idempotently.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ProcessedBlockEvent {

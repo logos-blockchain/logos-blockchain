@@ -48,9 +48,10 @@ impl From<Block<SignedMantleTx>> for ApiBlock {
 /// API response type for processed block events.
 /// Includes the full block along with the current chain state (tip and LIB).
 ///
-/// Note: The first event after subscribing may be an initial snapshot of the current state.
-/// In this case, `block.header.id` can equal `tip` and does not represent a newly processed
-/// block. Clients should handle events idempotently.
+/// Note: The first event after subscribing may be an initial snapshot of the
+/// current state. In this case, `block.header.id` can equal `tip` and does not
+/// represent a newly processed block. Clients should handle events
+/// idempotently.
 #[derive(Serialize)]
 pub struct ApiProcessedBlockEvent {
     /// The processed block.
