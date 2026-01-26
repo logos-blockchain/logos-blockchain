@@ -346,7 +346,7 @@ impl LedgerState {
             config.consensus_config.active_slot_coeff,
             config.consensus_config.security_param.get().into(),
         ));
-        let block_density_inference = BlockDensity::new(stake_inference.period(), slot);
+        let block_density = BlockDensity::new(stake_inference.period(), slot);
         Self {
             utxos: utxos.clone(),
             nonce,
@@ -363,7 +363,7 @@ impl LedgerState {
                 utxos,
                 total_stake,
             },
-            block_density: block_density_inference,
+            block_density,
             stake_inference,
         }
     }
