@@ -200,7 +200,7 @@ jobs:
         with:
           command: nextest
           # TODO: Enable all tests after adapting them to PoL
-          args: leadership::pol_tests --features build-verification-key
+          args: run leadership::pol_tests --features build-verification-key
 
       # Build binaries then use them - this includes testing feature needed for unit tests
       - name: Build binaries with required test features
