@@ -29,11 +29,13 @@ jobs:
       # All OSes should be tested even if one fails (default: true)
       fail-fast: false
       matrix:
-        # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-        os:
-          - [self-hosted, Linux]
-          - [self-hosted, macOS]
-    runs-on: ${{ matrix.os }}
+        platform:
+          # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
+          - os: [self-hosted, Linux]
+            label: self-hosted-linux
+          - os: [self-hosted, macOS]
+            label: self-hosted-macos
+    runs-on: ${{ matrix.platform.os }}
 
     steps:
       # Remove any rustup override to ensure default toolchain is used
