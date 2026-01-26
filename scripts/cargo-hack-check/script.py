@@ -23,6 +23,7 @@ import re
 # - WORKSPACE_ROOT pointing to the root of the workspace.
 # - HASH_SCRIPT being in the same directory as this script.
 # If these prerequisites are not met, the script will not behave as expected.
+# Moving these to parameters would be safer.
 
 CURRENT_FILE_DIRECTORY = Path(__file__).parent.resolve()
 WORKSPACE_ROOT = CURRENT_FILE_DIRECTORY.parent.parent

@@ -13,6 +13,7 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
+derivative                    = "2.2.0"
 lb-blend-crypto               = { workspace = true }
 lb-blend-message              = { workspace = true }
 lb-blend-proofs               = { workspace = true }
@@ -26,7 +27,7 @@ lb-utxotree                   = { workspace = true }
 num-bigint                    = { default-features = false, version = "0.4" }
 rand                          = { workspace = true }
 rpds                          = { default-features = false, version = "1.1.1" }
-serde                         = { default-features = false, features = ["derive"], optional = true, version = "1.0" }
+serde                         = { default-features = false, features = ["derive"], optional = true, workspace = true }
 thiserror                     = "1"
 tracing                       = { workspace = true }
 
