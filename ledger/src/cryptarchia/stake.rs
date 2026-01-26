@@ -27,9 +27,10 @@ impl StakeInference {
 
     pub fn period(&self) -> u64 {
         const PERIOD_CONSTANT: u64 = 6;
-        ((self.security_parameter * PERIOD_CONSTANT) as f64)
+        (self.security_parameter as f64)
             .div(self.slot_activation_coefficient)
             .floor() as u64
+            * PERIOD_CONSTANT
     }
 
     pub fn total_stake_inference<const PRECISION: u64>(
