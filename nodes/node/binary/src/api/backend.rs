@@ -40,11 +40,9 @@ use tower_http::{
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-#[cfg(feature = "block-explorer")]
-use super::handlers::blocks;
 use super::handlers::{
-    add_tx, block, blocks_stream, cryptarchia_headers, cryptarchia_info, cryptarchia_lib_stream,
-    libp2p_info, mantle_metrics, mantle_status, wallet,
+    add_tx, block, blocks, blocks_stream, cryptarchia_headers, cryptarchia_info,
+    cryptarchia_lib_stream, libp2p_info, mantle_metrics, mantle_status, wallet,
 };
 use crate::{
     WalletService,
@@ -245,7 +243,6 @@ where
             ),
         );
 
-        #[cfg(feature = "block-explorer")]
         let app = app.route(
             paths::BLOCKS,
             routing::get(blocks::<BlockStorageBackend, RuntimeServiceId>),

@@ -87,7 +87,6 @@ utoipa-swagger-ui = { features = ["axum"], workspace = true }
 test-log = { default-features = false, features = ["trace"], version = "0.2.18" }
 
 [features]
-block-explorer  = ["lb-api-service/block-explorer"]
 default         = ["tracing"]
 instrumentation = []
 profiling       = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]

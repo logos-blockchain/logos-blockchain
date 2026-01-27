@@ -1,11 +1,11 @@
 use core::fmt::Debug;
-use std::fmt::Display;
+use std::{fmt::Display, num::NonZeroUsize, ops::RangeInclusive};
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt as _};
+use futures::{Stream, StreamExt as _, future::join_all};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_chain_service::{
-    ConsensusMsg, ProcessedBlockEvent,
+    ConsensusMsg, ProcessedBlockEvent, Slot,
     storage::{StorageAdapter as _, adapters::StorageAdapter},
 };
 use lb_core::{
@@ -14,7 +14,13 @@ use lb_core::{
     mantle::{SignedMantleTx, Transaction, TxHash},
     sdp::Declaration,
 };
-use lb_storage_service::{StorageService, api::chain::StorageChainApi};
+use lb_storage_service::{
+    StorageMsg, StorageService,
+    api::{
+        StorageApiRequest,
+        chain::{StorageChainApi, requests::ChainApiRequest},
+    },
+};
 use lb_tx_service::{
     MempoolMetrics, MempoolMsg, TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
@@ -24,16 +30,6 @@ use overwatch::services::{AsServiceId, ServiceData};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::BroadcastStream;
-#[cfg(feature = "block-explorer")]
-use {
-    futures::future::join_all,
-    lb_chain_service::Slot,
-    lb_storage_service::{
-        StorageMsg,
-        api::{StorageApiRequest, chain::requests::ChainApiRequest},
-    },
-    std::{num::NonZeroUsize, ops::RangeInclusive},
-};
 
 /// A block along with the current chain state (tip and LIB) at the time it was
 /// processed. This allows clients to track the canonical chain without needing
@@ -238,7 +234,6 @@ where
     Ok(new_blocks_stream)
 }
 
-#[cfg(feature = "block-explorer")]
 /// Fetch block header ids in range.
 ///
 /// # Arguments
@@ -296,7 +291,6 @@ where
         .map_err(|error| Box::new(error) as super::DynError)
 }
 
-#[cfg(feature = "block-explorer")]
 /// Fetch blocks in range
 ///
 /// # Parameters

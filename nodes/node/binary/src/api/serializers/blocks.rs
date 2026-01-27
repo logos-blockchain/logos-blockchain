@@ -34,11 +34,9 @@ pub struct ApiHeaderSerializer {
     proof_of_leadership: Groth16LeaderProof,
 }
 
-#[cfg(feature = "block-explorer")]
 #[derive(Serialize)]
 pub struct ApiBlock(#[serde(with = "ApiBlockSerializer")] Block<SignedMantleTx>);
 
-#[cfg(feature = "block-explorer")]
 impl From<Block<SignedMantleTx>> for ApiBlock {
     fn from(value: Block<SignedMantleTx>) -> Self {
         Self(value)

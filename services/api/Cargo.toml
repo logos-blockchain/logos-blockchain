@@ -17,7 +17,6 @@ ignored = ["serde_json"]
 
 [features]
 axum            = ["dep:axum", "dep:hyper", "utoipa-swagger-ui/axum"]
-block-explorer  = []
 default         = ["axum"]
 instrumentation = []
 

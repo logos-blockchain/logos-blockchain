@@ -6,7 +6,9 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse as _, Response},
 };
+use futures::FutureExt as _;
 use lb_api_service::http::{
+    DynError,
     consensus::{self, Cryptarchia},
     libp2p, mantle, mempool,
     storage::StorageAdapter,
@@ -43,15 +45,12 @@ use overwatch::{
 use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt as _;
 use tracing::error;
-#[cfg(feature = "block-explorer")]
-use {
-    crate::api::{queries::BlockRangeQuery, serializers::blocks::ApiBlock},
-    futures::FutureExt as _,
-    lb_api_service::http::DynError,
-};
 
 use crate::api::{
-    responses, responses::overwatch::get_relay_or_500, serializers::blocks::ApiProcessedBlockEvent,
+    queries::BlockRangeQuery,
+    responses,
+    responses::overwatch::get_relay_or_500,
+    serializers::blocks::{ApiBlock, ApiProcessedBlockEvent},
 };
 
 #[macro_export]
@@ -442,7 +441,6 @@ where
     >(handle, declaration_id))
 }
 
-#[cfg(feature = "block-explorer")]
 #[utoipa::path(
     get,
     path = paths::BLOCKS,
