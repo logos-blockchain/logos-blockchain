@@ -1430,18 +1430,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "blst"
-version = "0.3.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcdb4c7013139a150f9fc55d123186dbfaba0d912817466282c73ac49e71fb45"
-dependencies = [
- "cc",
- "glob",
- "threadpool",
- "zeroize",
-]
-
-[[package]]
 name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1666,19 +1654,19 @@ dependencies = [
 [[package]]
 name = "cfgsync_tf"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#dc06af5486ffd8c387a415eca3c21124961f1002"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=e32c0366204e2904452b8b0d0fc9c32d194ac365#e32c0366204e2904452b8b0d0fc9c32d194ac365"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
  "clap",
  "hex",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-node 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-node 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "rand 0.8.5",
  "reqwest 0.12.28",
  "serde",
@@ -5295,19 +5283,19 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-api-service"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "bytes",
  "futures",
- "logos-blockchain-chain-broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-sdp-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-storage-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-tx-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-sdp-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-storage-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-tx-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "overwatch",
  "serde",
  "serde_json",
@@ -5332,13 +5320,13 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
- "logos-blockchain-blend-crypto 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-blend-message 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-blend-network 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-blend-scheduling 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-crypto 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-blend-message 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-blend-network 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-blend-scheduling 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
 ]
 
 [[package]]
@@ -5358,13 +5346,13 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-crypto"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "blake2",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-poq 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-poq 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "rs-merkle-tree",
  "thiserror 1.0.69",
 ]
@@ -5394,17 +5382,17 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-message"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "blake2",
  "derivative",
  "itertools 0.14.0",
- "logos-blockchain-blend-crypto 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-crypto 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "serde",
  "serde-big-array",
  "serde_with",
@@ -5440,18 +5428,18 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-network"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "either",
  "futures",
  "futures-timer",
  "libp2p",
- "logos-blockchain-blend-message 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-blend-scheduling 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-message 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-blend-scheduling 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "tracing",
 ]
 
@@ -5475,13 +5463,13 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-proofs"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "ed25519-dalek",
  "generic-array 1.3.5",
- "logos-blockchain-blend-crypto 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-poq 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-crypto 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-poq 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "num-bigint",
  "serde",
  "thiserror 1.0.69",
@@ -5515,17 +5503,17 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-scheduling"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "derivative",
  "fork_stream",
  "futures",
- "logos-blockchain-blend-message 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-message 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "multiaddr",
  "rand 0.8.5",
  "serde",
@@ -5575,28 +5563,28 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-service"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "fork_stream",
  "futures",
  "libp2p",
  "libp2p-stream",
- "logos-blockchain-blend 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-chain-broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-poq 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-sdp-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-chain-broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-poq 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-sdp-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "overwatch",
  "rand 0.8.5",
  "serde",
@@ -5677,12 +5665,12 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-broadcast-service"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "derivative",
  "futures",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "overwatch",
  "serde",
  "tokio",
@@ -5721,22 +5709,23 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-leader-service"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "futures",
- "logos-blockchain-blend-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-chain-service-common 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-tx-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-wallet-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-chain-service-common 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-tx-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-wallet-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "overwatch",
+ "rand 0.8.5",
  "serde",
  "thiserror 1.0.69",
  "tokio",
@@ -5775,20 +5764,20 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-network-service"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "futures",
- "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-chain-service-common 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-cryptarchia-sync 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-tx-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-chain-service-common 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-cryptarchia-sync 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-tx-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "overwatch",
  "rand 0.8.5",
  "serde",
@@ -5835,22 +5824,22 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-service"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "bytes",
  "futures",
- "logos-blockchain-chain-broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-cryptarchia-sync 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-storage-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-cryptarchia-sync 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-storage-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "num-bigint",
  "overwatch",
  "serde",
@@ -5873,9 +5862,9 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-service-common"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "serde",
 ]
 
@@ -5890,9 +5879,9 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-prover"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
- "logos-blockchain-circuits-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-circuits-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "tempfile",
 ]
 
@@ -5906,7 +5895,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-utils"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "dirs 6.0.0",
 ]
@@ -5938,13 +5927,13 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-common-http-client"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "futures",
- "logos-blockchain-chain-broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-http-api-common 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-http-api-common 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -5985,7 +5974,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-core"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "ark-ff 0.4.2",
  "bincode",
@@ -5995,13 +5984,13 @@ dependencies = [
  "futures",
  "generic-array 1.3.5",
  "hex",
- "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-pol 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-pol 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "multiaddr",
  "nom 8.0.0",
  "num-bigint",
@@ -6028,10 +6017,10 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-cryptarchia-engine"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "cfg_eval",
- "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "serde",
  "serde_with",
  "thiserror 1.0.69",
@@ -6062,14 +6051,14 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-cryptarchia-sync"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "bytes",
  "futures",
  "libp2p",
  "libp2p-stream",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "rand 0.8.5",
  "serde",
  "serde_with",
@@ -6148,7 +6137,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-groth16"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "ark-bn254 0.4.0",
  "ark-ec 0.4.2",
@@ -6183,12 +6172,12 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-http-api-common"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "axum 0.7.9",
  "governor",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "serde",
  "serde_json",
  "serde_with",
@@ -6223,18 +6212,18 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-key-management-system-keys"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "bytes",
  "ed25519-dalek",
  "generic-array 1.3.5",
- "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-macros 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-zksign 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-macros 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-zksign 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "num-bigint",
  "rand_core 0.6.4",
  "serde",
@@ -6258,7 +6247,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-key-management-system-macros"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6286,11 +6275,11 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-key-management-system-service"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "log",
- "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "overwatch",
  "serde",
  "thiserror 2.0.18",
@@ -6324,18 +6313,19 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-ledger"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
- "logos-blockchain-blend-crypto 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-blend-message 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-mmr 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-utxotree 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "derivative",
+ "logos-blockchain-blend-crypto 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-blend-message 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-mmr 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-utxotree 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "num-bigint",
  "rand 0.8.5",
  "rpds",
@@ -6378,7 +6368,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-libp2p"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "backon",
@@ -6389,8 +6379,8 @@ dependencies = [
  "hex",
  "igd-next 0.16.2",
  "libp2p",
- "logos-blockchain-cryptarchia-sync 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-cryptarchia-sync 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "multiaddr",
  "natpmp",
  "netdev",
@@ -6420,11 +6410,11 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-mmr"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "ark-ff 0.4.2",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "rpds",
  "serde",
 ]
@@ -6454,13 +6444,13 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-network-service"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "futures",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-cryptarchia-sync 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-cryptarchia-sync 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "overwatch",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
@@ -6530,7 +6520,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-node"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "axum 0.7.9",
@@ -6539,33 +6529,33 @@ dependencies = [
  "futures",
  "hex",
  "http 1.4.0",
- "logos-blockchain-api-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-blend 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-blend-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-chain-broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-chain-leader-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-chain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-http-api-common 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-pol 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-poq 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-sdp-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-storage-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-system-sig-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-tracing 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-tx-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-wallet-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-api-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-blend 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-blend-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-chain-broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-chain-leader-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-chain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-http-api-common 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-pol 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-poq 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-sdp-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-storage-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-system-sig-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-tracing 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-tx-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-wallet-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "num-bigint",
  "overwatch",
  "serde",
@@ -6616,12 +6606,12 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-pol"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
- "logos-blockchain-circuits-prover 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-circuits-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-witness-generator 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-circuits-prover 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-circuits-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-witness-generator 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "num-bigint",
  "num-traits",
  "serde",
@@ -6647,13 +6637,13 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-poq"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
- "logos-blockchain-circuits-prover 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-circuits-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-pol 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-witness-generator 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-circuits-prover 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-circuits-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-pol 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-witness-generator 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "num-bigint",
  "serde",
  "serde_json",
@@ -6673,7 +6663,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-poseidon2"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "ark-bn254 0.4.0",
  "ark-ff 0.4.2",
@@ -6699,18 +6689,16 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-sdp-service"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "futures",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-tx-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "overwatch",
  "serde",
  "thiserror 2.0.18",
  "tokio",
- "tokio-stream",
  "tracing",
 ]
 
@@ -6733,7 +6721,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-services-utils"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "futures",
@@ -6766,13 +6754,13 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-storage-service"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "bytes",
  "futures",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "overwatch",
  "rocksdb",
  "serde",
@@ -6794,7 +6782,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-system-sig-service"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-ctrlc",
  "async-trait",
@@ -6877,14 +6865,14 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-time-service"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "cfg_eval",
  "futures",
  "log",
- "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "overwatch",
  "serde",
  "serde_with",
@@ -6921,7 +6909,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-tracing"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "opentelemetry",
  "opentelemetry-http",
@@ -6958,10 +6946,10 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-tracing-service"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
- "logos-blockchain-tracing 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-tracing 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "overwatch",
  "serde",
  "tracing",
@@ -6998,14 +6986,14 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-tx-service"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "futures",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-storage-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-storage-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "overwatch",
  "rand 0.8.5",
  "serde",
@@ -7039,7 +7027,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-utils"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "blake2",
@@ -7073,12 +7061,12 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-utxotree"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "ark-ff 0.4.2",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "num-bigint",
  "rpds",
  "serde",
@@ -7103,11 +7091,11 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-wallet"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "num-bigint",
  "rpds",
  "thiserror 2.0.18",
@@ -7152,20 +7140,20 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-wallet-service"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "async-trait",
  "bytes",
  "futures",
  "hex",
- "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-storage-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-wallet 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-storage-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-wallet 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "overwatch",
  "serde",
  "thiserror 1.0.69",
@@ -7183,7 +7171,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-witness-generator"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
  "tempfile",
 ]
@@ -7207,13 +7195,13 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-zksign"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f#deea611ef2afa0115f6c1a8743a5a2703c24891f"
 dependencies = [
- "logos-blockchain-circuits-prover 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-circuits-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-witness-generator 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-circuits-prover 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-circuits-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-witness-generator 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "num-bigint",
  "serde",
  "serde_json",
@@ -11273,29 +11261,28 @@ dependencies = [
 [[package]]
 name = "testing-framework-config"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#dc06af5486ffd8c387a415eca3c21124961f1002"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=e32c0366204e2904452b8b0d0fc9c32d194ac365#e32c0366204e2904452b8b0d0fc9c32d194ac365"
 dependencies = [
- "blst",
  "hex",
- "logos-blockchain-api-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-blend-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-chain-leader-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-chain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-cryptarchia-sync 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-node 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-sdp-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-tracing 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-wallet-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-api-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-blend-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-chain-leader-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-chain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-cryptarchia-sync 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-node 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-sdp-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-tracing 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-wallet-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "num-bigint",
  "rand 0.8.5",
  "serde",
@@ -11308,24 +11295,24 @@ dependencies = [
 [[package]]
 name = "testing-framework-core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#dc06af5486ffd8c387a415eca3c21124961f1002"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=e32c0366204e2904452b8b0d0fc9c32d194ac365#e32c0366204e2904452b8b0d0fc9c32d194ac365"
 dependencies = [
  "anyhow",
  "async-trait",
  "futures",
  "hex",
- "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-common-http-client 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-http-api-common 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-node 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-tracing 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-common-http-client 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-http-api-common 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-node 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-tracing 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "prometheus-http-query",
  "rand 0.8.5",
  "reqwest 0.12.28",
@@ -11344,18 +11331,18 @@ dependencies = [
 [[package]]
 name = "testing-framework-env"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#dc06af5486ffd8c387a415eca3c21124961f1002"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=e32c0366204e2904452b8b0d0fc9c32d194ac365#e32c0366204e2904452b8b0d0fc9c32d194ac365"
 
 [[package]]
 name = "testing-framework-runner-compose"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#dc06af5486ffd8c387a415eca3c21124961f1002"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=e32c0366204e2904452b8b0d0fc9c32d194ac365#e32c0366204e2904452b8b0d0fc9c32d194ac365"
 dependencies = [
  "anyhow",
  "async-trait",
  "cfgsync_tf",
- "logos-blockchain-tracing 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-tracing 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "reqwest 0.12.28",
  "serde",
  "tempfile",
@@ -11373,13 +11360,13 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-local"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#dc06af5486ffd8c387a415eca3c21124961f1002"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=e32c0366204e2904452b8b0d0fc9c32d194ac365#e32c0366204e2904452b8b0d0fc9c32d194ac365"
 dependencies = [
  "async-trait",
- "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-node 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-node 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "rand 0.8.5",
  "testing-framework-config",
  "testing-framework-core",
@@ -11391,12 +11378,12 @@ dependencies = [
 [[package]]
 name = "testing-framework-workflows"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#dc06af5486ffd8c387a415eca3c21124961f1002"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=e32c0366204e2904452b8b0d0fc9c32d194ac365#e32c0366204e2904452b8b0d0fc9c32d194ac365"
 dependencies = [
  "async-trait",
- "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
- "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
+ "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=deea611ef2afa0115f6c1a8743a5a2703c24891f)",
  "rand 0.8.5",
  "reqwest 0.12.28",
  "testing-framework-config",
@@ -11464,15 +11451,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "threadpool"
-version = "1.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d050e60b33d41c19108b32cea32164033a9013fe3b46cbd4457559bfbf77afaa"
-dependencies = [
- "num_cpus",
 ]
 
 [[package]]

@@ -17,7 +17,7 @@ async fn smoke_two_validators_run_30s() -> Result<(), Box<dyn std::error::Error 
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();
     let duration = Duration::from_secs(30);
-    let mut scenario = ScenarioBuilder::topology_with(|t| t.network_star().validators(2))
+    let mut scenario = ScenarioBuilder::topology_with(|t| t.network_star().nodes(2))
         .with_run_duration(duration)
         .expect_consensus_liveness()
         .build()?;
