@@ -46,6 +46,7 @@ jobs:
           name: integration-test-artifacts
           path: tests/.tmp*
       - name: Run codecov analysis
+        if: success() || failure()
         uses: codecov/codecov-action@ea99328d1c4d5f39fda7cbffe104afd6906c50b0  # Version 5.4.0
         with:
           directory: /tmp/coverage/

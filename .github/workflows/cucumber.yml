@@ -88,6 +88,7 @@ jobs:
             --test cucumber -- --tags "@normal_ci"
 
       - name: Clean up build artifacts
+        if: success() || failure()
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: clean
