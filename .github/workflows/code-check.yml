@@ -288,6 +288,9 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
           CONSENSUS_SLOT_TIME: 1
+          # TODO: Remove this when the test framework removed all direct references to `NOMOS_NODE_BIN`
+          NOMOS_NODE_BIN: ${{ github.workspace }}/target/debug/logos-blockchain-node
+          LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/debug/logos-blockchain-node
         with:
           command: nextest
           # Run only two_nodes_happy to check the overall behavior.
