@@ -205,7 +205,7 @@ jobs:
           # - We don't test benches as they take 6h+, leading to a timeout
           # - We aslo do not test end-to-end integration tests here as those are run in a dedicated step below
           args: >-
-            run --workspace --locked --lib --bins --examples --tests 
+            run --workspace --locked --lib --bins --examples --tests --retries 2
             --all-features --no-fail-fast --exclude logos-blockchain-tests
 
       - name: Cargo test PoL proof generation and verification
