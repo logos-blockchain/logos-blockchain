@@ -339,15 +339,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arc-swap"
-version = "1.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51d03449bb8ca2cc2ef70869af31463d1ae5ccc8fa3e334b307203fbf815207e"
-dependencies = [
- "rustversion",
-]
-
-[[package]]
 name = "archery"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -378,18 +369,6 @@ dependencies = [
  "cpufeatures",
  "password-hash",
  "zeroize",
-]
-
-[[package]]
-name = "ark-bls12-381"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c775f0d12169cba7aae4caeb547bb6a50781c7449a8aa53793827c9ec4abf488"
-dependencies = [
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-serialize 0.4.2",
- "ark-std 0.4.0",
 ]
 
 [[package]]
@@ -597,23 +576,6 @@ dependencies = [
  "educe",
  "fnv",
  "hashbrown 0.15.5",
-]
-
-[[package]]
-name = "ark-poly-commit"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a741492629ffcd228337676dc223a28551aa6792eedb8a2a22c767f00df6c89"
-dependencies = [
- "ark-crypto-primitives",
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-poly 0.4.2",
- "ark-relations",
- "ark-serialize 0.4.2",
- "ark-std 0.4.0",
- "derivative",
- "digest",
 ]
 
 [[package]]
@@ -1239,12 +1201,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "az"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be5eb007b7cacc6c660343e96f650fedf4b5a77512399eb952ca6642cf8d13f7"
-
-[[package]]
 name = "backon"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1486,22 +1442,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "broadcast-service"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "derivative",
- "futures",
- "nomos-core",
- "overwatch",
- "serde",
- "tokio",
- "tokio-stream",
- "tracing",
-]
-
-[[package]]
 name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1598,18 +1538,6 @@ checksum = "225bff33b2141874fe80d71e07d6eec4f85c5c216453dd96388240f96e1acc14"
 dependencies = [
  "cc",
  "pkg-config",
-]
-
-[[package]]
-name = "cached"
-version = "0.55.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0839c297f8783316fcca9d90344424e968395413f0662a5481f79c6648bbc14"
-dependencies = [
- "hashbrown 0.14.5",
- "once_cell",
- "thiserror 2.0.18",
- "web-time",
 ]
 
 [[package]]
@@ -1738,21 +1666,19 @@ dependencies = [
 [[package]]
 name = "cfgsync_tf"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#28685298ba8b8bb8e628ac4649fac150276aa5d0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#dc06af5486ffd8c387a415eca3c21124961f1002"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
  "clap",
- "groth16",
  "hex",
- "key-management-system-service",
- "nomos-core",
- "nomos-da-network-core",
- "nomos-executor",
- "nomos-libp2p",
- "nomos-node",
- "nomos-tracing-service",
- "nomos-utils",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-node 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "rand 0.8.5",
  "reqwest 0.12.28",
  "serde",
@@ -1760,107 +1686,11 @@ dependencies = [
  "serde_path_to_error",
  "serde_with",
  "serde_yaml",
- "subnetworks-assignations",
  "testing-framework-config",
  "testing-framework-core",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "chain-common"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "nomos-core",
- "serde",
-]
-
-[[package]]
-name = "chain-leader"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "chain-common",
- "chain-service",
- "cryptarchia-engine",
- "futures",
- "key-management-system-keys",
- "nomos-blend-service",
- "nomos-core",
- "nomos-da-sampling",
- "nomos-ledger",
- "nomos-time",
- "nomos-wallet",
- "overwatch",
- "serde",
- "services-utils",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "tracing-futures",
- "tx-service",
-]
-
-[[package]]
-name = "chain-network"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "chain-common",
- "chain-service",
- "cryptarchia-engine",
- "cryptarchia-sync",
- "futures",
- "nomos-core",
- "nomos-da-sampling",
- "nomos-ledger",
- "nomos-network",
- "nomos-time",
- "overwatch",
- "rand 0.8.5",
- "serde",
- "serde_with",
- "services-utils",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
- "tracing-futures",
- "tx-service",
-]
-
-[[package]]
-name = "chain-service"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "broadcast-service",
- "bytes",
- "cryptarchia-engine",
- "cryptarchia-sync",
- "futures",
- "groth16",
- "nomos-core",
- "nomos-ledger",
- "nomos-network",
- "nomos-storage",
- "nomos-time",
- "nomos-utils",
- "num-bigint",
- "overwatch",
- "serde",
- "serde_with",
- "services-utils",
- "strum",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "tracing-futures",
 ]
 
 [[package]]
@@ -1934,23 +1764,6 @@ checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
 dependencies = [
  "crypto-common",
  "inout",
-]
-
-[[package]]
-name = "circuits-prover"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "circuits-utils",
- "tempfile",
-]
-
-[[package]]
-name = "circuits-utils"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "dirs 6.0.0",
 ]
 
 [[package]]
@@ -2049,24 +1862,6 @@ checksum = "ba5a308b75df32fe02788e748662718f03fde005016435c444eea572398219fd"
 dependencies = [
  "bytes",
  "memchr",
-]
-
-[[package]]
-name = "common-http-client"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "broadcast-service",
- "chain-service",
- "futures",
- "nomos-core",
- "nomos-da-messages",
- "nomos-http-api-common",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "url",
 ]
 
 [[package]]
@@ -2248,15 +2043,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "counter"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f009fcafa949dc1fc46a762dae84d0c2687d3b550906b633c4979d58d2c6ae52"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
 name = "cpio"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2373,40 +2159,6 @@ name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
-
-[[package]]
-name = "cryptarchia-engine"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "cfg_eval",
- "nomos-utils",
- "serde",
- "serde_with",
- "thiserror 1.0.69",
- "time",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "cryptarchia-sync"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "bytes",
- "cryptarchia-engine",
- "futures",
- "libp2p",
- "libp2p-stream",
- "nomos-core",
- "rand 0.8.5",
- "serde",
- "serde_with",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
 
 [[package]]
 name = "crypto-bigint"
@@ -3333,19 +3085,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "executor-http-client"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "common-http-client",
- "futures",
- "nomos-core",
- "nomos-http-api-common",
- "reqwest 0.12.28",
- "serde",
-]
-
-[[package]]
 name = "exr"
 version = "1.74.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3468,19 +3207,6 @@ dependencies = [
  "lazy_static",
  "libc",
  "winapi",
-]
-
-[[package]]
-name = "fixed"
-version = "1.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c566da967934c6c7ee0458a9773de9b2a685bd2ce26a3b28ddfc740e640182f5"
-dependencies = [
- "az",
- "bytemuck",
- "half",
- "serde",
- "typenum",
 ]
 
 [[package]]
@@ -3860,24 +3586,6 @@ dependencies = [
  "rand 0.8.5",
  "smallvec",
  "spinning_top",
-]
-
-[[package]]
-name = "groth16"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "ark-bn254 0.4.0",
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-groth16",
- "ark-serialize 0.4.2",
- "generic-array 1.3.5",
- "hex",
- "num-bigint",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -4789,15 +4497,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
@@ -4951,57 +4650,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "key-management-system-keys"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "bytes",
- "ed25519-dalek",
- "generic-array 1.3.5",
- "groth16",
- "key-management-system-macros",
- "nomos-blend-proofs",
- "nomos-utils",
- "num-bigint",
- "poseidon2",
- "rand_core 0.6.4",
- "serde",
- "subtle",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "x25519-dalek",
- "zeroize",
- "zksign",
-]
-
-[[package]]
-name = "key-management-system-macros"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
-]
-
-[[package]]
-name = "key-management-system-service"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "key-management-system-keys",
- "log",
- "overwatch",
- "serde",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "konst"
 version = "0.3.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5028,41 +4676,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0de8b303297635ad57c9f5059fd9cee7a47f8e8daa09df0fcd07dd39fb22977f"
 dependencies = [
  "log",
-]
-
-[[package]]
-name = "kzgrs"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "ark-bls12-381",
- "ark-ec 0.4.2",
- "ark-ff 0.4.2",
- "ark-poly 0.4.2",
- "ark-poly-commit",
- "ark-serialize 0.4.2",
- "blake2",
- "blst",
- "num-bigint",
- "num-traits",
- "rand 0.8.5",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "kzgrs-backend"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "ark-ff 0.4.2",
- "ark-poly 0.4.2",
- "ark-serialize 0.4.2",
- "blake2",
- "itertools 0.12.1",
- "kzgrs",
- "nomos-core",
- "rand 0.8.5",
- "serde",
 ]
 
 [[package]]
@@ -5660,16 +5273,42 @@ dependencies = [
  "bytes",
  "futures",
  "hyper 1.8.1",
- "logos-blockchain-chain-broadcast-service",
- "logos-blockchain-chain-service",
- "logos-blockchain-core",
- "logos-blockchain-network-service",
- "logos-blockchain-sdp-service",
- "logos-blockchain-storage-service",
- "logos-blockchain-time-service",
- "logos-blockchain-tx-service",
+ "logos-blockchain-chain-broadcast-service 0.1.0",
+ "logos-blockchain-chain-service 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-network-service 0.1.0",
+ "logos-blockchain-sdp-service 0.1.0",
+ "logos-blockchain-storage-service 0.1.0",
+ "logos-blockchain-time-service 0.1.0",
+ "logos-blockchain-tx-service 0.1.0",
  "overwatch",
  "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "utoipa",
+ "utoipa-swagger-ui",
+]
+
+[[package]]
+name = "logos-blockchain-api-service"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "logos-blockchain-chain-broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-sdp-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-storage-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-tx-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "overwatch",
  "serde",
  "serde_json",
  "tokio",
@@ -5683,11 +5322,23 @@ dependencies = [
 name = "logos-blockchain-blend"
 version = "0.1.0"
 dependencies = [
- "logos-blockchain-blend-crypto",
- "logos-blockchain-blend-message",
- "logos-blockchain-blend-network",
- "logos-blockchain-blend-proofs",
- "logos-blockchain-blend-scheduling",
+ "logos-blockchain-blend-crypto 0.1.0",
+ "logos-blockchain-blend-message 0.1.0",
+ "logos-blockchain-blend-network 0.1.0",
+ "logos-blockchain-blend-proofs 0.1.0",
+ "logos-blockchain-blend-scheduling 0.1.0",
+]
+
+[[package]]
+name = "logos-blockchain-blend"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "logos-blockchain-blend-crypto 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-message 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-network 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-scheduling 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
 ]
 
 [[package]]
@@ -5695,11 +5346,25 @@ name = "logos-blockchain-blend-crypto"
 version = "0.1.0"
 dependencies = [
  "blake2",
- "logos-blockchain-groth16",
- "logos-blockchain-poq",
- "logos-blockchain-poseidon2",
- "logos-blockchain-utils",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-poq 0.1.0",
+ "logos-blockchain-poseidon2 0.1.0",
+ "logos-blockchain-utils 0.1.0",
  "num-bigint",
+ "rs-merkle-tree",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "logos-blockchain-blend-crypto"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "blake2",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-poq 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "rs-merkle-tree",
  "thiserror 1.0.69",
 ]
@@ -5711,16 +5376,38 @@ dependencies = [
  "blake2",
  "derivative",
  "itertools 0.14.0",
- "logos-blockchain-blend-crypto",
- "logos-blockchain-blend-proofs",
- "logos-blockchain-core",
- "logos-blockchain-groth16",
- "logos-blockchain-key-management-system-keys",
- "logos-blockchain-utils",
+ "logos-blockchain-blend-crypto 0.1.0",
+ "logos-blockchain-blend-proofs 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-key-management-system-keys 0.1.0",
+ "logos-blockchain-utils 0.1.0",
  "serde",
  "serde-big-array",
  "serde_with",
  "test-log",
+ "thiserror 1.0.69",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "logos-blockchain-blend-message"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "blake2",
+ "derivative",
+ "itertools 0.14.0",
+ "logos-blockchain-blend-crypto 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "serde",
+ "serde-big-array",
+ "serde_with",
  "thiserror 1.0.69",
  "tracing",
  "zeroize",
@@ -5737,16 +5424,34 @@ dependencies = [
  "libp2p",
  "libp2p-stream",
  "libp2p-swarm-test",
- "logos-blockchain-blend-message",
- "logos-blockchain-blend-proofs",
- "logos-blockchain-blend-scheduling",
- "logos-blockchain-core",
- "logos-blockchain-groth16",
- "logos-blockchain-key-management-system-keys",
- "logos-blockchain-libp2p",
+ "logos-blockchain-blend-message 0.1.0",
+ "logos-blockchain-blend-proofs 0.1.0",
+ "logos-blockchain-blend-scheduling 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-key-management-system-keys 0.1.0",
+ "logos-blockchain-libp2p 0.1.0",
  "test-log",
  "tokio",
  "tokio-stream",
+ "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-blend-network"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "either",
+ "futures",
+ "futures-timer",
+ "libp2p",
+ "logos-blockchain-blend-message 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-scheduling 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "tracing",
 ]
 
@@ -5757,11 +5462,26 @@ dependencies = [
  "const-hex",
  "ed25519-dalek",
  "generic-array 1.3.5",
- "logos-blockchain-blend-crypto",
- "logos-blockchain-core",
- "logos-blockchain-groth16",
- "logos-blockchain-key-management-system-keys",
- "logos-blockchain-poq",
+ "logos-blockchain-blend-crypto 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-key-management-system-keys 0.1.0",
+ "logos-blockchain-poq 0.1.0",
+ "num-bigint",
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "logos-blockchain-blend-proofs"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "ed25519-dalek",
+ "generic-array 1.3.5",
+ "logos-blockchain-blend-crypto 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-poq 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "num-bigint",
  "serde",
  "thiserror 1.0.69",
@@ -5776,16 +5496,39 @@ dependencies = [
  "fork_stream",
  "futures",
  "libp2p",
- "logos-blockchain-blend-message",
- "logos-blockchain-blend-proofs",
- "logos-blockchain-core",
- "logos-blockchain-groth16",
- "logos-blockchain-key-management-system-keys",
- "logos-blockchain-utils",
+ "logos-blockchain-blend-message 0.1.0",
+ "logos-blockchain-blend-proofs 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-key-management-system-keys 0.1.0",
+ "logos-blockchain-utils 0.1.0",
  "multiaddr",
  "rand 0.8.5",
  "serde",
  "test-log",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-blend-scheduling"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "derivative",
+ "fork_stream",
+ "futures",
+ "logos-blockchain-blend-message 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "multiaddr",
+ "rand 0.8.5",
+ "serde",
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
@@ -5802,27 +5545,62 @@ dependencies = [
  "libp2p",
  "libp2p-stream",
  "libp2p-swarm-test",
- "logos-blockchain-blend",
- "logos-blockchain-chain-broadcast-service",
- "logos-blockchain-chain-service",
- "logos-blockchain-core",
- "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-groth16",
- "logos-blockchain-key-management-system-service",
- "logos-blockchain-ledger",
- "logos-blockchain-libp2p",
- "logos-blockchain-network-service",
- "logos-blockchain-poq",
- "logos-blockchain-sdp-service",
- "logos-blockchain-services-utils",
- "logos-blockchain-time-service",
- "logos-blockchain-utils",
+ "logos-blockchain-blend 0.1.0",
+ "logos-blockchain-chain-broadcast-service 0.1.0",
+ "logos-blockchain-chain-service 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-cryptarchia-engine 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-key-management-system-service 0.1.0",
+ "logos-blockchain-ledger 0.1.0",
+ "logos-blockchain-libp2p 0.1.0",
+ "logos-blockchain-network-service 0.1.0",
+ "logos-blockchain-poq 0.1.0",
+ "logos-blockchain-sdp-service 0.1.0",
+ "logos-blockchain-services-utils 0.1.0",
+ "logos-blockchain-time-service 0.1.0",
+ "logos-blockchain-utils 0.1.0",
  "overwatch",
  "rand 0.8.5",
  "serde",
  "serde_with",
  "tempfile",
  "test-log",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-blend-service"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "fork_stream",
+ "futures",
+ "libp2p",
+ "libp2p-stream",
+ "logos-blockchain-blend 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-poq 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-sdp-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "overwatch",
+ "rand 0.8.5",
+ "serde",
+ "serde_with",
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
@@ -5847,13 +5625,13 @@ name = "logos-blockchain-c"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
- "logos-blockchain-api-service",
- "logos-blockchain-chain-service",
- "logos-blockchain-core",
- "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-key-management-system-keys",
- "logos-blockchain-node",
- "logos-blockchain-wallet-service",
+ "logos-blockchain-api-service 0.1.0",
+ "logos-blockchain-chain-service 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-cryptarchia-engine 0.1.0",
+ "logos-blockchain-key-management-system-keys 0.1.0",
+ "logos-blockchain-node 0.1.0",
+ "logos-blockchain-wallet-service 0.1.0",
  "num-bigint",
  "overwatch",
  "serde_json",
@@ -5866,11 +5644,11 @@ version = "0.1.0"
 dependencies = [
  "axum 0.7.9",
  "clap",
- "logos-blockchain-core",
- "logos-blockchain-libp2p",
- "logos-blockchain-node",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-libp2p 0.1.0",
+ "logos-blockchain-node 0.1.0",
  "logos-blockchain-tests",
- "logos-blockchain-tracing-service",
+ "logos-blockchain-tracing-service 0.1.0",
  "rand 0.8.5",
  "reqwest 0.12.28",
  "serde",
@@ -5888,7 +5666,23 @@ dependencies = [
  "async-trait",
  "derivative",
  "futures",
- "logos-blockchain-core",
+ "logos-blockchain-core 0.1.0",
+ "overwatch",
+ "serde",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-chain-broadcast-service"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "derivative",
+ "futures",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "overwatch",
  "serde",
  "tokio",
@@ -5902,21 +5696,47 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures",
- "logos-blockchain-blend-service",
- "logos-blockchain-chain-service",
- "logos-blockchain-chain-service-common",
- "logos-blockchain-core",
- "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-groth16",
- "logos-blockchain-key-management-system-keys",
- "logos-blockchain-ledger",
- "logos-blockchain-services-utils",
- "logos-blockchain-time-service",
- "logos-blockchain-tx-service",
- "logos-blockchain-utils",
- "logos-blockchain-wallet-service",
+ "logos-blockchain-blend-service 0.1.0",
+ "logos-blockchain-chain-service 0.1.0",
+ "logos-blockchain-chain-service-common 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-cryptarchia-engine 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-key-management-system-keys 0.1.0",
+ "logos-blockchain-ledger 0.1.0",
+ "logos-blockchain-services-utils 0.1.0",
+ "logos-blockchain-time-service 0.1.0",
+ "logos-blockchain-tx-service 0.1.0",
+ "logos-blockchain-utils 0.1.0",
+ "logos-blockchain-wallet-service 0.1.0",
  "overwatch",
  "rand 0.8.5",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-futures",
+]
+
+[[package]]
+name = "logos-blockchain-chain-leader-service"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "futures",
+ "logos-blockchain-blend-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-service-common 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-tx-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-wallet-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "overwatch",
  "serde",
  "thiserror 1.0.69",
  "tokio",
@@ -5930,17 +5750,45 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures",
- "logos-blockchain-chain-service",
- "logos-blockchain-chain-service-common",
- "logos-blockchain-core",
- "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-cryptarchia-sync",
- "logos-blockchain-ledger",
- "logos-blockchain-network-service",
- "logos-blockchain-services-utils",
- "logos-blockchain-time-service",
- "logos-blockchain-tx-service",
- "logos-blockchain-utils",
+ "logos-blockchain-chain-service 0.1.0",
+ "logos-blockchain-chain-service-common 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-cryptarchia-engine 0.1.0",
+ "logos-blockchain-cryptarchia-sync 0.1.0",
+ "logos-blockchain-ledger 0.1.0",
+ "logos-blockchain-network-service 0.1.0",
+ "logos-blockchain-services-utils 0.1.0",
+ "logos-blockchain-time-service 0.1.0",
+ "logos-blockchain-tx-service 0.1.0",
+ "logos-blockchain-utils 0.1.0",
+ "overwatch",
+ "rand 0.8.5",
+ "serde",
+ "serde_with",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-futures",
+]
+
+[[package]]
+name = "logos-blockchain-chain-network-service"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "futures",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-service-common 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-cryptarchia-sync 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-tx-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "overwatch",
  "rand 0.8.5",
  "serde",
@@ -5959,18 +5807,18 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures",
- "logos-blockchain-chain-broadcast-service",
- "logos-blockchain-core",
- "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-cryptarchia-sync",
- "logos-blockchain-groth16",
- "logos-blockchain-key-management-system-keys",
- "logos-blockchain-ledger",
- "logos-blockchain-network-service",
- "logos-blockchain-services-utils",
- "logos-blockchain-storage-service",
- "logos-blockchain-time-service",
- "logos-blockchain-utils",
+ "logos-blockchain-chain-broadcast-service 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-cryptarchia-engine 0.1.0",
+ "logos-blockchain-cryptarchia-sync 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-key-management-system-keys 0.1.0",
+ "logos-blockchain-ledger 0.1.0",
+ "logos-blockchain-network-service 0.1.0",
+ "logos-blockchain-services-utils 0.1.0",
+ "logos-blockchain-storage-service 0.1.0",
+ "logos-blockchain-time-service 0.1.0",
+ "logos-blockchain-utils 0.1.0",
  "num-bigint",
  "overwatch",
  "serde",
@@ -5985,10 +5833,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-chain-service"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "logos-blockchain-chain-broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-cryptarchia-sync 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-storage-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "num-bigint",
+ "overwatch",
+ "serde",
+ "serde_with",
+ "strum",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-futures",
+]
+
+[[package]]
 name = "logos-blockchain-chain-service-common"
 version = "0.1.0"
 dependencies = [
- "logos-blockchain-core",
+ "logos-blockchain-core 0.1.0",
+ "serde",
+]
+
+[[package]]
+name = "logos-blockchain-chain-service-common"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "serde",
 ]
 
@@ -5996,7 +5883,16 @@ dependencies = [
 name = "logos-blockchain-circuits-prover"
 version = "0.1.0"
 dependencies = [
- "logos-blockchain-circuits-utils",
+ "logos-blockchain-circuits-utils 0.1.0",
+ "tempfile",
+]
+
+[[package]]
+name = "logos-blockchain-circuits-prover"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "logos-blockchain-circuits-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "tempfile",
 ]
 
@@ -6008,10 +5904,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-circuits-utils"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "dirs 6.0.0",
+]
+
+[[package]]
 name = "logos-blockchain-circuits-verifier"
 version = "0.1.0"
 dependencies = [
- "logos-blockchain-circuits-utils",
+ "logos-blockchain-circuits-utils 0.1.0",
  "tempfile",
 ]
 
@@ -6020,10 +5924,27 @@ name = "logos-blockchain-common-http-client"
 version = "0.1.0"
 dependencies = [
  "futures",
- "logos-blockchain-chain-broadcast-service",
- "logos-blockchain-chain-service",
- "logos-blockchain-core",
- "logos-blockchain-http-api-common",
+ "logos-blockchain-chain-broadcast-service 0.1.0",
+ "logos-blockchain-chain-service 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-http-api-common 0.1.0",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "url",
+]
+
+[[package]]
+name = "logos-blockchain-common-http-client"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "futures",
+ "logos-blockchain-chain-broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-http-api-common 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -6043,13 +5964,13 @@ dependencies = [
  "futures",
  "generic-array 1.3.5",
  "hex",
- "logos-blockchain-blend-proofs",
- "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-groth16",
- "logos-blockchain-key-management-system-keys",
- "logos-blockchain-pol",
- "logos-blockchain-poseidon2",
- "logos-blockchain-utils",
+ "logos-blockchain-blend-proofs 0.1.0",
+ "logos-blockchain-cryptarchia-engine 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-key-management-system-keys 0.1.0",
+ "logos-blockchain-pol 0.1.0",
+ "logos-blockchain-poseidon2 0.1.0",
+ "logos-blockchain-utils 0.1.0",
  "multiaddr",
  "nom 8.0.0",
  "num-bigint",
@@ -6062,11 +5983,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-core"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "ark-ff 0.4.2",
+ "bincode",
+ "blake2",
+ "bytes",
+ "const-hex",
+ "futures",
+ "generic-array 1.3.5",
+ "hex",
+ "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-pol 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "multiaddr",
+ "nom 8.0.0",
+ "num-bigint",
+ "serde",
+ "strum",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "logos-blockchain-cryptarchia-engine"
 version = "0.1.0"
 dependencies = [
  "cfg_eval",
- "logos-blockchain-utils",
+ "logos-blockchain-utils 0.1.0",
+ "serde",
+ "serde_with",
+ "thiserror 1.0.69",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-cryptarchia-engine"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "cfg_eval",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "serde",
  "serde_with",
  "thiserror 1.0.69",
@@ -6084,8 +6049,27 @@ dependencies = [
  "libp2p",
  "libp2p-stream",
  "libp2p-swarm-test",
- "logos-blockchain-core",
- "logos-blockchain-cryptarchia-engine",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-cryptarchia-engine 0.1.0",
+ "rand 0.8.5",
+ "serde",
+ "serde_with",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-cryptarchia-sync"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "bytes",
+ "futures",
+ "libp2p",
+ "libp2p-stream",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "rand 0.8.5",
  "serde",
  "serde_with",
@@ -6103,9 +6087,9 @@ dependencies = [
  "clap",
  "futures",
  "hex",
- "logos-blockchain-chain-broadcast-service",
- "logos-blockchain-common-http-client",
- "logos-blockchain-core",
+ "logos-blockchain-chain-broadcast-service 0.1.0",
+ "logos-blockchain-common-http-client 0.1.0",
+ "logos-blockchain-core 0.1.0",
  "logos-blockchain-demo-sequencer",
  "owo-colors",
  "redb 3.1.0",
@@ -6126,9 +6110,9 @@ version = "0.1.0"
 dependencies = [
  "axum 0.7.9",
  "hex",
- "logos-blockchain-common-http-client",
- "logos-blockchain-core",
- "logos-blockchain-key-management-system-service",
+ "logos-blockchain-common-http-client 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-key-management-system-service 0.1.0",
  "owo-colors",
  "rand 0.8.5",
  "redb 2.6.3",
@@ -6162,13 +6146,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-groth16"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "ark-bn254 0.4.0",
+ "ark-ec 0.4.2",
+ "ark-ff 0.4.2",
+ "ark-groth16",
+ "ark-serialize 0.4.2",
+ "generic-array 1.3.5",
+ "hex",
+ "num-bigint",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "logos-blockchain-http-api-common"
 version = "0.1.0"
 dependencies = [
  "axum 0.7.9",
  "governor",
- "logos-blockchain-core",
- "logos-blockchain-key-management-system-keys",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-key-management-system-keys 0.1.0",
  "pprof",
  "serde",
  "serde_json",
@@ -6179,6 +6181,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-http-api-common"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "axum 0.7.9",
+ "governor",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "tower_governor",
+]
+
+[[package]]
 name = "logos-blockchain-key-management-system-keys"
 version = "0.1.0"
 dependencies = [
@@ -6186,12 +6203,38 @@ dependencies = [
  "bytes",
  "ed25519-dalek",
  "generic-array 1.3.5",
- "logos-blockchain-blend-proofs",
- "logos-blockchain-groth16",
- "logos-blockchain-key-management-system-macros",
- "logos-blockchain-poseidon2",
- "logos-blockchain-utils",
- "logos-blockchain-zksign",
+ "logos-blockchain-blend-proofs 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-key-management-system-macros 0.1.0",
+ "logos-blockchain-poseidon2 0.1.0",
+ "logos-blockchain-utils 0.1.0",
+ "logos-blockchain-zksign 0.1.0",
+ "num-bigint",
+ "rand_core 0.6.4",
+ "serde",
+ "subtle",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
+name = "logos-blockchain-key-management-system-keys"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "ed25519-dalek",
+ "generic-array 1.3.5",
+ "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-macros 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-zksign 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "num-bigint",
  "rand_core 0.6.4",
  "serde",
@@ -6213,13 +6256,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-key-management-system-macros"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
 name = "logos-blockchain-key-management-system-service"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
  "log",
- "logos-blockchain-key-management-system-keys",
+ "logos-blockchain-key-management-system-keys 0.1.0",
  "num-bigint",
  "overwatch",
  "rand 0.8.5",
@@ -6231,20 +6284,58 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-key-management-system-service"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "log",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "overwatch",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "logos-blockchain-ledger"
 version = "0.1.0"
 dependencies = [
  "derivative",
- "logos-blockchain-blend-crypto",
- "logos-blockchain-blend-message",
- "logos-blockchain-blend-proofs",
- "logos-blockchain-core",
- "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-groth16",
- "logos-blockchain-key-management-system-keys",
- "logos-blockchain-mmr",
- "logos-blockchain-utils",
- "logos-blockchain-utxotree",
+ "logos-blockchain-blend-crypto 0.1.0",
+ "logos-blockchain-blend-message 0.1.0",
+ "logos-blockchain-blend-proofs 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-cryptarchia-engine 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-key-management-system-keys 0.1.0",
+ "logos-blockchain-mmr 0.1.0",
+ "logos-blockchain-utils 0.1.0",
+ "logos-blockchain-utxotree 0.1.0",
+ "num-bigint",
+ "rand 0.8.5",
+ "rpds",
+ "serde",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-ledger"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "logos-blockchain-blend-crypto 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-message 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-proofs 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-mmr 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utxotree 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "num-bigint",
  "rand 0.8.5",
  "rpds",
@@ -6267,8 +6358,8 @@ dependencies = [
  "igd-next 0.16.2",
  "libp2p",
  "libp2p-swarm-test",
- "logos-blockchain-cryptarchia-sync",
- "logos-blockchain-utils",
+ "logos-blockchain-cryptarchia-sync 0.1.0",
+ "logos-blockchain-utils 0.1.0",
  "multiaddr",
  "natpmp",
  "netdev",
@@ -6285,14 +6376,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-libp2p"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "backon",
+ "blake2",
+ "default-net",
+ "either",
+ "futures",
+ "hex",
+ "igd-next 0.16.2",
+ "libp2p",
+ "logos-blockchain-cryptarchia-sync 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "multiaddr",
+ "natpmp",
+ "netdev",
+ "num_enum",
+ "rand 0.8.5",
+ "serde",
+ "serde_with",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "zerocopy",
+]
+
+[[package]]
 name = "logos-blockchain-mmr"
 version = "0.1.0"
 dependencies = [
  "ark-ff 0.4.2",
- "logos-blockchain-groth16",
- "logos-blockchain-poseidon2",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-poseidon2 0.1.0",
  "proptest",
  "proptest-macro",
+ "rpds",
+ "serde",
+]
+
+[[package]]
+name = "logos-blockchain-mmr"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "ark-ff 0.4.2",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "rpds",
  "serde",
 ]
@@ -6304,10 +6436,10 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
- "logos-blockchain-core",
- "logos-blockchain-cryptarchia-sync",
- "logos-blockchain-libp2p",
- "logos-blockchain-utils",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-cryptarchia-sync 0.1.0",
+ "logos-blockchain-libp2p 0.1.0",
+ "logos-blockchain-utils 0.1.0",
  "overwatch",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
@@ -6317,6 +6449,25 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.22",
  "utoipa",
+]
+
+[[package]]
+name = "logos-blockchain-network-service"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "futures",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-cryptarchia-sync 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "overwatch",
+ "rand 0.8.5",
+ "rand_chacha 0.3.1",
+ "serde",
+ "tokio",
+ "tokio-stream",
+ "tracing",
 ]
 
 [[package]]
@@ -6330,33 +6481,33 @@ dependencies = [
  "futures",
  "hex",
  "http 1.4.0",
- "logos-blockchain-api-service",
- "logos-blockchain-blend",
- "logos-blockchain-blend-service",
- "logos-blockchain-chain-broadcast-service",
- "logos-blockchain-chain-leader-service",
- "logos-blockchain-chain-network-service",
- "logos-blockchain-chain-service",
- "logos-blockchain-core",
- "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-groth16",
- "logos-blockchain-http-api-common",
- "logos-blockchain-key-management-system-service",
- "logos-blockchain-ledger",
- "logos-blockchain-libp2p",
- "logos-blockchain-network-service",
- "logos-blockchain-pol",
- "logos-blockchain-poq",
- "logos-blockchain-sdp-service",
- "logos-blockchain-services-utils",
- "logos-blockchain-storage-service",
- "logos-blockchain-system-sig-service",
- "logos-blockchain-time-service",
- "logos-blockchain-tracing",
- "logos-blockchain-tracing-service",
- "logos-blockchain-tx-service",
- "logos-blockchain-utils",
- "logos-blockchain-wallet-service",
+ "logos-blockchain-api-service 0.1.0",
+ "logos-blockchain-blend 0.1.0",
+ "logos-blockchain-blend-service 0.1.0",
+ "logos-blockchain-chain-broadcast-service 0.1.0",
+ "logos-blockchain-chain-leader-service 0.1.0",
+ "logos-blockchain-chain-network-service 0.1.0",
+ "logos-blockchain-chain-service 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-cryptarchia-engine 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-http-api-common 0.1.0",
+ "logos-blockchain-key-management-system-service 0.1.0",
+ "logos-blockchain-ledger 0.1.0",
+ "logos-blockchain-libp2p 0.1.0",
+ "logos-blockchain-network-service 0.1.0",
+ "logos-blockchain-pol 0.1.0",
+ "logos-blockchain-poq 0.1.0",
+ "logos-blockchain-sdp-service 0.1.0",
+ "logos-blockchain-services-utils 0.1.0",
+ "logos-blockchain-storage-service 0.1.0",
+ "logos-blockchain-system-sig-service 0.1.0",
+ "logos-blockchain-time-service 0.1.0",
+ "logos-blockchain-tracing 0.1.0",
+ "logos-blockchain-tracing-service 0.1.0",
+ "logos-blockchain-tx-service 0.1.0",
+ "logos-blockchain-utils 0.1.0",
+ "logos-blockchain-wallet-service 0.1.0",
  "num-bigint",
  "overwatch",
  "serde",
@@ -6377,13 +6528,70 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-node"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "axum 0.7.9",
+ "clap",
+ "color-eyre",
+ "futures",
+ "hex",
+ "http 1.4.0",
+ "logos-blockchain-api-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-broadcast-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-leader-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-http-api-common 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-pol 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-poq 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-sdp-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-storage-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-system-sig-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-tracing 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-tx-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-wallet-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "num-bigint",
+ "overwatch",
+ "serde",
+ "serde_ignored",
+ "serde_json",
+ "serde_with",
+ "serde_yaml",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-stream",
+ "tower 0.4.13",
+ "tower-http 0.5.2",
+ "tracing",
+ "utoipa",
+ "utoipa-swagger-ui",
+]
+
+[[package]]
 name = "logos-blockchain-poc"
 version = "0.1.0"
 dependencies = [
- "logos-blockchain-circuits-prover",
- "logos-blockchain-circuits-utils",
- "logos-blockchain-groth16",
- "logos-blockchain-witness-generator",
+ "logos-blockchain-circuits-prover 0.1.0",
+ "logos-blockchain-circuits-utils 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-witness-generator 0.1.0",
  "num-bigint",
  "serde",
  "serde_json",
@@ -6394,10 +6602,26 @@ dependencies = [
 name = "logos-blockchain-pol"
 version = "0.1.0"
 dependencies = [
- "logos-blockchain-circuits-prover",
- "logos-blockchain-circuits-utils",
- "logos-blockchain-groth16",
- "logos-blockchain-witness-generator",
+ "logos-blockchain-circuits-prover 0.1.0",
+ "logos-blockchain-circuits-utils 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-witness-generator 0.1.0",
+ "num-bigint",
+ "num-traits",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "logos-blockchain-pol"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "logos-blockchain-circuits-prover 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-circuits-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-witness-generator 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "num-bigint",
  "num-traits",
  "serde",
@@ -6409,11 +6633,27 @@ dependencies = [
 name = "logos-blockchain-poq"
 version = "0.1.0"
 dependencies = [
- "logos-blockchain-circuits-prover",
- "logos-blockchain-circuits-utils",
- "logos-blockchain-groth16",
- "logos-blockchain-pol",
- "logos-blockchain-witness-generator",
+ "logos-blockchain-circuits-prover 0.1.0",
+ "logos-blockchain-circuits-utils 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-pol 0.1.0",
+ "logos-blockchain-witness-generator 0.1.0",
+ "num-bigint",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "logos-blockchain-poq"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "logos-blockchain-circuits-prover 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-circuits-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-pol 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-witness-generator 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "num-bigint",
  "serde",
  "serde_json",
@@ -6431,14 +6671,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-poseidon2"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "ark-bn254 0.4.0",
+ "ark-ff 0.4.2",
+ "jf-poseidon2",
+ "num-bigint",
+]
+
+[[package]]
 name = "logos-blockchain-sdp-service"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures",
- "logos-blockchain-core",
- "logos-blockchain-key-management-system-keys",
- "logos-blockchain-tx-service",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-key-management-system-keys 0.1.0",
+ "logos-blockchain-tx-service 0.1.0",
+ "overwatch",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-sdp-service"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "futures",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-tx-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "overwatch",
  "serde",
  "thiserror 2.0.18",
@@ -6464,18 +6733,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-services-utils"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "futures",
+ "log",
+ "overwatch",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "logos-blockchain-storage-service"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
  "futures",
- "logos-blockchain-core",
- "logos-blockchain-cryptarchia-engine",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-cryptarchia-engine 0.1.0",
  "overwatch",
  "rocksdb",
  "serde",
  "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-storage-service"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "overwatch",
+ "rocksdb",
+ "serde",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
@@ -6492,6 +6794,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-system-sig-service"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-ctrlc",
+ "async-trait",
+ "overwatch",
+ "tracing",
+]
+
+[[package]]
 name = "logos-blockchain-tests"
 version = "0.1.0"
 dependencies = [
@@ -6500,30 +6813,30 @@ dependencies = [
  "futures",
  "futures-util",
  "hex",
- "logos-blockchain-api-service",
- "logos-blockchain-blend-proofs",
- "logos-blockchain-blend-service",
- "logos-blockchain-chain-broadcast-service",
- "logos-blockchain-chain-leader-service",
- "logos-blockchain-chain-network-service",
- "logos-blockchain-chain-service",
- "logos-blockchain-common-http-client",
- "logos-blockchain-core",
- "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-cryptarchia-sync",
- "logos-blockchain-groth16",
- "logos-blockchain-http-api-common",
- "logos-blockchain-key-management-system-service",
- "logos-blockchain-libp2p",
- "logos-blockchain-network-service",
- "logos-blockchain-node",
- "logos-blockchain-sdp-service",
- "logos-blockchain-time-service",
- "logos-blockchain-tracing",
- "logos-blockchain-tracing-service",
- "logos-blockchain-tx-service",
- "logos-blockchain-utils",
- "logos-blockchain-wallet-service",
+ "logos-blockchain-api-service 0.1.0",
+ "logos-blockchain-blend-proofs 0.1.0",
+ "logos-blockchain-blend-service 0.1.0",
+ "logos-blockchain-chain-broadcast-service 0.1.0",
+ "logos-blockchain-chain-leader-service 0.1.0",
+ "logos-blockchain-chain-network-service 0.1.0",
+ "logos-blockchain-chain-service 0.1.0",
+ "logos-blockchain-common-http-client 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-cryptarchia-engine 0.1.0",
+ "logos-blockchain-cryptarchia-sync 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-http-api-common 0.1.0",
+ "logos-blockchain-key-management-system-service 0.1.0",
+ "logos-blockchain-libp2p 0.1.0",
+ "logos-blockchain-network-service 0.1.0",
+ "logos-blockchain-node 0.1.0",
+ "logos-blockchain-sdp-service 0.1.0",
+ "logos-blockchain-time-service 0.1.0",
+ "logos-blockchain-tracing 0.1.0",
+ "logos-blockchain-tracing-service 0.1.0",
+ "logos-blockchain-tx-service 0.1.0",
+ "logos-blockchain-utils 0.1.0",
+ "logos-blockchain-wallet-service 0.1.0",
  "num-bigint",
  "rand 0.8.5",
  "reqwest 0.12.28",
@@ -6550,8 +6863,30 @@ dependencies = [
  "cfg_eval",
  "futures",
  "log",
- "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-utils",
+ "logos-blockchain-cryptarchia-engine 0.1.0",
+ "logos-blockchain-utils 0.1.0",
+ "overwatch",
+ "serde",
+ "serde_with",
+ "sntpc",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-time-service"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "cfg_eval",
+ "futures",
+ "log",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "overwatch",
  "serde",
  "serde_with",
@@ -6586,12 +6921,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-tracing"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk",
+ "rand 0.8.5",
+ "reqwest 0.12.28",
+ "serde",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-gelf",
+ "tracing-loki",
+ "tracing-opentelemetry",
+ "tracing-subscriber 0.3.22",
+ "url",
+]
+
+[[package]]
 name = "logos-blockchain-tracing-service"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "console-subscriber",
- "logos-blockchain-tracing",
+ "logos-blockchain-tracing 0.1.0",
+ "overwatch",
+ "serde",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber 0.3.22",
+]
+
+[[package]]
+name = "logos-blockchain-tracing-service"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "logos-blockchain-tracing 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "overwatch",
  "serde",
  "tracing",
@@ -6605,19 +6977,41 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures",
- "logos-blockchain-core",
- "logos-blockchain-network-service",
- "logos-blockchain-services-utils",
- "logos-blockchain-storage-service",
- "logos-blockchain-tracing-service",
- "logos-blockchain-tx-service",
- "logos-blockchain-utils",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-network-service 0.1.0",
+ "logos-blockchain-services-utils 0.1.0",
+ "logos-blockchain-storage-service 0.1.0",
+ "logos-blockchain-tracing-service 0.1.0",
+ "logos-blockchain-tx-service 0.1.0",
+ "logos-blockchain-utils 0.1.0",
  "overwatch",
  "overwatch-derive",
  "rand 0.8.5",
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
+name = "logos-blockchain-tx-service"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "futures",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-storage-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "overwatch",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
@@ -6645,13 +7039,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-utils"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "blake2",
+ "cipher",
+ "const-hex",
+ "humantime",
+ "overwatch",
+ "rand 0.8.5",
+ "serde",
+ "serde_with",
+ "time",
+]
+
+[[package]]
 name = "logos-blockchain-utxotree"
 version = "0.1.0"
 dependencies = [
  "ark-ff 0.4.2",
- "logos-blockchain-core",
- "logos-blockchain-groth16",
- "logos-blockchain-poseidon2",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-poseidon2 0.1.0",
  "num-bigint",
  "quickcheck",
  "quickcheck_macros",
@@ -6662,14 +7073,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-utxotree"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "ark-ff 0.4.2",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "num-bigint",
+ "rpds",
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "logos-blockchain-wallet"
 version = "0.1.0"
 dependencies = [
- "logos-blockchain-core",
- "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-key-management-system-keys",
- "logos-blockchain-ledger",
- "logos-blockchain-utils",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-cryptarchia-engine 0.1.0",
+ "logos-blockchain-key-management-system-keys 0.1.0",
+ "logos-blockchain-ledger 0.1.0",
+ "logos-blockchain-utils 0.1.0",
+ "num-bigint",
+ "rpds",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-wallet"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-keys 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "num-bigint",
  "rpds",
  "thiserror 2.0.18",
@@ -6681,10 +7121,10 @@ name = "logos-blockchain-wallet-http-client"
 version = "0.1.0"
 dependencies = [
  "hex",
- "logos-blockchain-common-http-client",
- "logos-blockchain-core",
- "logos-blockchain-http-api-common",
- "logos-blockchain-key-management-system-keys",
+ "logos-blockchain-common-http-client 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-http-api-common 0.1.0",
+ "logos-blockchain-key-management-system-keys 0.1.0",
  "url",
 ]
 
@@ -6696,14 +7136,38 @@ dependencies = [
  "bytes",
  "futures",
  "hex",
- "logos-blockchain-chain-service",
- "logos-blockchain-core",
- "logos-blockchain-groth16",
- "logos-blockchain-key-management-system-service",
- "logos-blockchain-ledger",
- "logos-blockchain-services-utils",
- "logos-blockchain-storage-service",
- "logos-blockchain-wallet",
+ "logos-blockchain-chain-service 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-key-management-system-service 0.1.0",
+ "logos-blockchain-ledger 0.1.0",
+ "logos-blockchain-services-utils 0.1.0",
+ "logos-blockchain-storage-service 0.1.0",
+ "logos-blockchain-wallet 0.1.0",
+ "overwatch",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-wallet-service"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "hex",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-services-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-storage-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-wallet 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "overwatch",
  "serde",
  "thiserror 1.0.69",
@@ -6719,16 +7183,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-witness-generator"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "logos-blockchain-zksign"
 version = "0.1.0"
 dependencies = [
- "logos-blockchain-circuits-prover",
- "logos-blockchain-circuits-utils",
- "logos-blockchain-groth16",
- "logos-blockchain-poseidon2",
- "logos-blockchain-witness-generator",
+ "logos-blockchain-circuits-prover 0.1.0",
+ "logos-blockchain-circuits-utils 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-poseidon2 0.1.0",
+ "logos-blockchain-witness-generator 0.1.0",
  "num-bigint",
  "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "logos-blockchain-zksign"
+version = "0.1.0"
+source = "git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3#47ae18e95f643bde563b4769212b37f6f018fed3"
+dependencies = [
+ "logos-blockchain-circuits-prover 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-circuits-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-poseidon2 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-witness-generator 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "num-bigint",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -6935,18 +7423,6 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "mmr"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "ark-ff 0.4.2",
- "groth16",
- "poseidon2",
- "rpds",
- "serde",
 ]
 
 [[package]]
@@ -7298,706 +7774,6 @@ dependencies = [
  "bytecount",
  "memchr",
  "nom 8.0.0",
-]
-
-[[package]]
-name = "nomos-api"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "broadcast-service",
- "bytes",
- "chain-service",
- "futures",
- "kzgrs-backend",
- "nomos-core",
- "nomos-da-dispersal",
- "nomos-da-network-core",
- "nomos-da-network-service",
- "nomos-da-sampling",
- "nomos-da-verifier",
- "nomos-libp2p",
- "nomos-network",
- "nomos-sdp",
- "nomos-storage",
- "nomos-time",
- "overwatch",
- "serde",
- "serde_json",
- "subnetworks-assignations",
- "tokio",
- "tokio-stream",
- "tracing",
- "tx-service",
- "utoipa",
- "utoipa-swagger-ui",
-]
-
-[[package]]
-name = "nomos-blend"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "nomos-blend-crypto",
- "nomos-blend-message",
- "nomos-blend-network",
- "nomos-blend-proofs",
- "nomos-blend-scheduling",
-]
-
-[[package]]
-name = "nomos-blend-crypto"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "blake2",
- "groth16",
- "nomos-utils",
- "poq",
- "poseidon2",
- "rs-merkle-tree",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "nomos-blend-message"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "blake2",
- "derivative",
- "groth16",
- "itertools 0.14.0",
- "key-management-system-keys",
- "nomos-blend-crypto",
- "nomos-blend-proofs",
- "nomos-core",
- "nomos-utils",
- "serde",
- "serde-big-array",
- "serde_with",
- "thiserror 1.0.69",
- "tracing",
- "zeroize",
-]
-
-[[package]]
-name = "nomos-blend-network"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "either",
- "futures",
- "futures-timer",
- "key-management-system-keys",
- "libp2p",
- "nomos-blend-message",
- "nomos-blend-proofs",
- "nomos-blend-scheduling",
- "nomos-core",
- "nomos-libp2p",
- "tracing",
-]
-
-[[package]]
-name = "nomos-blend-proofs"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "ed25519-dalek",
- "generic-array 1.3.5",
- "groth16",
- "nomos-blend-crypto",
- "num-bigint",
- "poq",
- "serde",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "nomos-blend-scheduling"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "derivative",
- "fork_stream",
- "futures",
- "key-management-system-keys",
- "multiaddr",
- "nomos-blend-message",
- "nomos-blend-proofs",
- "nomos-core",
- "nomos-utils",
- "rand 0.8.5",
- "serde",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
-]
-
-[[package]]
-name = "nomos-blend-service"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "broadcast-service",
- "chain-service",
- "cryptarchia-engine",
- "fork_stream",
- "futures",
- "groth16",
- "key-management-system-service",
- "libp2p",
- "libp2p-stream",
- "nomos-blend",
- "nomos-core",
- "nomos-ledger",
- "nomos-libp2p",
- "nomos-network",
- "nomos-sdp",
- "nomos-time",
- "nomos-utils",
- "overwatch",
- "poq",
- "rand 0.8.5",
- "serde",
- "serde_with",
- "services-utils",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
-]
-
-[[package]]
-name = "nomos-core"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "ark-ff 0.4.2",
- "async-trait",
- "bincode",
- "blake2",
- "bytes",
- "const-hex",
- "cryptarchia-engine",
- "futures",
- "generic-array 1.3.5",
- "groth16",
- "hex",
- "key-management-system-keys",
- "multiaddr",
- "nom 8.0.0",
- "nomos-blend-proofs",
- "nomos-utils",
- "num-bigint",
- "pol",
- "poseidon2",
- "serde",
- "strum",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
-name = "nomos-da-dispersal"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "broadcast-service",
- "futures",
- "key-management-system-keys",
- "kzgrs-backend",
- "nomos-core",
- "nomos-da-network-core",
- "nomos-da-network-service",
- "nomos-tracing",
- "nomos-utils",
- "overwatch",
- "serde",
- "serde_with",
- "services-utils",
- "subnetworks-assignations",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tracing",
-]
-
-[[package]]
-name = "nomos-da-messages"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "blake2",
- "futures",
- "kzgrs-backend",
- "nomos-core",
- "serde",
- "tokio",
-]
-
-[[package]]
-name = "nomos-da-network-core"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "cached",
- "fixed",
- "futures",
- "indexmap 2.13.0",
- "kzgrs-backend",
- "libp2p",
- "libp2p-stream",
- "log",
- "nomos-core",
- "nomos-da-messages",
- "nomos-utils",
- "rand 0.9.2",
- "serde",
- "serde_with",
- "subnetworks-assignations",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
- "tracing-subscriber 0.3.22",
-]
-
-[[package]]
-name = "nomos-da-network-service"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "arc-swap",
- "async-trait",
- "bitvec",
- "blake2",
- "broadcast-service",
- "common-http-client",
- "futures",
- "kzgrs-backend",
- "libp2p",
- "libp2p-identity",
- "log",
- "multiaddr",
- "nomos-core",
- "nomos-da-messages",
- "nomos-da-network-core",
- "nomos-libp2p",
- "nomos-sdp",
- "nomos-storage",
- "nomos-tracing",
- "nomos-utils",
- "overwatch",
- "rand 0.8.5",
- "serde",
- "services-utils",
- "subnetworks-assignations",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "nomos-da-sampling"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "bytes",
- "either",
- "futures",
- "hex",
- "kzgrs-backend",
- "libp2p-identity",
- "nomos-core",
- "nomos-da-network-core",
- "nomos-da-network-service",
- "nomos-storage",
- "nomos-tracing",
- "overwatch",
- "rand 0.8.5",
- "serde",
- "services-utils",
- "subnetworks-assignations",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
- "tx-service",
-]
-
-[[package]]
-name = "nomos-da-verifier"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "futures",
- "kzgrs-backend",
- "libp2p",
- "nomos-core",
- "nomos-da-network-core",
- "nomos-da-network-service",
- "nomos-storage",
- "nomos-tracing",
- "nomos-utils",
- "overwatch",
- "serde",
- "serde_with",
- "services-utils",
- "subnetworks-assignations",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
- "tx-service",
-]
-
-[[package]]
-name = "nomos-executor"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "axum 0.7.9",
- "broadcast-service",
- "clap",
- "color-eyre",
- "futures",
- "kzgrs-backend",
- "nomos-api",
- "nomos-core",
- "nomos-da-dispersal",
- "nomos-da-network-core",
- "nomos-da-network-service",
- "nomos-da-sampling",
- "nomos-da-verifier",
- "nomos-http-api-common",
- "nomos-libp2p",
- "nomos-network",
- "nomos-node",
- "nomos-sdp",
- "nomos-storage",
- "nomos-time",
- "overwatch",
- "serde",
- "services-utils",
- "subnetworks-assignations",
- "tokio",
- "tower 0.4.13",
- "tower-http 0.5.2",
- "tracing",
- "tx-service",
- "utoipa",
- "utoipa-swagger-ui",
-]
-
-[[package]]
-name = "nomos-http-api-common"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "axum 0.7.9",
- "governor",
- "key-management-system-keys",
- "nomos-core",
- "serde",
- "serde_json",
- "serde_with",
- "tower_governor",
-]
-
-[[package]]
-name = "nomos-ledger"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "cryptarchia-engine",
- "groth16",
- "key-management-system-keys",
- "mmr",
- "nomos-blend-crypto",
- "nomos-blend-message",
- "nomos-blend-proofs",
- "nomos-core",
- "nomos-utils",
- "num-bigint",
- "rand 0.8.5",
- "rpds",
- "serde",
- "thiserror 1.0.69",
- "tracing",
- "utxotree",
-]
-
-[[package]]
-name = "nomos-libp2p"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "backon",
- "blake2",
- "cryptarchia-sync",
- "default-net",
- "either",
- "futures",
- "hex",
- "igd-next 0.16.2",
- "libp2p",
- "multiaddr",
- "natpmp",
- "netdev",
- "nomos-utils",
- "num_enum",
- "rand 0.8.5",
- "serde",
- "serde_with",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "zerocopy",
-]
-
-[[package]]
-name = "nomos-network"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "cryptarchia-sync",
- "futures",
- "nomos-core",
- "nomos-libp2p",
- "overwatch",
- "rand 0.8.5",
- "rand_chacha 0.3.1",
- "serde",
- "tokio",
- "tokio-stream",
- "tracing",
-]
-
-[[package]]
-name = "nomos-node"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "axum 0.7.9",
- "broadcast-service",
- "chain-leader",
- "chain-network",
- "chain-service",
- "clap",
- "color-eyre",
- "cryptarchia-engine",
- "futures",
- "groth16",
- "hex",
- "http 1.4.0",
- "key-management-system-service",
- "kzgrs-backend",
- "nomos-api",
- "nomos-blend",
- "nomos-blend-service",
- "nomos-core",
- "nomos-da-messages",
- "nomos-da-network-core",
- "nomos-da-network-service",
- "nomos-da-sampling",
- "nomos-da-verifier",
- "nomos-http-api-common",
- "nomos-ledger",
- "nomos-libp2p",
- "nomos-network",
- "nomos-sdp",
- "nomos-storage",
- "nomos-system-sig",
- "nomos-time",
- "nomos-tracing",
- "nomos-tracing-service",
- "nomos-utils",
- "nomos-wallet",
- "num-bigint",
- "overwatch",
- "pol",
- "poq",
- "serde",
- "serde_ignored",
- "serde_json",
- "serde_with",
- "serde_yaml",
- "services-utils",
- "subnetworks-assignations",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tokio-stream",
- "tower 0.4.13",
- "tower-http 0.5.2",
- "tracing",
- "tx-service",
- "utoipa",
- "utoipa-swagger-ui",
-]
-
-[[package]]
-name = "nomos-sdp"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "futures",
- "key-management-system-keys",
- "nomos-core",
- "overwatch",
- "serde",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tracing",
- "tx-service",
-]
-
-[[package]]
-name = "nomos-storage"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "bytes",
- "cryptarchia-engine",
- "futures",
- "libp2p-identity",
- "multiaddr",
- "nomos-core",
- "overwatch",
- "rocksdb",
- "serde",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "nomos-system-sig"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-ctrlc",
- "async-trait",
- "overwatch",
- "tracing",
-]
-
-[[package]]
-name = "nomos-time"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "cfg_eval",
- "cryptarchia-engine",
- "futures",
- "log",
- "nomos-utils",
- "overwatch",
- "serde",
- "serde_with",
- "sntpc",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tokio-stream",
- "tracing",
-]
-
-[[package]]
-name = "nomos-tracing"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "opentelemetry",
- "opentelemetry-http",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry_sdk",
- "rand 0.8.5",
- "reqwest 0.12.28",
- "serde",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-gelf",
- "tracing-loki",
- "tracing-opentelemetry",
- "tracing-subscriber 0.3.22",
- "url",
-]
-
-[[package]]
-name = "nomos-tracing-service"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "nomos-tracing",
- "overwatch",
- "serde",
- "tracing",
- "tracing-appender",
- "tracing-subscriber 0.3.22",
-]
-
-[[package]]
-name = "nomos-utils"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "blake2",
- "cipher",
- "const-hex",
- "humantime",
- "overwatch",
- "rand 0.8.5",
- "serde",
- "serde_with",
- "time",
-]
-
-[[package]]
-name = "nomos-wallet"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "bytes",
- "chain-service",
- "futures",
- "groth16",
- "hex",
- "key-management-system-service",
- "nomos-core",
- "nomos-ledger",
- "nomos-storage",
- "overwatch",
- "serde",
- "services-utils",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "wallet",
 ]
 
 [[package]]
@@ -8974,22 +8750,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pol"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "circuits-prover",
- "circuits-utils",
- "groth16",
- "num-bigint",
- "num-traits",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "witness-generator",
-]
-
-[[package]]
 name = "polling"
 version = "3.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9016,37 +8776,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "poq"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "circuits-prover",
- "circuits-utils",
- "groth16",
- "num-bigint",
- "pol",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "witness-generator",
-]
-
-[[package]]
 name = "portable-atomic"
 version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f89776e4d69bb58bc6993e99ffa1d11f228b839984854c7daeb5d37f87cbe950"
-
-[[package]]
-name = "poseidon2"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "ark-bn254 0.4.0",
- "ark-ff 0.4.2",
- "jf-poseidon2",
- "num-bigint",
-]
 
 [[package]]
 name = "potential_utf"
@@ -10783,21 +10516,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "services-utils"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "futures",
- "log",
- "overwatch",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
 name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11169,19 +10887,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
-]
-
-[[package]]
-name = "subnetworks-assignations"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "counter",
- "libp2p-identity",
- "nomos-core",
- "nomos-utils",
- "rand 0.8.5",
- "serde",
 ]
 
 [[package]]
@@ -11570,39 +11275,32 @@ dependencies = [
 [[package]]
 name = "testing-framework-config"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#28685298ba8b8bb8e628ac4649fac150276aa5d0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#dc06af5486ffd8c387a415eca3c21124961f1002"
 dependencies = [
  "blst",
- "chain-leader",
- "chain-network",
- "chain-service",
- "cryptarchia-engine",
- "cryptarchia-sync",
- "groth16",
  "hex",
- "key-management-system-service",
- "nomos-api",
- "nomos-blend-service",
- "nomos-core",
- "nomos-da-dispersal",
- "nomos-da-network-core",
- "nomos-da-network-service",
- "nomos-da-sampling",
- "nomos-da-verifier",
- "nomos-executor",
- "nomos-ledger",
- "nomos-libp2p",
- "nomos-node",
- "nomos-sdp",
- "nomos-time",
- "nomos-tracing",
- "nomos-tracing-service",
- "nomos-utils",
- "nomos-wallet",
+ "logos-blockchain-api-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-blend-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-leader-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-cryptarchia-engine 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-cryptarchia-sync 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-node 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-sdp-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-time-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-tracing 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-wallet-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "num-bigint",
  "rand 0.8.5",
  "serde",
- "subnetworks-assignations",
  "testing-framework-env",
  "thiserror 2.0.18",
  "time",
@@ -11612,27 +11310,24 @@ dependencies = [
 [[package]]
 name = "testing-framework-core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#28685298ba8b8bb8e628ac4649fac150276aa5d0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#dc06af5486ffd8c387a415eca3c21124961f1002"
 dependencies = [
  "anyhow",
  "async-trait",
- "chain-service",
- "common-http-client",
  "futures",
- "groth16",
  "hex",
- "key-management-system-service",
- "nomos-core",
- "nomos-da-network-core",
- "nomos-da-network-service",
- "nomos-executor",
- "nomos-http-api-common",
- "nomos-libp2p",
- "nomos-network",
- "nomos-node",
- "nomos-tracing",
- "nomos-tracing-service",
- "nomos-utils",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-common-http-client 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-groth16 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-http-api-common 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-node 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-tracing 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "prometheus-http-query",
  "rand 0.8.5",
  "reqwest 0.12.28",
@@ -11651,18 +11346,18 @@ dependencies = [
 [[package]]
 name = "testing-framework-env"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#28685298ba8b8bb8e628ac4649fac150276aa5d0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#dc06af5486ffd8c387a415eca3c21124961f1002"
 
 [[package]]
 name = "testing-framework-runner-compose"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#28685298ba8b8bb8e628ac4649fac150276aa5d0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#dc06af5486ffd8c387a415eca3c21124961f1002"
 dependencies = [
  "anyhow",
  "async-trait",
  "cfgsync_tf",
- "nomos-tracing",
- "nomos-tracing-service",
+ "logos-blockchain-tracing 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "reqwest 0.12.28",
  "serde",
  "tempfile",
@@ -11680,25 +11375,30 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-local"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#28685298ba8b8bb8e628ac4649fac150276aa5d0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#dc06af5486ffd8c387a415eca3c21124961f1002"
 dependencies = [
  "async-trait",
+ "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-node 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-utils 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "rand 0.8.5",
+ "testing-framework-config",
  "testing-framework-core",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
 ]
 
 [[package]]
 name = "testing-framework-workflows"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#28685298ba8b8bb8e628ac4649fac150276aa5d0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?branch=master#dc06af5486ffd8c387a415eca3c21124961f1002"
 dependencies = [
  "async-trait",
- "chain-service",
- "executor-http-client",
- "futures",
- "key-management-system-service",
- "nomos-core",
+ "logos-blockchain-chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
+ "logos-blockchain-key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=47ae18e95f643bde563b4769212b37f6f018fed3)",
  "rand 0.8.5",
  "reqwest 0.12.28",
  "testing-framework-config",
@@ -12396,28 +12096,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tx-service"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "async-trait",
- "futures",
- "nomos-core",
- "nomos-network",
- "nomos-storage",
- "overwatch",
- "rand 0.8.5",
- "serde",
- "serde_json",
- "services-utils",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
- "utoipa",
-]
-
-[[package]]
 name = "typed-builder"
 version = "0.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12739,21 +12417,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2eebbbfe4093922c2b6734d7c679ebfebd704a0d7e56dfcb0d05818ce28977d"
 
 [[package]]
-name = "utxotree"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "ark-ff 0.4.2",
- "groth16",
- "nomos-core",
- "num-bigint",
- "poseidon2",
- "rpds",
- "serde",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "uuid"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12818,20 +12481,6 @@ checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
 dependencies = [
  "same-file",
  "winapi-util",
-]
-
-[[package]]
-name = "wallet"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "key-management-system-keys",
- "nomos-core",
- "nomos-ledger",
- "num-bigint",
- "rpds",
- "thiserror 2.0.18",
- "tracing",
 ]
 
 [[package]]
@@ -13535,15 +13184,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7249219f66ced02969388cf2bb044a09756a083d0fab1e566056b04d9fbcaa5"
 
 [[package]]
-name = "witness-generator"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "circuits-utils",
- "tempfile",
-]
-
-[[package]]
 name = "writeable"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13881,22 +13521,6 @@ dependencies = [
  "byteorder",
  "bytesize",
  "thiserror 1.0.69",
-]
-
-[[package]]
-name = "zksign"
-version = "0.1.0"
-source = "git+https://github.com/logos-co/nomos-node.git?rev=06e2738bb83851fa6ba94ef36d03a4b7be8e17a8#06e2738bb83851fa6ba94ef36d03a4b7be8e17a8"
-dependencies = [
- "circuits-prover",
- "circuits-utils",
- "groth16",
- "num-bigint",
- "poseidon2",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "witness-generator",
 ]
 
 [[package]]

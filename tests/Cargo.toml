@@ -61,9 +61,15 @@ tracing                          = { workspace = true }
 tracing-subscriber               = { features = ["env-filter", "fmt"], version = "0.3" }
 
 [features]
-cucumber             = []
+cucumber = []
 cucumber_stand_alone = []
-testing_framework    = []
+pol-dev-mode = [
+  "lb-chain-leader-service/pol-dev-mode",
+  "lb-chain-network-service/pol-dev-mode",
+  "lb-chain-service/pol-dev-mode",
+  "lb-core/pol-dev-mode",
+]
+testing_framework = []
 
 [[test]]
 name = "test_cryptarchia_happy_path"

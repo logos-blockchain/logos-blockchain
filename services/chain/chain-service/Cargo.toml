@@ -46,7 +46,7 @@ lb-storage-service            = { features = ["rocksdb-backend"], workspace = tr
 tempfile                      = { default-features = false, version = "3" }
 
 [features]
-default         = []
-lb-pol-dev-mode = ["lb-core/pol-dev-mode"]
-libp2p          = ["lb-network-service/libp2p"]
-openapi         = ["dep:utoipa"]
+default      = []
+libp2p       = ["lb-network-service/libp2p"]
+openapi      = ["dep:utoipa"]
+pol-dev-mode = ["lb-core/pol-dev-mode"]

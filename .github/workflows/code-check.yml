@@ -161,8 +161,8 @@ jobs:
       matrix:
         os:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - [self-hosted, Linux]
-          - [self-hosted, macOS]
+          - [ self-hosted, Linux ]
+          - [ self-hosted, macOS ]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Disable rustup override
@@ -180,13 +180,43 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: run
-          args: --locked -p logos-blockchain-node nodes/node/config.yaml --check-config
+          args: --locked -p logos-blockchain-node -- nodes/node/config.yaml --check-config
 
       - name: Run the node binary with the testing feature to check the one-node config files validity
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: run
-          args: --locked -p logos-blockchain-node --features testing -- nodes/node/config-one-node.yaml --check-config --deployment nodes/node/one-node-custom-deployment.yaml
+          args: >-
+            --locked -p logos-blockchain-node --features testing 
+            -- nodes/node/config-one-node.yaml --check-config --deployment nodes/node/one-node-custom-deployment.yaml
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35
+        with:
+          tool: cargo-nextest
+
+      - name: Cargo test all except PoL and end-to-end integration tests
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        env:
+          POL_PROOF_DEV_MODE: true
+          CONSENSUS_SLOT_TIME: 5
+        with:
+          command: nextest
+          # - We don't test benches as they take 6h+, leading to a timeout
+          # - We aslo do not test end-to-end integration tests here as those are run in a dedicated step below
+          args: >-
+            run --workspace --locked --lib --bins --examples --tests 
+            --all-features --no-fail-fast --exclude logos-blockchain-tests
+
+      - name: Cargo test PoL proof generation and verification
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: nextest
+          # TODO: Enable all tests after adapting them to PoL
+          args: >-
+            run --locked --lib --bins --examples --tests 
+            -p logos-blockchain-chain-leader-service -p logos-blockchain-pol 
+            --no-fail-fast
 
       # Build binaries then use them - this includes testing feature needed for unit tests
       - name: Build binaries with required test features
@@ -197,7 +227,7 @@ jobs:
           # integration framework tests.
           args: --locked --features pol-dev-mode
 
-      - name: Cargo test without PoL
+      - name: End-to-end integration tests
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
           POL_PROOF_DEV_MODE: true
@@ -209,17 +239,9 @@ jobs:
           NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
           LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
         with:
-          command: test
+          command: nextest
           # - We don't test benches as they take 6h+, leading to a timeout
-          # - `cucumber` has its own action/workflow gated by `--features cucumber`
-          args: --locked --all --lib --bins --tests --examples --features pol-dev-mode
-
-      - name: Cargo test with PoL
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: test
-          # TODO: Enable all tests after adapting them to PoL
-          args: leadership::pol_tests
+          args: run --locked -p logos-blockchain-tests --no-fail-fast
 
       - name: Upload integration tests results
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
@@ -230,8 +252,8 @@ jobs:
           path: tests/.tmp*
   
   build-docker:
-    name: Trigger Docker build
-    runs-on: ubuntu-latest
+    name: Docker build
+    if: ${{ !startsWith(github.event.pull_request.title, '[WIP]') && !contains(github.event.label.name,  'DO NOT MERGE') }}
     needs:
       - formatting
       - cargo-deny
@@ -239,16 +261,16 @@ jobs:
       - unused-deps
       - lints
       - tests
-    env:
-      DOCKER_BUILD_WORKFLOW_FILE: build-docker.yml # Change this in case of file renamings
+    runs-on: ubuntu-latest
     steps:
-      - name: Trigger "Docker build" workflow
-        uses: actions/github-script@3908079ba1e7bce10117ad701c321d07e89017a9 # Version 7.0.1
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+      - name: Setup docker buildx
+        uses: docker/setup-buildx-action@afeb29a6e0d7d6258844ecabe6eba67d13443680  # Version 3.1.0
+      - name: Build Docker Image
+        uses: docker/build-push-action@84ad562665bb303b549fec655d1b64f9945f3f91  # Version 6.15.0
         with:
-          script: |
-            github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: '${{ env.DOCKER_BUILD_WORKFLOW_FILE }}',
-              ref: '${{ github.head_ref || github.ref }}',
-            })
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
