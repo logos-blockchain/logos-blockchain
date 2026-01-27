@@ -13,7 +13,6 @@ use lb_core::{
     sdp::{ServiceParameters, ServiceType},
 };
 use lb_libp2p::protocol_name::StreamProtocol;
-use lb_pol::TARGET_ACTIVE_SLOT_COEFF;
 use lb_node::config::{
     blend::deployment::{
         CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
@@ -25,6 +24,7 @@ use lb_node::config::{
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
+use lb_pol::TARGET_ACTIVE_SLOT_COEFF;
 use lb_utils::math::NonNegativeF64;
 
 use crate::topology::configs::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
