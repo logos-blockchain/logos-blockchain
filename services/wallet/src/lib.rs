@@ -479,14 +479,6 @@ where
                         hex::encode(declare_op.locked_note_id.as_bytes()),
                         utxo_tree.size()
                     );
-                    for (id, (utxo, _)) in utxo_tree.utxos().iter() {
-                        info!(
-                            "  UTXO: id={} value={}, pk={}",
-                            hex::encode(id.as_bytes()),
-                            utxo.note.value,
-                            hex::encode(lb_groth16::fr_to_bytes(utxo.note.pk.as_fr())),
-                        );
-                    }
                     let note = utxo_tree
                         .utxos()
                         .get(&declare_op.locked_note_id)

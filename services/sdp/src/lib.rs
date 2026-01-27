@@ -217,7 +217,7 @@ where
         {
             Ok(tx) => tx,
             Err(e) => {
-                tracing::error!("Failed to create activity transaction: {:?}", e);
+                tracing::error!("Failed to create declaration transaction: {:?}", e);
                 return;
             }
         };
