@@ -6830,6 +6830,7 @@ dependencies = [
  "logos-blockchain-libp2p 0.1.0",
  "logos-blockchain-network-service 0.1.0",
  "logos-blockchain-node 0.1.0",
+ "logos-blockchain-pol 0.1.0",
  "logos-blockchain-sdp-service 0.1.0",
  "logos-blockchain-time-service 0.1.0",
  "logos-blockchain-tracing 0.1.0",

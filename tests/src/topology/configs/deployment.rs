@@ -8,8 +8,12 @@ use lb_blend_service::{
     core::settings::{CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings},
     settings::TimingSettings,
 };
-use lb_core::sdp::{ServiceParameters, ServiceType};
+use lb_core::{
+    if_pol_dev_mode,
+    sdp::{ServiceParameters, ServiceType},
+};
 use lb_libp2p::protocol_name::StreamProtocol;
+use lb_pol::TARGET_ACTIVE_SLOT_COEFF;
 use lb_node::config::{
     blend::deployment::{
         CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
@@ -85,8 +89,10 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
         cryptarchia: CryptarchiaDeploymentSettings {
             gossipsub_protocol: "/integration/logos-blockchain/cryptarchia/proto/1.0.0".to_owned(),
             consensus_config: lb_cryptarchia_engine::Config {
-                // a block should be produced (on average) every slot
-                active_slot_coeff: 0.9,
+                active_slot_coeff: if_pol_dev_mode!(
+                    0.9, // a block should be produced (on average) every slot in dev mode
+                    TARGET_ACTIVE_SLOT_COEFF
+                ),
                 // by setting the slot coeff to 1, we also increase the probability of multiple
                 // blocks (forks) being produced in the same slot (epoch).
                 // Setting the security parameter to some value > 1 ensures

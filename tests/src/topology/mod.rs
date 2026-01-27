@@ -26,7 +26,6 @@ use crate::{
         consensus::{SHORT_PROLONGED_BOOTSTRAP_PERIOD, create_consensus_configs},
         time::default_time_config,
     },
-    verify_pol_proof_dev_mode,
 };
 
 pub struct TopologyConfig {
@@ -80,8 +79,6 @@ pub struct Topology {
 
 impl Topology {
     pub async fn spawn(config: TopologyConfig) -> Self {
-        verify_pol_proof_dev_mode();
-
         let n_participants = config.n_validators;
 
         // we use the same random bytes for:

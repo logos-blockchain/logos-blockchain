@@ -153,8 +153,8 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           key-prefix: code-check/lints/${{ matrix.os }}
  
-  tests:
-    name: Run test suite
+  tests-without-pol:
+    name: Run test suite without PoL
     if: ${{ !startsWith(github.event.pull_request.title, '[WIP]') && !contains(github.event.label.name,  'DO NOT MERGE') }}
     strategy:
       fail-fast: false # all OSes should be tested even if one fails (default: true)
@@ -208,16 +208,6 @@ jobs:
             run --workspace --locked --lib --bins --examples --tests 
             --all-features --no-fail-fast --exclude logos-blockchain-tests
 
-      - name: Cargo test PoL proof generation and verification
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: nextest
-          # TODO: Enable all tests after adapting them to PoL
-          args: >-
-            run --locked --lib --bins --examples --tests 
-            -p logos-blockchain-chain-leader-service -p logos-blockchain-pol 
-            --features build-verification-key --no-fail-fast
-
       # Build binaries then use them - this includes testing feature needed for unit tests
       - name: Build binaries with required test features
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
@@ -247,9 +237,71 @@ jobs:
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         if: failure()
         with:
-          name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
+          name: integration-test-artifacts-without-pol-${{ runner.os }}-${{ github.sha }}
           include-hidden-files: true
           path: tests/.tmp*
+
+  tests-with-pol:
+    name: Run test suite with PoL
+    if: ${{ !startsWith(github.event.pull_request.title, '[WIP]') && !contains(github.event.label.name,  'DO NOT MERGE') }}
+    strategy:
+      fail-fast: false # all OSes should be tested even if one fails (default: true)
+      matrix:
+        os:
+          # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
+          - [self-hosted, Linux]
+          - [self-hosted, macOS]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Disable rustup override
+        run: rustup override unset
+
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+
+      - name: Setup Circuits
+        uses: ./.github/actions/setup-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35
+        with:
+          tool: cargo-nextest
+
+      - name: Run tests for PoL proof generation and verification
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: nextest
+          args: >-
+            run --locked --lib --bins --examples --tests 
+            -p logos-blockchain-chain-leader-service -p logos-blockchain-pol 
+            --features build-verification-key --no-fail-fast
+
+      - name: Build binaries
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+        with:
+          command: build
+          args: --locked
+
+      - name: Run integration tests
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+        env:
+          CONSENSUS_SLOT_TIME: 1
+        with:
+          command: nextest
+          # Run only two_nodes_happy to check the overall behavior.
+          # The rest of the tests are covered by the `tests-without-pol` job.
+          args: run --locked -p logos-blockchain-tests --no-fail-fast -- two_nodes_happy
+
+      - name: Upload integration tests results
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
+        if: failure()
+        with:
+          name: integration-test-artifacts-with-pol-${{ runner.os }}-${{ github.sha }}
+          include-hidden-files: true
+          path: tests/.tmp*
+
   
   build-docker:
     name: Docker build
@@ -260,7 +312,8 @@ jobs:
       - features
       - unused-deps
       - lints
-      - tests
+      - tests-without-pol
+      - tests-with-pol
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
