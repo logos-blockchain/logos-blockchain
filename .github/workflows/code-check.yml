@@ -97,6 +97,11 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           key-prefix: code-check/feature-combinations/${{ matrix.platform.label }}
+      
+      - name: Clean up build artifacts
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: clean
 
   unused-deps:
     name: Check for unused dependencies
@@ -242,6 +247,11 @@ jobs:
           command: nextest
           # - We don't test benches as they take 6h+, leading to a timeout
           args: run --locked -p logos-blockchain-tests --no-fail-fast
+
+      - name: Clean up build artifacts
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: clean
 
       - name: Upload integration tests results
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
