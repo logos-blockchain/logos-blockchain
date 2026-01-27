@@ -6689,7 +6689,6 @@ dependencies = [
  "futures",
  "logos-blockchain-core 0.1.0",
  "logos-blockchain-key-management-system-keys 0.1.0",
- "logos-blockchain-tx-service 0.1.0",
  "overwatch",
  "serde",
  "thiserror 2.0.18",

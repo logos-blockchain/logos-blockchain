@@ -65,6 +65,8 @@ where
             .await
             .map_err(|(e, _)| MempoolAdapterError::Other(Box::new(e)))?;
 
-        receiver.await?.map_err(MempoolAdapterError::Mempool)
+        receiver
+            .await?
+            .map_err(|e| MempoolAdapterError::Mempool(Box::new(e)))
     }
 }
