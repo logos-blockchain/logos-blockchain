@@ -21,6 +21,7 @@ workspace = true
 
 [dependencies]
 async-trait                      = "0.1"
+cfg-if                           = { workspace = true }
 clap                             = { default-features = false, features = ["derive", "env", "std", "string"], version = "4" }
 color-eyre                       = { default-features = false, version = "0.6.0" }
 futures                          = { default-features = false, version = "0.3" }
@@ -87,9 +88,15 @@ utoipa-swagger-ui = { features = ["axum"], workspace = true }
 test-log = { default-features = false, features = ["trace"], version = "0.2.18" }
 
 [features]
-block-explorer  = ["lb-api-service/block-explorer"]
-default         = ["tracing"]
+block-explorer = ["lb-api-service/block-explorer"]
+default = ["tracing"]
 instrumentation = []
-profiling       = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
-testing         = ["lb-key-management-system-service/unsafe"]
-tracing         = []
+pol-dev-mode = [
+  "lb-chain-leader-service/pol-dev-mode",
+  "lb-chain-network-service/pol-dev-mode",
+  "lb-chain-service/pol-dev-mode",
+  "lb-core/pol-dev-mode",
+]
+profiling = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
+testing = ["lb-key-management-system-service/unsafe"]
+tracing = []

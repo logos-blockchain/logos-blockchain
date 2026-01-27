@@ -26,7 +26,7 @@ use tokio_stream::wrappers::WatchStream;
 
 use crate::generic_services::{
     CryptarchiaLeaderService, CryptarchiaService, SdpService, WalletService,
-    blend::proofs::{BlendProofsVerifier, CoreProofsGenerator, EdgeProofsGenerator},
+    blend::proofs::{CoreProofsGenerator, EdgeProofsGenerator, ProofsVerifier},
 };
 
 mod proofs;
@@ -40,7 +40,7 @@ pub type BlendCoreService<RuntimeServiceId> = lb_blend_service::core::BlendServi
     BlendMembershipAdapter<RuntimeServiceId>,
     SdpService<RuntimeServiceId>,
     CoreProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>,
-    BlendProofsVerifier,
+    ProofsVerifier,
     NtpTimeBackend,
     CryptarchiaService<RuntimeServiceId>,
     PolInfoProvider,

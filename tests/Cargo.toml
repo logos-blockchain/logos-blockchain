@@ -68,6 +68,7 @@ pol-dev-mode = [
   "lb-chain-network-service/pol-dev-mode",
   "lb-chain-service/pol-dev-mode",
   "lb-core/pol-dev-mode",
+  "lb-node/pol-dev-mode",
 ]
 testing_framework = []
 
