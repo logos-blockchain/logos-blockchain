@@ -2,7 +2,7 @@
 
 ## Tests Debugging Setup
 
-This document provides instructions for setting up and using the testing environment, including how to start the Docker
+This document provides instructions for setting up and using the testing environment, including how to start the Docker 
 setup, run tests with a feature flag, and access the Grafana dashboard.
 
 ## Prerequisites
@@ -10,20 +10,18 @@ setup, run tests with a feature flag, and access the Grafana dashboard.
 ### Using Docker
 
 Ensure that the following are installed on your system:
-
 - [Docker](https://docs.docker.com/get-docker/)
 - [Docker Compose](https://docs.docker.com/compose/install/)
 
 ### Using Rust `cargo test`
 
-Integration tests involving nodes run the binaries directly by spawning. Ensure the binaries are built and available in
+Integration tests involving nodes run the binaries directly by spawning. Ensure the binaries are built and available in 
 your `target/debug` or `target/release` directory. You can build the project using:
 
-`cargo build --features proof-dev-mode` or `cargo build --release --features proof-dev-mode`
+`cargo build --features pol-dev-mode` or `cargo build --release --features pol-dev-mode`
 
 **Notes:**
-
-- The `proof-dev-mode` feature flag enables proofs to be generated in dev mode.
+- The `pol-dev-mode` feature flag enables proofs to be generated in dev mode.
 
 ## Setup and Usage (using Docker)
 
@@ -36,33 +34,32 @@ docker-compose -f compose.debug.yml up -d
 ```
 
 This command will:
-Use the configuration specified in compose.debug.yml.
-Start all services in detached mode (-d), allowing the terminal to be used for other commands.
+    Use the configuration specified in compose.debug.yml.
+    Start all services in detached mode (-d), allowing the terminal to be used for other commands.
 
 To stop the services, you can run:
-
 ```
 docker compose -f compose.debug.yml down   # compose filename needs to be the same
 ```
 
 ### 2. Access the Grafana Dashboard
-
 > It's important that the test is performed after the docker compose is started
 
 Once the Docker setup is running, you can access the Grafana dashboard to view metrics and logs:
-Open a browser and navigate to http://localhost:9091.
+    Open a browser and navigate to http://localhost:9091.
 
-Use "Explore" tab to select data source: "Loki", "Tempo", "Prometheus". Prometheus source is unusable at the moment in
+Use "Explore" tab to select data source: "Loki", "Tempo", "Prometheus". Prometheus source is unusable at the moment in 
 local setup.
 
-- Loki - to kickstart your query, select "host" as label filter, and "nomo-0" or other nodes as value, this will show
+- Loki - to kickstart your query, select "host" as label filter, and "nomo-0" or other nodes as value, this will show 
 - all logs for selected host.
 - Tempo - to kickstart your query, enter "{}" as TraceQL query to see all traces.
 
+
 ## Setup and Usage (using `cargo test`)
 
-Where tests involve spawning node binaries, preference will be given to binaries corresponding to `USE_DEBUG_BINARIES`
-and `USE_RELEASE_BINARIES` environment variables in the in `target/debug` and in `target/debug` paths respectively. If
+Where tests involve spawning node binaries, preference will be given to binaries corresponding to `USE_DEBUG_BINARIES` 
+and `USE_RELEASE_BINARIES` environment variables in the in `target/debug` and in `target/debug` paths respectively. If 
 neither are defined, preference will be given to debug binaries.
 
 ### 1. Run a specific test
@@ -72,9 +69,7 @@ _**MacOS or Linux**_
 ```bash
 POL_PROOF_DEV_MODE=1 cargo test --test test_cryptarchia_happy_path two_nodes_happy -- --no-capture
 ```
-
-or
-
+or 
 ```bash
 POL_PROOF_DEV_MODE=1 USE_RELEASE_BINARIES=1 cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
 ```
@@ -84,17 +79,15 @@ _**Windows (PowerShell)**_
 ```pwsh
 $env:POL_PROOF_DEV_MODE="1"; cargo test --test test_cryptarchia_happy_path two_nodes_happy -- --no-capture
 ```
-
 or
-
 ```pwsh
 $env:POL_PROOF_DEV_MODE="1"; $env:USE_RELEASE_BINARIES="1"; cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
 
 ```
 
 **Notes:**
+- The presence of the `POL_PROOF_DEV_MODE` environment variable enables proofs to be generated in dev mode.
 
-- The presence of the `PROOF_DEV_MODE` environment variable enables proofs to be generated in dev mode.
 
 ### 2. Run Tests with Debug Feature Flag
 

@@ -3,13 +3,13 @@ use std::sync::LazyLock;
 use ark_ff::{Field as _, PrimeField as _};
 #[cfg(feature = "pol-dev-mode")]
 use generic_array::GenericArray;
-use lb_groth16::{fr_from_bytes, serde::serde_fr, Fr};
+use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const PROOF_DEV_MODE: &str = "PROOF_DEV_MODE";
+pub const POL_PROOF_DEV_MODE: &str = "POL_PROOF_DEV_MODE";
 
 /// Macro to conditionally execute code based on `PoL` dev mode.
 ///
@@ -63,7 +63,7 @@ pub struct Groth16LeaderProof {
     entropy_contribution: Fr,
     leader_key: Ed25519PublicKey,
     voucher_cm: VoucherCm,
-    #[cfg(feature = "proof-dev-mode")]
+    #[cfg(feature = "pol-dev-mode")]
     public: LeaderPublic,
 }
 
@@ -76,7 +76,7 @@ pub enum Error {
 impl Groth16LeaderProof {
     pub fn prove(witness: LeaderPrivate, voucher_cm: VoucherCm) -> Result<Self, Error> {
         let start_t = std::time::Instant::now();
-        #[cfg(feature = "proof-dev-mode")]
+        #[cfg(feature = "pol-dev-mode")]
         let public = witness.public;
         let leader_key = witness.pk;
         let (proof, entropy_contribution) = Self::generate_proof(witness)?;
@@ -87,7 +87,7 @@ impl Groth16LeaderProof {
             entropy_contribution,
             leader_key,
             voucher_cm,
-            #[cfg(feature = "proof-dev-mode")]
+            #[cfg(feature = "pol-dev-mode")]
             public,
         })
     }
@@ -99,7 +99,7 @@ impl Groth16LeaderProof {
             entropy_contribution: Fr::ZERO,
             leader_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
-            #[cfg(feature = "proof-dev-mode")]
+            #[cfg(feature = "pol-dev-mode")]
             public: LeaderPublic::new(Fr::ZERO, Fr::ZERO, Fr::ZERO, 0, 0),
         }
     }
@@ -233,7 +233,7 @@ impl LeaderPublic {
     }
 
     #[must_use]
-    #[cfg(feature = "proof-dev-mode")]
+    #[cfg(feature = "pol-dev-mode")]
     pub fn check_winning_dev(
         &self,
         value: u64,
@@ -255,7 +255,7 @@ impl LeaderPublic {
         (t0, t1)
     }
 
-    #[cfg(feature = "proof-dev-mode")]
+    #[cfg(feature = "pol-dev-mode")]
     fn scaled_phi_approx_dev(&self, active_slot_coeff: f64) -> (BigUint, BigUint) {
         let total_stake = BigUint::from(self.total_stake);
         let total_stake_sq = &total_stake * &total_stake;
@@ -290,7 +290,7 @@ static LEAD_V1: LazyLock<Fr> =
 pub struct LeaderPrivate {
     input: lb_pol::PolWitnessInputsData,
     pk: Ed25519PublicKey,
-    #[cfg(feature = "proof-dev-mode")]
+    #[cfg(feature = "pol-dev-mode")]
     public: LeaderPublic,
 }
 
@@ -330,7 +330,7 @@ impl LeaderPrivate {
         Self {
             input,
             pk: public_key,
-            #[cfg(feature = "proof-dev-mode")]
+            #[cfg(feature = "pol-dev-mode")]
             public,
         }
     }
@@ -425,7 +425,7 @@ mod tests {
     fn check_prob(target: f64, f: impl Fn() -> bool) {
         const EPS: f64 = 0.01; // tolerance band (±2 percentage points)
         const ALPHA: f64 = 1e-6; // fails with probability at most ALPHA if the observed rate is within EPS of
-                                 // target
+        // target
 
         let n = hoeffding_sample_size(EPS, ALPHA);
         println!("Sampling n = {n}");

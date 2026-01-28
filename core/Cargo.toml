@@ -43,6 +43,6 @@ rand       = { workspace = true }
 serde_json = { default-features = false, features = ["alloc"], version = "1.0" }
 
 [features]
-default        = []
-mock           = []
-proof-dev-mode = []
+default      = []
+mock         = []
+pol-dev-mode = []
