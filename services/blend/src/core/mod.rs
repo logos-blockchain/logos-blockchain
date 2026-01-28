@@ -764,6 +764,7 @@ where
 // Run the main event loop that persists while the node is a core node.
 // This can span across multiple sessions.
 #[expect(clippy::too_many_arguments, reason = "categorize args")]
+#[expect(clippy::cognitive_complexity, reason = "TODO: Address at some point.")]
 async fn run_event_loop<
     NodeId,
     Backend,
@@ -848,8 +849,14 @@ where
 
                 // We serialize here, outside of the handler function, so that we can serialize only once for all replicas.
                 let serialized_data_message = NetworkMessage::<NetAdapter::BroadcastSettings>::to_bytes(&message_payload).expect("NetworkMessage should be able to be serialized");
-                let message_copies = blend_config.data_replication_factor.checked_add(1).unwrap();
-                for _ in 0..message_copies {
+                // If there's at least 2 more nodes besides us, try to replicate the message according to the replication factor.
+                if public_info.session.membership.size() > 2 {
+                    let message_copies = blend_config.data_replication_factor.checked_add(1).unwrap();
+                    for _ in 0..message_copies {
+                        recovery_checkpoint = handle_serialized_local_data_message(&serialized_data_message, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
+                    }
+                // Else there is only a single other node (or even maybe just us), so just send it out once.
+                } else {
                     recovery_checkpoint = handle_serialized_local_data_message(&serialized_data_message, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
                 }
             }
