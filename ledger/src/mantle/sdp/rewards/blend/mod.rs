@@ -258,7 +258,7 @@ impl RewardsParameters {
 
     fn leader_inputs(&self, epoch_state: &EpochState) -> LeaderInputs {
         let num_blend_layers = self.num_blend_layers.get();
-        let message_quota = num_blend_layers * (num_blend_layers * self.data_replication_factor);
+        let message_quota = num_blend_layers + (num_blend_layers * self.data_replication_factor);
         LeaderInputs {
             pol_ledger_aged: epoch_state.utxos.root(),
             pol_epoch_nonce: epoch_state.nonce,

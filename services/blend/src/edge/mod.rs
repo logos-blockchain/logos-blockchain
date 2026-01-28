@@ -447,7 +447,7 @@ where
             Some(message) = incoming_message_stream.next() => {
                 let message_copies = settings.data_replication_factor.checked_add(1).unwrap();
                 for _ in 0..message_copies {
-                    message_handler.handle_messages_to_blend(message.clone()).await;
+                    message_handler.handle_message_to_blend(message.clone()).await;
                 }
             }
             Some(clock_tick) = remaining_clock_stream.next() => {

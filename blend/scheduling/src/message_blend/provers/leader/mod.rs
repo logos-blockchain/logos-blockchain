@@ -1,7 +1,7 @@
 use core::pin::Pin;
 
 use async_trait::async_trait;
-use futures::{Stream, StreamExt as _, stream};
+use futures::{FutureExt as _, Stream, StreamExt as _, stream};
 use lb_blend_message::crypto::{
     key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
 };
@@ -136,15 +136,15 @@ fn create_leadership_proof_stream(
                         private_inputs,
                     ),
                 )
-                .ok()?;
+                .expect("Leadership PoQ proof creation should not fail.");
                 let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
-                Some(BlendLayerProof {
+                BlendLayerProof {
                     proof_of_quota,
                     proof_of_selection,
                     ephemeral_signing_key,
-                })
+                }
             })
+            .map(|res| res.expect("Spawning task for leadership proof generation should not fail."))
         })
         .buffered(PROOFS_GENERATOR_BUFFER_SIZE)
-        .filter_map(async |result| result.ok().flatten())
 }

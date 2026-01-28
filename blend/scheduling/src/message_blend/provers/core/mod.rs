@@ -141,15 +141,14 @@ where
                         key_index,
                     )
                     .await
-                    .ok()?;
+                    .expect("Core PoQ generation should not fail.");
                 let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
-                Some(BlendLayerProof {
+                BlendLayerProof {
                     proof_of_quota,
                     proof_of_selection,
                     ephemeral_signing_key,
-                })
+                }
             }
         })
         .buffered(PROOFS_GENERATOR_BUFFER_SIZE)
-        .filter_map(async |result| result)
 }
