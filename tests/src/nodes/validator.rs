@@ -12,7 +12,7 @@ use lb_chain_service::CryptarchiaInfo;
 use lb_common_http_client::CommonHttpClient;
 use lb_core::{
     block::Block,
-    mantle::{SignedMantleTx, Transaction as _, TxHash},
+    mantle::{SignedMantleTx, Transaction as _, TxHash, Value},
     sdp::Declaration,
 };
 use lb_http_api_common::{
@@ -21,6 +21,7 @@ use lb_http_api_common::{
     },
     settings::AxumBackendSettings,
 };
+use lb_key_management_system_service::keys::secured_key::SecuredKey as _;
 use lb_network_service::backends::libp2p::Libp2pInfo;
 use lb_node::{
     HeaderId, RocksBackendSettings, UserConfig,
@@ -346,9 +347,18 @@ pub fn create_validator_config(config: GeneralConfig) -> RunConfig {
             read_only: false,
             column_family: Some("blocks".into()),
         },
-        sdp: SdpSettings { declaration: None },
+        sdp: SdpSettings {
+            declaration: None,
+            wallet_config: lb_sdp_service::wallet::SdpWalletConfig {
+                max_tx_fee: Value::MAX,
+                funding_pk: config.consensus_config.funding_sk.as_public_key(),
+            },
+        },
         wallet: WalletServiceSettings {
-            known_keys: HashSet::from_iter([config.consensus_config.user_config().leader.pk]),
+            known_keys: HashSet::from_iter([
+                config.consensus_config.user_config().leader.pk,
+                config.consensus_config.funding_sk.as_public_key(),
+            ]),
         },
         key_management: config.kms_config,
         testing_http: lb_api_service::ApiServiceSettings {

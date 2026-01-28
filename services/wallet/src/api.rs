@@ -1,16 +1,37 @@
 use lb_core::{
     header::HeaderId,
-    mantle::{Note, Utxo, Value, tx_builder::MantleTxBuilder},
+    mantle::{Note, SignedMantleTx, Utxo, Value, tx_builder::MantleTxBuilder},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use overwatch::{
-    DynError,
     overwatch::OverwatchHandle,
-    services::{AsServiceId, ServiceData, relay::OutboundRelay},
+    services::{
+        AsServiceId, ServiceData,
+        relay::{OutboundRelay, RelayError},
+    },
 };
-use tokio::sync::oneshot;
+use tokio::sync::oneshot::{self, error::RecvError};
 
-use crate::{WalletMsg, WalletService, WalletServiceSettings};
+use crate::{TipResponse, WalletMsg, WalletServiceError, WalletServiceSettings};
+
+#[derive(Debug, thiserror::Error)]
+pub enum WalletApiError {
+    #[error("Failed to relay message with wallet:{relay_error:?}, msg={msg:?}")]
+    RelaySend {
+        relay_error: RelayError,
+        msg: WalletMsg,
+    },
+    #[error("Failed to recv message from wallet: {0}")]
+    RelayRecv(#[from] RecvError),
+    #[error(transparent)]
+    Wallet(#[from] WalletServiceError),
+}
+
+impl From<(RelayError, WalletMsg)> for WalletApiError {
+    fn from((relay_error, msg): (RelayError, WalletMsg)) -> Self {
+        Self::RelaySend { relay_error, msg }
+    }
+}
 
 pub trait WalletServiceData:
     ServiceData<Settings = WalletServiceSettings, Message = WalletMsg>
@@ -22,7 +43,7 @@ pub trait WalletServiceData:
 }
 
 impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> WalletServiceData
-    for WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
+    for crate::WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
 {
     type Kms = Kms;
     type Cryptarchia = Cryptarchia;
@@ -59,63 +80,83 @@ where
 
     pub async fn get_balance(
         &self,
-        tip: HeaderId,
+        tip: Option<HeaderId>,
         pk: ZkPublicKey,
-    ) -> Result<Option<Value>, DynError> {
+    ) -> Result<TipResponse<Option<Value>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
             .send(WalletMsg::GetBalance { tip, pk, resp_tx })
-            .await
-            .map_err(|e| format!("Failed to send balance request: {e:?}"))?;
+            .await?;
 
         Ok(rx.await??)
     }
 
-    pub async fn fund_and_sign_tx(
+    pub async fn fund_tx(
         &self,
-        tip: HeaderId,
+        tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
-    ) -> Result<lb_core::mantle::SignedMantleTx, DynError> {
+    ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
-            .send(WalletMsg::FundAndSignTx {
+            .send(WalletMsg::FundTx {
                 tip,
                 tx_builder,
                 change_pk,
                 funding_pks,
                 resp_tx,
             })
-            .await
-            .map_err(|e| format!("Failed to send fund_and_sign_tx request: {e:?}"))?;
+            .await?;
 
         Ok(rx.await??)
     }
 
     pub async fn transfer_funds(
         &self,
-        tip: HeaderId,
+        tip: Option<HeaderId>,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
         recipient_pk: ZkPublicKey,
         amount: Value,
-    ) -> Result<lb_core::mantle::SignedMantleTx, DynError> {
+    ) -> Result<TipResponse<SignedMantleTx>, WalletApiError> {
         let mantle_tx_builder =
             MantleTxBuilder::new().add_ledger_output(Note::new(amount, recipient_pk));
-        self.fund_and_sign_tx(tip, mantle_tx_builder, change_pk, funding_pks)
-            .await
+        let funded_tx_builder = self
+            .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks)
+            .await?;
+        self.sign_tx(tip, funded_tx_builder.response).await
     }
 
-    pub async fn get_leader_aged_notes(&self, tip: HeaderId) -> Result<Vec<Utxo>, DynError> {
+    pub async fn sign_tx(
+        &self,
+        tip: Option<HeaderId>,
+        tx_builder: MantleTxBuilder,
+    ) -> Result<TipResponse<SignedMantleTx>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+
+        self.relay
+            .send(WalletMsg::SignTx {
+                tip,
+                tx_builder,
+                resp_tx,
+            })
+            .await?;
+
+        Ok(rx.await??)
+    }
+
+    pub async fn get_leader_aged_notes(
+        &self,
+        tip: Option<HeaderId>,
+    ) -> Result<TipResponse<Vec<Utxo>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
             .send(WalletMsg::GetLeaderAgedNotes { tip, resp_tx })
-            .await
-            .map_err(|e| format!("Failed to send get_leader_aged_notes request: {e:?}"))?;
+            .await?;
 
         Ok(rx.await??)
     }

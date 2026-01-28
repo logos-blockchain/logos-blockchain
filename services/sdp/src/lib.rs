@@ -1,4 +1,5 @@
-pub mod adapters;
+pub mod mempool;
+pub mod wallet;
 
 use std::{
     collections::BTreeSet,
@@ -7,7 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::{Stream, StreamExt as _};
+use futures::Stream;
 use lb_core::{
     block::BlockNumber,
     mantle::{NoteId, SignedMantleTx, tx_builder::MantleTxBuilder},
@@ -25,15 +26,12 @@ use overwatch::{
     },
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, oneshot};
-use tokio_stream::wrappers::BroadcastStream;
+use tokio::sync::oneshot;
 
-use crate::adapters::{
+use crate::{
     mempool::SdpMempoolAdapter,
-    wallet::{SdpWalletAdapter as _, mock::MockWalletAdapter},
+    wallet::{SdpWalletAdapter, SdpWalletConfig},
 };
-
-const BROADCAST_CHANNEL_SIZE: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeclarationState {
@@ -61,8 +59,9 @@ pub type BlockUpdateStream = Pin<Box<dyn Stream<Item = BlockEvent> + Send + Sync
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SdpSettings {
     /// Declaration info for this node (set after posting declaration and
-    /// restarting)
+    /// restarting).
     pub declaration: Option<Declaration>,
+    pub wallet_config: SdpWalletConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -73,11 +72,6 @@ pub struct Declaration {
 }
 
 pub enum SdpMessage {
-    ProcessNewBlock,
-    ProcessLibBlock,
-    Subscribe {
-        result_sender: oneshot::Sender<BlockUpdateStream>,
-    },
     PostDeclaration {
         declaration: Box<DeclarationMessage>,
         reply_channel: oneshot::Sender<Result<DeclarationId, DynError>>,
@@ -90,15 +84,15 @@ pub enum SdpMessage {
     },
 }
 
-pub struct SdpService<MempoolAdapter, RuntimeServiceId> {
+pub struct SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    finalized_update_tx: broadcast::Sender<BlockEvent>,
     current_declaration: Option<Declaration>,
     nonce: u64,
+    wallet_config: SdpWalletConfig,
 }
 
-impl<MempoolAdapter, RuntimeServiceId> ServiceData
-    for SdpService<MempoolAdapter, RuntimeServiceId>
+impl<MempoolAdapter, WalletAdapter, RuntimeServiceId> ServiceData
+    for SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>
 {
     type Settings = SdpSettings;
     type State = NoState<Self::Settings>;
@@ -107,13 +101,15 @@ impl<MempoolAdapter, RuntimeServiceId> ServiceData
 }
 
 #[async_trait]
-impl<MempoolAdapter, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for SdpService<MempoolAdapter, RuntimeServiceId>
+impl<MempoolAdapter, WalletAdapter, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>
 where
     MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx> + Send + Sync + 'static,
+    WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + AsServiceId<Self>
         + AsServiceId<MempoolAdapter::MempoolService>
+        + AsServiceId<WalletAdapter::WalletService>
         + Clone
         + Display
         + Send
@@ -129,13 +125,11 @@ where
             .notifier()
             .get_updated_settings();
 
-        let (finalized_update_tx, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
-
         Ok(Self {
             current_declaration: settings.declaration,
             service_resources_handle,
-            finalized_update_tx,
             nonce: 0,
+            wallet_config: settings.wallet_config,
         })
     }
 
@@ -146,7 +140,6 @@ where
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
 
-        let wallet_adapter = MockWalletAdapter::new();
         let mempool_relay = self
             .service_resources_handle
             .overwatch_handle
@@ -154,19 +147,15 @@ where
             .await?;
         let mempool_adapter = MempoolAdapter::new(mempool_relay);
 
+        let wallet_relay = self
+            .service_resources_handle
+            .overwatch_handle
+            .relay::<WalletAdapter::WalletService>()
+            .await?;
+        let wallet_adapter = WalletAdapter::new(wallet_relay);
+
         while let Some(msg) = self.service_resources_handle.inbound_relay.recv().await {
             match msg {
-                SdpMessage::ProcessNewBlock | SdpMessage::ProcessLibBlock => {
-                    todo!()
-                }
-                SdpMessage::Subscribe { result_sender } => {
-                    let receiver = self.finalized_update_tx.subscribe();
-                    let stream = make_finalized_stream(receiver);
-
-                    if result_sender.send(stream).is_err() {
-                        tracing::error!("Error sending finalized updates receiver");
-                    }
-                }
                 SdpMessage::PostActivity { metadata, .. } => {
                     self.handle_post_activity(metadata, &wallet_adapter, &mempool_adapter)
                         .await;
@@ -194,9 +183,11 @@ where
     }
 }
 
-impl<MempoolAdapter, RuntimeServiceId> SdpService<MempoolAdapter, RuntimeServiceId>
+impl<MempoolAdapter, WalletAdapter, RuntimeServiceId>
+    SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>
 where
     MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx> + Send + Sync + 'static,
+    WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + AsServiceId<Self>
         + AsServiceId<MempoolAdapter::MempoolService>
@@ -206,16 +197,24 @@ where
         + Sync
         + 'static,
 {
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Transaction building with error handling"
+    )]
     async fn handle_post_declaration(
         &self,
         declaration: Box<DeclarationMessage>,
-        wallet_adapter: &MockWalletAdapter,
+        wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
         reply_channel: oneshot::Sender<Result<DeclarationId, DynError>>,
     ) {
         let tx_builder = MantleTxBuilder::new();
+        let declaration_id = declaration.id();
 
-        let signed_tx = match wallet_adapter.declare_tx(tx_builder, declaration.clone()) {
+        let signed_tx = match wallet_adapter
+            .declare_tx(tx_builder, *declaration, &self.wallet_config)
+            .await
+        {
             Ok(tx) => tx,
             Err(e) => {
                 tracing::error!("Failed to create declaration transaction: {:?}", e);
@@ -228,7 +227,7 @@ where
             return;
         }
 
-        if let Err(e) = reply_channel.send(Ok(declaration.id())) {
+        if let Err(e) = reply_channel.send(Ok(declaration_id)) {
             tracing::error!("Failed to send post declaration response: {:?}", e);
         }
     }
@@ -236,7 +235,7 @@ where
     async fn handle_post_activity(
         &mut self,
         metadata: ActivityMetadata,
-        wallet_adapter: &MockWalletAdapter,
+        wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
     ) {
         // Check if we have a declaration_id
@@ -256,26 +255,30 @@ where
 
         let tx_builder = MantleTxBuilder::new();
 
-        let declaration = self.current_declaration.as_ref().unwrap();
-
-        let signed_tx =
-            match wallet_adapter.active_tx(tx_builder, active_message, declaration.zk_id) {
-                Ok(tx) => tx,
-                Err(e) => {
-                    tracing::error!("Failed to create activity transaction: {:?}", e);
-                    return;
-                }
-            };
+        let signed_tx = match wallet_adapter
+            .active_tx(tx_builder, active_message, &self.wallet_config)
+            .await
+        {
+            Ok(tx) => tx,
+            Err(e) => {
+                tracing::error!("Failed to create activity transaction: {:?}", e);
+                return;
+            }
+        };
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
             tracing::error!("Failed to post activity to mempool: {:?}", e);
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Transaction building with error handling"
+    )]
     async fn handle_post_withdrawal(
         &mut self,
         declaration_id: DeclarationId,
-        wallet_adapter: &MockWalletAdapter,
+        wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
     ) {
         if let Err(e) = self.validate_withdrawal(&declaration_id) {
@@ -295,12 +298,10 @@ where
 
         let tx_builder = MantleTxBuilder::new();
 
-        let signed_tx = match wallet_adapter.withdraw_tx(
-            tx_builder,
-            withdraw_message,
-            declaration.zk_id,
-            declaration.locked_note_id,
-        ) {
+        let signed_tx = match wallet_adapter
+            .withdraw_tx(tx_builder, withdraw_message, &self.wallet_config)
+            .await
+        {
             Ok(tx) => tx,
             Err(e) => {
                 tracing::error!("Failed to create withdrawal transaction: {:?}", e);
@@ -330,18 +331,4 @@ where
 
         Ok(())
     }
-}
-
-fn make_finalized_stream(receiver: broadcast::Receiver<BlockEvent>) -> BlockUpdateStream {
-    Box::pin(BroadcastStream::new(receiver).filter_map(|res| {
-        Box::pin(async move {
-            match res {
-                Ok(update) => Some(update),
-                Err(e) => {
-                    tracing::warn!("Lagging SDP subscriber: {e:?}");
-                    None
-                }
-            }
-        })
-    }))
 }

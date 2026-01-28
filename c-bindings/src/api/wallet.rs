@@ -44,7 +44,9 @@ pub(crate) fn get_balance_sync(
                 node.get_overwatch_handle(),
             )
             .await;
-            api.get_balance(tip, wallet_address).await
+            api.get_balance(Some(tip), wallet_address)
+                .await
+                .map(|tip_response| tip_response.response)
         })
         .map_err(|_| OperationStatus::DynError)
 }
@@ -200,13 +202,14 @@ pub(crate) fn transfer_funds_sync(
             )
             .await;
             api.transfer_funds(
-                tip,
+                Some(tip),
                 change_public_key,
                 funding_public_keys,
                 recipient_public_key,
                 amount,
             )
             .await
+            .map(|tip_response| tip_response.response)
         })
         .map_err(|_| OperationStatus::DynError)
 }

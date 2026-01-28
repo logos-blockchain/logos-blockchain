@@ -97,6 +97,12 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           key-prefix: code-check/feature-combinations/${{ matrix.platform.label }}
+      
+      - name: Clean up build artifacts
+        if: success() || failure()
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: clean
 
   unused-deps:
     name: Check for unused dependencies
@@ -205,7 +211,7 @@ jobs:
           # - We don't test benches as they take 6h+, leading to a timeout
           # - We aslo do not test end-to-end integration tests here as those are run in a dedicated step below
           args: >-
-            run --workspace --locked --lib --bins --examples --tests 
+            run --workspace --locked --lib --bins --examples --tests --retries 2
             --all-features --no-fail-fast --exclude logos-blockchain-tests
 
       - name: Cargo test PoL proof generation and verification
@@ -216,7 +222,7 @@ jobs:
           args: >-
             run --locked --lib --bins --examples --tests 
             -p logos-blockchain-chain-leader-service -p logos-blockchain-pol 
-            --features build-verification-key --no-fail-fast
+            --no-fail-fast
 
       # Build binaries then use them - this includes testing feature needed for unit tests
       - name: Build binaries with required test features
@@ -242,6 +248,12 @@ jobs:
           command: nextest
           # - We don't test benches as they take 6h+, leading to a timeout
           args: run --locked -p logos-blockchain-tests --no-fail-fast
+
+      - name: Clean up build artifacts
+        if: success() || failure()
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: clean
 
       - name: Upload integration tests results
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2

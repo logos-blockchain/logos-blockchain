@@ -21,7 +21,7 @@ use lb_core::{
 };
 pub use lb_http_api_common::settings::AxumBackendSettings;
 use lb_http_api_common::{paths, utils::create_rate_limit_layer};
-use lb_sdp_service::adapters::mempool::SdpMempoolAdapter;
+use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
 use lb_tx_service::{
@@ -56,12 +56,19 @@ use crate::{
 pub(crate) type BlockStorageBackend = RocksBackend;
 type BlockStorageService<RuntimeServiceId> = StorageService<BlockStorageBackend, RuntimeServiceId>;
 
-pub struct AxumBackend<TimeBackend, HttpStorageAdapter, MempoolStorageAdapter, SdpMempool> {
+pub struct AxumBackend<
+    TimeBackend,
+    HttpStorageAdapter,
+    MempoolStorageAdapter,
+    SdpMempool,
+    SdpWallet,
+> {
     settings: AxumBackendSettings,
     _time_backend: core::marker::PhantomData<TimeBackend>,
     _storage_adapter: core::marker::PhantomData<HttpStorageAdapter>,
     _mempool_storage_adapter: core::marker::PhantomData<MempoolStorageAdapter>,
     _sdp_mempool_adapter: core::marker::PhantomData<SdpMempool>,
+    _sdp_wallet_adapter: core::marker::PhantomData<SdpWallet>,
 }
 
 #[derive(OpenApi)]
@@ -69,9 +76,9 @@ pub struct AxumBackend<TimeBackend, HttpStorageAdapter, MempoolStorageAdapter, S
 struct ApiDoc;
 
 #[async_trait::async_trait]
-impl<TimeBackend, StorageAdapter, MempoolStorageAdapter, SdpMempool, RuntimeServiceId>
+impl<TimeBackend, StorageAdapter, MempoolStorageAdapter, SdpMempool, SdpWallet, RuntimeServiceId>
     Backend<RuntimeServiceId>
-    for AxumBackend<TimeBackend, StorageAdapter, MempoolStorageAdapter, SdpMempool>
+    for AxumBackend<TimeBackend, StorageAdapter, MempoolStorageAdapter, SdpMempool, SdpWallet>
 where
     TimeBackend: lb_time_service::backends::TimeBackend + Send + 'static,
     TimeBackend::Settings: Clone + Send + Sync,
@@ -87,6 +94,7 @@ where
         + 'static,
     MempoolStorageAdapter::Error: Debug,
     SdpMempool: SdpMempoolAdapter + Send + Sync + 'static,
+    SdpWallet: SdpWalletAdapter + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -120,7 +128,7 @@ where
                 RuntimeServiceId,
             >,
         >
-        + AsServiceId<lb_sdp_service::SdpService<SdpMempool, RuntimeServiceId>>
+        + AsServiceId<lb_sdp_service::SdpService<SdpMempool, SdpWallet, RuntimeServiceId>>
         + AsServiceId<WalletService>,
 {
     type Error = std::io::Error;
@@ -136,6 +144,7 @@ where
             _storage_adapter: core::marker::PhantomData,
             _mempool_storage_adapter: core::marker::PhantomData,
             _sdp_mempool_adapter: core::marker::PhantomData,
+            _sdp_wallet_adapter: core::marker::PhantomData,
         })
     }
 
@@ -207,33 +216,23 @@ where
             )
             .route(
                 paths::SDP_POST_DECLARATION,
-                routing::post(post_declaration::<SdpMempool, RuntimeServiceId>),
+                routing::post(post_declaration::<SdpMempool, SdpWallet, RuntimeServiceId>),
             )
             .route(
                 paths::SDP_POST_ACTIVITY,
-                routing::post(post_activity::<SdpMempool, RuntimeServiceId>),
+                routing::post(post_activity::<SdpMempool, SdpWallet, RuntimeServiceId>),
             )
             .route(
                 paths::SDP_POST_WITHDRAWAL,
-                routing::post(post_withdrawal::<SdpMempool, RuntimeServiceId>),
+                routing::post(post_withdrawal::<SdpMempool, SdpWallet, RuntimeServiceId>),
             )
             .route(
                 paths::wallet::BALANCE,
-                routing::get(
-                    wallet::get_balance::<WalletService, MempoolStorageAdapter, TimeBackend, _>,
-                ),
+                routing::get(wallet::get_balance::<WalletService, _>),
             )
             .route(
                 paths::wallet::TRANSACTIONS_TRANSFER_FUNDS,
-                routing::post(
-                    wallet::post_transactions_transfer_funds::<
-                        WalletService,
-                        BlockStorageBackend,
-                        MempoolStorageAdapter,
-                        TimeBackend,
-                        _,
-                    >,
-                ),
+                routing::post(wallet::post_transactions_transfer_funds::<WalletService, _>),
             );
 
         #[cfg(feature = "block-explorer")]

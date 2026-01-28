@@ -267,7 +267,7 @@ fn make_builder(topology: TopologySpec) -> Builder<()> {
         let base = match topology.network {
             NetworkKind::Star => t.network_star(),
         };
-        base.validators(topology.validators)
+        base.nodes(topology.validators)
     })
 }
 
