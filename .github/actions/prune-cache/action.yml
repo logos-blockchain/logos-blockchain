@@ -1,34 +1,134 @@
-name: Prune unnecessary cache
+name: Prune Cache
 
 inputs:
-  key-prefix:
-    description: The cache key prefix to prune
-    required: true
   github-token:
-    description: The GH token to use for the API request
+    description: GH token for API access
     required: true
+  key-prefix:
+    description: Cache key prefix
+    required: true
+  ref:
+    description: Optional ref to scope cache deletion (omit for all)
+    required: false
+  limit:
+    # NOTE: Uses a single page. Add pagination if the cache count grows.
+    description: Max number of caches to fetch (page size)
+    required: false
+    default: "100"
+  mode:
+    description: "Prune mode. Available options: 'delete-all' (default), 'keep-latest'"
+    required: false
+    default: "delete-all"
 
-description: Prune unnecessary cache for the provided key
+description: Prune caches matching a prefix
 
 runs:
   using: composite
   steps:
-    - name: Obtain cache entry to delete
-      id: fetch-outdated-cache
+    - name: Validate mode
       shell: bash
       run: |
-        CACHE=$(curl  \
-          -H "Accept: application/vnd.github.v3+json" \
-          -H "Authorization: token ${{ inputs.github-token }}" \
-          https://api.github.com/repos/logos-blockchain/logos-blockchain/actions/caches | jq '.actions_caches[] | select(.key | startswith("${{ inputs.key-prefix }}")) | .id')
-        echo "cache=$CACHE" >> "$GITHUB_OUTPUT"
-      continue-on-error: true
-    - name: Delete cache entry
-      if: steps.fetch-outdated-cache.outputs.cache != null
+        case "${{ inputs.mode }}" in
+          delete-all|keep-latest)
+            exit 0
+            ;;
+          *)
+            echo "Invalid prune mode: '${{ inputs.mode }}'"
+            echo "Valid modes: delete-all, keep-latest"
+            exit 1
+            ;;
+        esac
+
+    - name: Select all caches
+      id: select
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        KEY_PREFIX: ${{ inputs.key-prefix }}
+        REF: ${{ inputs.ref }}
+        LIMIT: ${{ inputs.limit }}
+      run: |
+        set -euo pipefail
+
+        OWNER="${GITHUB_REPOSITORY%%/*}"
+        REPOSITORY="${GITHUB_REPOSITORY##*/}"
+
+        URL="https://api.github.com/repos/${OWNER}/${REPOSITORY}/actions/caches?per_page=${LIMIT}"
+        if [ -n "${REF:-}" ]; then
+          URL="${URL}&ref=${REF}"
+        fi
+
+        RESPONSE=$(curl -sS \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: token ${GH_TOKEN}" \
+          "$URL")
+
+        IDS=$(echo "$RESPONSE" | jq -r '
+          .actions_caches
+          | sort_by(.created_at)
+          | reverse
+          | .[]
+          | select(.key | startswith("'"$KEY_PREFIX"'"))
+          | "\(.id) \(.key)"
+        ')
+
+        echo "ids<<EOF" >> "$GITHUB_OUTPUT"
+        echo "$IDS" >> "$GITHUB_OUTPUT"
+        echo "EOF" >> "$GITHUB_OUTPUT"
+
+    - name: Filter for keep-latest
+      id: keep-latest
+      if: inputs.mode == 'keep-latest'
       shell: bash
       run: |
-        curl -X DELETE \
-          -H "Accept: application/vnd.github.v3+json" \
-          -H "Authorization: token ${{ inputs.github-token }}" \
-          https://api.github.com/repos/logos-blockchain/logos-blockchain/actions/caches/${{ steps.fetch-outdated-cache.outputs.cache }}
-      continue-on-error: true
+        IDS="${{ steps.select.outputs.ids }}"
+
+        if [ -z "$IDS" ]; then
+          echo "ids=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        OUT=$(echo "$IDS" | tail -n +2)
+
+        echo "ids<<EOF" >> "$GITHUB_OUTPUT"
+        echo "$OUT" >> "$GITHUB_OUTPUT"
+        echo "EOF" >> "$GITHUB_OUTPUT"
+
+    - name: Prune selected caches
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+
+        if [ "${{ inputs.mode }}" = "keep-latest" ]; then
+          IDS="${{ steps.keep-latest.outputs.ids }}"
+        elif [ "${{ inputs.mode }}" = "delete-all" ]; then
+          IDS="${{ steps.select.outputs.ids }}"
+        else
+          # This should never happen due to prior validation
+          exit 1
+        fi
+        
+        OWNER="${GITHUB_REPOSITORY%%/*}"
+        REPOSITORY="${GITHUB_REPOSITORY##*/}"
+        URL="https://api.github.com/repos/${OWNER}/${REPOSITORY}/actions/caches"
+
+        if [ -z "$IDS" ]; then
+          echo "No caches to delete"
+          exit 0
+        fi
+
+        echo "Deleting caches:"
+        set +e
+        while read -r id key; do
+          [ -z "$id" ] && continue
+          echo "- $key ($id)"
+          curl -sS -X DELETE \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: token ${GH_TOKEN}" \
+            "${URL}/${id}"
+        done <<< "$IDS"
+        set -e
+
+        echo "Done"

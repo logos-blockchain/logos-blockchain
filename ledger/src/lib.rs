@@ -1,5 +1,5 @@
 mod config;
-// The edger is split into two modules:
+// The ledger is split into two modules:
 // - `cryptarchia`: the base functionalities needed by the Cryptarchia consensus
 //   algorithm, including a minimal UTxO model.
 // - `mantle_ops` : our extensions in the form of Mantle operations, e.g. SDP.
@@ -231,7 +231,7 @@ impl LedgerState {
     }
 
     pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config) -> Self {
-        let cryptarchia_ledger = CryptarchiaLedger::from_utxos(utxos, Fr::ZERO);
+        let cryptarchia_ledger = CryptarchiaLedger::from_utxos(utxos, config, Fr::ZERO);
         let mantle_ledger = MantleLedger::new(config, cryptarchia_ledger.epoch_state());
         Self {
             block_number: 0,
@@ -245,7 +245,7 @@ impl LedgerState {
         config: &Config,
         epoch_nonce: Fr,
     ) -> Result<Self, LedgerError<Id>> {
-        let cryptarchia_ledger = CryptarchiaLedger::from_genesis_tx(&tx, epoch_nonce)?;
+        let cryptarchia_ledger = CryptarchiaLedger::from_genesis_tx(&tx, config, epoch_nonce)?;
         let mantle_ledger = MantleLedger::from_genesis_tx(
             tx,
             config,

@@ -20,7 +20,7 @@ jobs:
         uses: actions-rs/toolchain@88dc2356392166efad76775c878094f4e83ff746  # Version 1.0.6
         with:
           # The same version must be used in the `.pre-commit-config.yaml` file
-          toolchain: nightly-2025-10-25
+          toolchain: nightly-2025-12-05
           profile: minimal
           components: rustfmt
           override: true
@@ -44,22 +44,31 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
-      - name: Run `cargo deny`
-        uses: EmbarkStudios/cargo-deny-action@76cd80eb775d7bbbd2d80292136d74d39e1b4918 # Version 2.0.14
-        with:
-          arguments: "--locked"
-          command-arguments: "--hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings"
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      # `cargo-deny`'s action is compiled and run using `musl` but we generally use `gnu` in our local machines.
+      # Thus, results may differ from local runs.
+      # To avoid this, we install and run `cargo-deny` manually.
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked --version 0.19.0
+
+      - name: Run cargo-deny
+        run: cargo-deny --locked --all-features check --hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings
 
   features:
     name: Check packages feature combinations
     strategy:
       fail-fast: false
       matrix:
-        os:
+        platform:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - [ self-hosted, Linux ]
-          - [ self-hosted, macOS ]
-    runs-on: ${{ matrix.os }}
+          - os: [self-hosted, Linux]
+            label: self-hosted-linux
+          - os: [self-hosted, macOS]
+            label: self-hosted-macos
+    runs-on: ${{ matrix.platform.os }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
@@ -67,24 +76,33 @@ jobs:
         uses: ./.github/actions/setup-circuits
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install cargo-hack
         uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25  # Version 2.49.35
         with:
           tool: cargo-hack
+
       - name: Set up Cargo cache
         uses: ./.github/actions/setup-cargo-cache
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Run cargo-hack
-        env:
-          RUSTFLAGS: -D warnings
-        run: cargo hack check --feature-powerset --keep-going --all-targets
+          key-prefix: code-check/feature-combinations/${{ matrix.platform.label }}
+
+      - name: Run Cargo Hack Check (Cache-Aware)
+        uses: ./.github/actions/cargo-hack-check-cached
+
       - name: Update Cargo cache
         if: success() || failure()
         uses: ./.github/actions/update-cargo-cache
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: code-check/feature-combinations/${{ matrix.platform.label }}
+      
+      - name: Clean up build artifacts
+        if: success() || failure()
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: clean
 
   unused-deps:
     name: Check for unused dependencies
@@ -116,26 +134,31 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+
       - name: Set up Cargo cache
         uses: ./.github/actions/setup-cargo-cache
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: code-check/lints/${{ matrix.os }}
+
       - name: Setup Circuits
         uses: ./.github/actions/setup-circuits
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run cargo clippy on workspace
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: clippy
           args: --locked --all --all-targets --all-features
+
       - name: Update Cargo cache
         if: success() || failure()
         uses: ./.github/actions/update-cargo-cache
         with:
-          key: ${{ github.ref }}->${{ github.workflow }}->${{ github.job }}->${{ matrix.os }}
-
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          key-prefix: code-check/lints/${{ matrix.os }}
+ 
   tests:
     name: Run test suite
     if: ${{ !startsWith(github.event.pull_request.title, '[WIP]') && !contains(github.event.label.name,  'DO NOT MERGE') }}
@@ -163,32 +186,74 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: run
-          args: --locked -p logos-blockchain-node nodes/node/config.yaml --check-config
+          args: --locked -p logos-blockchain-node -- nodes/node/config.yaml --check-config
 
-      - name: Run the executor binary to check the config file validity
+      - name: Run the node binary with the testing feature to check the one-node config files validity
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: run
-          args: --locked -p logos-blockchain-executor nodes/executor/config.yaml --check-config
+          args: >-
+            --locked -p logos-blockchain-node --features testing 
+            -- nodes/node/config-one-node.yaml --check-config --deployment nodes/node/one-node-custom-deployment.yaml
 
-      # This includes testing feature needed for tests
-      - name: Build binaries with all features
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35
         with:
-          command: build
-          args: --locked --all-features
+          tool: cargo-nextest
 
-      - name: Cargo test
+      - name: Cargo test all except PoL and end-to-end integration tests
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
           PROOF_DEV_MODE: true
           CONSENSUS_SLOT_TIME: 5
+        with:
+          command: nextest
+          # - We don't test benches as they take 6h+, leading to a timeout
+          # - We aslo do not test end-to-end integration tests here as those are run in a dedicated step below
+          args: >-
+            run --workspace --locked --lib --bins --examples --tests --retries 2
+            --all-features --no-fail-fast --exclude logos-blockchain-tests
+
+      - name: Cargo test PoL proof generation and verification
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: nextest
+          # TODO: Enable all tests after adapting them to PoL
+          args: >-
+            run --locked --lib --bins --examples --tests 
+            -p logos-blockchain-chain-leader-service -p logos-blockchain-pol 
+            --no-fail-fast
+
+      # Build binaries then use them - this includes testing feature needed for unit tests
+      - name: Build binaries with required test features
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+        with:
+          command: build
+          # We specify necessary features only, as `--all-features` will include features intended for cucumber and \
+          # integration framework tests.
+          args: --locked --features pol-dev-mode
+
+      - name: End-to-end integration tests
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        env:
+          POL_PROOF_DEV_MODE: true
+          CONSENSUS_SLOT_TIME: 5
+          # TODO: Remove this when the test framework removed all direct references to `NOMOS_NODE_BIN`
+          NOMOS_NODE_BIN: ${{ github.workspace }}/target/debug/logos-blockchain-node
           LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/debug/logos-blockchain-node
+          # TODO: Remove this when the test framework removed all direct references to `NOMOS_KZGRS_PARAMS_PATH`
+          NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
           LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
         with:
-          command: test
-          # We don't test benches as they take 6h+, leading to a timeout
-          args: --locked --all --lib --bins --tests --examples --all-features
+          command: nextest
+          # - We don't test benches as they take 6h+, leading to a timeout
+          args: run --locked -p logos-blockchain-tests --no-fail-fast
+
+      - name: Clean up build artifacts
+        if: success() || failure()
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: clean
 
       - name: Upload integration tests results
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
@@ -199,8 +264,8 @@ jobs:
           path: tests/.tmp*
   
   build-docker:
-    name: Trigger Docker build
-    runs-on: ubuntu-latest
+    name: Docker build
+    if: ${{ !startsWith(github.event.pull_request.title, '[WIP]') && !contains(github.event.label.name,  'DO NOT MERGE') }}
     needs:
       - formatting
       - cargo-deny
@@ -208,16 +273,16 @@ jobs:
       - unused-deps
       - lints
       - tests
-    env:
-      DOCKER_BUILD_WORKFLOW_FILE: build-docker.yml # Change this in case of file renamings
+    runs-on: ubuntu-latest
     steps:
-      - name: Trigger "Docker build" workflow
-        uses: actions/github-script@3908079ba1e7bce10117ad701c321d07e89017a9 # Version 7.0.1
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+      - name: Setup docker buildx
+        uses: docker/setup-buildx-action@afeb29a6e0d7d6258844ecabe6eba67d13443680  # Version 3.1.0
+      - name: Build Docker Image
+        uses: docker/build-push-action@84ad562665bb303b549fec655d1b64f9945f3f91  # Version 6.15.0
         with:
-          script: |
-            github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: '${{ env.DOCKER_BUILD_WORKFLOW_FILE }}',
-              ref: '${{ github.head_ref || github.ref }}',
-            })
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false

@@ -1,0 +1,59 @@
+name: Cargo Hack Check (Cache-Aware)
+
+
+description: Runs cargo hack check with cache support
+
+
+inputs:
+  cache-directory:
+    description: The directory to cache the cargo-hack keys in
+    required: false
+    default: ./.cache/cargo-hack-check
+
+
+runs:
+  using: composite
+  steps:
+    - name: Restore Cargo Hack Keys (main)
+      if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # Version 4.2.3
+      continue-on-error: true
+      with:
+        path: ${{ inputs.cache-directory }}
+        key: cargo-hack-check/${{ runner.os }}/main/${{ github.sha }}
+        restore-keys: |
+          cargo-hack-check/${{ runner.os }}/main
+          cargo-hack-check/${{ runner.os }}
+
+    # TODO: Improvement: Restore keys should not be `main` but the branch we're merging into.
+    - name: Restore Cargo Hack Keys (PR)
+      if: github.event_name == 'pull_request'
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # Version 4.2.3
+      continue-on-error: true
+      with:
+        path: ${{ inputs.cache-directory }}
+        key: cargo-hack-check/${{ runner.os }}/pr#${{ github.event.pull_request.number }}/${{ github.sha }}
+        restore-keys: |
+          cargo-hack-check/${{ runner.os }}/pr#${{ github.event.pull_request.number }}
+          cargo-hack-check/${{ runner.os }}/main
+          cargo-hack-check/${{ runner.os }}
+
+    - name: Run Cache-Aware Cargo Hack Check
+      shell: bash
+      env:
+        RUSTFLAGS: "-D warnings"
+      run: python3 ./scripts/cargo-hack-check/script.py
+
+    - name: Save Cargo Hack Keys (main)
+      if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684  # Version 4.2.3
+      with:
+        path: ${{ inputs.cache-directory }}
+        key: cargo-hack-check/${{ runner.os }}/main/${{ github.sha }}
+
+    - name: Save Cargo Hack Keys (PR)
+      if: github.event_name == 'pull_request'
+      uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684  # Version 4.2.3
+      with:
+        path: ${{ inputs.cache-directory }}
+        key: cargo-hack-check/${{ runner.os }}/pr#${{ github.event.pull_request.number }}/${{ github.sha }}

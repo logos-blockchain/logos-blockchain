@@ -135,7 +135,7 @@ After installation, verify the circuits are properly set up:
 
 ```bash
 # Run tests that use the circuits
-cargo test -p circuits-prover -p circuits-verifier --lib
+cargo test -p logos-blockchain-circuits-prover -p logos-blockchain-circuits-verifier --lib
 ```
 
 ## Design Goals
@@ -251,7 +251,7 @@ To use an example configuration located at `nodes/node/config.yaml`, first run t
 kzgrs file and then run the docker container with the appropriate config and global params:
 
 ```bash
-cargo test --package kzgrs-backend write_random_kzgrs_params_to_file -- --ignored
+cargo test --package logos-blockchain-kzgrs-backend write_random_kzgrs_params_to_file -- --ignored
 
 docker run -v "$(pwd)/nodes/node/config.yaml:/etc/logos-blockchain/config.yml" \
   -v "$(pwd)/logos-blockchain-da/kzgrs-backend/kzgrs_test_params:/app/tests/kzgrs/kzgrs_test_params" \
@@ -281,7 +281,7 @@ Node stores its state inside the `db` directory. If there are any issues when re
   location:
 
 ```bash
-cargo test --package kzgrs-backend write_random_kzgrs_params_to_file -- --ignored
+cargo test --package logos-blockchain-kzgrs-backend write_random_kzgrs_params_to_file -- --ignored
 ```
 
 - To run the Logos blockchain node directly from the command line, edit the `global_params_path:` key in

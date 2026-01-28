@@ -1,13 +1,11 @@
-use std::{collections::HashSet, fmt::Debug, hash::Hash, sync::Arc};
+use std::sync::Arc;
 
 use futures::{Stream, StreamExt as _};
 use lb_chain_broadcast_service::BlockInfo;
 use lb_chain_service::CryptarchiaInfo;
-use lb_core::{block::Block, da::blob::Share, header::HeaderId, mantle::SignedMantleTx};
-use lb_da_messages::http::da::{DASharesCommitmentsRequest, DaSamplingRequest, GetSharesRequest};
+use lb_core::{block::Block, header::HeaderId, mantle::SignedMantleTx};
 use lb_http_api_common::paths::{
-    CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, DA_GET_LIGHT_SHARE, DA_GET_SHARES,
-    DA_GET_STORAGE_SHARES_COMMITMENTS, MEMPOOL_ADD_TX, STORAGE_BLOCK,
+    CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, STORAGE_BLOCK,
 };
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
 use serde::{Serialize, de::DeserializeOwned};
@@ -149,85 +147,6 @@ impl CommonHttpClient {
             .join(STORAGE_BLOCK.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.post(request_url, &header_id).await
-    }
-
-    /// Get the commitments for a Blob
-    pub async fn get_storage_commitments<S>(
-        &self,
-        base_url: Url,
-        blob_id: S::BlobId,
-    ) -> Result<Option<S::SharesCommitments>, Error>
-    where
-        S: Share,
-        S::SharesCommitments: DeserializeOwned + Send + Sync,
-        <S as Share>::BlobId: Serialize + Send + Sync,
-    {
-        let request: DASharesCommitmentsRequest<S> = DASharesCommitmentsRequest { blob_id };
-        let path = DA_GET_STORAGE_SHARES_COMMITMENTS.trim_start_matches('/');
-        let request_url = base_url.join(path).map_err(Error::Url)?;
-        self.get(request_url, Some(&request)).await
-    }
-
-    /// Get blob by blob id and column index
-    pub async fn get_share<S, C>(
-        &self,
-        base_url: Url,
-        blob_id: S::BlobId,
-        share_idx: S::ShareIndex,
-    ) -> Result<Option<C>, Error>
-    where
-        C: DeserializeOwned + Send + Sync,
-        S: Share + DeserializeOwned + Send + Sync,
-        <S as Share>::BlobId: Serialize + Send + Sync,
-        <S as Share>::ShareIndex: Serialize + Send + Sync,
-    {
-        let request: DaSamplingRequest<S> = DaSamplingRequest { blob_id, share_idx };
-        let path = DA_GET_LIGHT_SHARE.trim_start_matches('/');
-        let request_url = base_url.join(path).map_err(Error::Url)?;
-        self.get(request_url, Some(&request)).await
-    }
-
-    pub async fn get_shares<B>(
-        &self,
-        base_url: Url,
-        blob_id: B::BlobId,
-        requested_shares: HashSet<B::ShareIndex>,
-        filter_shares: HashSet<B::ShareIndex>,
-        return_available: bool,
-    ) -> Result<impl Stream<Item = B::LightShare>, Error>
-    where
-        B: Share,
-        <B as Share>::BlobId: Serialize + Send + Sync,
-        <B as Share>::ShareIndex: Serialize + DeserializeOwned + Eq + Hash + Send + Sync,
-        <B as Share>::LightShare: DeserializeOwned + Send + Sync,
-    {
-        let request: GetSharesRequest<B> = GetSharesRequest {
-            blob_id,
-            requested_shares,
-            filter_shares,
-            return_available,
-        };
-        let request_url = base_url
-            .join(DA_GET_SHARES.trim_start_matches('/'))
-            .map_err(Error::Url)?;
-        let mut request = self.client.get(request_url).json(&request);
-
-        if let Some(basic_auth) = &self.basic_auth {
-            request = request.basic_auth(&basic_auth.username, basic_auth.password.as_deref());
-        }
-
-        let response = request.send().await.map_err(Error::Request)?;
-        let status = response.status();
-
-        let shares_stream = response.bytes_stream().filter_map(async |item| {
-            let bytes = item.ok()?;
-            serde_json::from_slice::<B::LightShare>(&bytes).ok()
-        });
-        match status {
-            StatusCode::OK => Ok(shares_stream),
-            StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server("Error".to_owned())),
-            _ => Err(Error::Server(format!("Unexpected response [{status}]",))),
-        }
     }
 
     pub async fn post_transaction<Tx>(&self, base_url: Url, transaction: Tx) -> Result<(), Error>

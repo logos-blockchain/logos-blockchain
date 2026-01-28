@@ -26,7 +26,3 @@ lb-circuits-utils = { workspace = true }
 
 [lints]
 workspace = true
-
-[features]
-build-verification-key = []
-default                = ["build-verification-key"]

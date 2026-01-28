@@ -1,34 +1,51 @@
-name: Setup Cargo cache
+name: Setup Cargo Cache
 
 inputs:
-  key:
-    description: The key to use for the cache
-    required: true
   github-token:
     description: Valid GitHub token to interact with GitHub REST API
     required: true
+  key-prefix:
+    description: Prefix for the cache key.
+    required: true
 
-description: Set up cache read operations for Cargo artifacts
+description: Set up Cargo Cache for Rust projects
 
 runs:
   using: composite
   steps:
-    - name: Set up Cargo cache
+    - name: Set up Cargo cache (main)
+      id: setup-main
+      if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
       uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # Version 4.2.3
+      continue-on-error: true
       with:
         path: |
           ~/.cargo/registry/index/
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
           target/
-        # Must be in sync with the key used in the update-cargo-cache action
-        key: ${{ inputs.key }}->#${{ github.run_id }}
+
+        # Must be in sync with the keys used in the `update-cargo-cache` workflow.
+        key: ${{ inputs.key-prefix }}/main/${{ github.sha }}
         restore-keys: |
-          ${{ inputs.key }}
+            ${{ inputs.key-prefix }}/main
+            ${{ inputs.key-prefix }}
+
+    - name: Set up Cargo cache (PR)
+      id: setup-pr
+      if: github.event_name == 'pull_request'
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # Version 4.2.3
       continue-on-error: true
-    - name: Delete retrieved cache
-      uses: ./.github/actions/prune-cache
       with:
-        key-prefix: ${{ inputs.key }}->#
-        github-token: ${{ inputs.github-token }}
-      continue-on-error: true
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+
+        # Must be in sync with the keys used in the `update-cargo-cache` workflow.
+        key: ${{ inputs.key-prefix }}/pr#${{ github.event.pull_request.number }}/${{ github.sha }}
+        restore-keys: |
+          ${{ inputs.key-prefix }}/pr#${{ github.event.pull_request.number }}
+          ${{ inputs.key-prefix }}/main
+          ${{ inputs.key-prefix }}

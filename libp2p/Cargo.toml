@@ -32,6 +32,7 @@ libp2p = { features = [
   "macros",
   "quic",
   "secp256k1",
+  "serde",
   "tokio",
 ], workspace = true }
 multiaddr = { default-features = false, version = "0.18" }

@@ -41,15 +41,10 @@ pub struct BlockInfo {
 pub enum BlockBroadcastMsg {
     BroadcastFinalizedBlock(BlockInfo),
     BroadcastBlendSession(SessionUpdate),
-    BroadcastDASession(SessionUpdate),
     SubscribeToFinalizedBlocks {
         result_sender: oneshot::Sender<broadcast::Receiver<BlockInfo>>,
     },
     SubscribeBlendSession {
-        #[derivative(Debug = "ignore")]
-        result_sender: oneshot::Sender<SessionSubscription>,
-    },
-    SubscribeDASession {
         #[derivative(Debug = "ignore")]
         result_sender: oneshot::Sender<SessionSubscription>,
     },
@@ -59,10 +54,8 @@ pub struct BlockBroadcastService<RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     finalized_blocks: broadcast::Sender<BlockInfo>,
     blend_session: broadcast::Sender<SessionUpdate>,
-    da_session: broadcast::Sender<SessionUpdate>,
     // For sending latest session on subscription.
     last_blend_session: Option<SessionUpdate>,
-    last_da_session: Option<SessionUpdate>,
 }
 
 impl<RuntimeServiceId> ServiceData for BlockBroadcastService<RuntimeServiceId> {
@@ -83,15 +76,12 @@ where
     ) -> Result<Self, overwatch::DynError> {
         let (finalized_blocks, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
         let (blend_session, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
-        let (da_session, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
 
         Ok(Self {
             service_resources_handle,
             finalized_blocks,
             blend_session,
-            da_session,
             last_blend_session: None,
-            last_da_session: None,
         })
     }
 
@@ -115,12 +105,6 @@ where
                         error!("Could not send to new blocks channel: {err}");
                     }
                 }
-                BlockBroadcastMsg::BroadcastDASession(session) => {
-                    self.last_da_session = Some(session.clone());
-                    if let Err(err) = self.da_session.send(session) {
-                        error!("Could not send to new blocks channel: {err}");
-                    }
-                }
                 BlockBroadcastMsg::SubscribeToFinalizedBlocks { result_sender } => {
                     // TODO: This naively broadcast what was sent from the chain service. In case
                     // of LIB branch change (might happend during bootstrapping), blocks should be
@@ -138,17 +122,6 @@ where
                         .is_err()
                     {
                         error!("Could not subscribe to blend session channel.");
-                    }
-                }
-                BlockBroadcastMsg::SubscribeDASession { result_sender } => {
-                    if result_sender
-                        .send(create_session_stream(
-                            self.last_da_session.clone(),
-                            &self.da_session,
-                        ))
-                        .is_err()
-                    {
-                        error!("Could not subscribe to DA session channel.");
                     }
                 }
             }

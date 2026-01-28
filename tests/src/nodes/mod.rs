@@ -1,12 +1,10 @@
-pub mod executor;
 pub mod validator;
 
 use std::{path::PathBuf, sync::LazyLock};
 
 use reqwest::Client;
 use tempfile::TempDir;
-
-const DA_GET_TESTING_ENDPOINT_ERROR: &str = "Failed to connect to testing endpoint. The binary was likely built without the 'testing' feature. Try: cargo build --locked --all-features";
+pub use validator::{Pool, Validator, create_validator_config};
 
 const LOGS_PREFIX: &str = "__logs";
 static CLIENT: LazyLock<Client> = LazyLock::new(Client::new);

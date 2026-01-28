@@ -20,7 +20,6 @@ lb-chain-service              = { workspace = true }
 lb-chain-service-common       = { workspace = true }
 lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
-lb-da-sampling-service        = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-ledger                     = { features = ["serde"], workspace = true }
 lb-services-utils             = { workspace = true }
@@ -28,11 +27,16 @@ lb-time-service               = { workspace = true }
 lb-tx-service                 = { workspace = true }
 lb-wallet-service             = { workspace = true }
 overwatch                     = { workspace = true }
+rand                          = { workspace = true }
 serde                         = { workspace = true }
 thiserror                     = "1.0"
 tokio                         = { default-features = false, version = "1" }
 tracing                       = { workspace = true }
 tracing-futures               = { default-features = false, version = "0.2" }
+
+[dev-dependencies]
+lb-groth16 = { workspace = true }
+lb-utils   = { workspace = true }
 
 [features]
 default        = []

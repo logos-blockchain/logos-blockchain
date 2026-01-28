@@ -12,47 +12,25 @@ use lb_chain_service::CryptarchiaInfo;
 use lb_common_http_client::CommonHttpClient;
 use lb_core::{
     block::Block,
-    da::BlobId,
     mantle::{SignedMantleTx, Transaction as _, TxHash},
-    sdp::{Declaration, SessionNumber},
+    sdp::Declaration,
 };
-use lb_da_network_core::{
-    protocols::sampling::SubnetsConfig,
-    swarm::{BalancerStats, DAConnectionPolicySettings, MonitorStats},
+use lb_http_api_common::{
+    paths::{
+        CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, MANTLE_SDP_DECLARATIONS, NETWORK_INFO, STORAGE_BLOCK,
+    },
+    settings::AxumBackendSettings,
 };
-use lb_da_network_service::{
-    MembershipResponse, NetworkConfig as DaNetworkConfig, api::http::ApiAdapterSettings,
-    backends::libp2p::common::DaNetworkBackendSettings,
-};
-use lb_da_sampling_service::{
-    DaSamplingServiceSettings, backend::kzgrs::KzgrsSamplingBackendSettings,
-    verifier::kzgrs::KzgrsDaVerifierSettings as SamplingVerifierSettings,
-};
-use lb_da_verifier_service::{
-    DaVerifierServiceSettings,
-    backend::{kzgrs::KzgrsDaVerifierSettings, trigger::MempoolPublishTriggerConfig},
-    storage::adapters::rocksdb::RocksAdapterSettings as VerifierStorageAdapterSettings,
-};
-use lb_http_api_common::paths::{
-    CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, DA_BALANCER_STATS, DA_GET_MEMBERSHIP,
-    DA_GET_SHARES_COMMITMENTS, DA_HISTORIC_SAMPLING, DA_MONITOR_STATS, MANTLE_SDP_DECLARATIONS,
-    NETWORK_INFO, STORAGE_BLOCK,
-};
-use lb_kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
 use lb_network_service::backends::libp2p::Libp2pInfo;
 use lb_node::{
-    Config, HeaderId, RocksBackendSettings,
-    api::{
-        backend::AxumBackendSettings, handlers::GetCommitmentsRequest,
-        testing::handlers::HistoricSamplingRequest,
-    },
-    config::mempool::serde::Config as MempoolConfig,
+    HeaderId, RocksBackendSettings, UserConfig,
+    config::{RunConfig, mempool::serde::Config as MempoolConfig},
 };
 use lb_sdp_service::SdpSettings;
 use lb_tracing::logging::local::FileConfig;
 use lb_tracing_service::LoggerLayer;
 use lb_tx_service::MempoolMetrics;
-use lb_utils::{math::NonNegativeF64, net::get_available_tcp_port};
+use lb_utils::net::get_available_tcp_port;
 use lb_wallet_service::WalletServiceSettings;
 use reqwest::Url;
 use tempfile::NamedTempFile;
@@ -69,7 +47,6 @@ const BIN_PATH_DEBUG: &str = "../target/debug/logos-blockchain-node";
 const BIN_PATH_RELEASE: &str = "../target/release/logos-blockchain-node";
 
 pub enum Pool {
-    Da,
     Mantle,
 }
 
@@ -78,7 +55,7 @@ pub struct Validator {
     testing_http_addr: SocketAddr,
     tempdir: tempfile::TempDir,
     child: Child,
-    config: Config,
+    config: RunConfig,
     http_client: CommonHttpClient,
 }
 
@@ -120,26 +97,20 @@ impl Validator {
         .is_ok()
     }
 
-    pub async fn spawn(mut config: Config) -> Result<Self, Elapsed> {
+    pub async fn spawn(mut config: RunConfig) -> Result<Self, Elapsed> {
         let dir = create_tempdir().unwrap();
         let mut file = NamedTempFile::new().unwrap();
         let config_path = file.path().to_owned();
 
         if !*IS_DEBUG_TRACING {
             // setup logging so that we can intercept it later in testing
-            config.tracing.logger = LoggerLayer::File(FileConfig {
+            config.user.tracing.logger = LoggerLayer::File(FileConfig {
                 directory: dir.path().to_owned(),
                 prefix: Some(LOGS_PREFIX.into()),
             });
         }
 
-        config.storage.db_path = dir.path().join("db");
-        dir.path().clone_into(
-            &mut config
-                .da_verifier
-                .storage_adapter_settings
-                .blob_storage_directory,
-        );
+        config.user.storage.db_path = dir.path().join("db");
 
         serde_yaml::to_writer(&mut file, &config).unwrap();
         let exe_path = get_exe_path(BIN_PATH_DEBUG, BIN_PATH_RELEASE);
@@ -151,8 +122,8 @@ impl Validator {
             .spawn()
             .unwrap();
         let node = Self {
-            addr: config.http.backend_settings.address,
-            testing_http_addr: config.testing_http.backend_settings.address,
+            addr: config.user.http.backend_settings.address,
+            testing_http_addr: config.user.testing_http.backend_settings.address,
             child,
             tempdir: dir,
             config,
@@ -202,29 +173,9 @@ impl Validator {
             .unwrap()
     }
 
-    pub async fn get_commitments(
-        &self,
-        blob_id: BlobId,
-        session: SessionNumber,
-    ) -> Option<DaSharesCommitments> {
-        let request = GetCommitmentsRequest { blob_id, session };
-
-        CLIENT
-            .post(format!("http://{}{}", self.addr, DA_GET_SHARES_COMMITMENTS))
-            .header("Content-Type", "application/json")
-            .body(serde_json::to_string(&request).unwrap())
-            .send()
-            .await
-            .unwrap()
-            .json::<Option<DaSharesCommitments>>()
-            .await
-            .unwrap()
-    }
-
-    pub async fn get_mempoool_metrics(&self, pool: Pool) -> MempoolMetrics {
+    pub async fn get_mempool_metrics(&self, pool: Pool) -> MempoolMetrics {
         let discr = match pool {
             Pool::Mantle => "mantle",
-            Pool::Da => "da",
         };
         let addr = format!("/{discr}/metrics");
         let res = self
@@ -254,29 +205,6 @@ impl Validator {
             .expect("Failed to deserialize SDP declarations response")
     }
 
-    pub async fn da_historic_sampling(
-        &self,
-        block_id: HeaderId,
-        blob_ids: Vec<(BlobId, SessionNumber)>,
-    ) -> Result<bool, reqwest::Error> {
-        let request = HistoricSamplingRequest { block_id, blob_ids };
-
-        let response = CLIENT
-            .post(format!(
-                "http://{}{}",
-                self.testing_http_addr, DA_HISTORIC_SAMPLING
-            ))
-            .json(&request)
-            .send()
-            .await?;
-
-        response.error_for_status_ref()?;
-
-        // Parse the boolean response
-        let success: bool = response.json().await?;
-        Ok(success)
-    }
-
     // not async so that we can use this in `Drop`
     #[must_use]
     pub fn get_logs_from_file(&self) -> String {
@@ -284,7 +212,6 @@ impl Validator {
             "fetching logs from dir {}...",
             self.tempdir.path().display()
         );
-        // std::thread::sleep(std::time::Duration::from_secs(50));
         std::fs::read_dir(self.tempdir.path())
             .unwrap()
             .filter_map(|entry| {
@@ -297,7 +224,7 @@ impl Validator {
     }
 
     #[must_use]
-    pub const fn config(&self) -> &Config {
+    pub const fn config(&self) -> &RunConfig {
         &self.config
     }
 
@@ -334,73 +261,8 @@ impl Validator {
         res.unwrap().json().await.unwrap()
     }
 
-    pub async fn balancer_stats(&self) -> BalancerStats {
-        self.get(DA_BALANCER_STATS)
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap()
-    }
-
-    pub async fn monitor_stats(&self) -> MonitorStats {
-        self.get(DA_MONITOR_STATS)
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap()
-    }
-
-    pub async fn da_get_membership(
-        &self,
-        session_id: SessionNumber,
-    ) -> Result<MembershipResponse, reqwest::Error> {
-        let response = CLIENT
-            .post(format!(
-                "http://{}{}",
-                self.testing_http_addr, DA_GET_MEMBERSHIP
-            ))
-            .header("Content-Type", "application/json")
-            .body(serde_json::to_string(&session_id).unwrap())
-            .send()
-            .await?;
-
-        response.error_for_status()?.json().await
-    }
-
     pub async fn network_info(&self) -> Libp2pInfo {
         self.get(NETWORK_INFO).await.unwrap().json().await.unwrap()
-    }
-
-    pub async fn get_shares(
-        &self,
-        blob_id: BlobId,
-        requested_shares: HashSet<[u8; 2]>,
-        filter_shares: HashSet<[u8; 2]>,
-        return_available: bool,
-    ) -> Result<impl Stream<Item = DaLightShare>, lb_common_http_client::Error> {
-        self.http_client
-            .get_shares::<DaShare>(
-                Url::from_str(&format!("http://{}", self.addr))?,
-                blob_id,
-                requested_shares,
-                filter_shares,
-                return_available,
-            )
-            .await
-    }
-
-    pub async fn get_storage_commitments(
-        &self,
-        blob_id: BlobId,
-    ) -> Result<Option<DaSharesCommitments>, lb_common_http_client::Error> {
-        self.http_client
-            .get_storage_commitments::<DaShare>(
-                Url::from_str(&format!("http://{}", self.addr))?,
-                blob_id,
-            )
-            .await
     }
 
     pub async fn get_lib_stream(
@@ -456,71 +318,18 @@ impl Validator {
 }
 
 #[must_use]
-#[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
-pub fn create_validator_config(config: GeneralConfig) -> Config {
+pub fn create_validator_config(config: GeneralConfig) -> RunConfig {
     let testing_http_address = format!("127.0.0.1:{}", get_available_tcp_port().unwrap())
         .parse()
         .unwrap();
-    let custom_deployment_config = default_e2e_deployment_settings();
 
-    let da_policy_settings = config.da_config.policy_settings;
-    Config {
+    let user_config = UserConfig {
         network: config.network_config,
         blend: config.blend_config.0,
-        deployment: custom_deployment_config,
         time: config.time_config,
         cryptarchia: config.consensus_config.user_config().clone(),
         mempool: MempoolConfig {
             recovery_path: "./recovery/mempool.json".into(),
-        },
-
-        da_network: DaNetworkConfig {
-            backend: DaNetworkBackendSettings {
-                node_key: config.da_config.node_key,
-                listening_address: config.da_config.listening_address,
-                policy_settings: DAConnectionPolicySettings {
-                    min_dispersal_peers: 0,
-                    min_replication_peers: da_policy_settings.min_replication_peers,
-                    max_dispersal_failures: da_policy_settings.max_dispersal_failures,
-                    max_sampling_failures: da_policy_settings.max_sampling_failures,
-                    max_replication_failures: da_policy_settings.max_replication_failures,
-                    malicious_threshold: da_policy_settings.malicious_threshold,
-                },
-                monitor_settings: config.da_config.monitor_settings,
-                balancer_interval: config.da_config.balancer_interval,
-                redial_cooldown: config.da_config.redial_cooldown,
-                replication_settings: config.da_config.replication_settings,
-                subnets_settings: SubnetsConfig {
-                    num_of_subnets: config.da_config.num_samples as usize,
-                    shares_retry_limit: config.da_config.retry_shares_limit,
-                    commitments_retry_limit: config.da_config.retry_commitments_limit,
-                },
-            },
-            membership: config.da_config.membership.clone(),
-            api_adapter_settings: ApiAdapterSettings {
-                api_port: config.api_config.address.port(),
-                is_secure: false,
-            },
-            subnet_refresh_interval: config.da_config.subnets_refresh_interval,
-            subnet_threshold: config.da_config.num_subnets as usize,
-            min_session_members: config.da_config.num_subnets as usize,
-        },
-        da_verifier: DaVerifierServiceSettings {
-            share_verifier_settings: KzgrsDaVerifierSettings {
-                global_params_path: config.da_config.global_params_path.clone(),
-                domain_size: config.da_config.num_subnets as usize,
-            },
-            tx_verifier_settings: (),
-            network_adapter_settings: (),
-            storage_adapter_settings: VerifierStorageAdapterSettings {
-                blob_storage_directory: "./".into(),
-            },
-            mempool_trigger_settings: MempoolPublishTriggerConfig {
-                publish_threshold: NonNegativeF64::try_from(0.8).unwrap(),
-                share_duration: Duration::from_secs(5),
-                prune_duration: Duration::from_secs(30),
-                prune_interval: Duration::from_secs(5),
-            },
         },
         tracing: config.tracing_config.tracing_settings,
         http: lb_api_service::ApiServiceSettings {
@@ -531,20 +340,6 @@ pub fn create_validator_config(config: GeneralConfig) -> Config {
                 max_concurrent_requests: 1000,
                 ..Default::default()
             },
-        },
-        da_sampling: DaSamplingServiceSettings {
-            sampling_settings: KzgrsSamplingBackendSettings {
-                num_samples: config.da_config.num_samples,
-                num_subnets: config.da_config.num_subnets,
-                old_blobs_check_interval: config.da_config.old_blobs_check_interval,
-                blobs_validity_duration: config.da_config.blobs_validity_duration,
-            },
-            share_verifier_settings: SamplingVerifierSettings {
-                global_params_path: config.da_config.global_params_path,
-                domain_size: config.da_config.num_subnets as usize,
-            },
-            commitments_wait_duration: Duration::from_secs(1),
-            sdp_blob_trigger_sampling_delay: adjust_timeout(Duration::from_secs(5)),
         },
         storage: RocksBackendSettings {
             db_path: "./db".into(),
@@ -565,5 +360,11 @@ pub fn create_validator_config(config: GeneralConfig) -> Config {
                 ..Default::default()
             },
         },
+    };
+    let deployment_config = default_e2e_deployment_settings();
+
+    RunConfig {
+        deployment: deployment_config,
+        user: user_config,
     }
 }

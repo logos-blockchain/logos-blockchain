@@ -121,7 +121,7 @@ mod tests {
         let security_param: NonZero<u32> = 2.try_into().unwrap();
         let cryptarchia_engine_config = lb_cryptarchia_engine::Config {
             security_param,
-            active_slot_coeff: 0f64,
+            active_slot_coeff: 1f64,
         };
         let ledger_config = lb_ledger::Config {
             epoch_config: lb_cryptarchia_engine::EpochConfig {
@@ -132,28 +132,16 @@ mod tests {
             consensus_config: cryptarchia_engine_config,
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
-                    [
-                        (
-                            ServiceType::BlendNetwork,
-                            ServiceParameters {
-                                lock_period: 10,
-                                inactivity_period: 20,
-                                retention_period: 100,
-                                timestamp: 0,
-                                session_duration: 10,
-                            },
-                        ),
-                        (
-                            ServiceType::DataAvailability,
-                            ServiceParameters {
-                                lock_period: 10,
-                                inactivity_period: 20,
-                                retention_period: 100,
-                                timestamp: 0,
-                                session_duration: 10,
-                            },
-                        ),
-                    ]
+                    [(
+                        ServiceType::BlendNetwork,
+                        ServiceParameters {
+                            lock_period: 10,
+                            inactivity_period: 20,
+                            retention_period: 100,
+                            timestamp: 0,
+                            session_duration: 10,
+                        },
+                    )]
                     .into(),
                 ),
                 service_rewards_params: ServiceRewardsParameters {

@@ -17,7 +17,7 @@ use time::Duration;
 /// ```rust
 ///     use serde_with::serde_as;
 ///     use time::Duration;
-///     use lb_utils::bounded_duration::{SECOND, MinimalBoundedDuration};
+///     use logos_blockchain_utils::bounded_duration::{SECOND, MinimalBoundedDuration};
 ///
 ///     #[serde_as]
 ///     #[derive(serde::Serialize, serde::Deserialize)]

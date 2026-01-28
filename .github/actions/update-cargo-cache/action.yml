@@ -1,23 +1,64 @@
-name: Update Cargo cache
+name: Update Cargo Cache
 
 inputs:
-  key:
-    description: The key to use for the cache
+  github-token:
+    description: Valid GitHub token to interact with GitHub REST API
+    required: true
+  key-prefix:
+    description: Prefix for the cache key.
     required: true
 
-description: Update the Cargo artifacts cache at the provided key
+description: Update Cargo Cache for Rust projects
 
 runs:
   using: composite
   steps:
-    - name: Set up Cargo cache
+    - name: Update Cargo cache (main)
+      id: update-main
+      if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
       uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # Version 4.2.3
+      continue-on-error: true
       with:
         path: |
           ~/.cargo/registry/index/
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
           target/
-        # Must be in sync with the key used in the setup-cargo-cache action
-        key: ${{ inputs.key }}->#${{ github.run_id }}
+
+        # Must be in sync with the keys used in the `setup-cargo-cache` workflow.
+        key: ${{ inputs.key-prefix }}/main/${{ github.sha }}
+
+    - name: Update Cargo cache (PR)
+      id: update-pr
+      if: github.event_name == 'pull_request'
+      uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # Version 4.2.3
       continue-on-error: true
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+
+        # Must be in sync with the keys used in the `setup-cargo-cache` workflow.
+        key: ${{ inputs.key-prefix }}/pr#${{ github.event.pull_request.number }}/${{ github.sha }}
+
+    - name: Delete retrieved cache (main)
+      if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      uses: ./.github/actions/prune-cache
+      continue-on-error: true
+      with:
+        github-token: ${{ inputs.github-token }}
+        # Must be in sync with the keys used in the `setup-cargo-cache` workflow.
+        key-prefix: ${{ inputs.key-prefix }}/main
+        mode: keep-latest
+
+    - name: Delete retrieved cache (PR)
+      if: github.event_name == 'pull_request'
+      uses: ./.github/actions/prune-cache
+      continue-on-error: true
+      with:
+        github-token: ${{ inputs.github-token }}
+        # Must be in sync with the keys used in the `setup-cargo-cache` workflow.
+        key-prefix: ${{ inputs.key-prefix }}/pr#${{ github.event.pull_request.number }}
+        mode: keep-latest

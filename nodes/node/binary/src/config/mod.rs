@@ -1,3 +1,4 @@
+use core::{convert::Infallible, str::FromStr};
 use std::{
     net::{IpAddr, SocketAddr, ToSocketAddrs as _},
     path::{Path, PathBuf},
@@ -15,15 +16,17 @@ use lb_tracing_service::{LoggerLayer, Tracing};
 use num_bigint::BigUint;
 use overwatch::services::ServiceData;
 use serde::Deserialize;
-use tracing::Level;
+use tracing::{Level, warn};
 
 use crate::{
-    ApiService, CryptarchiaService, DaNetworkService, DaSamplingService, DaVerifierService,
-    KeyManagementService, RuntimeServiceId, StorageService,
+    ApiService, CryptarchiaService, KeyManagementService, RuntimeServiceId, StorageService,
     config::{
-        blend::serde::Config as BlendConfig, cryptarchia::serde::Config as CryptarchiaConfig,
-        deployment::DeploymentSettings, mempool::serde::Config as MempoolConfig,
-        network::serde::Config as NetworkConfig, time::serde::Config as TimeConfig,
+        blend::serde::Config as BlendConfig,
+        cryptarchia::serde::Config as CryptarchiaConfig,
+        deployment::{DeploymentSettings, WellKnownDeployment},
+        mempool::serde::Config as MempoolConfig,
+        network::serde::Config as NetworkConfig,
+        time::serde::Config as TimeConfig,
     },
     generic_services::{SdpService, WalletService},
 };
@@ -62,9 +65,9 @@ pub struct CliArgs {
     #[clap(flatten)]
     cryptarchia_leader: CryptarchiaLeaderArgs,
     #[clap(flatten)]
-    da: DaArgs,
-    #[clap(flatten)]
     time: TimeArgs,
+    #[clap(flatten)]
+    deployment: DeploymentArgs,
 }
 
 impl CliArgs {
@@ -73,29 +76,14 @@ impl CliArgs {
         &self.config
     }
 
-    /// If flags the blend service group to start if either all service groups
-    /// are flagged to start or the blend service group is.
     #[must_use]
     pub const fn dry_run(&self) -> bool {
         self.check_config_only
     }
 
     #[must_use]
-    pub const fn must_blend_service_group_start(&self) -> bool {
-        self.must_all_service_groups_start() || self.blend.start_blend_at_boot
-    }
-
-    /// If flags the DA service group to start if either all service groups are
-    /// flagged to start or the DA service group is.
-    #[must_use]
-    pub const fn must_da_service_group_start(&self) -> bool {
-        self.must_all_service_groups_start() || self.da.start_da_at_boot
-    }
-
-    /// If no "start" flag is explicitly set for any service group, then all
-    /// service groups are flagged to start.
-    const fn must_all_service_groups_start(&self) -> bool {
-        !self.blend.start_blend_at_boot && !self.da.start_da_at_boot
+    pub const fn deployment_type(&self) -> &DeploymentType {
+        &self.deployment.deployment_type
     }
 }
 
@@ -173,8 +161,6 @@ pub struct NetworkArgs {
 pub struct BlendArgs {
     #[clap(long = "blend-addr", env = "BLEND_ADDR")]
     blend_addr: Option<Multiaddr>,
-    #[clap(long = "blend-service-group", action)]
-    start_blend_at_boot: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -224,26 +210,75 @@ impl TimeArgs {
 }
 
 #[derive(Parser, Debug, Clone)]
-pub struct DaArgs {
-    #[clap(long = "da-service-group", action)]
-    start_da_at_boot: bool,
+pub struct DeploymentArgs {
+    #[clap(long = "deployment", env = "DEPLOYMENT", default_value = DeploymentType::default())]
+    deployment_type: DeploymentType,
+}
+
+impl DeploymentArgs {
+    #[must_use]
+    pub const fn deployment_type(&self) -> &DeploymentType {
+        &self.deployment_type
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum DeploymentType {
+    WellKnown(WellKnownDeployment),
+    Custom(PathBuf),
+}
+
+impl Default for DeploymentType {
+    fn default() -> Self {
+        WellKnownDeployment::default().into()
+    }
+}
+
+impl From<WellKnownDeployment> for DeploymentType {
+    fn from(deployment: WellKnownDeployment) -> Self {
+        Self::WellKnown(deployment)
+    }
+}
+
+impl From<PathBuf> for DeploymentType {
+    fn from(path: PathBuf) -> Self {
+        Self::Custom(path)
+    }
+}
+
+#[expect(clippy::fallible_impl_from, reason = "`From` impl required by clap.")]
+impl From<DeploymentType> for OsStr {
+    fn from(value: DeploymentType) -> Self {
+        match value {
+            DeploymentType::WellKnown(well_known_deployment) => {
+                well_known_deployment.to_string().into()
+            }
+            DeploymentType::Custom(path) => path.to_str().unwrap().to_owned().into(),
+        }
+    }
+}
+
+impl FromStr for DeploymentType {
+    type Err = Infallible;
+
+    // Try to parse as a well-known deployment first, otherwise treat as a path.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(s.parse::<WellKnownDeployment>()
+            .map_or_else(|()| PathBuf::from(s).into(), Into::into))
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
 #[cfg_attr(feature = "testing", derive(serde::Serialize))]
-pub struct Config {
+pub struct UserConfig {
     pub network: NetworkConfig,
     pub blend: BlendConfig,
-    pub deployment: DeploymentSettings,
     pub cryptarchia: CryptarchiaConfig,
     pub time: TimeConfig,
     pub mempool: MempoolConfig,
 
     pub tracing: <Tracing<RuntimeServiceId> as ServiceData>::Settings,
-    pub da_network: <DaNetworkService as ServiceData>::Settings,
-    pub da_verifier: <DaVerifierService as ServiceData>::Settings,
     pub sdp: <SdpService<RuntimeServiceId> as ServiceData>::Settings,
-    pub da_sampling: <DaSamplingService as ServiceData>::Settings,
     pub http: <ApiService as ServiceData>::Settings,
     pub storage: <StorageService as ServiceData>::Settings,
     pub key_management: <KeyManagementService as ServiceData>::Settings,
@@ -253,8 +288,8 @@ pub struct Config {
     pub testing_http: <ApiService as ServiceData>::Settings,
 }
 
-impl Config {
-    pub fn update_from_args(mut self, args: CliArgs) -> Result<Self> {
+impl UserConfig {
+    pub fn update_from_args(mut self, args: CliArgs) -> Result<RunConfig> {
         let CliArgs {
             log: log_args,
             http: http_args,
@@ -262,6 +297,7 @@ impl Config {
             blend: blend_args,
             cryptarchia_leader: cryptarchia_leader_args,
             time: time_args,
+            deployment: deployment_args,
             ..
         } = args;
         update_tracing(&mut self.tracing, log_args)?;
@@ -270,7 +306,21 @@ impl Config {
         update_http(&mut self.http, http_args)?;
         update_cryptarchia_leader_consensus(&mut self.cryptarchia.leader, cryptarchia_leader_args)?;
         update_time(&mut self.time, &time_args)?;
-        Ok(self)
+
+        let deployment_settings = match deployment_args.deployment_type() {
+            DeploymentType::WellKnown(well_known_deployment) => (*well_known_deployment).into(),
+            DeploymentType::Custom(custom_deployment_config_path) => {
+                deserialize_config_at_path::<DeploymentSettings>(
+                    custom_deployment_config_path,
+                    OnUnknownKeys::Warn,
+                )?
+            }
+        };
+
+        Ok(RunConfig {
+            deployment: deployment_settings,
+            user: self,
+        })
     }
 }
 
@@ -348,7 +398,7 @@ pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) ->
 }
 
 pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) -> Result<()> {
-    let BlendArgs { blend_addr, .. } = blend_args;
+    let BlendArgs { blend_addr } = blend_args;
 
     if let Some(addr) = blend_addr {
         blend.set_listening_address(addr);
@@ -418,8 +468,14 @@ pub enum ConfigDeserializationError<Config> {
     SerdeError(#[from] serde_yaml::Error),
 }
 
+pub enum OnUnknownKeys {
+    Fail,
+    Warn,
+}
+
 pub fn deserialize_config_at_path<Config>(
     config_path: &Path,
+    unknown_keys_strategy: OnUnknownKeys,
 ) -> Result<Config, ConfigDeserializationError<Config>>
 where
     Config: for<'de> Deserialize<'de>,
@@ -432,12 +488,35 @@ where
         },
     )?;
 
-    if ignored_fields.is_empty() {
-        Ok(config)
-    } else {
-        Err(ConfigDeserializationError::UnrecognizedFields {
-            fields: ignored_fields,
-            config,
-        })
+    match (ignored_fields, unknown_keys_strategy) {
+        (ignored_fields, _) if ignored_fields.is_empty() => Ok(config),
+        (ignored_fields, OnUnknownKeys::Warn) => {
+            warn!(
+                "The following unrecognized fields were found in the config file: {ignored_fields:?}."
+            );
+            Ok(config)
+        }
+        (ignored_fields, OnUnknownKeys::Fail) => {
+            Err(ConfigDeserializationError::UnrecognizedFields {
+                fields: ignored_fields,
+                config,
+            })
+        }
+    }
+}
+
+/// Configuration for a running node. It is the combination of user-provided and
+/// deployment-specific settings.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "testing", derive(serde::Serialize))]
+pub struct RunConfig {
+    #[cfg_attr(feature = "testing", serde(flatten))]
+    pub user: UserConfig,
+    pub deployment: DeploymentSettings,
+}
+
+impl From<RunConfig> for UserConfig {
+    fn from(value: RunConfig) -> Self {
+        value.user
     }
 }

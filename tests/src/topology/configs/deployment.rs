@@ -25,18 +25,14 @@ use lb_utils::math::NonNegativeF64;
 
 use crate::topology::configs::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Deployment settings are inherently verbose."
-)]
 #[must_use]
 pub fn default_e2e_deployment_settings() -> DeploymentSettings {
     let slot_duration_in_secs = std::env::var(CONSENSUS_SLOT_TIME_VAR)
         .map(|s| s.parse::<u64>().unwrap())
         .unwrap_or(DEFAULT_SLOT_TIME_IN_SECS);
 
-    DeploymentSettings::new_custom(
-        BlendDeploymentSettings {
+    DeploymentSettings {
+        blend: BlendDeploymentSettings {
             common: BlendCommonSettings {
                 minimum_network_size: NonZeroU64::try_from(30u64)
                     .expect("Minimum network size cannot be zero."),
@@ -77,7 +73,7 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
                 },
             },
         },
-        NetworkDeploymentSettings {
+        network: NetworkDeploymentSettings {
             identify_protocol_name: StreamProtocol::new(
                 "/integration/logos-blockchain/identify/1.0.0",
             ),
@@ -86,7 +82,7 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
                 "/integration/logos-blockchain/chainsync/1.0.0",
             ),
         },
-        CryptarchiaDeploymentSettings {
+        cryptarchia: CryptarchiaDeploymentSettings {
             gossipsub_protocol: "/integration/logos-blockchain/cryptarchia/proto/1.0.0".to_owned(),
             consensus_config: lb_cryptarchia_engine::Config {
                 // a block should be produced (on average) every slot
@@ -105,28 +101,16 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
             },
             sdp_config: lb_node::config::cryptarchia::deployment::SdpConfig {
                 service_params: Arc::new(
-                    [
-                        (
-                            ServiceType::BlendNetwork,
-                            ServiceParameters {
-                                lock_period: 10,
-                                inactivity_period: 20,
-                                retention_period: 100,
-                                timestamp: 0,
-                                session_duration: 21_600,
-                            },
-                        ),
-                        (
-                            ServiceType::DataAvailability,
-                            ServiceParameters {
-                                lock_period: 10,
-                                inactivity_period: 20,
-                                retention_period: 100,
-                                timestamp: 0,
-                                session_duration: 1000,
-                            },
-                        ),
-                    ]
+                    [(
+                        ServiceType::BlendNetwork,
+                        ServiceParameters {
+                            lock_period: 10,
+                            inactivity_period: 20,
+                            retention_period: 100,
+                            timestamp: 0,
+                            session_duration: 21_600,
+                        },
+                    )]
                     .into(),
                 ),
                 min_stake: lb_core::sdp::MinStake {
@@ -135,11 +119,11 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
                 },
             },
         },
-        TimeDeploymentSettings {
+        time: TimeDeploymentSettings {
             slot_duration: Duration::from_secs(slot_duration_in_secs),
         },
-        MempoolDeploymentSettings {
+        mempool: MempoolDeploymentSettings {
             pubsub_topic: "mantle_e2e_tests".to_owned(),
         },
-    )
+    }
 }

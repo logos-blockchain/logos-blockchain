@@ -2,12 +2,12 @@
 # check=skip=SecretsUsedInArgOrEnv
 # Ignore warnings about sensitive information as this is test data.
 
-ARG VERSION=v0.3.1
+ARG VERSION=v0.3.2
 
 # ===========================
 # BUILD IMAGE
 # ===========================
-FROM rust:1.92.0-slim-bookworm AS builder
+FROM rust:1.93.0-slim-bookworm AS builder
 
 ARG VERSION
 
@@ -54,11 +54,10 @@ ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 
 # Copy Binaries
 COPY --from=builder /logos-blockchain/target/release/logos-blockchain-node /usr/bin/
-COPY --from=builder /logos-blockchain/target/release/logos-blockchain-executor /usr/bin/
 COPY --from=builder /logos-blockchain/target/release/logos-blockchain-cli /usr/bin/
-COPY --from=builder /logos-blockchain/target/release/cfgsync-server /usr/bin/
-COPY --from=builder /logos-blockchain/target/release/cfgsync-client /usr/bin/
-COPY --from=builder /logos-blockchain/target/release/demo-sequencer /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-cfgsync-server /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-cfgsync-client /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-sequencer /usr/bin/
 COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-archiver /usr/bin/
 
 # Copy Frontend & Nginx config
