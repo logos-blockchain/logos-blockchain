@@ -500,7 +500,6 @@ where
     Wallet: lb_wallet_service::api::WalletServiceData,
     RuntimeServiceId: Sync + Send + 'static,
 {
-    #[expect(clippy::too_many_arguments, reason = "it nearly fits")]
     #[expect(clippy::allow_attributes_without_reason)]
     #[expect(
         clippy::too_many_arguments,

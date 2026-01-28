@@ -83,10 +83,10 @@ pub enum WalletServiceError {
     MissingLockedNote(lb_core::mantle::NoteId),
 
     #[error("PoC generation failed: {0:?}")]
-    PoCGenerationFailed(lb_core::proofs::leader_claim_proof::Error),
+    PoCGenerationFailed(#[from] lb_core::proofs::leader_claim_proof::Error),
 
     #[error("blocking task failed: {0}")]
-    Join(#[from] JoinError),
+    TaskJoin(#[from] JoinError),
 }
 
 #[derive(Debug)]
@@ -113,6 +113,8 @@ pub enum WalletMsg {
 }
 
 impl WalletMsg {
+    /// Returns [`HeaderId`] of the tip if the message is associated
+    /// with a specific tip.
     #[must_use]
     pub const fn tip(&self) -> Option<HeaderId> {
         match self {
@@ -570,19 +572,14 @@ where
         rewards_root: RewardsRoot,
         tx_hash: TxHash,
     ) -> Result<Groth16LeaderClaimProof, WalletServiceError> {
-        let result = Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
+        Ok(Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
             LeaderClaimPublic {
                 voucher_root: rewards_root.into(),
                 mantle_tx_hash: tx_hash.into(),
             },
             path,
             voucher_secret,
-        ));
-
-        match result {
-            Ok(poc) => Ok(poc),
-            Err(e) => Err(WalletServiceError::PoCGenerationFailed(e)),
-        }
+        ))?)
     }
 
     async fn get_leader_aged_notes(

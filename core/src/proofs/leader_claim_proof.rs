@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    mantle::ops::leader_claim::VoucherNullifier,
-    utils::merkle::{MerkleNode, MerklePath},
+    mantle::ops::leader_claim::VoucherNullifier, proofs::merkle::merkle_path_to_witness,
+    utils::merkle::MerklePath,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -25,11 +25,11 @@ impl Groth16LeaderClaimProof {
     pub fn prove(witness: LeaderClaimPrivate) -> Result<Self, Error> {
         let start_t = std::time::Instant::now();
         let (proof, voucher_nf) = Self::generate_proof(witness)?;
-        tracing::debug!("groth16 prover time: {:.2?}", start_t.elapsed(),);
+        tracing::debug!("PoC groth16 prover time: {:.2?}", start_t.elapsed());
 
         Ok(Self {
             proof,
-            voucher_nf: VoucherNullifier::from(voucher_nf),
+            voucher_nf: voucher_nf.into(),
         })
     }
 
@@ -119,14 +119,12 @@ impl LeaderClaimPrivate {
             voucher_root: public.voucher_root,
             mantle_tx_hash: public.mantle_tx_hash,
         };
+        let (voucher_merkle_path, voucher_merkle_path_selectors) =
+            merkle_path_to_witness(voucher_path);
         let wallet = lb_poc::PoCWalletInputsData {
             secret_voucher,
-            voucher_merkle_path: voucher_path.iter().map(|n| *n.item()).collect(),
-            voucher_merkle_path_selectors: voucher_path
-                .iter()
-                .rev() // PoC circuit expects the reverse order for selectors
-                .map(|n| matches!(n, MerkleNode::Right(_)))
-                .collect(),
+            voucher_merkle_path,
+            voucher_merkle_path_selectors,
         };
         let input = lb_poc::PoCWitnessInputsData::from_chain_and_wallet_data(chain, wallet);
         Self { input }

@@ -125,7 +125,7 @@ where
         self.relay
             .send(WalletMsg::GenerateNewVoucherSecret { resp_tx })
             .await
-            .map_err(|e| format!("Failed to send generate new voucher secret request: {e:?}"))?;
+            .map_err(|e| format!("Failed to request generating new voucher secret: {e:?}"))?;
         Ok(rx.await?)
     }
 }

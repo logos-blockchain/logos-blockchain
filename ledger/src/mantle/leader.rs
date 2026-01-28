@@ -32,8 +32,8 @@ pub struct LeaderState {
     claimable_rewards: Value,
     // Merkle tree vouchers that can be claimed in this epoch
     // this is updated once at the start of each epoch
-    // TODO: this needs to be replaced by a MMR and Merkle proof needs to
-    // TODO: be maintained in the wallet.
+    // TODO: Replace this with MMR to save space by moving merkle path
+    //       maintenance to the wallet.
     vouchers: DynamicMerkleTree<VoucherCm, lb_core::crypto::ZkHasher>,
     voucher_indices: HashTrieMapSync<VoucherCm, usize>,
     // List of vouchers that are waiting to be added at the start of
@@ -73,8 +73,9 @@ impl LeaderState {
     }
 
     pub fn try_apply_header(self, epoch: Epoch, voucher_cm: VoucherCm) -> Result<Self, Error> {
-        let self_ = self.update_epoch_state(epoch)?;
-        Ok(self_.add_voucher(voucher_cm))
+        Ok(self
+            .update_epoch_state(epoch)?
+            .add_pending_voucher(voucher_cm))
     }
 
     fn update_epoch_state(mut self, epoch: Epoch) -> Result<Self, Error> {
@@ -93,11 +94,15 @@ impl LeaderState {
         }
     }
 
-    fn add_voucher(mut self, voucher_cm: VoucherCm) -> Self {
+    /// Add a voucher to be included in the Merkle tree at the start of the
+    /// next epoch
+    fn add_pending_voucher(mut self, voucher_cm: VoucherCm) -> Self {
         self.pending_vouchers.push(voucher_cm);
         self
     }
 
+    /// Insert all pending vouchers into the Merkle tree,
+    /// and update the Merkle root.
     fn update_vouchers(mut self) -> Self {
         for &voucher_cm in &self.pending_vouchers {
             let (new_vouchers, index) = self.vouchers.insert(voucher_cm);
@@ -110,6 +115,7 @@ impl LeaderState {
         self
     }
 
+    /// Get the Merkle path for a given voucher commitment
     pub(crate) fn voucher_merkle_path(&self, voucher_cm: VoucherCm) -> Option<MerklePath<ZkHash>> {
         let index = self.voucher_indices.get(&voucher_cm)?;
         self.vouchers.path(*index)
