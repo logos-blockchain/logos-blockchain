@@ -445,7 +445,10 @@ where
               current_public_inputs = new_public_inputs;
             }
             Some(message) = incoming_message_stream.next() => {
-                message_handler.handle_messages_to_blend(message).await;
+                let message_copies = settings.data_replication_factor.checked_add(1).unwrap();
+                for _ in 0..message_copies {
+                    message_handler.handle_messages_to_blend(message.clone()).await;
+                }
             }
             Some(clock_tick) = remaining_clock_stream.next() => {
                 let (new_message_handler, new_public_inputs) = handle_clock_event(clock_tick, settings.clone(), &current_private_leader_info, overwatch_handle, &current_membership_info.membership, &mut epoch_handler, message_handler, current_public_inputs).await;
