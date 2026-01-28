@@ -6,6 +6,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey, ZkPublicKey};
 use lb_ledger::{EpochState, UtxoTree};
+#[cfg(feature = "pol-dev-mode")]
 use lb_pol::slot_activation_coefficient;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
@@ -428,10 +429,7 @@ mod pol_tests {
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
             },
-            consensus_config: lb_cryptarchia_engine::Config {
-                security_param: NonZero::new(5).unwrap(),
-                active_slot_coefficient: 0.05,
-            },
+            consensus_config: lb_cryptarchia_engine::Config::new(NonZero::new(5).unwrap(), 0.05),
             sdp_config: SdpConfig {
                 service_params: Arc::new(
                     [(
