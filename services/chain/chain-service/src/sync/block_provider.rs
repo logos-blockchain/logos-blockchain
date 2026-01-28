@@ -982,10 +982,7 @@ mod tests {
         fn new_cryptarchia(lib: HeaderId) -> lb_cryptarchia_engine::Cryptarchia<HeaderId> {
             <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib,
-                Config {
-                    security_param: NonZero::new(1).unwrap(),
-                    active_slot_coefficient: 1.0,
-                },
+                Config::new(NonZero::new(1).unwrap(), 1.0),
                 lb_cryptarchia_engine::State::Bootstrapping,
             )
         }

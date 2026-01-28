@@ -21,6 +21,7 @@ use lb_node::config::{
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
+use lb_pol::slot_activation_coefficient;
 use lb_utils::math::NonNegativeF64;
 
 use crate::topology::configs::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
@@ -84,16 +85,15 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
         },
         cryptarchia: CryptarchiaDeploymentSettings {
             gossipsub_protocol: "/integration/logos-blockchain/cryptarchia/proto/1.0.0".to_owned(),
-            consensus_config: lb_cryptarchia_engine::Config {
-                // a block should be produced (on average) every slot
-                active_slot_coefficient: 0.9,
+            consensus_config: lb_cryptarchia_engine::Config::new(
                 // by setting the slot coeff to 1, we also increase the probability of multiple
                 // blocks (forks) being produced in the same slot (epoch).
                 // Setting the security parameter to some value > 1 ensures
                 // nodes have some time to sync before deciding on the
                 // longest chain.
-                security_param: NonZero::new(10).unwrap(),
-            },
+                NonZero::new(10).unwrap(),
+                slot_activation_coefficient(),
+            ),
             epoch_config: lb_cryptarchia_engine::EpochConfig {
                 epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),

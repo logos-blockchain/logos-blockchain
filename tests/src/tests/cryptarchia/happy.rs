@@ -1,6 +1,7 @@
 use std::{collections::HashSet, time::Duration};
 
 use futures::stream::{self, StreamExt as _};
+use lb_pol::slot_activation_coefficient;
 use logos_blockchain_tests::{
     adjust_timeout,
     topology::{Topology, TopologyConfig},
@@ -22,15 +23,10 @@ async fn happy_test(topology: &Topology) {
         .deployment
         .cryptarchia
         .consensus_config
-        .security_param;
+        .security_param();
     let n_blocks = security_param.get() * CHAIN_LENGTH_MULTIPLIER;
     println!("waiting for {n_blocks} blocks");
-    let timeout = (f64::from(n_blocks)
-        / config
-            .deployment
-            .cryptarchia
-            .consensus_config
-            .active_slot_coefficient
+    let timeout = (f64::from(n_blocks) / slot_activation_coefficient()
         * config.deployment.time.slot_duration.as_secs() as f64
         * TIMEOUT_MULTIPLIER)
         .floor() as u64;

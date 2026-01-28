@@ -5,6 +5,17 @@ use std::{
 
 use num_bigint::BigUint;
 use num_traits::{CheckedSub as _, Num as _};
+
+#[must_use]
+pub const fn slot_activation_coefficient() -> f64 {
+    #[cfg(not(feature = "high-active-slot-coefficient"))]
+    {
+        1f64 / 30f64
+    }
+    #[cfg(feature = "high-active-slot-coefficient")]
+    1f64
+}
+
 /// From [Proof of Leadership spec](https://www.notion.so/nomos-tech/Proof-of-Leadership-Specification-21c261aa09df819ba5b6d95d0fe3066d?source=copy_link#256261aa09df800fbc88e5aae5ea7e06)
 pub static P: LazyLock<BigUint> = LazyLock::new(|| {
     #[cfg(not(feature = "high-active-slot-coefficient"))]

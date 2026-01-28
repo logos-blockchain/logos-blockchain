@@ -6,6 +6,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey, ZkPublicKey};
 use lb_ledger::{EpochState, UtxoTree};
+use lb_pol::slot_activation_coefficient;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch::Sender;
@@ -57,7 +58,7 @@ impl Leader {
                     utxo.note.value,
                     note_id,
                     *secret_key.as_fr(),
-                    self.config.consensus_config.active_slot_coefficient,
+                    slot_activation_coefficient(),
                 ),
                 public_inputs.check_winning(utxo.note.value, note_id, *secret_key.as_fr())
             );

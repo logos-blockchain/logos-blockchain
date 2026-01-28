@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
 use lb_cryptarchia_engine::{Config as ConsensusConfig, EpochConfig};
+use lb_pol::slot_activation_coefficient;
 use serde::{Deserialize, Serialize};
 
 use crate::config::deployment::WellKnownDeployment;
@@ -39,7 +40,10 @@ fn mainnet_settings() -> Settings {
             epoch_period_nonce_stabilization: 4.try_into().unwrap(),
             epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
         },
-        consensus_config: ConsensusConfig::new(10.try_into().unwrap()),
+        consensus_config: ConsensusConfig::new(
+            10.try_into().unwrap(),
+            slot_activation_coefficient(),
+        ),
         sdp_config: SdpConfig {
             min_stake: MinStake {
                 threshold: 1,
