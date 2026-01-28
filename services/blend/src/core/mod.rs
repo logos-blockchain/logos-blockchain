@@ -394,6 +394,7 @@ where
             scheduler: blend_config.scheduler,
             time: blend_config.time,
             zk: blend_config.zk,
+            data_replication_factor: blend_config.data_replication_factor,
         };
         let (
             mut remaining_session_stream,
@@ -574,7 +575,7 @@ where
                   }| CoreSessionInfo {
                 public: CoreSessionPublicInfo {
                     poq_core_public_inputs: CoreInputs {
-                        quota: config.session_quota(membership.size()),
+                        quota: config.session_core_quota(membership.size()),
                         zk_root,
                     },
                     membership,
@@ -702,7 +703,7 @@ where
     let message_scheduler = SchedulerWrapper::new_with_initial_messages(
         SchedulerSessionInfo {
             core_quota: blend_config
-                .session_quota(current_membership_info.public.membership.size())
+                .session_core_quota(current_membership_info.public.membership.size())
                 .saturating_sub(current_recovery_checkpoint.spent_quota()),
             session_number: u128::from(current_membership_info.public.session).into(),
         },
@@ -1064,7 +1065,7 @@ where
             backend.rotate_session(new_session_info.clone()).await;
 
             let new_scheduler_session_info = SchedulerSessionInfo {
-                core_quota: settings.session_quota(new_session_info.membership.size()),
+                core_quota: settings.session_core_quota(new_session_info.membership.size()),
                 session_number: u128::from(new_session).into(),
             };
 

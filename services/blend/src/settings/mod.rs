@@ -43,6 +43,7 @@ impl<CoreBackendSettings, EdgeBackendSettings>
                     backend,
                     scheduler,
                     zk,
+                    data_replication_factor,
                 },
             ..
         }: Settings<CoreBackendSettings, EdgeBackendSettings>,
@@ -61,6 +62,7 @@ impl<CoreBackendSettings, EdgeBackendSettings>
             num_blend_layers,
             minimum_network_size,
             recovery_path,
+            data_replication_factor,
         }
     }
 }

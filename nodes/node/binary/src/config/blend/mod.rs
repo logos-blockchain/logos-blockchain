@@ -68,6 +68,7 @@ impl From<ServiceConfig>
                 },
                 scheduler: config.deployment.core.scheduler,
                 zk: config.user.core.zk,
+                data_replication_factor: config.deployment.core.data_replication_factor,
             },
             edge: EdgeSettings::<Libp2pEdgeBlendBackendSettings> {
                 backend: Libp2pEdgeBlendBackendSettings {

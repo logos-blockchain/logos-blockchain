@@ -89,6 +89,7 @@ pub fn settings<BackendSettings>(
     local_private_key: UnsecuredEd25519Key,
     minimum_network_size: NonZeroU64,
     backend_settings: BackendSettings,
+    data_replication_factor: u64,
 ) -> (BlendConfig<BackendSettings>, NamedTempFile) {
     let recovery_file = NamedTempFile::new().unwrap();
     let settings = BlendConfig {
@@ -110,6 +111,7 @@ pub fn settings<BackendSettings>(
         num_blend_layers: NonZeroU64::try_from(1).unwrap(),
         minimum_network_size,
         recovery_path: recovery_file.path().to_path_buf(),
+        data_replication_factor,
     };
     (settings, recovery_file)
 }
@@ -322,7 +324,7 @@ pub fn new_public_info<BackendSettings>(
     membership: Membership<NodeId>,
     settings: &BlendConfig<BackendSettings>,
 ) -> PublicInfo<NodeId> {
-    let core_quota = settings.session_quota(membership.size());
+    let core_quota = settings.session_core_quota(membership.size());
     PublicInfo {
         session: SessionInfo {
             session_number: session,

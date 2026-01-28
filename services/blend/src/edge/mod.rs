@@ -416,7 +416,7 @@ where
     let mut current_public_inputs = PoQVerificationInputsMinusSigningKey {
         core: CoreInputs {
             zk_root: current_membership_info.zk.root,
-            quota: settings.cover.session_quota(
+            quota: settings.cover.session_core_quota(
                 settings.num_blend_layers,
                 &settings.time,
                 current_membership_info.membership.size(),
@@ -501,7 +501,7 @@ where
     let new_public_inputs = PoQVerificationInputsMinusSigningKey {
         session: new_session_number,
         core: CoreInputs {
-            quota: settings.cover.session_quota(
+            quota: settings.cover.session_core_quota(
                 settings.num_blend_layers,
                 &settings.time,
                 new_membership.size(),
