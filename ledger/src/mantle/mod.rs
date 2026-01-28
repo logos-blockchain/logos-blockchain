@@ -122,6 +122,11 @@ impl LedgerState {
     }
 
     #[must_use]
+    pub fn has_claimable_voucher(&self, voucher_cm: &VoucherCm) -> bool {
+        self.leaders.has_claimable_voucher(voucher_cm)
+    }
+
+    #[must_use]
     pub fn voucher_merkle_path(&self, voucher_cm: VoucherCm) -> Option<MerklePath<ZkHash>> {
         self.leaders.voucher_merkle_path(voucher_cm)
     }

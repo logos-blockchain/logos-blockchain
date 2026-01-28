@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    mantle::ops::leader_claim::VoucherNullifier, proofs::merkle::merkle_path_to_witness,
+    mantle::ops::leader_claim::{VoucherNullifier, VoucherSecret},
+    proofs::merkle::merkle_path_to_witness,
     utils::merkle::MerklePath,
 };
 
@@ -113,7 +114,7 @@ impl LeaderClaimPrivate {
     pub fn new(
         public: LeaderClaimPublic,
         voucher_path: &MerklePath<Fr>,
-        secret_voucher: Fr,
+        secret_voucher: VoucherSecret,
     ) -> Self {
         let chain = lb_poc::PoCChainInputsData {
             voucher_root: public.voucher_root,
@@ -122,7 +123,7 @@ impl LeaderClaimPrivate {
         let (voucher_merkle_path, voucher_merkle_path_selectors) =
             merkle_path_to_witness(voucher_path);
         let wallet = lb_poc::PoCWalletInputsData {
-            secret_voucher,
+            secret_voucher: secret_voucher.into(),
             voucher_merkle_path,
             voucher_merkle_path_selectors,
         };

@@ -18,7 +18,7 @@ use lb_core::{
         ops::{
             Op, OpProof,
             channel::ChannelId,
-            leader_claim::{RewardsRoot, VoucherCm},
+            leader_claim::{RewardsRoot, VoucherCm, VoucherNullifier, VoucherSecret},
         },
         tx_builder::MantleTxBuilder,
     },
@@ -85,8 +85,8 @@ pub enum WalletServiceError {
     #[error("PoC generation failed: {0:?}")]
     PoCGenerationFailed(#[from] lb_core::proofs::leader_claim_proof::Error),
 
-    #[error("No voucher secret left")]
-    NoVoucherSecretLeft,
+    #[error("Voucher secret not found for the nullifier")]
+    VoucherSecretNotFound(VoucherNullifier),
 
     #[error("Merkle path not found for voucher_cm: {0:?}")]
     VoucherMerklePathNotFound(VoucherCm),
@@ -139,7 +139,6 @@ pub struct WalletServiceSettings {
 
 pub struct WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    voucher_secrets: Vec<Fr>,
     _marker: std::marker::PhantomData<(Kms, Cryptarchia, Tx, Storage)>,
 }
 
@@ -152,6 +151,7 @@ impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> ServiceData
     type Message = WalletMsg;
 }
 
+#[expect(clippy::too_many_lines, reason = "TODO: refactor after code reviews")]
 #[async_trait]
 impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> ServiceCore<RuntimeServiceId>
     for WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
@@ -178,7 +178,6 @@ where
     ) -> Result<Self, DynError> {
         Ok(Self {
             service_resources_handle,
-            voucher_secrets: Vec::new(),
             _marker: std::marker::PhantomData,
         })
     }
@@ -186,7 +185,6 @@ where
     async fn run(mut self) -> Result<(), DynError> {
         let Self {
             mut service_resources_handle,
-            mut voucher_secrets,
             ..
         } = self;
 
@@ -255,12 +253,20 @@ where
             .await?
             .ok_or(WalletServiceError::LedgerStateNotFound(lib))?;
 
-        let mut wallet = Wallet::from_lib(settings.known_keys.clone(), lib, &lib_ledger);
+        let mut wallet = Wallet::from_lib(
+            settings.known_keys.clone(),
+            // TODO: Load known_voucher_indices from config
+            // after migrating voucher derivation to KMS.
+            std::iter::empty(),
+            lib,
+            &lib_ledger,
+        );
 
         Self::backfill_missing_blocks(
             &Self::fetch_missing_headers(chain_info.tip, &cryptarchia_api).await?,
             &mut wallet,
             &storage_adapter,
+            &cryptarchia_api,
         )
         .await?;
 
@@ -270,7 +276,7 @@ where
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Self::handle_wallet_message(msg, &mut wallet, &storage_adapter, &cryptarchia_api, &kms, &mut voucher_secrets).await;
+                    Self::handle_wallet_message(msg, &mut wallet, &storage_adapter, &cryptarchia_api, &kms).await;
                 }
 
                 Ok(header_id) = new_block_receiver.recv() => {
@@ -278,15 +284,26 @@ where
                         error!(block_id=?header_id, "Missing block in storage");
                         continue;
                     };
+                    let ledger = match cryptarchia_api.get_ledger_state(header_id).await {
+                        Ok(Some(ledger)) => ledger,
+                        Ok(None) => {
+                            error!(block_id=?header_id, "No ledger state for {header_id:?}");
+                            continue;
+                        }
+                        Err(e) => {
+                            error!(block_id=?header_id, "Failed to get ledger state from cryptarchia: {e:?}");
+                            continue;
+                        }
+                    };
                     let wallet_block = WalletBlock::from(block);
-                    match wallet.apply_block(&wallet_block) {
+                    match wallet.apply_block(&wallet_block, &ledger) {
                         Ok(()) => {
                             trace!(block_id = ?wallet_block.id, "Applied block to wallet");
                         }
                         Err(WalletError::UnknownBlock(block_id)) => {
 
                             info!(block_id = ?block_id, "Missing block in wallet, backfilling");
-                            Self::backfill_missing_blocks(&Self::fetch_missing_headers(wallet_block.id, &cryptarchia_api).await?, &mut wallet, &storage_adapter).await?;
+                            Self::backfill_missing_blocks(&Self::fetch_missing_headers(wallet_block.id, &cryptarchia_api).await?, &mut wallet, &storage_adapter, &cryptarchia_api).await?;
                         },
                         Err(err) => {
                             error!(err=?err, "unexexpected error while applying block to wallet");
@@ -320,7 +337,6 @@ where
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        voucher_secrets: &mut Vec<Fr>,
     ) {
         if let Some(tip) = msg.tip()
             && let Err(err) = Self::backfill_if_not_in_sync(tip, wallet, storage, cryptarchia).await
@@ -364,13 +380,13 @@ where
                     }
                 };
 
-                Self::handle_sign_tx(funded, ledger, resp_tx, kms, voucher_secrets).await;
+                Self::handle_sign_tx(funded, ledger, resp_tx, kms, wallet).await;
             }
             WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
                 Self::get_leader_aged_notes(tip, resp_tx, wallet, cryptarchia).await;
             }
             WalletMsg::GenerateNewVoucherSecret { resp_tx } => {
-                Self::generate_new_voucher_secret(voucher_secrets, resp_tx);
+                Self::generate_new_voucher_secret(wallet, resp_tx);
             }
         }
     }
@@ -395,9 +411,9 @@ where
         ledger: LedgerState,
         resp_tx: oneshot::Sender<Result<SignedMantleTx, WalletServiceError>>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        voucher_secrets: &mut Vec<Fr>,
+        wallet: &Wallet,
     ) {
-        let signed_tx_res = Self::sign_tx(tx_builder, ledger, kms, voucher_secrets).await;
+        let signed_tx_res = Self::sign_tx(tx_builder, ledger, kms, wallet).await;
 
         if resp_tx.send(signed_tx_res).is_err() {
             error!("Failed to respond to FundAndSignTx");
@@ -408,7 +424,7 @@ where
         tx_builder: MantleTxBuilder,
         ledger: LedgerState,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        voucher_secrets: &mut Vec<Fr>,
+        wallet: &Wallet,
     ) -> Result<SignedMantleTx, WalletServiceError> {
         // Extract input public keys before building the transaction
         let input_pks: Vec<ZkPublicKey> = tx_builder
@@ -494,9 +510,11 @@ where
                     OpProof::ZkSig(zk_sig)
                 }
                 Op::LeaderClaim(claim_op) => {
-                    let voucher_secret = voucher_secrets
-                        .pop()
-                        .ok_or(WalletServiceError::NoVoucherSecretLeft)?;
+                    let voucher_secret = wallet
+                        .find_known_voucher_secret(&claim_op.voucher_nullifier)
+                        .ok_or(WalletServiceError::VoucherSecretNotFound(
+                            claim_op.voucher_nullifier,
+                        ))?;
                     let voucher_cm = VoucherCm::from_secret(voucher_secret);
                     let path = ledger
                         .mantle_ledger()
@@ -576,7 +594,7 @@ where
     }
 
     fn generate_poc(
-        voucher_secret: Fr,
+        voucher_secret: VoucherSecret,
         path: &MerklePath<Fr>,
         rewards_root: RewardsRoot,
         tx_hash: TxHash,
@@ -628,20 +646,18 @@ where
         }
     }
 
-    /// Generate a new voucher secret randomly and store it in Vec.
+    /// Generate a new voucher secret randomly and store it in [`Wallet`].
     // TODO: Do this in KMS: Derive a voucher from leader_sk in KMS.
     //       So, we don't store new vouchers to the service state.
-    fn generate_new_voucher_secret(
-        voucher_secrets: &mut Vec<Fr>,
-        resp_tx: oneshot::Sender<VoucherCm>,
-    ) {
+    fn generate_new_voucher_secret(wallet: &mut Wallet, resp_tx: oneshot::Sender<VoucherCm>) {
         let mut voucher_secret_bytes = [0u8; 31];
         OsRng.fill_bytes(&mut voucher_secret_bytes);
-        let voucher_secret =
-            fr_from_bytes(&voucher_secret_bytes).expect("voucher secret bytes must be a valid Fr");
+        let voucher_secret = fr_from_bytes(&voucher_secret_bytes)
+            .expect("voucher secret bytes must be a valid Fr")
+            .into();
         let voucher_cm = VoucherCm::from_secret(voucher_secret);
 
-        voucher_secrets.push(voucher_secret);
+        wallet.add_known_voucher_secret(voucher_secret);
 
         if let Err(e) = resp_tx.send(voucher_cm) {
             error!("Failed to send voucher secret: {e:?}");
@@ -664,7 +680,7 @@ where
         // cryptarchia. If we still have not caught up after the backfill, we return an
         // error to the caller
         let headers = Self::fetch_missing_headers(tip, cryptarchia).await?;
-        Self::backfill_missing_blocks(&headers, wallet, storage).await?;
+        Self::backfill_missing_blocks(&headers, wallet, storage, cryptarchia).await?;
 
         if wallet.has_processed_block(tip) {
             Ok(())
@@ -699,6 +715,7 @@ where
         headers: &[HeaderId],
         wallet: &mut Wallet,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) -> Result<(), WalletServiceError> {
         for header_id in headers.iter().rev().copied() {
             if wallet.has_processed_block(header_id) {
@@ -711,7 +728,12 @@ where
                 return Err(WalletServiceError::BlockNotFoundInStorage(header_id));
             };
 
-            if let Err(e) = wallet.apply_block(&block.into()) {
+            let ledger = cryptarchia_api
+                .get_ledger_state(header_id)
+                .await?
+                .ok_or(WalletServiceError::LedgerStateNotFound(header_id))?;
+
+            if let Err(e) = wallet.apply_block(&block.into(), &ledger) {
                 error!(
                     block_id = ?header_id,
                     err = %e,

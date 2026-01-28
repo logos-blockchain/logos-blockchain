@@ -34,8 +34,8 @@ pub struct LeaderState {
     // this is updated once at the start of each epoch
     // TODO: Replace this with MMR to save space by moving merkle path
     //       maintenance to the wallet.
-    vouchers: DynamicMerkleTree<VoucherCm, lb_core::crypto::ZkHasher>,
-    voucher_indices: HashTrieMapSync<VoucherCm, usize>,
+    claimable_vouchers: DynamicMerkleTree<VoucherCm, lb_core::crypto::ZkHasher>,
+    claimable_voucher_indices: HashTrieMapSync<VoucherCm, usize>,
     // List of vouchers that are waiting to be added at the start of
     // the next epoch
     pending_vouchers: Vec<VoucherCm>,
@@ -66,8 +66,8 @@ impl LeaderState {
             n_claimable_vouchers: 0,
             nfs: rpds::HashTrieSetSync::new_sync(),
             claimable_rewards: 0,
-            vouchers: DynamicMerkleTree::new(),
-            voucher_indices: HashTrieMapSync::new_sync(),
+            claimable_vouchers: DynamicMerkleTree::new(),
+            claimable_voucher_indices: HashTrieMapSync::new_sync(),
             pending_vouchers: Vec::new(),
         }
     }
@@ -86,7 +86,7 @@ impl LeaderState {
                 incoming: epoch,
             }),
             Ordering::Greater => {
-                self = self.update_vouchers();
+                self = self.update_claimable_vouchers();
                 self.epoch = epoch;
                 // TODO: increase rewards, what about epoch jumps?
                 Ok(self)
@@ -103,22 +103,27 @@ impl LeaderState {
 
     /// Insert all pending vouchers into the Merkle tree,
     /// and update the Merkle root.
-    fn update_vouchers(mut self) -> Self {
+    fn update_claimable_vouchers(mut self) -> Self {
         for &voucher_cm in &self.pending_vouchers {
-            let (new_vouchers, index) = self.vouchers.insert(voucher_cm);
-            self.vouchers = new_vouchers;
-            self.voucher_indices = self.voucher_indices.insert(voucher_cm, index);
+            let (new_vouchers, index) = self.claimable_vouchers.insert(voucher_cm);
+            self.claimable_vouchers = new_vouchers;
+            self.claimable_voucher_indices =
+                self.claimable_voucher_indices.insert(voucher_cm, index);
         }
         self.pending_vouchers = Vec::new();
-        self.claimable_vouchers_root = self.vouchers.root().into();
-        self.n_claimable_vouchers = self.vouchers.size() as u64;
+        self.claimable_vouchers_root = self.claimable_vouchers.root().into();
+        self.n_claimable_vouchers = self.claimable_vouchers.size() as u64;
         self
+    }
+
+    pub(crate) fn has_claimable_voucher(&self, voucher_cm: &VoucherCm) -> bool {
+        self.claimable_voucher_indices.contains_key(voucher_cm)
     }
 
     /// Get the Merkle path for a given voucher commitment
     pub(crate) fn voucher_merkle_path(&self, voucher_cm: VoucherCm) -> Option<MerklePath<ZkHash>> {
-        let index = self.voucher_indices.get(&voucher_cm)?;
-        self.vouchers.path(*index)
+        let index = self.claimable_voucher_indices.get(&voucher_cm)?;
+        self.claimable_vouchers.path(*index)
     }
 
     /// Claim the reward associated with a voucher.
@@ -153,8 +158,8 @@ impl LeaderState {
                 n_claimable_vouchers: self.n_claimable_vouchers,
                 nfs,
                 claimable_rewards,
-                vouchers: self.vouchers.clone(),
-                voucher_indices: self.voucher_indices.clone(),
+                claimable_vouchers: self.claimable_vouchers.clone(),
+                claimable_voucher_indices: self.claimable_voucher_indices.clone(),
                 pending_vouchers: self.pending_vouchers.clone(),
             },
             Balance::from(reward_amount),
