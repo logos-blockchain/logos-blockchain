@@ -37,13 +37,13 @@ impl<CoreBackendSettings, EdgeBackendSettings>
                     recovery_path_prefix,
                     non_ephemeral_signing_key_id,
                     num_blend_layers,
+                    data_replication_factor,
                 },
             core:
                 CoreSettings {
                     backend,
                     scheduler,
                     zk,
-                    data_replication_factor,
                 },
             ..
         }: Settings<CoreBackendSettings, EdgeBackendSettings>,
@@ -78,6 +78,7 @@ impl<CoreBackendSettings, EdgeBackendSettings>
                     time,
                     non_ephemeral_signing_key_id,
                     num_blend_layers,
+                    data_replication_factor,
                     ..
                 },
             edge: EdgeSettings { backend },
@@ -95,6 +96,7 @@ impl<CoreBackendSettings, EdgeBackendSettings>
             num_blend_layers,
             minimum_network_size,
             cover,
+            data_replication_factor,
         }
     }
 }

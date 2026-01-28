@@ -337,7 +337,7 @@ pub fn new_public_info<BackendSettings>(
         epoch: LeaderInputs {
             pol_ledger_aged: ZkHash::ZERO,
             pol_epoch_nonce: ZkHash::ZERO,
-            message_quota: settings.num_blend_layers.get(),
+            message_quota: settings.session_leadership_quota(),
             total_stake: 10,
         },
     }

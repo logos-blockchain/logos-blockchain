@@ -293,6 +293,7 @@ where
                 num_blend_layers: settings.num_blend_layers,
                 minimum_network_size: settings.minimum_network_size,
                 time: settings.time,
+                data_replication_factor: settings.data_replication_factor,
             },
             &overwatch_handle,
             || {
@@ -371,7 +372,7 @@ where
         };
         (
             LeaderInputs {
-                message_quota: settings.num_blend_layers.into(),
+                message_quota: settings.session_leadership_quota(),
                 pol_epoch_nonce,
                 pol_ledger_aged,
                 total_stake,
@@ -574,7 +575,7 @@ where
             pol_ledger_aged,
             total_stake,
         }) => LeaderInputs {
-            message_quota: settings.num_blend_layers.into(),
+            message_quota: settings.session_leadership_quota(),
             pol_epoch_nonce,
             pol_ledger_aged,
             total_stake,

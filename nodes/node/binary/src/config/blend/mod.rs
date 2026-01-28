@@ -43,6 +43,7 @@ impl From<ServiceConfig>
                 minimum_network_size: config.deployment.common.minimum_network_size,
                 recovery_path_prefix: config.user.recovery_path_prefix,
                 time: config.deployment.common.timing,
+                data_replication_factor: config.deployment.common.data_replication_factor,
             },
             core: CoreSettings {
                 backend: Libp2pCoreBlendBackendSettings {
@@ -68,7 +69,6 @@ impl From<ServiceConfig>
                 },
                 scheduler: config.deployment.core.scheduler,
                 zk: config.user.core.zk,
-                data_replication_factor: config.deployment.core.data_replication_factor,
             },
             edge: EdgeSettings::<Libp2pEdgeBlendBackendSettings> {
                 backend: Libp2pEdgeBlendBackendSettings {

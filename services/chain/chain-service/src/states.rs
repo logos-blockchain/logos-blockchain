@@ -150,6 +150,7 @@ mod tests {
                         message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
+                        data_replication_factor: 0,
                     },
                 },
                 min_stake: MinStake {

@@ -7,5 +7,4 @@ pub struct CoreSettings<BackendSettings> {
     pub backend: BackendSettings,
     pub scheduler: SchedulerSettings,
     pub zk: ZkSettings,
-    pub data_replication_factor: u64,
 }

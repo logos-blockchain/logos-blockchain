@@ -46,12 +46,11 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
 
     pub const fn session_leadership_quota(&self) -> u64 {
         let num_blend_layers = self.num_blend_layers.get();
+        let additional_encapsulations = num_blend_layers
+            .checked_mul(self.data_replication_factor)
+            .expect("Overflow when computing total replication factor.");
         num_blend_layers
-            .checked_add(
-                num_blend_layers
-                    .checked_mul(self.data_replication_factor)
-                    .expect("Overflow when computing total replication factor."),
-            )
+            .checked_add(additional_encapsulations)
             .expect("Overflow when computing leadership quota.")
     }
 
@@ -64,14 +63,6 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
             rounds_per_interval: self.time.rounds_per_interval,
             num_blend_layers: self.num_blend_layers,
         }
-    }
-}
-
-impl<BackendSettings> StartingBlendConfig<BackendSettings> {
-    pub fn session_quota(&self, membership_size: usize) -> u64 {
-        self.scheduler
-            .cover
-            .session_core_quota(self.num_blend_layers, &self.time, membership_size)
     }
 }
 

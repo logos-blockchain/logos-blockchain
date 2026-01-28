@@ -846,6 +846,7 @@ where
             Some(local_data_message) = inbound_relay.next() => {
                 let ServiceMessage::Blend(message_payload) = local_data_message;
 
+                // We serialize here, outside of the handler function, so that we can serialize only once for all replicas.
                 let serialized_data_message = NetworkMessage::<NetAdapter::BroadcastSettings>::to_bytes(&message_payload).expect("NetworkMessage should be able to be serialized");
                 let message_copies = blend_config.data_replication_factor.checked_add(1).unwrap();
                 for _ in 0..message_copies {
@@ -1218,6 +1219,10 @@ enum HandleSessionEventOutput<
 /// encapsulate its payload is performed. If encapsulation is successful, the
 /// message is queued with the Blend scheduler and blended during the next
 /// round.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: Address this at some point."
+)]
 async fn handle_serialized_local_data_message<
     NodeId,
     Rng,
@@ -1291,6 +1296,10 @@ where
     let processed_message = match remaining_message_type {
         // If all the layers are peeled off locally, then we are left with the initial data message.
         DecapsulatedMessageType::Completed(fully_decapsulated_message) => {
+            assert!(
+                fully_decapsulated_message.payload_type() == PayloadType::Data,
+                "Locally-generated and fully-decapsulated message should be a data message."
+            );
             let deserialized_data_message =
                 NetworkMessage::from_bytes(fully_decapsulated_message.payload_body())
                     .expect("Locally-generated and serialized message should be deserializable.");

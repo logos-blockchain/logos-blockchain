@@ -116,6 +116,9 @@ fn create_leadership_proof_stream(
             // as the blending operations per message), we end up with two,
             // fully-encapsulated copies of the same original message, with valid proofs
             // because within the expected index value.
+            // The logic on how these indices are mapped to each message + encapsulation
+            // layer is out of scope for this component, and will be up to the
+            // message scheduler.
             let message_release_index = current_index % message_quota;
             let private_inputs = private_inputs.clone();
 
