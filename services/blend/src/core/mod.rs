@@ -844,7 +844,13 @@ where
     loop {
         tokio::select! {
             Some(local_data_message) = inbound_relay.next() => {
-                recovery_checkpoint = handle_local_data_message(local_data_message, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
+                let ServiceMessage::Blend(message_payload) = local_data_message;
+
+                let serialized_data_message = NetworkMessage::<NetAdapter::BroadcastSettings>::to_bytes(&message_payload).expect("NetworkMessage should be able to be serialized");
+                let message_copies = blend_config.data_replication_factor.checked_add(1).unwrap();
+                for _ in 0..message_copies {
+                    recovery_checkpoint = handle_serialized_local_data_message(&serialized_data_message, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
+                }
             }
             Some(incoming_message) = blend_messages.next() => {
                 recovery_checkpoint = handle_incoming_blend_message(incoming_message, &mut message_scheduler, old_session_message_scheduler.as_mut(), &crypto_processor, old_session_crypto_processor.as_ref(),  recovery_checkpoint);
@@ -1212,7 +1218,7 @@ enum HandleSessionEventOutput<
 /// encapsulate its payload is performed. If encapsulation is successful, the
 /// message is queued with the Blend scheduler and blended during the next
 /// round.
-async fn handle_local_data_message<
+async fn handle_serialized_local_data_message<
     NodeId,
     Rng,
     BackendSettings,
@@ -1221,7 +1227,7 @@ async fn handle_local_data_message<
     ProofsVerifier,
     CorePoQGenerator,
 >(
-    local_data_message: ServiceMessage<BroadcastSettings>,
+    serialized_local_data_message: &[u8],
     cryptographic_processor: &mut CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1244,14 +1250,8 @@ where
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
-    let ServiceMessage::Blend(message_payload) = local_data_message;
-
-    let serialized_data_message = NetworkMessage::<BroadcastSettings>::to_bytes(&message_payload)
-        .expect("NetworkMessage should be able to be serialized")
-        .to_vec();
-
     let Ok(wrapped_message) = cryptographic_processor
-        .encapsulate_data_payload(&serialized_data_message)
+        .encapsulate_data_payload(serialized_local_data_message)
         .await
         .inspect_err(|e| {
             tracing::error!(target: LOG_TARGET, "Failed to wrap message: {e:?}");
@@ -1290,9 +1290,12 @@ where
         multi_layer_decapsulation_output.into_components();
     let processed_message = match remaining_message_type {
         // If all the layers are peeled off locally, then we are left with the initial data message.
-        DecapsulatedMessageType::Completed(_) => {
-            tracing::debug!(target: LOG_TARGET, "Locally generated data message {message_payload:?} had all the {} layers addressed to this same node. Propagating only the fully decapsulated message.", blending_tokens.len());
-            ProcessedMessage::from(message_payload)
+        DecapsulatedMessageType::Completed(fully_decapsulated_message) => {
+            let deserialized_data_message =
+                NetworkMessage::from_bytes(fully_decapsulated_message.payload_body())
+                    .expect("Locally-generated and serialized message should be deserializable.");
+            tracing::debug!(target: LOG_TARGET, "Locally generated data message {deserialized_data_message:?} had all the {} layers addressed to this same node. Propagating only the fully decapsulated message.", blending_tokens.len());
+            ProcessedMessage::from(deserialized_data_message)
         }
         DecapsulatedMessageType::Incompleted(remaining_encapsulated_message) => {
             tracing::debug!(target: LOG_TARGET, "Locally generated data message had the outermost {} layers addressed to this same node. Propagating only the remaining encapsulated layers.", blending_tokens.len());

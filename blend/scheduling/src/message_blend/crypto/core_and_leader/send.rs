@@ -18,16 +18,12 @@ use crate::{
         },
         provers::{ProofsGeneratorSettings, core_and_leader::CoreAndLeaderProofsGenerator},
     },
-    serialize_encapsulated_message,
 };
 
 /// [`SessionCryptographicProcessor`] is responsible for only wrapping
 /// cover and data messages for the message indistinguishability.
 ///
 /// Each instance is meant to be used during a single session.
-///
-/// This processor is suitable for non-core nodes that want to generate noise
-/// (i.e., cover) traffic along with data payloads.
 pub struct SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator> {
     num_blend_layers: NonZeroU64,
     /// The non-ephemeral encryption key (NEK) for decapsulating messages.
@@ -105,29 +101,11 @@ where
         self.encapsulate_payload(PayloadType::Cover, payload).await
     }
 
-    pub async fn encapsulate_and_serialize_cover_payload(
-        &mut self,
-        payload: &[u8],
-    ) -> Result<Vec<u8>, Error> {
-        Ok(serialize_encapsulated_message(
-            &self.encapsulate_cover_payload(payload).await?,
-        ))
-    }
-
     pub async fn encapsulate_data_payload(
         &mut self,
         payload: &[u8],
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
         self.encapsulate_payload(PayloadType::Data, payload).await
-    }
-
-    pub async fn encapsulate_and_serialize_data_payload(
-        &mut self,
-        payload: &[u8],
-    ) -> Result<Vec<u8>, Error> {
-        Ok(serialize_encapsulated_message(
-            &self.encapsulate_data_payload(payload).await?,
-        ))
     }
 
     // TODO: Think about optimizing this by, e.g., using less encapsulations if

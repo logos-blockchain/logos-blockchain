@@ -2,7 +2,7 @@ use lb_blend::message::encap::encapsulated::EncapsulatedMessage;
 use serde::{Deserialize, Serialize};
 
 /// A message that is handled by [`BlendService`].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ServiceMessage<BroadcastSettings> {
     /// To send a message to the blend network and eventually broadcast it to
     /// the [`NetworkService`].

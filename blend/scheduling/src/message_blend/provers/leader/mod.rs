@@ -108,7 +108,15 @@ fn create_leadership_proof_stream(
 
     stream::iter(0u64..)
         .map(move |current_index| {
-            let encapsulation_layer = current_index % message_quota;
+            // This represents the total number of encapsulations sent out for each message.
+            // E.g., for a session with data message replication factor of `1`, we get
+            // indices `0` to `2` that belong to the first copy encapsulation, and indices
+            // `3` to `5` that belong to the second copy encapsulation.
+            // In the end, because the expected maximum message quota is `6` (if we take `3`
+            // as the blending operations per message), we end up with two,
+            // fully-encapsulated copies of the same original message, with valid proofs
+            // because within the expected index value.
+            let message_release_index = current_index % message_quota;
             let private_inputs = private_inputs.clone();
 
             spawn_blocking(move || {
@@ -121,7 +129,7 @@ fn create_leadership_proof_stream(
                         session: public_inputs.session,
                     },
                     PrivateInputs::new_proof_of_leadership_quota_inputs(
-                        encapsulation_layer,
+                        message_release_index,
                         private_inputs,
                     ),
                 )
