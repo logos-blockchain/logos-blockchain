@@ -637,7 +637,7 @@ where
         epoch: LeaderInputs {
             pol_ledger_aged,
             pol_epoch_nonce,
-            message_quota: blend_config.num_blend_layers.into(),
+            message_quota: blend_config.session_leadership_quota(),
             total_stake,
         },
         session: SessionInfo {
@@ -1813,7 +1813,7 @@ where
             total_stake,
         }) => {
             let new_leader_inputs = LeaderInputs {
-                message_quota: settings.num_blend_layers.into(),
+                message_quota: settings.session_leadership_quota(),
                 pol_epoch_nonce,
                 pol_ledger_aged,
                 total_stake,
@@ -1840,7 +1840,7 @@ where
             total_stake,
         }) => {
             let new_leader_inputs = LeaderInputs {
-                message_quota: settings.num_blend_layers.into(),
+                message_quota: settings.session_leadership_quota(),
                 pol_epoch_nonce,
                 pol_ledger_aged,
                 total_stake,
