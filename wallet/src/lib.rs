@@ -44,7 +44,7 @@ pub struct WalletState {
     pub utxos: rpds::HashTrieMapSync<NoteId, Utxo>,
     pub pk_index: rpds::HashTrieMapSync<ZkPublicKey, rpds::HashTrieSetSync<NoteId>>,
     /// Claimable vouchers in the corresponding ledger state.
-    /// When building LEADER_CLAIM ops, vouchers must be picked from this.
+    /// When building `LEADER_CLAIM` ops, vouchers must be picked from this.
     // TODO: Replace this with voucher_indices by moving voucher derivation to KMS.
     pub claimable_voucher_secrets: rpds::HashTrieSetSync<VoucherSecret>,
 }
