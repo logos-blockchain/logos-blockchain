@@ -85,6 +85,12 @@ pub enum WalletServiceError {
     #[error("PoC generation failed: {0:?}")]
     PoCGenerationFailed(#[from] lb_core::proofs::leader_claim_proof::Error),
 
+    #[error("No voucher secret left")]
+    NoVoucherSecretLeft,
+
+    #[error("Merkle path not found for voucher_cm: {0:?}")]
+    VoucherMerklePathNotFound(VoucherCm),
+
     #[error("blocking task failed: {0}")]
     TaskJoin(#[from] JoinError),
 }
@@ -488,12 +494,14 @@ where
                     OpProof::ZkSig(zk_sig)
                 }
                 Op::LeaderClaim(claim_op) => {
-                    let voucher_secret = voucher_secrets.pop().expect("No voucher secret left");
+                    let voucher_secret = voucher_secrets
+                        .pop()
+                        .ok_or(WalletServiceError::NoVoucherSecretLeft)?;
                     let voucher_cm = VoucherCm::from_secret(voucher_secret);
                     let path = ledger
                         .mantle_ledger()
                         .voucher_merkle_path(voucher_cm)
-                        .expect("Merkle path not found");
+                        .ok_or(WalletServiceError::VoucherMerklePathNotFound(voucher_cm))?;
 
                     let rewards_root = claim_op.rewards_root;
                     let mantle_tx_hash = claim_op.mantle_tx_hash;
@@ -627,7 +635,8 @@ where
     ) {
         let mut voucher_secret_bytes = [0u8; 31];
         OsRng.fill_bytes(&mut voucher_secret_bytes);
-        let voucher_secret = fr_from_bytes(&voucher_secret_bytes).unwrap();
+        let voucher_secret =
+            fr_from_bytes(&voucher_secret_bytes).expect("voucher secret bytes must be a valid Fr");
         let voucher_cm = VoucherCm::from_secret(voucher_secret);
 
         voucher_secrets.push(voucher_secret);
