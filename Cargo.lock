@@ -6604,6 +6604,7 @@ version = "0.1.0"
 dependencies = [
  "logos-blockchain-circuits-prover 0.1.0",
  "logos-blockchain-circuits-utils 0.1.0",
+ "logos-blockchain-cryptarchia-engine 0.1.0",
  "logos-blockchain-groth16 0.1.0",
  "logos-blockchain-witness-generator 0.1.0",
  "num-bigint",

@@ -8,15 +8,36 @@ pub struct Config {
     // trigger the additional fork selection rule, which is however only expected to be used
     // during bootstrapping.
     pub security_param: NonZero<u32>,
-    // f, the rate of occupied slots
-    pub active_slot_coeff: f64,
+    #[serde(skip, default = "Config::active_slot_coefficient")]
+    pub active_slot_coefficient: f64,
 }
 
 impl Config {
     #[must_use]
+    pub const fn new(security_param: NonZero<u32>) -> Self {
+        Self {
+            security_param,
+            active_slot_coefficient: Self::active_slot_coefficient(),
+        }
+    }
+    #[must_use]
+    const fn active_slot_coefficient() -> f64 {
+        #[cfg(not(feature = "high-active-slot-coefficient"))]
+        {
+            1f64
+        }
+        #[cfg(feature = "high-active-slot-coefficient")]
+        {
+            1f64 / 30f64
+        }
+    }
+
+    #[must_use]
     pub fn base_period_length(&self) -> NonZero<u64> {
-        NonZero::new((f64::from(self.security_param.get()) / self.active_slot_coeff).floor() as u64)
-            .expect("base_period_length with proper configuration should never be zero")
+        NonZero::new(
+            (f64::from(self.security_param.get()) / Self::active_slot_coefficient()).floor() as u64,
+        )
+        .expect("base_period_length with proper configuration should never be zero")
     }
 
     // return the number of slots required to have great confidence at least k

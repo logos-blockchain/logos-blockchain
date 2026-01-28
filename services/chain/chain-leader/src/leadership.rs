@@ -57,7 +57,7 @@ impl Leader {
                     utxo.note.value,
                     note_id,
                     *secret_key.as_fr(),
-                    self.config.consensus_config.active_slot_coeff,
+                    self.config.consensus_config.active_slot_coefficient,
                 ),
                 public_inputs.check_winning(utxo.note.value, note_id, *secret_key.as_fr())
             );
@@ -429,7 +429,7 @@ mod pol_tests {
             },
             consensus_config: lb_cryptarchia_engine::Config {
                 security_param: NonZero::new(5).unwrap(),
-                active_slot_coeff: 0.05,
+                active_slot_coefficient: 0.05,
             },
             sdp_config: SdpConfig {
                 service_params: Arc::new(

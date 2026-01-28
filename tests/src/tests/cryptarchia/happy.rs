@@ -30,7 +30,7 @@ async fn happy_test(topology: &Topology) {
             .deployment
             .cryptarchia
             .consensus_config
-            .active_slot_coeff
+            .active_slot_coefficient
         * config.deployment.time.slot_duration.as_secs() as f64
         * TIMEOUT_MULTIPLIER)
         .floor() as u64;

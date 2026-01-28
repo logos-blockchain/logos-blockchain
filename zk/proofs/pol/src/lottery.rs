@@ -5,23 +5,44 @@ use std::{
 
 use num_bigint::BigUint;
 use num_traits::{CheckedSub as _, Num as _};
-
 /// From [Proof of Leadership spec](https://www.notion.so/nomos-tech/Proof-of-Leadership-Specification-21c261aa09df819ba5b6d95d0fe3066d?source=copy_link#256261aa09df800fbc88e5aae5ea7e06)
 pub static P: LazyLock<BigUint> = LazyLock::new(|| {
-    BigUint::from_str_radix(
-        "30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001",
-        16,
-    )
-    .expect("P constant should parse")
+    #[cfg(not(feature = "high-active-slot-coefficient"))]
+    {
+        BigUint::from_str_radix(
+            "30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001",
+            16,
+        )
+        .expect("P constant should parse")
+    }
+    #[cfg(feature = "high-active-slot-coefficient")]
+    {
+        BigUint::from_str_radix(
+            "30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001",
+            16,
+        )
+        .expect("P constant should parse")
+    }
 });
 
 /// From [Proof of Leadership spec](https://www.notion.so/nomos-tech/Proof-of-Leadership-Specification-21c261aa09df819ba5b6d95d0fe3066d?source=copy_link#256261aa09df800fbc88e5aae5ea7e06)
 pub static T0_CONSTANT: LazyLock<BigUint> = LazyLock::new(|| {
-    BigUint::from_str_radix(
-        "1a3fb997fd58374772808c13d1c2ddacb5ab3ea77413f86fd6e0d3d978e5438",
-        16,
-    )
-    .expect("Constant should parse")
+    #[cfg(not(feature = "high-active-slot-coefficient"))]
+    {
+        BigUint::from_str_radix(
+            "1a3fb997fd58374772808c13d1c2ddacb5ab3ea77413f86fd6e0d3d978e5438",
+            16,
+        )
+        .expect("Constant should parse")
+    }
+    #[cfg(feature = "high-active-slot-coefficient")]
+    {
+        BigUint::from_str_radix(
+            "1a3fb997fd58374772808c13d1c2ddacb5ab3ea77413f86fd6e0d3d978e5438",
+            16,
+        )
+        .expect("Constant should parse")
+    }
 });
 
 /// From [Proof of Leadership spec](https://www.notion.so/nomos-tech/Proof-of-Leadership-Specification-21c261aa09df819ba5b6d95d0fe3066d?source=copy_link#256261aa09df800fbc88e5aae5ea7e06)

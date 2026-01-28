@@ -122,7 +122,7 @@ async fn test_ibd_behind_nodes() {
             .deployment
             .cryptarchia
             .consensus_config
-            .active_slot_coeff,
+            .active_slot_coefficient,
         height_check_timestamp.elapsed(),
     );
 

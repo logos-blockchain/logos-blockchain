@@ -1,24 +1,25 @@
 [package]
-categories  = { workspace = true }
+categories = { workspace = true }
 description = { workspace = true }
-edition     = { workspace = true }
-keywords    = { workspace = true }
-license     = { workspace = true }
-name        = "logos-blockchain-pol"
-readme      = { workspace = true }
-repository  = { workspace = true }
-version     = { workspace = true }
+edition = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+name = "logos-blockchain-pol"
+readme = { workspace = true }
+repository = { workspace = true }
+version = { workspace = true }
 
 [dependencies]
-lb-circuits-prover   = { workspace = true }
-lb-circuits-utils    = { workspace = true }
-lb-groth16           = { features = ["deser"], workspace = true }
+lb-cryptarchia-engine = { workspace = true }
+lb-circuits-prover = { workspace = true }
+lb-circuits-utils = { workspace = true }
+lb-groth16 = { features = ["deser"], workspace = true }
 lb-witness-generator = { workspace = true }
-num-bigint           = "0.4"
-num-traits           = "0.2.19"
-serde                = { features = ["derive", "std"], workspace = true }
-serde_json           = { version = "1.0" }
-thiserror            = "2.0"
+num-bigint = "0.4"
+num-traits = "0.2.19"
+serde = { features = ["derive", "std"], workspace = true }
+serde_json = { version = "1.0" }
+thiserror = "2.0"
 
 [dev-dependencies]
 
@@ -30,4 +31,5 @@ workspace = true
 
 [features]
 build-verification-key = []
-default                = ["build-verification-key"]
+default = ["build-verification-key"]
+high-active-slot-coefficient = ["lb-cryptarchia-engine/high-active-slot-coefficient"]

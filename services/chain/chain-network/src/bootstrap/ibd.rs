@@ -1088,7 +1088,7 @@ mod tests {
             },
             consensus_config: lb_cryptarchia_engine::Config {
                 security_param: NonZero::new(1).unwrap(),
-                active_slot_coeff: 1.0,
+                active_slot_coefficient: 1.0,
             },
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(

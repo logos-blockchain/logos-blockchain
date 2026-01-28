@@ -706,10 +706,7 @@ pub mod tests {
 
     #[must_use]
     pub const fn config_with(security_param: u32) -> Config {
-        Config {
-            security_param: NonZero::new(security_param).unwrap(),
-            active_slot_coeff: 1.0,
-        }
+        Config::new(NonZero::new(security_param).unwrap())
     }
 
     fn hash<T: Hash>(t: &T) -> [u8; 32] {

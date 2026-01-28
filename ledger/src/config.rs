@@ -72,7 +72,7 @@ mod tests {
             },
             consensus_config: lb_cryptarchia_engine::Config {
                 security_param: NonZero::new(5).unwrap(),
-                active_slot_coeff: 0.5,
+                active_slot_coefficient: 0.5,
             },
             sdp_config: crate::mantle::sdp::Config {
                 service_params: Arc::new(
@@ -119,7 +119,7 @@ mod tests {
             },
             consensus_config: lb_cryptarchia_engine::Config {
                 security_param: NonZero::new(5).unwrap(),
-                active_slot_coeff: 0.5,
+                active_slot_coefficient: 0.5,
             },
             sdp_config: crate::mantle::sdp::Config {
                 service_params: Arc::new(

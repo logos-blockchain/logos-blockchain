@@ -39,10 +39,7 @@ fn mainnet_settings() -> Settings {
             epoch_period_nonce_stabilization: 4.try_into().unwrap(),
             epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
         },
-        consensus_config: ConsensusConfig {
-            active_slot_coeff: 0.9,
-            security_param: 10.try_into().unwrap(),
-        },
+        consensus_config: ConsensusConfig::new(10.try_into().unwrap()),
         sdp_config: SdpConfig {
             min_stake: MinStake {
                 threshold: 1,

@@ -86,7 +86,7 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
             gossipsub_protocol: "/integration/logos-blockchain/cryptarchia/proto/1.0.0".to_owned(),
             consensus_config: lb_cryptarchia_engine::Config {
                 // a block should be produced (on average) every slot
-                active_slot_coeff: 0.9,
+                active_slot_coefficient: 0.9,
                 // by setting the slot coeff to 1, we also increase the probability of multiple
                 // blocks (forks) being produced in the same slot (epoch).
                 // Setting the security parameter to some value > 1 ensures
