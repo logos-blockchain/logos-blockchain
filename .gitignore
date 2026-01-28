@@ -32,3 +32,9 @@ c-bindings/lib_logos_blockchain.h
 node_modules
 *.database
 /tests/cucumber_tests/temp/
+
+# Nix
+result
+
+# Docker
+tempo-data/
