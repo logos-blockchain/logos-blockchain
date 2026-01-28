@@ -628,7 +628,9 @@ where
         }
     }
 
-    // TODO: Do this in KMS. DO NOT RESTART THE NODE TO NOT LOSE REWARDS FOR NOW
+    /// Generate a new voucher secret randomly and store it in Vec.
+    // TODO: Do this in KMS: Derive a voucher from leader_sk in KMS.
+    //       So, we don't store new vouchers to the service state.
     fn generate_new_voucher_secret(
         voucher_secrets: &mut Vec<Fr>,
         resp_tx: oneshot::Sender<VoucherCm>,
