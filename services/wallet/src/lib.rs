@@ -180,6 +180,7 @@ where
     async fn run(mut self) -> Result<(), DynError> {
         let Self {
             mut service_resources_handle,
+            mut voucher_secrets,
             ..
         } = self;
 
@@ -263,7 +264,7 @@ where
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Self::handle_wallet_message(&mut self.voucher_secrets, msg, &mut wallet, &storage_adapter, &cryptarchia_api, &kms).await;
+                    Self::handle_wallet_message(msg, &mut wallet, &storage_adapter, &cryptarchia_api, &kms, &mut voucher_secrets).await;
                 }
 
                 Ok(header_id) = new_block_receiver.recv() => {
@@ -308,12 +309,12 @@ where
         AsServiceId<Cryptarchia> + AsServiceId<Kms> + std::fmt::Debug + std::fmt::Display + Sync,
 {
     async fn handle_wallet_message(
-        voucher_secrets: &mut Vec<Fr>,
         msg: WalletMsg,
         wallet: &mut Wallet,
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        voucher_secrets: &mut Vec<Fr>,
     ) {
         if let Some(tip) = msg.tip()
             && let Err(err) = Self::backfill_if_not_in_sync(tip, wallet, storage, cryptarchia).await
@@ -357,7 +358,7 @@ where
                     }
                 };
 
-                Self::handle_sign_tx(voucher_secrets, funded, ledger, resp_tx, kms).await;
+                Self::handle_sign_tx(funded, ledger, resp_tx, kms, voucher_secrets).await;
             }
             WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
                 Self::get_leader_aged_notes(tip, resp_tx, wallet, cryptarchia).await;
@@ -384,13 +385,13 @@ where
     }
 
     async fn handle_sign_tx(
-        voucher_secrets: &mut Vec<Fr>,
         tx_builder: MantleTxBuilder,
         ledger: LedgerState,
         resp_tx: oneshot::Sender<Result<SignedMantleTx, WalletServiceError>>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        voucher_secrets: &mut Vec<Fr>,
     ) {
-        let signed_tx_res = Self::sign_tx(voucher_secrets, tx_builder, ledger, kms).await;
+        let signed_tx_res = Self::sign_tx(tx_builder, ledger, kms, voucher_secrets).await;
 
         if resp_tx.send(signed_tx_res).is_err() {
             error!("Failed to respond to FundAndSignTx");
@@ -398,10 +399,10 @@ where
     }
 
     async fn sign_tx(
-        voucher_secrets: &mut Vec<Fr>,
         tx_builder: MantleTxBuilder,
         ledger: LedgerState,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        voucher_secrets: &mut Vec<Fr>,
     ) -> Result<SignedMantleTx, WalletServiceError> {
         // Extract input public keys before building the transaction
         let input_pks: Vec<ZkPublicKey> = tx_builder
