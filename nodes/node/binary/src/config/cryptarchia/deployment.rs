@@ -1,3 +1,4 @@
+use core::num::NonZeroU32;
 use std::{collections::HashMap, sync::Arc};
 
 use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
@@ -10,9 +11,16 @@ use crate::config::deployment::WellKnownDeployment;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Settings {
     pub epoch_config: EpochConfig,
-    pub consensus_config: ConsensusConfig,
+    pub security_param: NonZeroU32,
     pub sdp_config: SdpConfig,
     pub gossipsub_protocol: String,
+}
+
+impl Settings {
+    #[must_use]
+    pub const fn consensus_config(&self) -> ConsensusConfig {
+        ConsensusConfig::new(self.security_param, slot_activation_coefficient())
+    }
 }
 
 // The same as `lb_ledger::mantle::sdp::Config`, minus the
@@ -40,10 +48,7 @@ fn mainnet_settings() -> Settings {
             epoch_period_nonce_stabilization: 4.try_into().unwrap(),
             epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
         },
-        consensus_config: ConsensusConfig::new(
-            10.try_into().unwrap(),
-            slot_activation_coefficient(),
-        ),
+        security_param: 10.try_into().unwrap(),
         sdp_config: SdpConfig {
             min_stake: MinStake {
                 threshold: 1,

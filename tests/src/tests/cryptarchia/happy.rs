@@ -19,11 +19,7 @@ async fn happy_test(topology: &Topology) {
     let nodes = topology.validators();
     let config = nodes[0].config();
 
-    let security_param = config
-        .deployment
-        .cryptarchia
-        .consensus_config
-        .security_param();
+    let security_param = config.deployment.cryptarchia.security_param;
     let n_blocks = security_param.get() * CHAIN_LENGTH_MULTIPLIER;
     println!("waiting for {n_blocks} blocks");
     let timeout = (f64::from(n_blocks) / slot_activation_coefficient()

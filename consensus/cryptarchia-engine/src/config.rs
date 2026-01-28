@@ -13,7 +13,7 @@ pub struct Config {
 
 impl Config {
     #[must_use]
-    pub fn new(security_param: NonZero<u32>, active_slot_coefficient: f64) -> Self {
+    pub const fn new(security_param: NonZero<u32>, active_slot_coefficient: f64) -> Self {
         Self {
             security_param,
             base_period_length: Self::compute_base_period_length(
@@ -29,11 +29,11 @@ impl Config {
     }
 
     #[must_use]
-    fn compute_base_period_length(
+    const fn compute_base_period_length(
         security_param: NonZero<u32>,
         active_slot_coefficient: f64,
     ) -> NonZero<u64> {
-        NonZero::new((f64::from(security_param.get()) / active_slot_coefficient).floor() as u64)
+        NonZero::new(((security_param.get() as f64) / active_slot_coefficient).floor() as u64)
             .expect("base_period_length with proper configuration should never be zero")
     }
 

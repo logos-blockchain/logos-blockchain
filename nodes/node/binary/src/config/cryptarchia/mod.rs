@@ -27,7 +27,7 @@ impl ServiceConfig {
         lb_chain_leader_service::LeaderSettings<(), Libp2pBroadcastSettings>,
     ) {
         let ledger_config = lb_ledger::Config {
-            consensus_config: self.deployment.consensus_config,
+            consensus_config: self.deployment.consensus_config(),
             epoch_config: self.deployment.epoch_config,
             sdp_config: lb_ledger::mantle::sdp::Config {
                 min_stake: self.deployment.sdp_config.min_stake,
