@@ -57,6 +57,7 @@ async fn test_handle_incoming_blend_message() {
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
+        0,
     );
     let public_info = new_public_info(session, membership.clone(), &settings);
     let mut processor = new_crypto_processor(
@@ -266,6 +267,7 @@ async fn test_handle_session_transition_expired() {
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
+        0,
     );
     // Set a long rounds_per_session to make the core quota large enough,
     // since we want the activity threshold to be sufficiently high.
@@ -344,6 +346,7 @@ async fn test_handle_session_event() {
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
+        0,
     );
     let public_info = new_public_info(session, membership.clone(), &settings);
     let crypto_processor = new_crypto_processor(
@@ -509,6 +512,7 @@ async fn complete_old_session_after_main_loop_done() {
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
+        0,
     );
 
     // Prepare streams.

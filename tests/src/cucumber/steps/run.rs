@@ -11,7 +11,7 @@ async fn run_scenario(world: &mut CucumberWorld) -> StepResult {
     world.run.result = Some(match deployer {
         DeployerKind::Local => {
             let mut scenario = world.build_local_scenario()?;
-            let deployer = LocalDeployer::default().with_membership_check(world.membership_check);
+            let deployer = LocalDeployer::default();
             let result = async {
                 let runner =
                     deployer

@@ -42,6 +42,7 @@ impl ServiceConfig {
                         minimum_network_size: blend_deployment.common.minimum_network_size,
                         num_blend_layers: blend_deployment.common.num_blend_layers,
                         rounds_per_session: blend_deployment.common.timing.rounds_per_session,
+                        data_replication_factor: blend_deployment.common.data_replication_factor,
                     },
                 },
             },

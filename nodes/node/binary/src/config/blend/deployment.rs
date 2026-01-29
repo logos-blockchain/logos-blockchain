@@ -34,6 +34,7 @@ pub struct CommonSettings {
     pub timing: TimingSettings,
     pub minimum_network_size: NonZeroU64,
     pub protocol_name: StreamProtocol,
+    pub data_replication_factor: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -58,6 +59,7 @@ fn mainnet_settings() -> Settings {
                 rounds_per_session_transition_period: 30.try_into().unwrap(),
             },
             protocol_name: StreamProtocol::new("/logos-blockchain/blend/1.0.0"),
+            data_replication_factor: 0,
         },
         core: CoreSettings {
             minimum_messages_coefficient: 3.try_into().unwrap(),

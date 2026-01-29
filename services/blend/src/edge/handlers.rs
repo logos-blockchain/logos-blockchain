@@ -98,7 +98,7 @@ where
     ProofsGenerator: LeaderProofsGenerator,
 {
     /// Blend a new message received from another service.
-    pub async fn handle_messages_to_blend(&mut self, message: Vec<u8>) {
+    pub async fn handle_message_to_blend(&mut self, message: Vec<u8>) {
         let Ok(message) = self
             .cryptographic_processor
             .encapsulate_data_payload(&message)

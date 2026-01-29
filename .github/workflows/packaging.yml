@@ -92,7 +92,7 @@ jobs:
         name: Build Logos blockchain node bundler
         with:
           command: build
-          args: --bin bundle-logos-blockchain-node --release --target ${{ matrix.platform.target_triple }}
+          args: --bin logos-blockchain-bundle-node --release --target ${{ matrix.platform.target_triple }}
 
       - name: Bundle
         shell: bash
@@ -113,7 +113,7 @@ jobs:
             EXTENSION=""
           fi
   
-          "target/${{ matrix.platform.target_triple }}/release/bundle-logos-blockchain-node$EXTENSION" $PARAMETER
+          "target/${{ matrix.platform.target_triple }}/release/logos-blockchain-bundle-node$EXTENSION" $PARAMETER
 
       - name: Flatten Linux bundles
         if: matrix.platform.os == 'linux'

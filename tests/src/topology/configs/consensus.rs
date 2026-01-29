@@ -55,6 +55,7 @@ pub struct GeneralConsensusConfig {
     genesis_tx: GenesisTx,
     pub utxos: Vec<Utxo>,
     pub blend_notes: Vec<ServiceNote>,
+    pub funding_sk: ZkKey,
 }
 
 impl GeneralConsensusConfig {
@@ -121,16 +122,24 @@ pub fn create_consensus_configs(
 ) -> Vec<GeneralConsensusConfig> {
     let mut leader_keys = Vec::new();
     let mut blend_notes = Vec::new();
+    let mut sdp_notes = Vec::new();
 
-    let utxos = create_utxos_for_leader_and_services(ids, &mut leader_keys, &mut blend_notes);
+    let utxos = create_utxos_for_leader_and_services(
+        ids,
+        &mut leader_keys,
+        &mut blend_notes,
+        &mut sdp_notes,
+    );
     let genesis_tx = create_genesis_tx(&utxos);
 
     leader_keys
         .into_iter()
-        .map(|(pk, sk)| GeneralConsensusConfig {
+        .enumerate()
+        .map(|(i, (pk, sk))| GeneralConsensusConfig {
             blend_notes: blend_notes.clone(),
             genesis_tx: genesis_tx.clone(),
             utxos: utxos.clone(),
+            funding_sk: sdp_notes[i].sk.clone(),
             user_config: Config {
                 leader: LeaderConfig {
                     pk,
@@ -173,6 +182,7 @@ fn create_utxos_for_leader_and_services(
     ids: &[[u8; 32]],
     leader_keys: &mut Vec<(ZkPublicKey, ZkKey)>,
     blend_notes: &mut Vec<ServiceNote>,
+    sdp_notes: &mut Vec<ServiceNote>,
 ) -> Vec<Utxo> {
     let derive_key_material = |prefix: &[u8], id_bytes: &[u8]| -> [u8; 16] {
         let mut sk_data = [0; 16];
@@ -217,6 +227,23 @@ fn create_utxos_for_leader_and_services(
             note: note_blend,
             tx_hash: BigUint::from(0u8).into(),
             output_index: 0,
+        });
+        output_index += 1;
+
+        let sk_sdp_data = derive_key_material(b"sdp", &id);
+        let sk_sdp = ZkKey::from(BigUint::from_bytes_le(&sk_sdp_data));
+        let pk_sdp = sk_sdp.to_public_key();
+        let note_sdp = Note::new(100_000, pk_sdp);
+        sdp_notes.push(ServiceNote {
+            pk: pk_sdp,
+            sk: sk_sdp,
+            note: note_sdp,
+            output_index,
+        });
+        utxos.push(Utxo {
+            note: note_sdp,
+            tx_hash: BigUint::from(0u8).into(),
+            output_index,
         });
         output_index += 1;
     }

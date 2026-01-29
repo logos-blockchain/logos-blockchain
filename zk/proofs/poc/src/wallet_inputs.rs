@@ -8,6 +8,7 @@ pub struct PoCWalletInputs {
     voucher_merkle_path_selectors: Vec<Groth16Input>,
 }
 
+#[derive(Clone, Debug)]
 pub struct PoCWalletInputsData {
     pub secret_voucher: Fr,
     pub voucher_merkle_path: Vec<Fr>,

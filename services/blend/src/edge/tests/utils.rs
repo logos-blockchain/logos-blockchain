@@ -146,6 +146,7 @@ pub fn settings(
         backend: msg_sender,
         minimum_network_size: NonZeroU64::new(minimum_network_size).unwrap(),
         cover: CoverTrafficSettings::default(),
+        data_replication_factor: 0,
     }
 }
 

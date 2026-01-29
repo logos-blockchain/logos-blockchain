@@ -1,7 +1,7 @@
 use core::pin::Pin;
 
 use async_trait::async_trait;
-use futures::{Stream, StreamExt as _, stream};
+use futures::{FutureExt as _, Stream, StreamExt as _, stream};
 use lb_blend_message::crypto::{
     key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
 };
@@ -108,7 +108,18 @@ fn create_leadership_proof_stream(
 
     stream::iter(0u64..)
         .map(move |current_index| {
-            let encapsulation_layer = current_index % message_quota;
+            // This represents the total number of encapsulations sent out for each message.
+            // E.g., for a session with data message replication factor of `1`, we get
+            // indices `0` to `2` that belong to the first copy encapsulation, and indices
+            // `3` to `5` that belong to the second copy encapsulation.
+            // In the end, because the expected maximum message quota is `6` (if we take `3`
+            // as the blending operations per message), we end up with two,
+            // fully-encapsulated copies of the same original message, with valid proofs
+            // because within the expected index value.
+            // The logic on how these indices are mapped to each message + encapsulation
+            // layer is out of scope for this component, and will be up to the
+            // message scheduler.
+            let message_release_index = current_index % message_quota;
             let private_inputs = private_inputs.clone();
 
             spawn_blocking(move || {
@@ -121,19 +132,19 @@ fn create_leadership_proof_stream(
                         session: public_inputs.session,
                     },
                     PrivateInputs::new_proof_of_leadership_quota_inputs(
-                        encapsulation_layer,
+                        message_release_index,
                         private_inputs,
                     ),
                 )
-                .ok()?;
+                .expect("Leadership PoQ proof creation should not fail.");
                 let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
-                Some(BlendLayerProof {
+                BlendLayerProof {
                     proof_of_quota,
                     proof_of_selection,
                     ephemeral_signing_key,
-                })
+                }
             })
+            .map(|res| res.expect("Spawning task for leadership proof generation should not fail."))
         })
         .buffered(PROOFS_GENERATOR_BUFFER_SIZE)
-        .filter_map(async |result| result.ok().flatten())
 }

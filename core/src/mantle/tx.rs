@@ -19,6 +19,7 @@ use crate::{
         ledger::Tx as LedgerTx,
         ops::{Op, OpProof},
     },
+    proofs::leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
 };
 
 /// The hash of a transaction
@@ -220,6 +221,8 @@ pub struct SignedMantleTx {
 pub enum VerificationError {
     #[error("Invalid signature for operation at index {op_index}")]
     InvalidSignature { op_index: usize },
+    #[error("Invalid proof of claim for operation at index {op_index}")]
+    InvalidProofOfClaim { op_index: usize },
     #[error("Missing required proof for {op_type} operation at index {op_index}")]
     MissingProof {
         op_type: &'static str,
@@ -307,6 +310,15 @@ impl SignedMantleTx {
                         op_type: v.0.as_str(),
                         op_index: idx,
                     });
+                }
+                (Op::LeaderClaim(leader_claim_op), OpProof::PoC(poc)) => {
+                    let ok = poc.verify(&LeaderClaimPublic {
+                        voucher_root: leader_claim_op.rewards_root.into(),
+                        mantle_tx_hash: leader_claim_op.mantle_tx_hash.into(),
+                    });
+                    if !ok {
+                        return Err(VerificationError::InvalidProofOfClaim { op_index: idx });
+                    }
                 }
                 // Other operations are checked by the ledger or don't require verification here
                 _ => {}

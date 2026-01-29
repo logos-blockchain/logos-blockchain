@@ -14,7 +14,7 @@ It maintains account balances, batches transactions into blocks, and submits the
 ## Building
 
 ```bash
-cargo build --release -p demo-sequencer
+cargo build --release -p logos-blockchain-demo-sequencer
 ```
 
 ## Running
@@ -43,7 +43,7 @@ export SEQUENCER_INITIAL_BALANCE=1000
 export SEQUENCER_NODE_AUTH_USERNAME=admin
 export SEQUENCER_NODE_AUTH_PASSWORD=secret
 
-./target/release/demo-sequencer
+./target/release/logos-blockchain-demo-sequencer
 ```
 
 ### Using a `.env` File
@@ -63,7 +63,7 @@ SEQUENCER_NODE_AUTH_PASSWORD=secret
 Then run with a tool like `dotenv`:
 
 ```bash
-dotenv ./target/release/demo-sequencer
+dotenv ./target/release/logos-blockchain-demo-sequencer
 ```
 
 ## HTTP API
@@ -165,10 +165,10 @@ The sequencer uses `tracing` for structured logging. Control log level via the `
 
 ```bash
 # Debug logging
-RUST_LOG=debug ./target/release/demo-sequencer
+RUST_LOG=debug ./target/release/logos-blockchain-demo-sequencer
 
 # Only show warnings and errors
-RUST_LOG=warn ./target/release/demo-sequencer
+RUST_LOG=warn ./target/release/logos-blockchain-demo-sequencer
 ```
 
 ## Data Persistence

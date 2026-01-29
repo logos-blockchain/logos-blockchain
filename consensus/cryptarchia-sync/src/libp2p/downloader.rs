@@ -86,7 +86,7 @@ impl Downloader {
         utils::close_stream(peer_id, stream).await
     }
 
-    pub async fn receive_blocks(
+    pub fn receive_blocks(
         request_stream: BlocksRequestStream,
         timeout: Duration,
     ) -> Result<(), ChainSyncError> {
@@ -94,6 +94,10 @@ impl Downloader {
         let peer_id = request_stream.peer_id;
         let reply_channel = request_stream.reply_channel;
 
+        #[expect(
+            closure_returning_async_block,
+            reason = "Signature expected by `try_unfold`"
+        )]
         let stream = stream::try_unfold(libp2p_stream, move |mut stream| async move {
             let response = time::timeout(timeout, unpack_from_reader(&mut stream)).await;
 
@@ -112,11 +116,11 @@ impl Downloader {
                     })
                 }
                 Ok(Err(e)) => {
-                    let _ = utils::close_stream(peer_id, stream).await;
+                    drop(utils::close_stream(peer_id, stream).await);
                     Err(ChainSyncError::from((peer_id, e)))
                 }
                 Err(e) => {
-                    let _ = utils::close_stream(peer_id, stream).await;
+                    drop(utils::close_stream(peer_id, stream).await);
                     Err(ChainSyncError::from((peer_id, e)))
                 }
             }
@@ -128,7 +132,7 @@ impl Downloader {
             .map_err(|_| ChainSyncError {
                 peer: peer_id,
                 kind: ChainSyncErrorKind::ChannelSendError(
-                    "Failed to send blocks stream".to_string(),
+                    "Failed to send blocks stream".to_owned(),
                 ),
             })
     }

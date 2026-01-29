@@ -12,6 +12,8 @@ pub struct StartingBlendConfig<BackendSettings> {
     pub num_blend_layers: NonZeroU64,
     pub minimum_network_size: NonZeroU64,
     pub cover: CoverTrafficSettings,
+    /// `R_c`: replication factor for data messages.
+    pub data_replication_factor: u64,
 }
 
 /// Same values as [`StartingBlendConfig`] but with the secret key exfiltrated
@@ -24,4 +26,17 @@ pub struct RunningBlendConfig<BackendSettings> {
     pub num_blend_layers: NonZeroU64,
     pub minimum_network_size: NonZeroU64,
     pub cover: CoverTrafficSettings,
+    pub data_replication_factor: u64,
+}
+
+impl<BackendSettings> RunningBlendConfig<BackendSettings> {
+    pub const fn session_leadership_quota(&self) -> u64 {
+        let num_blend_layers = self.num_blend_layers.get();
+        let additional_encapsulations = num_blend_layers
+            .checked_mul(self.data_replication_factor)
+            .expect("Overflow when computing total replication factor.");
+        num_blend_layers
+            .checked_add(additional_encapsulations)
+            .expect("Overflow when computing leadership quota.")
+    }
 }

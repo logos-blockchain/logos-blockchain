@@ -4,6 +4,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction as _, TxHash},
 };
+use lb_sdp_service::mempool::{MempoolAdapterError, SdpMempoolAdapter as SdpMempoolAdapterTrait};
 use lb_tx_service::{
     MempoolMsg, TxMempoolService,
     backend::{MemPool, RecoverableMempool},
@@ -14,11 +15,9 @@ use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
-use super::{MempoolAdapterError, SdpMempoolAdapter};
-
 type MempoolRelay<Item, Key> = OutboundRelay<MempoolMsg<HeaderId, Item, Item, Key>>;
 
-pub struct SdpMempoolNetworkAdapter<MempoolNetAdapter, Mempool, RuntimeServiceId>
+pub struct SdpMempoolAdapter<MempoolNetAdapter, Mempool, RuntimeServiceId>
 where
     Mempool: MemPool<BlockId = HeaderId, Key = TxHash>,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Key = Mempool::Key>,
@@ -30,8 +29,8 @@ where
 }
 
 #[async_trait::async_trait]
-impl<MempoolNetAdapter, Mempool, RuntimeServiceId> SdpMempoolAdapter
-    for SdpMempoolNetworkAdapter<MempoolNetAdapter, Mempool, RuntimeServiceId>
+impl<MempoolNetAdapter, Mempool, RuntimeServiceId> SdpMempoolAdapterTrait
+    for SdpMempoolAdapter<MempoolNetAdapter, Mempool, RuntimeServiceId>
 where
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = SignedMantleTx> + Send + Sync,
@@ -66,6 +65,8 @@ where
             .await
             .map_err(|(e, _)| MempoolAdapterError::Other(Box::new(e)))?;
 
-        receiver.await?.map_err(MempoolAdapterError::Mempool)
+        receiver
+            .await?
+            .map_err(|e| MempoolAdapterError::Mempool(Box::new(e)))
     }
 }

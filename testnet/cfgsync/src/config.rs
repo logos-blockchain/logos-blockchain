@@ -99,7 +99,7 @@ pub fn create_node_configs(
     }
 
     // Set Blend keys in KMS of each node config.
-    let kms_configs = create_kms_configs(&blend_configs);
+    let kms_configs = create_kms_configs(&blend_configs, &consensus_configs);
 
     for (i, host) in hosts.into_iter().enumerate() {
         let consensus_config = consensus_configs[i].clone();

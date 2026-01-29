@@ -451,6 +451,7 @@ mod pol_tests {
                         message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZero::new(3u64).unwrap(),
                         minimum_network_size: NonZero::new(1u64).unwrap(),
+                        data_replication_factor: 0,
                     },
                 },
                 min_stake: MinStake {

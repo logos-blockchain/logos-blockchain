@@ -96,13 +96,13 @@ To execute the test suite with the debug feature flag, use the following command
 _**MacOS or Linux**_
 
 ```bash
-POL_PROOF_DEV_MODE=1 cargo test -p tests -F debug disseminate_and_retrieve
+POL_PROOF_DEV_MODE=1 cargo test -p logos-blockchain-tests -F debug disseminate_and_retrieve
 ```
 
 _**Windows (PowerShell)**_
 
 ```pwsh
-$env:POL_PROOF_DEV_MODE="1"; cargo test -p tests -F debug disseminate_and_retrieve
+$env:POL_PROOF_DEV_MODE="1"; cargo test -p logos-blockchain-tests -F debug disseminate_and_retrieve
 ```
 
 `-F debug`: Enables the debug feature flag for the integration tests, allowing for extra debug output or specific
@@ -117,8 +117,8 @@ the corresponding binaries:
 
 ```text
 POL_PROOF_DEV_MODE=1
-NOMOS_KZGRS_PARAMS_PATH=/path-to/tests/kzgrs
-NOMOS_NODE_BIN=/path-to/target/release/nomos-node
+LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH=/path-to/tests/logos-blockchain-kzgrs
+LOGOS_BLOCKCHAIN__NODE_BIN=/path-to/target/release/logos-blockchain-node
 ```
 
 Filtering based on tags can be done using the `--tags` option. For example, to run all tests tagged with `@normal_ci`, 

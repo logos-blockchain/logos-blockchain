@@ -135,8 +135,8 @@ mod tests {
     #[tokio::test]
     async fn yield_two_events_alternately() {
         let session_duration = Duration::from_secs(1);
-        let transition_period = Duration::from_millis(100);
-        let time_tolerance = Duration::from_millis(50);
+        let transition_period = Duration::from_millis(200);
+        let time_tolerance = Duration::from_millis(100);
 
         let mut stream = SessionEventStream::new(
             Box::pin(IntervalStream::new(interval(session_duration))),

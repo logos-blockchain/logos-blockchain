@@ -201,7 +201,7 @@ impl CucumberWorld {
             let node_ok = env::var_os("NOMOS_NODE_BIN")
                 .map(PathBuf::from)
                 .is_some_and(|p| p.is_file())
-                || shared_host_bin_path("nomos-node").is_file();
+                || shared_host_bin_path("logos-blockchain-node").is_file();
 
             if !(node_ok) {
                 return Err(StepError::Preflight {
@@ -267,7 +267,7 @@ fn make_builder(topology: TopologySpec) -> Builder<()> {
         let base = match topology.network {
             NetworkKind::Star => t.network_star(),
         };
-        base.validators(topology.validators)
+        base.nodes(topology.validators)
     })
 }
 

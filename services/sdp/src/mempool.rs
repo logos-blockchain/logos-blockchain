@@ -1,6 +1,3 @@
-pub mod sdp;
-
-use lb_tx_service::backend::MempoolError;
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
@@ -9,7 +6,7 @@ use overwatch::{
 #[derive(thiserror::Error, Debug)]
 pub enum MempoolAdapterError {
     #[error("Mempool responded with and error: {0}")]
-    Mempool(#[from] MempoolError),
+    Mempool(DynError),
     #[error("Channel receive error: {0}")]
     ChannelRecv(#[from] tokio::sync::oneshot::error::RecvError),
     #[error("Other mempool adapter error: {0}")]

@@ -54,7 +54,7 @@ impl Provider {
             }
         };
 
-        let _ = close_stream(peer_id, libp2p_stream).await;
+        drop(close_stream(peer_id, libp2p_stream).await);
 
         send_result
     }
@@ -78,7 +78,7 @@ impl Provider {
             ProviderResponse::Unavailable { reason } => {
                 let response = DownloadBlocksResponse::Failure(reason);
                 send_message(peer_id, &mut libp2p_stream, &response).await?;
-                let _ = close_stream(peer_id, libp2p_stream).await;
+                drop(close_stream(peer_id, libp2p_stream).await);
                 Ok(())
             }
         }
@@ -96,7 +96,7 @@ impl Provider {
                     "Failed to receive block from stream: {e}"
                 )),
             })
-            .try_fold(&mut libp2p_stream, |stream, block| async move {
+            .try_fold(&mut libp2p_stream, async |stream, block| {
                 let message = DownloadBlocksResponse::Block(block);
                 send_message(peer_id, stream, &message).await?;
                 Ok(stream)
@@ -111,12 +111,12 @@ impl Provider {
             Err(e) => {
                 error!("Failed to send blocks to peer {}: {}", peer_id, e);
                 let message = DownloadBlocksResponse::Failure(e.to_string());
-                let _ = send_message(peer_id, &mut libp2p_stream, &message).await;
+                drop(send_message(peer_id, &mut libp2p_stream, &message).await);
                 Err(e)
             }
         };
 
-        let _ = close_stream(peer_id, libp2p_stream).await;
+        drop(close_stream(peer_id, libp2p_stream).await);
 
         final_result
     }

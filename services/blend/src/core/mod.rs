@@ -394,6 +394,7 @@ where
             scheduler: blend_config.scheduler,
             time: blend_config.time,
             zk: blend_config.zk,
+            data_replication_factor: blend_config.data_replication_factor,
         };
         let (
             mut remaining_session_stream,
@@ -574,7 +575,7 @@ where
                   }| CoreSessionInfo {
                 public: CoreSessionPublicInfo {
                     poq_core_public_inputs: CoreInputs {
-                        quota: config.session_quota(membership.size()),
+                        quota: config.session_core_quota(membership.size()),
                         zk_root,
                     },
                     membership,
@@ -636,7 +637,7 @@ where
         epoch: LeaderInputs {
             pol_ledger_aged,
             pol_epoch_nonce,
-            message_quota: blend_config.num_blend_layers.into(),
+            message_quota: blend_config.session_leadership_quota(),
             total_stake,
         },
         session: SessionInfo {
@@ -702,7 +703,7 @@ where
     let message_scheduler = SchedulerWrapper::new_with_initial_messages(
         SchedulerSessionInfo {
             core_quota: blend_config
-                .session_quota(current_membership_info.public.membership.size())
+                .session_core_quota(current_membership_info.public.membership.size())
                 .saturating_sub(current_recovery_checkpoint.spent_quota()),
             session_number: u128::from(current_membership_info.public.session).into(),
         },
@@ -842,8 +843,14 @@ where
 
     loop {
         tokio::select! {
-            Some(local_data_message) = inbound_relay.next() => {
-                recovery_checkpoint = handle_local_data_message(local_data_message, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
+            Some(ServiceMessage::Blend(message_payload)) = inbound_relay.next() => {
+                // We serialize here, outside of the handler function, so that we can serialize only once for all replicas.
+                let serialized_data_message = NetworkMessage::<NetAdapter::BroadcastSettings>::to_bytes(&message_payload).expect("NetworkMessage should be able to be serialized");
+
+                let message_copies = blend_config.data_replication_factor.checked_add(1).unwrap();
+                for _ in 0..message_copies {
+                    recovery_checkpoint = handle_serialized_local_data_message(&serialized_data_message, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
+                }
             }
             Some(incoming_message) = blend_messages.next() => {
                 recovery_checkpoint = handle_incoming_blend_message(incoming_message, &mut message_scheduler, old_session_message_scheduler.as_mut(), &crypto_processor, old_session_crypto_processor.as_ref(),  recovery_checkpoint);
@@ -1064,7 +1071,7 @@ where
             backend.rotate_session(new_session_info.clone()).await;
 
             let new_scheduler_session_info = SchedulerSessionInfo {
-                core_quota: settings.session_quota(new_session_info.membership.size()),
+                core_quota: settings.session_core_quota(new_session_info.membership.size()),
                 session_number: u128::from(new_session).into(),
             };
 
@@ -1211,7 +1218,11 @@ enum HandleSessionEventOutput<
 /// encapsulate its payload is performed. If encapsulation is successful, the
 /// message is queued with the Blend scheduler and blended during the next
 /// round.
-async fn handle_local_data_message<
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: Address this at some point."
+)]
+async fn handle_serialized_local_data_message<
     NodeId,
     Rng,
     BackendSettings,
@@ -1220,7 +1231,7 @@ async fn handle_local_data_message<
     ProofsVerifier,
     CorePoQGenerator,
 >(
-    local_data_message: ServiceMessage<BroadcastSettings>,
+    serialized_local_data_message: &[u8],
     cryptographic_processor: &mut CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1243,14 +1254,8 @@ where
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
-    let ServiceMessage::Blend(message_payload) = local_data_message;
-
-    let serialized_data_message = NetworkMessage::<BroadcastSettings>::to_bytes(&message_payload)
-        .expect("NetworkMessage should be able to be serialized")
-        .to_vec();
-
     let Ok(wrapped_message) = cryptographic_processor
-        .encapsulate_data_payload(&serialized_data_message)
+        .encapsulate_data_payload(serialized_local_data_message)
         .await
         .inspect_err(|e| {
             tracing::error!(target: LOG_TARGET, "Failed to wrap message: {e:?}");
@@ -1289,9 +1294,16 @@ where
         multi_layer_decapsulation_output.into_components();
     let processed_message = match remaining_message_type {
         // If all the layers are peeled off locally, then we are left with the initial data message.
-        DecapsulatedMessageType::Completed(_) => {
-            tracing::debug!(target: LOG_TARGET, "Locally generated data message {message_payload:?} had all the {} layers addressed to this same node. Propagating only the fully decapsulated message.", blending_tokens.len());
-            ProcessedMessage::from(message_payload)
+        DecapsulatedMessageType::Completed(fully_decapsulated_message) => {
+            assert!(
+                fully_decapsulated_message.payload_type() == PayloadType::Data,
+                "Locally-generated and fully-decapsulated message should be a data message."
+            );
+            let deserialized_data_message =
+                NetworkMessage::from_bytes(fully_decapsulated_message.payload_body())
+                    .expect("Locally-generated and serialized message should be deserializable.");
+            tracing::debug!(target: LOG_TARGET, "Locally generated data message {deserialized_data_message:?} had all the {} layers addressed to this same node. Propagating only the fully decapsulated message.", blending_tokens.len());
+            ProcessedMessage::from(deserialized_data_message)
         }
         DecapsulatedMessageType::Incompleted(remaining_encapsulated_message) => {
             tracing::debug!(target: LOG_TARGET, "Locally generated data message had the outermost {} layers addressed to this same node. Propagating only the remaining encapsulated layers.", blending_tokens.len());
@@ -1812,7 +1824,7 @@ where
             total_stake,
         }) => {
             let new_leader_inputs = LeaderInputs {
-                message_quota: settings.num_blend_layers.into(),
+                message_quota: settings.session_leadership_quota(),
                 pol_epoch_nonce,
                 pol_ledger_aged,
                 total_stake,
@@ -1839,7 +1851,7 @@ where
             total_stake,
         }) => {
             let new_leader_inputs = LeaderInputs {
-                message_quota: settings.num_blend_layers.into(),
+                message_quota: settings.session_leadership_quota(),
                 pol_epoch_nonce,
                 pol_ledger_aged,
                 total_stake,

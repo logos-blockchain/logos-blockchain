@@ -19,6 +19,7 @@ use rand::{Rng as _, thread_rng};
 
 use crate::{
     adjust_timeout,
+    common::kms::key_id_for_preload_backend,
     nodes::validator::{Validator, create_validator_config},
     topology::configs::{
         api::create_api_configs,
@@ -150,7 +151,7 @@ impl Topology {
         }
 
         // Set Blend keys in KMS of each node config.
-        let kms_configs = create_kms_configs(&blend_configs);
+        let kms_configs = create_kms_configs(&blend_configs, &consensus_configs);
 
         let mut node_configs = vec![];
 
@@ -367,11 +368,15 @@ fn find_expected_peer_counts(
 }
 
 #[must_use]
-pub fn create_kms_configs(blend_configs: &[GeneralBlendConfig]) -> Vec<PreloadKMSBackendSettings> {
+pub fn create_kms_configs(
+    blend_configs: &[GeneralBlendConfig],
+    consensus_configs: &[GeneralConsensusConfig],
+) -> Vec<PreloadKMSBackendSettings> {
     blend_configs
         .iter()
+        .enumerate()
         .map(
-            |(blend_conf, private_key, zk_secret_key)| PreloadKMSBackendSettings {
+            |(i, (blend_conf, private_key, zk_secret_key))| PreloadKMSBackendSettings {
                 keys: [
                     (
                         blend_conf.non_ephemeral_signing_key_id.clone(),
@@ -380,6 +385,11 @@ pub fn create_kms_configs(blend_configs: &[GeneralBlendConfig]) -> Vec<PreloadKM
                     (
                         blend_conf.core.zk.secret_key_kms_id.clone(),
                         zk_secret_key.clone().into(),
+                    ),
+                    // SDP funding secret key - used by wallet for signing SDP transactions
+                    (
+                        key_id_for_preload_backend(&consensus_configs[i].funding_sk.clone().into()),
+                        consensus_configs[i].funding_sk.clone().into(),
                     ),
                 ]
                 .into(),

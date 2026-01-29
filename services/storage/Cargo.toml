@@ -35,6 +35,6 @@ mock            = []
 rocksdb-backend = ["dep:rocksdb"]
 
 [[bin]]
-name              = "rocks"
+name              = "logos-blockchain-rocksdb"
 path              = "src/bin/rocks.rs"
 required-features = ["rocksdb-backend"]
