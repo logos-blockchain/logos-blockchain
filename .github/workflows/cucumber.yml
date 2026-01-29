@@ -78,7 +78,6 @@ jobs:
           POL_PROOF_DEV_MODE: true
           CONSENSUS_SLOT_TIME: 5
           LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
-          USE_RELEASE_BINARIES: true
         with:
           command: nextest
           # - We don't test benches as they take 6h+, leading to a timeout
