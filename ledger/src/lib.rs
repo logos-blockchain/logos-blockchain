@@ -274,6 +274,15 @@ impl LedgerState {
         self.cryptarchia_ledger.next_epoch_state()
     }
 
+    /// Computes the epoch state for a given slot.
+    ///
+    /// This handles the case where epochs have been skipped (no blocks produced).
+    /// Returns `None` if the requested epoch is in the past.
+    #[must_use]
+    pub fn epoch_state_for_slot(&self, slot: Slot, config: &Config) -> Option<EpochState> {
+        self.cryptarchia_ledger.epoch_state_for_slot(slot, config)
+    }
+
     #[must_use]
     pub const fn latest_utxos(&self) -> &UtxoTree {
         self.cryptarchia_ledger.latest_utxos()

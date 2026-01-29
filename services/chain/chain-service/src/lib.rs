@@ -317,17 +317,10 @@ impl Cryptarchia {
         Ok((cryptarchia, pruned_blocks, reorged_blocks))
     }
 
-    fn epoch_state_for_slot(&self, slot: Slot) -> Option<&EpochState> {
+    fn epoch_state_for_slot(&self, slot: Slot) -> Option<EpochState> {
         let tip = self.tip();
         let state = self.ledger.state(&tip).expect("no state for tip");
-        let requested_epoch = self.ledger.config().epoch(slot);
-        if state.epoch_state().epoch() == requested_epoch {
-            Some(state.epoch_state())
-        } else if requested_epoch == state.next_epoch_state().epoch() {
-            Some(state.next_epoch_state())
-        } else {
-            None
-        }
+        state.epoch_state_for_slot(slot, self.ledger.config())
     }
 
     /// Remove the ledger states associated with blocks that have been pruned by
@@ -792,7 +785,7 @@ where
                 });
             }
             ConsensusMsg::GetEpochState { slot, tx } => {
-                let epoch_state = cryptarchia.epoch_state_for_slot(slot).cloned();
+                let epoch_state = cryptarchia.epoch_state_for_slot(slot);
                 tx.send(epoch_state).unwrap_or_else(|_| {
                     error!("Could not send epoch state through channel");
                 });
