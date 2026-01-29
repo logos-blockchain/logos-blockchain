@@ -1,4 +1,3 @@
-use ark_ff::Field as _;
 use lb_groth16::{Fr, serde::serde_fr};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -34,14 +33,6 @@ impl Groth16LeaderClaimProof {
         })
     }
 
-    #[must_use]
-    pub fn genesis() -> Self {
-        Self {
-            proof: lb_poc::PoCProof::from_bytes(&[0u8; 128]),
-            voucher_nf: VoucherNullifier::default(),
-        }
-    }
-
     fn generate_proof(private: LeaderClaimPrivate) -> Result<(lb_poc::PoCProof, Fr), Error> {
         let (proof, verif_inputs) =
             lb_poc::prove(&private.input.into()).map_err(Error::PoCProofFailed)?;
@@ -58,8 +49,6 @@ pub trait LeaderClaimProof {
     /// Verify the proof against the public inputs.
     fn verify(&self, public_inputs: &LeaderClaimPublic) -> bool;
 
-    fn verify_genesis(&self) -> bool;
-
     fn voucher_nf(&self) -> &VoucherNullifier;
 }
 
@@ -74,11 +63,6 @@ impl LeaderClaimProof for Groth16LeaderClaimProof {
             ),
         )
         .is_ok()
-    }
-
-    fn verify_genesis(&self) -> bool {
-        self.proof == lb_poc::PoCProof::from_bytes(&[0u8; 128])
-            && self.voucher_nf == VoucherNullifier::from(Fr::ZERO)
     }
 
     fn voucher_nf(&self) -> &VoucherNullifier {

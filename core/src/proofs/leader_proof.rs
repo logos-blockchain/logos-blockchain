@@ -175,10 +175,11 @@ impl LeaderProof for Groth16LeaderProof {
     }
 
     fn verify_genesis(&self) -> bool {
-        self.proof == lb_pol::PoLProof::from_bytes(&[0u8; 128])
-            && self.entropy_contribution == Fr::ZERO
-            && self.leader_key == Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()
-            && self.voucher_cm == VoucherCm::default()
+        let expected_genesis = Self::genesis();
+        self.proof == expected_genesis.proof
+            && self.entropy_contribution == expected_genesis.entropy_contribution
+            && self.leader_key == expected_genesis.leader_key
+            && self.voucher_cm == expected_genesis.voucher_cm
     }
 
     fn entropy(&self) -> Fr {
@@ -436,6 +437,12 @@ mod tests {
         let note = Fr::from(rng.next_u64()); // note value
         let sk = Fr::from(rng.next_u64()); // secret key
         (public, note, sk)
+    }
+
+    #[test]
+    fn test_genesis_verification() {
+        let genesis_proof = Groth16LeaderProof::genesis();
+        assert!(genesis_proof.verify_genesis());
     }
 
     /// Check that ticket is derived correctly with known values.

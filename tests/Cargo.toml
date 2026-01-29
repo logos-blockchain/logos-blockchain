@@ -50,10 +50,10 @@ serde_json                       = "1.0"
 serde_yaml                       = "0.9"
 serial_test                      = "3.1.1"
 tempfile                         = { workspace = true }
-testing-framework-core           = { branch = "master", git = "https://github.com/logos-blockchain/logos-blockchain-testing.git" }
-testing-framework-runner-compose = { branch = "master", git = "https://github.com/logos-blockchain/logos-blockchain-testing.git" }
-testing-framework-runner-local   = { branch = "master", git = "https://github.com/logos-blockchain/logos-blockchain-testing.git" }
-testing-framework-workflows      = { branch = "master", git = "https://github.com/logos-blockchain/logos-blockchain-testing.git" }
+testing-framework-core           = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "e32c0366204e2904452b8b0d0fc9c32d194ac365" }
+testing-framework-runner-compose = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "e32c0366204e2904452b8b0d0fc9c32d194ac365" }
+testing-framework-runner-local   = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "e32c0366204e2904452b8b0d0fc9c32d194ac365" }
+testing-framework-workflows      = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "e32c0366204e2904452b8b0d0fc9c32d194ac365" }
 thiserror                        = { default-features = false, version = "2.0" }
 time                             = { default-features = false, version = "0.3" }
 tokio                            = "1"
