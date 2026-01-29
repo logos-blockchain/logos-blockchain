@@ -764,7 +764,6 @@ where
 // Run the main event loop that persists while the node is a core node.
 // This can span across multiple sessions.
 #[expect(clippy::too_many_arguments, reason = "categorize args")]
-#[expect(clippy::cognitive_complexity, reason = "TODO: Address at some point.")]
 async fn run_event_loop<
     NodeId,
     Backend,

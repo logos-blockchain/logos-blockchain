@@ -329,7 +329,6 @@ where
 ///   handler.
 /// - If the initial secret `PoL` info is not yielded immediately by the `PoL`
 ///   info provider.
-#[expect(clippy::too_many_lines, reason = "TODO: Address at some point.")]
 async fn run<Backend, NodeId, ProofsGenerator, ChainService, PolInfoProvider, RuntimeServiceId>(
     session_stream: UninitializedSessionEventStream<
         impl Stream<Item = MembershipInfo<NodeId>> + Unpin,
