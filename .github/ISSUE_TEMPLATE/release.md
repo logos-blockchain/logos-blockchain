@@ -5,69 +5,23 @@ labels: "release"
 
 Progress on the checklist must be provided as comments to the issue.
 
-## Versioning Reference
-
-| Change Type | Version Bump | Example |
-|-------------|--------------|---------|
-| Circuits change or any other hard fork changes | Major | `1.0.0` → `2.0.0` |
-| New non-consensus feature (soft fork) | Minor | `1.0.0` → `1.1.0` |
-| Bug fix | Patch | `1.0.0` → `1.0.1` |
-
 ---
 
 ## Branch Setup
-- [ ] Choose a release captain and a release co-captain
-- [ ] Verify the commit on `master` we are branching off for the release has green CI ✅
-- [ ] Branch off of `master` into branch `release/X.Y.Z`
-- [ ] Update and commit workspace version in root `Cargo.toml` to `X.Y.Z`
-- [ ] Tag initial release candidate with `X.Y.Z-rc.1`
-- [ ] Push branch and tag
+- [ ] Verify the HEAD of `master` has green CI ✅
+- [ ] Tag commit with `X.Y.Z` and push the tag
 
-## Internal Testing (RC Phase)
-- [ ] Verify that CI jobs related to the new tag are green ✅
-- [ ] Run all required tests for `X.Y.Z-rc.N`
-- [ ] If issues found
-  - [ ] If the bugfix is compatible with `master`
-    - [ ] Fix on `master`
-    - [ ] Cherry-pick fix to `release/X.Y.Z`
-  - [ ] If the bugfix is not compatible with `master`
-    - [ ] Fix directly on `release/X.Y.Z`
-  - [ ] Tag new RC with `X.Y.Z-rc.(N+1)`
-  - [ ] Push branch and tag
-
-Repeat process until no more issues are found, documenting under the issue.
-
-## Promotion to Public Release Candidate
-- [ ] Prepare changelog
-  - [ ] If new major
-    - [ ] Major changes since last major release
-  - [ ] If new minor
-    - [ ] Minor changes since last minor release
-  - [ ] If new patch
-    - [ ] Patch changes since previous patch of same minor
-  - [ ] Instructions on how to set up the circuits
-- [ ] Manually trigger the bundling workflow providing the `X.Y.Z-rc.N` tag name
+## GitHub Release
+- [ ] Prepare (or auto-generate) changelog with commit history since last release
+- [ ] Manually trigger the bundling workflow providing the `X.Y.Z` tag name
 - [ ] Wait for the bundling workflow to complete and download build artifacts
 - [ ] Download the appropriate version of the Linux and MacOS circuits from the circuits repo
-- [ ] Create GitHub Release (mark as **pre-release**)
-  - [ ] Point to same commit as tested RC tag
+- [ ] Create GitHub Release
   - [ ] Attach platform bundles
-  - [ ] Attach the appropriate version of the Linux and MacOS circuits
+  - [ ] Attach the Linux and MacOS circuits
   - [ ] Include changelog
-  - [ ] Review draft
-- [ ] If issues found, fix and publish a new tag `X.Y.Z-rc.(N+1)`, and repeat the RC Phase process.
-
-## Final Release
-- [ ] Tag final release (same commit as last RC) with `X.Y.Z`
-- [ ] Draft GitHub Release (not pre-release)
-  - [ ] Attach final platform bundles
-  - [ ] Attach the appropriate version of the Linux and MacOS circuits
-  - [ ] Include changelog
-  - [ ] Review draft
-- [ ] Publish GitHub Release
 
 ## Post-Release
-- [ ] Delete release branch (tag preserved)
 - [ ] Update the release checklist with anything that was missing or that was fixed
 
 ---
