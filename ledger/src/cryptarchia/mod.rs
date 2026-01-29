@@ -8,11 +8,12 @@ use lb_core::{
     crypto::{ZkDigest, ZkHasher},
     mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value, gas::GasConstants},
     proofs::leader_proof::{self, LeaderPublic},
-    utils::merkle::MerklePath,
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Fr, fr_from_bytes};
 use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_pol::slot_activation_coefficient;
+use lb_utxotree::MerklePath;
 
 use crate::cryptarchia::{
     block_density::BlockDensity,
@@ -343,8 +344,8 @@ impl LedgerState {
         let slot: Slot = 0.into();
         let stake_inference = Arc::new(StakeInference::new(
             LEARNING_RATE,
-            config.consensus_config.active_slot_coeff,
-            config.consensus_config.security_param.get().into(),
+            slot_activation_coefficient(),
+            config.consensus_config.security_param().get().into(),
         ));
         let block_density = BlockDensity::new(stake_inference.period(), slot);
         Self {
@@ -542,10 +543,7 @@ pub mod tests {
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(3).unwrap(),
             },
-            consensus_config: lb_cryptarchia_engine::Config {
-                security_param: NonZero::new(1).unwrap(),
-                active_slot_coeff: 1.0,
-            },
+            consensus_config: lb_cryptarchia_engine::Config::new(NonZero::new(1).unwrap(), 1.0),
             sdp_config: crate::mantle::sdp::Config {
                 service_params: Arc::new(service_params),
                 service_rewards_params: ServiceRewardsParameters {
@@ -575,8 +573,8 @@ pub mod tests {
             .collect::<UtxoTree>();
         let stake_inference = Arc::new(StakeInference::new(
             LEARNING_RATE,
-            config.consensus_config.active_slot_coeff,
-            config.consensus_config.security_param.get().into(),
+            slot_activation_coefficient(),
+            config.consensus_config.security_param().get().into(),
         ));
         let block_density_inference = BlockDensity::new(stake_inference.period(), 0.into());
         LedgerState {

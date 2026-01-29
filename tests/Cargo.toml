@@ -36,6 +36,7 @@ lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-network-service               = { features = ["libp2p"], workspace = true }
 lb-node                          = { default-features = false, features = ["testing"], workspace = true }
+lb-pol                           = { workspace = true }
 lb-sdp-service                   = { workspace = true }
 lb-time-service                  = { workspace = true }
 lb-tracing                       = { workspace = true }
@@ -68,6 +69,7 @@ pol-dev-mode = [
   "lb-chain-network-service/pol-dev-mode",
   "lb-chain-service/pol-dev-mode",
   "lb-core/pol-dev-mode",
+  "lb-pol/high-active-slot-coefficient",
 ]
 testing_framework = []
 

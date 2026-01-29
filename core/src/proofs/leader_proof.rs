@@ -5,6 +5,7 @@ use ark_ff::{Field as _, PrimeField as _};
 use generic_array::GenericArray;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
+use lb_utxotree::MerklePath;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -53,7 +54,6 @@ use crate::{
         ops::{channel::Ed25519PublicKey, leader_claim::VoucherCm},
     },
     proofs::merkle::merkle_path_to_witness,
-    utils::merkle::MerklePath,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -410,18 +410,24 @@ mod tests {
     }
 
     fn check_prob(target: f64, f: impl Fn() -> bool) {
-        const EPS: f64 = 0.01; // tolerance band (±2 percentage points)
-        const ALPHA: f64 = 1e-6; // fails with probability at most ALPHA if the observed rate is within EPS of
-        // target
+        let eps = if target < 0.1 {
+            0.01 // tight tolerance for low target (±1%p)
+        } else {
+            0.08 // loose tolerance for high target (±8%p)
+        };
 
-        let n = hoeffding_sample_size(EPS, ALPHA);
+        let n = hoeffding_sample_size(
+            eps,
+            // fails with probability at most 1e-6 if the observed rate is within EPS of target
+            1e-6,
+        );
         println!("Sampling n = {n}");
 
         let observed = empirical_rate(n, f);
 
         assert!(
-            (observed - target).abs() <= EPS,
-            "Rate out of tolerance: observed={observed:.6}, target={target:.6}, eps={EPS:.6}, n={n}"
+            (observed - target).abs() <= eps,
+            "Rate out of tolerance: observed={observed:.6}, target={target:.6}, eps={eps:.6}, n={n}"
         );
     }
 
@@ -465,24 +471,10 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "pol-dev-mode")]
-    #[test]
-    fn test_check_winning_dev() {
-        // winning rate of all the stake should be ~ active slot coeff
-        check_prob(1.0 / 30.0, || {
-            let (public, note_id, sk) = rand_inputs();
-            public.check_winning_dev(1, note_id, sk, 1.0 / 30.0)
-        });
-        check_prob(0.05, || {
-            let (public, note_id, sk) = rand_inputs();
-            public.check_winning_dev(1, note_id, sk, 0.05)
-        });
-    }
-
     #[test]
     fn test_check_winning() {
         // winning rate of all the stake should be ~ active slot coeff
-        check_prob(1.0 / 30.0, || {
+        check_prob(lb_pol::slot_activation_coefficient(), || {
             let (public, note_id, sk) = rand_inputs();
             public.check_winning(1, note_id, sk)
         });

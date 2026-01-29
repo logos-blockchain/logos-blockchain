@@ -1,11 +1,11 @@
 use lb_groth16::{Fr, serde::serde_fr};
+use lb_utxotree::MerklePath;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
     mantle::ops::leader_claim::{VoucherNullifier, VoucherSecret},
     proofs::merkle::merkle_path_to_witness,
-    utils::merkle::MerklePath,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]

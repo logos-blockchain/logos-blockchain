@@ -557,17 +557,18 @@ mod tests {
     use futures::StreamExt as _;
     use lb_core::{
         codec::DeserializeOp as _,
+        crypto::ZkHasher,
         mantle::{Note, SignedMantleTx, ledger::Utxo},
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
-        utils::merkle::MerkleNode,
     };
     use lb_cryptarchia_engine::Config;
     use lb_groth16::Fr;
-    use lb_key_management_system_keys::keys::Ed25519Key;
+    use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
     use lb_storage_service::{
         StorageService,
         backends::rocksdb::{RocksBackend, RocksBackendSettings},
     };
+    use lb_utxotree::UtxoTree;
     use num_bigint::BigUint;
     use overwatch::{derive_services, overwatch::OverwatchRunner};
     use tempfile::TempDir;
@@ -946,29 +947,30 @@ mod tests {
         }
 
         fn make_test_proof() -> lb_core::proofs::leader_proof::Groth16LeaderProof {
-            let public_inputs = LeaderPublic::new(
-                Fr::from(1), // aged root
-                Fr::from(2), // latest root
-                Fr::from(3), // epoch nonce
-                0,           // slot
-                1000,        // total stake
-            );
-
+            let leader_sk = UnsecuredZkKey::zero();
             let utxo = Utxo {
                 tx_hash: Fr::from(BigUint::from(1u8)).into(),
                 output_index: 0,
-                note: Note::new(100, Fr::from(5).into()),
+                note: Note::new(1000, leader_sk.to_public_key()),
             };
+            let utxo_tree = UtxoTree::<_, _, ZkHasher>::new().insert(utxo.id(), utxo).0;
+            let utxo_tree_root = utxo_tree.root();
+            let utxo_merkle_path = utxo_tree.path(&utxo.id()).expect("note must exist in tree");
 
-            let aged_path = vec![MerkleNode::Right(Fr::from(0u8))];
-            let latest_path = vec![MerkleNode::Left(Fr::from(0u8))];
+            let public_inputs = LeaderPublic::new(
+                utxo_tree_root, // aged root
+                utxo_tree_root, // latest root
+                Fr::from(3),    // epoch nonce
+                0,              // slot
+                1000,           // total stake
+            );
 
             let private_inputs = LeaderPrivate::new(
                 public_inputs,
                 utxo,
-                &aged_path,
-                &latest_path,
-                Fr::from(6), // secret key
+                &utxo_merkle_path, // aged path
+                &utxo_merkle_path, // latest path
+                *leader_sk.as_fr(),
                 &Ed25519Key::from_bytes(&[1u8; 32]).public_key(),
             );
 
@@ -982,10 +984,7 @@ mod tests {
         fn new_cryptarchia(lib: HeaderId) -> lb_cryptarchia_engine::Cryptarchia<HeaderId> {
             <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib,
-                Config {
-                    security_param: NonZero::new(1).unwrap(),
-                    active_slot_coeff: 1.0,
-                },
+                Config::new(NonZero::new(1).unwrap(), 1.0),
                 lb_cryptarchia_engine::State::Bootstrapping,
             )
         }

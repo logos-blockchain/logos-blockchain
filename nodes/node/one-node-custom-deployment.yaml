@@ -29,9 +29,7 @@ cryptarchia:
     epoch_stake_distribution_stabilization: 3
     epoch_period_nonce_buffer: 3
     epoch_period_nonce_stabilization: 4
-  consensus_config:
-    security_param: 10
-    active_slot_coeff: 0.9
+  security_param: 10
   sdp_config:
     service_params:
       BN:

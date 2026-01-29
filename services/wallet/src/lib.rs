@@ -24,7 +24,6 @@ use lb_core::{
         tx_builder::MantleTxBuilder,
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
-    utils::merkle::MerklePath,
 };
 use lb_groth16::{Fr, fr_from_bytes};
 use lb_key_management_system_service::{
@@ -38,6 +37,7 @@ use lb_key_management_system_service::{
 use lb_ledger::LedgerState;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
+use lb_utxotree::MerklePath;
 use lb_wallet::{Wallet, WalletBlock, WalletError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,

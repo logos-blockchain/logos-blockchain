@@ -43,12 +43,12 @@ impl State {
     {
         match cryptarchia.state {
             Self::Bootstrapping => {
-                let k = cryptarchia.config.security_param.get().into();
+                let k = cryptarchia.config.security_param().get().into();
                 let s = cryptarchia.config.s();
                 maxvalid_bg(cryptarchia.local_chain, &cryptarchia.branches, k, s)
             }
             Self::Online => {
-                let k = cryptarchia.config.security_param.get().into();
+                let k = cryptarchia.config.security_param().get().into();
                 maxvalid_mc(cryptarchia.local_chain, &cryptarchia.branches, k)
             }
         }
@@ -64,7 +64,7 @@ impl State {
                 .branches
                 .nth_ancestor(
                     &cryptarchia.local_chain,
-                    cryptarchia.config.security_param.get().into(),
+                    cryptarchia.config.security_param().get().into(),
                 )
                 .id(),
         }
@@ -700,16 +700,13 @@ pub mod tests {
     use crate::{Config, ReorgedBlocks, State, UpdatedCryptarchia};
 
     #[must_use]
-    pub const fn config() -> Config {
+    pub fn config() -> Config {
         config_with(1)
     }
 
     #[must_use]
-    pub const fn config_with(security_param: u32) -> Config {
-        Config {
-            security_param: NonZero::new(security_param).unwrap(),
-            active_slot_coeff: 1.0,
-        }
+    pub fn config_with(security_param: u32) -> Config {
+        Config::new(NonZero::new(security_param).unwrap(), 1f64)
     }
 
     fn hash<T: Hash>(t: &T) -> [u8; 32] {

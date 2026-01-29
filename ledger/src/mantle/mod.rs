@@ -12,8 +12,8 @@ use lb_core::{
         ops::{Op, OpProof, leader_claim::VoucherCm},
     },
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
-    utils::merkle::MerklePath,
 };
+use lb_utxotree::MerklePath;
 use sdp::{Error as SdpLedgerError, locked_notes::LockedNotes};
 
 use crate::{Balance, Config, EpochState, UtxoTree};

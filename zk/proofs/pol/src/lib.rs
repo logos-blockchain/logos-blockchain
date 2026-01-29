@@ -45,7 +45,9 @@ use thiserror::Error;
 pub use wallet_inputs::{PolWalletInputs, PolWalletInputsData};
 pub use witness::Witness;
 
-pub use crate::lottery::{P, T0_CONSTANT, T1_CONSTANT, compute_lottery_values};
+pub use crate::lottery::{
+    P, T0_CONSTANT, T1_CONSTANT, compute_lottery_values, slot_activation_coefficient,
+};
 use crate::{inputs::PolVerifierInputJson, proving_key::POL_PROVING_KEY_PATH};
 
 pub type PoLProof = CompressedGroth16Proof;

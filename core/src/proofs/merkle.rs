@@ -1,4 +1,4 @@
-use crate::utils::merkle::{MerkleNode, MerklePath};
+use lb_utxotree::{MerkleNode, MerklePath};
 
 /// Converts a [`MerklePath`] to the witness format expected by the circuit.
 pub fn merkle_path_to_witness<T: Copy>(path: &MerklePath<T>) -> (Vec<T>, Vec<bool>) {

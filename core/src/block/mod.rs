@@ -219,29 +219,32 @@ mod tests {
     use std::iter;
 
     use lb_groth16::Fr;
+    use lb_key_management_system_keys::keys::UnsecuredZkKey;
+    use lb_utxotree::UtxoTree;
     use num_bigint::BigUint;
 
     use super::*;
     use crate::{
+        crypto::ZkHasher,
         mantle::{
             ledger::{Note, Tx, Utxo},
             ops::leader_claim::VoucherCm,
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
-        utils::merkle::MerkleNode,
     };
 
     pub fn create_proof() -> Groth16LeaderProof {
-        let public_inputs = LeaderPublic::new(Fr::from(1), Fr::from(2), Fr::from(3), 0, 1000);
-
+        let leader_sk = UnsecuredZkKey::zero();
         let utxo = Utxo {
             tx_hash: Fr::from(BigUint::from(1u8)).into(),
             output_index: 0,
-            note: Note::new(100, Fr::from(5).into()),
+            note: Note::new(1000, leader_sk.to_public_key()),
         };
+        let utxo_tree = UtxoTree::<_, _, ZkHasher>::new().insert(utxo.id(), utxo).0;
+        let utxo_tree_root = utxo_tree.root();
+        let utxo_merkle_path = utxo_tree.path(&utxo.id()).expect("note must exist in tree");
 
-        let aged_path = vec![MerkleNode::Right(Fr::from(0u8))];
-        let latest_path = vec![MerkleNode::Left(Fr::from(0u8))];
+        let public_inputs = LeaderPublic::new(utxo_tree_root, utxo_tree_root, Fr::from(3), 0, 1000);
 
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let verifying_key = signing_key.public_key();
@@ -249,9 +252,9 @@ mod tests {
         let private_inputs = LeaderPrivate::new(
             public_inputs,
             utxo,
-            &aged_path,
-            &latest_path,
-            Fr::from(6),
+            &utxo_merkle_path, // aged path
+            &utxo_merkle_path, // latest path
+            *leader_sk.as_fr(),
             &verifying_key,
         );
         Groth16LeaderProof::prove(private_inputs, VoucherCm::default())

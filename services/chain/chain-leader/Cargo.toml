@@ -22,6 +22,7 @@ lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-ledger                     = { features = ["serde"], workspace = true }
+lb-pol                        = { workspace = true }
 lb-services-utils             = { workspace = true }
 lb-time-service               = { workspace = true }
 lb-tx-service                 = { workspace = true }

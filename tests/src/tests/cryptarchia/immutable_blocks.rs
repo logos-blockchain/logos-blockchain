@@ -25,11 +25,8 @@ async fn immutable_blocks_two_nodes() {
                 .service
                 .bootstrap
                 .prolonged_bootstrap_period = Duration::ZERO;
-            config
-                .deployment
-                .cryptarchia
-                .consensus_config
-                .security_param = NonZero::new(5).unwrap();
+            config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
+
             config
         })
         .collect::<Vec<_>>();
