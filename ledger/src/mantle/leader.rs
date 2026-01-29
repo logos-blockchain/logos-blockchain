@@ -6,10 +6,9 @@ use lb_core::{
         Value,
         ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier},
     },
-    utils::merkle::MerklePath,
 };
 use lb_cryptarchia_engine::Epoch;
-use lb_utxotree::DynamicMerkleTree;
+use lb_utxotree::{DynamicMerkleTree, MerklePath};
 use rpds::HashTrieMapSync;
 
 use crate::Balance;

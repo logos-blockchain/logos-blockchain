@@ -8,12 +8,12 @@ use lb_core::{
     crypto::{ZkDigest, ZkHasher},
     mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value, gas::GasConstants},
     proofs::leader_proof::{self, LeaderPublic},
-    utils::merkle::MerklePath,
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Fr, fr_from_bytes};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_pol::slot_activation_coefficient;
+use lb_utxotree::MerklePath;
 
 use crate::cryptarchia::{
     block_density::BlockDensity,

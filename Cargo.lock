@@ -5809,6 +5809,7 @@ dependencies = [
  "logos-blockchain-storage-service 0.1.0",
  "logos-blockchain-time-service 0.1.0",
  "logos-blockchain-utils 0.1.0",
+ "logos-blockchain-utxotree 0.1.0",
  "num-bigint",
  "overwatch",
  "serde",
@@ -5962,6 +5963,7 @@ dependencies = [
  "logos-blockchain-pol 0.1.0",
  "logos-blockchain-poseidon2 0.1.0",
  "logos-blockchain-utils 0.1.0",
+ "logos-blockchain-utxotree 0.1.0",
  "multiaddr",
  "nom 8.0.0",
  "num-bigint",
@@ -7049,7 +7051,6 @@ name = "logos-blockchain-utxotree"
 version = "0.1.0"
 dependencies = [
  "ark-ff 0.4.2",
- "logos-blockchain-core 0.1.0",
  "logos-blockchain-groth16 0.1.0",
  "logos-blockchain-poseidon2 0.1.0",
  "num-bigint",
@@ -7132,6 +7133,7 @@ dependencies = [
  "logos-blockchain-ledger 0.1.0",
  "logos-blockchain-services-utils 0.1.0",
  "logos-blockchain-storage-service 0.1.0",
+ "logos-blockchain-utxotree 0.1.0",
  "logos-blockchain-wallet 0.1.0",
  "overwatch",
  "rand 0.8.5",

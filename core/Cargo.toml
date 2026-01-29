@@ -30,6 +30,7 @@ lb-poc                        = { workspace = true }
 lb-pol                        = { workspace = true }
 lb-poseidon2                  = { workspace = true }
 lb-utils                      = { workspace = true }
+lb-utxotree                   = { workspace = true }
 multiaddr                     = { default-features = false, version = "0.18" }
 nom                           = { default-features = false, features = ["alloc"], version = "8" }
 num-bigint                    = { default-features = false, version = "0.4" }

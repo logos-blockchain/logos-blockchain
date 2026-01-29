@@ -11,7 +11,6 @@ version     = { workspace = true }
 
 [dependencies]
 ark-ff       = { default-features = false, version = "0.4" }
-lb-core      = { workspace = true }
 lb-groth16   = { features = ["deser"], workspace = true }
 lb-poseidon2 = { workspace = true }
 num-bigint   = { default-features = false, version = "0.4" }

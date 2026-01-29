@@ -1,25 +1,5 @@
 use crate::crypto::{Digest as _, Hasher};
 
-/// A merkle path node indicating whether the sibling is on left or right.
-#[derive(Clone)]
-pub enum MerkleNode<T> {
-    /// The value of sibling which is the left child.
-    Left(T),
-    /// The value of sibling which is the right child.
-    Right(T),
-}
-
-impl<T> MerkleNode<T> {
-    pub const fn item(&self) -> &T {
-        match self {
-            Self::Left(v) | Self::Right(v) => v,
-        }
-    }
-}
-
-/// A Merkle path consisting of sibling nodes from leaf to root (excluded).
-pub type MerklePath<T> = Vec<MerkleNode<T>>;
-
 #[must_use]
 pub fn leaf(data: &[u8]) -> [u8; 32] {
     let mut hasher = Hasher::new();

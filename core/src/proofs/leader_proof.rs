@@ -5,6 +5,7 @@ use ark_ff::{Field as _, PrimeField as _};
 use generic_array::GenericArray;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
+use lb_utxotree::MerklePath;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -53,7 +54,6 @@ use crate::{
         ops::{channel::Ed25519PublicKey, leader_claim::VoucherCm},
     },
     proofs::merkle::merkle_path_to_witness,
-    utils::merkle::MerklePath,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -465,24 +465,10 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "pol-dev-mode")]
-    #[test]
-    fn test_check_winning_dev() {
-        // winning rate of all the stake should be ~ active slot coeff
-        check_prob(1.0 / 30.0, || {
-            let (public, note_id, sk) = rand_inputs();
-            public.check_winning_dev(1, note_id, sk, 1.0 / 30.0)
-        });
-        check_prob(0.05, || {
-            let (public, note_id, sk) = rand_inputs();
-            public.check_winning_dev(1, note_id, sk, 0.05)
-        });
-    }
-
     #[test]
     fn test_check_winning() {
         // winning rate of all the stake should be ~ active slot coeff
-        check_prob(1.0 / 30.0, || {
+        check_prob(lb_pol::slot_activation_coefficient(), || {
             let (public, note_id, sk) = rand_inputs();
             public.check_winning(1, note_id, sk)
         });
