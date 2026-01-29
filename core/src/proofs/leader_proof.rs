@@ -415,10 +415,11 @@ mod tests {
         } else {
             0.08 // loose tolerance for high target (±8%p)
         };
-        const ALPHA: f64 = 1e-6; // fails with probability at most ALPHA if the observed rate is within EPS of
-        // target
 
-        let n = hoeffding_sample_size(eps, ALPHA);
+        let n = hoeffding_sample_size(
+            eps,
+            1e-6, // ALPHA: fails with probability at most ALPHA if the observed rate is within EPS of target
+        );
         println!("Sampling n = {n}");
 
         let observed = empirical_rate(n, f);
