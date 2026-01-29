@@ -155,21 +155,7 @@ jobs:
         with:
           tag_name: ${{ env.VERSION }}
           release_name: Logos Blockchain Node ${{ env.VERSION }}
-          body: |
-            Logos Blockchain Node ${{ env.VERSION }}.
-
-            ## Changelog
-            - feature(X): new feature
-            - fix(Y): bug description
-            - feature: performance improvement on Z
-            ## Checklist
-            Before publishing please ensure:
-            - [ ] Description is complete
-            - [ ] Changelog is correct
-            - [ ] Assets for all platforms exist
-            - [ ] Circuits are added
-            - [ ] Pre-release is checked if necessary
-            - [ ] Remove this checklist before publishing the release.
+          body_path: ./.github/release/release-content.md
           draft: true
           prerelease: true
 
