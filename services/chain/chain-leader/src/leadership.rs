@@ -126,7 +126,7 @@ impl Leader {
                 utxo.note.value,
                 note_id,
                 *secret_key.as_fr(),
-                self.config.consensus_config.active_slot_coeff,
+                slot_activation_coefficient(),
             ),
             public_inputs.check_winning(utxo.note.value, note_id, *secret_key.as_fr())
         )
