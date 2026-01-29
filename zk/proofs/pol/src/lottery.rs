@@ -13,7 +13,7 @@ pub const fn slot_activation_coefficient() -> f64 {
         1f64 / 30f64
     }
     #[cfg(feature = "high-active-slot-coefficient")]
-    0.9f64
+    0.5f64
 }
 
 /// From [Proof of Leadership spec](https://www.notion.so/nomos-tech/Proof-of-Leadership-Specification-21c261aa09df819ba5b6d95d0fe3066d?source=copy_link#256261aa09df800fbc88e5aae5ea7e06)
@@ -38,7 +38,7 @@ pub static T0_CONSTANT: LazyLock<BigUint> = LazyLock::new(|| {
     #[cfg(feature = "high-active-slot-coefficient")]
     {
         BigUint::from_str_radix(
-            "6f6d2136746b2e9d7e6c3ed992648434f8538392f776108faff1561b8421825b",
+            "218aeb703858b6ef2bc62d5871c765025863620764726ce3f26fd914428c45b6",
             16,
         )
         .expect("Constant should parse")
@@ -58,7 +58,7 @@ pub static T1_CONSTANT: LazyLock<BigUint> = LazyLock::new(|| {
     #[cfg(feature = "high-active-slot-coefficient")]
     {
         BigUint::from_str_radix(
-            "8048c4edd8d4c6d2517f44dfa17e3ae6b8b4eb4c28c55e029e665e4c1056cb8e",
+            "b9fffe4b14e22c8093204936e25194c3233e8167446a8089029be711a359baa",
             16,
         )
         .expect("Constant should parse")
