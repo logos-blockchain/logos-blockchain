@@ -87,7 +87,7 @@
           );
         in
         {
-          inherit logosBlockChainC;
+          logos-blockchain-c = logosBlockChainC;
           default = logosBlockChainC;
         }
       );
