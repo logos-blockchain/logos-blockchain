@@ -9,6 +9,9 @@ readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
 
+[lints]
+workspace = true
+
 [dependencies]
 bytes                 = { features = ["serde"], workspace = true }
 futures               = { default-features = false, version = "0.3" }

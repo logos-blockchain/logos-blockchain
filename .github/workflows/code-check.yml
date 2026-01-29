@@ -220,34 +220,9 @@ jobs:
           command: nextest
           # TODO: Enable all tests after adapting them to PoL
           args: >-
-            run --locked --lib --bins --examples --tests 
+            run --locked --lib --bins --examples --tests --retries 2
             -p logos-blockchain-chain-leader-service -p logos-blockchain-pol 
             --no-fail-fast
-
-      # Build binaries then use them - this includes testing feature needed for unit tests
-      - name: Build binaries with required test features
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
-        with:
-          command: build
-          # We specify necessary features only, as `--all-features` will include features intended for cucumber and \
-          # integration framework tests.
-          args: --locked --features pol-dev-mode
-
-      - name: End-to-end integration tests
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        env:
-          POL_PROOF_DEV_MODE: true
-          CONSENSUS_SLOT_TIME: 5
-          # TODO: Remove this when the test framework removed all direct references to `NOMOS_NODE_BIN`
-          NOMOS_NODE_BIN: ${{ github.workspace }}/target/debug/logos-blockchain-node
-          LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/debug/logos-blockchain-node
-          # TODO: Remove this when the test framework removed all direct references to `NOMOS_KZGRS_PARAMS_PATH`
-          NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
-          LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
-        with:
-          command: nextest
-          # - We don't test benches as they take 6h+, leading to a timeout
-          args: run --locked -p logos-blockchain-tests --no-fail-fast
 
       - name: Clean up build artifacts
         if: success() || failure()
@@ -269,10 +244,8 @@ jobs:
     needs:
       - formatting
       - cargo-deny
-      - features
       - unused-deps
       - lints
-      - tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

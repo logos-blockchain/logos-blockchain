@@ -43,6 +43,7 @@ impl From<ServiceConfig>
                 minimum_network_size: config.deployment.common.minimum_network_size,
                 recovery_path_prefix: config.user.recovery_path_prefix,
                 time: config.deployment.common.timing,
+                data_replication_factor: config.deployment.common.data_replication_factor,
             },
             core: CoreSettings {
                 backend: Libp2pCoreBlendBackendSettings {

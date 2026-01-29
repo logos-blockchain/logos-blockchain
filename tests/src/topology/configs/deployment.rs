@@ -53,6 +53,7 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
                         .expect("Epoch transition period in slots cannot be zero."),
                 },
                 protocol_name: StreamProtocol::new("/blend/integration-tests"),
+                data_replication_factor: 0,
             },
             core: BlendCoreSettings {
                 minimum_messages_coefficient: NonZeroU64::try_from(1)

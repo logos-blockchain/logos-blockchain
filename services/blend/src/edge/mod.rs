@@ -293,6 +293,7 @@ where
                 num_blend_layers: settings.num_blend_layers,
                 minimum_network_size: settings.minimum_network_size,
                 time: settings.time,
+                data_replication_factor: settings.data_replication_factor,
             },
             &overwatch_handle,
             || {
@@ -371,7 +372,7 @@ where
         };
         (
             LeaderInputs {
-                message_quota: settings.num_blend_layers.into(),
+                message_quota: settings.session_leadership_quota(),
                 pol_epoch_nonce,
                 pol_ledger_aged,
                 total_stake,
@@ -416,7 +417,7 @@ where
     let mut current_public_inputs = PoQVerificationInputsMinusSigningKey {
         core: CoreInputs {
             zk_root: current_membership_info.zk.root,
-            quota: settings.cover.session_quota(
+            quota: settings.cover.session_core_quota(
                 settings.num_blend_layers,
                 &settings.time,
                 current_membership_info.membership.size(),
@@ -444,7 +445,10 @@ where
               current_public_inputs = new_public_inputs;
             }
             Some(message) = incoming_message_stream.next() => {
-                message_handler.handle_messages_to_blend(message).await;
+                let message_copies = settings.data_replication_factor.checked_add(1).unwrap();
+                for _ in 0..message_copies {
+                    message_handler.handle_message_to_blend(message.clone()).await;
+                }
             }
             Some(clock_tick) = remaining_clock_stream.next() => {
                 let (new_message_handler, new_public_inputs) = handle_clock_event(clock_tick, settings.clone(), &current_private_leader_info, overwatch_handle, &current_membership_info.membership, &mut epoch_handler, message_handler, current_public_inputs).await;
@@ -501,7 +505,7 @@ where
     let new_public_inputs = PoQVerificationInputsMinusSigningKey {
         session: new_session_number,
         core: CoreInputs {
-            quota: settings.cover.session_quota(
+            quota: settings.cover.session_core_quota(
                 settings.num_blend_layers,
                 &settings.time,
                 new_membership.size(),
@@ -574,7 +578,7 @@ where
             pol_ledger_aged,
             total_stake,
         }) => LeaderInputs {
-            message_quota: settings.num_blend_layers.into(),
+            message_quota: settings.session_leadership_quota(),
             pol_epoch_nonce,
             pol_ledger_aged,
             total_stake,

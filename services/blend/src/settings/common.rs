@@ -16,4 +16,5 @@ pub struct CommonSettings {
     pub time: TimingSettings,
     pub minimum_network_size: NonZeroU64,
     pub recovery_path_prefix: PathBuf,
+    pub data_replication_factor: u64,
 }

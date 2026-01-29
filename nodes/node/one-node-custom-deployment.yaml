@@ -10,6 +10,7 @@ blend:
       epoch_transition_period_in_slots: 2600
     minimum_network_size: 30
     protocol_name: /blend/integration-tests
+    data_replication_factor: 0
   core:
     scheduler:
       cover:

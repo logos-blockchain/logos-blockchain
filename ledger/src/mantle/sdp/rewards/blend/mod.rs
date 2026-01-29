@@ -235,6 +235,7 @@ pub struct RewardsParameters {
     pub rounds_per_session: NonZeroU64,
     pub message_frequency_per_round: NonNegativeF64,
     pub num_blend_layers: NonZeroU64,
+    pub data_replication_factor: u64,
     pub minimum_network_size: NonZeroU64,
 }
 
@@ -256,10 +257,12 @@ impl RewardsParameters {
     }
 
     fn leader_inputs(&self, epoch_state: &EpochState) -> LeaderInputs {
+        let num_blend_layers = self.num_blend_layers.get();
+        let message_quota = num_blend_layers + (num_blend_layers * self.data_replication_factor);
         LeaderInputs {
             pol_ledger_aged: epoch_state.utxos.root(),
             pol_epoch_nonce: epoch_state.nonce,
-            message_quota: self.num_blend_layers.get(),
+            message_quota,
             total_stake: epoch_state.total_stake,
         }
     }
@@ -299,6 +302,7 @@ mod tests {
             message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
             num_blend_layers: NonZeroU64::new(3).unwrap(),
             minimum_network_size: minimum_network_size.try_into().unwrap(),
+            data_replication_factor: 0,
         }
     }
 

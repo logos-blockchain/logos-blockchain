@@ -3,7 +3,7 @@ on:
   push:
     branches: [ master ]
 
-name: Cucumber integration tests
+name: Cucumber and end-to-end integration tests
 
 # Ensure only one workflow run per branch/workflow is active at a time.
 # Cancels any in-progress runs for the same group to avoid overlap.
@@ -60,6 +60,11 @@ jobs:
       - name: Set circuits path environment variable (old)
         run: echo "NOMOS_CIRCUITS=$HOME/.logos-blockchain-circuits" >> $GITHUB_ENV
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35
+        with:
+          tool: cargo-nextest
+
       # Build release binary for logos-blockchain-node (so runtimes can be reduced) with required test features
       - name: Build binaries with required features
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
@@ -67,8 +72,29 @@ jobs:
           command: build
           args: --release --locked --all --features "pol-dev-mode"
 
+      - name: End-to-end integration tests
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        env:
+          POL_PROOF_DEV_MODE: true
+          CONSENSUS_SLOT_TIME: 5
+          LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
+        with:
+          command: nextest
+          # - We don't test benches as they take 6h+, leading to a timeout
+          args: run --locked --jobs 2 --retries 2 -p logos-blockchain-tests --features pol-dev-mode --no-fail-fast
+
+      - name: Upload integration tests results
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
+        if: failure()
+        with:
+          name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
+          include-hidden-files: true
+          path: tests/.tmp*
+
       # Run cucumber integration tests with environment variables for binaries and test params
       - name: Run cucumber
+        # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
+        if: ${{ !cancelled() }}
         timeout-minutes: 40  # Safety net timeout - this needs to be adjusted as more tests are added
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
@@ -125,3 +151,8 @@ jobs:
           path: cucumber_tests/temp/cucumber-output-junit.xml
           reporter: java-junit
 
+      - name: Clean up build artifacts
+        if: success() || failure()
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: clean

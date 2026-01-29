@@ -18,6 +18,8 @@ pub struct StartingBlendConfig<BackendSettings> {
     pub num_blend_layers: NonZeroU64,
     pub minimum_network_size: NonZeroU64,
     pub recovery_path: PathBuf,
+    /// `R_c`: replication factor for data messages.
+    pub data_replication_factor: u64,
 }
 
 /// Same values as [`StartingBlendConfig`] but with the secret key exfiltrated
@@ -32,13 +34,24 @@ pub struct RunningBlendConfig<BackendSettings> {
     pub num_blend_layers: NonZeroU64,
     pub minimum_network_size: NonZeroU64,
     pub recovery_path: PathBuf,
+    pub data_replication_factor: u64,
 }
 
 impl<BackendSettings> RunningBlendConfig<BackendSettings> {
-    pub fn session_quota(&self, membership_size: usize) -> u64 {
+    pub fn session_core_quota(&self, membership_size: usize) -> u64 {
         self.scheduler
             .cover
-            .session_quota(self.num_blend_layers, &self.time, membership_size)
+            .session_core_quota(self.num_blend_layers, &self.time, membership_size)
+    }
+
+    pub const fn session_leadership_quota(&self) -> u64 {
+        let num_blend_layers = self.num_blend_layers.get();
+        let additional_encapsulations = num_blend_layers
+            .checked_mul(self.data_replication_factor)
+            .expect("Overflow when computing total replication factor.");
+        num_blend_layers
+            .checked_add(additional_encapsulations)
+            .expect("Overflow when computing leadership quota.")
     }
 
     pub(super) fn scheduler_settings(&self) -> lb_blend::scheduling::message_scheduler::Settings {
@@ -50,14 +63,6 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
             rounds_per_interval: self.time.rounds_per_interval,
             num_blend_layers: self.num_blend_layers,
         }
-    }
-}
-
-impl<BackendSettings> StartingBlendConfig<BackendSettings> {
-    pub fn session_quota(&self, membership_size: usize) -> u64 {
-        self.scheduler
-            .cover
-            .session_quota(self.num_blend_layers, &self.time, membership_size)
     }
 }
 
@@ -93,7 +98,7 @@ impl Default for CoverTrafficSettings {
 
 impl CoverTrafficSettings {
     #[must_use]
-    pub(crate) fn session_quota(
+    pub(crate) fn session_core_quota(
         &self,
         num_blend_layers: NonZeroU64,
         timings: &TimingSettings,

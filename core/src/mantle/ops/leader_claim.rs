@@ -10,10 +10,19 @@ static REWARD_VOUCHER: LazyLock<Fr> = LazyLock::new(|| {
     fr_from_bytes(b"REWARD_VOUCHER").expect("BigUint should load from constant string")
 });
 
+static VOUCHER_NF: LazyLock<Fr> = LazyLock::new(|| {
+    fr_from_bytes(b"VOUCHER_NF").expect("BigUint should load from constant string")
+});
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 pub struct RewardsRoot(#[serde(with = "serde_fr")] ZkHash);
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct VoucherSecret(#[serde(with = "serde_fr")] pub Fr);
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct VoucherNullifier(#[serde(with = "serde_fr")] ZkHash);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 pub struct VoucherCm(#[serde(with = "serde_fr")] ZkHash);
 
@@ -22,6 +31,18 @@ pub struct LeaderClaimOp {
     pub rewards_root: RewardsRoot,
     pub voucher_nullifier: VoucherNullifier,
     pub mantle_tx_hash: TxHash,
+}
+
+impl From<Fr> for VoucherSecret {
+    fn from(value: Fr) -> Self {
+        Self(value)
+    }
+}
+
+impl From<VoucherSecret> for Fr {
+    fn from(value: VoucherSecret) -> Self {
+        value.0
+    }
 }
 
 impl AsRef<Fr> for VoucherCm {
@@ -60,6 +81,15 @@ impl From<VoucherNullifier> for Fr {
     }
 }
 
+impl VoucherNullifier {
+    #[must_use]
+    pub fn from_secret(voucher_secret: VoucherSecret) -> Self {
+        let mut hash = ZkHasher::new();
+        hash.compress(&[*VOUCHER_NF, voucher_secret.into()]);
+        hash.finalize().into()
+    }
+}
+
 impl From<VoucherCm> for Fr {
     fn from(value: VoucherCm) -> Self {
         value.0
@@ -73,9 +103,9 @@ impl VoucherCm {
     }
 
     #[must_use]
-    pub fn from_secret(voucher_secret: Fr) -> Self {
+    pub fn from_secret(voucher_secret: VoucherSecret) -> Self {
         let mut hash = ZkHasher::new();
-        hash.compress(&[*REWARD_VOUCHER, voucher_secret]);
+        hash.compress(&[*REWARD_VOUCHER, voucher_secret.into()]);
         hash.finalize().into()
     }
 }
