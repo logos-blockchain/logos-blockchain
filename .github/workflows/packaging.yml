@@ -1,15 +1,11 @@
-name: Packaging and Distribution
+name: Bundling and Packaging
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release. Must follow the format of 'vX.Y.Z'."
+        description: "Version to release. Must follow the format of 'X.Y.Z[-rc.N]'."
         required: true
-        default: "v0.1.0"
 
 jobs:
   setup:
@@ -21,20 +17,12 @@ jobs:
       - name: Define version
         id: define-version
         env:
-          # Use the tag name if it is available, otherwise use the input version.
-          # If neither is available, default to "v0.1.0".
-          VERSION: ${{ github.event.release.tag_name || inputs.version || 'v0.1.0' }}
+          VERSION: ${{ inputs.version }}
         run: |
-          if [ -z "$VERSION" ]; then
-            echo "Could not determine version."
-            exit 1
-          elif [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "VERSION must follow the format of 'vX.Y.Z'. Value: '$VERSION'."
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]; then
+            echo "VERSION must follow the format of 'X.Y.Z[-rc.N]'. Value: '$VERSION'."
             exit 2
           fi
-          
-          # Export the version to be used in the following jobs.
-          VERSION="${VERSION:1}" # Remove the leading 'v' character
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
   bundle:
@@ -56,11 +44,6 @@ jobs:
             arch: aarch64
             builder: macos-14
             target_triple: aarch64-apple-darwin
-          - os: windows
-            os-display: Windows
-            arch: x86_64
-            builder: windows-2022
-            target_triple: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.platform.builder }}
     steps:
@@ -105,12 +88,6 @@ jobs:
           if [[ ${{ github.event.debug || false }} == true ]]; then
             echo "This workflow is on debug mode: the bundle command's `-v` parameter will be removed for debugging." 
             PARAMETER=""
-          fi
-          
-          if [ "${{ matrix.platform.os }}" = "windows" ]; then
-            EXTENSION=".exe"
-          else
-            EXTENSION=""
           fi
   
           "target/${{ matrix.platform.target_triple }}/release/logos-blockchain-bundle-node$EXTENSION" $PARAMETER
@@ -158,118 +135,3 @@ jobs:
           name: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.dmg
           path: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.dmg
           if-no-files-found: error
-
-      - name: Flatten Windows bundles
-        if: matrix.platform.os == 'windows'
-        run: |
-          mv target/${{ matrix.platform.target_triple }}/release/bundle/msi/logos-blockchain-node_${{ env.VERSION }}_x64_en-US.msi logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.msi
-          mv target/${{ matrix.platform.target_triple }}/release/bundle/nsis/logos-blockchain-node_${{ env.VERSION }}_x64-setup.exe logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.exe
-
-      - name: Upload MSI (${{ matrix.platform.arch }})
-        if: matrix.platform.os == 'windows'
-        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
-        with:
-          name: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.msi
-          path: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.msi
-          if-no-files-found: error
-
-      - name: Upload EXE (${{ matrix.platform.arch }})
-        if: matrix.platform.os == 'windows'
-        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
-        with:
-          name: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.exe
-          path: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.exe
-          if-no-files-found: error
-
-  create-release:
-    name: "Create release"
-    # Only run this job for tags or manual trigger, not for PRs
-    # if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
-    needs:
-      - setup
-      - bundle
-    runs-on: ubuntu-latest
-    env:
-      VERSION: ${{ needs.setup.outputs.version }}
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-    steps:
-      - name: Create Release
-        uses: actions/create-release@4c11c9fe1dcd9636620a16455165783b20fc7ea0  # Version 1.1.4
-        id: create_release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ env.VERSION }}
-          release_name: Logos Blockchain Node ${{ env.VERSION }}
-          body: |
-            This is a release of Logos Blockchain Node ${{ env.VERSION }}.
-            ## Changelog
-            - feature(X): new feature
-            - fix(Y): bug description
-            - feature: performance improvement on Z
-            ## Checklist
-            Before publishing please ensure:
-            - [ ] Description is complete
-            - [ ] Changelog is correct
-            - [ ] Assets for all platforms exist
-            - [ ] Pre-release is checked if necessary
-            - [ ] Remove this checklist before publishing the release.
-          draft: true
-          prerelease: true
-
-  upload-artifacts:
-    name: "Upload Artifacts to release"
-    needs:
-      - setup
-      - create-release
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        platform:
-          - os: linux
-            arch: x86_64
-            extension: deb
-            extension-display: DEB
-          - os: linux
-            arch: x86_64
-            extension: rpm
-            extension-display: RPM
-          - os: linux
-            arch: x86_64
-            extension: AppImage
-            extension-display: AppImage
-          - os: macos
-            arch: aarch64
-            extension: dmg
-            extension-display: DMG
-          - os: windows
-            arch: x86_64
-            extension: msi
-            extension-display: MSI
-          - os: windows
-            arch: x86_64
-            extension: exe
-            extension-display: EXE
-
-    env:
-      UPLOAD_URL: ${{ needs.create-release.outputs.upload_url }}
-      BINARY_NAME: logos_blockchain_node-${{ needs.setup.outputs.version }}-${{ matrix.platform.arch }}.${{ matrix.platform.extension }}
-      DOWNLOAD_DIRECTORY: artifacts
-    steps:
-      - name: Download Artifact
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # Version 4.2.1
-        with:
-          name: ${{ env.BINARY_NAME }}
-          path: ${{ env.DOWNLOAD_DIRECTORY }}
-          merge-multiple: 'true'
-
-      - name: Upload ${{ matrix.platform.extension-display }} (${{ matrix.platform.arch }})
-        uses: actions/upload-release-asset@ef2adfe8cb8ebfa540930c452c576b3819990faa  # Version 1.0.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: ${{ env.DOWNLOAD_DIRECTORY }}/${{ env.BINARY_NAME }}
-          asset_name: ${{ env.BINARY_NAME }}
-          asset_content_type: application/octet-stream
