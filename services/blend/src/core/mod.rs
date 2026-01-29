@@ -844,9 +844,7 @@ where
 
     loop {
         tokio::select! {
-            Some(local_data_message) = inbound_relay.next() => {
-                let ServiceMessage::Blend(message_payload) = local_data_message;
-
+            Some(ServiceMessage::Blend(message_payload)) = inbound_relay.next() => {
                 // We serialize here, outside of the handler function, so that we can serialize only once for all replicas.
                 let serialized_data_message = NetworkMessage::<NetAdapter::BroadcastSettings>::to_bytes(&message_payload).expect("NetworkMessage should be able to be serialized");
 
