@@ -90,7 +90,7 @@ jobs:
             PARAMETER=""
           fi
   
-          "target/${{ matrix.platform.target_triple }}/release/logos-blockchain-bundle-node$EXTENSION" $PARAMETER
+          "target/${{ matrix.platform.target_triple }}/release/logos-blockchain-bundle-node" $PARAMETER
 
       - name: Flatten Linux bundles
         if: matrix.platform.os == 'linux'
