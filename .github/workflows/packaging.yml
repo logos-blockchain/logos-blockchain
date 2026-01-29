@@ -135,3 +135,88 @@ jobs:
           name: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.dmg
           path: logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.dmg
           if-no-files-found: error
+
+  create-release:
+    name: Create release
+    needs:
+      - setup
+      - bundle
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - name: Create Release
+        uses: actions/create-release@4c11c9fe1dcd9636620a16455165783b20fc7ea0  # Version 1.1.4
+        id: create_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.VERSION }}
+          release_name: Logos Blockchain Node ${{ env.VERSION }}
+          body: |
+            Logos Blockchain Node ${{ env.VERSION }}.
+
+            ## Changelog
+            - feature(X): new feature
+            - fix(Y): bug description
+            - feature: performance improvement on Z
+            ## Checklist
+            Before publishing please ensure:
+            - [ ] Description is complete
+            - [ ] Changelog is correct
+            - [ ] Assets for all platforms exist
+            - [ ] Circuits are added
+            - [ ] Pre-release is checked if necessary
+            - [ ] Remove this checklist before publishing the release.
+          draft: true
+          prerelease: true
+
+  upload-artifacts:
+    name: Upload Artifacts to release
+    needs:
+      - setup
+      - create-release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform:
+          - os: linux
+            arch: x86_64
+            extension: deb
+            extension-display: DEB
+          - os: linux
+            arch: x86_64
+            extension: rpm
+            extension-display: RPM
+          - os: linux
+            arch: x86_64
+            extension: AppImage
+            extension-display: AppImage
+          - os: macos
+            arch: aarch64
+            extension: dmg
+            extension-display: DMG
+
+    env:
+      UPLOAD_URL: ${{ needs.create-release.outputs.upload_url }}
+      BINARY_NAME: logos_blockchain_node-${{ needs.setup.outputs.version }}-${{ matrix.platform.arch }}.${{ matrix.platform.extension }}
+      DOWNLOAD_DIRECTORY: artifacts
+    steps:
+      - name: Download Artifact
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # Version 4.2.1
+        with:
+          name: ${{ env.BINARY_NAME }}
+          path: ${{ env.DOWNLOAD_DIRECTORY }}
+          merge-multiple: 'true'
+
+      - name: Upload ${{ matrix.platform.extension-display }} (${{ matrix.platform.arch }})
+        uses: actions/upload-release-asset@ef2adfe8cb8ebfa540930c452c576b3819990faa  # Version 1.0.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ env.UPLOAD_URL }}
+          asset_path: ${{ env.DOWNLOAD_DIRECTORY }}/${{ env.BINARY_NAME }}
+          asset_name: ${{ env.BINARY_NAME }}
+          asset_content_type: application/octet-stream
