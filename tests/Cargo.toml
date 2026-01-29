@@ -36,7 +36,7 @@ lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-network-service               = { features = ["libp2p"], workspace = true }
 lb-node                          = { default-features = false, features = ["testing"], workspace = true }
-lb-pol                           = { workspace = true }
+lb-pol                           = { features = ["high-active-slot-coefficient"], workspace = true }
 lb-sdp-service                   = { workspace = true }
 lb-time-service                  = { workspace = true }
 lb-tracing                       = { workspace = true }
@@ -62,16 +62,9 @@ tracing                          = { workspace = true }
 tracing-subscriber               = { features = ["env-filter", "fmt"], version = "0.3" }
 
 [features]
-cucumber = []
+cucumber             = []
 cucumber_stand_alone = []
-pol-dev-mode = [
-  "lb-chain-leader-service/pol-dev-mode",
-  "lb-chain-network-service/pol-dev-mode",
-  "lb-chain-service/pol-dev-mode",
-  "lb-core/pol-dev-mode",
-  "lb-pol/high-active-slot-coefficient",
-]
-testing_framework = []
+testing_framework    = []
 
 [[test]]
 name = "test_cryptarchia_happy_path"

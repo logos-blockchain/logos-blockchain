@@ -70,18 +70,17 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
-          args: --release --locked --all --features "pol-dev-mode"
+          args: --release --locked --all --features high-active-slot-coefficient
 
       - name: End-to-end integration tests
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
-          POL_PROOF_DEV_MODE: true
           CONSENSUS_SLOT_TIME: 5
           LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
         with:
           command: nextest
           # - We don't test benches as they take 6h+, leading to a timeout
-          args: run --locked --jobs 2 --retries 2 -p logos-blockchain-tests --features pol-dev-mode --no-fail-fast
+          args: run --locked --jobs 2 --retries 2 -p logos-blockchain-tests --no-fail-fast
 
       - name: Upload integration tests results
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
@@ -98,7 +97,6 @@ jobs:
         timeout-minutes: 40  # Safety net timeout - this needs to be adjusted as more tests are added
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
-          POL_PROOF_DEV_MODE: true
           CONSENSUS_SLOT_TIME: 5
           # TODO: Remove this when the test framework removed all direct references to `NOMOS_NODE_BIN`
           NOMOS_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
@@ -110,7 +108,7 @@ jobs:
           command: test
           # The test binary can be debug mode to increase build times
           args: >-
-            --locked -p logos-blockchain-tests --features cucumber --features pol-dev-mode 
+            --locked -p logos-blockchain-tests --features cucumber
             --test cucumber -- --tags "@normal_ci"
 
       - name: Clean up build artifacts

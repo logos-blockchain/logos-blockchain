@@ -1,52 +1,12 @@
 use std::sync::LazyLock;
 
 use ark_ff::{Field as _, PrimeField as _};
-#[cfg(feature = "pol-dev-mode")]
-use generic_array::GenericArray;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use lb_utxotree::MerklePath;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-
-pub const POL_PROOF_DEV_MODE: &str = "POL_PROOF_DEV_MODE";
-
-/// Macro to conditionally execute code based on `PoL` dev mode.
-///
-/// This macro checks both the `pol-dev-mode` feature flag (compile-time) and
-/// the `POL_PROOF_DEV_MODE` environment variable (runtime). The dev code path
-/// is only taken when both conditions are met.
-///
-/// When the `pol-dev-mode` feature is disabled, the dev code is completely
-/// eliminated at compile time.
-///
-/// # Example
-/// ```ignore
-/// let result = if_pol_dev_mode!(
-///     // Dev mode code
-///     compute_dev_result(),
-///     // Normal mode code
-///     compute_normal_result()
-/// );
-/// ```
-#[macro_export]
-macro_rules! if_pol_dev_mode {
-    ($dev:expr, $normal:expr) => {{
-        #[cfg(feature = "pol-dev-mode")]
-        {
-            if std::env::var($crate::proofs::leader_proof::POL_PROOF_DEV_MODE).is_ok() {
-                $dev
-            } else {
-                $normal
-            }
-        }
-        #[cfg(not(feature = "pol-dev-mode"))]
-        {
-            $normal
-        }
-    }};
-}
 
 use crate::{
     mantle::{
@@ -64,8 +24,6 @@ pub struct Groth16LeaderProof {
     entropy_contribution: Fr,
     leader_key: Ed25519PublicKey,
     voucher_cm: VoucherCm,
-    #[cfg(feature = "pol-dev-mode")]
-    public: LeaderPublic,
 }
 
 #[derive(Debug, Error)]
@@ -77,8 +35,6 @@ pub enum Error {
 impl Groth16LeaderProof {
     pub fn prove(witness: LeaderPrivate, voucher_cm: VoucherCm) -> Result<Self, Error> {
         let start_t = std::time::Instant::now();
-        #[cfg(feature = "pol-dev-mode")]
-        let public = witness.public;
         let leader_key = witness.pk;
         let (proof, entropy_contribution) = Self::generate_proof(witness)?;
         tracing::debug!("groth16 prover time: {:.2?}", start_t.elapsed(),);
@@ -88,8 +44,6 @@ impl Groth16LeaderProof {
             entropy_contribution,
             leader_key,
             voucher_cm,
-            #[cfg(feature = "pol-dev-mode")]
-            public,
         })
     }
 
@@ -100,30 +54,13 @@ impl Groth16LeaderProof {
             entropy_contribution: Fr::ZERO,
             leader_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
             voucher_cm: VoucherCm::default(),
-            #[cfg(feature = "pol-dev-mode")]
-            public: LeaderPublic::new(Fr::ZERO, Fr::ZERO, Fr::ZERO, 0, 0),
         }
     }
 
     fn generate_proof(private: LeaderPrivate) -> Result<(lb_pol::PoLProof, Fr), Error> {
-        if_pol_dev_mode!(
-            {
-                tracing::warn!(
-                    "Proofs are being generated in dev mode. This should never be used in production."
-                );
-                let proof = lb_groth16::CompressedGroth16Proof::new(
-                    GenericArray::default(),
-                    GenericArray::default(),
-                    GenericArray::default(),
-                );
-                Ok((proof, Fr::ZERO))
-            },
-            {
-                let (proof, verif_inputs) =
-                    lb_pol::prove(&private.input.into()).map_err(Error::PoLProofFailed)?;
-                Ok((proof, verif_inputs.entropy_contribution.into_inner()))
-            }
-        )
+        let (proof, verif_inputs) =
+            lb_pol::prove(&private.input.into()).map_err(Error::PoLProofFailed)?;
+        Ok((proof, verif_inputs.entropy_contribution.into_inner()))
     }
 
     #[must_use]
@@ -148,30 +85,20 @@ pub trait LeaderProof {
 
 impl LeaderProof for Groth16LeaderProof {
     fn verify(&self, public_inputs: &LeaderPublic) -> bool {
-        if_pol_dev_mode!(
-            {
-                tracing::warn!(
-                    "Proofs are being verified in dev mode. This should never be used in production."
-                );
-                &self.public == public_inputs
-            },
-            {
-                let leader_pk = ed25519_pk_to_fr_tuple(self.leader_key());
-                lb_pol::verify(
-                    &self.proof,
-                    &lb_pol::PolVerifierInput::new(
-                        self.entropy(),
-                        public_inputs.slot,
-                        public_inputs.epoch_nonce,
-                        public_inputs.aged_root,
-                        public_inputs.latest_root,
-                        public_inputs.total_stake,
-                        leader_pk,
-                    ),
-                )
-                .is_ok()
-            }
+        let leader_pk = ed25519_pk_to_fr_tuple(self.leader_key());
+        lb_pol::verify(
+            &self.proof,
+            &lb_pol::PolVerifierInput::new(
+                self.entropy(),
+                public_inputs.slot,
+                public_inputs.epoch_nonce,
+                public_inputs.aged_root,
+                public_inputs.latest_root,
+                public_inputs.total_stake,
+                leader_pk,
+            ),
         )
+        .is_ok()
     }
 
     fn verify_genesis(&self) -> bool {
@@ -234,45 +161,11 @@ impl LeaderPublic {
         ticket < threshold
     }
 
-    #[must_use]
-    #[cfg(feature = "pol-dev-mode")]
-    pub fn check_winning_dev(
-        &self,
-        value: u64,
-        note_id: Fr,
-        sk: Fr,
-        active_slot_coeff: f64,
-    ) -> bool {
-        let (t0, t1) = self.scaled_phi_approx_dev(active_slot_coeff);
-        let threshold =
-            Self::phi_approx(&Fr::from(value), &(Fr::from(t0), Fr::from(t1))).into_bigint();
-        let ticket = Self::ticket(note_id, sk, self.epoch_nonce, Fr::from(self.slot)).into_bigint();
-        ticket < threshold
-    }
-
     fn scaled_phi_approx(&self) -> (BigUint, BigUint) {
         let t0 = &*lb_pol::T0_CONSTANT / &BigUint::from(self.total_stake);
         let total_stake_sq = &BigUint::from(self.total_stake) * &BigUint::from(self.total_stake);
         let t1 = &*lb_pol::P - (&*lb_pol::T1_CONSTANT / &total_stake_sq);
         (t0, t1)
-    }
-
-    #[cfg(feature = "pol-dev-mode")]
-    fn scaled_phi_approx_dev(&self, active_slot_coeff: f64) -> (BigUint, BigUint) {
-        let total_stake = BigUint::from(self.total_stake);
-        let total_stake_sq = &total_stake * &total_stake;
-        let double_total_stake_sq = &total_stake_sq * 2u64;
-
-        let precision = 1_000_000_000_000_000_000u128;
-        let order = lb_pol::P.clone();
-        let neg_f_ln =
-            BigUint::from((-(1.0 - active_slot_coeff).ln() * precision as f64).round() as u128);
-        let neg_f_ln_sq = &neg_f_ln * &neg_f_ln;
-
-        let t0 = (&order * &neg_f_ln) / (&total_stake * precision);
-        let t1 =
-            ((&order * &neg_f_ln_sq) / (&double_total_stake_sq * precision * precision)) % &order;
-        (t0, &order - t1)
     }
 
     fn phi_approx(stake: &Fr, approx: &(Fr, Fr)) -> Fr {
@@ -292,8 +185,6 @@ static LEAD_V1: LazyLock<Fr> =
 pub struct LeaderPrivate {
     input: lb_pol::PolWitnessInputsData,
     pk: Ed25519PublicKey,
-    #[cfg(feature = "pol-dev-mode")]
-    public: LeaderPublic,
 }
 
 impl LeaderPrivate {
@@ -332,8 +223,6 @@ impl LeaderPrivate {
         Self {
             input,
             pk: public_key,
-            #[cfg(feature = "pol-dev-mode")]
-            public,
         }
     }
 

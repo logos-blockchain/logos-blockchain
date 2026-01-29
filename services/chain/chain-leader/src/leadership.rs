@@ -1,13 +1,10 @@
 use lb_core::{
-    if_pol_dev_mode,
     mantle::{Utxo, ops::leader_claim::VoucherCm},
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey, ZkPublicKey};
 use lb_ledger::{EpochState, UtxoTree};
-#[cfg(feature = "pol-dev-mode")]
-use lb_pol::slot_activation_coefficient;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch::Sender;
@@ -50,20 +47,7 @@ impl Leader {
     ) -> Option<(Groth16LeaderProof, Ed25519Key)> {
         for utxo in utxos {
             let public_inputs = public_inputs_for_slot(epoch_state, slot, latest_tree);
-
-            let note_id = utxo.id().0;
-            let secret_key = self.secret_key();
-
-            let winning = if_pol_dev_mode!(
-                public_inputs.check_winning_dev(
-                    utxo.note.value,
-                    note_id,
-                    *secret_key.as_fr(),
-                    slot_activation_coefficient(),
-                ),
-                public_inputs.check_winning(utxo.note.value, note_id, *secret_key.as_fr())
-            );
-
+            let winning = self.check_winning(utxo, &public_inputs);
             if winning {
                 tracing::debug!(
                     "leader for slot {:?}, {:?}/{:?}",
@@ -124,6 +108,15 @@ impl Leader {
         None
     }
 
+    /// Check if the given note is owned by the leader and wins the lottery with
+    /// the given public inputs.
+    fn check_winning(&self, utxo: &Utxo, public_inputs: &LeaderPublic) -> bool {
+        let secret_key = self.secret_key();
+        // TODO: Remove checking pubkey by using any key in KMS corresponding to `utxo`
+        utxo.note.pk == secret_key.to_public_key()
+            && public_inputs.check_winning(utxo.note.value, utxo.id().0, *secret_key.as_fr())
+    }
+
     fn private_inputs_for_winning_utxo_and_slot(
         &self,
         utxo: &Utxo,
@@ -131,16 +124,12 @@ impl Leader {
         public_inputs: LeaderPublic,
         latest_tree: &UtxoTree,
     ) -> Result<(LeaderPrivate, Ed25519Key), PrivateInputsError> {
-        let aged_path = if_pol_dev_mode!(Vec::new(), {
-            epoch_state
-                .utxo_merkle_path(utxo)
-                .ok_or(PrivateInputsError::AgedNoteNotFound)?
-        });
-        let latest_path = if_pol_dev_mode!(Vec::new(), {
-            latest_tree
-                .path(&utxo.id())
-                .ok_or(PrivateInputsError::LatestNoteNotFound)?
-        });
+        let aged_path = epoch_state
+            .utxo_merkle_path(utxo)
+            .ok_or(PrivateInputsError::AgedNoteNotFound)?;
+        let latest_path = latest_tree
+            .path(&utxo.id())
+            .ok_or(PrivateInputsError::LatestNoteNotFound)?;
         let secret_key = *self.sk.as_fr();
         // Generate a random one-time Ed25519 key for P_LEAD (as per PoL spec)
         let leader_signing_key = Ed25519Key::generate(&mut OsRng);
@@ -326,7 +315,6 @@ impl<'service> WinningPoLSlotNotifier<'service> {
     }
 }
 
-#[cfg(not(feature = "pol-dev-mode"))]
 #[cfg(test)]
 mod pol_tests {
     use std::{num::NonZero, sync::Arc};

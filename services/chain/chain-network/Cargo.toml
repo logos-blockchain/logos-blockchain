@@ -41,6 +41,5 @@ lb-network-service = { features = ["mock"], workspace = true }
 lb-utils           = { workspace = true }
 
 [features]
-default      = []
-libp2p       = ["lb-network-service/libp2p"]
-pol-dev-mode = ["lb-core/pol-dev-mode"]
+default = []
+libp2p  = ["lb-network-service/libp2p"]

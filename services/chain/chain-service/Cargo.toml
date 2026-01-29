@@ -47,7 +47,6 @@ lb-utxotree                   = { workspace = true }
 tempfile                      = { default-features = false, version = "3" }
 
 [features]
-default      = []
-libp2p       = ["lb-network-service/libp2p"]
-openapi      = ["dep:utoipa"]
-pol-dev-mode = ["lb-core/pol-dev-mode"]
+default = []
+libp2p  = ["lb-network-service/libp2p"]
+openapi = ["dep:utoipa"]

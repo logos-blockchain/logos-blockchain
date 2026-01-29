@@ -18,10 +18,11 @@ Ensure that the following are installed on your system:
 Integration tests involving nodes run the binaries directly by spawning. Ensure the binaries are built and available in 
 your `target/debug` or `target/release` directory. You can build the project using:
 
-`cargo build --features pol-dev-mode` or `cargo build --release --features pol-dev-mode`
+`cargo build --features high-active-slot-coefficient` or `cargo build --release --features high-active-slot-coefficient`
 
-**Notes:**
-- The `pol-dev-mode` feature flag enables proofs to be generated in dev mode.
+**Important:**
+Make sure to build the node binaries in advance with the `high-active-slot-coefficient` feature enabled, which increases the lottery winning rate and results in more frequent block production.
+Integration tests rely on these pre-built binaries and will not build them automatically.
 
 ## Setup and Usage (using Docker)
 
@@ -67,26 +68,27 @@ neither are defined, preference will be given to debug binaries.
 _**MacOS or Linux**_
 
 ```bash
-POL_PROOF_DEV_MODE=1 cargo test --test test_cryptarchia_happy_path two_nodes_happy -- --no-capture
+cargo test --test test_cryptarchia_happy_path  two_nodes_happy -- --no-capture
 ```
 or 
 ```bash
-POL_PROOF_DEV_MODE=1 USE_RELEASE_BINARIES=1 cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
+USE_RELEASE_BINARIES=1 cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
 ```
 
 _**Windows (PowerShell)**_
 
 ```pwsh
-$env:POL_PROOF_DEV_MODE="1"; cargo test --test test_cryptarchia_happy_path two_nodes_happy -- --no-capture
+cargo test --test test_cryptarchia_happy_path two_nodes_happy -- --no-capture
 ```
 or
 ```pwsh
-$env:POL_PROOF_DEV_MODE="1"; $env:USE_RELEASE_BINARIES="1"; cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
+$env:USE_RELEASE_BINARIES="1"; cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
 
 ```
 
-**Notes:**
-- The presence of the `POL_PROOF_DEV_MODE` environment variable enables proofs to be generated in dev mode.
+**Important:**
+Make sure to build the node binaries in advance with the `high-active-slot-coefficient` feature enabled, which increases the lottery winning rate and results in more frequent block production.
+Integration tests rely on these pre-built binaries and will not build them automatically.
 
 
 ### 2. Run Tests with Debug Feature Flag
@@ -96,13 +98,13 @@ To execute the test suite with the debug feature flag, use the following command
 _**MacOS or Linux**_
 
 ```bash
-POL_PROOF_DEV_MODE=1 cargo test -p logos-blockchain-tests -F debug disseminate_and_retrieve
+cargo test -p logos-blockchain-tests -F debug disseminate_and_retrieve
 ```
 
 _**Windows (PowerShell)**_
 
 ```pwsh
-$env:POL_PROOF_DEV_MODE="1"; cargo test -p logos-blockchain-tests -F debug disseminate_and_retrieve
+cargo test -p logos-blockchain-tests -F debug disseminate_and_retrieve
 ```
 
 `-F debug`: Enables the debug feature flag for the integration tests, allowing for extra debug output or specific
@@ -116,7 +118,6 @@ To run the Cucumber tests, ensure the binaries are built (debug or release) and 
 the corresponding binaries:
 
 ```text
-POL_PROOF_DEV_MODE=1
 LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH=/path-to/tests/logos-blockchain-kzgrs
 LOGOS_BLOCKCHAIN__NODE_BIN=/path-to/target/release/logos-blockchain-node
 ```

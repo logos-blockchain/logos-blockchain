@@ -20,7 +20,6 @@ blake2                        = { default-features = false, version = "0.10" }
 bytes                         = { workspace = true }
 const-hex                     = { default-features = false, features = ["alloc"], version = "1" }
 futures                       = { default-features = false, features = ["alloc"], version = "0.3" }
-generic-array                 = "1.2.0"
 hex                           = { default-features = false, features = ["alloc"], version = "0.4" }
 lb-blend-proofs               = { workspace = true }
 lb-cryptarchia-engine         = { features = ["serde"], workspace = true }
@@ -44,6 +43,5 @@ rand       = { workspace = true }
 serde_json = { default-features = false, features = ["alloc"], version = "1.0" }
 
 [features]
-default      = []
-mock         = []
-pol-dev-mode = []
+default = []
+mock    = []
