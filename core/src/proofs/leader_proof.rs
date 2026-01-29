@@ -418,7 +418,8 @@ mod tests {
 
         let n = hoeffding_sample_size(
             eps,
-            1e-6, // ALPHA: fails with probability at most ALPHA if the observed rate is within EPS of target
+            // fails with probability at most 1e-6 if the observed rate is within EPS of target
+            1e-6,
         );
         println!("Sampling n = {n}");
 
