@@ -12,7 +12,7 @@ pub const SDP_POST_ACTIVITY: &str = "/sdp/activity";
 pub const SDP_POST_WITHDRAWAL: &str = "/sdp/withdrawal";
 
 pub const BLOCKS: &str = "/cryptarchia/blocks";
-pub const BLOCKS_STREAM: &str = "/cryptarchia/blocks/stream";
+pub const BLOCKS_STREAM: &str = "/cryptarchia/events/blocks/stream";
 
 pub mod wallet {
     pub const BALANCE: &str = "/wallet/:public_key/balance";
