@@ -446,14 +446,8 @@ where
               current_public_inputs = new_public_inputs;
             }
             Some(message) = incoming_message_stream.next() => {
-                // If there's at least 2 core nodes try to replicate the message according to the replication factor.
-                if current_membership_info.membership.size() > 1 {
-                    let message_copies = settings.data_replication_factor.checked_add(1).unwrap();
-                    for _ in 0..message_copies {
-                        message_handler.handle_message_to_blend(message.clone()).await;
-                    }
-                // Else there is only a single core node, so replication is useless.
-                } else {
+                let message_copies = settings.data_replication_factor.checked_add(1).unwrap();
+                for _ in 0..message_copies {
                     message_handler.handle_message_to_blend(message.clone()).await;
                 }
             }
