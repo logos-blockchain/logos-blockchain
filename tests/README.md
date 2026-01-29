@@ -116,7 +116,6 @@ the corresponding binaries:
 ```text
 POL_PROOF_DEV_MODE=1
 LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH=/path-to/tests/logos-blockchain-kzgrs
-LOGOS_BLOCKCHAIN__NODE_BIN=/path-to/target/release/logos-blockchain-node
 ```
 
 Filtering based on tags can be done using the `--tags` option. For example, to run all tests tagged with `@normal_ci`, 
