@@ -20,7 +20,7 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]; then
-            echo "VERSION must follow the format of 'X.Y.Z[-rc.N]'. Value: '$VERSION'."
+            echo "VERSION must follow the format of 'X.Y.Z[-rc.N]' with N > 0. Value: '$VERSION'."
             exit 2
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
@@ -95,7 +95,7 @@ jobs:
       - name: Flatten Linux bundles
         if: matrix.platform.os == 'linux'
         run: |
-          mv target/${{ matrix.platform.target_triple }}/release/bundle/rpm/logos-blockchain-node-${{ env.VERSION }}-1.x86_64.rpm logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.rpm
+          mv target/${{ matrix.platform.target_triple }}/release/bundle/rpm/logos-blockchain-node-${{ env.VERSION }}_x86_64.rpm logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.rpm
           mv target/${{ matrix.platform.target_triple }}/release/bundle/deb/logos-blockchain-node_${{ env.VERSION }}_amd64.deb logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.deb
           mv target/${{ matrix.platform.target_triple }}/release/bundle/appimage/logos-blockchain-node_${{ env.VERSION }}_amd64.AppImage logos_blockchain_node-${{ env.VERSION }}-${{ matrix.platform.arch }}.AppImage
 

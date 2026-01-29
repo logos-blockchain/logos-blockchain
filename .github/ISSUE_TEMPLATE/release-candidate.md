@@ -25,8 +25,6 @@ Progress on the checklist must be provided as comments to the issue.
 
 ## Internal Testing (RC Phase)
 - [ ] Verify that CI jobs related to the new tag are green ✅
-- [ ] Wait for the bundling workflow to complete and download build artifacts
-- [ ] Download the appropriate version of the Linux and MacOS circuits from the circuits repo
 - [ ] Run all required tests for `X.Y.Z-rc.N`
 - [ ] If issues found
   - [ ] If the bugfix is compatible with `master`
@@ -48,21 +46,28 @@ Repeat process until no more issues are found, documenting under the issue.
   - [ ] If new patch
     - [ ] Patch changes since previous patch of same minor
   - [ ] Instructions on how to set up the circuits
+- [ ] Manually trigger the bundling workflow providing the `X.Y.Z-rc.N` tag name
+- [ ] Wait for the bundling workflow to complete and download build artifacts
+- [ ] Download the appropriate version of the Linux and MacOS circuits from the circuits repo
 - [ ] Create GitHub Release (mark as **pre-release**)
   - [ ] Point to same commit as tested RC tag
   - [ ] Attach platform bundles
+  - [ ] Attach the appropriate version of the Linux and MacOS circuits
   - [ ] Include changelog
+  - [ ] Review draft
 - [ ] If issues found, fix and publish a new tag `X.Y.Z-rc.(N+1)`, and repeat the RC Phase process.
 
 ## Final Release
 - [ ] Tag final release (same commit as last RC) with `X.Y.Z`
 - [ ] Draft GitHub Release (not pre-release)
   - [ ] Attach final platform bundles
+  - [ ] Attach the appropriate version of the Linux and MacOS circuits
   - [ ] Include changelog
   - [ ] Review draft
 - [ ] Publish GitHub Release
 
 ## Post-Release
 - [ ] Delete release branch (tag preserved)
+- [ ] Update the release checklist with anything that was missing or that was fixed
 
 ---
