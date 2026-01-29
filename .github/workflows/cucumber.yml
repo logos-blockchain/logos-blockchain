@@ -65,12 +65,12 @@ jobs:
         with:
           tool: cargo-nextest
 
-      # Build release binary for logos-blockchain-node (so runtimes can be reduced) with required test features
+      # Build binary for logos-blockchain-node (so runtimes can be reduced) with required test features
       - name: Build binaries with required features
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
-          args: --release --locked --all --features "pol-dev-mode"
+          args: --profile integration-tests --locked --all --features "pol-dev-mode"
 
       - name: End-to-end integration tests
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
@@ -101,8 +101,8 @@ jobs:
           POL_PROOF_DEV_MODE: true
           CONSENSUS_SLOT_TIME: 5
           # TODO: Remove this when the test framework removed all direct references to `NOMOS_NODE_BIN`
-          NOMOS_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
-          LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
+          NOMOS_NODE_BIN: ${{ github.workspace }}/target/integration-tests/logos-blockchain-node
+          LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/integration-tests/logos-blockchain-node
           # TODO: Remove this when the test framework removed all direct references to `NOMOS_KZGRS_PARAMS_PATH`
           NOMOS_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs/kzgrs_test_params
           LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs/kzgrs_test_params

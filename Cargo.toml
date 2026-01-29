@@ -8,6 +8,16 @@ readme      = "README.md"
 repository  = "https://github.com/logos-blockchain/logos-blockchain"
 version     = "0.1.0"
 
+[profile.release]
+codegen-units = 1     # (Much) slower build time, much better performances
+lto           = "fat" # Same as above
+
+[profile.integration-tests]
+codegen-units = 16        # Good compromise between slow (1) and fast (256) compilation, at the expense of runtime performances
+debug         = true      # Keep debug symbols for backtraces
+inherits      = "release"
+lto           = "thin"    # Almost as effective as "fat", but with much faster compilation times
+
 [workspace]
 # Make sure any excluded crates are still clipped in our CI. Also, make sure they use the same Clippy and rustc lints we specify in this file down below.
 members = [

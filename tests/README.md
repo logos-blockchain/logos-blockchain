@@ -16,7 +16,7 @@ Ensure that the following are installed on your system:
 ### Using Rust `cargo test`
 
 Integration tests involving nodes run the binaries directly by spawning. Ensure the binaries are built and available in 
-your `target/debug` or `target/release` directory. You can build the project using:
+your target directory, depending on the profile used. You can build the project using:
 
 `cargo build --features pol-dev-mode` or `cargo build --release --features pol-dev-mode`
 
