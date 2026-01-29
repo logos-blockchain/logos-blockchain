@@ -44,9 +44,6 @@ use crate::{
     topology::configs::{GeneralConfig, deployment::default_e2e_deployment_settings},
 };
 
-const BIN_PATH_DEBUG: &str = "../target/debug/logos-blockchain-node";
-const BIN_PATH_RELEASE: &str = "../target/release/logos-blockchain-node";
-
 pub enum Pool {
     Mantle,
 }
@@ -114,7 +111,8 @@ impl Validator {
         config.user.storage.db_path = dir.path().join("db");
 
         serde_yaml::to_writer(&mut file, &config).unwrap();
-        let exe_path = get_exe_path(BIN_PATH_DEBUG, BIN_PATH_RELEASE);
+        let binary_profile = std::env::var("BINARY_PROFILE").unwrap_or("debug".into());
+        let exe_path = get_exe_path(binary_profile.as_str());
         let child = Command::new(exe_path)
             .arg(&config_path)
             .current_dir(dir.path())

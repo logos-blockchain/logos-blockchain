@@ -58,9 +58,7 @@ local setup.
 
 ## Setup and Usage (using `cargo test`)
 
-Where tests involve spawning node binaries, preference will be given to binaries corresponding to `USE_DEBUG_BINARIES` 
-and `USE_RELEASE_BINARIES` environment variables in the in `target/debug` and in `target/debug` paths respectively. If 
-neither are defined, preference will be given to debug binaries.
+Where tests involve spawning node binaries, by default the `debug` profile (for dev builds) will be used, unless overridden with the `BINARY_PROFILE` variable.
 
 ### 1. Run a specific test
 
@@ -71,7 +69,7 @@ POL_PROOF_DEV_MODE=1 cargo test --test test_cryptarchia_happy_path two_nodes_hap
 ```
 or 
 ```bash
-POL_PROOF_DEV_MODE=1 USE_RELEASE_BINARIES=1 cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
+POL_PROOF_DEV_MODE=1 BINARY_PROFILE=release cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
 ```
 
 _**Windows (PowerShell)**_
@@ -81,7 +79,7 @@ $env:POL_PROOF_DEV_MODE="1"; cargo test --test test_cryptarchia_happy_path two_n
 ```
 or
 ```pwsh
-$env:POL_PROOF_DEV_MODE="1"; $env:USE_RELEASE_BINARIES="1"; cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
+$env:POL_PROOF_DEV_MODE="1"; $env:BINARY_PROFILE="release"; cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
 
 ```
 
