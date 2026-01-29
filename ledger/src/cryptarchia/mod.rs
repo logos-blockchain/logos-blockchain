@@ -315,12 +315,14 @@ impl LedgerState {
 
     /// Computes the epoch state for a given slot.
     ///
-    /// This handles the case where epochs have been skipped (no blocks produced).
-    /// When the requested epoch is ahead of the stored epoch states, it synthesizes
-    /// an epoch state with adjusted total stake using half of the expected block
-    /// density to avoid aggressive drops in stake estimates.
+    /// This handles the case where epochs have been skipped (no blocks
+    /// produced). When the requested epoch is ahead of the stored epoch
+    /// states, it synthesizes an epoch state with adjusted total stake
+    /// using half of the expected block density to avoid aggressive drops
+    /// in stake estimates.
     ///
-    /// Returns `None` if the requested epoch is in the past (before current epoch_state).
+    /// Returns `None` if the requested epoch is in the past (before current
+    /// epoch_state).
     #[must_use]
     pub fn epoch_state_for_slot(&self, slot: Slot, config: &Config) -> Option<EpochState> {
         let requested_epoch = config.epoch(slot);
@@ -1065,7 +1067,8 @@ pub mod tests {
         let config = config();
         let ledger_state = genesis_state(&[utxo]);
 
-        // Genesis state is at epoch 0, with epoch_state for epoch 0 and next_epoch_state for epoch 1
+        // Genesis state is at epoch 0, with epoch_state for epoch 0 and
+        // next_epoch_state for epoch 1
         assert_eq!(ledger_state.epoch_state.epoch, 0.into());
         assert_eq!(ledger_state.next_epoch_state.epoch, 1.into());
         let initial_total_stake = ledger_state.epoch_state.total_stake;
@@ -1086,13 +1089,15 @@ pub mod tests {
         assert_eq!(epoch_1_state.epoch, 1.into());
         assert_eq!(epoch_1_state.total_stake, initial_total_stake);
 
-        // Query for epoch 2 (skipped epoch) - should synthesize with reduced total stake
+        // Query for epoch 2 (skipped epoch) - should synthesize with reduced total
+        // stake
         let epoch_2_slot: Slot = 25.into();
         let epoch_2_state = ledger_state
             .epoch_state_for_slot(epoch_2_slot, &config)
             .expect("Should synthesize epoch state for skipped epoch");
         assert_eq!(epoch_2_state.epoch, 2.into());
-        // Total stake should be reduced due to empty epoch (using half expected density)
+        // Total stake should be reduced due to empty epoch (using half expected
+        // density)
         assert!(
             epoch_2_state.total_stake < initial_total_stake,
             "Total stake should decrease for skipped epochs: {} < {}",
@@ -1100,7 +1105,8 @@ pub mod tests {
             initial_total_stake
         );
 
-        // Query for epoch 3 (multiple skipped epochs) - should have further reduced total stake
+        // Query for epoch 3 (multiple skipped epochs) - should have further reduced
+        // total stake
         let epoch_3_slot: Slot = 35.into();
         let epoch_3_state = ledger_state
             .epoch_state_for_slot(epoch_3_slot, &config)
