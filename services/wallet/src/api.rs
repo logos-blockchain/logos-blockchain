@@ -7,6 +7,7 @@ use lb_core::{
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use overwatch::{
+    DynError,
     overwatch::OverwatchHandle,
     services::{
         AsServiceId, ServiceData,

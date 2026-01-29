@@ -13,7 +13,7 @@ use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, SignedMantleTx, Transaction as _, TxHash, Utxo, Value,
+        AuthenticatedMantleTx, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo, Value,
         gas::MainnetGasConstants,
         ops::{
             channel::ChannelId,
@@ -24,7 +24,7 @@ use lb_core::{
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
     utils::merkle::MerklePath,
 };
-use lb_groth16::{Fr, fr_from_bytes, fr_to_bytes};
+use lb_groth16::{Fr, fr_from_bytes};
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::preload::PreloadKMSBackend,
@@ -137,7 +137,7 @@ impl WalletMsg {
             Self::GetBalance { tip, .. }
             | Self::FundTx { tip, .. }
             | Self::SignTx { tip, .. }
-            | Self::GetLeaderAgedNotes { tip, .. } => Some(*tip),
+            | Self::GetLeaderAgedNotes { tip, .. } => *tip,
             Self::GenerateNewVoucherSecret { .. } => None,
         }
     }
@@ -349,8 +349,8 @@ where
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         voucher_secrets: &mut Vec<Fr>,
     ) {
-        if let Some(tip) = msg.tip()
-            && let Err(err) = Self::backfill_if_not_in_sync(tip, wallet, storage, cryptarchia).await
+        if let Err(err) =
+            Self::backfill_if_not_in_sync(msg.tip(), wallet, storage, cryptarchia).await
         {
             error!(err=?err, "Failed backfilling wallet to message tip, will attempt to continue processing the message {msg:?}");
         }
