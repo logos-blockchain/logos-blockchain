@@ -24,7 +24,7 @@ use lb_http_api_common::{
     paths,
 };
 use lb_network_service::backends::libp2p::Libp2p as Libp2pNetworkBackend;
-use lb_sdp_service::adapters::mempool::SdpMempoolAdapter;
+use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
 use lb_tx_service::{
     TxMempoolService, backend::Mempool,
@@ -33,7 +33,6 @@ use lb_tx_service::{
 use lb_wallet_service::api::{WalletApi, WalletServiceData};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use serde::Deserialize;
-use tracing::error;
 #[cfg(feature = "block-explorer")]
 use {
     crate::api::{queries::BlockRangeQuery, serializers::blocks::ApiBlock},
@@ -365,21 +364,23 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn post_declaration<MempoolAdapter, RuntimeServiceId>(
+pub async fn post_declaration<MempoolAdapter, WalletAdapter, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(declaration): Json<lb_core::sdp::DeclarationMessage>,
 ) -> Response
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
+    WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
         + Display
         + 'static
-        + AsServiceId<lb_sdp_service::SdpService<MempoolAdapter, RuntimeServiceId>>,
+        + AsServiceId<lb_sdp_service::SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>>,
 {
     make_request_and_return_response!(lb_api_service::http::sdp::post_declaration_handler::<
         MempoolAdapter,
+        WalletAdapter,
         RuntimeServiceId,
     >(handle, declaration))
 }
@@ -392,21 +393,23 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn post_activity<MempoolAdapter, RuntimeServiceId>(
+pub async fn post_activity<MempoolAdapter, WalletAdapter, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(metadata): Json<lb_core::sdp::ActivityMetadata>,
 ) -> Response
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
+    WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
         + Display
         + 'static
-        + AsServiceId<lb_sdp_service::SdpService<MempoolAdapter, RuntimeServiceId>>,
+        + AsServiceId<lb_sdp_service::SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>>,
 {
     make_request_and_return_response!(lb_api_service::http::sdp::post_activity_handler::<
         MempoolAdapter,
+        WalletAdapter,
         RuntimeServiceId,
     >(handle, metadata))
 }
@@ -419,21 +422,23 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn post_withdrawal<MempoolAdapter, RuntimeServiceId>(
+pub async fn post_withdrawal<MempoolAdapter, WalletAdapter, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(declaration_id): Json<lb_core::sdp::DeclarationId>,
 ) -> Response
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
+    WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
         + Display
         + 'static
-        + AsServiceId<lb_sdp_service::SdpService<MempoolAdapter, RuntimeServiceId>>,
+        + AsServiceId<lb_sdp_service::SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>>,
 {
     make_request_and_return_response!(lb_api_service::http::sdp::post_withdrawal_handler::<
         MempoolAdapter,
+        WalletAdapter,
         RuntimeServiceId,
     >(handle, declaration_id))
 }
@@ -524,29 +529,14 @@ pub mod wallet {
         (status = 500, description = "Internal server error", body = String),
     )
     )]
-    pub async fn get_balance<WalletService, MempoolStorageAdapter, TimeBackend, RuntimeServiceId>(
+    pub async fn get_balance<WalletService, RuntimeServiceId>(
         State(handle): State<OverwatchHandle<RuntimeServiceId>>,
         Path(address): Path<ZkPublicKey>,
         Query(query): Query<TipQuery>,
     ) -> Response
     where
         WalletService: WalletServiceData + 'static,
-        MempoolStorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
-                RuntimeServiceId,
-                Key = <SignedMantleTx as Transaction>::Hash,
-                Item = SignedMantleTx,
-            > + Clone
-            + 'static,
-        MempoolStorageAdapter::Error: Debug,
-        TimeBackend: lb_time_service::backends::TimeBackend,
-        TimeBackend::Settings: Clone + Send + Sync,
-        RuntimeServiceId: Debug
-            + Send
-            + Sync
-            + Display
-            + 'static
-            + AsServiceId<WalletService>
-            + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
     {
         let wallet_api = {
             let wallet_relay = match get_relay_or_500::<WalletService, _>(&handle).await {
@@ -555,34 +545,21 @@ pub mod wallet {
             };
             WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay)
         };
-        let tip = {
-            if let Some(tip) = query.tip {
-                tip
-            } else if let Ok(info) = consensus::cryptarchia_info(&handle).await {
-                info.tip
-            } else {
-                error!(
-                    "Failed to get cryptarchia info: It wasn't provided in the query and couldn't be retrieved from the consensus service."
-                );
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    String::from("Couldn't retrieve a valid tip"),
-                )
-                    .into_response();
-            }
-        };
 
-        let balance = wallet_api.get_balance(tip, address).await;
+        let balance = wallet_api.get_balance(query.tip, address).await;
         match balance {
-            Ok(Some(balance)) => WalletBalanceResponseBody {
+            Ok(lb_wallet_service::TipResponse {
+                tip,
+                response: Some(balance),
+            }) => WalletBalanceResponseBody {
                 tip,
                 balance,
                 address,
             }
             .into_response(),
-            Ok(None) => (
+            Ok(lb_wallet_service::TipResponse { response: None, .. }) => (
                 StatusCode::NOT_FOUND,
-                "The requested address could not be found in the wallet.",
+                "The requested address could not be found in the wallet",
             )
                 .into_response(),
             Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
@@ -597,36 +574,13 @@ pub mod wallet {
         (status = 500, description = "Internal server error", body = String),
     )
     )]
-    pub async fn post_transactions_transfer_funds<
-        WalletService,
-        StorageBackend,
-        MempoolStorageAdapter,
-        TimeBackend,
-        RuntimeServiceId,
-    >(
+    pub async fn post_transactions_transfer_funds<WalletService, RuntimeServiceId>(
         State(handle): State<OverwatchHandle<RuntimeServiceId>>,
         Json(body): Json<WalletTransferFundsRequestBody>,
     ) -> Response
     where
         WalletService: WalletServiceData + 'static,
-        StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
-        MempoolStorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
-                RuntimeServiceId,
-                Key = <SignedMantleTx as Transaction>::Hash,
-                Item = SignedMantleTx,
-            > + Clone
-            + 'static,
-        MempoolStorageAdapter::Error: Debug,
-        TimeBackend: lb_time_service::backends::TimeBackend,
-        TimeBackend::Settings: Clone + Send + Sync,
-        RuntimeServiceId: Debug
-            + Send
-            + Sync
-            + Display
-            + 'static
-            + AsServiceId<WalletService>
-            + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
-            + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
     {
         let wallet_api = {
             let wallet_relay = match get_relay_or_500::<WalletService, _>(&handle).await {
@@ -636,26 +590,9 @@ pub mod wallet {
             WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay)
         };
 
-        let tip = {
-            if let Some(tip) = body.tip {
-                tip
-            } else if let Ok(info) = consensus::cryptarchia_info(&handle).await {
-                info.tip
-            } else {
-                error!(
-                    "Failed to get cryptarchia info: It wasn't provided in the query and couldn't be retrieved from the consensus service."
-                );
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    String::from("Couldn't retrieve a valid tip"),
-                )
-                    .into_response();
-            }
-        };
-
         let transfer_funds = wallet_api
             .transfer_funds(
-                tip,
+                body.tip,
                 body.change_public_key,
                 body.funding_public_keys,
                 body.recipient_public_key,
@@ -664,7 +601,10 @@ pub mod wallet {
             .await;
 
         match transfer_funds {
-            Ok(transaction) => WalletTransferFundsResponseBody::from(transaction).into_response(),
+            Ok(lb_wallet_service::TipResponse {
+                response: transaction,
+                ..
+            }) => WalletTransferFundsResponseBody::from(transaction).into_response(),
             Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
         }
     }

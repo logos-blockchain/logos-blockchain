@@ -7,7 +7,7 @@ use bytes::Bytes;
 use lb_chain_service::{
     LibUpdate,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
-    storage::{StorageAdapter as _, adapters::storage::StorageAdapter},
+    storage::{StorageAdapter as _, adapters::StorageAdapter},
 };
 use lb_core::{
     block::Block,
@@ -16,7 +16,6 @@ use lb_core::{
         AuthenticatedMantleTx, SignedMantleTx, Transaction as _, TxHash, Utxo, Value,
         gas::MainnetGasConstants,
         ops::{
-            Op, OpProof,
             channel::ChannelId,
             leader_claim::{RewardsRoot, VoucherCm},
         },
@@ -98,24 +97,35 @@ pub enum WalletServiceError {
 #[derive(Debug)]
 pub enum WalletMsg {
     GetBalance {
-        tip: HeaderId,
+        tip: Option<HeaderId>,
         pk: ZkPublicKey,
-        resp_tx: oneshot::Sender<Result<Option<Value>, WalletServiceError>>,
+        resp_tx: oneshot::Sender<Result<TipResponse<Option<Value>>, WalletServiceError>>,
     },
-    FundAndSignTx {
-        tip: HeaderId,
+    FundTx {
+        tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
-        resp_tx: oneshot::Sender<Result<SignedMantleTx, WalletServiceError>>,
+        resp_tx: oneshot::Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
+    },
+    SignTx {
+        tip: Option<HeaderId>,
+        tx_builder: MantleTxBuilder,
+        resp_tx: oneshot::Sender<Result<TipResponse<SignedMantleTx>, WalletServiceError>>,
     },
     GetLeaderAgedNotes {
-        tip: HeaderId,
-        resp_tx: oneshot::Sender<Result<Vec<Utxo>, WalletServiceError>>,
+        tip: Option<HeaderId>,
+        resp_tx: oneshot::Sender<Result<TipResponse<Vec<Utxo>>, WalletServiceError>>,
     },
     GenerateNewVoucherSecret {
         resp_tx: oneshot::Sender<VoucherCm>,
     },
+}
+
+#[derive(Debug)]
+pub struct TipResponse<R> {
+    pub tip: HeaderId,
+    pub response: R,
 }
 
 impl WalletMsg {
@@ -125,7 +135,8 @@ impl WalletMsg {
     pub const fn tip(&self) -> Option<HeaderId> {
         match self {
             Self::GetBalance { tip, .. }
-            | Self::FundAndSignTx { tip, .. }
+            | Self::FundTx { tip, .. }
+            | Self::SignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. } => Some(*tip),
             Self::GenerateNewVoucherSecret { .. } => None,
         }
@@ -314,6 +325,22 @@ where
     RuntimeServiceId:
         AsServiceId<Cryptarchia> + AsServiceId<Kms> + std::fmt::Debug + std::fmt::Display + Sync,
 {
+    async fn msg_tip_or_latest(
+        msg_tip: Option<HeaderId>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    ) -> Result<HeaderId, WalletServiceError> {
+        if let Some(tip) = msg_tip {
+            Ok(tip)
+        } else {
+            let info = cryptarchia.info().await?;
+            Ok(info.tip)
+        }
+    }
+
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Message dispatch with error handling"
+    )]
     async fn handle_wallet_message(
         msg: WalletMsg,
         wallet: &mut Wallet,
@@ -330,15 +357,23 @@ where
 
         match msg {
             WalletMsg::GetBalance { tip, pk, resp_tx } => {
-                Self::handle_get_balance(tip, pk, resp_tx, wallet);
+                Self::handle_get_balance(tip, pk, resp_tx, wallet, cryptarchia).await;
             }
-            WalletMsg::FundAndSignTx {
+            WalletMsg::FundTx {
                 tip,
                 tx_builder,
                 change_pk,
                 funding_pks,
                 resp_tx,
             } => {
+                let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+                    Ok(tip) => tip,
+                    Err(err) => {
+                        Self::send_err(resp_tx, err);
+                        return;
+                    }
+                };
+
                 let funded = match wallet.fund_tx::<MainnetGasConstants>(
                     tip,
                     &tx_builder,
@@ -348,6 +383,29 @@ where
                     Ok(funded) => funded,
                     Err(err) => {
                         Self::send_err(resp_tx, WalletServiceError::from(err));
+                        return;
+                    }
+                };
+
+                if resp_tx
+                    .send(Ok(TipResponse {
+                        tip,
+                        response: funded,
+                    }))
+                    .is_err()
+                {
+                    error!("Failed to respond to FundTx");
+                }
+            }
+            WalletMsg::SignTx {
+                tip,
+                tx_builder,
+                resp_tx,
+            } => {
+                let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+                    Ok(tip) => tip,
+                    Err(err) => {
+                        Self::send_err(resp_tx, err);
                         return;
                     }
                 };
@@ -364,7 +422,16 @@ where
                     }
                 };
 
-                Self::handle_sign_tx(funded, ledger, resp_tx, kms, voucher_secrets).await;
+                let resp = Self::sign_tx(tx_builder, ledger, kms, voucher_secrets)
+                    .await
+                    .map(|signed_tx| TipResponse {
+                        tip,
+                        response: signed_tx,
+                    });
+
+                if resp_tx.send(resp).is_err() {
+                    error!("Failed to respond to SignTx");
+                }
             }
             WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
                 Self::get_leader_aged_notes(tip, resp_tx, wallet, cryptarchia).await;
@@ -375,32 +442,31 @@ where
         }
     }
 
-    fn handle_get_balance(
-        tip: HeaderId,
+    async fn handle_get_balance(
+        tip: Option<HeaderId>,
         pk: ZkPublicKey,
-        resp_tx: oneshot::Sender<Result<Option<u64>, WalletServiceError>>,
+        resp_tx: oneshot::Sender<Result<TipResponse<Option<u64>>, WalletServiceError>>,
         wallet: &Wallet,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
-        let balance = wallet
+        let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+            Ok(tip) => tip,
+            Err(err) => {
+                Self::send_err(resp_tx, err);
+                return;
+            }
+        };
+
+        let resp = wallet
             .balance(tip, pk)
-            .map_err(WalletServiceError::WalletError);
+            .map_err(WalletServiceError::WalletError)
+            .map(|balance| TipResponse {
+                tip,
+                response: balance,
+            });
 
-        if resp_tx.send(balance).is_err() {
+        if resp_tx.send(resp).is_err() {
             error!("Failed to respond to GetBalance");
-        }
-    }
-
-    async fn handle_sign_tx(
-        tx_builder: MantleTxBuilder,
-        ledger: LedgerState,
-        resp_tx: oneshot::Sender<Result<SignedMantleTx, WalletServiceError>>,
-        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        voucher_secrets: &mut Vec<Fr>,
-    ) {
-        let signed_tx_res = Self::sign_tx(tx_builder, ledger, kms, voucher_secrets).await;
-
-        if resp_tx.send(signed_tx_res).is_err() {
-            error!("Failed to respond to FundAndSignTx");
         }
     }
 
@@ -440,16 +506,24 @@ where
                     OpProof::Ed25519Sig(ed25519_sig)
                 }
                 Op::SDPDeclare(declare_op) => {
-                    let locked_note = ledger
-                        .mantle_ledger()
-                        .locked_notes()
+                    // For a new declaration, the note is still in the UTXOs (not yet locked).
+                    // We look it up from the UTXO set to get the public key for signing.
+                    let utxo_tree = ledger.latest_utxos();
+                    info!(
+                        "SDPDeclare: Looking for note_id={}, utxo_tree has {} UTXOs",
+                        hex::encode(declare_op.locked_note_id.as_bytes()),
+                        utxo_tree.size()
+                    );
+                    let note = utxo_tree
+                        .utxos()
                         .get(&declare_op.locked_note_id)
+                        .map(|(utxo, _)| utxo.note)
                         .ok_or(WalletServiceError::MissingLockedNote(
                             declare_op.locked_note_id,
                         ))?;
 
                     let zk_sig =
-                        Self::sign_zksig(tx_hash, [locked_note.pk, declare_op.zk_id], kms).await?;
+                        Self::sign_zksig(tx_hash, [note.pk, declare_op.zk_id], kms).await?;
                     let ed25519_sig =
                         Self::sign_ed25519(tx_hash, declare_op.provider_id.0, kms).await?;
 
@@ -557,7 +631,7 @@ where
         // Use hex-encoded public key as key_id for now
         let key_ids: Vec<_> = pks
             .into_iter()
-            .map(|pk| hex::encode(fr_to_bytes(&pk.into_inner())))
+            .map(|pk| hex::encode(lb_groth16::fr_to_bytes(&pk.into_inner())))
             .collect();
 
         let payload = PayloadEncoding::Ed25519(tx_hash.as_signing_bytes());
@@ -592,14 +666,22 @@ where
     }
 
     async fn get_leader_aged_notes(
-        tip: HeaderId,
-        tx: oneshot::Sender<Result<Vec<Utxo>, WalletServiceError>>,
+        tip: Option<HeaderId>,
+        resp_tx: oneshot::Sender<Result<TipResponse<Vec<Utxo>>, WalletServiceError>>,
         wallet: &Wallet,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
+        let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+            Ok(tip) => tip,
+            Err(err) => {
+                Self::send_err(resp_tx, err);
+                return;
+            }
+        };
+
         // Get the ledger state at the specified tip
         let Ok(Some(ledger_state)) = cryptarchia.get_ledger_state(tip).await else {
-            Self::send_err(tx, WalletServiceError::LedgerStateNotFound(tip));
+            Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(tip));
             return;
         };
 
@@ -608,7 +690,7 @@ where
             Err(err) => {
                 error!(err = ?err, "Failed to fetch wallet state");
                 Self::send_err(
-                    tx,
+                    resp_tx,
                     WalletServiceError::FailedToFetchWalletStateForBlock(tip),
                 );
                 return;
@@ -623,7 +705,13 @@ where
             .map(|(_, utxo)| *utxo)
             .collect();
 
-        if tx.send(Ok(eligible_utxos)).is_err() {
+        if resp_tx
+            .send(Ok(TipResponse {
+                tip,
+                response: eligible_utxos,
+            }))
+            .is_err()
+        {
             error!("Failed to respond to GetLeaderAgedNotes");
         }
     }
@@ -649,11 +737,13 @@ where
     }
 
     async fn backfill_if_not_in_sync(
-        tip: HeaderId,
+        tip: Option<HeaderId>,
         wallet: &mut Wallet,
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) -> Result<(), WalletServiceError> {
+        let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
+
         if wallet.has_processed_block(tip) {
             // We are already in sync with `tip`.
             return Ok(());

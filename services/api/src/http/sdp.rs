@@ -1,10 +1,10 @@
 use std::fmt::{Debug, Display};
 
 use lb_core::sdp::{ActivityMetadata, DeclarationId, DeclarationMessage};
-use lb_sdp_service::{SdpService, adapters::mempool::SdpMempoolAdapter};
+use lb_sdp_service::{SdpService, mempool::SdpMempoolAdapter};
 use overwatch::{DynError, overwatch::OverwatchHandle};
 
-pub async fn post_declaration_handler<MempoolAdapter, RuntimeServiceId>(
+pub async fn post_declaration_handler<MempoolAdapter, WalletAdapter, RuntimeServiceId>(
     handle: OverwatchHandle<RuntimeServiceId>,
     declaration: DeclarationMessage,
 ) -> Result<DeclarationId, DynError>
@@ -15,7 +15,9 @@ where
         + Debug
         + Display
         + 'static
-        + overwatch::services::AsServiceId<SdpService<MempoolAdapter, RuntimeServiceId>>,
+        + overwatch::services::AsServiceId<
+            SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>,
+        >,
 {
     let relay = handle.relay().await?;
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -31,7 +33,7 @@ where
     reply_rx.await?
 }
 
-pub async fn post_activity_handler<MempoolAdapter, RuntimeServiceId>(
+pub async fn post_activity_handler<MempoolAdapter, WalletAdapter, RuntimeServiceId>(
     handle: OverwatchHandle<RuntimeServiceId>,
     metadata: ActivityMetadata,
 ) -> Result<(), DynError>
@@ -42,7 +44,9 @@ where
         + Debug
         + Display
         + 'static
-        + overwatch::services::AsServiceId<SdpService<MempoolAdapter, RuntimeServiceId>>,
+        + overwatch::services::AsServiceId<
+            SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>,
+        >,
 {
     let relay = handle.relay().await?;
 
@@ -54,7 +58,7 @@ where
     Ok(())
 }
 
-pub async fn post_withdrawal_handler<MempoolAdapter, RuntimeServiceId>(
+pub async fn post_withdrawal_handler<MempoolAdapter, WalletAdapter, RuntimeServiceId>(
     handle: OverwatchHandle<RuntimeServiceId>,
     declaration_id: DeclarationId,
 ) -> Result<(), DynError>
@@ -65,7 +69,9 @@ where
         + Debug
         + Display
         + 'static
-        + overwatch::services::AsServiceId<SdpService<MempoolAdapter, RuntimeServiceId>>,
+        + overwatch::services::AsServiceId<
+            SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>,
+        >,
 {
     let relay = handle.relay().await?;
 
