@@ -17,7 +17,7 @@ use lb_core::{
         gas::MainnetGasConstants,
         ops::{
             channel::ChannelId,
-            leader_claim::{RewardsRoot, VoucherCm},
+            leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm},
         },
         tx_builder::MantleTxBuilder,
     },
@@ -568,25 +568,7 @@ where
                     OpProof::ZkSig(zk_sig)
                 }
                 Op::LeaderClaim(claim_op) => {
-                    let voucher_secret = voucher_secrets
-                        .pop()
-                        .ok_or(WalletServiceError::NoVoucherSecretLeft)?;
-                    let voucher_cm = VoucherCm::from_secret(voucher_secret);
-                    let path = ledger
-                        .mantle_ledger()
-                        .voucher_merkle_path(voucher_cm)
-                        .ok_or(WalletServiceError::VoucherMerklePathNotFound(voucher_cm))?;
-
-                    let rewards_root = claim_op.rewards_root;
-                    let mantle_tx_hash = claim_op.mantle_tx_hash;
-
-                    // TODO: This should happen in KMS
-                    let poc = tokio::task::spawn_blocking(move || {
-                        Self::generate_poc(voucher_secret, &path, rewards_root, mantle_tx_hash)
-                    })
-                    .await??;
-
-                    OpProof::PoC(poc)
+                    Self::prove_leader_claim_op(claim_op.clone(), &ledger, voucher_secrets).await?
                 }
             };
             ops_proofs.push(proof);
@@ -647,6 +629,29 @@ where
         };
 
         Ok(zk_sig)
+    }
+
+    async fn prove_leader_claim_op(
+        op: LeaderClaimOp,
+        ledger: &LedgerState,
+        voucher_secrets: &mut Vec<Fr>,
+    ) -> Result<OpProof, WalletServiceError> {
+        let voucher_secret = voucher_secrets
+            .pop()
+            .ok_or(WalletServiceError::NoVoucherSecretLeft)?;
+        let voucher_cm = VoucherCm::from_secret(voucher_secret);
+        let path = ledger
+            .mantle_ledger()
+            .voucher_merkle_path(voucher_cm)
+            .ok_or(WalletServiceError::VoucherMerklePathNotFound(voucher_cm))?;
+
+        // TODO: This should happen in KMS
+        let poc = tokio::task::spawn_blocking(move || {
+            Self::generate_poc(voucher_secret, &path, op.rewards_root, op.mantle_tx_hash)
+        })
+        .await??;
+
+        Ok(OpProof::PoC(poc))
     }
 
     fn generate_poc(
