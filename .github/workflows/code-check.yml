@@ -231,7 +231,7 @@ jobs:
           command: build
           # We specify necessary features only, as `--all-features` will include features intended for cucumber and \
           # integration framework tests.
-          args: --locked --release --features pol-dev-mode
+          args: --release --locked --all --features "pol-dev-mode"
 
       - name: End-to-end integration tests
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
@@ -243,7 +243,7 @@ jobs:
         with:
           command: nextest
           # - We don't test benches as they take 6h+, leading to a timeout
-          args: run --locked --jobs 1 --retries 2 -p logos-blockchain-tests --no-fail-fast
+          args: run --locked --jobs 2 --retries 2 -p logos-blockchain-tests --features pol-dev-mode --no-fail-fast
 
       - name: Clean up build artifacts
         if: success() || failure()
