@@ -152,6 +152,7 @@ pub struct WalletServiceSettings {
 
 pub struct WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
+    voucher_secrets: Vec<Fr>,
     _marker: std::marker::PhantomData<(Kms, Cryptarchia, Tx, Storage)>,
 }
 
@@ -191,6 +192,7 @@ where
     ) -> Result<Self, DynError> {
         Ok(Self {
             service_resources_handle,
+            voucher_secrets: Vec::new(),
             _marker: std::marker::PhantomData,
         })
     }
@@ -198,6 +200,7 @@ where
     async fn run(mut self) -> Result<(), DynError> {
         let Self {
             mut service_resources_handle,
+            mut voucher_secrets,
             ..
         } = self;
 
@@ -289,7 +292,7 @@ where
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Self::handle_wallet_message(msg, &mut wallet, &storage_adapter, &cryptarchia_api, &kms).await;
+                    Self::handle_wallet_message(msg, &mut wallet, &storage_adapter, &cryptarchia_api, &kms, &mut voucher_secrets).await;
                 }
 
                 Ok(header_id) = new_block_receiver.recv() => {
@@ -366,6 +369,7 @@ where
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        voucher_secrets: &mut Vec<Fr>,
     ) {
         if let Err(err) =
             Self::backfill_if_not_in_sync(msg.tip(), wallet, storage, cryptarchia).await
