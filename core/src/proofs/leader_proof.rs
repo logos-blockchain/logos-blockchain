@@ -175,7 +175,7 @@ impl LeaderProof for Groth16LeaderProof {
     }
 
     fn verify_genesis(&self) -> bool {
-        let expected_genesis = Groth16LeaderProof::genesis();
+        let expected_genesis = Self::genesis();
         self.proof == expected_genesis.proof
             && self.entropy_contribution == expected_genesis.entropy_contribution
             && self.leader_key == expected_genesis.leader_key
