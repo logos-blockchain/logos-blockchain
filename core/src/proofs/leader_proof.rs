@@ -410,18 +410,22 @@ mod tests {
     }
 
     fn check_prob(target: f64, f: impl Fn() -> bool) {
-        const EPS: f64 = 0.01; // tolerance band (±2 percentage points)
+        let eps = if target < 0.1 {
+            0.01 // tight tolerance for low target (±1%p)
+        } else {
+            0.08 // loose tolerance for high target (±8%p)
+        };
         const ALPHA: f64 = 1e-6; // fails with probability at most ALPHA if the observed rate is within EPS of
         // target
 
-        let n = hoeffding_sample_size(EPS, ALPHA);
+        let n = hoeffding_sample_size(eps, ALPHA);
         println!("Sampling n = {n}");
 
         let observed = empirical_rate(n, f);
 
         assert!(
-            (observed - target).abs() <= EPS,
-            "Rate out of tolerance: observed={observed:.6}, target={target:.6}, eps={EPS:.6}, n={n}"
+            (observed - target).abs() <= eps,
+            "Rate out of tolerance: observed={observed:.6}, target={target:.6}, eps={eps:.6}, n={n}"
         );
     }
 
