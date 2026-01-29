@@ -11,7 +11,9 @@ use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, GasConstants, NoteId, Utxo, Value, ledger::Tx as LedgerTx,
+        AuthenticatedMantleTx, GasConstants, NoteId, Utxo, Value,
+        ledger::Tx as LedgerTx,
+        ops::leader_claim::{VoucherCm, VoucherNullifier, VoucherSecret},
         tx_builder::MantleTxBuilder,
     },
 };
@@ -41,10 +43,19 @@ impl<Tx: AuthenticatedMantleTx> From<Block<Tx>> for WalletBlock {
 pub struct WalletState {
     pub utxos: rpds::HashTrieMapSync<NoteId, Utxo>,
     pub pk_index: rpds::HashTrieMapSync<ZkPublicKey, rpds::HashTrieSetSync<NoteId>>,
+    /// Claimable vouchers in the corresponding ledger state.
+    /// When building `LEADER_CLAIM` ops, vouchers must be picked from this.
+    // TODO: Replace this with voucher_indices by moving voucher derivation to KMS.
+    pub claimable_voucher_secrets: rpds::HashTrieSetSync<VoucherSecret>,
 }
 
 impl WalletState {
-    pub fn from_ledger(known_keys: &HashSet<ZkPublicKey>, ledger: &LedgerState) -> Self {
+    pub fn from_ledger(
+        known_keys: &HashSet<ZkPublicKey>,
+        // TODO: Replace this with voucher_indices
+        known_voucher_secrets: &HashSet<VoucherSecret>,
+        ledger: &LedgerState,
+    ) -> Self {
         let mut utxos = rpds::HashTrieMapSync::new_sync();
         let mut pk_index = rpds::HashTrieMapSync::new_sync();
 
@@ -62,7 +73,14 @@ impl WalletState {
             }
         }
 
-        Self { utxos, pk_index }
+        let claimable_voucher_secrets =
+            Self::filter_claimable_known_voucher_secrets(known_voucher_secrets, ledger);
+
+        Self {
+            utxos,
+            pk_index,
+            claimable_voucher_secrets,
+        }
     }
 
     pub fn utxos_owned_by_pks(
@@ -133,7 +151,13 @@ impl WalletState {
     }
 
     #[must_use]
-    pub fn apply_block(&self, known_keys: &HashSet<ZkPublicKey>, block: &WalletBlock) -> Self {
+    pub fn apply_block(
+        &self,
+        known_keys: &HashSet<ZkPublicKey>,
+        known_voucher_secrets: &HashSet<VoucherSecret>,
+        block: &WalletBlock,
+        ledger: &LedgerState,
+    ) -> Self {
         let mut utxos = self.utxos.clone();
         let mut pk_index = self.pk_index.clone();
 
@@ -172,27 +196,59 @@ impl WalletState {
             }
         }
 
-        Self { utxos, pk_index }
+        // Update the known claimable voucher list.
+        // We need the ledger because block doesn't contain the list of vouchers
+        // that have newly become claimable.
+        let claimable_voucher_secrets =
+            Self::filter_claimable_known_voucher_secrets(known_voucher_secrets, ledger);
+
+        Self {
+            utxos,
+            pk_index,
+            claimable_voucher_secrets,
+        }
+    }
+
+    /// Filter the known voucher secrets to only those that are claimable in the
+    /// given ledger state.
+    fn filter_claimable_known_voucher_secrets(
+        known_voucher_secrets: &HashSet<VoucherSecret>,
+        ledger: &LedgerState,
+    ) -> rpds::HashTrieSetSync<VoucherSecret> {
+        known_voucher_secrets
+            .iter()
+            .copied()
+            .filter(|&known_voucher_secret| {
+                ledger
+                    .mantle_ledger()
+                    .has_claimable_voucher(&VoucherCm::from_secret(known_voucher_secret))
+            })
+            .collect()
     }
 }
 
 #[derive(Clone)]
 pub struct Wallet {
     known_keys: HashSet<ZkPublicKey>,
+    known_voucher_secrets: HashSet<VoucherSecret>,
     wallet_states: BTreeMap<HeaderId, WalletState>,
 }
 
 impl Wallet {
     pub fn from_lib(
         known_keys: impl IntoIterator<Item = ZkPublicKey>,
+        // TODO: Replace with known_voucher_indices
+        known_voucher_secrets: impl IntoIterator<Item = VoucherSecret>,
         lib: HeaderId,
         ledger: &LedgerState,
     ) -> Self {
         let known_keys: HashSet<ZkPublicKey> = known_keys.into_iter().collect();
-        let wallet_state = WalletState::from_ledger(&known_keys, ledger);
+        let known_voucher_secrets = known_voucher_secrets.into_iter().collect::<HashSet<_>>();
+        let wallet_state = WalletState::from_ledger(&known_keys, &known_voucher_secrets, ledger);
 
         Self {
             known_keys,
+            known_voucher_secrets,
             wallet_states: [(lib, wallet_state)].into(),
         }
     }
@@ -203,19 +259,47 @@ impl Wallet {
     }
 
     #[must_use]
+    pub const fn known_voucher_secrets(&self) -> &HashSet<VoucherSecret> {
+        &self.known_voucher_secrets
+    }
+
+    pub fn add_known_voucher_secret(&mut self, voucher_secret: VoucherSecret) {
+        self.known_voucher_secrets.insert(voucher_secret);
+    }
+
+    #[must_use]
+    pub fn find_known_voucher_secret(
+        &self,
+        voucher_nf: &VoucherNullifier,
+    ) -> Option<VoucherSecret> {
+        // TODO: Optimize this after migrating voucher derivation to KMS.
+        self.known_voucher_secrets
+            .iter()
+            .copied()
+            .find(|&vs| VoucherNullifier::from_secret(vs) == *voucher_nf)
+    }
+
+    #[must_use]
     pub fn has_processed_block(&self, block_id: HeaderId) -> bool {
         self.wallet_states.contains_key(&block_id)
     }
 
-    pub fn apply_block(&mut self, block: &WalletBlock) -> Result<(), WalletError> {
+    pub fn apply_block(
+        &mut self,
+        block: &WalletBlock,
+        ledger: &LedgerState,
+    ) -> Result<(), WalletError> {
         if self.wallet_states.contains_key(&block.id) {
             // Already processed this block
             return Ok(());
         }
 
-        let block_wallet_state = self
-            .wallet_state_at(block.parent)?
-            .apply_block(&self.known_keys, block);
+        let block_wallet_state = self.wallet_state_at(block.parent)?.apply_block(
+            &self.known_keys,
+            &self.known_voucher_secrets,
+            block,
+            ledger,
+        );
         self.wallet_states.insert(block.id, block_wallet_state);
         Ok(())
     }
@@ -292,10 +376,15 @@ mod tests {
         TxHash::from(BigUint::from(v))
     }
 
+    fn voucher_secret(i: u64) -> VoucherSecret {
+        VoucherSecret(BigUint::from(i).into())
+    }
+
     #[test]
     fn test_initialization() {
         let alice = pk(1);
         let bob = pk(2);
+        let voucher = voucher_secret(0);
 
         let genesis = HeaderId::from([0; 32]);
 
@@ -308,19 +397,34 @@ mod tests {
             &ledger_config(),
         );
 
-        let wallet = Wallet::from_lib([], genesis, &ledger);
+        let wallet = Wallet::from_lib([], [], genesis, &ledger);
         assert_eq!(wallet.balance(genesis, alice).unwrap(), None);
         assert_eq!(wallet.balance(genesis, bob).unwrap(), None);
+        assert!(
+            !wallet
+                .wallet_state_at(genesis)
+                .unwrap()
+                .claimable_voucher_secrets
+                .contains(&voucher)
+        );
 
-        let wallet = Wallet::from_lib([alice], genesis, &ledger);
+        let wallet = Wallet::from_lib([alice], [voucher], genesis, &ledger);
         assert_eq!(wallet.balance(genesis, alice).unwrap(), Some(104));
         assert_eq!(wallet.balance(genesis, bob).unwrap(), None);
+        // we know the voucher, but it is not claimable (doesn't exist) in the ledger
+        assert!(
+            !wallet
+                .wallet_state_at(genesis)
+                .unwrap()
+                .claimable_voucher_secrets
+                .contains(&voucher)
+        );
 
-        let wallet = Wallet::from_lib([bob], genesis, &ledger);
+        let wallet = Wallet::from_lib([bob], [], genesis, &ledger);
         assert_eq!(wallet.balance(genesis, alice).unwrap(), None);
         assert_eq!(wallet.balance(genesis, bob).unwrap(), Some(20));
 
-        let wallet = Wallet::from_lib([alice, bob], genesis, &ledger);
+        let wallet = Wallet::from_lib([alice, bob], [], genesis, &ledger);
         assert_eq!(wallet.balance(genesis, alice).unwrap(), Some(104));
         assert_eq!(wallet.balance(genesis, bob).unwrap(), Some(20));
     }
@@ -334,7 +438,7 @@ mod tests {
 
         let genesis_ledger = LedgerState::from_utxos([], &ledger_config());
 
-        let mut wallet = Wallet::from_lib([alice, bob], genesis, &genesis_ledger);
+        let mut wallet = Wallet::from_lib([alice, bob], [], genesis, &genesis_ledger);
 
         // Block 1
         // - alice is minted 104 NMO in two notes (100 NMO and 4 NMO)
@@ -349,7 +453,7 @@ mod tests {
             ledger_txs: vec![tx1.clone()],
         };
 
-        wallet.apply_block(&block_1).unwrap();
+        wallet.apply_block(&block_1, &genesis_ledger).unwrap();
 
         // Block 2
         //  - alice spends 100 NMO utxo, sending 20 NMO to bob and 80 to herself
@@ -363,7 +467,7 @@ mod tests {
                 outputs: vec![Note::new(20, bob), Note::new(80, alice)],
             }],
         };
-        wallet.apply_block(&block_2).unwrap();
+        wallet.apply_block(&block_2, &genesis_ledger).unwrap();
 
         // Query the balance of for each pk at different points in the blockchain
         assert_eq!(wallet.balance(genesis, alice).unwrap(), None);
@@ -383,6 +487,7 @@ mod tests {
 
         let wallet_state = WalletState::from_ledger(
             &HashSet::from_iter([alice]),
+            &HashSet::new(),
             &LedgerState::from_utxos([alice_utxo], &ledger_config()),
         );
 
@@ -419,6 +524,7 @@ mod tests {
 
         let wallet_state = WalletState::from_ledger(
             &HashSet::from_iter([alice]),
+            &HashSet::new(),
             &LedgerState::from_utxos(
                 [
                     Utxo::new(tx_hash(0), 0, Note::new(100, alice)),
@@ -449,6 +555,7 @@ mod tests {
 
         let wallet_state = WalletState::from_ledger(
             &HashSet::from_iter([alice]),
+            &HashSet::new(),
             &LedgerState::from_utxos([], &ledger_config()),
         );
 
@@ -471,6 +578,7 @@ mod tests {
 
         let wallet_state = WalletState::from_ledger(
             &HashSet::from_iter([alice, bob]),
+            &HashSet::new(),
             &LedgerState::from_utxos(
                 [Utxo::new(tx_hash(0), 0, Note::new(1_000_000, bob))],
                 &ledger_config(),
@@ -516,6 +624,7 @@ mod tests {
         // note
         let wallet_state = WalletState::from_ledger(
             &HashSet::from_iter([alice]),
+            &HashSet::new(),
             &LedgerState::from_utxos(
                 [Utxo::new(tx_hash(0), 0, Note::new(2884, alice))],
                 &ledger_config(),
@@ -546,6 +655,7 @@ mod tests {
             // note
             let wallet_state = WalletState::from_ledger(
                 &HashSet::from_iter([alice]),
+                &HashSet::new(),
                 &LedgerState::from_utxos(
                     [Utxo::new(tx_hash(0), 0, Note::new(value, alice))],
                     &ledger_config(),
@@ -563,6 +673,7 @@ mod tests {
         // We can fund the tx if the note value exceeds gas cost with change note
         let wallet_state = WalletState::from_ledger(
             &HashSet::from_iter([alice]),
+            &HashSet::new(),
             &LedgerState::from_utxos(
                 [Utxo::new(tx_hash(0), 0, Note::new(2925, alice))],
                 &ledger_config(),
