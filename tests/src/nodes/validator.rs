@@ -44,6 +44,9 @@ use crate::{
     topology::configs::{GeneralConfig, deployment::default_e2e_deployment_settings},
 };
 
+const BINARY_PROFILE_ENV_NAME: &str = "BINARY_PROFILE";
+const DEFAULT_BINARY_PROFILE: &str = "dev"; // Profile for debug builds
+
 pub enum Pool {
     Mantle,
 }
@@ -111,7 +114,8 @@ impl Validator {
         config.user.storage.db_path = dir.path().join("db");
 
         serde_yaml::to_writer(&mut file, &config).unwrap();
-        let binary_profile = std::env::var("BINARY_PROFILE").unwrap_or("debug".into());
+        let binary_profile = std::env::var(BINARY_PROFILE_ENV_NAME)
+            .unwrap_or_else(|_| DEFAULT_BINARY_PROFILE.into());
         let exe_path = get_exe_path(binary_profile.as_str());
         let child = Command::new(exe_path)
             .arg(&config_path)

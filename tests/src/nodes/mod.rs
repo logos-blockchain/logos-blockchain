@@ -29,12 +29,12 @@ fn persist_tempdir(tempdir: &mut TempDir, label: &str) -> std::io::Result<()> {
 }
 
 #[must_use]
-pub fn get_exe_path(profile_name: &str) -> PathBuf {
+pub fn get_exe_path(binary_profile: &str) -> PathBuf {
     let binary_path = std::env::current_dir()
         .unwrap()
         .join("../")
         .join("target")
-        .join(profile_name)
+        .join(binary_profile)
         .join("logos-blockchain-node");
 
     if std::fs::exists(&binary_path).unwrap() {
