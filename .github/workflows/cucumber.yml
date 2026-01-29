@@ -93,7 +93,8 @@ jobs:
 
       # Run cucumber integration tests with environment variables for binaries and test params
       - name: Run cucumber
-        if: always()
+        # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
+        if: ${{ !cancelled() }}
         timeout-minutes: 40  # Safety net timeout - this needs to be adjusted as more tests are added
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
