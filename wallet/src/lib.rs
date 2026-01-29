@@ -74,7 +74,7 @@ impl WalletState {
         }
 
         let claimable_voucher_secrets =
-            Self::known_claimable_voucher_secrets(known_voucher_secrets, ledger);
+            Self::filter_claimable_known_voucher_secrets(known_voucher_secrets, ledger);
 
         Self {
             utxos,
@@ -200,7 +200,7 @@ impl WalletState {
         // We need the ledger because block doesn't contain the list of vouchers
         // that have newly become claimable.
         let claimable_voucher_secrets =
-            Self::known_claimable_voucher_secrets(known_voucher_secrets, ledger);
+            Self::filter_claimable_known_voucher_secrets(known_voucher_secrets, ledger);
 
         Self {
             utxos,
@@ -209,7 +209,9 @@ impl WalletState {
         }
     }
 
-    fn known_claimable_voucher_secrets(
+    /// Filter the known voucher secrets to only those that are claimable in the
+    /// given ledger state.
+    fn filter_claimable_known_voucher_secrets(
         known_voucher_secrets: &HashSet<VoucherSecret>,
         ledger: &LedgerState,
     ) -> rpds::HashTrieSetSync<VoucherSecret> {
