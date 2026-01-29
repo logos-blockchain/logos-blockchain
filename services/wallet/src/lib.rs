@@ -255,7 +255,7 @@ where
 
         let mut wallet = Wallet::from_lib(
             settings.known_keys.clone(),
-            // TODO: Load known_voucher_indices from config
+            // TODO: Load known_voucher_indices from state recovery
             // after migrating voucher derivation to KMS.
             std::iter::empty(),
             lib,
