@@ -8,5 +8,5 @@ fn main() {
         .with_language(cbindgen::Language::C)
         .generate()
         .expect("Unable to generate bindings")
-        .write_to_file("lib_logos_blockchain.h");
+        .write_to_file("logos_blockchain.h");
 }

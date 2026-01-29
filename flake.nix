@@ -63,31 +63,32 @@
             LOGOS_BLOCKCHAIN_CIRCUITS = logos-blockchain-circuits.packages.${system}.default;
           };
 
-          cargoArtifacts = craneLib.buildDepsOnly (
+          logosBlockchainDependencies = craneLib.buildDepsOnly (
             commonArgs
             // {
-              pname = "logos-blockchain-deps";
+              pname = "logos-blockchain";
               version = "0.1.0";
             }
           );
 
-          logos-blockchain-c = craneLib.buildPackage (
+          logosBlockChainC = craneLib.buildPackage (
             commonArgs
             // {
-              inherit cargoArtifacts;
+              inherit logosBlockchainDependencies;
               pname = "logos-blockchain-c";
               version = "0.1.0";
               cargoExtraArgs = "-p logos-blockchain-c";
 
               postInstall = ''
                 mkdir -p $out/include
-                cp c-bindings/lib_logos_blockchain.h $out/include/
+                cp c-bindings/logos_blockchain.h $out/include/
               '';
             }
           );
         in
         {
-          inherit logos-blockchain-c;
+          inherit logosBlockChainC;
+          default = logosBlockChainC;
         }
       );
 
