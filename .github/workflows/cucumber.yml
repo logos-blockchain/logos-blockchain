@@ -60,6 +60,11 @@ jobs:
       - name: Set circuits path environment variable (old)
         run: echo "NOMOS_CIRCUITS=$HOME/.logos-blockchain-circuits" >> $GITHUB_ENV
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35
+        with:
+          tool: cargo-nextest
+
       # Build release binary for logos-blockchain-node (so runtimes can be reduced) with required test features
       - name: Build binaries with required features
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
@@ -89,6 +94,7 @@ jobs:
 
       # Run cucumber integration tests with environment variables for binaries and test params
       - name: Run cucumber
+        if: always()
         timeout-minutes: 40  # Safety net timeout - this needs to be adjusted as more tests are added
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
