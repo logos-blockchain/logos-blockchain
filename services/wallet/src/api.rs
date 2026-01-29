@@ -155,11 +155,16 @@ where
     pub async fn get_leader_aged_notes(
         &self,
         tip: Option<HeaderId>,
+        leader_pk: ZkPublicKey,
     ) -> Result<TipResponse<Vec<Utxo>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
-            .send(WalletMsg::GetLeaderAgedNotes { tip, resp_tx })
+            .send(WalletMsg::GetLeaderAgedNotes {
+                tip,
+                leader_pk,
+                resp_tx,
+            })
             .await?;
 
         Ok(rx.await??)

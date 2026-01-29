@@ -117,6 +117,7 @@ pub enum WalletMsg {
     },
     GetLeaderAgedNotes {
         tip: Option<HeaderId>,
+        leader_pk: ZkPublicKey,
         resp_tx: oneshot::Sender<Result<TipResponse<Vec<Utxo>>, WalletServiceError>>,
     },
     GenerateNewVoucherSecret {
@@ -420,8 +421,12 @@ where
                     error!("Failed to respond to SignTx");
                 }
             }
-            WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
-                Self::get_leader_aged_notes(tip, resp_tx, wallet, cryptarchia).await;
+            WalletMsg::GetLeaderAgedNotes {
+                tip,
+                leader_pk,
+                resp_tx,
+            } => {
+                Self::get_leader_aged_notes(tip, leader_pk, resp_tx, wallet, cryptarchia).await;
             }
             WalletMsg::GenerateNewVoucherSecret { resp_tx } => {
                 Self::generate_new_voucher_secret(wallet, resp_tx);
@@ -661,6 +666,7 @@ where
 
     async fn get_leader_aged_notes(
         tip: Option<HeaderId>,
+        leader_pk: ZkPublicKey,
         resp_tx: oneshot::Sender<Result<TipResponse<Vec<Utxo>>, WalletServiceError>>,
         wallet: &Wallet,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
@@ -695,7 +701,7 @@ where
         let eligible_utxos: Vec<Utxo> = wallet_state
             .utxos
             .iter()
-            .filter(|(note_id, _)| aged_utxos.contains_key(note_id))
+            .filter(|(note_id, utxo)| utxo.note.pk == leader_pk && aged_utxos.contains_key(note_id))
             .map(|(_, utxo)| *utxo)
             .collect();
 
