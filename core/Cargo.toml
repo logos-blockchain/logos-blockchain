@@ -26,6 +26,7 @@ lb-blend-proofs               = { workspace = true }
 lb-cryptarchia-engine         = { features = ["serde"], workspace = true }
 lb-groth16                    = { features = ["deser"], workspace = true }
 lb-key-management-system-keys = { workspace = true }
+lb-poc                        = { workspace = true }
 lb-pol                        = { workspace = true }
 lb-poseidon2                  = { workspace = true }
 lb-utils                      = { workspace = true }

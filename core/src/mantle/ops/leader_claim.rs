@@ -1,12 +1,18 @@
-use lb_groth16::{fr_to_bytes, serde::serde_fr};
+use std::sync::LazyLock;
+
+use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_poseidon2::{Fr, ZkHash};
 use serde::{Deserialize, Serialize};
 
-use crate::mantle::TxHash;
+use crate::{crypto::ZkHasher, mantle::TxHash};
+
+static REWARD_VOUCHER: LazyLock<Fr> = LazyLock::new(|| {
+    fr_from_bytes(b"REWARD_VOUCHER").expect("BigUint should load from constant string")
+});
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 pub struct RewardsRoot(#[serde(with = "serde_fr")] ZkHash);
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct VoucherNullifier(#[serde(with = "serde_fr")] ZkHash);
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 pub struct VoucherCm(#[serde(with = "serde_fr")] ZkHash);
@@ -64,5 +70,12 @@ impl VoucherCm {
     #[must_use]
     pub fn to_bytes(&self) -> [u8; 32] {
         fr_to_bytes(&self.0)
+    }
+
+    #[must_use]
+    pub fn from_secret(voucher_secret: Fr) -> Self {
+        let mut hash = ZkHasher::new();
+        hash.compress(&[*REWARD_VOUCHER, voucher_secret]);
+        hash.finalize().into()
     }
 }

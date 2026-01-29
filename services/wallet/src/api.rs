@@ -1,9 +1,13 @@
 use lb_core::{
     header::HeaderId,
-    mantle::{Note, SignedMantleTx, Utxo, Value, tx_builder::MantleTxBuilder},
+    mantle::{
+        Note, SignedMantleTx, Utxo, Value, ops::leader_claim::VoucherCm,
+        tx_builder::MantleTxBuilder,
+    },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use overwatch::{
+    DynError,
     overwatch::OverwatchHandle,
     services::{
         AsServiceId, ServiceData,
@@ -159,5 +163,14 @@ where
             .await?;
 
         Ok(rx.await??)
+    }
+
+    pub async fn generate_new_voucher(&self) -> Result<VoucherCm, DynError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::GenerateNewVoucherSecret { resp_tx })
+            .await
+            .map_err(|e| format!("Failed to request generating new voucher secret: {e:?}"))?;
+        Ok(rx.await?)
     }
 }

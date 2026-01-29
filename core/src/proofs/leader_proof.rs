@@ -52,7 +52,8 @@ use crate::{
         ledger::Utxo,
         ops::{channel::Ed25519PublicKey, leader_claim::VoucherCm},
     },
-    utils::merkle::{MerkleNode, MerklePath},
+    proofs::merkle::merkle_path_to_witness,
+    utils::merkle::MerklePath,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,10 +175,11 @@ impl LeaderProof for Groth16LeaderProof {
     }
 
     fn verify_genesis(&self) -> bool {
-        self.proof == lb_pol::PoLProof::from_bytes(&[0u8; 128])
-            && self.entropy_contribution == Fr::ZERO
-            && self.leader_key == Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()
-            && self.voucher_cm == VoucherCm::default()
+        let expected_genesis = Self::genesis();
+        self.proof == expected_genesis.proof
+            && self.entropy_contribution == expected_genesis.entropy_contribution
+            && self.leader_key == expected_genesis.leader_key
+            && self.voucher_cm == expected_genesis.voucher_cm
     }
 
     fn entropy(&self) -> Fr {
@@ -378,21 +380,6 @@ fn ed25519_pk_to_fr_tuple(pk: &Ed25519PublicKey) -> (Fr, Fr) {
     )
 }
 
-/// Converts a [`MerklePath`] to the witness format expected by the circuit.
-fn merkle_path_to_witness<T: Copy>(path: &MerklePath<T>) -> (Vec<T>, Vec<bool>) {
-    path.iter()
-        // PoL circuit expects the reverse order for selectors
-        .zip(path.iter().rev())
-        .map(|(node, rev_node)| {
-            (
-                *node.item(),
-                // 1 if sibling is on the left
-                matches!(rev_node, MerkleNode::Left(_)),
-            )
-        })
-        .unzip()
-}
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr as _;
@@ -452,6 +439,12 @@ mod tests {
         (public, note, sk)
     }
 
+    #[test]
+    fn test_genesis_verification() {
+        let genesis_proof = Groth16LeaderProof::genesis();
+        assert!(genesis_proof.verify_genesis());
+    }
+
     /// Check that ticket is derived correctly with known values.
     ///
     /// NOTE: This test must be updated if the ticket derivation changes.
@@ -493,28 +486,5 @@ mod tests {
             let (public, note_id, sk) = rand_inputs();
             public.check_winning(1, note_id, sk)
         });
-    }
-
-    #[test]
-    fn test_merkle_path_to_witness() {
-        let path: Vec<MerkleNode<i32>> = vec![
-            MerkleNode::Left(1),
-            MerkleNode::Right(2),
-            MerkleNode::Left(3),
-            MerkleNode::Right(4),
-        ];
-        let (items, selectors) = merkle_path_to_witness(&path);
-        // Items should be in forward order.
-        assert_eq!(items, vec![1, 2, 3, 4]);
-        // Selectors should be in reverse order.
-        assert_eq!(selectors, vec![false, true, false, true]);
-    }
-
-    #[test]
-    fn test_merkle_path_to_witness_empty() {
-        let path: Vec<MerkleNode<i32>> = vec![];
-        let (items, selectors) = merkle_path_to_witness(&path);
-        assert!(items.is_empty());
-        assert!(selectors.is_empty());
     }
 }

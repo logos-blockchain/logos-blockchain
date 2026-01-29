@@ -14,9 +14,17 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo, Value,
-        gas::MainnetGasConstants, ops::channel::ChannelId, tx_builder::MantleTxBuilder,
+        gas::MainnetGasConstants,
+        ops::{
+            channel::ChannelId,
+            leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm},
+        },
+        tx_builder::MantleTxBuilder,
     },
+    proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
+    utils::merkle::MerklePath,
 };
+use lb_groth16::{Fr, fr_from_bytes};
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::preload::PreloadKMSBackend,
@@ -36,8 +44,9 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
+use rand::{RngCore as _, rngs::OsRng};
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, task::JoinError};
 use tracing::{debug, error, info, trace};
 
 #[derive(Debug, thiserror::Error)]
@@ -71,6 +80,18 @@ pub enum WalletServiceError {
 
     #[error("Locked note {0:?} is missing in ledger")]
     MissingLockedNote(lb_core::mantle::NoteId),
+
+    #[error("PoC generation failed: {0:?}")]
+    PoCGenerationFailed(#[from] lb_core::proofs::leader_claim_proof::Error),
+
+    #[error("No voucher secret left")]
+    NoVoucherSecretLeft,
+
+    #[error("Merkle path not found for voucher_cm: {0:?}")]
+    VoucherMerklePathNotFound(VoucherCm),
+
+    #[error("blocking task failed: {0}")]
+    TaskJoin(#[from] JoinError),
 }
 
 #[derive(Debug)]
@@ -96,6 +117,9 @@ pub enum WalletMsg {
         tip: Option<HeaderId>,
         resp_tx: oneshot::Sender<Result<TipResponse<Vec<Utxo>>, WalletServiceError>>,
     },
+    GenerateNewVoucherSecret {
+        resp_tx: oneshot::Sender<VoucherCm>,
+    },
 }
 
 #[derive(Debug)]
@@ -105,6 +129,8 @@ pub struct TipResponse<R> {
 }
 
 impl WalletMsg {
+    /// Returns [`HeaderId`] of the tip if the message is associated
+    /// with a specific tip.
     #[must_use]
     pub const fn tip(&self) -> Option<HeaderId> {
         match self {
@@ -112,6 +138,7 @@ impl WalletMsg {
             | Self::FundTx { tip, .. }
             | Self::SignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. } => *tip,
+            Self::GenerateNewVoucherSecret { .. } => None,
         }
     }
 }
@@ -123,6 +150,7 @@ pub struct WalletServiceSettings {
 
 pub struct WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
+    voucher_secrets: Vec<Fr>,
     _marker: std::marker::PhantomData<(Kms, Cryptarchia, Tx, Storage)>,
 }
 
@@ -161,6 +189,7 @@ where
     ) -> Result<Self, DynError> {
         Ok(Self {
             service_resources_handle,
+            voucher_secrets: Vec::new(),
             _marker: std::marker::PhantomData,
         })
     }
@@ -168,6 +197,7 @@ where
     async fn run(mut self) -> Result<(), DynError> {
         let Self {
             mut service_resources_handle,
+            mut voucher_secrets,
             ..
         } = self;
 
@@ -251,7 +281,7 @@ where
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Self::handle_wallet_message(msg, &mut wallet, &storage_adapter, &cryptarchia_api, &kms).await;
+                    Self::handle_wallet_message(msg, &mut wallet, &storage_adapter, &cryptarchia_api, &kms, &mut voucher_secrets).await;
                 }
 
                 Ok(header_id) = new_block_receiver.recv() => {
@@ -317,6 +347,7 @@ where
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        voucher_secrets: &mut Vec<Fr>,
     ) {
         if let Err(err) =
             Self::backfill_if_not_in_sync(msg.tip(), wallet, storage, cryptarchia).await
@@ -391,7 +422,7 @@ where
                     }
                 };
 
-                let resp = Self::sign_tx(tx_builder, ledger, kms)
+                let resp = Self::sign_tx(tx_builder, ledger, kms, voucher_secrets)
                     .await
                     .map(|signed_tx| TipResponse {
                         tip,
@@ -404,6 +435,9 @@ where
             }
             WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
                 Self::get_leader_aged_notes(tip, resp_tx, wallet, cryptarchia).await;
+            }
+            WalletMsg::GenerateNewVoucherSecret { resp_tx } => {
+                Self::generate_new_voucher_secret(voucher_secrets, resp_tx);
             }
         }
     }
@@ -440,6 +474,7 @@ where
         tx_builder: MantleTxBuilder,
         ledger: LedgerState,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        voucher_secrets: &mut Vec<Fr>,
     ) -> Result<SignedMantleTx, WalletServiceError> {
         // Extract input public keys before building the transaction
         let input_pks: Vec<ZkPublicKey> = tx_builder
@@ -532,8 +567,8 @@ where
 
                     OpProof::ZkSig(zk_sig)
                 }
-                Op::LeaderClaim(_claim_op) => {
-                    todo!("LeaderClaim proof not yet implemented")
+                Op::LeaderClaim(claim_op) => {
+                    Self::prove_leader_claim_op(claim_op.clone(), &ledger, voucher_secrets).await?
                 }
             };
             ops_proofs.push(proof);
@@ -596,6 +631,45 @@ where
         Ok(zk_sig)
     }
 
+    async fn prove_leader_claim_op(
+        op: LeaderClaimOp,
+        ledger: &LedgerState,
+        voucher_secrets: &mut Vec<Fr>,
+    ) -> Result<OpProof, WalletServiceError> {
+        let voucher_secret = voucher_secrets
+            .pop()
+            .ok_or(WalletServiceError::NoVoucherSecretLeft)?;
+        let voucher_cm = VoucherCm::from_secret(voucher_secret);
+        let path = ledger
+            .mantle_ledger()
+            .voucher_merkle_path(voucher_cm)
+            .ok_or(WalletServiceError::VoucherMerklePathNotFound(voucher_cm))?;
+
+        // TODO: This should happen in KMS
+        let poc = tokio::task::spawn_blocking(move || {
+            Self::generate_poc(voucher_secret, &path, op.rewards_root, op.mantle_tx_hash)
+        })
+        .await??;
+
+        Ok(OpProof::PoC(poc))
+    }
+
+    fn generate_poc(
+        voucher_secret: Fr,
+        path: &MerklePath<Fr>,
+        rewards_root: RewardsRoot,
+        tx_hash: TxHash,
+    ) -> Result<Groth16LeaderClaimProof, WalletServiceError> {
+        Ok(Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
+            LeaderClaimPublic {
+                voucher_root: rewards_root.into(),
+                mantle_tx_hash: tx_hash.into(),
+            },
+            path,
+            voucher_secret,
+        ))?)
+    }
+
     async fn get_leader_aged_notes(
         tip: Option<HeaderId>,
         resp_tx: oneshot::Sender<Result<TipResponse<Vec<Utxo>>, WalletServiceError>>,
@@ -644,6 +718,26 @@ where
             .is_err()
         {
             error!("Failed to respond to GetLeaderAgedNotes");
+        }
+    }
+
+    /// Generate a new voucher secret randomly and store it in Vec.
+    // TODO: Do this in KMS: Derive a voucher from leader_sk in KMS.
+    //       So, we don't store new vouchers to the service state.
+    fn generate_new_voucher_secret(
+        voucher_secrets: &mut Vec<Fr>,
+        resp_tx: oneshot::Sender<VoucherCm>,
+    ) {
+        let mut voucher_secret_bytes = [0u8; 31];
+        OsRng.fill_bytes(&mut voucher_secret_bytes);
+        let voucher_secret =
+            fr_from_bytes(&voucher_secret_bytes).expect("voucher secret bytes must be a valid Fr");
+        let voucher_cm = VoucherCm::from_secret(voucher_secret);
+
+        voucher_secrets.push(voucher_secret);
+
+        if let Err(e) = resp_tx.send(voucher_cm) {
+            error!("Failed to send voucher secret: {e:?}");
         }
     }
 

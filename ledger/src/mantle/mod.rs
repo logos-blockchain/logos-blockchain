@@ -6,11 +6,13 @@ use std::collections::HashMap;
 
 use lb_core::{
     block::BlockNumber,
+    crypto::ZkHash,
     mantle::{
         AuthenticatedMantleTx, GasConstants, GenesisTx, NoteId, TxHash, Utxo,
         ops::{Op, OpProof, leader_claim::VoucherCm},
     },
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
+    utils::merkle::MerklePath,
 };
 use sdp::{Error as SdpLedgerError, locked_notes::LockedNotes};
 
@@ -117,6 +119,11 @@ impl LedgerState {
     #[must_use]
     pub fn sdp_declarations(&self) -> Vec<(DeclarationId, Declaration)> {
         self.sdp.declarations()
+    }
+
+    #[must_use]
+    pub fn voucher_merkle_path(&self, voucher_cm: VoucherCm) -> Option<MerklePath<ZkHash>> {
+        self.leaders.voucher_merkle_path(voucher_cm)
     }
 
     pub fn try_apply_header(
