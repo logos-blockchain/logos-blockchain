@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release. Must follow the format of 'X.Y.Z[-rc.N]'."
+        description: "Version to release. Must follow the format of 'X.Y.Z'."
         required: true
 
 jobs:
@@ -19,8 +19,8 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]; then
-            echo "VERSION must follow the format of 'X.Y.Z[-rc.N]' with N > 0. Value: '$VERSION'."
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "VERSION must follow the format of 'X.Y.Z'. Value: '$VERSION'."
             exit 2
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
