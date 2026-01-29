@@ -62,7 +62,7 @@ pub enum WalletServiceError {
     #[error("Failed to apply historical block {0} to wallet")]
     FailedToApplyBlock(HeaderId),
 
-    #[error("Block {0} not found in storage during wallet sync")]
+    #[error("Block {0} not found in storage")]
     BlockNotFoundInStorage(HeaderId),
 
     #[error(transparent)]
@@ -164,7 +164,6 @@ impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> ServiceData
     type Message = WalletMsg;
 }
 
-#[expect(clippy::too_many_lines, reason = "TODO: refactor after code reviews")]
 #[async_trait]
 impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> ServiceCore<RuntimeServiceId>
     for WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
@@ -276,7 +275,7 @@ where
         );
 
         Self::backfill_missing_blocks(
-            &Self::fetch_missing_headers(chain_info.tip, &cryptarchia_api).await?,
+            chain_info.tip,
             &mut wallet,
             &storage_adapter,
             &cryptarchia_api,
@@ -291,39 +290,9 @@ where
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
                     Self::handle_wallet_message(msg, &mut wallet, &storage_adapter, &cryptarchia_api, &kms).await;
                 }
-
                 Ok(header_id) = new_block_receiver.recv() => {
-                    let Some(block) = storage_adapter.get_block(&header_id).await else {
-                        error!(block_id=?header_id, "Missing block in storage");
-                        continue;
-                    };
-                    let ledger = match cryptarchia_api.get_ledger_state(header_id).await {
-                        Ok(Some(ledger)) => ledger,
-                        Ok(None) => {
-                            error!(block_id=?header_id, "No ledger state for {header_id:?}");
-                            continue;
-                        }
-                        Err(e) => {
-                            error!(block_id=?header_id, "Failed to get ledger state from cryptarchia: {e:?}");
-                            continue;
-                        }
-                    };
-                    let wallet_block = WalletBlock::from(block);
-                    match wallet.apply_block(&wallet_block, &ledger) {
-                        Ok(()) => {
-                            trace!(block_id = ?wallet_block.id, "Applied block to wallet");
-                        }
-                        Err(WalletError::UnknownBlock(block_id)) => {
-
-                            info!(block_id = ?block_id, "Missing block in wallet, backfilling");
-                            Self::backfill_missing_blocks(&Self::fetch_missing_headers(wallet_block.id, &cryptarchia_api).await?, &mut wallet, &storage_adapter, &cryptarchia_api).await?;
-                        },
-                        Err(err) => {
-                            error!(err=?err, "unexexpected error while applying block to wallet");
-                        }
-                    }
+                    Self::handle_new_block(header_id, &mut wallet, &storage_adapter, &cryptarchia_api).await;
                 }
-
                 Ok(lib_update) = lib_receiver.recv() => {
                     Self::handle_lib_update(&lib_update, &mut wallet);
                 }
@@ -776,8 +745,7 @@ where
         // To resolve this, we do a JIT backfill to try to sync the wallet with
         // cryptarchia. If we still have not caught up after the backfill, we return an
         // error to the caller
-        let headers = Self::fetch_missing_headers(tip, cryptarchia).await?;
-        Self::backfill_missing_blocks(&headers, wallet, storage, cryptarchia).await?;
+        Self::backfill_missing_blocks(tip, wallet, storage, cryptarchia).await?;
 
         if wallet.has_processed_block(tip) {
             Ok(())
@@ -785,6 +753,68 @@ where
             error!("Failed to backfill wallet to {tip}");
             Err(WalletServiceError::FailedToFetchWalletStateForBlock(tip))
         }
+    }
+
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Handling new block with error handling"
+    )]
+    async fn handle_new_block(
+        header_id: HeaderId,
+        wallet: &mut Wallet,
+        storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    ) {
+        let Ok((block, ledger)) = Self::load_block_and_ledger(
+            header_id,
+            storage_adapter,
+            cryptarchia_api,
+        )
+        .await
+        .inspect_err(|e| {
+            error!(block_id=?header_id, err=%e, "Failed to fetch new block and ledger for wallet");
+        }) else {
+            return;
+        };
+
+        let wallet_block = WalletBlock::from(block);
+        match wallet.apply_block(&wallet_block, &ledger) {
+            Ok(()) => {
+                trace!(block_id=?wallet_block.id, "Applied block to wallet");
+            }
+            Err(WalletError::UnknownBlock(block_id)) => {
+                info!(block_id = ?block_id, "Missing block in wallet, backfilling");
+                if let Err(e) = Self::backfill_missing_blocks(
+                    wallet_block.id,
+                    wallet,
+                    storage_adapter,
+                    cryptarchia_api,
+                )
+                .await
+                {
+                    error!(block_id=?header_id, err=%e, "Failed to backfill missing block to wallet");
+                }
+            }
+            Err(e) => {
+                error!(err=%e, "unexexpected error while applying block to wallet");
+            }
+        }
+    }
+
+    async fn load_block_and_ledger(
+        header_id: HeaderId,
+        storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    ) -> Result<(Block<Tx>, LedgerState), WalletServiceError> {
+        let block = storage_adapter
+            .get_block(&header_id)
+            .await
+            .ok_or(WalletServiceError::BlockNotFoundInStorage(header_id))?;
+        let ledger = cryptarchia_api
+            .get_ledger_state(header_id)
+            .await?
+            .ok_or(WalletServiceError::LedgerStateNotFound(header_id))?;
+        Ok((block, ledger))
     }
 
     fn handle_lib_update(lib_update: &LibUpdate, wallet: &mut Wallet) {
@@ -798,37 +828,28 @@ where
         wallet.prune_states(lib_update.pruned_blocks.all());
     }
 
-    async fn fetch_missing_headers(
-        missing_block: HeaderId,
-        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
-    ) -> Result<Vec<HeaderId>, WalletServiceError> {
-        cryptarchia_api
-            .get_headers_to_lib(missing_block)
-            .await
-            .map_err(WalletServiceError::CryptarchiaApi)
-    }
-
     async fn backfill_missing_blocks(
-        headers: &[HeaderId],
+        tip: HeaderId,
         wallet: &mut Wallet,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) -> Result<(), WalletServiceError> {
-        for header_id in headers.iter().rev().copied() {
+        let missing_headers = cryptarchia_api
+            .get_headers_to_lib(tip)
+            .await
+            .map_err(WalletServiceError::CryptarchiaApi)
+            .inspect_err(|e| {
+                error!(block_id = ?tip, err = %e, "Failed to fetch missing headers for backfill");
+            })?;
+
+        for header_id in missing_headers.iter().rev().copied() {
             if wallet.has_processed_block(header_id) {
                 info!("skipping already processed block");
                 continue;
             }
 
-            let Some(block) = storage_adapter.get_block(&header_id).await else {
-                error!(block_id = ?header_id, "Block not found in storage during wallet sync");
-                return Err(WalletServiceError::BlockNotFoundInStorage(header_id));
-            };
-
-            let ledger = cryptarchia_api
-                .get_ledger_state(header_id)
-                .await?
-                .ok_or(WalletServiceError::LedgerStateNotFound(header_id))?;
+            let (block, ledger) =
+                Self::load_block_and_ledger(header_id, storage_adapter, cryptarchia_api).await?;
 
             if let Err(e) = wallet.apply_block(&block.into(), &ledger) {
                 error!(
