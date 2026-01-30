@@ -1,0 +1,6 @@
+port: 4400
+n_hosts: 1
+timeout: 1
+tracing_settings:
+  service_name: 'test'
+  otlp_endpoint: 'http://loc:4317'
