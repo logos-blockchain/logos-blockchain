@@ -12,7 +12,7 @@
     crane.url = "github:ipetkov/crane";
 
     logos-blockchain-circuits = {
-      url = "github:logos-blockchain/logos-blockchain-circuits?ref=feat/nixify";
+      url = "github:logos-blockchain/logos-blockchain-circuits";
     };
   };
 

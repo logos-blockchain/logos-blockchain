@@ -2,11 +2,11 @@
   "nodes": {
     "crane": {
       "locked": {
-        "lastModified": 1769287525,
-        "narHash": "sha256-gABuYA6BzoRMLuPaeO5p7SLrpd4qExgkwEmYaYQY4bM=",
+        "lastModified": 1769737823,
+        "narHash": "sha256-DrBaNpZ+sJ4stXm+0nBX7zqZT9t9P22zbk6m5YhQxS4=",
         "owner": "ipetkov",
         "repo": "crane",
-        "rev": "0314e365877a85c9e5758f9ea77a9972afbb4c21",
+        "rev": "b2f45c3830aa96b7456a4c4bc327d04d7a43e1ba",
         "type": "github"
       },
       "original": {
@@ -20,16 +20,15 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1769615660,
+        "lastModified": 1769780029,
         "narHash": "sha256-B2CYcJWuJIXAJaWgBcY4k0FTxo62mI8Hd9RqBECfq4o=",
         "owner": "logos-blockchain",
         "repo": "logos-blockchain-circuits",
-        "rev": "1576b3a31ff784e21884a4509e71ee61fb10fa7e",
+        "rev": "480b9bc4fddb4643f528d607f046f27610439a78",
         "type": "github"
       },
       "original": {
         "owner": "logos-blockchain",
-        "ref": "feat/nixify",
         "repo": "logos-blockchain-circuits",
         "type": "github"
       }
@@ -81,11 +80,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1769568593,
-        "narHash": "sha256-vf3cZf8imUlPzFtICa1uyReDzoPV0XhHOIRM3tqI5VY=",
+        "lastModified": 1769742225,
+        "narHash": "sha256-roSD/OJ3x9nF+Dxr+/bLClX3U8FP9EkCQIFpzxKjSUM=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "6fe5039018d05cee5d01dda7df1c0846fb7943a4",
+        "rev": "bcdd8d37594f0e201639f55889c01c827baf5c75",
         "type": "github"
       },
       "original": {
