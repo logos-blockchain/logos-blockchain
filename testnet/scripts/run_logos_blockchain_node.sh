@@ -9,5 +9,5 @@ export CFG_FILE_PATH="/config.yaml" \
        LOG_LEVEL="INFO" \
        POL_PROOF_DEV_MODE=true
 
-/usr/bin/cfgsync-client && \
+/usr/bin/logos-blockchain-cfgsync-client && \
     exec /usr/bin/logos-blockchain-node /config.yaml

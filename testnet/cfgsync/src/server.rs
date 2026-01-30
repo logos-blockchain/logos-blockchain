@@ -3,6 +3,7 @@ use std::{fs, net::Ipv4Addr, path::PathBuf, sync::Arc};
 use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
 use lb_tests::nodes::validator::create_validator_config;
 use lb_tracing_service::TracingSettings;
+use reqwest::header::CONTENT_TYPE;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot::channel;
 
@@ -101,9 +102,39 @@ async fn custom_validator_config(
     )
 }
 
+async fn append_validator_config(
+    State(repo): State<Arc<ConfigRepo>>,
+    Json(p): Json<CustomClientIp>,
+) -> impl IntoResponse {
+    let host = Host::custom_validator_from_ip(
+        p.ip,
+        p.identifier,
+        p.network_port,
+        p.blend_port,
+        p.api_port,
+    );
+
+    repo.append(host).map_or_else(
+        || {
+            (
+                StatusCode::BAD_REQUEST,
+                "Network not initialized. Initial nodes must sync first.",
+            )
+                .into_response()
+        },
+        |cfg| {
+            let validator_config = create_validator_config(cfg);
+            let yaml = serde_yaml::to_string(&validator_config).unwrap_or_default();
+
+            (StatusCode::OK, [(CONTENT_TYPE, "text/yaml")], yaml).into_response()
+        },
+    )
+}
+
 pub fn cfgsync_app(config_repo: Arc<ConfigRepo>) -> Router {
     Router::new()
         .route("/validator", post(default_validator_config))
         .route("/custom-validator", post(custom_validator_config))
+        .route("/append-validator", post(append_validator_config))
         .with_state(config_repo)
 }

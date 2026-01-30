@@ -45,7 +45,6 @@ async fn main() {
     let identifier =
         env::var("CFG_HOST_IDENTIFIER").unwrap_or_else(|_| "unidentified-node".to_owned());
 
-    // Check for optional ports
     let network_port = get_optional_u16("CFG_NETWORK_PORT");
     let blend_port = get_optional_u16("CFG_BLEND_PORT");
     let api_port = get_optional_u16("CFG_API_PORT");
@@ -63,7 +62,6 @@ async fn main() {
         println!("Using custom validator endpoint with ports: {np}, {bp}, {ap}");
         pull_to_file::<ValidatorConfig, _>(&payload, &endpoint, &config_file_path).await
     } else {
-        // Use DEFAULT endpoint
         let endpoint = format!("{server_addr}/validator");
         let payload = ClientIp { ip, identifier };
         pull_to_file::<ValidatorConfig, _>(&payload, &endpoint, &config_file_path).await

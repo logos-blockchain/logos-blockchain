@@ -2,4 +2,4 @@
 
 set -e
 
-exec /usr/bin/cfgsync-server /etc/logos-blockchain/cfgsync.yaml
+exec /usr/bin/logos-blockchain-cfgsync-server /etc/logos-blockchain/cfgsync.yaml

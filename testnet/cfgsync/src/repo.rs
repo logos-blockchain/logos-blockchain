@@ -68,18 +68,28 @@ impl ConfigRepo {
     }
 
     /// Generates a new node config for host based on the initial nodes config.
-    pub fn append(&self, host: Host, reply_tx: Sender<RepoResponse>) {
-        let generated = self.generated_configs.lock().unwrap();
+    pub fn append(&self, host: Host) -> Option<GeneralConfig> {
+        let template = self
+            .generated_configs
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .cloned();
 
-        if let Some(template) = generated.values().next() {
+        if let Some(template) = template {
             let new_config =
-                create_node_config_from_template(&self.tracing_settings, &host, template);
+                create_node_config_from_template(&self.tracing_settings, &host, &template);
+
             self.generated_configs
                 .lock()
                 .unwrap()
                 .insert(host, new_config.clone());
-            drop(reply_tx.send(RepoResponse::Config(Box::new(new_config))));
+
+            return Some(new_config);
         }
+
+        None
     }
 
     async fn run(&self) {

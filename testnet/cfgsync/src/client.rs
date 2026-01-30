@@ -22,7 +22,7 @@ where
 
     let response = client
         .post(url)
-        .json(payload) // Payload is now generic
+        .json(payload)
         .send()
         .await
         .map_err(|err| format!("Failed to send IP announcement: {err}"))?;
