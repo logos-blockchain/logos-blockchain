@@ -29,7 +29,7 @@ Before publishing please ensure:
 - [ ] Description is complete
 - [ ] Changelog is correct, compared to last release
 - [ ] Binaries for Mac and Linux platforms are present
-- [ ] Circuits of the expected version for Mac and Linux platforms are present (need to be manually downloaded and included for now)
+- [ ] Circuits of the expected version for Mac and Linux platforms are present (need to be manually downloaded and included for now )
 - [ ] Example user config YAML file is present
 - [ ] Pre-release is checked if necessary
 - [ ] Remove this checklist and address all TODOs before publishing the release.
