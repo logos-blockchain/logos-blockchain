@@ -16,8 +16,7 @@ jobs:
       version: ${{ steps.define-version.outputs.version }}
 
     steps:
-      # Takes the version of the tag from which the workflow is dispatched (or fails if the workflow was not dispatched from a tag).
-      # Also, it uses a special tag name `release-ci-test` to indicate a test run, in which case the release version is set to `0.0.0`, and should be used for test reasons only.
+      # Take the version of the tag from which the workflow is dispatched, or use `0.0.0` for test runs with the `release-ci-test` tag.
       - name: Define version
         id: define-version
         env:
