@@ -5684,7 +5684,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures",
- "hex",
  "logos-blockchain-blend-service 0.1.0",
  "logos-blockchain-chain-service 0.1.0",
  "logos-blockchain-chain-service-common 0.1.0",
@@ -6501,7 +6500,6 @@ dependencies = [
  "logos-blockchain-tx-service 0.1.0",
  "logos-blockchain-utils 0.1.0",
  "logos-blockchain-wallet-service 0.1.0",
- "num-bigint",
  "overwatch",
  "serde",
  "serde_ignored",
@@ -6806,7 +6804,6 @@ dependencies = [
  "logos-blockchain-blend-proofs 0.1.0",
  "logos-blockchain-blend-service 0.1.0",
  "logos-blockchain-chain-broadcast-service 0.1.0",
- "logos-blockchain-chain-leader-service 0.1.0",
  "logos-blockchain-chain-network-service 0.1.0",
  "logos-blockchain-chain-service 0.1.0",
  "logos-blockchain-common-http-client 0.1.0",

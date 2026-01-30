@@ -53,7 +53,6 @@ lb-tracing-service               = { workspace = true }
 lb-tx-service                    = { features = ["rocksdb-backend"], workspace = true }
 lb-utils                         = { features = ["serde"], workspace = true }
 lb-wallet-service                = { workspace = true }
-num-bigint                       = { default-features = false, version = "0.4" }
 overwatch                        = { workspace = true }
 serde                            = { workspace = true }
 serde_ignored                    = { workspace = true }
