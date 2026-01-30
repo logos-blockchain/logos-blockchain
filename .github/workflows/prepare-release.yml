@@ -32,7 +32,7 @@ jobs:
           
           echo "version=0.1.0" >> $GITHUB_OUTPUT
 
-  bundle:
+  build:
     name: "Build binaries for ${{ matrix.platform.os-display }} (${{ matrix.platform.arch }})"
     needs: setup
     env:
@@ -69,20 +69,20 @@ jobs:
         name: Build node binary
         with:
           command: build
-          args: -p logos-blockchain-node --no-default-features --target ${{ matrix.platform.target_triple }}
+          args: -p logos-blockchain-node --target ${{ matrix.platform.target_triple }}
 
       - name: Upload binary (${{ matrix.platform.arch }})
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
           name: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.setup.outputs.version }}
-          path: target/debug/logos-blockchain-node
+          path: target/${{ matrix.platform.target_triple }}/debug/logos-blockchain-node
           if-no-files-found: error
 
   create-release:
     name: Create release
     needs:
       - setup
-      - bundle
+      - build
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.setup.outputs.version }}
