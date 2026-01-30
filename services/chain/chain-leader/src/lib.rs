@@ -1,4 +1,5 @@
 mod blend;
+mod kms;
 mod leadership;
 mod mempool;
 mod relays;
@@ -18,7 +19,7 @@ use lb_core::{
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_key_management_system_keys::keys::Ed25519Key;
+use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use lb_tx_service::{
@@ -27,7 +28,6 @@ use lb_tx_service::{
     network::NetworkAdapter as MempoolNetworkAdapter,
     storage::MempoolStorageAdapter,
 };
-pub use leadership::LeaderConfig;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData},
@@ -40,7 +40,8 @@ use tracing_futures::Instrument as _;
 
 use crate::{
     blend::BlendAdapter,
-    leadership::{Leader, WinningPoLSlotNotifier},
+    kms::PreloadKmsService,
+    leadership::{WinningPoLSlotNotifier, build_proof_for},
     mempool::MempoolAdapter as _,
     relays::CryptarchiaConsensusRelays,
 };
@@ -89,7 +90,6 @@ pub struct LeaderSettings<Ts, BlendBroadcastSettings> {
     #[serde(default)]
     pub transaction_selector_settings: Ts,
     pub config: lb_ledger::Config,
-    pub leader_config: LeaderConfig,
     pub blend_broadcast_settings: BlendBroadcastSettings,
 }
 
@@ -235,7 +235,8 @@ where
         >
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<CryptarchiaService>
-        + AsServiceId<Wallet>,
+        + AsServiceId<Wallet>
+        + AsServiceId<PreloadKmsService<RuntimeServiceId>>,
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -270,7 +271,6 @@ where
         let LeaderSettings {
             config: ledger_config,
             transaction_selector_settings,
-            leader_config,
             blend_broadcast_settings,
         } = self
             .service_resources_handle
@@ -280,15 +280,22 @@ where
 
         // TODO: check active slot coeff is exactly 1/30
 
-        let leader = Leader::new(leader_config.sk, ledger_config.clone());
         let mut winning_pol_slot_notifier =
-            WinningPoLSlotNotifier::new(&leader, &self.winning_pol_epoch_slots_sender);
+            WinningPoLSlotNotifier::new(&ledger_config, &self.winning_pol_epoch_slots_sender);
 
         let wallet_api = lb_wallet_service::api::WalletApi::<Wallet, RuntimeServiceId>::new(
             self.service_resources_handle
                 .overwatch_handle
                 .relay::<Wallet>()
                 .await?,
+        );
+
+        let kms_api = KmsServiceApi::<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>::new(
+            self.service_resources_handle
+                .overwatch_handle
+                .relay::<PreloadKmsService<_>>()
+                .await
+                .expect("Relay with KMS service should be available."),
         );
 
         let tx_selector = TxS::new(transaction_selector_settings);
@@ -305,7 +312,8 @@ where
             TxMempoolService<_, _, _, _>,
             TimeService<_, _>,
             CryptarchiaService,
-            Wallet
+            Wallet,
+            PreloadKmsService<_>
         )
         .await?;
 
@@ -374,9 +382,9 @@ where
                         };
 
                         // If it's a new epoch or the service just started, pre-compute the first winning slot and notify consumers.
-                        winning_pol_slot_notifier.process_epoch(&eligible_utxos.response, &epoch_state);
+                        winning_pol_slot_notifier.process_epoch(&eligible_utxos.response, &epoch_state, &kms_api).await;
 
-                       if let Some((proof, signing_key)) = leader.build_proof_for(&eligible_utxos.response, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier).await {
+                       if let Some((proof, signing_key)) = build_proof_for(&eligible_utxos.response, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier, &kms_api).await {
                             let voucher_cm = match wallet_api.generate_new_voucher().await {
                                 Ok(voucher_cm) => voucher_cm,
                                 Err(e) => {

@@ -93,9 +93,6 @@ cryptarchia:
     sync:
       orphan:
         max_orphan_cache_size: 5
-  leader:
-    pk: "0000000000000000000000000000000000000000000000000000000000000000"
-    sk: 3cf3335017304dcfce45124a0633829f00000000000000000000000000000000
 storage:
   db_path: logos_blockchain_db
   read_only: false

@@ -66,7 +66,6 @@ impl ServiceConfig {
                 topic: self.deployment.gossipsub_protocol,
             },
             config: ledger_config,
-            leader_config: self.user.leader,
             transaction_selector_settings: (),
         };
         (

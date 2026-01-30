@@ -356,7 +356,7 @@ pub fn create_validator_config(config: GeneralConfig) -> RunConfig {
         },
         wallet: WalletServiceSettings {
             known_keys: HashSet::from_iter([
-                config.consensus_config.user_config().leader.pk,
+                config.consensus_config.known_key.as_public_key(),
                 config.consensus_config.funding_sk.as_public_key(),
             ]),
         },

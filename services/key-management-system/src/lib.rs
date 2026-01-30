@@ -151,6 +151,7 @@ where
                 }
             }
             KMSMessage::Execute { key_id, operator } => {
+                // TODO: Bubble up errors: https://github.com/logos-blockchain/logos-blockchain/issues/2079
                 drop(backend.execute(&key_id, operator).await.inspect_err(|e| {
                     error!("Failed to execute operator with key ID {key_id:?}. Error: {e:?}");
                 }));
