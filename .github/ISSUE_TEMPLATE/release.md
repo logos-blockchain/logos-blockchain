@@ -1,6 +1,8 @@
 ---
-title: "Release Checklist for [X.Y.Z]"
-labels: "release"
+name: Release Checklist
+about: Checklist for releasing a new version
+title: Release Checklist for [X.Y.Z]
+labels: release
 ---
 
 Progress on the checklist must be provided as comments to the issue.
