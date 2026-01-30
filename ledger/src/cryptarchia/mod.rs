@@ -318,8 +318,7 @@ impl LedgerState {
     /// This handles the case where epochs have been skipped (no blocks
     /// produced). When the requested epoch is ahead of the stored epoch
     /// states, it synthesizes an epoch state with adjusted total stake
-    /// using half of the expected block density to avoid aggressive drops
-    /// in stake estimates.
+    /// using 0 block density for each skipped epoch.
     ///
     /// Returns `None` if the requested epoch is in the past (before current
     /// `epoch_state`).
