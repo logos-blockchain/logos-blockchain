@@ -335,12 +335,19 @@ impl LedgerState {
             // Use 0 density since no blocks were produced in the skipped epochs.
             let mut total_stake = self.epoch_state.total_stake;
 
-            for skipped_epoch in u32::from(self.next_epoch_state.epoch())..u32::from(requested_epoch) {
+            for _ in u32::from(self.next_epoch_state.epoch())..u32::from(requested_epoch) {
                 total_stake = self
                     .stake_inference
                     .total_stake_inference::<PRECISION>(total_stake, 0);
-                tracing::warn!("No blocks produced in epoch {skipped_epoch}, adjusting total stake: {total_stake}");
             }
+
+            tracing::warn!(
+                "EpochState skipping epochs {}..{}, adjusting total stake: {} -> {}",
+                u32::from(self.next_epoch_state.epoch()),
+                u32::from(requested_epoch),
+                self.epoch_state.total_stake,
+                total_stake
+            );
 
             Some(EpochState {
                 epoch: requested_epoch,
