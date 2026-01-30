@@ -322,7 +322,7 @@ impl LedgerState {
     /// in stake estimates.
     ///
     /// Returns `None` if the requested epoch is in the past (before current
-    /// epoch_state).
+    /// `epoch_state`).
     #[must_use]
     pub fn epoch_state_for_slot(&self, slot: Slot, config: &Config) -> Option<EpochState> {
         let requested_epoch = config.epoch(slot);
