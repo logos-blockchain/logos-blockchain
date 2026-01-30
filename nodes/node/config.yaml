@@ -113,6 +113,7 @@ wallet:
     - "0000000000000000000000000000000000000000000000000000000000000000"
     # SDP funding public key - wallet must track this to use the SDP funding note
     - "89b7314f5184bae9eb7fa511098eb321b97b8fbbdec611dda591e0c01e18331d"
+  recovery_path: ./recovery/wallet.json
 key_management:
   keys:
     leader_key: !Zk 3cf3335017304dcfce45124a0633829f00000000000000000000000000000000

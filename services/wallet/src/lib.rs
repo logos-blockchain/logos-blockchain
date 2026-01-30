@@ -1,6 +1,8 @@
 pub mod api;
+mod state;
+mod wallet;
 
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, path::PathBuf, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -35,21 +37,23 @@ use lb_key_management_system_service::{
     },
 };
 use lb_ledger::LedgerState;
-use lb_services_utils::wait_until_services_are_ready;
+use lb_services_utils::{
+    overwatch::{JsonFileBackend, RecoveryOperator, recovery::backends::FileBackendSettings},
+    wait_until_services_are_ready,
+};
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
 use lb_utxotree::MerklePath;
-use lb_wallet::{Wallet, WalletBlock, WalletError};
+use lb_wallet::{WalletBlock, WalletError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
-    services::{
-        AsServiceId, ServiceCore, ServiceData,
-        state::{NoOperator, NoState},
-    },
+    services::{AsServiceId, ServiceCore, ServiceData},
 };
 use rand::{RngCore as _, rngs::OsRng};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{sync::oneshot, task::JoinError};
 use tracing::{debug, error, info, trace};
+
+use crate::{state::State, wallet::Wallet};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletServiceError {
@@ -148,10 +152,18 @@ impl WalletMsg {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WalletServiceSettings {
     pub known_keys: HashSet<ZkPublicKey>,
+    pub recovery_file: PathBuf,
+}
+
+impl FileBackendSettings for WalletServiceSettings {
+    fn recovery_file(&self) -> &PathBuf {
+        &self.recovery_file
+    }
 }
 
 pub struct WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
+    initial_state: <Self as ServiceData>::State,
     _marker: std::marker::PhantomData<(Kms, Cryptarchia, Tx, Storage)>,
 }
 
@@ -159,8 +171,8 @@ impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> ServiceData
     for WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
 {
     type Settings = WalletServiceSettings;
-    type State = NoState<Self::Settings>;
-    type StateOperator = NoOperator<Self::State>;
+    type State = State;
+    type StateOperator = RecoveryOperator<JsonFileBackend<Self::State, Self::Settings>>;
     type Message = WalletMsg;
 }
 
@@ -186,10 +198,11 @@ where
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-        _initial_state: Self::State,
+        initial_state: Self::State,
     ) -> Result<Self, DynError> {
         Ok(Self {
             service_resources_handle,
+            initial_state,
             _marker: std::marker::PhantomData,
         })
     }
@@ -267,11 +280,10 @@ where
 
         let mut wallet = Wallet::from_lib(
             settings.known_keys.clone(),
-            // TODO: Load known_voucher_indices from state recovery
-            // after migrating voucher derivation to KMS.
-            std::iter::empty(),
+            self.initial_state.voucher_secrets().copied(),
             lib,
             &lib_ledger,
+            service_resources_handle.state_updater,
         );
 
         Self::backfill_missing_blocks(
@@ -634,7 +646,6 @@ where
             .voucher_merkle_path(voucher_cm)
             .ok_or(WalletServiceError::VoucherMerklePathNotFound(voucher_cm))?;
 
-        // TODO: This should happen in KMS
         let poc = tokio::task::spawn_blocking(move || {
             Self::generate_poc(voucher_secret, &path, op.rewards_root, op.mantle_tx_hash)
         })
@@ -710,9 +721,7 @@ where
         }
     }
 
-    /// Generate a new voucher secret randomly and store it in [`Wallet`].
-    // TODO: Do this in KMS: Derive a voucher from leader_sk in KMS.
-    //       So, we don't store new vouchers to the service state.
+    /// Generate/store a new voucher secret randomly.
     fn generate_new_voucher_secret(wallet: &mut Wallet, resp_tx: oneshot::Sender<VoucherCm>) {
         let mut voucher_secret_bytes = [0u8; 31];
         OsRng.fill_bytes(&mut voucher_secret_bytes);

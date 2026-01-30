@@ -359,6 +359,7 @@ pub fn create_validator_config(config: GeneralConfig) -> RunConfig {
                 config.consensus_config.user_config().leader.pk,
                 config.consensus_config.funding_sk.as_public_key(),
             ]),
+            recovery_file: "./recovery/wallet.json".into(),
         },
         key_management: config.kms_config,
         testing_http: lb_api_service::ApiServiceSettings {
