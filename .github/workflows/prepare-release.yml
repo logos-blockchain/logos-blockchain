@@ -6,6 +6,10 @@ on:
     branches:
       - aa/testnet-release-template
 
+concurrency:
+  group: ${{ github.workflow }}@${{ github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   setup:
     name: Define variables and configure environment
