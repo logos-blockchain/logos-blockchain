@@ -33,12 +33,6 @@ impl StakeInference {
             * PERIOD_CONSTANT
     }
 
-    /// Returns the expected block density for the observation period.
-    /// This is `period * slot_activation_coefficient`.
-    pub fn expected_density(&self) -> u64 {
-        (self.period() as f64 * self.slot_activation_coefficient).floor() as u64
-    }
-
     pub fn total_stake_inference<const PRECISION: u64>(
         &self,
         total_stake_estimate: u64,

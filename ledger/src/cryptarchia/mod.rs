@@ -333,16 +333,15 @@ impl LedgerState {
             Some(self.next_epoch_state.clone())
         } else if requested_epoch > self.next_epoch_state.epoch() {
             // Epochs were skipped - synthesize epoch state with adjusted total stake.
-            // Use half of expected density to avoid aggressive drops in stake estimates.
+            // Use 0 density since no blocks were produced in the skipped epochs.
             let epochs_to_skip =
                 u32::from(requested_epoch) - u32::from(self.next_epoch_state.epoch());
-            let half_expected_density = self.stake_inference.expected_density() / 2;
             let mut total_stake = self.epoch_state.total_stake;
 
             for _ in 0..epochs_to_skip {
                 total_stake = self
                     .stake_inference
-                    .total_stake_inference::<PRECISION>(total_stake, half_expected_density);
+                    .total_stake_inference::<PRECISION>(total_stake, 0);
             }
 
             Some(EpochState {
@@ -1096,27 +1095,21 @@ pub mod tests {
             .epoch_state_for_slot(epoch_2_slot, &config)
             .expect("Should synthesize epoch state for skipped epoch");
         assert_eq!(epoch_2_state.epoch, 2.into());
-        // Total stake should be reduced due to empty epoch (using half expected
-        // density)
-        assert!(
-            epoch_2_state.total_stake < initial_total_stake,
-            "Total stake should decrease for skipped epochs: {} < {}",
-            epoch_2_state.total_stake,
-            initial_total_stake
+        // With 0 density and LEARNING_RATE=1, total stake drops to minimum (1)
+        assert_eq!(
+            epoch_2_state.total_stake, 1,
+            "Total stake should drop to minimum for empty epochs"
         );
 
-        // Query for epoch 3 (multiple skipped epochs) - should have further reduced
-        // total stake
+        // Query for epoch 3 (multiple skipped epochs) - stake stays at minimum
         let epoch_3_slot: Slot = 35.into();
         let epoch_3_state = ledger_state
             .epoch_state_for_slot(epoch_3_slot, &config)
             .expect("Should synthesize epoch state for multiple skipped epochs");
         assert_eq!(epoch_3_state.epoch, 3.into());
-        assert!(
-            epoch_3_state.total_stake < epoch_2_state.total_stake,
-            "Total stake should continue decreasing: {} < {}",
-            epoch_3_state.total_stake,
-            epoch_2_state.total_stake
+        assert_eq!(
+            epoch_3_state.total_stake, 1,
+            "Total stake should remain at minimum"
         );
 
         // Verify nonce and utxos are preserved from current state
