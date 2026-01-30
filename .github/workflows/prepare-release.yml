@@ -147,12 +147,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: ${{ env.DOWNLOAD_DIRECTORY }}/${{ env.BINARY_NAME }}
+          asset_path: ${{ env.DOWNLOAD_DIRECTORY }}/logos-blockchain-node
           asset_name: ${{ env.BINARY_NAME }}
           asset_content_type: application/octet-stream
 
-  upload-user-config:
-    name: Upload user config file to release
+  upload-node-config:
+    name: Upload node config file to release
     needs:
       - create-release
     runs-on: ubuntu-latest
@@ -162,12 +162,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
-      - name: Upload user-config.yaml
+      - name: Upload node-config.yaml
         uses: actions/upload-release-asset@ef2adfe8cb8ebfa540930c452c576b3819990faa  # Version 1.0.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ env.UPLOAD_URL }}
           asset_path: nodes/node/config.yaml
-          asset_name: user-config.yaml
+          asset_name: node-config.yaml
           asset_content_type: text/yaml
