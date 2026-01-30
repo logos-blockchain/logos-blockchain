@@ -333,14 +333,13 @@ impl LedgerState {
         } else if requested_epoch > self.next_epoch_state.epoch() {
             // Epochs were skipped - synthesize epoch state with adjusted total stake.
             // Use 0 density since no blocks were produced in the skipped epochs.
-            let epochs_to_skip =
-                u32::from(requested_epoch) - u32::from(self.next_epoch_state.epoch());
             let mut total_stake = self.epoch_state.total_stake;
 
-            for _ in 0..epochs_to_skip {
+            for skipped_epoch in u32::from(self.next_epoch_state.epoch())..u32::from(requested_epoch) {
                 total_stake = self
                     .stake_inference
                     .total_stake_inference::<PRECISION>(total_stake, 0);
+                tracing::warn!("No blocks produced in epoch {skipped_epoch}, adjusting total stake: {total_stake}");
             }
 
             Some(EpochState {
