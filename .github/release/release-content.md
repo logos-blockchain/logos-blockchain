@@ -2,7 +2,7 @@
 
 TODO: Changelog.
 
-## Setting up
+## Setup
 
 If it's the first time configuring your environment, please do the following:
 
