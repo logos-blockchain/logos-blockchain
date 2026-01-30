@@ -9,6 +9,8 @@ services:
       - ./testnet:/etc/logos-blockchain
     depends_on:
       - grafana
+    ports:
+      - "4400:4400/tcp"
     entrypoint: /etc/logos-blockchain/scripts/run_cfgsync.sh
 
   logos-blockchain-node-0:
@@ -27,7 +29,7 @@ services:
     ports:
       - "3000:3000/udp"
       - "3400:3400/udp"
-      - "18080:18080/tcp"
+      - "18085:18085/tcp"
     entrypoint: /etc/logos-blockchain/scripts/run_node.sh
 
   logos-blockchain-node-1:
@@ -155,10 +157,11 @@ services:
     container_name: l2_nginx
     image: ghcr.io/logos-blockchain/logos-blockchain:testnet
     ports:
-      - "8200:80"
+      - "18080:18080"
     depends_on:
-      - l2-sequencer
-      - l2-archiver
+      - cfgsync
+    volumes:
+      - ./testnet/nginx.conf:/etc/nginx/nginx.conf:ro
     entrypoint: [ "nginx", "-g", "daemon off;" ]
 
   l2-sequencer:
@@ -166,7 +169,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:testnet
     environment:
       - SEQUENCER_LISTEN_ADDR=0.0.0.0:8080
-      - SEQUENCER_NODE_ENDPOINT=http://logos-blockchain-node-0:18080
+      - SEQUENCER_NODE_ENDPOINT=http://logos-blockchain-node-0:18081
       - SEQUENCER_DB_PATH=/data/sequencer.db
       - SEQUENCER_SIGNING_KEY_PATH=/data/sequencer.key
       - SEQUENCER_CHANNEL_ID=6d656d636f696e00000000000000000000000000000000000000000000000001
@@ -179,7 +182,7 @@ services:
     container_name: l2_archiver
     image: ghcr.io/logos-blockchain/logos-blockchain:testnet
     environment:
-      - TESTNET_ENDPOINT=http://logos-blockchain-node-1:18080
+      - TESTNET_ENDPOINT=http://logos-blockchain-node-1:18081
       - CHANNEL_ID=6d656d636f696e00000000000000000000000000000000000000000000000001
       - TOKEN_NAME=MEM
     entrypoint: [ "/usr/bin/logos-blockchain-demo-archiver" ]
