@@ -47,7 +47,7 @@ impl Leader {
     ) -> Option<(Groth16LeaderProof, Ed25519Key)> {
         for utxo in utxos {
             let public_inputs = public_inputs_for_slot(epoch_state, slot, latest_tree);
-            let winning = self.check_winning(utxo, &public_inputs);
+            let winning = check_winning(utxo, &public_inputs, &self.sk);
             if winning {
                 tracing::debug!(
                     "leader for slot {:?}, {:?}/{:?}",
@@ -108,15 +108,6 @@ impl Leader {
         None
     }
 
-    /// Check if the given note is owned by the leader and wins the lottery with
-    /// the given public inputs.
-    fn check_winning(&self, utxo: &Utxo, public_inputs: &LeaderPublic) -> bool {
-        let secret_key = self.secret_key();
-        // TODO: Remove checking pubkey by using any key in KMS corresponding to `utxo`
-        utxo.note.pk == secret_key.to_public_key()
-            && public_inputs.check_winning(utxo.note.value, utxo.id().0, *secret_key.as_fr())
-    }
-
     fn private_inputs_for_winning_utxo_and_slot(
         &self,
         utxo: &Utxo,
@@ -151,6 +142,13 @@ impl Leader {
     fn secret_key(&self) -> UnsecuredZkKey {
         self.sk.clone()
     }
+}
+
+/// Check if the given note is owned by the leader and wins the lottery with
+/// the given public inputs.
+fn check_winning(utxo: &Utxo, public_inputs: &LeaderPublic, secret_key: &UnsecuredZkKey) -> bool {
+    utxo.note.pk == secret_key.to_public_key()
+        && public_inputs.check_winning(utxo.note.value, utxo.id().0, *secret_key.as_fr())
 }
 
 fn public_inputs_for_slot(
@@ -235,16 +233,13 @@ impl<'service> WinningPoLSlotNotifier<'service> {
 
         let mut first_winning_slot: Option<Slot> = None;
         for utxo in utxos {
-            let note_id = utxo.id().0;
-
             for offset in 0..slots_per_epoch {
                 let slot = epoch_starting_slot
                     .checked_add(offset)
                     .expect("Slot calculation overflow.");
-                let secret_key = self.leader.secret_key();
 
                 let public_inputs = public_inputs_for_slot(epoch_state, slot.into(), &latest_tree);
-                if !public_inputs.check_winning(utxo.note.value, note_id, *secret_key.as_fr()) {
+                if !check_winning(utxo, &public_inputs, &self.leader.secret_key()) {
                     continue;
                 }
                 tracing::debug!("Found winning utxo with ID {:?} for slot {slot}", utxo.id());
