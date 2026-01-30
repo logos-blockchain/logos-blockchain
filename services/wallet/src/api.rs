@@ -1,8 +1,7 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, SignedMantleTx, Utxo, Value, ops::leader_claim::VoucherCm,
-        tx_builder::MantleTxBuilder,
+        Note, SignedMantleTx, Value, ops::leader_claim::VoucherCm, tx_builder::MantleTxBuilder,
     },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -16,7 +15,7 @@ use overwatch::{
 };
 use tokio::sync::oneshot::{self, error::RecvError};
 
-use crate::{TipResponse, WalletMsg, WalletServiceError, WalletServiceSettings};
+use crate::{TipResponse, UtxoWithKeyId, WalletMsg, WalletServiceError, WalletServiceSettings};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletApiError {
@@ -155,7 +154,7 @@ where
     pub async fn get_leader_aged_notes(
         &self,
         tip: Option<HeaderId>,
-    ) -> Result<TipResponse<Vec<Utxo>>, WalletApiError> {
+    ) -> Result<TipResponse<Vec<UtxoWithKeyId>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay

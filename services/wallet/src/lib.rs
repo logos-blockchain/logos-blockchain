@@ -1,6 +1,6 @@
 pub mod api;
 
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -28,7 +28,7 @@ use lb_core::{
 use lb_groth16::{Fr, fr_from_bytes};
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
-    backend::preload::PreloadKMSBackend,
+    backend::{KMSBackend, preload::PreloadKMSBackend},
     keys::{
         Ed25519Key, PayloadEncoding, SignatureEncoding, ZkPublicKey, ZkSignature,
         secured_key::SecuredKey,
@@ -50,6 +50,9 @@ use rand::{RngCore as _, rngs::OsRng};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{sync::oneshot, task::JoinError};
 use tracing::{debug, error, info, trace};
+
+type KmsBackend = PreloadKMSBackend;
+type KeyId = <KmsBackend as KMSBackend>::KeyId;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletServiceError {
@@ -117,7 +120,7 @@ pub enum WalletMsg {
     },
     GetLeaderAgedNotes {
         tip: Option<HeaderId>,
-        resp_tx: oneshot::Sender<Result<TipResponse<Vec<Utxo>>, WalletServiceError>>,
+        resp_tx: oneshot::Sender<Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError>>,
     },
     GenerateNewVoucherSecret {
         resp_tx: oneshot::Sender<VoucherCm>,
@@ -128,6 +131,12 @@ pub enum WalletMsg {
 pub struct TipResponse<R> {
     pub tip: HeaderId,
     pub response: R,
+}
+
+#[derive(Debug)]
+pub struct UtxoWithKeyId {
+    pub utxo: Utxo,
+    pub key_id: KeyId,
 }
 
 impl WalletMsg {
@@ -147,7 +156,7 @@ impl WalletMsg {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WalletServiceSettings {
-    pub known_keys: HashSet<ZkPublicKey>,
+    pub known_keys: HashMap<KeyId, ZkPublicKey>,
 }
 
 pub struct WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> {
@@ -168,7 +177,7 @@ impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> ServiceData
 impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> ServiceCore<RuntimeServiceId>
     for WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
 where
-    Kms: KmsServiceData<Backend = PreloadKMSBackend> + Send + Sync,
+    Kms: KmsServiceData<Backend = KmsBackend> + Send + Sync,
     Tx: AuthenticatedMantleTx + Send + Sync + Clone + Eq + Serialize + DeserializeOwned + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx>,
     Storage: StorageBackend + Send + Sync + 'static,
@@ -266,7 +275,11 @@ where
             .ok_or(WalletServiceError::LedgerStateNotFound(lib))?;
 
         let mut wallet = Wallet::from_lib(
-            settings.known_keys.clone(),
+            settings
+                .known_keys
+                .clone()
+                .into_iter()
+                .map(|(key_id, pk)| (pk, key_id)),
             // TODO: Load known_voucher_indices from state recovery
             // after migrating voucher derivation to KMS.
             std::iter::empty(),
@@ -304,7 +317,7 @@ where
 impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
     WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
 where
-    Kms: KmsServiceData<Backend = PreloadKMSBackend>,
+    Kms: KmsServiceData<Backend = KmsBackend>,
     Tx: AuthenticatedMantleTx + Send + Sync + Clone + Eq + Serialize + DeserializeOwned + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx> + Send + 'static,
     Storage: StorageBackend + Send + Sync + 'static,
@@ -331,7 +344,7 @@ where
     )]
     async fn handle_wallet_message(
         msg: WalletMsg,
-        wallet: &mut Wallet,
+        wallet: &mut Wallet<KeyId>,
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
@@ -433,7 +446,7 @@ where
         tip: Option<HeaderId>,
         pk: ZkPublicKey,
         resp_tx: oneshot::Sender<Result<TipResponse<Option<u64>>, WalletServiceError>>,
-        wallet: &Wallet,
+        wallet: &Wallet<KeyId>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
         let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
@@ -461,7 +474,7 @@ where
         tx_builder: MantleTxBuilder,
         ledger: LedgerState,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        wallet: &Wallet,
+        wallet: &Wallet<KeyId>,
     ) -> Result<SignedMantleTx, WalletServiceError> {
         // Extract input public keys before building the transaction
         let input_pks: Vec<ZkPublicKey> = tx_builder
@@ -621,7 +634,7 @@ where
     async fn prove_leader_claim_op(
         op: LeaderClaimOp,
         ledger: &LedgerState,
-        wallet: &Wallet,
+        wallet: &Wallet<KeyId>,
     ) -> Result<OpProof, WalletServiceError> {
         let voucher_secret = wallet
             .find_known_voucher_secret(&op.voucher_nullifier)
@@ -661,8 +674,8 @@ where
 
     async fn get_leader_aged_notes(
         tip: Option<HeaderId>,
-        resp_tx: oneshot::Sender<Result<TipResponse<Vec<Utxo>>, WalletServiceError>>,
-        wallet: &Wallet,
+        resp_tx: oneshot::Sender<Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError>>,
+        wallet: &Wallet<KeyId>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
         let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
@@ -692,11 +705,19 @@ where
         };
 
         let aged_utxos = ledger_state.epoch_state().utxos.utxos();
-        let eligible_utxos: Vec<Utxo> = wallet_state
+        let eligible_utxos = wallet_state
             .utxos
             .iter()
             .filter(|(note_id, _)| aged_utxos.contains_key(note_id))
-            .map(|(_, utxo)| *utxo)
+            .filter_map(|(_, utxo)| {
+                wallet
+                    .known_keys()
+                    .get(&utxo.note.pk)
+                    .map(|key_id| UtxoWithKeyId {
+                        utxo: *utxo,
+                        key_id: key_id.clone(),
+                    })
+            })
             .collect();
 
         if resp_tx
@@ -713,7 +734,10 @@ where
     /// Generate a new voucher secret randomly and store it in [`Wallet`].
     // TODO: Do this in KMS: Derive a voucher from leader_sk in KMS.
     //       So, we don't store new vouchers to the service state.
-    fn generate_new_voucher_secret(wallet: &mut Wallet, resp_tx: oneshot::Sender<VoucherCm>) {
+    fn generate_new_voucher_secret(
+        wallet: &mut Wallet<KeyId>,
+        resp_tx: oneshot::Sender<VoucherCm>,
+    ) {
         let mut voucher_secret_bytes = [0u8; 31];
         OsRng.fill_bytes(&mut voucher_secret_bytes);
         let voucher_secret = fr_from_bytes(&voucher_secret_bytes)
@@ -730,7 +754,7 @@ where
 
     async fn backfill_if_not_in_sync(
         tip: Option<HeaderId>,
-        wallet: &mut Wallet,
+        wallet: &mut Wallet<KeyId>,
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) -> Result<(), WalletServiceError> {
@@ -761,7 +785,7 @@ where
     )]
     async fn handle_new_block(
         header_id: HeaderId,
-        wallet: &mut Wallet,
+        wallet: &mut Wallet<KeyId>,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
@@ -817,7 +841,7 @@ where
         Ok((block, ledger))
     }
 
-    fn handle_lib_update(lib_update: &LibUpdate, wallet: &mut Wallet) {
+    fn handle_lib_update(lib_update: &LibUpdate, wallet: &mut Wallet<KeyId>) {
         debug!(
             new_lib = ?lib_update.new_lib,
             stale_blocks_count = lib_update.pruned_blocks.stale_blocks.len(),
@@ -830,7 +854,7 @@ where
 
     async fn backfill_missing_blocks(
         tip: HeaderId,
-        wallet: &mut Wallet,
+        wallet: &mut Wallet<KeyId>,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) -> Result<(), WalletServiceError> {

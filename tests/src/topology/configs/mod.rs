@@ -105,7 +105,7 @@ pub fn create_general_configs_with_blend_core_subset(
         c.override_genesis_tx(genesis_tx.clone());
     }
 
-    // Set Blend keys in KMS of each node config.
+    // Set note keys and Blend keys in KMS of each node config.
     let kms_configs: Vec<_> = blend_configs
         .iter()
         .enumerate()
@@ -119,6 +119,10 @@ pub fn create_general_configs_with_blend_core_subset(
                     (
                         blend_conf.core.zk.secret_key_kms_id.clone(),
                         zk_secret_key.clone().into(),
+                    ),
+                    (
+                        key_id_for_preload_backend(&consensus_configs[i].known_key.clone().into()),
+                        consensus_configs[i].known_key.clone().into(),
                     ),
                     // SDP funding secret key - used by wallet for signing SDP transactions
                     (

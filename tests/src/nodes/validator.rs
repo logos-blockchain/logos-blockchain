@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::HashMap,
     net::SocketAddr,
     process::{Child, Command, Stdio},
     str::FromStr as _,
@@ -40,6 +40,7 @@ use tokio::time::error::Elapsed;
 use super::{CLIENT, create_tempdir, get_exe_path, persist_tempdir};
 use crate::{
     IS_DEBUG_TRACING, adjust_timeout,
+    common::kms::key_id_for_preload_backend,
     nodes::LOGS_PREFIX,
     topology::configs::{GeneralConfig, deployment::default_e2e_deployment_settings},
 };
@@ -355,9 +356,15 @@ pub fn create_validator_config(config: GeneralConfig) -> RunConfig {
             },
         },
         wallet: WalletServiceSettings {
-            known_keys: HashSet::from_iter([
-                config.consensus_config.known_key.as_public_key(),
-                config.consensus_config.funding_sk.as_public_key(),
+            known_keys: HashMap::from_iter([
+                (
+                    key_id_for_preload_backend(&config.consensus_config.known_key.clone().into()),
+                    config.consensus_config.known_key.as_public_key(),
+                ),
+                (
+                    key_id_for_preload_backend(&config.consensus_config.funding_sk.clone().into()),
+                    config.consensus_config.funding_sk.as_public_key(),
+                ),
             ]),
         },
         key_management: config.kms_config,

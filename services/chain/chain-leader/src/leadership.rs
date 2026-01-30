@@ -5,12 +5,12 @@ use lb_core::{
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::{
     backend::preload::KeyId,
     keys::{Ed25519Key, UnsecuredZkKey},
 };
 use lb_ledger::{EpochState, UtxoTree};
+use lb_wallet_service::UtxoWithKeyId;
 use rand::rngs::OsRng;
 use tokio::sync::watch::Sender;
 
@@ -26,15 +26,15 @@ use crate::{WinningPolInfo, kms::KmsAdapter};
 /// If the slot is not a winning one, it returns `None` and no consumer is
 /// notified.
 pub async fn build_proof_for<RuntimeServiceId>(
-    utxos: &[Utxo],
+    utxos: &[UtxoWithKeyId],
     latest_tree: &UtxoTree,
     epoch_state: &EpochState,
     slot: Slot,
     winning_pol_info_notifier: &WinningPoLSlotNotifier<'_>,
     kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
 ) -> Option<(Groth16LeaderProof, Ed25519Key)> {
-    for utxo in utxos {
-        let secret_key = kms.get_leader_key(key_id(utxo)).await;
+    for UtxoWithKeyId { utxo, key_id } in utxos {
+        let secret_key = kms.get_leader_key(key_id.clone()).await;
         let public_inputs = public_inputs_for_slot(epoch_state, slot, latest_tree);
         let winning = check_winning(utxo, &public_inputs, &secret_key);
         if winning {
@@ -96,11 +96,6 @@ pub async fn build_proof_for<RuntimeServiceId>(
     }
 
     None
-}
-
-// TODO: Get this from wallet along with the note
-fn key_id(utxo: &Utxo) -> KeyId {
-    hex::encode(fr_to_bytes(utxo.note.pk.as_fr()))
 }
 
 /// Check if the given note is owned by the leader and wins the lottery with
@@ -192,7 +187,7 @@ impl<'service> WinningPoLSlotNotifier<'service> {
     /// first identified winning slot for this epoch, if any.
     pub(super) async fn process_epoch<RuntimeServiceId>(
         &mut self,
-        utxos: &[Utxo],
+        utxos: &[UtxoWithKeyId],
         epoch_state: &EpochState,
         kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
     ) {
@@ -218,7 +213,7 @@ impl<'service> WinningPoLSlotNotifier<'service> {
     #[expect(clippy::cognitive_complexity, reason = "TODO: extract inner loop")]
     async fn check_epoch_winning_utxos<RuntimeServiceId>(
         &mut self,
-        utxos: &[Utxo],
+        utxos: &[UtxoWithKeyId],
         epoch_state: &EpochState,
         kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
     ) {
@@ -232,13 +227,13 @@ impl<'service> WinningPoLSlotNotifier<'service> {
         let latest_tree = UtxoTree::new();
 
         let mut first_winning_slot: Option<Slot> = None;
-        for utxo in utxos {
+        for UtxoWithKeyId { utxo, key_id } in utxos {
             for offset in 0..slots_per_epoch {
                 let slot = epoch_starting_slot
                     .checked_add(offset)
                     .expect("Slot calculation overflow.");
 
-                let secret_key = kms.get_leader_key(key_id(utxo)).await;
+                let secret_key = kms.get_leader_key(key_id.clone()).await;
 
                 let public_inputs = public_inputs_for_slot(epoch_state, slot.into(), &latest_tree);
                 if !check_winning(utxo, &public_inputs, &secret_key) {
@@ -313,7 +308,7 @@ impl<'service> WinningPoLSlotNotifier<'service> {
 
 #[cfg(test)]
 mod pol_tests {
-    use std::{num::NonZero, sync::Arc};
+    use std::{num::NonZero, slice, sync::Arc};
 
     use lb_core::{
         mantle::ledger::{Note, Tx},
@@ -336,7 +331,8 @@ mod pol_tests {
     async fn test_build_proof_for() {
         // Create secret key and leader
         let kms = DummyKms;
-        let sk = kms.get_leader_key(KeyId::new()).await;
+        let key_id = KeyId::from("0");
+        let sk = kms.get_leader_key(key_id.clone()).await;
         let pk = sk.to_public_key();
         let config = test_config();
 
@@ -364,7 +360,7 @@ mod pol_tests {
         // Find a winning slot by calling `build_proof_for` until it succeeds
         let (proof, winning_slot) = find_winning_slot_and_build_proof(
             (0..1000).map(Slot::from),
-            utxo,
+            UtxoWithKeyId { utxo, key_id },
             &epoch_state,
             &latest_tree,
             &notifier,
@@ -390,15 +386,22 @@ mod pol_tests {
     /// Find a winning slot by calling `build_proof_for` until it succeeds
     async fn find_winning_slot_and_build_proof(
         slots: impl Iterator<Item = Slot>,
-        utxo: Utxo,
+        utxo: UtxoWithKeyId,
         epoch_state: &EpochState,
         latest_tree: &UtxoTree,
         notifier: &WinningPoLSlotNotifier<'_>,
         kms: &(impl KmsAdapter<(), KeyId = KeyId> + Sync),
     ) -> Option<(Groth16LeaderProof, Slot)> {
         for slot in slots {
-            if let Some((proof, _signing_key)) =
-                build_proof_for(&[utxo], latest_tree, epoch_state, slot, notifier, kms).await
+            if let Some((proof, _signing_key)) = build_proof_for(
+                slice::from_ref(&utxo),
+                latest_tree,
+                epoch_state,
+                slot,
+                notifier,
+                kms,
+            )
+            .await
             {
                 return Some((proof, slot));
             }
