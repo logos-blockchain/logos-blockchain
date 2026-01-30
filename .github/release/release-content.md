@@ -13,7 +13,8 @@ To run the binary, you will need two configuration files: a deployment config an
 
 For the former, please reach out to the Logos Blockchain team on [Discord](https://discord.gg/CXnvqEG7) to get a copy of it and a list of bootnode addresses for the network you intend to join.
 
-For the latter, you can download the example config from this release and tweak it to your needs. Please check the docs for info on what each field means.
+For the latter, you can download the example config from this release and tweak it to your needs.
+Please check the docs for info on what each field means.
 
 ## Run the binary
 

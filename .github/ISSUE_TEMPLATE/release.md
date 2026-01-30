@@ -14,7 +14,7 @@ Progress on the checklist must be provided as comments to the issue.
 ## GitHub Release
 - [ ] Manually trigger the bundling workflow from the `X.Y.Z` tag on GitHub
 - [ ] Wait for the bundling workflow to complete and generate a draft GitHub pre-release
-- [ ] Address checklist of the generate GitHub release
+- [ ] Address checklist of the generated GitHub release
 - [ ] Publish release
 
   ## Post-Release
