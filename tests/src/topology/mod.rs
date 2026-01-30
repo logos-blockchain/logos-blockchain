@@ -383,6 +383,10 @@ pub fn create_kms_configs(
                         blend_conf.core.zk.secret_key_kms_id.clone(),
                         zk_secret_key.clone().into(),
                     ),
+                    (
+                        key_id_for_preload_backend(&consensus_configs[i].known_key.clone().into()),
+                        consensus_configs[i].known_key.clone().into(),
+                    ),
                     // SDP funding secret key - used by wallet for signing SDP transactions
                     (
                         key_id_for_preload_backend(&consensus_configs[i].funding_sk.clone().into()),
