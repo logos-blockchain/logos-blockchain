@@ -1,7 +1,10 @@
 use std::{env, fs, net::Ipv4Addr, process};
 
 use lb_node::UserConfig as ValidatorConfig;
-use logos_blockchain_cfgsync::client::get_config;
+use logos_blockchain_cfgsync::{
+    client::get_config,
+    server::{ClientIp, CustomClientIp},
+};
 use serde::{Serialize, de::DeserializeOwned};
 
 fn parse_ip(ip_str: &str) -> Ipv4Addr {
@@ -11,18 +14,24 @@ fn parse_ip(ip_str: &str) -> Ipv4Addr {
     })
 }
 
-async fn pull_to_file<Config: Serialize + DeserializeOwned>(
-    ip: Ipv4Addr,
-    identifier: String,
+fn get_optional_u16(var_name: &str) -> Option<u16> {
+    env::var(var_name).ok()?.parse().ok()
+}
+
+async fn pull_to_file<Config, Payload>(
+    payload: &Payload,
     url: &str,
     config_file: &str,
-) -> Result<(), String> {
-    let config = get_config::<Config>(ip, identifier, url).await?;
+) -> Result<(), String>
+where
+    Config: Serialize + DeserializeOwned,
+    Payload: Serialize + Sync,
+{
+    let config = get_config::<Config, Payload>(payload, url).await?;
     let yaml = serde_yaml::to_string(&config)
         .map_err(|err| format!("Failed to serialize config to YAML: {err}"))?;
 
     fs::write(config_file, yaml).map_err(|err| format!("Failed to write config to file: {err}"))?;
-
     println!("Config saved to {config_file}");
     Ok(())
 }
@@ -36,13 +45,30 @@ async fn main() {
     let identifier =
         env::var("CFG_HOST_IDENTIFIER").unwrap_or_else(|_| "unidentified-node".to_owned());
 
-    let node_config_endpoint = format!("{server_addr}/validator");
+    // Check for optional ports
+    let network_port = get_optional_u16("CFG_NETWORK_PORT");
+    let blend_port = get_optional_u16("CFG_BLEND_PORT");
+    let api_port = get_optional_u16("CFG_API_PORT");
 
-    let config_result =
-        pull_to_file::<ValidatorConfig>(ip, identifier, &node_config_endpoint, &config_file_path)
-            .await;
+    let config_result = if let (Some(np), Some(bp), Some(ap)) = (network_port, blend_port, api_port)
+    {
+        let endpoint = format!("{server_addr}/custom-validator");
+        let payload = CustomClientIp {
+            ip,
+            identifier,
+            network_port: np,
+            blend_port: bp,
+            api_port: ap,
+        };
+        println!("Using custom validator endpoint with ports: {np}, {bp}, {ap}");
+        pull_to_file::<ValidatorConfig, _>(&payload, &endpoint, &config_file_path).await
+    } else {
+        // Use DEFAULT endpoint
+        let endpoint = format!("{server_addr}/validator");
+        let payload = ClientIp { ip, identifier };
+        pull_to_file::<ValidatorConfig, _>(&payload, &endpoint, &config_file_path).await
+    };
 
-    // Handle error if the config request fails
     if let Err(err) = config_result {
         eprintln!("Error: {err}");
         process::exit(1);

@@ -41,7 +41,16 @@ pub struct ClientIp {
     pub identifier: String,
 }
 
-async fn validator_config(
+#[derive(Serialize, Deserialize)]
+pub struct CustomClientIp {
+    pub ip: Ipv4Addr,
+    pub identifier: String,
+    pub network_port: u16,
+    pub blend_port: u16,
+    pub api_port: u16,
+}
+
+async fn default_validator_config(
     State(config_repo): State<Arc<ConfigRepo>>,
     Json(payload): Json<ClientIp>,
 ) -> impl IntoResponse {
@@ -62,8 +71,39 @@ async fn validator_config(
     )
 }
 
+async fn custom_validator_config(
+    State(config_repo): State<Arc<ConfigRepo>>,
+    Json(payload): Json<CustomClientIp>,
+) -> impl IntoResponse {
+    let CustomClientIp {
+        ip,
+        identifier,
+        network_port,
+        blend_port,
+        api_port,
+    } = payload;
+
+    let (reply_tx, reply_rx) = channel();
+    config_repo.register(
+        Host::custom_validator_from_ip(ip, identifier, network_port, blend_port, api_port),
+        reply_tx,
+    );
+
+    (reply_rx.await).map_or_else(
+        |_| (StatusCode::INTERNAL_SERVER_ERROR, "Error receiving config").into_response(),
+        |config_response| match config_response {
+            RepoResponse::Config(config) => {
+                let config = create_validator_config(*config);
+                (StatusCode::OK, Json(config)).into_response()
+            }
+            RepoResponse::Timeout => (StatusCode::REQUEST_TIMEOUT).into_response(),
+        },
+    )
+}
+
 pub fn cfgsync_app(config_repo: Arc<ConfigRepo>) -> Router {
     Router::new()
-        .route("/validator", post(validator_config))
+        .route("/validator", post(default_validator_config))
+        .route("/custom-validator", post(custom_validator_config))
         .with_state(config_repo)
 }

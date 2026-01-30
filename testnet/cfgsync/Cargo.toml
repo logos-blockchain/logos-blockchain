@@ -20,6 +20,7 @@ lb-libp2p           = { workspace = true }
 lb-node             = { workspace = true }
 lb-tests            = { workspace = true }
 lb-tracing-service  = { workspace = true }
+lb-utils            = { workspace = true }
 rand                = { workspace = true }
 reqwest             = { workspace = true }
 serde               = { workspace = true }

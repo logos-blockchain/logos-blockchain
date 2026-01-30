@@ -1,0 +1,12 @@
+port: 4400
+n_hosts: 4
+timeout: 10
+
+# Tracing
+tracing_settings:
+  logger: !Stdout
+  tracing: None
+  filter: None
+  metrics: None
+  console: None
+  level: Debug

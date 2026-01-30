@@ -5637,6 +5637,7 @@ dependencies = [
  "logos-blockchain-node 0.1.0",
  "logos-blockchain-tests",
  "logos-blockchain-tracing-service 0.1.0",
+ "logos-blockchain-utils 0.1.0",
  "rand 0.8.5",
  "reqwest 0.12.28",
  "serde",

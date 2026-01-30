@@ -6,7 +6,7 @@ use tokio::time::sleep;
 
 const SERVER_BIN: &str = "../../target/debug/logos-blockchain-cfgsync-server";
 const CLIENT_BIN: &str = "../../target/debug/logos-blockchain-cfgsync-client";
-const SERVER_CFG: &str = "../cfgsync.yaml";
+const SERVER_CFG: &str = "./tests/cfgsync.yaml";
 
 #[tokio::test]
 async fn smoke_test_four_clients() {
@@ -20,7 +20,7 @@ async fn smoke_test_four_clients() {
     let mut set = JoinSet::new();
     for i in 0..4 {
         set.spawn(async move {
-            let out = format!("out_{i}.yaml");
+            let out = format!(".tmp_out_{i}.yaml");
             let status = Command::new(CLIENT_BIN)
                 .env("CFG_FILE_PATH", &out)
                 .env("CFG_SERVER_ADDR", "http://127.0.0.1:4400")
