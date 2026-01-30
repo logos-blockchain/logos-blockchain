@@ -1,5 +1,5 @@
 param(
-    [string]$Version    = "v0.3.1",
+    [string]$Version    = "v0.4.1",
     [string]$InstallDir = "$env:USERPROFILE\.logos-blockchain-circuits"
 )
 
