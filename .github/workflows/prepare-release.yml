@@ -49,7 +49,7 @@ jobs:
           - os: linux
             os-display: Linux
             arch: aarch64
-            builder: ubuntu-24.04
+            builder: ubuntu-22.04-arm
             target_triple: aarch64-unknown-linux-gnu
           - os: macos
             os-display: MacOS
