@@ -18,6 +18,7 @@ lb-key-management-system-keys = { workspace = true }
 lb-ledger                     = { workspace = true }
 num-bigint                    = { default-features = false, version = "0.4" }
 rpds                          = { default-features = false, version = "1.1.1" }
+serde                         = { features = ["derive"], workspace = true }
 thiserror                     = { workspace = true }
 tracing                       = { workspace = true }
 

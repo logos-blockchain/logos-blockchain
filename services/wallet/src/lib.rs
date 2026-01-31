@@ -1,6 +1,7 @@
 pub mod api;
+mod states;
 
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -25,31 +26,33 @@ use lb_core::{
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
 };
-use lb_groth16::{Fr, fr_from_bytes};
+use lb_groth16::Fr;
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::{KMSBackend, preload::PreloadKMSBackend},
     keys::{
-        Ed25519Key, PayloadEncoding, SignatureEncoding, ZkPublicKey, ZkSignature,
+        Ed25519Key, KeyOperators, PayloadEncoding, SignatureEncoding, ZkPublicKey, ZkSignature,
         secured_key::SecuredKey,
     },
+    operators::zk::voucher::UnsafeVoucherOperator,
 };
 use lb_ledger::LedgerState;
-use lb_services_utils::wait_until_services_are_ready;
+use lb_services_utils::{
+    overwatch::{JsonFileBackend, RecoveryOperator, recovery::backends::FileBackendSettings},
+    wait_until_services_are_ready,
+};
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
 use lb_utxotree::MerklePath;
-use lb_wallet::{Wallet, WalletBlock, WalletError};
+use lb_wallet::{WalletBlock, WalletError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
-    services::{
-        AsServiceId, ServiceCore, ServiceData,
-        state::{NoOperator, NoState},
-    },
+    services::{AsServiceId, ServiceCore, ServiceData},
 };
-use rand::{RngCore as _, rngs::OsRng};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{sync::oneshot, task::JoinError};
 use tracing::{debug, error, info, trace};
+
+use crate::states::{RecoveryState, ServiceState, Wallet};
 
 type KmsBackend = PreloadKMSBackend;
 type KeyId = <KmsBackend as KMSBackend>::KeyId;
@@ -89,8 +92,8 @@ pub enum WalletServiceError {
     #[error("PoC generation failed: {0:?}")]
     PoCGenerationFailed(#[from] lb_core::proofs::leader_claim_proof::Error),
 
-    #[error("Voucher secret not found for the nullifier")]
-    VoucherSecretNotFound(VoucherNullifier),
+    #[error("Voucher not found for the nullifier")]
+    VoucherNotFound(VoucherNullifier),
 
     #[error("Merkle path not found for voucher_cm: {0:?}")]
     VoucherMerklePathNotFound(VoucherCm),
@@ -157,10 +160,19 @@ impl WalletMsg {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WalletServiceSettings {
     pub known_keys: HashMap<KeyId, ZkPublicKey>,
+    pub voucher_master_key_id: KeyId,
+    pub recovery_path: PathBuf,
+}
+
+impl FileBackendSettings for WalletServiceSettings {
+    fn recovery_file(&self) -> &PathBuf {
+        &self.recovery_path
+    }
 }
 
 pub struct WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
+    initial_state: RecoveryState,
     _marker: std::marker::PhantomData<(Kms, Cryptarchia, Tx, Storage)>,
 }
 
@@ -168,8 +180,8 @@ impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> ServiceData
     for WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
 {
     type Settings = WalletServiceSettings;
-    type State = NoState<Self::Settings>;
-    type StateOperator = NoOperator<Self::State>;
+    type State = RecoveryState;
+    type StateOperator = RecoveryOperator<JsonFileBackend<Self::State, Self::Settings>>;
     type Message = WalletMsg;
 }
 
@@ -195,10 +207,11 @@ where
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-        _initial_state: Self::State,
+        initial_state: Self::State,
     ) -> Result<Self, DynError> {
         Ok(Self {
             service_resources_handle,
+            initial_state,
             _marker: std::marker::PhantomData,
         })
     }
@@ -274,22 +287,18 @@ where
             .await?
             .ok_or(WalletServiceError::LedgerStateNotFound(lib))?;
 
-        let mut wallet = Wallet::from_lib(
-            settings
-                .known_keys
-                .clone()
-                .into_iter()
-                .map(|(key_id, pk)| (pk, key_id)),
-            // TODO: Load known_voucher_indices from state recovery
-            // after migrating voucher derivation to KMS.
-            std::iter::empty(),
+        let mut state = ServiceState::new(
+            self.initial_state,
+            &settings,
             lib,
             &lib_ledger,
+            &service_resources_handle.state_updater,
         );
+        let voucher_master_key_id = settings.voucher_master_key_id;
 
         Self::backfill_missing_blocks(
             chain_info.tip,
-            &mut wallet,
+            &mut state,
             &storage_adapter,
             &cryptarchia_api,
         )
@@ -301,13 +310,13 @@ where
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Self::handle_wallet_message(msg, &mut wallet, &storage_adapter, &cryptarchia_api, &kms).await;
+                    Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage_adapter, &cryptarchia_api, &kms).await;
                 }
                 Ok(event) = new_block_receiver.recv() => {
-                    Self::handle_new_block(event.block_id, &mut wallet, &storage_adapter, &cryptarchia_api).await;
+                    Self::handle_new_block(event.block_id, &mut state, &storage_adapter, &cryptarchia_api).await;
                 }
                 Ok(lib_update) = lib_receiver.recv() => {
-                    Self::handle_lib_update(&lib_update, &mut wallet);
+                    Self::handle_lib_update(&lib_update, &mut state);
                 }
             }
         }
@@ -344,20 +353,21 @@ where
     )]
     async fn handle_wallet_message(
         msg: WalletMsg,
-        wallet: &mut Wallet<KeyId>,
+        state: &mut ServiceState<'_>,
+        voucher_master_key_id: &KeyId,
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) {
         if let Err(err) =
-            Self::backfill_if_not_in_sync(msg.tip(), wallet, storage, cryptarchia).await
+            Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia).await
         {
             error!(err=?err, "Failed backfilling wallet to message tip, will attempt to continue processing the message {msg:?}");
         }
 
         match msg {
             WalletMsg::GetBalance { tip, pk, resp_tx } => {
-                Self::handle_get_balance(tip, pk, resp_tx, wallet, cryptarchia).await;
+                Self::handle_get_balance(tip, pk, resp_tx, state.wallet(), cryptarchia).await;
             }
             WalletMsg::FundTx {
                 tip,
@@ -374,7 +384,7 @@ where
                     }
                 };
 
-                let funded = match wallet.fund_tx::<MainnetGasConstants>(
+                let funded = match state.wallet().fund_tx::<MainnetGasConstants>(
                     tip,
                     &tx_builder,
                     change_pk,
@@ -422,7 +432,7 @@ where
                     }
                 };
 
-                let resp = Self::sign_tx(tx_builder, ledger, kms, wallet)
+                let resp = Self::sign_tx(tx_builder, ledger, kms, state.wallet())
                     .await
                     .map(|signed_tx| TipResponse {
                         tip,
@@ -434,10 +444,16 @@ where
                 }
             }
             WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
-                Self::get_leader_aged_notes(tip, resp_tx, wallet, cryptarchia).await;
+                Self::get_leader_aged_notes(tip, resp_tx, state.wallet(), cryptarchia).await;
             }
             WalletMsg::GenerateNewVoucherSecret { resp_tx } => {
-                Self::generate_new_voucher_secret(wallet, resp_tx);
+                Self::generate_new_voucher_secret(
+                    state,
+                    voucher_master_key_id.clone(),
+                    kms,
+                    resp_tx,
+                )
+                .await;
             }
         }
     }
@@ -446,7 +462,7 @@ where
         tip: Option<HeaderId>,
         pk: ZkPublicKey,
         resp_tx: oneshot::Sender<Result<TipResponse<Option<u64>>, WalletServiceError>>,
-        wallet: &Wallet<KeyId>,
+        wallet: &Wallet,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
         let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
@@ -474,7 +490,7 @@ where
         tx_builder: MantleTxBuilder,
         ledger: LedgerState,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        wallet: &Wallet<KeyId>,
+        wallet: &Wallet,
     ) -> Result<SignedMantleTx, WalletServiceError> {
         // Extract input public keys before building the transaction
         let input_pks: Vec<ZkPublicKey> = tx_builder
@@ -568,7 +584,7 @@ where
                     OpProof::ZkSig(zk_sig)
                 }
                 Op::LeaderClaim(claim_op) => {
-                    Self::prove_leader_claim_op(claim_op.clone(), &ledger, wallet).await?
+                    Self::prove_leader_claim_op(claim_op.clone(), &ledger, wallet, kms).await?
                 }
             };
             ops_proofs.push(proof);
@@ -634,13 +650,15 @@ where
     async fn prove_leader_claim_op(
         op: LeaderClaimOp,
         ledger: &LedgerState,
-        wallet: &Wallet<KeyId>,
+        wallet: &Wallet,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<OpProof, WalletServiceError> {
-        let voucher_secret = wallet
-            .find_known_voucher_secret(&op.voucher_nullifier)
-            .ok_or(WalletServiceError::VoucherSecretNotFound(
-                op.voucher_nullifier,
-            ))?;
+        let (voucher_master_key_id, voucher_index) = wallet
+            .get_voucher_by_nullifier(&op.voucher_nullifier)
+            .ok_or(WalletServiceError::VoucherNotFound(op.voucher_nullifier))?;
+        let voucher_secret =
+            Self::derive_voucher_from_kms(kms, voucher_master_key_id.clone(), *voucher_index).await;
+
         let voucher_cm = VoucherCm::from_secret(voucher_secret);
         let path = ledger
             .mantle_ledger()
@@ -675,7 +693,7 @@ where
     async fn get_leader_aged_notes(
         tip: Option<HeaderId>,
         resp_tx: oneshot::Sender<Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError>>,
-        wallet: &Wallet<KeyId>,
+        wallet: &Wallet,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
         let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
@@ -731,36 +749,58 @@ where
         }
     }
 
-    /// Generate a new voucher secret randomly and store it in [`Wallet`].
-    // TODO: Do this in KMS: Derive a voucher from leader_sk in KMS.
-    //       So, we don't store new vouchers to the service state.
-    fn generate_new_voucher_secret(
-        wallet: &mut Wallet<KeyId>,
+    /// Derive a new voucher via KMS and store it in [`Wallet`].
+    async fn generate_new_voucher_secret(
+        state: &mut ServiceState<'_>,
+        master_key_id: KeyId,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         resp_tx: oneshot::Sender<VoucherCm>,
     ) {
-        let mut voucher_secret_bytes = [0u8; 31];
-        OsRng.fill_bytes(&mut voucher_secret_bytes);
-        let voucher_secret = fr_from_bytes(&voucher_secret_bytes)
-            .expect("voucher secret bytes must be a valid Fr")
-            .into();
-        let voucher_cm = VoucherCm::from_secret(voucher_secret);
+        let index = state.get_and_inc_next_new_voucher_index();
+        let secret = Self::derive_voucher_from_kms(kms, master_key_id.clone(), index).await;
+        let cm = VoucherCm::from_secret(secret);
+        let nf = VoucherNullifier::from_secret(secret);
 
-        wallet.add_known_voucher_secret(voucher_secret);
+        state.add_known_voucher(cm, nf, (master_key_id, index));
 
-        if let Err(e) = resp_tx.send(voucher_cm) {
+        if let Err(e) = resp_tx.send(cm) {
             error!("Failed to send voucher secret: {e:?}");
         }
     }
 
+    /// Derive voucher secret from KMS given master key and index.
+    // TODO: Use secure KMS operator that returns `VoucherCm` and `VoucherNullifier`
+    async fn derive_voucher_from_kms(
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        key_id: KeyId,
+        index: u64,
+    ) -> VoucherSecret {
+        let (output_tx, output_rx) = oneshot::channel();
+        let () = kms
+            .execute(
+                key_id,
+                KeyOperators::Zk(Box::new(UnsafeVoucherOperator::new(
+                    index.into(),
+                    output_tx,
+                ))),
+            )
+            .await
+            .expect("KMS API should be invoked");
+        output_rx
+            .await
+            .expect("KMS API should respond with voucher_cm")
+            .into()
+    }
+
     async fn backfill_if_not_in_sync(
         tip: Option<HeaderId>,
-        wallet: &mut Wallet<KeyId>,
+        state: &mut ServiceState<'_>,
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) -> Result<(), WalletServiceError> {
         let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
 
-        if wallet.has_processed_block(tip) {
+        if state.wallet().has_processed_block(tip) {
             // We are already in sync with `tip`.
             return Ok(());
         }
@@ -769,9 +809,9 @@ where
         // To resolve this, we do a JIT backfill to try to sync the wallet with
         // cryptarchia. If we still have not caught up after the backfill, we return an
         // error to the caller
-        Self::backfill_missing_blocks(tip, wallet, storage, cryptarchia).await?;
+        Self::backfill_missing_blocks(tip, state, storage, cryptarchia).await?;
 
-        if wallet.has_processed_block(tip) {
+        if state.wallet().has_processed_block(tip) {
             Ok(())
         } else {
             error!("Failed to backfill wallet to {tip}");
@@ -785,7 +825,7 @@ where
     )]
     async fn handle_new_block(
         header_id: HeaderId,
-        wallet: &mut Wallet<KeyId>,
+        state: &mut ServiceState<'_>,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
@@ -802,7 +842,7 @@ where
         };
 
         let wallet_block = WalletBlock::from(block);
-        match wallet.apply_block(&wallet_block, &ledger) {
+        match state.apply_block(&wallet_block, &ledger) {
             Ok(()) => {
                 trace!(block_id=?wallet_block.id, "Applied block to wallet");
             }
@@ -810,7 +850,7 @@ where
                 info!(block_id = ?block_id, "Missing block in wallet, backfilling");
                 if let Err(e) = Self::backfill_missing_blocks(
                     wallet_block.id,
-                    wallet,
+                    state,
                     storage_adapter,
                     cryptarchia_api,
                 )
@@ -841,7 +881,7 @@ where
         Ok((block, ledger))
     }
 
-    fn handle_lib_update(lib_update: &LibUpdate, wallet: &mut Wallet<KeyId>) {
+    fn handle_lib_update(lib_update: &LibUpdate, state: &mut ServiceState<'_>) {
         debug!(
             new_lib = ?lib_update.new_lib,
             stale_blocks_count = lib_update.pruned_blocks.stale_blocks.len(),
@@ -849,12 +889,12 @@ where
             "Received LIB update"
         );
 
-        wallet.prune_states(lib_update.pruned_blocks.all());
+        state.prune_states(lib_update.pruned_blocks.all());
     }
 
     async fn backfill_missing_blocks(
         tip: HeaderId,
-        wallet: &mut Wallet<KeyId>,
+        state: &mut ServiceState<'_>,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) -> Result<(), WalletServiceError> {
@@ -867,7 +907,7 @@ where
             })?;
 
         for header_id in missing_headers.iter().rev().copied() {
-            if wallet.has_processed_block(header_id) {
+            if state.wallet().has_processed_block(header_id) {
                 info!("skipping already processed block");
                 continue;
             }
@@ -875,7 +915,7 @@ where
             let (block, ledger) =
                 Self::load_block_and_ledger(header_id, storage_adapter, cryptarchia_api).await?;
 
-            if let Err(e) = wallet.apply_block(&block.into(), &ledger) {
+            if let Err(e) = state.apply_block(&block.into(), &ledger) {
                 error!(
                     block_id = ?header_id,
                     err = %e,

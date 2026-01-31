@@ -369,6 +369,10 @@ pub fn create_validator_config(config: GeneralConfig) -> RunConfig {
                     config.consensus_config.funding_sk.as_public_key(),
                 ),
             ]),
+            voucher_master_key_id: key_id_for_preload_backend(
+                &config.consensus_config.known_key.clone().into(),
+            ),
+            recovery_path: "./recovery/wallet.json".into(),
         },
         key_management: config.kms_config,
         testing_http: lb_api_service::ApiServiceSettings {

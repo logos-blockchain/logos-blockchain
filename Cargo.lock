@@ -7100,6 +7100,7 @@ dependencies = [
  "logos-blockchain-utils 0.1.0",
  "num-bigint",
  "rpds",
+ "serde",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -7148,7 +7149,6 @@ dependencies = [
  "logos-blockchain-utxotree 0.1.0",
  "logos-blockchain-wallet 0.1.0",
  "overwatch",
- "rand 0.8.5",
  "serde",
  "thiserror 1.0.69",
  "tokio",
