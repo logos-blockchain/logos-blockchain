@@ -7,7 +7,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_service::{
     backend::preload::KeyId,
-    keys::{Ed25519Key, UnsecuredZkKey},
+    keys::{Ed25519Key, UnsecuredZkKey, ZkKey},
 };
 use lb_ledger::{EpochState, UtxoTree};
 use lb_wallet_service::UtxoWithKeyId;
@@ -34,9 +34,10 @@ pub async fn build_proof_for<RuntimeServiceId>(
     kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
 ) -> Option<(Groth16LeaderProof, Ed25519Key)> {
     for UtxoWithKeyId { utxo, key_id } in utxos {
-        let secret_key = kms.get_leader_key(key_id.clone()).await;
         let public_inputs = public_inputs_for_slot(epoch_state, slot, latest_tree);
-        let winning = check_winning(utxo, &public_inputs, &secret_key);
+        let winning = kms
+            .check_winning_with_key(key_id.clone(), utxo, &public_inputs)
+            .await;
         if winning {
             tracing::debug!(
                 "leader for slot {:?}, {:?}/{:?}",
@@ -100,7 +101,11 @@ pub async fn build_proof_for<RuntimeServiceId>(
 
 /// Check if the given note is owned by the leader and wins the lottery with
 /// the given public inputs.
-fn check_winning(utxo: &Utxo, public_inputs: &LeaderPublic, secret_key: &UnsecuredZkKey) -> bool {
+pub(crate) fn check_winning(
+    utxo: Utxo,
+    public_inputs: LeaderPublic,
+    secret_key: &UnsecuredZkKey,
+) -> bool {
     utxo.note.pk == secret_key.to_public_key()
         && public_inputs.check_winning(utxo.note.value, utxo.id().0, *secret_key.as_fr())
 }
@@ -232,11 +237,11 @@ impl<'service> WinningPoLSlotNotifier<'service> {
                 let slot = epoch_starting_slot
                     .checked_add(offset)
                     .expect("Slot calculation overflow.");
-
-                let secret_key = kms.get_leader_key(key_id.clone()).await;
-
                 let public_inputs = public_inputs_for_slot(epoch_state, slot.into(), &latest_tree);
-                if !check_winning(utxo, &public_inputs, &secret_key) {
+                let winning = kms
+                    .check_winning_with_key(key_id.clone(), utxo, &public_inputs)
+                    .await;
+                if !winning {
                     continue;
                 }
                 tracing::debug!("Found winning utxo with ID {:?} for slot {slot}", utxo.id());
@@ -332,7 +337,7 @@ mod pol_tests {
         // Create secret key and leader
         let kms = DummyKms;
         let key_id = KeyId::from("0");
-        let sk = kms.get_leader_key(key_id.clone()).await;
+        let sk = kms.check_winning_with_key(key_id.clone()).await;
         let pk = sk.to_public_key();
         let config = test_config();
 
@@ -454,8 +459,8 @@ mod pol_tests {
     impl KmsAdapter<()> for DummyKms {
         type KeyId = KeyId;
 
-        async fn get_leader_key(&self, _: Self::KeyId) -> UnsecuredZkKey {
-            UnsecuredZkKey::new(Fr::from(0u64))
+        async fn check_winning_with_key(&self, _: Self::KeyId, _: &Utxo, _: &LeaderPublic) -> bool {
+            true
         }
     }
 }

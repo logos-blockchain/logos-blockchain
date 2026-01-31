@@ -1,14 +1,17 @@
 use std::fmt::{Debug, Display};
 
+use lb_core::{mantle::Utxo, proofs::leader_proof::LeaderPublic};
 use lb_key_management_system_service::{
     KMSService,
     api::KmsServiceApi,
     backend::preload::{KeyId, PreloadKMSBackend},
     keys::{KeyOperators, UnsecuredZkKey},
-    operators::zk::leader::unsafe_leader_key_operator::UnsafeLeaderKeyOperator,
+    operators::zk::leader::CheckConditionWithLeaderKey,
 };
 use overwatch::services::AsServiceId;
 use tokio::sync::oneshot;
+
+use crate::leadership::check_winning;
 
 pub type PreloadKmsService<RuntimeServiceId> = KMSService<PreloadKMSBackend, RuntimeServiceId>;
 
@@ -16,7 +19,12 @@ pub type PreloadKmsService<RuntimeServiceId> = KMSService<PreloadKMSBackend, Run
 pub trait KmsAdapter<RuntimeServiceId> {
     type KeyId;
 
-    async fn get_leader_key(&self, key_id: Self::KeyId) -> UnsecuredZkKey;
+    async fn check_winning_with_key(
+        &self,
+        key_id: Self::KeyId,
+        utxo: &Utxo,
+        public_inputs: &LeaderPublic,
+    ) -> bool;
 }
 
 #[async_trait::async_trait]
@@ -28,12 +36,23 @@ where
 {
     type KeyId = KeyId;
 
-    async fn get_leader_key(&self, key_id: Self::KeyId) -> UnsecuredZkKey {
+    async fn check_winning_with_key(
+        &self,
+        key_id: Self::KeyId,
+        utxo: &Utxo,
+        public_inputs: &LeaderPublic,
+    ) -> bool {
         let (output_tx, output_rx) = oneshot::channel();
+        // clone to send
+        let utxo = utxo.clone();
+        let public_inputs = public_inputs.clone();
         let () = self
             .execute(
                 key_id,
-                KeyOperators::Zk(Box::new(UnsafeLeaderKeyOperator::new(output_tx))),
+                KeyOperators::Zk(Box::new(CheckConditionWithLeaderKey::new(
+                    output_tx,
+                    move |key: &UnsecuredZkKey| check_winning(utxo, public_inputs, key),
+                ))),
             )
             .await
             .expect("KMS API should be invoked");

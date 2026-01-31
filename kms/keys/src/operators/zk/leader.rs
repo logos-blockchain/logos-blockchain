@@ -1,47 +1,38 @@
-// TODO: Make this secure by embedding actual logic
-//       once resolving cyclic dep: kms-keys <> core
-#[cfg(feature = "unsafe")]
-pub mod unsafe_leader_key_operator {
-    use std::fmt::{self, Debug, Formatter};
+use std::fmt::{Debug, Formatter};
 
-    use tokio::sync::oneshot;
+use crate::keys::{UnsecuredZkKey, ZkKey, errors::KeyError, secured_key::SecureKeyOperator};
 
-    use crate::keys::{
-        UnsecuredZkKey, ZkKey,
-        secured_key::{SecureKeyOperator, SecuredKey},
-    };
+pub struct CheckConditionWithLeaderKey<F> {
+    result_channel: tokio::sync::oneshot::Sender<bool>,
+    f: F,
+}
 
-    pub struct UnsafeLeaderKeyOperator {
-        result_channel: oneshot::Sender<UnsecuredZkKey>,
+impl<F> Debug for CheckConditionWithLeaderKey<F> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CheckConditionWithLeaderKey")
     }
+}
 
-    impl UnsafeLeaderKeyOperator {
-        #[must_use]
-        pub const fn new(result_channel: oneshot::Sender<UnsecuredZkKey>) -> Self {
-            Self { result_channel }
-        }
+impl<F> CheckConditionWithLeaderKey<F> {
+    #[must_use]
+    pub const fn new(result_channel: tokio::sync::oneshot::Sender<bool>, f: F) -> Self {
+        Self { result_channel, f }
     }
+}
 
-    #[async_trait::async_trait]
-    impl SecureKeyOperator for UnsafeLeaderKeyOperator {
-        type Key = ZkKey;
-        type Error = <ZkKey as SecuredKey>::Error;
+#[async_trait::async_trait]
+impl<F> SecureKeyOperator for CheckConditionWithLeaderKey<F>
+where
+    F: Fn(&UnsecuredZkKey) -> bool + Send + Sync + 'static,
+{
+    type Key = ZkKey;
+    type Error = KeyError;
 
-        async fn execute(self: Box<Self>, key: &Self::Key) -> Result<(), Self::Error> {
-            if self
-                .result_channel
-                .send(key.clone().into_unsecured())
-                .is_err()
-            {
-                tracing::error!("Failed to send result via channel");
-            }
-            Ok(())
+    async fn execute(self: Box<Self>, key: &Self::Key) -> Result<(), Self::Error> {
+        let Self { result_channel, f } = *self;
+        if result_channel.send(f(key.as_unsecured())).is_err() {
+            tracing::error!("Failed to send result via channel");
         }
-    }
-
-    impl Debug for UnsafeLeaderKeyOperator {
-        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-            write!(f, "UnsafeLeaderKeyOperator")
-        }
+        Ok(())
     }
 }
