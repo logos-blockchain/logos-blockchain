@@ -7,7 +7,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_service::{
     backend::preload::KeyId,
-    keys::{Ed25519Key, UnsecuredZkKey, ZkKey},
+    keys::{Ed25519Key, UnsecuredZkKey},
 };
 use lb_ledger::{EpochState, UtxoTree};
 use lb_wallet_service::UtxoWithKeyId;
@@ -45,24 +45,25 @@ pub async fn build_proof_for<RuntimeServiceId>(
                 utxo.note.value,
                 epoch_state.total_stake()
             );
-
-            let (private_inputs, leader_signing_key) =
-                match private_inputs_for_winning_utxo_and_slot(
+            let private_inputs_result = kms
+                .build_private_inputs_for_winning_utxo_and_slot(
+                    key_id.clone(),
                     utxo,
-                    &secret_key,
                     epoch_state,
                     public_inputs,
                     latest_tree,
-                ) {
-                    Ok(result) => result,
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to build private inputs for winning utxo {:?} for {slot:?}: {e:?}",
-                            utxo.id(),
-                        );
-                        continue;
-                    }
-                };
+                )
+                .await;
+            let (private_inputs, leader_signing_key) = match private_inputs_result {
+                Ok(result) => result,
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to build private inputs for winning utxo {:?} for {slot:?}: {e:?}",
+                        utxo.id(),
+                    );
+                    continue;
+                }
+            };
 
             winning_pol_info_notifier.notify_about_winning_slot(
                 private_inputs.clone(),
@@ -101,16 +102,12 @@ pub async fn build_proof_for<RuntimeServiceId>(
 
 /// Check if the given note is owned by the leader and wins the lottery with
 /// the given public inputs.
-pub(crate) fn check_winning(
-    utxo: Utxo,
-    public_inputs: LeaderPublic,
-    secret_key: &UnsecuredZkKey,
-) -> bool {
+pub fn check_winning(utxo: Utxo, public_inputs: LeaderPublic, secret_key: &UnsecuredZkKey) -> bool {
     utxo.note.pk == secret_key.to_public_key()
         && public_inputs.check_winning(utxo.note.value, utxo.id().0, *secret_key.as_fr())
 }
 
-fn private_inputs_for_winning_utxo_and_slot(
+pub fn private_inputs_for_winning_utxo_and_slot(
     utxo: &Utxo,
     secret_key: &UnsecuredZkKey,
     epoch_state: &EpochState,
@@ -156,7 +153,7 @@ fn public_inputs_for_slot(
 }
 
 #[derive(thiserror::Error, Debug)]
-enum PrivateInputsError {
+pub enum PrivateInputsError {
     #[error("Aged note not found from merkle tree")]
     AgedNoteNotFound,
     #[error("Latest note not found from merkle tree")]
@@ -249,13 +246,16 @@ impl<'service> WinningPoLSlotNotifier<'service> {
                 // Note: We discard the signing key here since this is just for pre-computing
                 // winning slots. The actual signing key will be generated when building the
                 // proof.
-                let (leader_private, _signing_key) = match private_inputs_for_winning_utxo_and_slot(
-                    utxo,
-                    &secret_key,
-                    epoch_state,
-                    public_inputs,
-                    &latest_tree,
-                ) {
+                let private_inputs_result = kms
+                    .build_private_inputs_for_winning_utxo_and_slot(
+                        key_id.clone(),
+                        utxo,
+                        epoch_state,
+                        public_inputs,
+                        &latest_tree,
+                    )
+                    .await;
+                let (leader_private, _signing_key) = match private_inputs_result {
                     Ok(result) => result,
                     Err(e) => {
                         tracing::error!(
@@ -337,7 +337,7 @@ mod pol_tests {
         // Create secret key and leader
         let kms = DummyKms;
         let key_id = KeyId::from("0");
-        let sk = kms.check_winning_with_key(key_id.clone()).await;
+        let sk = UnsecuredZkKey::new(Fr::from(0u64));
         let pk = sk.to_public_key();
         let config = test_config();
 
@@ -459,8 +459,30 @@ mod pol_tests {
     impl KmsAdapter<()> for DummyKms {
         type KeyId = KeyId;
 
-        async fn check_winning_with_key(&self, _: Self::KeyId, _: &Utxo, _: &LeaderPublic) -> bool {
-            true
+        async fn check_winning_with_key(
+            &self,
+            _: Self::KeyId,
+            utxo: &Utxo,
+            leader_public: &LeaderPublic,
+        ) -> bool {
+            check_winning(*utxo, *leader_public, &UnsecuredZkKey::new(Fr::from(0u64)))
+        }
+
+        async fn build_private_inputs_for_winning_utxo_and_slot(
+            &self,
+            _: Self::KeyId,
+            utxo: &Utxo,
+            epoch_state: &EpochState,
+            public_inputs: LeaderPublic,
+            latest_tree: &UtxoTree,
+        ) -> Result<(LeaderPrivate, Ed25519Key), PrivateInputsError> {
+            private_inputs_for_winning_utxo_and_slot(
+                utxo,
+                &UnsecuredZkKey::new(Fr::from(0u64)),
+                epoch_state,
+                public_inputs,
+                latest_tree,
+            )
         }
     }
 }
