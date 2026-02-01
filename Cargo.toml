@@ -66,6 +66,7 @@ members = [
   "zk/proofs/pol",
   "zk/proofs/poq",
   "zk/proofs/zksign",
+  "zone-sdk",
 ]
 resolver = "2"
 
@@ -125,6 +126,7 @@ lb-wallet-http-client            = { default-features = false, package = "logos-
 lb-wallet-service                = { default-features = false, package = "logos-blockchain-wallet-service", path = "./services/wallet" }
 lb-witness-generator             = { default-features = false, package = "logos-blockchain-witness-generator", path = "./zk/circuits/witness-generator" }
 lb-zksign                        = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
+lb-zone-sdk                      = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
 
 # External
 blake2            = { default-features = false, version = "0.10" }

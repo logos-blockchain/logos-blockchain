@@ -7211,6 +7211,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-zone-sdk"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "logos-blockchain-common-http-client 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-key-management-system-service 0.1.0",
+ "reqwest 0.12.28",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "loki-api"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
