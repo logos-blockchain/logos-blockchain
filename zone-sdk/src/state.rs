@@ -116,7 +116,7 @@ mod tests {
         let hash_b = tx_b.mantle_tx.hash();
 
         state.submit_pending(hash_a, tx_a.clone());
-        state.submit_pending(hash_b, tx_b.clone());
+        state.submit_pending(hash_b, tx_b);
         assert_eq!(state.pending_count(), 2);
 
         // Block contains tx_a and tx_c (tx_c was never pending)
