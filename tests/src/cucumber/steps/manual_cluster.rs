@@ -65,6 +65,7 @@ async fn start_manual_stand_alone_node(world: &mut CucumberWorld, node_name: Str
                 name: node_name,
                 started_node,
                 run_config: None,
+                chain_info: HashMap::default(),
             },
         );
         Ok(())
@@ -113,6 +114,7 @@ async fn start_manual_connected_node(
             name: node_name.clone(),
             started_node,
             run_config: None,
+            chain_info: HashMap::default(),
         },
     );
     Ok(())
@@ -157,6 +159,7 @@ async fn start_manual_two_connected_nodes(
             name: node_name.clone(),
             started_node,
             run_config: None,
+            chain_info: HashMap::default(),
         },
     );
     Ok(())
@@ -164,40 +167,23 @@ async fn start_manual_two_connected_nodes(
 
 #[when(expr = "node {string} is at height {int} in {int} seconds")]
 #[then(expr = "node {string} is at height {int} in {int} seconds")]
-#[expect(clippy::needless_pass_by_ref_mut, reason = "Required by Cucumber")]
 async fn node_is_at_height(
     world: &mut CucumberWorld,
     node_name: String,
     height: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    let node = world
-        .nodes_info
-        .get(&node_name)
-        .ok_or(StepError::LogicalError {
-            message: format!("Runtime node '{node_name}' not found"),
-        })?;
     let start = tokio::time::Instant::now();
     let time_out = Duration::from_secs(time_out_seconds);
 
     let mut count = 0usize;
     loop {
-        let node_status = node
-            .started_node
-            .api
-            .consensus_info()
-            .await
-            .inspect_err(|e| {
-                warn!(
-                    target: TARGET,
-                    "Error: Node '{node_name}' did not return any status info after {:.2?}: {e}",
-                    start.elapsed()
-                );
-            })?;
-        if node_status.height >= height {
+        poll_all_nodes_and_update_consensus_cache(&mut world.nodes_info).await?;
+        let best_height = world.node_best_height(&node_name)?.unwrap_or_default();
+        if best_height >= height {
             info!(
                 target: TARGET,
-                "Node '{node_name}' reached height {height} in {:.2?}",
+                "Node '{node_name}' cache shows it reached height {height} in {:.2?}",
                 start.elapsed()
             );
             return Ok(());
@@ -205,7 +191,7 @@ async fn node_is_at_height(
             info!(
                 target: TARGET,
                 "Waiting for '{node_name}' to reach height {height} - elapsed: {:.2?}, current \
-                height: {}", start.elapsed(), node_status.height
+                height: {}", start.elapsed(), best_height
             );
         }
 
@@ -223,7 +209,6 @@ async fn node_is_at_height(
 
 #[when(expr = "all nodes converged to within {int} blocks in {int} seconds")]
 #[then(expr = "all nodes converged to within {int} blocks in {int} seconds")]
-#[expect(clippy::needless_pass_by_ref_mut, reason = "Required by Cucumber")]
 async fn all_nodes_converged(
     world: &mut CucumberWorld,
     max_diff_height: u64,
@@ -231,16 +216,16 @@ async fn all_nodes_converged(
 ) -> StepResult {
     use std::collections::HashMap;
 
-    let nodes = &world.nodes_info.values().collect::<Vec<&NodeInfo>>();
+    let nodes_info = &world.nodes_info.values().collect::<Vec<&NodeInfo>>();
     let start = tokio::time::Instant::now();
     let time_out = Duration::from_secs(time_out_seconds);
 
     // node_name -> (height -> header_id)  (overwrites on reorg)
     let mut nodes_chain_info: HashMap<String, HashMap<u64, String>> =
-        HashMap::with_capacity(nodes.len());
+        HashMap::with_capacity(nodes_info.len());
 
     // Pre-initialize so lookups are deterministic
-    for node_info in nodes {
+    for node_info in nodes_info {
         nodes_chain_info
             .entry(node_info.started_node.name.clone())
             .or_default();
@@ -248,9 +233,10 @@ async fn all_nodes_converged(
 
     let mut count = 0usize;
     loop {
-        let (peer_min, diff, peer_heights) =
-            fetch_and_update_chain_info(nodes, &mut nodes_chain_info).await?;
-        let (status, anchor_hashes) = tips_aligned_at_min_difference(&nodes_chain_info, peer_min);
+        let (all_nodes_min, diff, peer_heights) =
+            fetch_and_update_chain_info(&mut world.nodes_info, &mut nodes_chain_info).await?;
+        let (status, anchor_hashes) =
+            tips_aligned_at_min_difference(&nodes_chain_info, all_nodes_min);
 
         if diff <= max_diff_height && matches!(status, AlignmentStatus::Aligned) {
             info!(
@@ -267,7 +253,7 @@ async fn all_nodes_converged(
                 None,
                 diff,
                 &peer_heights,
-                peer_min,
+                all_nodes_min,
                 &anchor_hashes,
                 start,
             );
@@ -289,7 +275,7 @@ async fn all_nodes_converged(
 
 fn tips_aligned_at_min_difference(
     nodes_chain_info: &HashMap<String, HashMap<u64, String>>,
-    peer_min: u64,
+    all_nodes_min: u64,
 ) -> (AlignmentStatus, Vec<(String, u64, Option<String>)>) {
     // Always return per-node view at min_height for logging
     let mut anchor_hashes: Vec<(String, u64, Option<String>)> =
@@ -301,8 +287,8 @@ fn tips_aligned_at_min_difference(
             .expect("nodes_chain_info must be pre-initialized");
         anchor_hashes.push((
             node_name.clone(),
-            peer_min,
-            peer_chain.get(&peer_min).cloned(),
+            all_nodes_min,
+            peer_chain.get(&all_nodes_min).cloned(),
         ));
     }
 
@@ -324,46 +310,38 @@ fn tips_aligned_at_min_difference(
 }
 
 async fn fetch_and_update_chain_info(
-    nodes: &Vec<&NodeInfo>,
+    nodes_info: &mut HashMap<String, NodeInfo>,
     nodes_chain_info: &mut HashMap<String, HashMap<u64, String>>,
 ) -> Result<(u64, u64, Vec<u64>), StepError> {
-    // Fetch consensus info for all nodes
-    let info_futures = nodes.iter().map(async |node_info| {
-        let node_name = node_info.started_node.name.clone();
-        node_info
-            .started_node
-            .api
-            .consensus_info()
-            .await
-            .map(|info| (node_name, info.height, info.tip.encode_hex()))
-    });
-    let nodes_tip_info: Vec<(String, u64, String)> =
-        try_join_all(info_futures).await.inspect_err(|e| {
-            warn!(
-                target: TARGET,
-                "Error: Some node(s) did not respond with their consensus_info: {e}",
-            );
-        })?;
+    poll_all_nodes_and_update_consensus_cache(nodes_info).await?;
 
-    // Update chain info (overwrite same height on reorg)
-    for (node_name, height, hash) in &nodes_tip_info {
-        let chain = nodes_chain_info
-            .get_mut(node_name)
-            .ok_or(StepError::LogicalError {
-                message: format!("Runtime node '{node_name}' not found in chain info map"),
-            })?;
-        chain.insert(*height, hash.clone());
+    let mut best_node_heights: Vec<u64> = Vec::with_capacity(nodes_info.len());
+
+    for node_info in nodes_info.values() {
+        let max_height = node_info.best_height().unwrap_or_default();
+        best_node_heights.push(max_height);
+
+        let started_node_name = node_info.started_node.name.clone();
+        let chain =
+            nodes_chain_info
+                .get_mut(&started_node_name)
+                .ok_or(StepError::LogicalError {
+                    message: format!(
+                        "Started node '{}' not found in chain info map",
+                        &started_node_name
+                    ),
+                })?;
+        let chain_info = node_info.chain_info();
+        for (height, hash) in chain_info {
+            chain.insert(*height, hash.clone());
+        }
     }
 
-    let peer_heights: Vec<u64> = nodes_tip_info
-        .iter()
-        .map(|(_, height, _)| *height)
-        .collect();
-    let peer_min = *peer_heights.iter().min().unwrap();
-    let peer_max = *peer_heights.iter().max().unwrap();
-    let diff = peer_max - peer_min;
+    let all_nodes_min = *best_node_heights.iter().min().unwrap_or(&0);
+    let all_nodes_max = *best_node_heights.iter().max().unwrap_or(&0);
+    let diff = all_nodes_max - all_nodes_min;
 
-    Ok((peer_min, diff, peer_heights))
+    Ok((all_nodes_min, diff, best_node_heights))
 }
 
 fn log_waiting_status(
@@ -417,7 +395,6 @@ fn log_waiting_status(
 #[then(
     expr = "all nodes have at least {int} blocks and converged to within {int} blocks in {int} seconds"
 )]
-#[expect(clippy::needless_pass_by_ref_mut, reason = "Required by Cucumber")]
 async fn all_nodes_reached_min_height_and_converged(
     world: &mut CucumberWorld,
     min_height: u64,
@@ -426,16 +403,16 @@ async fn all_nodes_reached_min_height_and_converged(
 ) -> StepResult {
     use std::collections::HashMap;
 
-    let nodes = &world.nodes_info.values().collect::<Vec<&NodeInfo>>();
+    let nodes_info = &world.nodes_info.values().collect::<Vec<&NodeInfo>>();
     let start = tokio::time::Instant::now();
     let time_out = Duration::from_secs(time_out_seconds);
 
     // node_name -> (height -> header_id)  (overwrites on reorg)
     let mut nodes_chain_info: HashMap<String, HashMap<u64, String>> =
-        HashMap::with_capacity(nodes.len());
+        HashMap::with_capacity(nodes_info.len());
 
     // Pre-initialize so lookups are deterministic
-    for node_info in nodes {
+    for node_info in nodes_info {
         nodes_chain_info
             .entry(node_info.started_node.name.clone())
             .or_default();
@@ -443,13 +420,14 @@ async fn all_nodes_reached_min_height_and_converged(
 
     let mut count = 0usize;
     loop {
-        let (peer_min, diff, peer_heights) =
-            fetch_and_update_chain_info(nodes, &mut nodes_chain_info).await?;
-        let (status, anchor_hashes) = tips_aligned_at_min_difference(&nodes_chain_info, peer_min);
+        let (all_nodes_min, diff, peer_heights) =
+            fetch_and_update_chain_info(&mut world.nodes_info, &mut nodes_chain_info).await?;
+        let (status, anchor_hashes) =
+            tips_aligned_at_min_difference(&nodes_chain_info, all_nodes_min);
 
         if diff <= max_diff_height
             && matches!(status, AlignmentStatus::Aligned)
-            && peer_min >= min_height
+            && all_nodes_min >= min_height
         {
             info!(
                 target: TARGET,
@@ -466,7 +444,7 @@ async fn all_nodes_reached_min_height_and_converged(
                 Some(min_height),
                 diff,
                 &peer_heights,
-                peer_min,
+                all_nodes_min,
                 &anchor_hashes,
                 start,
             );
@@ -500,6 +478,51 @@ fn stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
         let _unused = world.nodes_info.remove(&node_name);
     }
     cluster.stop_all();
+
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct ConsensusSnapshot {
+    node_name: String,
+    height: u64,
+    tip_hex: String,
+}
+
+async fn poll_all_nodes_and_update_consensus_cache(
+    nodes_info: &mut HashMap<String, NodeInfo>,
+) -> Result<(), StepError> {
+    let nodes = nodes_info.values().collect::<Vec<&NodeInfo>>();
+    let info_futures = nodes.iter().map(async |node| {
+        let node_name = node.name.clone();
+        node.started_node
+            .api
+            .consensus_info()
+            .await
+            .map(|info| ConsensusSnapshot {
+                node_name,
+                height: info.height,
+                tip_hex: info.tip.encode_hex(),
+            })
+    });
+
+    let snapshots: Vec<ConsensusSnapshot> = try_join_all(info_futures).await.inspect_err(|e| {
+        warn!(
+            target: TARGET,
+            "Error: Some node(s) did not respond with their consensus_info: {e}",
+        );
+    })?;
+    for snap in &snapshots {
+        let node = nodes_info
+            .get_mut(&snap.node_name)
+            .ok_or(StepError::LogicalError {
+                message: format!(
+                    "Runtime node '{}' not found in world.nodes_info",
+                    snap.node_name
+                ),
+            })?;
+        node.upsert_tip(snap.height, snap.tip_hex.clone());
+    }
 
     Ok(())
 }

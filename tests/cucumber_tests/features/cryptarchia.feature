@@ -21,7 +21,7 @@ Feature: Cryptarchia
     Then I stop all nodes
 
   @cryptarchia @flaky
-  Scenario: Orphan staggered start with fork 1
+  Scenario: Orphan staggered fork start 1
     Given I have a cluster with capacity of 9 nodes
     And I start node "NODE_A1"
     When node "NODE_A1" is at height 10 in 300 seconds
@@ -39,7 +39,7 @@ Feature: Cryptarchia
     Then I stop all nodes
 
   @cryptarchia @undefined_behaviour
-  Scenario: Orphan staggered start with fork 2
+  Scenario: Orphan staggered fork start 2
     Given I have a cluster with capacity of 11 nodes
     And I start node "NODE_A1"
     When node "NODE_A1" is at height 10 in 300 seconds

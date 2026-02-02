@@ -9,7 +9,7 @@ use testing_framework_workflows::{ScenarioBuilderExt as _, expectations::Consens
 
 use crate::cucumber::{
     error::{StepError, StepResult},
-    utils::{is_truthy_env, make_builder, positive_u64, positive_usize, shared_host_bin_path},
+    utils::{make_builder, positive_u64, positive_usize, shared_host_bin_path},
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -83,9 +83,40 @@ pub struct NodeInfo {
     pub started_node: StartedNode,
     /// General node configuration used to start the node
     pub run_config: Option<RunConfig>,
+    /// Chain height vs. hash at that height
+    pub chain_info: HashMap<u64, String>,
+}
+
+impl NodeInfo {
+    /// Convenience: record a node's current tip at its current height.
+    pub fn upsert_tip(&mut self, height: u64, tip_hash_hex: String) {
+        self.chain_info.insert(height, tip_hash_hex);
+    }
+
+    /// Returns the highest height for which we have a cached hash (if any).
+    #[must_use]
+    pub fn best_height(&self) -> Option<u64> {
+        self.chain_info.keys().copied().max()
+    }
+
+    /// Returns a reference to the full map of cached height -> hash.
+    #[must_use]
+    pub const fn chain_info(&self) -> &HashMap<u64, String> {
+        &self.chain_info
+    }
 }
 
 impl CucumberWorld {
+    pub fn node_best_height(&self, node_name: &String) -> Result<Option<u64>, StepError> {
+        let node = self
+            .nodes_info
+            .get(node_name)
+            .ok_or(StepError::LogicalError {
+                message: format!("Runtime node '{node_name}' not found"),
+            })?;
+        Ok(node.best_height())
+    }
+
     pub const fn set_deployer(&mut self, kind: DeployerKind) -> StepResult {
         self.deployer = Some(kind);
         Ok(())
@@ -177,14 +208,6 @@ impl CucumberWorld {
         let actual = self.deployer.ok_or(StepError::MissingDeployer)?;
         if actual != expected {
             return Err(StepError::DeployerMismatch { expected, actual });
-        }
-
-        if !is_truthy_env("POL_PROOF_DEV_MODE") {
-            return Err(StepError::Preflight {
-                message:
-                    "POL_PROOF_DEV_MODE must be set to \"true\" (or \"1\") for practical test runs."
-                        .to_owned(),
-            });
         }
 
         if expected == DeployerKind::Local {

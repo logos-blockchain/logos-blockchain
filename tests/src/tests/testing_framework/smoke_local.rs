@@ -7,7 +7,6 @@ use testing_framework_workflows::ScenarioBuilderExt as _;
 #[tokio::test]
 async fn smoke_two_validators_run_30s() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Required env vars (set on the command line when running this test):
-    // - `POL_PROOF_DEV_MODE=true` (required for local proof generation)
     // - `LOGOS_BLOCKCHAIN_NODE_BIN=...` (path to `logos-blockchain-node` binary)
     // - `RUST_LOG=info` (optional; better visibility)
     let _init_result = tracing_subscriber::fmt()

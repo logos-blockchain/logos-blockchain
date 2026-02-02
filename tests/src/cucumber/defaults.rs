@@ -21,7 +21,6 @@ fn set_default_env(key: &str, value: &str) {
 }
 
 pub fn init_logging_defaults() {
-    set_default_env("POL_PROOF_DEV_MODE", "true");
     set_default_env("NOMOS_TESTS_KEEP_LOGS", "1");
     set_default_env("NOMOS_LOG_LEVEL", "info");
     set_default_env("RUST_LOG", "info");
