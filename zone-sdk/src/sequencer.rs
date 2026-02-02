@@ -7,7 +7,7 @@ use lb_core::mantle::{
     ledger::Tx as LedgerTx,
     ops::{
         Op, OpProof,
-        channel::{ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp},
+        channel::{ChannelId, MsgId, inscribe::InscriptionOp},
     },
     tx::TxHash,
 };
@@ -269,18 +269,16 @@ async fn fetch_block(
 fn create_inscribe_tx(
     channel_id: ChannelId,
     signing_key: &Ed25519Key,
-    data: Vec<u8>,
+    inscription: Vec<u8>,
     parent: MsgId,
 ) -> (SignedMantleTx, MsgId) {
-    let verifying_key_bytes = signing_key.public_key().to_bytes();
-    let verifying_key =
-        Ed25519PublicKey::from_bytes(&verifying_key_bytes).expect("valid ed25519 public key");
+    let signer = signing_key.public_key();
 
     let inscribe_op = InscriptionOp {
         channel_id,
-        inscription: data,
+        inscription,
         parent,
-        signer: verifying_key,
+        signer,
     };
     let msg_id = inscribe_op.id();
 
@@ -294,11 +292,7 @@ fn create_inscribe_tx(
     };
 
     let tx_hash = inscribe_tx.hash();
-    let signature_bytes = signing_key
-        .sign_payload(tx_hash.as_signing_bytes().as_ref())
-        .to_bytes();
-    let signature =
-        lb_key_management_system_service::keys::Ed25519Signature::from_bytes(&signature_bytes);
+    let signature = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
 
     let signed_tx = SignedMantleTx {
         ops_proofs: vec![OpProof::Ed25519Sig(signature)],
