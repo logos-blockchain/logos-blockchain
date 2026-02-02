@@ -33,7 +33,7 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
     DeploymentSettings {
         blend: BlendDeploymentSettings {
             common: BlendCommonSettings {
-                minimum_network_size: NonZeroU64::try_from(30u64)
+                minimum_network_size: NonZeroU64::try_from(1u64)
                     .expect("Minimum network size cannot be zero."),
                 num_blend_layers: NonZeroU64::try_from(3)
                     .expect("Number of blend layers cannot be zero."),
