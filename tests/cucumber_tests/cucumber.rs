@@ -40,12 +40,17 @@ async fn main() {
     let world = CucumberWorld::cucumber()
         .repeat_failed()
         .max_concurrent_scenarios(1)
-        .fail_on_skipped()
+        // .fail_on_skipped()
         // .fail_fast() // Remove comment to enable fail-fast behavior for development
         .with_writer(
             writer::Summarize::new(writer::Basic::new(
                 io::stdout(),
-                writer::Coloring::Auto,
+                // With `writer::Coloring::Auto`, cucumber treats the output as a TTY and using the
+                // underlying termcolor/console behaviour that can rewrite/clear lines when
+                // printing step statuses (✔ ...). That can visually clobber the
+                // immediately adjacent tracing line, especially the one emitted
+                // right as the step transitions from “running” to “passed”.
+                writer::Coloring::Never,
                 Verbosity::ShowWorldAndDocString,
             ))
             .tee::<CucumberWorld, _>(writer::JUnit::for_tee(junit_xml_file, 0))

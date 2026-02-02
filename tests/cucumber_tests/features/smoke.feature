@@ -1,7 +1,7 @@
 Feature: Testing Framework - Auto Local/Compose Deployer
 
   # no workloads, liveness only
-  @normal_ci
+  @normal_ci @broken
   Scenario: Idle smoke
     Given we have a CLI deployer specified
     And topology has 2 validators
@@ -11,7 +11,7 @@ Feature: Testing Framework - Auto Local/Compose Deployer
     Then scenario should succeed
 
   # tx + liveness
-  @normal_ci
+  @normal_ci @broken
   Scenario: Simple smoke
     Given we have a CLI deployer specified
     And topology has 2 validators

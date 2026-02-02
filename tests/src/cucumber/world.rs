@@ -1,11 +1,16 @@
-use std::{env, path::PathBuf, time::Duration};
+use std::{collections::HashMap, env, path::PathBuf, time::Duration};
 
 use cucumber::World;
-use testing_framework_core::scenario::{
-    Builder, NodeControlCapability, Scenario, ScenarioBuildError, ScenarioBuilder,
-};
+use derivative::Derivative;
+use lb_node::config::RunConfig;
+use testing_framework_core::scenario::{Builder, NodeControlCapability, Scenario, StartedNode};
+use testing_framework_runner_local::LocalManualCluster;
 use testing_framework_workflows::{ScenarioBuilderExt as _, expectations::ConsensusLiveness};
-use thiserror::Error;
+
+use crate::cucumber::{
+    error::{StepError, StepResult},
+    utils::{is_truthy_env, make_builder, positive_u64, positive_usize, shared_host_bin_path},
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DeployerKind {
@@ -56,43 +61,28 @@ pub struct ConsensusLivenessSpec {
     pub lag_allowance: Option<u64>,
 }
 
-#[derive(Debug, Error)]
-pub enum StepError {
-    #[error("deployer is not selected; set it first (e.g. `Given deployer is \"local\"`)")]
-    MissingDeployer,
-    #[error("scenario topology is not configured")]
-    MissingTopology,
-    #[error("scenario run duration is not configured")]
-    MissingRunDuration,
-    #[error("unsupported deployer kind: {value}")]
-    UnsupportedDeployer { value: String },
-    #[error("step requires deployer {expected:?}, but current deployer is {actual:?}")]
-    DeployerMismatch {
-        expected: DeployerKind,
-        actual: DeployerKind,
-    },
-    #[error("invalid argument: {message}")]
-    InvalidArgument { message: String },
-    #[error("{message}")]
-    Preflight { message: String },
-    #[error("failed to build scenario: {source}")]
-    ScenarioBuild {
-        #[source]
-        source: ScenarioBuildError,
-    },
-    #[error("{message}")]
-    RunFailed { message: String },
-}
-
-pub type StepResult = Result<(), StepError>;
-
-#[derive(World, Debug, Default)]
+#[derive(World, Derivative)]
+#[derivative(Debug, Default)]
 pub struct CucumberWorld {
     pub deployer: Option<DeployerKind>,
     pub spec: ScenarioSpec,
     pub run: RunState,
     pub membership_check: bool,
     pub readiness_checks: bool,
+    #[derivative(Debug = "ignore")]
+    #[derivative(Default(value = "None"))]
+    pub local_cluster: Option<LocalManualCluster>,
+    #[derivative(Debug = "ignore")]
+    pub nodes_info: HashMap<String, NodeInfo>,
+}
+
+/// Information about a started node in the world
+pub struct NodeInfo {
+    /// Node name
+    pub name: String,
+    pub started_node: StartedNode,
+    /// General node configuration used to start the node
+    pub run_config: Option<RunConfig>,
 }
 
 impl CucumberWorld {
@@ -198,14 +188,14 @@ impl CucumberWorld {
         }
 
         if expected == DeployerKind::Local {
-            let node_ok = env::var_os("NOMOS_NODE_BIN")
+            let node_ok = env::var_os("LOGOS_BLOCKCHAIN_NODE_BIN")
                 .map(PathBuf::from)
                 .is_some_and(|p| p.is_file())
                 || shared_host_bin_path("logos-blockchain-node").is_file();
 
             if !(node_ok) {
                 return Err(StepError::Preflight {
-                    message: "Missing Logos host binaries. Set NOMOS_NODE_BIN, or run \
+                    message: "Missing Logos host binaries. Set LOGOS_BLOCKCHAIN_NODE_BIN, or run \
                     `scripts/run/run-examples.sh host` to restore them into \
                     `testing-framework/assets/stack/bin`."
                         .to_owned(),
@@ -260,55 +250,16 @@ impl CucumberWorld {
 
         Ok(builder)
     }
-}
 
-fn make_builder(topology: TopologySpec) -> Builder<()> {
-    ScenarioBuilder::topology_with(|t| {
-        let base = match topology.network {
-            NetworkKind::Star => t.network_star(),
-        };
-        base.nodes(topology.validators)
-    })
-}
-
-fn is_truthy_env(key: &str) -> bool {
-    env::var(key)
-        .ok()
-        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-}
-
-fn positive_usize(label: &str, value: usize) -> Result<usize, StepError> {
-    if value == 0 {
-        Err(StepError::InvalidArgument {
-            message: format!("{label} must be > 0"),
-        })
-    } else {
-        Ok(value)
+    pub fn resolve_node_name(&self, node_name: &str) -> Result<String, StepError> {
+        Ok(self
+            .nodes_info
+            .get(node_name)
+            .ok_or(StepError::LogicalError {
+                message: format!("Runtime node '{node_name}' not found"),
+            })?
+            .started_node
+            .name
+            .clone())
     }
-}
-
-fn positive_u64(label: &str, value: u64) -> Result<u64, StepError> {
-    if value == 0 {
-        Err(StepError::InvalidArgument {
-            message: format!("{label} must be > 0"),
-        })
-    } else {
-        Ok(value)
-    }
-}
-
-pub fn parse_deployer(value: &str) -> Result<DeployerKind, StepError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "local" | "host" => Ok(DeployerKind::Local),
-        "compose" | "docker" => Ok(DeployerKind::Compose),
-        other => Err(StepError::UnsupportedDeployer {
-            value: other.to_owned(),
-        }),
-    }
-}
-
-#[must_use]
-pub fn shared_host_bin_path(binary_name: &str) -> PathBuf {
-    let cucumber_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    cucumber_dir.join("../assets/stack/bin").join(binary_name)
 }
