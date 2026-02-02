@@ -95,8 +95,6 @@ pub enum LeaderMsg {
     /// * this service is started mid-epoch -> immediately the first winning
     ///   slot of the ongoing epoch (the slot can also be in the past compared
     ///   to the current slot as returned by the time service), if any
-    /// * a new winning slot (other than the very first one in the ongoing
-    ///   epoch) is identified when proposing blocks
     /// * a new consumer subscribes -> the latest value that was sent to all the
     ///   other consumers, if any
     WinningPolEpochSlotStreamSubscribe {
