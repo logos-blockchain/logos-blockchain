@@ -18,9 +18,29 @@ use tracing::{debug, info, warn};
 
 use crate::state::State;
 
-const RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
-const RECONNECT_DELAY: Duration = Duration::from_secs(5);
-const PUBLISH_CHANNEL_CAPACITY: usize = 256;
+const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
+const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
+const DEFAULT_PUBLISH_CHANNEL_CAPACITY: usize = 256;
+
+/// Configuration for the zone sequencer.
+pub struct SequencerConfig {
+    /// How often to resubmit pending transactions to the mempool.
+    pub resubmit_interval: Duration,
+    /// Delay before retrying a failed LIB stream connection.
+    pub reconnect_delay: Duration,
+    /// Capacity of the internal publish request channel.
+    pub publish_channel_capacity: usize,
+}
+
+impl Default for SequencerConfig {
+    fn default() -> Self {
+        Self {
+            resubmit_interval: DEFAULT_RESUBMIT_INTERVAL,
+            reconnect_delay: DEFAULT_RECONNECT_DELAY,
+            publish_channel_capacity: DEFAULT_PUBLISH_CHANNEL_CAPACITY,
+        }
+    }
+}
 
 /// Result of a `publish_block` call.
 pub struct PublishResult {
@@ -62,7 +82,7 @@ pub struct ZoneSequencer {
 }
 
 impl ZoneSequencer {
-    /// Initialize a new sequencer.
+    /// Initialize a new sequencer with default configuration.
     ///
     /// Spawns a background actor that owns all mutable state, connects to
     /// the node's LIB stream, tracks finalized transactions, and resubmits
@@ -74,8 +94,26 @@ impl ZoneSequencer {
         node_url: Url,
         auth: Option<BasicAuthCredentials>,
     ) -> Self {
+        Self::init_with_config(
+            channel_id,
+            signing_key,
+            node_url,
+            auth,
+            SequencerConfig::default(),
+        )
+    }
+
+    /// Initialize a new sequencer with custom configuration.
+    #[must_use]
+    pub fn init_with_config(
+        channel_id: ChannelId,
+        signing_key: Ed25519Key,
+        node_url: Url,
+        auth: Option<BasicAuthCredentials>,
+        config: SequencerConfig,
+    ) -> Self {
         let http_client = CommonHttpClient::new(auth);
-        let (request_tx, request_rx) = mpsc::channel(PUBLISH_CHANNEL_CAPACITY);
+        let (request_tx, request_rx) = mpsc::channel(config.publish_channel_capacity);
 
         tokio::spawn(run_loop(
             request_rx,
@@ -83,6 +121,7 @@ impl ZoneSequencer {
             signing_key,
             node_url.clone(),
             http_client.clone(),
+            config,
         ));
 
         Self {
@@ -92,13 +131,13 @@ impl ZoneSequencer {
         }
     }
 
-    /// Publish a zone block.
+    /// Publish an inscription to the zone's channel.
     ///
     /// Sends the data to the background actor which creates the inscription
     /// transaction and tracks it as pending. Then posts the transaction to
     /// the mempool inline. If the post fails the transaction remains pending
     /// and will be retried by the periodic resubmit.
-    pub async fn publish_block(&self, data: Vec<u8>) -> Result<PublishResult, Error> {
+    pub async fn publish_inscription(&self, data: Vec<u8>) -> Result<PublishResult, Error> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let request = PublishRequest {
             data,
@@ -136,10 +175,11 @@ async fn run_loop(
     signing_key: Ed25519Key,
     node_url: Url,
     http_client: CommonHttpClient,
+    config: SequencerConfig,
 ) {
     let mut state = State::new();
     let mut last_msg_id = MsgId::root();
-    let mut resubmit_interval = tokio::time::interval(RESUBMIT_INTERVAL);
+    let mut resubmit_interval = tokio::time::interval(config.resubmit_interval);
     let mut resubmit_active = false;
     let mut in_flight: FuturesUnordered<BoxFuture<'static, InFlight>> = FuturesUnordered::new();
 
@@ -147,8 +187,11 @@ async fn run_loop(
         let lib_stream = match http_client.get_lib_stream(node_url.clone()).await {
             Ok(stream) => stream,
             Err(e) => {
-                warn!("Failed to connect to LIB stream: {e}, retrying in {RECONNECT_DELAY:?}");
-                tokio::time::sleep(RECONNECT_DELAY).await;
+                warn!(
+                    "Failed to connect to LIB stream: {e}, retrying in {:?}",
+                    config.reconnect_delay
+                );
+                tokio::time::sleep(config.reconnect_delay).await;
                 continue;
             }
         };
