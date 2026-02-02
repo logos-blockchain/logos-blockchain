@@ -6194,7 +6194,6 @@ dependencies = [
  "bytes",
  "ed25519-dalek",
  "generic-array 1.3.5",
- "logos-blockchain-blend-proofs 0.1.0",
  "logos-blockchain-groth16 0.1.0",
  "logos-blockchain-key-management-system-macros 0.1.0",
  "logos-blockchain-poseidon2 0.1.0",
@@ -6267,11 +6266,8 @@ dependencies = [
  "logos-blockchain-key-management-system-keys 0.1.0",
  "logos-blockchain-poseidon2 0.1.0",
  "logos-blockchain-utxotree 0.1.0",
- "subtle",
  "tokio",
  "tracing",
- "x25519-dalek",
- "zeroize",
 ]
 
 [[package]]
