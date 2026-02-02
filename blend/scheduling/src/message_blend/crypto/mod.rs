@@ -8,7 +8,7 @@ use lb_blend_message::{
     },
 };
 use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
-use lb_key_management_system_keys::operators::ed25519::derive_x25519::X25519PrivateKey;
+use lb_key_management_system_keys::keys::X25519PrivateKey;
 
 pub mod core_and_leader;
 pub use self::core_and_leader::{

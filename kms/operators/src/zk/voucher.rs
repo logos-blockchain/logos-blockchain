@@ -1,9 +1,10 @@
 use lb_groth16::Fr;
+use lb_key_management_system_keys::keys::{
+    ZkKey, errors::KeyError, secured_key::SecureKeyOperator,
+};
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher as ZkHasher, ZkHash};
 use tokio::sync::oneshot;
 use tracing::error;
-
-use crate::keys::{ZkKey, errors::KeyError, secured_key::SecureKeyOperator};
 
 pub struct VoucherOperator {
     index: Fr,

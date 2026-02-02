@@ -6257,6 +6257,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-key-management-system-operators"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "logos-blockchain-blend-proofs 0.1.0",
+ "logos-blockchain-core 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-key-management-system-keys 0.1.0",
+ "logos-blockchain-poseidon2 0.1.0",
+ "logos-blockchain-utxotree 0.1.0",
+ "subtle",
+ "tokio",
+ "tracing",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
 name = "logos-blockchain-key-management-system-service"
 version = "0.1.0"
 dependencies = [
@@ -6264,6 +6282,7 @@ dependencies = [
  "bytes",
  "log",
  "logos-blockchain-key-management-system-keys 0.1.0",
+ "logos-blockchain-key-management-system-operators",
  "num-bigint",
  "overwatch",
  "rand 0.8.5",

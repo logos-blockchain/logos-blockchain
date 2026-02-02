@@ -6,13 +6,13 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_service::{
-    backend::preload::KeyId,
-    keys::{Ed25519Key, UnsecuredZkKey},
+    backend::preload::KeyId, keys::Ed25519Key,
+    operators::zk::leader::BuildPrivateInputsWithLeaderKey,
 };
 use lb_ledger::{EpochState, UtxoTree};
 use lb_wallet_service::UtxoWithKeyId;
 use rand::rngs::OsRng;
-use tokio::sync::watch::Sender;
+use tokio::sync::{oneshot, watch::Sender};
 
 use crate::{WinningPolInfo, kms::KmsAdapter};
 
@@ -100,40 +100,40 @@ pub async fn build_proof_for<RuntimeServiceId>(
     None
 }
 
-/// Check if the given note is owned by the leader and wins the lottery with
-/// the given public inputs.
-pub fn check_winning(utxo: Utxo, public_inputs: LeaderPublic, secret_key: &UnsecuredZkKey) -> bool {
-    utxo.note.pk == secret_key.to_public_key()
-        && public_inputs.check_winning(utxo.note.value, utxo.id().0, *secret_key.as_fr())
-}
-
-pub fn private_inputs_for_winning_utxo_and_slot(
+pub fn operator_for_private_inputs_arguments_for_winning_utxo_and_slot(
     utxo: &Utxo,
-    secret_key: &UnsecuredZkKey,
     epoch_state: &EpochState,
     public_inputs: LeaderPublic,
     latest_tree: &UtxoTree,
-) -> Result<(LeaderPrivate, Ed25519Key), PrivateInputsError> {
+) -> Result<
+    (
+        BuildPrivateInputsWithLeaderKey,
+        oneshot::Receiver<LeaderPrivate>,
+        Ed25519Key,
+    ),
+    PrivateInputsError,
+> {
+    let (sender, receiver) = oneshot::channel();
     let aged_path = epoch_state
         .utxo_merkle_path(utxo)
         .ok_or(PrivateInputsError::AgedNoteNotFound)?;
     let latest_path = latest_tree
         .path(&utxo.id())
         .ok_or(PrivateInputsError::LatestNoteNotFound)?;
-    let secret_key = *secret_key.as_fr();
     // Generate a random one-time Ed25519 key for P_LEAD (as per PoL spec)
     let leader_signing_key = Ed25519Key::generate(&mut OsRng);
     let leader_pk = leader_signing_key.public_key();
 
     Ok((
-        LeaderPrivate::new(
-            public_inputs,
+        BuildPrivateInputsWithLeaderKey::new(
+            sender,
             *utxo,
-            &aged_path,
-            &latest_path,
-            secret_key,
-            &leader_pk,
+            public_inputs,
+            aged_path,
+            latest_path,
+            leader_pk,
         ),
+        receiver,
         leader_signing_key,
     ))
 }
@@ -317,11 +317,12 @@ mod pol_tests {
 
     use lb_core::{
         mantle::ledger::{Note, Tx},
-        proofs::leader_proof::LeaderProof as _,
+        proofs::leader_proof::{LeaderProof as _, check_winning},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::EpochConfig;
     use lb_groth16::Fr;
+    use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkKey};
     use lb_ledger::mantle::sdp::{
         Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
     };
@@ -465,7 +466,7 @@ mod pol_tests {
             utxo: &Utxo,
             leader_public: &LeaderPublic,
         ) -> bool {
-            check_winning(*utxo, *leader_public, &UnsecuredZkKey::new(Fr::from(0u64)))
+            check_winning(*utxo, *leader_public, &ZkKey::new(Fr::from(0u64)))
         }
 
         async fn build_private_inputs_for_winning_utxo_and_slot(
@@ -476,13 +477,24 @@ mod pol_tests {
             public_inputs: LeaderPublic,
             latest_tree: &UtxoTree,
         ) -> Result<(LeaderPrivate, Ed25519Key), PrivateInputsError> {
-            private_inputs_for_winning_utxo_and_slot(
-                utxo,
-                &UnsecuredZkKey::new(Fr::from(0u64)),
-                epoch_state,
+            let aged_path = epoch_state
+                .utxo_merkle_path(utxo)
+                .ok_or(PrivateInputsError::AgedNoteNotFound)?;
+            let latest_path = latest_tree
+                .path(&utxo.id())
+                .ok_or(PrivateInputsError::LatestNoteNotFound)?;
+            // Generate a random one-time Ed25519 key for P_LEAD (as per PoL spec)
+            let leader_signing_key = Ed25519Key::generate(&mut OsRng);
+            let leader_pk = leader_signing_key.public_key();
+            let leader_private = LeaderPrivate::new(
                 public_inputs,
-                latest_tree,
-            )
+                *utxo,
+                &aged_path,
+                &latest_path,
+                Fr::from(0u64),
+                &leader_pk,
+            );
+            Ok((leader_private, leader_signing_key))
         }
     }
 }

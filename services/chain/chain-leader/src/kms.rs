@@ -8,15 +8,15 @@ use lb_key_management_system_service::{
     KMSService,
     api::KmsServiceApi,
     backend::preload::{KeyId, PreloadKMSBackend},
-    keys::{Ed25519Key, KeyOperators, UnsecuredZkKey},
-    operators::zk::leader::{BuildWithLeaderKey, CheckConditionWithLeaderKey},
+    keys::{Ed25519Key, KeyOperators},
+    operators::zk::leader::CheckLotteryWinning,
 };
 use lb_ledger::{EpochState, UtxoTree};
 use overwatch::services::AsServiceId;
 use tokio::sync::oneshot;
 
 use crate::leadership::{
-    PrivateInputsError, check_winning, private_inputs_for_winning_utxo_and_slot,
+    PrivateInputsError, operator_for_private_inputs_arguments_for_winning_utxo_and_slot,
 };
 
 pub type PreloadKmsService<RuntimeServiceId> = KMSService<PreloadKMSBackend, RuntimeServiceId>;
@@ -64,9 +64,10 @@ where
         let () = self
             .execute(
                 key_id,
-                KeyOperators::Zk(Box::new(CheckConditionWithLeaderKey::new(
+                KeyOperators::Zk(Box::new(CheckLotteryWinning::new(
                     output_tx,
-                    move |key: &UnsecuredZkKey| check_winning(utxo, public_inputs, key),
+                    utxo,
+                    public_inputs,
                 ))),
             )
             .await
@@ -82,29 +83,21 @@ where
         public_inputs: LeaderPublic,
         latest_tree: &UtxoTree,
     ) -> Result<(LeaderPrivate, Ed25519Key), PrivateInputsError> {
-        let (output_tx, output_rx) = oneshot::channel();
         // clone to send
         let utxo = *utxo;
         let epoch_state = epoch_state.clone();
         let latest_tree = latest_tree.clone();
+        let (operator, output_rx, key) =
+            operator_for_private_inputs_arguments_for_winning_utxo_and_slot(
+                &utxo,
+                &epoch_state,
+                public_inputs,
+                &latest_tree,
+            )?;
         let () = self
-            .execute(
-                key_id,
-                KeyOperators::Zk(Box::new(BuildWithLeaderKey::new(
-                    output_tx,
-                    move |key: &UnsecuredZkKey| {
-                        private_inputs_for_winning_utxo_and_slot(
-                            &utxo,
-                            key,
-                            &epoch_state,
-                            public_inputs,
-                            &latest_tree,
-                        )
-                    },
-                ))),
-            )
+            .execute(key_id, KeyOperators::Zk(Box::new(operator)))
             .await
             .expect("KMS API should be invoked");
-        output_rx.await.expect("KMS API should respond")
+        Ok((output_rx.await.expect("KMS API should respond"), key))
     }
 }

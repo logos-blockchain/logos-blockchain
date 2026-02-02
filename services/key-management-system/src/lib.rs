@@ -1,7 +1,8 @@
 use std::fmt::{Debug, Display};
 
+pub use lb_key_management_system_keys::keys;
 use lb_key_management_system_keys::keys::secured_key::SecuredKey;
-pub use lb_key_management_system_keys::{keys, operators};
+pub use lb_key_management_system_operators as operators;
 use log::error;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,

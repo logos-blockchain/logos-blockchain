@@ -2,6 +2,7 @@ use std::sync::LazyLock;
 
 use ark_ff::{Field as _, PrimeField as _};
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
+use lb_key_management_system_keys::keys::ZkKey;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use lb_utxotree::MerklePath;
 use num_bigint::BigUint;
@@ -132,6 +133,14 @@ pub struct LeaderPublic {
     pub aged_root: Fr,
     #[serde(with = "serde_fr")]
     pub latest_root: Fr,
+}
+
+/// Check if the given note is owned by the leader and wins the lottery with
+/// the given public inputs.
+#[must_use]
+pub fn check_winning(utxo: Utxo, public_inputs: LeaderPublic, secret_key: &ZkKey) -> bool {
+    utxo.note.pk == secret_key.to_public_key()
+        && public_inputs.check_winning(utxo.note.value, utxo.id().0, *secret_key.as_fr())
 }
 
 impl LeaderPublic {

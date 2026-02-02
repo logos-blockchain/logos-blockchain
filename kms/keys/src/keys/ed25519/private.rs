@@ -5,10 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use subtle::ConstantTimeEq as _;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
-use crate::{
-    keys::{Ed25519PublicKey, Ed25519Signature},
-    operators::ed25519::derive_x25519::X25519PrivateKey,
-};
+use crate::keys::{Ed25519PublicKey, Ed25519Signature, X25519PrivateKey};
 
 pub const KEY_SIZE: usize = SECRET_KEY_LENGTH;
 

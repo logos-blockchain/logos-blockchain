@@ -8,13 +8,12 @@ use lb_blend_proofs::{
     },
 };
 use lb_groth16::Fr;
-use tokio::{sync::oneshot, task::spawn_blocking};
-use tracing::error;
-
-use crate::keys::{
+use lb_key_management_system_keys::keys::{
     ZkKey,
     secured_key::{SecureKeyOperator, SecuredKey},
 };
+use tokio::{sync::oneshot, task::spawn_blocking};
+use tracing::error;
 
 pub struct PoQOperator {
     core_path_and_selectors: CorePathAndSelectors,
