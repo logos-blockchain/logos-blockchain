@@ -430,7 +430,7 @@ where
                         };
 
                         // If it's a new epoch or the service just started, pre-compute the first winning slot and notify consumers.
-                        winning_pol_slot_notifier.process_epoch(&eligible_utxos.response, &epoch_state, &kms_api).await;
+                        winning_pol_slot_notifier.process_epoch(&eligible_utxos.response, latest_tree, &epoch_state, &kms_api).await;
 
                        if let Some((proof, signing_key)) = build_proof_for(&eligible_utxos.response, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier, &wallet_api, &kms_api).await {
                             // TODO: spawn as a separate task?
