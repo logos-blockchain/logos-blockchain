@@ -51,7 +51,7 @@ pub struct CustomClientIp {
     pub api_port: u16,
 }
 
-async fn default_node_config(
+async fn init_default_node(
     State(config_repo): State<Arc<ConfigRepo>>,
     Json(payload): Json<ClientIp>,
 ) -> impl IntoResponse {
@@ -72,7 +72,7 @@ async fn default_node_config(
     )
 }
 
-async fn custom_node_config(
+async fn init_custom_node(
     State(config_repo): State<Arc<ConfigRepo>>,
     Json(payload): Json<CustomClientIp>,
 ) -> impl IntoResponse {
@@ -102,7 +102,7 @@ async fn custom_node_config(
     )
 }
 
-async fn get_node_config(
+async fn generate_custom_node(
     State(repo): State<Arc<ConfigRepo>>,
     Json(p): Json<CustomClientIp>,
 ) -> impl IntoResponse {
@@ -128,8 +128,8 @@ async fn get_node_config(
 
 pub fn cfgsync_app(config_repo: Arc<ConfigRepo>) -> Router {
     Router::new()
-        .route("/init/default-node", post(default_node_config))
-        .route("/init/custom-node", post(custom_node_config))
-        .route("/config/custom-node", post(get_node_config))
+        .route("/init/default-node", post(init_default_node))
+        .route("/init/custom-node", post(init_custom_node))
+        .route("/config/custom-node", post(generate_custom_node))
         .with_state(config_repo)
 }

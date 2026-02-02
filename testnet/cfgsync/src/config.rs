@@ -292,9 +292,8 @@ mod cfgsync_tests {
     };
     use tracing::Level;
 
-    use crate::config::create_node_config_from_template;
-
     use super::{Host, HostKind, create_node_configs};
+    use crate::config::create_node_config_from_template;
 
     fn extract_port(multiaddr: &Multiaddr) -> u16 {
         multiaddr

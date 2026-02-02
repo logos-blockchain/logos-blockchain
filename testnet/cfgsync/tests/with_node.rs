@@ -1,13 +1,11 @@
-use lb_utils::net::{get_available_tcp_port, get_available_udp_port};
-use std::fs;
-use std::time::Duration;
-use tokio::process::Command;
-use tokio::task::JoinSet;
-use tokio::time::sleep;
+use std::{fs, time::Duration};
 
 use lb_node::{UserConfig, config::RunConfig};
-use lb_tests::nodes::validator::Validator;
-use lb_tests::topology::configs::deployment::default_e2e_deployment_settings;
+use lb_tests::{
+    nodes::validator::Validator, topology::configs::deployment::default_e2e_deployment_settings,
+};
+use lb_utils::net::{get_available_tcp_port, get_available_udp_port};
+use tokio::{process::Command, task::JoinSet, time::sleep};
 
 const SERVER_BIN: &str = "../../target/debug/logos-blockchain-cfgsync-server";
 const CLIENT_BIN: &str = "../../target/debug/logos-blockchain-cfgsync-client";

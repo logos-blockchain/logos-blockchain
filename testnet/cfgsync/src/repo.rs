@@ -79,7 +79,7 @@ impl ConfigRepo {
 
         if let Some(template) = template {
             let new_config =
-                create_node_config_from_template(&self.tracing_settings, &host, &template);
+                create_node_config_from_template(&TracingSettings::default(), &host, &template);
 
             self.generated_configs
                 .lock()

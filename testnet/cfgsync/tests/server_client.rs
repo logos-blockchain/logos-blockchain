@@ -1,8 +1,6 @@
-use std::fs;
-use std::time::Duration;
-use tokio::process::Command;
-use tokio::task::JoinSet;
-use tokio::time::sleep;
+use std::{fs, time::Duration};
+
+use tokio::{process::Command, task::JoinSet, time::sleep};
 
 const SERVER_BIN: &str = "../../target/debug/logos-blockchain-cfgsync-server";
 const CLIENT_BIN: &str = "../../target/debug/logos-blockchain-cfgsync-client";
