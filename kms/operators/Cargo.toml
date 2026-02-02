@@ -24,4 +24,4 @@ tokio                         = { default-features = false, features = ["rt"], v
 tracing                       = { default-features = false, version = "0.1" }
 
 [features]
-unsafe = []
+unsafe = ["lb-key-management-system-keys/unsafe"]
