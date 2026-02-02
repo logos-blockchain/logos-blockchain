@@ -44,7 +44,7 @@ pub struct Host {
 
 impl Host {
     #[must_use]
-    pub const fn default_validator_from_ip(ip: Ipv4Addr, identifier: String) -> Self {
+    pub const fn default_node_from_ip(ip: Ipv4Addr, identifier: String) -> Self {
         Self {
             kind: HostKind::Validator,
             ip,
@@ -56,7 +56,7 @@ impl Host {
     }
 
     #[must_use]
-    pub const fn custom_validator_from_ip(
+    pub const fn custom_node_from_ip(
         ip: Ipv4Addr,
         identifier: String,
         network_port: u16,
@@ -351,11 +351,11 @@ mod cfgsync_tests {
             level: Level::DEBUG,
         };
 
-        let init_host = Host::default_validator_from_ip(Ipv4Addr::LOCALHOST, "init".into());
+        let init_host = Host::default_node_from_ip(Ipv4Addr::LOCALHOST, "init".into());
         let init_configs = create_node_configs(&tracing, vec![init_host.clone()]);
         let template = init_configs.get(&init_host).unwrap();
 
-        let new_host = Host::custom_validator_from_ip(
+        let new_host = Host::custom_node_from_ip(
             Ipv4Addr::new(127, 0, 0, 2),
             "joiner".into(),
             4000,

@@ -45,8 +45,8 @@ use crate::{
     topology::configs::{GeneralConfig, deployment::default_e2e_deployment_settings},
 };
 
-const BIN_PATH_DEBUG: &str = "../../target/debug/logos-blockchain-node";
-const BIN_PATH_RELEASE: &str = "../../target/release/logos-blockchain-node";
+const BIN_PATH_DEBUG: &str = "../target/debug/logos-blockchain-node";
+const BIN_PATH_RELEASE: &str = "../target/release/logos-blockchain-node";
 
 pub enum Pool {
     Mantle,

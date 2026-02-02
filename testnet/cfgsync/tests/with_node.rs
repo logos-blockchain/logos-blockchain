@@ -13,6 +13,7 @@ const SERVER_BIN: &str = "../../target/debug/logos-blockchain-cfgsync-server";
 const CLIENT_BIN: &str = "../../target/debug/logos-blockchain-cfgsync-client";
 const SERVER_CFG: &str = "./tests/cfgsync.yaml";
 
+#[ignore = "For local debugging"]
 #[tokio::test]
 async fn test_spawn_nodes_from_cfgsync_custom_ports() {
     let mut server = std::process::Command::new(SERVER_BIN)

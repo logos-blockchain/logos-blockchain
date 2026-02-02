@@ -51,7 +51,7 @@ async fn main() {
 
     let config_result = if let (Some(np), Some(bp), Some(ap)) = (network_port, blend_port, api_port)
     {
-        let endpoint = format!("{server_addr}/custom-validator");
+        let endpoint = format!("{server_addr}/init/custom-node");
         let payload = CustomClientIp {
             ip,
             identifier,
@@ -62,7 +62,7 @@ async fn main() {
         println!("Using custom validator endpoint with ports: {np}, {bp}, {ap}");
         pull_to_file::<ValidatorConfig, _>(&payload, &endpoint, &config_file_path).await
     } else {
-        let endpoint = format!("{server_addr}/validator");
+        let endpoint = format!("{server_addr}/init/default-node");
         let payload = ClientIp { ip, identifier };
         pull_to_file::<ValidatorConfig, _>(&payload, &endpoint, &config_file_path).await
     };

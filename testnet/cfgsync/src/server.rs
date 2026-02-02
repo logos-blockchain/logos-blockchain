@@ -51,14 +51,14 @@ pub struct CustomClientIp {
     pub api_port: u16,
 }
 
-async fn default_validator_config(
+async fn default_node_config(
     State(config_repo): State<Arc<ConfigRepo>>,
     Json(payload): Json<ClientIp>,
 ) -> impl IntoResponse {
     let ClientIp { ip, identifier } = payload;
 
     let (reply_tx, reply_rx) = channel();
-    config_repo.register(Host::default_validator_from_ip(ip, identifier), reply_tx);
+    config_repo.register(Host::default_node_from_ip(ip, identifier), reply_tx);
 
     (reply_rx.await).map_or_else(
         |_| (StatusCode::INTERNAL_SERVER_ERROR, "Error receiving config").into_response(),
@@ -72,7 +72,7 @@ async fn default_validator_config(
     )
 }
 
-async fn custom_validator_config(
+async fn custom_node_config(
     State(config_repo): State<Arc<ConfigRepo>>,
     Json(payload): Json<CustomClientIp>,
 ) -> impl IntoResponse {
@@ -86,7 +86,7 @@ async fn custom_validator_config(
 
     let (reply_tx, reply_rx) = channel();
     config_repo.register(
-        Host::custom_validator_from_ip(ip, identifier, network_port, blend_port, api_port),
+        Host::custom_node_from_ip(ip, identifier, network_port, blend_port, api_port),
         reply_tx,
     );
 
@@ -102,17 +102,12 @@ async fn custom_validator_config(
     )
 }
 
-async fn append_validator_config(
+async fn get_node_config(
     State(repo): State<Arc<ConfigRepo>>,
     Json(p): Json<CustomClientIp>,
 ) -> impl IntoResponse {
-    let host = Host::custom_validator_from_ip(
-        p.ip,
-        p.identifier,
-        p.network_port,
-        p.blend_port,
-        p.api_port,
-    );
+    let host =
+        Host::custom_node_from_ip(p.ip, p.identifier, p.network_port, p.blend_port, p.api_port);
 
     repo.append(host).map_or_else(
         || {
@@ -123,8 +118,8 @@ async fn append_validator_config(
                 .into_response()
         },
         |cfg| {
-            let validator_config = create_validator_config(cfg);
-            let yaml = serde_yaml::to_string(&validator_config).unwrap_or_default();
+            let node_config = create_validator_config(cfg);
+            let yaml = serde_yaml::to_string(&node_config).unwrap_or_default();
 
             (StatusCode::OK, [(CONTENT_TYPE, "text/yaml")], yaml).into_response()
         },
@@ -133,8 +128,8 @@ async fn append_validator_config(
 
 pub fn cfgsync_app(config_repo: Arc<ConfigRepo>) -> Router {
     Router::new()
-        .route("/validator", post(default_validator_config))
-        .route("/custom-validator", post(custom_validator_config))
-        .route("/append-validator", post(append_validator_config))
+        .route("/init/default-node", post(default_node_config))
+        .route("/init/custom-node", post(custom_node_config))
+        .route("/config/custom-node", post(get_node_config))
         .with_state(config_repo)
 }
