@@ -75,9 +75,6 @@ time       = { default-features = false, version = "0.3" }
 tower      = { default-features = false, features = ["limit"], version = "0.4" }
 tower-http = { default-features = false, features = ["cors", "limit", "timeout", "trace"], version = "0.5" }
 
-[dev-dependencies]
-test-log = { default-features = false, features = ["trace"], version = "0.2.18" }
-
 [features]
 default         = ["tracing"]
 instrumentation = []
