@@ -43,8 +43,16 @@ jobs:
         run: rustup override unset
 
       # Checkout the repository code
+      # Notes:
+      # - We need to test the exact PR code, immutable, no synthetic merge commit from master
+      # - For PRs we use `github.event.pull_request.head.sha` - the exact commit from the PR branch
+      # - For pushes to master this falls back to `github.sha` - the commit that triggered the workflow
+      # - Uses SHA (immutable) rather than branch name (which could move during workflow execution)
+      # - You control integration - manually merge/rebase when YOU decide the PR is ready
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       # Set up custom circuits required for tests
       - name: Setup Circuits
@@ -71,6 +79,8 @@ jobs:
         with:
           command: build
           args: --release --locked --all --features high-active-slot-coefficient
+        env:
+          CARGO_INCREMENTAL: 0  # Disable incremental compilation
 
       - name: End-to-end integration tests
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
