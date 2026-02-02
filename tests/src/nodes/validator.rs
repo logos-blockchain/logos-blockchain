@@ -101,8 +101,8 @@ impl Validator {
 
     pub async fn spawn(mut config: RunConfig) -> Result<Self, Elapsed> {
         let dir = create_tempdir().unwrap();
-        let mut file = NamedTempFile::new().unwrap();
-        let config_path = file.path().to_owned();
+        let mut user_config_file = NamedTempFile::new().unwrap();
+        let mut deployment_config_file = NamedTempFile::new().unwrap();
 
         if !*IS_DEBUG_TRACING {
             // setup logging so that we can intercept it later in testing
@@ -114,10 +114,13 @@ impl Validator {
 
         config.user.storage.db_path = dir.path().join("db");
 
-        serde_yaml::to_writer(&mut file, &config).unwrap();
+        serde_yaml::to_writer(&mut user_config_file, &config.user).unwrap();
+        serde_yaml::to_writer(&mut deployment_config_file, &config.deployment).unwrap();
         let exe_path = get_exe_path(BIN_PATH_DEBUG, BIN_PATH_RELEASE);
         let child = Command::new(exe_path)
-            .arg(&config_path)
+            .arg("--deployment")
+            .arg(deployment_config_file.path().as_os_str())
+            .arg(user_config_file.path().as_os_str())
             .current_dir(dir.path())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
