@@ -49,7 +49,12 @@ impl SecureKeyOperator for CheckLotteryWinning {
             public_inputs,
         } = *self;
         if result_channel
-            .send(check_winning(utxo, public_inputs, key))
+            .send(check_winning(
+                utxo,
+                public_inputs,
+                &key.to_public_key(),
+                *key.as_fr(),
+            ))
             .is_err()
         {
             tracing::error!("Failed to send result via channel");

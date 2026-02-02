@@ -466,7 +466,8 @@ mod pol_tests {
             utxo: &Utxo,
             leader_public: &LeaderPublic,
         ) -> bool {
-            check_winning(*utxo, *leader_public, &ZkKey::new(Fr::from(0u64)))
+            let sk = ZkKey::new(Fr::from(0u64));
+            check_winning(*utxo, *leader_public, &sk.to_public_key(), Fr::from(0u64))
         }
 
         async fn build_private_inputs_for_winning_utxo_and_slot(
