@@ -5509,6 +5509,7 @@ dependencies = [
  "logos-blockchain-blend-proofs 0.1.0",
  "logos-blockchain-blend-service 0.1.0",
  "logos-blockchain-chain-broadcast-service 0.1.0",
+ "logos-blockchain-chain-leader-service 0.1.0",
  "logos-blockchain-chain-network-service 0.1.0",
  "logos-blockchain-chain-service 0.1.0",
  "logos-blockchain-common-http-client 0.1.0",

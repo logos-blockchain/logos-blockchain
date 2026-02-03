@@ -24,6 +24,7 @@ lb-api-service                   = { workspace = true }
 lb-blend-proofs                  = { workspace = true }
 lb-blend-service                 = { features = ["libp2p"], workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
+lb-chain-leader-service          = { workspace = true }
 lb-chain-network-service         = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-common-http-client            = { workspace = true }

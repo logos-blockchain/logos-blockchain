@@ -119,6 +119,10 @@ impl LeaderState {
         self.claimable_voucher_indices.contains_key(voucher_cm)
     }
 
+    pub(crate) const fn claimable_vouchers_root(&self) -> RewardsRoot {
+        self.claimable_vouchers_root
+    }
+
     /// Get the Merkle path for a given voucher commitment
     pub(crate) fn voucher_merkle_path(&self, voucher_cm: VoucherCm) -> Option<MerklePath<ZkHash>> {
         let index = self.claimable_voucher_indices.get(&voucher_cm)?;

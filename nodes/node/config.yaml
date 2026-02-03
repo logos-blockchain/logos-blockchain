@@ -93,6 +93,10 @@ cryptarchia:
     sync:
       orphan:
         max_orphan_cache_size: 5
+  leader:
+    wallet:
+      max_tx_fee: 18446744073709551615  # u64::MAX
+      funding_pk: "0000000000000000000000000000000000000000000000000000000000000000"
 storage:
   db_path: logos_blockchain_db
   read_only: false

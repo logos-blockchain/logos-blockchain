@@ -226,6 +226,12 @@ impl<KeyId, VoucherId> Wallet<KeyId, VoucherId> {
         self.known_vouchers.get_by_nullifier(nf)
     }
 
+    pub fn voucher_commitments_and_nullifiers(
+        &self,
+    ) -> impl Iterator<Item = (&VoucherNullifier, &VoucherCm)> {
+        self.known_vouchers.commitments_and_nullifiers()
+    }
+
     #[must_use]
     pub const fn vouchers(&self) -> &Vouchers<VoucherId> {
         &self.known_vouchers

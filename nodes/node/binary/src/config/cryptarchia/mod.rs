@@ -70,6 +70,7 @@ impl ServiceConfig {
             },
             config: ledger_config,
             transaction_selector_settings: (),
+            wallet_config: self.user.leader.wallet,
         };
         (
             chain_service_settings,

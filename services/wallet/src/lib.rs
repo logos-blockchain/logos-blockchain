@@ -128,6 +128,12 @@ pub enum WalletMsg {
     GenerateNewVoucherSecret {
         resp_tx: oneshot::Sender<VoucherCm>,
     },
+    GetClaimableVoucher {
+        tip: Option<HeaderId>,
+        resp_tx: oneshot::Sender<
+            Result<TipResponse<Option<VoucherCommitmentAndNullifier>>, WalletServiceError>,
+        >,
+    },
 }
 
 #[derive(Debug)]
@@ -142,6 +148,12 @@ pub struct UtxoWithKeyId {
     pub key_id: KeyId,
 }
 
+#[derive(Debug)]
+pub struct VoucherCommitmentAndNullifier {
+    pub commitment: VoucherCm,
+    pub nullifier: VoucherNullifier,
+}
+
 impl WalletMsg {
     /// Returns [`HeaderId`] of the tip if the message is associated
     /// with a specific tip.
@@ -151,7 +163,8 @@ impl WalletMsg {
             Self::GetBalance { tip, .. }
             | Self::FundTx { tip, .. }
             | Self::SignTx { tip, .. }
-            | Self::GetLeaderAgedNotes { tip, .. } => *tip,
+            | Self::GetLeaderAgedNotes { tip, .. }
+            | Self::GetClaimableVoucher { tip, .. } => *tip,
             Self::GenerateNewVoucherSecret { .. } => None,
         }
     }
@@ -454,6 +467,9 @@ where
                     resp_tx,
                 )
                 .await;
+            }
+            WalletMsg::GetClaimableVoucher { tip, resp_tx } => {
+                Self::get_claimable_voucher(tip, resp_tx, state.wallet(), cryptarchia).await;
             }
         }
     }
@@ -792,6 +808,55 @@ where
             .await
             .expect("KMS API should respond with voucher_cm")
             .into()
+    }
+
+    async fn get_claimable_voucher(
+        tip: Option<HeaderId>,
+        resp_tx: oneshot::Sender<
+            Result<TipResponse<Option<VoucherCommitmentAndNullifier>>, WalletServiceError>,
+        >,
+        wallet: &Wallet,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    ) {
+        let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+            Ok(tip) => tip,
+            Err(err) => {
+                Self::send_err(resp_tx, err);
+                return;
+            }
+        };
+
+        // Get the ledger state at the specified tip
+        let Ok(Some(ledger_state)) = cryptarchia.get_ledger_state(tip).await else {
+            Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(tip));
+            return;
+        };
+
+        let voucher = Self::find_claimable_voucher(wallet, &ledger_state);
+        if resp_tx
+            .send(Ok(TipResponse {
+                tip,
+                response: voucher,
+            }))
+            .is_err()
+        {
+            error!("Failed to respond to GetClaimableVoucher");
+        }
+    }
+
+    fn find_claimable_voucher(
+        wallet: &Wallet,
+        ledger_state: &LedgerState,
+    ) -> Option<VoucherCommitmentAndNullifier> {
+        for (nf, cm) in wallet.voucher_commitments_and_nullifiers() {
+            if ledger_state.mantle_ledger().has_claimable_voucher(cm) {
+                return Some(VoucherCommitmentAndNullifier {
+                    commitment: *cm,
+                    nullifier: *nf,
+                });
+            }
+        }
+        None
     }
 
     async fn backfill_if_not_in_sync(
