@@ -741,6 +741,7 @@ mod tests {
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
+                        activity_threshold_sensitivity: 1,
                     },
                 },
                 min_stake: MinStake {
