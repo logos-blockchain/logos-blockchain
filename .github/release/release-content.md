@@ -22,6 +22,32 @@ After obtaining the deployment file for the network you want to join and tweakin
 
 For example: `logos-blockchain-node-macos-aarch64-0.0.1 --deployment deployment.yaml node-config.yaml`. See the repo's `README.md` for more info.
 
+
+## Devnet setup
+
+If you wish to join the devnet at https://devnet.blockchain.logos.co, you can automatically generate and download your node configuration using the following command:
+
+```bash
+curl -X POST -L --location-trusted https://devnet.blockchain.logos.co/node/0/cfgsync/config/custom-node \
+     -u "username:password" \
+     -H "Content-Type: application/json" \
+     -d '{
+            "ip": "192.168.6.7",
+            "identifier": "marcins-anonymous-node",
+            "network_port": 3000,
+            "blend_port": 4000,
+            "api_port": 8080
+         }' \
+     -o my_logos_node_config.yaml
+```
+
+Once the configuration file is downloaded, you can start your node with:
+```bash
+logos-blockchain-node-macos-aarch64-0.0.1 my_logos_node_config.yaml
+```
+
+To verify that your node is running correctly and connected, visit http://localhost:8080/cryptarchia/info. The slot and height should both be constantly increasing.
+
 ## Checklist
 
 Before publishing please ensure:
