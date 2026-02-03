@@ -21,7 +21,6 @@ impl From<WellKnownDeployment> for Settings {
     fn from(value: WellKnownDeployment) -> Self {
         match value {
             WellKnownDeployment::Mainnet => mainnet_settings(),
-            WellKnownDeployment::Testnet => testnet_settings(),
         }
     }
 }
@@ -77,8 +76,4 @@ fn mainnet_settings() -> Settings {
             activity_threshold_sensitivity: 1,
         },
     }
-}
-
-fn testnet_settings() -> Settings {
-    mainnet_settings()
 }
