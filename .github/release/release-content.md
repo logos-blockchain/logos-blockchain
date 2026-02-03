@@ -34,18 +34,13 @@ curl -X POST -L --location-trusted https://devnet.blockchain.logos.co/node/0/cfg
      -o my_logos_node_config.yaml
 ```
 
-Once the configuration file is downloaded, you can start your node with:
-```bash
-logos-blockchain-node-macos-aarch64-0.0.1 --deployment devnet my_logos_node_config.yaml 
-```
-
-To verify that your node is running correctly and connected, visit http://localhost:8080/cryptarchia/info. The slot and height should both be constantly increasing.
-
 ## Run the binary
 
 After obtaining the deployment file for the network you want to join and tweaking the node config file to fit your needs, including specifying the list of bootnodes for the network you are joining, you can run the node binary.
 
 For example: `logos-blockchain-node-macos-aarch64-0.0.1 --deployment deployment.yaml node-config.yaml`. See the repo's `README.md` for more info.
+
+To verify that your node is running correctly and connected, visit http://localhost:{api_port_in_user_config}/cryptarchia/info. The slot and height should both be constently increasing.
 
 ## Checklist
 
