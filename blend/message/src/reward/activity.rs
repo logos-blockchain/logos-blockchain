@@ -69,7 +69,7 @@ impl ActivityProof {
 pub fn activity_threshold(
     token_count_bit_len: u64,
     network_size_bit_len: u64,
-    /// Sensitivity parameter to control the lottery winning conditions.
+    // Sensitivity parameter to control the lottery winning conditions.
     activity_threshold_sensitivity: u64,
 ) -> HammingDistance {
     debug!(
