@@ -4,7 +4,7 @@ use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_poseidon2::{Fr, ZkHash};
 use serde::{Deserialize, Serialize};
 
-use crate::{crypto::ZkHasher, mantle::TxHash};
+use crate::crypto::ZkHasher;
 
 static REWARD_VOUCHER: LazyLock<Fr> = LazyLock::new(|| {
     fr_from_bytes(b"REWARD_VOUCHER").expect("BigUint should load from constant string")
@@ -30,7 +30,6 @@ pub struct VoucherCm(#[serde(with = "serde_fr")] ZkHash);
 pub struct LeaderClaimOp {
     pub rewards_root: RewardsRoot,
     pub voucher_nullifier: VoucherNullifier,
-    pub mantle_tx_hash: TxHash,
 }
 
 impl From<Fr> for VoucherSecret {
