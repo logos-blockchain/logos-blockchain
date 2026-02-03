@@ -9,10 +9,9 @@ repository  = "https://github.com/logos-blockchain/logos-blockchain"
 version     = "0.1.0"
 
 [profile.release]
-codegen-units = 1       # (Much) slower build time, much better performances
-lto           = "fat"   # Same as above
-panic         = "abort" # Remove panic handler to reduce binary size
-strip         = true    # Remove symbols to reduce binary size
+codegen-units = 1     # (Much) slower build time, much better performances
+lto           = "fat" # Same as above
+strip         = true  # Remove symbols to reduce binary size
 
 [profile.release.package."*"]
 # LTO cannot be overridden for downstream dependencies.
