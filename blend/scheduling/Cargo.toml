@@ -28,6 +28,7 @@ serde                         = { workspace = true }
 thiserror                     = { default-features = false, version = "1" }
 tokio                         = { default-features = false, version = "1" }
 tokio-stream                  = { default-features = false, version = "0.1" }
+tokio-util                    = { default-features = false, version = "0.7" }
 tracing                       = { workspace = true }
 
 [dev-dependencies]
