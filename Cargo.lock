@@ -5685,6 +5685,7 @@ dependencies = [
  "async-trait",
  "futures",
  "logos-blockchain-blend-service 0.1.0",
+ "logos-blockchain-chain-network-service 0.1.0",
  "logos-blockchain-chain-service 0.1.0",
  "logos-blockchain-chain-service-common 0.1.0",
  "logos-blockchain-core 0.1.0",

@@ -74,8 +74,12 @@ pub(crate) type CryptarchiaService = generic_services::CryptarchiaService<Runtim
 
 pub(crate) type ChainNetworkService = generic_services::ChainNetworkService<RuntimeServiceId>;
 
-pub(crate) type CryptarchiaLeaderService =
-    generic_services::CryptarchiaLeaderService<CryptarchiaService, WalletService, RuntimeServiceId>;
+pub(crate) type CryptarchiaLeaderService = generic_services::CryptarchiaLeaderService<
+    CryptarchiaService,
+    ChainNetworkService,
+    WalletService,
+    RuntimeServiceId,
+>;
 
 pub type TimeService = generic_services::TimeService<RuntimeServiceId>;
 

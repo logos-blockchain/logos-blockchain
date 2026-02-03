@@ -1,3 +1,4 @@
+pub mod api;
 mod bootstrap;
 mod mempool;
 pub mod network;
@@ -36,6 +37,7 @@ use overwatch::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
+use tokio::sync::oneshot;
 use tracing::{Level, debug, error, info, instrument, span};
 use tracing_futures::Instrument as _;
 
@@ -68,6 +70,14 @@ pub enum Error {
     HeaderIdNotFound(HeaderId),
     #[error("Service session not found: {0:?}")]
     ServiceSessionNotFound(ServiceType),
+}
+
+#[derive(Debug)]
+pub enum Message<Tx> {
+    ApplyBlockAndReconcileMempool {
+        block: Block<Tx>,
+        resp: oneshot::Sender<Result<(), Error>>,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -149,7 +159,7 @@ where
     type Settings = ChainNetworkSettings<NetAdapter::PeerId, NetAdapter::Settings>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
-    type Message = ();
+    type Message = Message<Mempool::Item>;
 }
 
 #[async_trait::async_trait]
@@ -332,7 +342,7 @@ where
 
                         Self::log_received_block(&block);
 
-                        match process_block::<_, Mempool, _>(
+                        match apply_block_and_reconcile_mempool::<_, Mempool, _>(
                             block.clone(),
                             relays.cryptarchia(),
                             relays.mempool_adapter(),
@@ -345,6 +355,10 @@ where
                                 orphan_downloader.cancel_active_download();
                             }
                         }
+                    }
+
+                    Some(msg) = self.service_resources_handle.inbound_relay.next() => {
+                        Self::handle_message(msg, &relays).await;
                     }
                 }
             }
@@ -492,8 +506,12 @@ where
 
         let block_id = block.header().id();
 
-        match process_block::<_, Mempool, _>(block, relays.cryptarchia(), relays.mempool_adapter())
-            .await
+        match apply_block_and_reconcile_mempool::<_, Mempool, _>(
+            block,
+            relays.cryptarchia(),
+            relays.mempool_adapter(),
+        )
+        .await
         {
             Ok(()) => {
                 orphan_downloader.remove_orphan(&block_id);
@@ -518,6 +536,37 @@ where
             histogram.received_blocks_data = content_size,
             transactions = transactions,
         );
+    }
+
+    async fn handle_message(
+        msg: Message<Mempool::Item>,
+        relays: &ChainNetworkRelays<
+            Cryptarchia,
+            Mempool,
+            MempoolNetAdapter,
+            NetAdapter,
+            RuntimeServiceId,
+        >,
+    ) where
+        RuntimeServiceId: Send,
+    {
+        match msg {
+            Message::ApplyBlockAndReconcileMempool { block, resp } => {
+                let result = apply_block_and_reconcile_mempool::<_, Mempool, _>(
+                    block,
+                    relays.cryptarchia(),
+                    relays.mempool_adapter(),
+                )
+                .await;
+
+                if let Err(send_err) = resp.send(result) {
+                    error!(
+                        target: LOG_TARGET,
+                        "Failed to send ApplyBlockAndReconcileMempool response: {:?}", send_err
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -555,7 +604,7 @@ where
 /// A [`Block`] is only added if it's valid
 #[expect(clippy::allow_attributes_without_reason)]
 #[instrument(level = "debug", skip(cryptarchia, mempool_adapter))]
-async fn process_block<Cryptarchia, Mempool, RuntimeServiceId>(
+async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool, RuntimeServiceId>(
     block: Block<Cryptarchia::Tx>,
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     mempool_adapter: &MempoolAdapter<Mempool::Item>,
