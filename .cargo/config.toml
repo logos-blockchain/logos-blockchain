@@ -1,4 +1,4 @@
 [target.'cfg(target_os = "macos")']
 # when using osx, we need to link against some golang libraries, it did just work with this missing flags
 # from: https://github.com/golang/go/issues/42459
-rustflags = ["-C", "link-args=-framework CoreFoundation -framework Security -framework CoreServices -lresolv"]
+rustflags = ["-C", "linker=rust-lld"]
