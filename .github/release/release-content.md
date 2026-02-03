@@ -16,13 +16,6 @@ For the former, please reach out to the Logos Blockchain team on [Discord](https
 For the latter, you can download the example config from this release and tweak it to your needs.
 Please check the docs for info on what each field means.
 
-## Run the binary
-
-After obtaining the deployment file for the network you want to join and tweaking the node config file to fit your needs, including specifying the list of bootnodes for the network you are joining, you can run the node binary.
-
-For example: `logos-blockchain-node-macos-aarch64-0.0.1 --deployment deployment.yaml node-config.yaml`. See the repo's `README.md` for more info.
-
-
 ## Devnet setup
 
 If you wish to join the devnet at https://devnet.blockchain.logos.co, you can automatically generate and download your node configuration using the following command:
@@ -43,10 +36,16 @@ curl -X POST -L --location-trusted https://devnet.blockchain.logos.co/node/0/cfg
 
 Once the configuration file is downloaded, you can start your node with:
 ```bash
-logos-blockchain-node-macos-aarch64-0.0.1 my_logos_node_config.yaml
+logos-blockchain-node-macos-aarch64-0.0.1 --deployment devnet my_logos_node_config.yaml 
 ```
 
 To verify that your node is running correctly and connected, visit http://localhost:8080/cryptarchia/info. The slot and height should both be constantly increasing.
+
+## Run the binary
+
+After obtaining the deployment file for the network you want to join and tweaking the node config file to fit your needs, including specifying the list of bootnodes for the network you are joining, you can run the node binary.
+
+For example: `logos-blockchain-node-macos-aarch64-0.0.1 --deployment deployment.yaml node-config.yaml`. See the repo's `README.md` for more info.
 
 ## Checklist
 
