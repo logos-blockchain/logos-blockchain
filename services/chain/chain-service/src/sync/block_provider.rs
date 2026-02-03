@@ -957,13 +957,22 @@ mod tests {
             let utxo_tree_root = utxo_tree.root();
             let utxo_merkle_path = utxo_tree.path(&utxo.id()).expect("note must exist in tree");
 
-            let public_inputs = LeaderPublic::new(
-                utxo_tree_root, // aged root
-                utxo_tree_root, // latest root
-                Fr::from(3),    // epoch nonce
-                0,              // slot
-                1000,           // total stake
-            );
+            // We grind the nonce here to find a winning PoL
+            let public_inputs = {
+                let mut nonce = 0;
+                while nonce < 1000 {
+                    let inputs =
+                        LeaderPublic::new(utxo_tree_root, utxo_tree_root, Fr::from(nonce), 0, 1000);
+
+                    if inputs.check_winning(utxo.note.value, *utxo.id().as_fr(), *leader_sk.as_fr())
+                    {
+                        break;
+                    }
+
+                    nonce += 1;
+                }
+                LeaderPublic::new(utxo_tree_root, utxo_tree_root, Fr::from(nonce), 0, 1000)
+            };
 
             let private_inputs = LeaderPrivate::new(
                 public_inputs,
