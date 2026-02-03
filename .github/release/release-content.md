@@ -34,13 +34,15 @@ curl -X POST -L --location-trusted https://devnet.blockchain.logos.co/node/0/cfg
      -o my_logos_node_config.yaml
 ```
 
+Then, download the `devnet-deployment.yaml` deployment file attached to this release.
+
 ## Run the binary
 
-After obtaining the deployment file for the network you want to join and tweaking the node config file to fit your needs, including specifying the list of bootnodes for the network you are joining, you can run the node binary.
+After tweaking the node config file to fit your needs, you can run the node binary.
 
-For example: `logos-blockchain-node-macos-aarch64-0.0.1 --deployment deployment.yaml node-config.yaml`. See the repo's `README.md` for more info.
+For example: `logos-blockchain-node-macos-aarch64-0.0.1 --deployment devnet-deployment.yaml node-config.yaml`. See the repo's `README.md` for more info.
 
-To verify that your node is running correctly and connected, visit http://localhost:{api_port_in_user_config}/cryptarchia/info. The slot and height should both be constently increasing.
+To verify that your node is running correctly and connected, visit http://localhost:{api_port_in_user_config}/cryptarchia/info. The slot and height should both be constantly increasing.
 
 ## Checklist
 
@@ -48,7 +50,7 @@ Before publishing please ensure:
 - [ ] Description is complete
 - [ ] Changelog is correct, compared to last release
 - [ ] Binaries for Mac and Linux platforms are present
-- [ ] Circuits of the expected version for Mac and Linux platforms are present (need to be manually downloaded and included for now )
-- [ ] Example user config YAML file is present
+- [ ] Circuits of the expected version for Mac and Linux platforms are present (need to be manually downloaded and included for now)
+- [ ] Well-known deployment files are included in the release
 - [ ] Pre-release is checked if necessary
 - [ ] Remove this checklist and address all TODOs before publishing the release.
