@@ -144,7 +144,7 @@ async fn node_is_at_height(
         if best_height >= height {
             info!(
                 target: TARGET,
-                "Node '{node_name}' cache shows it reached height {height} in {:.2?}",
+                "Node '{node_name}' reached height {height} in {:.2?}",
                 start.elapsed()
             );
             return Ok(());
@@ -159,7 +159,7 @@ async fn node_is_at_height(
         if start.elapsed() >= time_out {
             return Err(StepError::StepFail {
                 message: format!(
-                    "Error: Node '{node_name}' did not reach height {height} in {time_out_seconds} timeout"
+                    "Error: Node '{node_name}' did not reach height {height} in {time_out_seconds} s"
                 ),
             });
         }
@@ -317,9 +317,9 @@ fn log_waiting_status(
                 .collect();
             info!(
                 target: TARGET,
-                "Fork chain detected!!! Elapsed: {:.2?}, diff: {diff}, heights: {peer_heights:?}, \
-                fork hashes at {}: {:?}",
-                start.elapsed(), anchor_hashes[0].height, fork_hashes
+                "{} fork chains detected!!! Elapsed: {:.2?}, diff: {diff}, heights: {peer_heights:?}, \
+                fork hashes at height {}: {:?}",
+                fork_hashes.len(), start.elapsed(), anchor_hashes[0].height, fork_hashes
             );
         }
     }

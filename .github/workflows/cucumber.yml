@@ -103,12 +103,9 @@ jobs:
       - name: Run cucumber - @normal_ci
         # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
         if: ${{ !cancelled() }}
-        timeout-minutes: 40  # Safety net timeout - this needs to be adjusted as more tests are added
+        timeout-minutes: 60  # Safety net timeout - this needs to be adjusted as more tests are added
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
-          CONSENSUS_SLOT_TIME: 5
-          # TODO: Remove this when the test framework removed all direct references to `NOMOS_NODE_BIN`
-          NOMOS_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
           LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
           LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs/kzgrs_test_params
         with:
@@ -116,16 +113,16 @@ jobs:
           # The test binary can be debug mode to increase build times
           args: >-
             --locked -p logos-blockchain-tests --features cucumber
-            --test cucumber -- --tags "@normal_ci and not (@broken or @undefined_behaviour)"
+            --test cucumber -- --tags "@normal_ci and not (@broken
+            or @undefined_behaviour)"
 
       # Run cucumber integration tests with environment variables for binaries and test params
       - name: Run cucumber - @cryptarchia
         # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
         if: ${{ !cancelled() }}
-        timeout-minutes: 40  # Safety net timeout - this needs to be adjusted as more tests are added
+        timeout-minutes: 60  # Safety net timeout - this needs to be adjusted as more tests are added
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
-          CONSENSUS_SLOT_TIME: 5
           LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
           LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs/kzgrs_test_params
         with:
