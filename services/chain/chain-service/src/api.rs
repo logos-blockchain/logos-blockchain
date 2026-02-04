@@ -2,7 +2,7 @@ use lb_core::{block::Block, header::HeaderId};
 use lb_network_service::message::ChainSyncEvent;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use thiserror::Error;
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{broadcast, oneshot, watch};
 
 use crate::{ConsensusMsg, CryptarchiaInfo, LibUpdate, ProcessedBlockEvent};
 
@@ -242,5 +242,22 @@ where
             })?;
 
         Ok(())
+    }
+
+    /// Subscribe to be notified when the chain becomes online mode.
+    /// For details, see [`ConsensusMsg::SubscribeChainOnline`].
+    pub async fn subscribe_chain_online(&self) -> Result<watch::Receiver<Option<()>>, ApiError> {
+        let (sender, receiver) = oneshot::channel();
+
+        self.relay
+            .send(ConsensusMsg::SubscribeChainOnline { sender })
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending SubscribeChainOnline"))
+            })?;
+
+        receiver.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while recving SubscribeChainOnline"))
+        })
     }
 }

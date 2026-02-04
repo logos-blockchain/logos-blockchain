@@ -343,6 +343,8 @@ where
             receiver.await?
         };
 
+        // TODO: Wait until chain becomes Online
+
         self.service_resources_handle.status_updater.notify_ready();
         info!(
             "Service '{}' is ready.",
