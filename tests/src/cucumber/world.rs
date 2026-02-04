@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, path::PathBuf, time::Duration};
+use std::{collections::HashMap, env, num::NonZero, path::PathBuf, time::Duration};
 
 use cucumber::World;
 use derivative::Derivative;
@@ -7,9 +7,12 @@ use testing_framework_core::scenario::{Builder, NodeControlCapability, Scenario,
 use testing_framework_runner_local::LocalManualCluster;
 use testing_framework_workflows::{ScenarioBuilderExt as _, expectations::ConsensusLiveness};
 
-use crate::cucumber::{
-    error::{StepError, StepResult},
-    utils::{make_builder, positive_u64, positive_usize, shared_host_bin_path},
+use crate::{
+    cucumber::{
+        error::{StepError, StepResult},
+        utils::{make_builder, shared_host_bin_path},
+    },
+    non_zero,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -32,7 +35,7 @@ pub struct RunState {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ScenarioSpec {
     pub topology: Option<TopologySpec>,
-    pub duration_secs: Option<u64>,
+    pub duration_secs: Option<NonZero<u64>>,
     pub wallets: Option<WalletSpec>,
     pub transactions: Option<TransactionSpec>,
     pub consensus_liveness: Option<ConsensusLivenessSpec>,
@@ -40,25 +43,25 @@ pub struct ScenarioSpec {
 
 #[derive(Debug, Clone, Copy)]
 pub struct TopologySpec {
-    pub validators: usize,
+    pub validators: NonZero<usize>,
     pub network: NetworkKind,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct WalletSpec {
     pub total_funds: u64,
-    pub users: usize,
+    pub users: NonZero<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct TransactionSpec {
-    pub rate_per_block: u64,
-    pub users: Option<usize>,
+    pub rate_per_block: NonZero<u64>,
+    pub users: Option<NonZero<usize>>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ConsensusLivenessSpec {
-    pub lag_allowance: Option<u64>,
+    pub lag_allowance: Option<NonZero<u64>>,
 }
 
 #[derive(World, Derivative)]
@@ -76,6 +79,8 @@ pub struct CucumberWorld {
     pub nodes_info: HashMap<String, NodeInfo>,
 }
 
+pub type ChainInfoMap = HashMap<u64, String>;
+
 /// Information about a started node in the world
 pub struct NodeInfo {
     /// Node name
@@ -84,7 +89,7 @@ pub struct NodeInfo {
     /// General node configuration used to start the node
     pub run_config: Option<RunConfig>,
     /// Chain height vs. hash at that height
-    pub chain_info: HashMap<u64, String>,
+    pub chain_info: ChainInfoMap,
 }
 
 impl NodeInfo {
@@ -101,7 +106,7 @@ impl NodeInfo {
 
     /// Returns a reference to the full map of cached height -> hash.
     #[must_use]
-    pub const fn chain_info(&self) -> &HashMap<u64, String> {
+    pub const fn chain_info(&self) -> &ChainInfoMap {
         &self.chain_info
     }
 }
@@ -124,21 +129,21 @@ impl CucumberWorld {
 
     pub fn set_topology(&mut self, validators: usize, network: NetworkKind) -> StepResult {
         self.spec.topology = Some(TopologySpec {
-            validators: positive_usize("validators", validators)?,
+            validators: non_zero!("validators", validators)?,
             network,
         });
         Ok(())
     }
 
     pub fn set_run_duration(&mut self, seconds: u64) -> StepResult {
-        self.spec.duration_secs = Some(positive_u64("duration", seconds)?);
+        self.spec.duration_secs = Some(non_zero!("duration", seconds)?);
         Ok(())
     }
 
     pub fn set_wallets(&mut self, total_funds: u64, users: usize) -> StepResult {
         self.spec.wallets = Some(WalletSpec {
             total_funds,
-            users: positive_usize("wallet users", users)?,
+            users: non_zero!("wallet users", users)?,
         });
         Ok(())
     }
@@ -154,15 +159,12 @@ impl CucumberWorld {
             });
         }
 
-        if users.is_some_and(|u| u == 0) {
-            return Err(StepError::InvalidArgument {
-                message: "transactions users must be > 0".to_owned(),
-            });
-        }
-
         self.spec.transactions = Some(TransactionSpec {
-            rate_per_block: positive_u64("transactions rate", rate_per_block)?,
-            users,
+            rate_per_block: non_zero!("transactions rate", rate_per_block)?,
+            users: match users {
+                Some(val) => Some(non_zero!("transactions users", val)?),
+                None => None,
+            },
         });
         Ok(())
     }
@@ -178,10 +180,8 @@ impl CucumberWorld {
     }
 
     pub fn set_consensus_liveness_lag_allowance(&mut self, blocks: u64) -> StepResult {
-        let blocks = positive_u64("lag allowance", blocks)?;
-
         self.spec.consensus_liveness = Some(ConsensusLivenessSpec {
-            lag_allowance: Some(blocks),
+            lag_allowance: Some(non_zero!("lag allowance", blocks)?),
         });
 
         Ok(())
@@ -242,21 +242,22 @@ impl CucumberWorld {
         let duration_secs = self
             .spec
             .duration_secs
-            .ok_or(StepError::MissingRunDuration)?;
+            .ok_or(StepError::MissingRunDuration)?
+            .get();
 
         let mut builder: Builder<Caps> = make_builder(topology).with_capabilities(Caps::default());
 
         builder = builder.with_run_duration(Duration::from_secs(duration_secs));
 
         if let Some(wallets) = self.spec.wallets {
-            builder = builder.initialize_wallet(wallets.total_funds, wallets.users);
+            builder = builder.initialize_wallet(wallets.total_funds, wallets.users.get());
         }
 
         if let Some(tx) = self.spec.transactions {
             builder = builder.transactions_with(|flow| {
-                let mut flow = flow.rate(tx.rate_per_block);
+                let mut flow = flow.rate(tx.rate_per_block.get());
                 if let Some(users) = tx.users {
-                    flow = flow.users(users);
+                    flow = flow.users(users.get());
                 }
                 flow
             });
@@ -264,8 +265,8 @@ impl CucumberWorld {
 
         if let Some(liveness) = self.spec.consensus_liveness {
             if let Some(lag) = liveness.lag_allowance {
-                builder =
-                    builder.with_expectation(ConsensusLiveness::default().with_lag_allowance(lag));
+                builder = builder
+                    .with_expectation(ConsensusLiveness::default().with_lag_allowance(lag.get()));
             } else {
                 builder = builder.expect_consensus_liveness();
             }

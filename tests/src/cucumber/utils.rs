@@ -13,7 +13,7 @@ pub fn make_builder(topology: TopologySpec) -> Builder<()> {
         let base = match topology.network {
             NetworkKind::Star => t.network_star(),
         };
-        base.nodes(topology.validators)
+        base.nodes(topology.validators.get())
     })
 }
 
@@ -22,26 +22,6 @@ pub fn is_truthy_env(key: &str) -> bool {
     env::var(key)
         .ok()
         .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-}
-
-pub fn positive_usize(label: &str, value: usize) -> Result<usize, StepError> {
-    if value == 0 {
-        Err(StepError::InvalidArgument {
-            message: format!("{label} must be > 0"),
-        })
-    } else {
-        Ok(value)
-    }
-}
-
-pub fn positive_u64(label: &str, value: u64) -> Result<u64, StepError> {
-    if value == 0 {
-        Err(StepError::InvalidArgument {
-            message: format!("{label} must be > 0"),
-        })
-    } else {
-        Ok(value)
-    }
 }
 
 pub fn parse_deployer(value: &str) -> Result<DeployerKind, StepError> {
@@ -58,4 +38,13 @@ pub fn parse_deployer(value: &str) -> Result<DeployerKind, StepError> {
 pub fn shared_host_bin_path(binary_name: &str) -> PathBuf {
     let cucumber_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     cucumber_dir.join("../assets/stack/bin").join(binary_name)
+}
+
+#[macro_export]
+macro_rules! non_zero {
+    ($field:expr, $value:expr) => {
+        std::num::NonZero::new($value).ok_or_else(|| StepError::InvalidArgument {
+            message: format!("'{}' must be > 0", $field),
+        })
+    };
 }

@@ -14,13 +14,26 @@ use tracing::{info, warn};
 use crate::cucumber::{
     error::{StepError, StepResult},
     steps::TARGET,
-    world::{CucumberWorld, NodeInfo},
+    world::{ChainInfoMap, CucumberWorld, NodeInfo},
 };
 
 enum AlignmentStatus {
     MissingChainInfo,
     Fork,
     Aligned,
+}
+
+#[derive(Debug, Clone)]
+struct ConsensusSnapshot {
+    node_name: String,
+    height: u64,
+    header_hash: String,
+}
+
+#[derive(Debug, Clone)]
+struct MaybeSnapshot {
+    height: u64,
+    header_hash: Option<String>,
 }
 
 #[given(expr = "I have a cluster with capacity of {int} nodes")]
@@ -42,38 +55,7 @@ fn manual_cluster(world: &mut CucumberWorld, nodes_count: usize) -> StepResult {
 #[given(expr = "I start node {string}")]
 #[when(expr = "I start node {string}")]
 async fn start_manual_stand_alone_node(world: &mut CucumberWorld, node_name: String) -> StepResult {
-    if let Some(cluster) = world.local_cluster.as_ref() {
-        let started_node = cluster
-            .start_node_with(
-                &node_name,
-                StartNodeOptions {
-                    peers: PeerSelection::None,
-                    config_patch: None,
-                }
-                .create_patch(move |config| {
-                    // Placeholder - Add any custom configuration changes here if needed.
-                    Ok(config)
-                }),
-            )
-            .await
-            .inspect_err(|e| {
-                warn!(target: TARGET, "Step `I start stand-alone node {node_name}` error: {e}");
-            })?;
-        world.nodes_info.insert(
-            node_name.clone(),
-            NodeInfo {
-                name: node_name,
-                started_node,
-                run_config: None,
-                chain_info: HashMap::default(),
-            },
-        );
-        Ok(())
-    } else {
-        Err(StepError::LogicalError {
-            message: "No local cluster available".into(),
-        })
-    }
+    start_node(world, node_name, &Vec::new()).await
 }
 
 #[given(expr = "I start peer node {string} connected to node {string}")]
@@ -83,17 +65,41 @@ async fn start_manual_connected_node(
     node_name: String,
     peer_name: String,
 ) -> StepResult {
+    start_node(world, node_name, &[peer_name]).await
+}
+
+#[given(expr = "I start peer node {string} connected to node {string} and node {string}")]
+#[when(expr = "I start peer node {string} connected to node {string} and node {string}")]
+async fn start_manual_two_connected_nodes(
+    world: &mut CucumberWorld,
+    node_name: String,
+    peer_name1: String,
+    peer_name2: String,
+) -> StepResult {
+    start_node(world, node_name, &[peer_name1, peer_name2]).await
+}
+
+async fn start_node(world: &mut CucumberWorld, node_name: String, peers: &[String]) -> StepResult {
     let cluster = world
         .local_cluster
         .as_ref()
         .ok_or(StepError::LogicalError {
             message: "No local cluster available".into(),
         })?;
+    let peer_selection = if peers.is_empty() {
+        PeerSelection::None
+    } else {
+        let named = peers
+            .iter()
+            .map(|peer| world.resolve_node_name(peer))
+            .collect::<Result<Vec<String>, StepError>>()?;
+        PeerSelection::Named(named)
+    };
     let started_node = cluster
         .start_node_with(
             &node_name,
             StartNodeOptions {
-                peers: PeerSelection::Named(vec![world.resolve_node_name(&peer_name)?]),
+                peers: peer_selection,
                 config_patch: None,
             }
             .create_patch(move |config| {
@@ -105,52 +111,7 @@ async fn start_manual_connected_node(
         .inspect_err(|e| {
             warn!(
                 target: TARGET,
-                "Step `I start connected node {node_name} connected to {peer_name}` error: {e}"
-            );
-        })?;
-    world.nodes_info.insert(
-        node_name.clone(),
-        NodeInfo {
-            name: node_name.clone(),
-            started_node,
-            run_config: None,
-            chain_info: HashMap::default(),
-        },
-    );
-    Ok(())
-}
-
-#[given(expr = "I start peer node {string} connected to node {string} and node {string}")]
-#[when(expr = "I start peer node {string} connected to node {string} and node {string}")]
-async fn start_manual_two_connected_nodes(
-    world: &mut CucumberWorld,
-    node_name: String,
-    peer_name1: String,
-    peer_name2: String,
-) -> StepResult {
-    let cluster = world
-        .local_cluster
-        .as_ref()
-        .ok_or(StepError::LogicalError {
-            message: "No local cluster available".into(),
-        })?;
-    let started_node = cluster
-        .start_node_with(
-            &node_name,
-            StartNodeOptions {
-                peers: PeerSelection::Named(vec![world.resolve_node_name(&peer_name1)?, world.resolve_node_name(&peer_name2)?]),
-                config_patch: None,
-            }
-                .create_patch(move |config| {
-                    // Placeholder - Add any custom configuration changes here if needed.
-                    Ok(config)
-                }),
-        )
-        .await
-        .inspect_err(|e| {
-            warn!(
-                target: TARGET,
-                "Step `I start connected node {node_name} connected to {peer_name1} and node {peer_name2}` error: {e}"
+                "Step `I start node/peer node {node_name} (connected to {peers:?})` error: {e}"
             );
         })?;
     world.nodes_info.insert(
@@ -214,93 +175,68 @@ async fn all_nodes_converged(
     max_diff_height: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    use std::collections::HashMap;
+    nodes_converged(world, None, max_diff_height, time_out_seconds).await
+}
 
-    let nodes_info = &world.nodes_info.values().collect::<Vec<&NodeInfo>>();
-    let start = tokio::time::Instant::now();
-    let time_out = Duration::from_secs(time_out_seconds);
+#[when(
+    expr = "all nodes have at least {int} blocks and converged to within {int} blocks in {int} seconds"
+)]
+#[then(
+    expr = "all nodes have at least {int} blocks and converged to within {int} blocks in {int} seconds"
+)]
+async fn all_nodes_reached_min_height_and_converged(
+    world: &mut CucumberWorld,
+    min_height: u64,
+    max_diff_height: u64,
+    time_out_seconds: u64,
+) -> StepResult {
+    nodes_converged(world, Some(min_height), max_diff_height, time_out_seconds).await
+}
 
-    // node_name -> (height -> header_id)  (overwrites on reorg)
-    let mut nodes_chain_info: HashMap<String, HashMap<u64, String>> =
-        HashMap::with_capacity(nodes_info.len());
-
-    // Pre-initialize so lookups are deterministic
-    for node_info in nodes_info {
-        nodes_chain_info
-            .entry(node_info.started_node.name.clone())
-            .or_default();
+#[then(expr = "I stop all nodes")]
+fn stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
+    let cluster = world
+        .local_cluster
+        .as_ref()
+        .ok_or(StepError::LogicalError {
+            message: "No local cluster available".into(),
+        })?;
+    let node_names: Vec<String> = world.nodes_info.keys().cloned().collect();
+    for node_name in node_names {
+        info!(target: TARGET, "Stopping node '{node_name}'");
+        let _unused = world.nodes_info.remove(&node_name);
     }
+    cluster.stop_all();
 
-    let mut count = 0usize;
-    loop {
-        let (all_nodes_min, diff, peer_heights) =
-            fetch_and_update_chain_info(&mut world.nodes_info, &mut nodes_chain_info).await?;
-        let (status, anchor_hashes) =
-            tips_aligned_at_min_difference(&nodes_chain_info, all_nodes_min);
-
-        if diff <= max_diff_height && matches!(status, AlignmentStatus::Aligned) {
-            info!(
-                target: TARGET,
-                "All nodes converged in {:.2?} - max diff: {diff}, heights: {peer_heights:?}",
-                start.elapsed()
-            );
-            return Ok(());
-        }
-
-        if count.is_multiple_of(50) {
-            log_waiting_status(
-                &status,
-                None,
-                diff,
-                &peer_heights,
-                all_nodes_min,
-                &anchor_hashes,
-                start,
-            );
-        }
-
-        if start.elapsed() >= time_out {
-            return Err(StepError::StepFail {
-                message: format!(
-                    "Error: Nodes did not converge to {max_diff_height} blocks at in \
-                    {time_out_seconds} s"
-                ),
-            });
-        }
-
-        sleep(Duration::from_millis(100)).await;
-        count += 1;
-    }
+    Ok(())
 }
 
 fn tips_aligned_at_min_difference(
-    nodes_chain_info: &HashMap<String, HashMap<u64, String>>,
+    nodes_chain_info: &HashMap<String, ChainInfoMap>,
     all_nodes_min: u64,
-) -> (AlignmentStatus, Vec<(String, u64, Option<String>)>) {
+) -> (AlignmentStatus, Vec<MaybeSnapshot>) {
     // Always return per-node view at min_height for logging
-    let mut anchor_hashes: Vec<(String, u64, Option<String>)> =
-        Vec::with_capacity(nodes_chain_info.len());
+    let mut anchor_hashes: Vec<MaybeSnapshot> = Vec::with_capacity(nodes_chain_info.len());
 
     for node_name in nodes_chain_info.keys() {
         let peer_chain = nodes_chain_info
             .get(node_name)
             .expect("nodes_chain_info must be pre-initialized");
-        anchor_hashes.push((
-            node_name.clone(),
-            all_nodes_min,
-            peer_chain.get(&all_nodes_min).cloned(),
-        ));
+        anchor_hashes.push(MaybeSnapshot {
+            height: all_nodes_min,
+            header_hash: peer_chain.get(&all_nodes_min).cloned(),
+        });
     }
 
-    let all_have = anchor_hashes.iter().all(|(_, _, hash)| hash.is_some());
+    let all_have = anchor_hashes.iter().all(|snap| snap.header_hash.is_some());
     if !all_have {
         return (AlignmentStatus::MissingChainInfo, anchor_hashes);
     }
 
-    let compare_hash = anchor_hashes[0].2.as_ref().unwrap();
+    let compare_hash = anchor_hashes[0].header_hash.as_ref().unwrap();
     let all_same = anchor_hashes
         .iter()
-        .all(|(_, _, hash)| hash.as_ref().unwrap() == compare_hash);
+        .all(|snap| snap.header_hash.as_ref().unwrap() == compare_hash);
 
     if all_same {
         (AlignmentStatus::Aligned, anchor_hashes)
@@ -311,7 +247,7 @@ fn tips_aligned_at_min_difference(
 
 async fn fetch_and_update_chain_info(
     nodes_info: &mut HashMap<String, NodeInfo>,
-    nodes_chain_info: &mut HashMap<String, HashMap<u64, String>>,
+    nodes_chain_info: &mut HashMap<String, ChainInfoMap>,
 ) -> Result<(u64, u64, Vec<u64>), StepError> {
     poll_all_nodes_and_update_consensus_cache(nodes_info).await?;
 
@@ -350,7 +286,7 @@ fn log_waiting_status(
     diff: u64,
     peer_heights: &[u64],
     peer_min: u64,
-    anchor_hashes: &[(String, u64, Option<String>)],
+    anchor_hashes: &[MaybeSnapshot],
     start: tokio::time::Instant,
 ) {
     match status {
@@ -377,38 +313,30 @@ fn log_waiting_status(
         AlignmentStatus::Fork => {
             let fork_hashes: std::collections::HashSet<_> = anchor_hashes
                 .iter()
-                .filter_map(|(_, _, hash)| hash.as_ref())
+                .filter_map(|snap| snap.header_hash.as_ref())
                 .collect();
             info!(
                 target: TARGET,
                 "Fork chain detected!!! Elapsed: {:.2?}, diff: {diff}, heights: {peer_heights:?}, \
                 fork hashes at {}: {:?}",
-                start.elapsed(), anchor_hashes[0].1, fork_hashes
+                start.elapsed(), anchor_hashes[0].height, fork_hashes
             );
         }
     }
 }
 
-#[when(
-    expr = "all nodes have at least {int} blocks and converged to within {int} blocks in {int} seconds"
-)]
-#[then(
-    expr = "all nodes have at least {int} blocks and converged to within {int} blocks in {int} seconds"
-)]
-async fn all_nodes_reached_min_height_and_converged(
+async fn nodes_converged(
     world: &mut CucumberWorld,
-    min_height: u64,
+    min_height: Option<u64>,
     max_diff_height: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    use std::collections::HashMap;
-
     let nodes_info = &world.nodes_info.values().collect::<Vec<&NodeInfo>>();
     let start = tokio::time::Instant::now();
     let time_out = Duration::from_secs(time_out_seconds);
 
     // node_name -> (height -> header_id)  (overwrites on reorg)
-    let mut nodes_chain_info: HashMap<String, HashMap<u64, String>> =
+    let mut nodes_chain_info: HashMap<String, ChainInfoMap> =
         HashMap::with_capacity(nodes_info.len());
 
     // Pre-initialize so lookups are deterministic
@@ -427,21 +355,29 @@ async fn all_nodes_reached_min_height_and_converged(
 
         if diff <= max_diff_height
             && matches!(status, AlignmentStatus::Aligned)
-            && all_nodes_min >= min_height
+            && all_nodes_min >= min_height.unwrap_or_default()
         {
-            info!(
-                target: TARGET,
-                "All nodes have at least {min_height} blocks, converged in {:.2?} - max diff: \
-                {diff}, heights: {peer_heights:?}",
-                start.elapsed()
-            );
+            if let Some(min_height) = min_height {
+                info!(
+                    target: TARGET,
+                    "All nodes have at least {min_height} blocks, converged in {:.2?} - max diff: \
+                    {diff}, heights: {peer_heights:?}",
+                    start.elapsed()
+                );
+            } else {
+                info!(
+                    target: TARGET,
+                    "All nodes converged in {:.2?} - max diff: {diff}, heights: {peer_heights:?}",
+                    start.elapsed()
+                );
+            }
             return Ok(());
         }
 
         if count.is_multiple_of(50) {
             log_waiting_status(
                 &status,
-                Some(min_height),
+                min_height,
                 diff,
                 &peer_heights,
                 all_nodes_min,
@@ -451,42 +387,23 @@ async fn all_nodes_reached_min_height_and_converged(
         }
 
         if start.elapsed() >= time_out {
-            return Err(StepError::StepFail {
+            let err = min_height.map_or_else(|| StepError::StepFail {
+                message: format!(
+                    "Error: Nodes did not converge to {max_diff_height} blocks at in \
+                    {time_out_seconds} s"
+                ),
+            }, |min_height| StepError::StepFail {
                 message: format!(
                     "Error: Nodes did not converge to {max_diff_height} blocks at minimum height \
                     {min_height} in {time_out_seconds} s"
                 ),
             });
+            return Err(err);
         }
 
         sleep(Duration::from_millis(100)).await;
         count += 1;
     }
-}
-
-#[then(expr = "I stop all nodes")]
-fn stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
-    let cluster = world
-        .local_cluster
-        .as_ref()
-        .ok_or(StepError::LogicalError {
-            message: "No local cluster available".into(),
-        })?;
-    let node_names: Vec<String> = world.nodes_info.keys().cloned().collect();
-    for node_name in node_names {
-        info!(target: TARGET, "Stopping node '{node_name}'");
-        let _unused = world.nodes_info.remove(&node_name);
-    }
-    cluster.stop_all();
-
-    Ok(())
-}
-
-#[derive(Debug, Clone)]
-struct ConsensusSnapshot {
-    node_name: String,
-    height: u64,
-    tip_hex: String,
 }
 
 async fn poll_all_nodes_and_update_consensus_cache(
@@ -502,7 +419,7 @@ async fn poll_all_nodes_and_update_consensus_cache(
             .map(|info| ConsensusSnapshot {
                 node_name,
                 height: info.height,
-                tip_hex: info.tip.encode_hex(),
+                header_hash: info.tip.encode_hex(),
             })
     });
 
@@ -521,7 +438,7 @@ async fn poll_all_nodes_and_update_consensus_cache(
                     snap.node_name
                 ),
             })?;
-        node.upsert_tip(snap.height, snap.tip_hex.clone());
+        node.upsert_tip(snap.height, snap.header_hash.clone());
     }
 
     Ok(())
