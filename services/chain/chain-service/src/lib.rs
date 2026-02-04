@@ -22,8 +22,7 @@ use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, Transaction, TxHash, gas::MainnetGasConstants,
-        genesis_tx::GenesisTx, ops::leader_claim::VoucherCm,
+        AuthenticatedMantleTx, Transaction, TxHash, gas::MainnetGasConstants, genesis_tx::GenesisTx,
     },
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType},
 };
@@ -281,7 +280,6 @@ impl Cryptarchia {
                 parent,
                 slot,
                 header.leader_proof(),
-                VoucherCm::default(), // TODO: add the new voucher commitment here
                 block.transactions(),
             )
             .map_err(|err| match err {

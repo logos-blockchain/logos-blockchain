@@ -528,7 +528,6 @@ pub mod tests {
             parent,
             slot,
             &proof,
-            VoucherCm::default(),
             std::iter::empty::<&SignedMantleTx>(),
         )?;
         Ok(id)

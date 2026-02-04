@@ -558,7 +558,7 @@ mod tests {
     use lb_core::{
         codec::DeserializeOp as _,
         crypto::ZkHasher,
-        mantle::{Note, SignedMantleTx, ledger::Utxo},
+        mantle::{Note, SignedMantleTx, ledger::Utxo, ops::leader_claim::VoucherCm},
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
     use lb_cryptarchia_engine::Config;
@@ -985,7 +985,7 @@ mod tests {
 
             lb_core::proofs::leader_proof::Groth16LeaderProof::prove(
                 private_inputs,
-                lb_core::mantle::ops::leader_claim::VoucherCm::default(),
+                VoucherCm::default(),
             )
             .expect("Proof generation should succeed")
         }
