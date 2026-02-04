@@ -293,8 +293,6 @@ where
             .notifier()
             .get_updated_settings();
 
-        // TODO: check active slot coeff is exactly 1/30
-
         let mut winning_pol_slot_notifier =
             WinningPoLSlotNotifier::new(&ledger_config, &self.winning_pol_epoch_slots_sender);
 
@@ -343,7 +341,15 @@ where
             receiver.await?
         };
 
-        // TODO: Wait until chain becomes Online
+        // Wait until the chain becomes Online mode.
+        // We should not propose blocks while the chain is in Bootstrapping mode.
+        cryptarchia_api
+            .subscribe_chain_online()
+            .await
+            .expect("Subscribing to chain mode should succeed")
+            .wait_for(Option::is_some)
+            .await
+            .expect("Waiting for chain to be online should succeed");
 
         self.service_resources_handle.status_updater.notify_ready();
         info!(
