@@ -632,7 +632,7 @@ where
             .map(|pk| hex::encode(lb_groth16::fr_to_bytes(&pk.into_inner())))
             .collect();
 
-        let payload = PayloadEncoding::Ed25519(tx_hash.as_signing_bytes());
+        let payload = PayloadEncoding::Zk(tx_hash.into());
         let signature = kms
             .sign_multiple(key_ids, payload)
             .await
