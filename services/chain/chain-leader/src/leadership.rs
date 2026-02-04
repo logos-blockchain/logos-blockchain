@@ -1,7 +1,7 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 
 use lb_core::{
-    mantle::{Utxo, ops::leader_claim::VoucherCm},
+    mantle::Utxo,
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
@@ -10,7 +10,8 @@ use lb_key_management_system_service::{
     operators::zk::leader::BuildPrivateInputsWithLeaderKey,
 };
 use lb_ledger::{EpochState, UtxoTree};
-use lb_wallet_service::UtxoWithKeyId;
+use lb_wallet_service::{UtxoWithKeyId, api::WalletApi};
+use overwatch::services::AsServiceId;
 use rand::rngs::OsRng;
 use tokio::sync::{oneshot, watch::Sender};
 
@@ -25,14 +26,19 @@ use crate::{WinningPolInfo, kms::KmsAdapter};
 ///
 /// If the slot is not a winning one, it returns `None` and no consumer is
 /// notified.
-pub async fn build_proof_for<RuntimeServiceId>(
+pub async fn build_proof_for<Wallet, RuntimeServiceId>(
     utxos: &[UtxoWithKeyId],
     latest_tree: &UtxoTree,
     epoch_state: &EpochState,
     slot: Slot,
     winning_pol_info_notifier: &WinningPoLSlotNotifier<'_>,
+    wallet: &WalletApi<Wallet, RuntimeServiceId>,
     kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
-) -> Option<(Groth16LeaderProof, Ed25519Key)> {
+) -> Option<(Groth16LeaderProof, Ed25519Key)>
+where
+    Wallet: lb_wallet_service::api::WalletServiceData,
+    RuntimeServiceId: Debug + Display + Sync + AsServiceId<Wallet>,
+{
     for UtxoWithKeyId { utxo, key_id } in utxos {
         let public_inputs = public_inputs_for_slot(epoch_state, slot, latest_tree);
         let winning = kms
@@ -45,6 +51,15 @@ pub async fn build_proof_for<RuntimeServiceId>(
                 utxo.note.value,
                 epoch_state.total_stake()
             );
+
+            let voucher_cm = match wallet.generate_new_voucher().await {
+                Ok(voucher_cm) => voucher_cm,
+                Err(e) => {
+                    tracing::error!("Failed to generate voucher: {e:?}");
+                    continue;
+                }
+            };
+
             let private_inputs_result = kms
                 .build_private_inputs_for_winning_utxo_and_slot(
                     key_id.clone(),
@@ -72,10 +87,7 @@ pub async fn build_proof_for<RuntimeServiceId>(
             );
 
             let res = tokio::task::spawn_blocking(move || {
-                Groth16LeaderProof::prove(
-                    private_inputs,
-                    VoucherCm::default(), // TODO: use actual voucher commitment
-                )
+                Groth16LeaderProof::prove(private_inputs, voucher_cm)
             })
             .await;
             match res {
@@ -313,21 +325,31 @@ impl<'service> WinningPoLSlotNotifier<'service> {
 
 #[cfg(test)]
 mod pol_tests {
-    use std::{num::NonZero, slice, sync::Arc};
+    use core::fmt;
+    use std::{fmt::Formatter, num::NonZero, slice, sync::Arc};
 
     use lb_core::{
-        mantle::ledger::{Note, Tx},
+        mantle::{
+            ledger::{Note, Tx},
+            ops::leader_claim::VoucherCm,
+        },
         proofs::leader_proof::{LeaderProof as _, check_winning},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::EpochConfig;
-    use lb_groth16::Fr;
+    use lb_groth16::{Fr, fr_from_bytes_unchecked};
     use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkKey};
     use lb_ledger::mantle::sdp::{
         Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
     };
     use lb_utils::math::NonNegativeF64;
-    use tokio::sync::watch;
+    use lb_wallet_service::{WalletMsg, WalletServiceSettings, api::WalletServiceData};
+    use overwatch::services::{
+        ServiceData,
+        relay::OutboundRelay,
+        state::{NoOperator, NoState},
+    };
+    use tokio::sync::{mpsc, watch};
 
     use super::*;
 
@@ -363,6 +385,9 @@ mod pol_tests {
         let (sender, _receiver) = watch::channel(None);
         let notifier = WinningPoLSlotNotifier::new(&config, &sender);
 
+        // Create dummy wallet service
+        let wallet = DummyWallet::spawn();
+
         // Find a winning slot by calling `build_proof_for` until it succeeds
         let (proof, winning_slot) = find_winning_slot_and_build_proof(
             (0..1000).map(Slot::from),
@@ -370,10 +395,12 @@ mod pol_tests {
             &epoch_state,
             &latest_tree,
             &notifier,
+            &wallet,
             &kms,
         )
         .await
         .expect("should find a winning slot and build a proof");
+        assert_eq!(proof.voucher_cm(), &dummy_voucher_cm());
 
         // Verify proof
         let public_inputs = LeaderPublic::new(
@@ -396,7 +423,8 @@ mod pol_tests {
         epoch_state: &EpochState,
         latest_tree: &UtxoTree,
         notifier: &WinningPoLSlotNotifier<'_>,
-        kms: &(impl KmsAdapter<(), KeyId = KeyId> + Sync),
+        wallet: &WalletApi<DummyWallet, TestRuntimeServiceId>,
+        kms: &(impl KmsAdapter<TestRuntimeServiceId, KeyId = KeyId> + Sync),
     ) -> Option<(Groth16LeaderProof, Slot)> {
         for slot in slots {
             if let Some((proof, _signing_key)) = build_proof_for(
@@ -405,6 +433,7 @@ mod pol_tests {
                 epoch_state,
                 slot,
                 notifier,
+                wallet,
                 kms,
             )
             .await
@@ -457,7 +486,7 @@ mod pol_tests {
     struct DummyKms;
 
     #[async_trait::async_trait]
-    impl KmsAdapter<()> for DummyKms {
+    impl KmsAdapter<TestRuntimeServiceId> for DummyKms {
         type KeyId = KeyId;
 
         async fn check_winning_with_key(
@@ -496,6 +525,57 @@ mod pol_tests {
                 &leader_pk,
             );
             Ok((leader_private, leader_signing_key))
+        }
+    }
+
+    struct DummyWallet;
+
+    impl ServiceData for DummyWallet {
+        type Settings = WalletServiceSettings;
+        type State = NoState<Self::Settings>;
+        type StateOperator = NoOperator<Self::State>;
+        type Message = WalletMsg;
+    }
+
+    impl WalletServiceData for DummyWallet {
+        type Kms = ();
+        type Cryptarchia = ();
+        type Tx = ();
+        type Storage = ();
+    }
+
+    impl DummyWallet {
+        fn spawn() -> WalletApi<Self, TestRuntimeServiceId> {
+            let (msg_sender, mut msg_receiver) = mpsc::channel(10);
+
+            tokio::spawn(async move {
+                while let Some(msg) = msg_receiver.recv().await {
+                    if let WalletMsg::GenerateNewVoucherSecret { resp_tx } = msg {
+                        let _ = resp_tx.send(dummy_voucher_cm());
+                    }
+                }
+            });
+
+            WalletApi::<Self, TestRuntimeServiceId>::new(OutboundRelay::new(msg_sender))
+        }
+    }
+
+    const DUMMY_VOUCHER_CM_BYTES: [u8; 32] = [99u8; 32];
+
+    fn dummy_voucher_cm() -> VoucherCm {
+        fr_from_bytes_unchecked(&DUMMY_VOUCHER_CM_BYTES).into()
+    }
+
+    #[derive(Debug)]
+    struct TestRuntimeServiceId;
+
+    impl AsServiceId<DummyWallet> for TestRuntimeServiceId {
+        const SERVICE_ID: Self = Self;
+    }
+
+    impl Display for TestRuntimeServiceId {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            write!(f, "TestRuntimeServiceId")
         }
     }
 }

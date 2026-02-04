@@ -228,7 +228,13 @@ where
             )
             .route(
                 paths::wallet::TRANSACTIONS_TRANSFER_FUNDS,
-                routing::post(wallet::post_transactions_transfer_funds::<WalletService, _>),
+                routing::post(
+                    wallet::post_transactions_transfer_funds::<
+                        WalletService,
+                        MempoolStorageAdapter,
+                        _,
+                    >,
+                ),
             );
 
         let app = app.route(

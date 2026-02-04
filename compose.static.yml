@@ -9,20 +9,28 @@ services:
       - ./testnet:/etc/logos-blockchain
     depends_on:
       - grafana
+    ports:
+      - "4400:4400/tcp"
     entrypoint: /etc/logos-blockchain/scripts/run_cfgsync.sh
 
   logos-blockchain-node-0:
     container_name: logos_blockchain_node_0
     image: ghcr.io/logos-blockchain/logos-blockchain:testnet
-    ports:
-      - "3000:3000/udp"
-      - "18080:18080/tcp"
     volumes:
       - ./testnet:/etc/logos-blockchain
       - ./tests/kzgrs/kzgrs_test_params:/kzgrs_test_params:z
     depends_on:
       - cfgsync
-    entrypoint: /etc/logos-blockchain/scripts/run_logos_blockchain_node.sh
+    environment:
+      - CFG_HOST_IP=${PUBLIC_IP_ADDR}
+      - CFG_NETWORK_PORT=${NODE0_NET_PORT}
+      - CFG_BLEND_PORT=${NODE0_BLEND_PORT}
+      - CFG_API_PORT=${NODE0_API_PORT}
+    ports:
+      - "3000:3000/udp"
+      - "3400:3400/udp"
+      - "18085:18085/tcp"
+    entrypoint: /etc/logos-blockchain/scripts/run_node.sh
 
   logos-blockchain-node-1:
     container_name: logos_blockchain_node_1
@@ -32,10 +40,16 @@ services:
       - ./tests/kzgrs/kzgrs_test_params:/kzgrs_test_params:z
     depends_on:
       - cfgsync
+    environment:
+      - CFG_HOST_IP=${PUBLIC_IP_ADDR}
+      - CFG_NETWORK_PORT=${NODE1_NET_PORT}
+      - CFG_BLEND_PORT=${NODE1_BLEND_PORT}
+      - CFG_API_PORT=${NODE1_API_PORT}
     ports:
-      - "3001:3000/udp"
-      - "18081:18080/tcp"
-    entrypoint: /etc/logos-blockchain/scripts/run_logos_blockchain_node.sh
+      - "3001:3001/udp"
+      - "3401:3401/udp"
+      - "18081:18081/tcp"
+    entrypoint: /etc/logos-blockchain/scripts/run_node.sh
 
   logos-blockchain-node-2:
     container_name: logos_blockchain_node_2
@@ -45,10 +59,16 @@ services:
       - ./tests/kzgrs/kzgrs_test_params:/kzgrs_test_params:z
     depends_on:
       - cfgsync
+    environment:
+      - CFG_HOST_IP=${PUBLIC_IP_ADDR}
+      - CFG_NETWORK_PORT=${NODE2_NET_PORT}
+      - CFG_BLEND_PORT=${NODE2_BLEND_PORT}
+      - CFG_API_PORT=${NODE2_API_PORT}
     ports:
-      - "3002:3000/udp"
-      - "18082:18080/tcp"
-    entrypoint: /etc/logos-blockchain/scripts/run_logos_blockchain_node.sh
+      - "3002:3002/udp"
+      - "3402:3402/udp"
+      - "18082:18082/tcp"
+    entrypoint: /etc/logos-blockchain/scripts/run_node.sh
 
   logos-blockchain-node-3:
     container_name: logos_blockchain_node_3
@@ -58,10 +78,16 @@ services:
       - ./tests/kzgrs/kzgrs_test_params:/kzgrs_test_params:z
     depends_on:
       - cfgsync
+    environment:
+      - CFG_HOST_IP=${PUBLIC_IP_ADDR}
+      - CFG_NETWORK_PORT=${NODE3_NET_PORT}
+      - CFG_BLEND_PORT=${NODE3_BLEND_PORT}
+      - CFG_API_PORT=${NODE3_API_PORT}
     ports:
-      - "3003:3000/udp"
-      - "18083:18080/tcp"
-    entrypoint: /etc/logos-blockchain/scripts/run_logos_blockchain_node.sh
+      - "3003:3003/udp"
+      - "3403:3403/udp"
+      - "18083:18083/tcp"
+    entrypoint: /etc/logos-blockchain/scripts/run_node.sh
 
   prometheus:
     container_name: prometheus
@@ -131,10 +157,11 @@ services:
     container_name: l2_nginx
     image: ghcr.io/logos-blockchain/logos-blockchain:testnet
     ports:
-      - "8200:80"
+      - "18080:18080"
     depends_on:
-      - l2-sequencer
-      - l2-archiver
+      - cfgsync
+    volumes:
+      - ./testnet/nginx.conf:/etc/nginx/nginx.conf:ro
     entrypoint: [ "nginx", "-g", "daemon off;" ]
 
   l2-sequencer:
@@ -142,7 +169,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:testnet
     environment:
       - SEQUENCER_LISTEN_ADDR=0.0.0.0:8080
-      - SEQUENCER_NODE_ENDPOINT=http://logos-blockchain-node-0:18080
+      - SEQUENCER_NODE_ENDPOINT=http://logos-blockchain-node-0:18081
       - SEQUENCER_DB_PATH=/data/sequencer.db
       - SEQUENCER_SIGNING_KEY_PATH=/data/sequencer.key
       - SEQUENCER_CHANNEL_ID=6d656d636f696e00000000000000000000000000000000000000000000000001
@@ -155,7 +182,7 @@ services:
     container_name: l2_archiver
     image: ghcr.io/logos-blockchain/logos-blockchain:testnet
     environment:
-      - TESTNET_ENDPOINT=http://logos-blockchain-node-1:18080
+      - TESTNET_ENDPOINT=http://logos-blockchain-node-1:18081
       - CHANNEL_ID=6d656d636f696e00000000000000000000000000000000000000000000000001
       - TOKEN_NAME=MEM
     entrypoint: [ "/usr/bin/logos-blockchain-demo-archiver" ]

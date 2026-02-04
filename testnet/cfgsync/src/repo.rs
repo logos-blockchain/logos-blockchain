@@ -9,7 +9,8 @@ use lb_tracing_service::TracingSettings;
 use tokio::{sync::oneshot::Sender, time::timeout};
 
 use crate::{
-    config::{Host, create_node_configs},
+    Host,
+    config::{create_node_config_from_template, create_node_configs},
     server::CfgSyncConfig,
 };
 
@@ -20,6 +21,7 @@ pub enum RepoResponse {
 
 pub struct ConfigRepo {
     waiting_hosts: Mutex<HashMap<Host, Sender<RepoResponse>>>,
+    generated_configs: Mutex<HashMap<Host, GeneralConfig>>,
     n_hosts: usize,
     tracing_settings: TracingSettings,
     timeout_duration: Duration,
@@ -46,6 +48,7 @@ impl ConfigRepo {
     ) -> Arc<Self> {
         let repo = Arc::new(Self {
             waiting_hosts: Mutex::new(HashMap::new()),
+            generated_configs: Mutex::new(HashMap::new()),
             n_hosts,
             tracing_settings,
             timeout_duration,
@@ -59,9 +62,35 @@ impl ConfigRepo {
         repo
     }
 
+    /// Registers host into the initial node list.
     pub fn register(&self, host: Host, reply_tx: Sender<RepoResponse>) {
         let mut waiting_hosts = self.waiting_hosts.lock().unwrap();
         waiting_hosts.insert(host, reply_tx);
+    }
+
+    /// Generates a new node config for host based on the initial nodes config.
+    pub fn append(&self, host: Host) -> Option<GeneralConfig> {
+        let template = self
+            .generated_configs
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .cloned();
+
+        if let Some(template) = template {
+            let new_config =
+                create_node_config_from_template(&TracingSettings::default(), &host, &template);
+
+            self.generated_configs
+                .lock()
+                .unwrap()
+                .insert(host, new_config.clone());
+
+            return Some(new_config);
+        }
+
+        None
     }
 
     async fn run(&self) {
@@ -74,6 +103,11 @@ impl ConfigRepo {
             let hosts = waiting_hosts.keys().cloned().collect();
 
             let configs = create_node_configs(&self.tracing_settings, hosts);
+
+            {
+                let mut storage = self.generated_configs.lock().unwrap();
+                (*storage).clone_from(&configs);
+            };
 
             for (host, sender) in waiting_hosts.drain() {
                 let config = configs.get(&host).expect("host should have a config");

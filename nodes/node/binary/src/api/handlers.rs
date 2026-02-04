@@ -575,13 +575,45 @@ pub mod wallet {
         (status = 500, description = "Internal server error", body = String),
     )
     )]
-    pub async fn post_transactions_transfer_funds<WalletService, RuntimeServiceId>(
+    pub async fn post_transactions_transfer_funds<WalletService, StorageAdapter, RuntimeServiceId>(
         State(handle): State<OverwatchHandle<RuntimeServiceId>>,
         Json(body): Json<WalletTransferFundsRequestBody>,
     ) -> Response
     where
         WalletService: WalletServiceData + 'static,
-        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+        StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+                RuntimeServiceId,
+                Item = SignedMantleTx,
+                Key = <SignedMantleTx as Transaction>::Hash,
+            > + Send
+            + Sync
+            + Clone
+            + 'static,
+        StorageAdapter::Error: Debug,
+        RuntimeServiceId: Debug
+            + Send
+            + Sync
+            + Display
+            + 'static
+            + AsServiceId<WalletService>
+            + AsServiceId<
+                TxMempoolService<
+                    MempoolNetworkAdapter<
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        RuntimeServiceId,
+                    >,
+                    Mempool<
+                        HeaderId,
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        StorageAdapter,
+                        RuntimeServiceId,
+                    >,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+            >,
     {
         let wallet_api = {
             let wallet_relay = match get_relay_or_500::<WalletService, _>(&handle).await {
@@ -605,7 +637,27 @@ pub mod wallet {
             Ok(lb_wallet_service::TipResponse {
                 response: transaction,
                 ..
-            }) => WalletTransferFundsResponseBody::from(transaction).into_response(),
+            }) => {
+                // Submit to mempool
+                if let Err(e) = mempool::add_tx::<
+                    Libp2pNetworkBackend,
+                    MempoolNetworkAdapter<
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        RuntimeServiceId,
+                    >,
+                    StorageAdapter,
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    RuntimeServiceId,
+                >(&handle, transaction.clone(), Transaction::hash)
+                .await
+                {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                }
+
+                WalletTransferFundsResponseBody::from(transaction).into_response()
+            }
             Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
         }
     }

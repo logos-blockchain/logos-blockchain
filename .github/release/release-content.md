@@ -21,7 +21,7 @@ Please check the docs for info on what each field means.
 If you wish to join the devnet at https://devnet.blockchain.logos.co, you can automatically generate and download your node configuration using the following command:
 
 ```bash
-curl -X POST -L --location-trusted https://devnet.blockchain.logos.co/node/0/cfgsync/config/custom-node \
+curl -X POST -L --location-trusted https://devnet.blockchain.logos.co/node/0/cfgsync/generate-config \
      -u "username:password" \
      -H "Content-Type: application/json" \
      -d '{
