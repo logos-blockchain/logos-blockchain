@@ -10,7 +10,7 @@ use lb_node::{
 use reqwest::Url;
 
 pub struct Faucet {
-    user_config: UserConfig,
+    faucet_pk: ZkPublicKey,
     http_client: CommonHttpClient,
     base_url: Url,
     drip_rate: u64, // Percentage from the faucet balance to send to the receiver.
@@ -26,6 +26,15 @@ impl Faucet {
             deserialize_config_at_path::<UserConfig>(node_config_path, OnUnknownKeys::Warn)
                 .map_err(|e| format!("Failed to deserialize node config: {e}"))?;
 
+        let (_, faucet_pk) = user_config
+            .wallet
+            .known_keys
+            .into_iter()
+            .find(|(id, _)| *id != user_config.wallet.voucher_master_key_id)
+            .ok_or_else(|| {
+                "Faucet config contains no usable keys (only master key found or empty)".to_owned()
+            })?;
+
         let base_url = Url::parse(&format!(
             "http://{}",
             user_config.http.backend_settings.address
@@ -35,7 +44,7 @@ impl Faucet {
         let http_client = CommonHttpClient::new(None);
 
         Ok(Self {
-            user_config,
+            faucet_pk,
             http_client,
             base_url,
             drip_rate,
@@ -43,17 +52,9 @@ impl Faucet {
     }
 
     pub async fn transfer_to_pk(&self, recipient_pk: ZkPublicKey) -> Result<(), String> {
-        let (_, faucet_pk) = self
-            .user_config
-            .wallet
-            .known_keys
-            .iter()
-            .next()
-            .ok_or_else(|| "Faucet config contains no known keys".to_owned())?;
-
         let balance_info = self
             .http_client
-            .get_wallet_balance(self.base_url.clone(), *faucet_pk, None)
+            .get_wallet_balance(self.base_url.clone(), self.faucet_pk, None)
             .await
             .map_err(|e| format!("Failed to fetch faucet balance: {e}"))?;
 
@@ -73,8 +74,8 @@ impl Faucet {
 
         let body = WalletTransferFundsRequestBody {
             tip: None,
-            change_public_key: *faucet_pk,
-            funding_public_keys: vec![*faucet_pk],
+            change_public_key: self.faucet_pk,
+            funding_public_keys: vec![self.faucet_pk],
             recipient_public_key: recipient_pk,
             amount: amount_to_send,
         };
