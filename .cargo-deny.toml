@@ -21,6 +21,7 @@ ignore = [
   { id = "RUSTSEC-2025-0134", reason = "`rusttls-pemfile` is unmaintained; consider using an alternative. Use `cargo tree -p difference -i > tmp.txt` to check the dependency tree." },
   { id = "RUSTSEC-2025-0141", reason = "`bincode` is unmaintained but continuing to use it." },
 ]
+unused-ignored-advisory = "deny"
 yanked = "deny"
 
 [bans]
@@ -47,11 +48,6 @@ allow = [
 ]
 private = { ignore = false }
 unused-allowed-license = "deny"
-
-[[licenses.clarify]]
-expression    = "MIT AND ISC"
-license-files = [{ hash = 0xbd0eed23, path = "LICENSE" }]
-name          = "ring"
 
 [sources]
 allow-git = [

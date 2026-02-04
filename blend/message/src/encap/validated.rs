@@ -1,8 +1,6 @@
 use lb_blend_crypto::random_sized_bytes;
 use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::inputs::VerifyInputs};
-use lb_key_management_system_keys::{
-    keys::UnsecuredEd25519Key, operators::ed25519::derive_x25519::X25519PrivateKey,
-};
+use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, X25519PrivateKey};
 use serde::{Deserialize, Serialize};
 
 use crate::{

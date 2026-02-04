@@ -1,7 +1,6 @@
 use core::{num::NonZeroUsize, time::Duration};
 use std::collections::HashSet;
 
-use lb_chain_leader_service::LeaderConfig;
 use lb_chain_network_service::{IbdConfig, OrphanConfig, SyncConfig};
 use lb_chain_service::{OfflineGracePeriodConfig, StartingState};
 use lb_core::{
@@ -54,6 +53,7 @@ pub struct GeneralConsensusConfig {
     user_config: Config,
     genesis_tx: GenesisTx,
     pub utxos: Vec<Utxo>,
+    pub known_key: ZkKey,
     pub blend_notes: Vec<ServiceNote>,
     pub funding_sk: ZkKey,
 }
@@ -120,31 +120,28 @@ pub fn create_consensus_configs(
     ids: &[[u8; 32]],
     prolonged_bootstrap_period: Duration,
 ) -> Vec<GeneralConsensusConfig> {
-    let mut leader_keys = Vec::new();
+    let mut regular_note_keys = Vec::new();
     let mut blend_notes = Vec::new();
     let mut sdp_notes = Vec::new();
 
-    let utxos = create_utxos_for_leader_and_services(
+    let utxos = create_utxos(
         ids,
-        &mut leader_keys,
+        &mut regular_note_keys,
         &mut blend_notes,
         &mut sdp_notes,
     );
     let genesis_tx = create_genesis_tx(&utxos);
 
-    leader_keys
+    regular_note_keys
         .into_iter()
         .enumerate()
-        .map(|(i, (pk, sk))| GeneralConsensusConfig {
+        .map(|(i, sk)| GeneralConsensusConfig {
             blend_notes: blend_notes.clone(),
             genesis_tx: genesis_tx.clone(),
             utxos: utxos.clone(),
+            known_key: sk,
             funding_sk: sdp_notes[i].sk.clone(),
             user_config: Config {
-                leader: LeaderConfig {
-                    pk,
-                    sk: sk.into_unsecured(),
-                },
                 network: NetworkConfig {
                     bootstrap: lb_chain_network_service::BootstrapConfig {
                         ibd: IbdConfig {
@@ -178,9 +175,9 @@ pub fn create_consensus_configs(
         .collect()
 }
 
-fn create_utxos_for_leader_and_services(
+fn create_utxos(
     ids: &[[u8; 32]],
-    leader_keys: &mut Vec<(ZkPublicKey, ZkKey)>,
+    regular_note_keys: &mut Vec<ZkKey>,
     blend_notes: &mut Vec<ServiceNote>,
     sdp_notes: &mut Vec<ServiceNote>,
 ) -> Vec<Utxo> {
@@ -202,12 +199,12 @@ fn create_utxos_for_leader_and_services(
 
     // Create notes for leader and Blend declarations.
     for &id in ids {
-        let sk_leader_data = derive_key_material(b"ld", &id);
-        let sk_leader = ZkKey::from(BigUint::from_bytes_le(&sk_leader_data));
-        let pk_leader = sk_leader.to_public_key();
-        leader_keys.push((pk_leader, sk_leader));
+        let sk_data = derive_key_material(b"ld", &id);
+        let sk = ZkKey::from(BigUint::from_bytes_le(&sk_data));
+        let pk = sk.to_public_key();
+        regular_note_keys.push(sk);
         utxos.push(Utxo {
-            note: Note::new(100_000, pk_leader),
+            note: Note::new(100_000, pk),
             tx_hash: BigUint::from(0u8).into(),
             output_index: 0,
         });

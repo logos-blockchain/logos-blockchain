@@ -1,7 +1,8 @@
 use std::fmt::{Debug, Display};
 
+pub use lb_key_management_system_keys::keys;
 use lb_key_management_system_keys::keys::secured_key::SecuredKey;
-pub use lb_key_management_system_keys::{keys, operators};
+pub use lb_key_management_system_operators as operators;
 use log::error;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -151,6 +152,7 @@ where
                 }
             }
             KMSMessage::Execute { key_id, operator } => {
+                // TODO: Bubble up errors: https://github.com/logos-blockchain/logos-blockchain/issues/2079
                 drop(backend.execute(&key_id, operator).await.inspect_err(|e| {
                     error!("Failed to execute operator with key ID {key_id:?}. Error: {e:?}");
                 }));

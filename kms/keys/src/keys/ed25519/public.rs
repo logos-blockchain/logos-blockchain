@@ -2,7 +2,7 @@ use ed25519_dalek::{PUBLIC_KEY_LENGTH, SignatureError, Verifier as _, VerifyingK
 use lb_utils::serde::{deserialize_bytes_array, serialize_bytes_array};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 
-use crate::{keys::Ed25519Signature, operators::ed25519::derive_x25519::X25519PublicKey};
+use crate::keys::{Ed25519Signature, X25519PublicKey};
 
 pub const KEY_SIZE: usize = PUBLIC_KEY_LENGTH;
 

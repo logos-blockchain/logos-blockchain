@@ -1,0 +1,24 @@
+[package]
+categories  = { workspace = true }
+description = "Logos blockchain Zone SDK - client library for building zone sequencers and indexers"
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-zone-sdk"
+publish     = false
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+futures                          = { default-features = false, version = "0.3" }
+lb-common-http-client            = { workspace = true }
+lb-core                          = { workspace = true }
+lb-key-management-system-service = { workspace = true }
+reqwest                          = { workspace = true }
+thiserror                        = { workspace = true }
+tokio                            = { default-features = false, features = ["macros", "rt", "sync", "time"], version = "1" }
+tracing                          = { workspace = true }

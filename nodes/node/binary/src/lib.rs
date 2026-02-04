@@ -37,7 +37,7 @@ use overwatch::{
     overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
 };
 
-pub use crate::config::{CryptarchiaLeaderArgs, HttpArgs, LogArgs, NetworkArgs, UserConfig};
+pub use crate::config::{HttpArgs, LogArgs, NetworkArgs, UserConfig};
 use crate::{
     api::backend::AxumBackend,
     config::{
@@ -74,8 +74,12 @@ pub(crate) type CryptarchiaService = generic_services::CryptarchiaService<Runtim
 
 pub(crate) type ChainNetworkService = generic_services::ChainNetworkService<RuntimeServiceId>;
 
-pub(crate) type CryptarchiaLeaderService =
-    generic_services::CryptarchiaLeaderService<CryptarchiaService, WalletService, RuntimeServiceId>;
+pub(crate) type CryptarchiaLeaderService = generic_services::CryptarchiaLeaderService<
+    CryptarchiaService,
+    ChainNetworkService,
+    WalletService,
+    RuntimeServiceId,
+>;
 
 pub type TimeService = generic_services::TimeService<RuntimeServiceId>;
 

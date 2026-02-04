@@ -62,7 +62,7 @@ fn mainnet_settings() -> Settings {
             data_replication_factor: 0,
         },
         core: CoreSettings {
-            minimum_messages_coefficient: 3.try_into().unwrap(),
+            minimum_messages_coefficient: 1.try_into().unwrap(),
             normalization_constant: 1.03.try_into().unwrap(),
             scheduler: SchedulerSettings {
                 cover: CoverTrafficSettings {

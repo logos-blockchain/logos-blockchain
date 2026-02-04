@@ -1,7 +1,5 @@
 use lb_blend_crypto::cipher::Cipher;
-use lb_key_management_system_keys::{
-    keys::UnsecuredEd25519Key, operators::ed25519::derive_x25519::SharedKey,
-};
+use lb_key_management_system_keys::keys::{SharedKey, UnsecuredEd25519Key};
 use lb_utils::blake_rng::{BlakeRng, SeedableRng as _};
 use zeroize::ZeroizeOnDrop;
 

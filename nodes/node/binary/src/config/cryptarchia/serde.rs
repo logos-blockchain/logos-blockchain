@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use lb_chain_leader_service::LeaderConfig;
 use lb_chain_network_service::SyncConfig;
 use lb_chain_service::StartingState;
 use lb_libp2p::PeerId;
@@ -10,7 +9,6 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub service: ServiceConfig,
     pub network: NetworkConfig,
-    pub leader: LeaderConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

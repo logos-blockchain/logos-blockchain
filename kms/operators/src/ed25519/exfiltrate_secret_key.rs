@@ -1,11 +1,10 @@
 use core::fmt::{self, Debug, Formatter};
 
-use tokio::sync::oneshot;
-use tracing::error;
-
-use crate::keys::{
+use lb_key_management_system_keys::keys::{
     Ed25519Key, UnsecuredEd25519Key, errors::KeyError, secured_key::SecureKeyOperator,
 };
+use tokio::sync::oneshot;
+use tracing::error;
 
 pub struct LeakSecretKeyOperator {
     response_channel: oneshot::Sender<UnsecuredEd25519Key>,

@@ -17,7 +17,6 @@ async-trait                     = { default-features = false, version = "0.1" }
 bytes                           = { workspace = true }
 ed25519-dalek                   = { features = ["rand_core", "serde", "zeroize"], workspace = true }
 generic-array                   = { default-features = false, version = "1.2.0" }
-lb-blend-proofs                 = { workspace = true }
 lb-groth16                      = { workspace = true }
 lb-key-management-system-macros = { workspace = true }
 lb-poseidon2                    = { workspace = true }

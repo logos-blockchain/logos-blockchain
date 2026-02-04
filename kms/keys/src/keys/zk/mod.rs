@@ -35,7 +35,8 @@ impl ZkKey {
         Self(UnsecuredZkKey::zero())
     }
 
-    pub(crate) const fn as_fr(&self) -> &Fr {
+    #[must_use]
+    pub const fn as_fr(&self) -> &Fr {
         self.0.as_fr()
     }
 
@@ -59,6 +60,12 @@ impl ZkKey {
     #[must_use]
     pub fn into_unsecured(self) -> UnsecuredZkKey {
         self.0.clone()
+    }
+
+    #[cfg(feature = "unsafe")]
+    #[must_use]
+    pub const fn as_unsecured(&self) -> &UnsecuredZkKey {
+        &self.0
     }
 }
 

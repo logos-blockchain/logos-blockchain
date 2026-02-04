@@ -50,8 +50,9 @@ axum = { default-features = false, features = [
 hyper = { default-features = false, optional = true, version = "1.0" }
 
 # openapi related dependencies
-utoipa            = { workspace = true }
-utoipa-swagger-ui = { workspace = true }
+utoipa = { workspace = true }
+# XCompiling from Unix has issues downloading assets. Also, building with Nix can't download assets.
+utoipa-swagger-ui = { features = ["vendored"], workspace = true }
 
 [dev-dependencies]
 axum              = { default-features = false, features = ["http1", "http2", "json", "query", "tokio"], version = "0.7.5" }

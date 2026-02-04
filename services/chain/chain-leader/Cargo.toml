@@ -13,26 +13,27 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                   = "0.1"
-futures                       = { default-features = false, version = "0.3" }
-lb-blend-service              = { workspace = true }
-lb-chain-service              = { workspace = true }
-lb-chain-service-common       = { workspace = true }
-lb-core                       = { workspace = true }
-lb-cryptarchia-engine         = { workspace = true }
-lb-key-management-system-keys = { workspace = true }
-lb-ledger                     = { features = ["serde"], workspace = true }
-lb-services-utils             = { workspace = true }
-lb-time-service               = { workspace = true }
-lb-tx-service                 = { workspace = true }
-lb-wallet-service             = { workspace = true }
-overwatch                     = { workspace = true }
-rand                          = { workspace = true }
-serde                         = { workspace = true }
-thiserror                     = "1.0"
-tokio                         = { default-features = false, version = "1" }
-tracing                       = { workspace = true }
-tracing-futures               = { default-features = false, version = "0.2" }
+async-trait                      = "0.1"
+futures                          = { default-features = false, version = "0.3" }
+lb-blend-service                 = { workspace = true }
+lb-chain-network-service         = { workspace = true }
+lb-chain-service                 = { workspace = true }
+lb-chain-service-common          = { workspace = true }
+lb-core                          = { workspace = true }
+lb-cryptarchia-engine            = { workspace = true }
+lb-key-management-system-service = { features = ["unsafe"], workspace = true }
+lb-ledger                        = { features = ["serde"], workspace = true }
+lb-services-utils                = { workspace = true }
+lb-time-service                  = { workspace = true }
+lb-tx-service                    = { workspace = true }
+lb-wallet-service                = { workspace = true }
+overwatch                        = { workspace = true }
+rand                             = { workspace = true }
+serde                            = { workspace = true }
+thiserror                        = "1.0"
+tokio                            = { default-features = false, version = "1" }
+tracing                          = { workspace = true }
+tracing-futures                  = { default-features = false, version = "0.2" }
 
 [dev-dependencies]
 lb-groth16 = { workspace = true }

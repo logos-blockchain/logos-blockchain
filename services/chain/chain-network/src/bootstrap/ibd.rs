@@ -54,12 +54,16 @@ where
     }
 
     async fn process_block(&mut self, block: Block<Cryptarchia::Tx>) -> Result<(), Error> {
-        crate::process_block::<_, Mempool, _>(block, &self.cryptarchia, &self.mempool_adapter)
-            .await
-            .map_err(|e| {
-                error!("Error processing block during IBD: {:?}", e);
-                Error::from(e)
-            })
+        crate::apply_block_and_reconcile_mempool::<_, Mempool, _>(
+            block,
+            &self.cryptarchia,
+            &self.mempool_adapter,
+        )
+        .await
+        .map_err(|e| {
+            error!("Error processing block during IBD: {:?}", e);
+            Error::from(e)
+        })
     }
 
     async fn has_processed_block(&self, block_id: HeaderId) -> Result<bool, Error> {

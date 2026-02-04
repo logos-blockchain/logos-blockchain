@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::HashMap,
     net::SocketAddr,
     process::{Child, Command, Stdio},
     str::FromStr as _,
@@ -40,6 +40,7 @@ use tokio::time::error::Elapsed;
 use super::{CLIENT, create_tempdir, get_exe_path, persist_tempdir};
 use crate::{
     IS_DEBUG_TRACING, adjust_timeout,
+    common::kms::key_id_for_preload_backend,
     nodes::LOGS_PREFIX,
     topology::configs::{GeneralConfig, deployment::default_e2e_deployment_settings},
 };
@@ -100,8 +101,8 @@ impl Validator {
 
     pub async fn spawn(mut config: RunConfig) -> Result<Self, Elapsed> {
         let dir = create_tempdir().unwrap();
-        let mut file = NamedTempFile::new().unwrap();
-        let config_path = file.path().to_owned();
+        let mut user_config_file = NamedTempFile::new().unwrap();
+        let mut deployment_config_file = NamedTempFile::new().unwrap();
 
         if !*IS_DEBUG_TRACING {
             // setup logging so that we can intercept it later in testing
@@ -113,10 +114,13 @@ impl Validator {
 
         config.user.storage.db_path = dir.path().join("db");
 
-        serde_yaml::to_writer(&mut file, &config).unwrap();
+        serde_yaml::to_writer(&mut user_config_file, &config.user).unwrap();
+        serde_yaml::to_writer(&mut deployment_config_file, &config.deployment).unwrap();
         let exe_path = get_exe_path(BIN_PATH_DEBUG, BIN_PATH_RELEASE);
         let child = Command::new(exe_path)
-            .arg(&config_path)
+            .arg("--deployment")
+            .arg(deployment_config_file.path().as_os_str())
+            .arg(user_config_file.path().as_os_str())
             .current_dir(dir.path())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -355,10 +359,20 @@ pub fn create_validator_config(config: GeneralConfig) -> RunConfig {
             },
         },
         wallet: WalletServiceSettings {
-            known_keys: HashSet::from_iter([
-                config.consensus_config.user_config().leader.pk,
-                config.consensus_config.funding_sk.as_public_key(),
+            known_keys: HashMap::from_iter([
+                (
+                    key_id_for_preload_backend(&config.consensus_config.known_key.clone().into()),
+                    config.consensus_config.known_key.as_public_key(),
+                ),
+                (
+                    key_id_for_preload_backend(&config.consensus_config.funding_sk.clone().into()),
+                    config.consensus_config.funding_sk.as_public_key(),
+                ),
             ]),
+            voucher_master_key_id: key_id_for_preload_backend(
+                &config.consensus_config.known_key.clone().into(),
+            ),
+            recovery_path: "./recovery/wallet.json".into(),
         },
         key_management: config.kms_config,
         testing_http: lb_api_service::ApiServiceSettings {

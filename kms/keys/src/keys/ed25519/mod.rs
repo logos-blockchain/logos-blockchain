@@ -6,17 +6,18 @@ use rand_core::CryptoRngCore;
 use serde::Deserialize;
 use zeroize::ZeroizeOnDrop;
 
-use crate::{
-    keys::{errors::KeyError, secured_key::SecuredKey},
-    operators::ed25519::derive_x25519::X25519PrivateKey,
-};
+use crate::keys::{errors::KeyError, secured_key::SecuredKey};
 
 mod private;
 pub use self::private::{KEY_SIZE as ED25519_SECRET_KEY_SIZE, UnsecuredEd25519Key};
 mod public;
 pub use self::public::{KEY_SIZE as ED25519_PUBLIC_KEY_SIZE, PublicKey};
 mod signature;
-pub use self::signature::{SIGNATURE_SIZE as ED25519_SIGNATURE_SIZE, Signature};
+mod x25519;
+pub use self::{
+    signature::{SIGNATURE_SIZE as ED25519_SIGNATURE_SIZE, Signature},
+    x25519::{SharedKey, X25519PrivateKey, X25519PublicKey},
+};
 
 /// An hardened Ed25519 secret key that only exposes methods to retrieve public
 /// information.
@@ -61,7 +62,8 @@ impl Ed25519Key {
     }
 
     #[cfg(feature = "unsafe")]
-    pub(crate) fn into_unsecured(self) -> UnsecuredEd25519Key {
+    #[must_use]
+    pub fn into_unsecured(self) -> UnsecuredEd25519Key {
         self.0.clone()
     }
 }

@@ -202,7 +202,7 @@ a few minutes of your current system time) before launching the node, **or use a
 with the chain start time set to the current time:
 
 ```bash
-CONSENSUS_SLOT_TIME=5 logos-blockchain-node nodes/node/config-one-node.yaml --dev-mode-reset-chain-clock
+logos-blockchain-node nodes/node/config-one-node.yaml --dev-mode-reset-chain-clock
 ```
 
 #### Manually set chain start time in config
@@ -259,7 +259,7 @@ When the node is built locally, it can be run with example config for one node n
 cargo build --all-features --all-targets
 
 # Run node without connecting to any other node.
-CONSENSUS_SLOT_TIME=5 target/debug/logos-blockchain-node nodes/node/config-one-node.yaml
+target/debug/logos-blockchain-node nodes/node/config-one-node.yaml
 ```
 
 Node stores its state inside the `db` directory. If there are any issues when restarting the node, please try removing 
@@ -297,7 +297,7 @@ To run the node programatically, one can use `local_testnet_one_node` integratio
 cargo build --all-features --all-targets
 
 # Integration test uses binaries built in a previous step.
-CONSENSUS_SLOT_TIME=5 cargo test --all-features local_testnet_one_node -- --ignored --nocapture
+cargo test --all-features local_testnet_one_node -- --ignored --nocapture
 ```
 
 ## Running Tests

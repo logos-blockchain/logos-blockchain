@@ -1,8 +1,5 @@
 use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
-use lb_key_management_system_keys::{
-    keys::{Ed25519PublicKey, UnsecuredEd25519Key},
-    operators::ed25519::derive_x25519::SharedKey,
-};
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, SharedKey, UnsecuredEd25519Key};
 
 /// Input for a single encapsulation,
 pub struct EncapsulationInput {

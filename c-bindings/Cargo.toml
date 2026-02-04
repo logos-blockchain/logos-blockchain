@@ -27,7 +27,7 @@ cbindgen = "0.29"
 
 [lib]
 crate-type = ["cdylib"]
-name       = "lib_logos_blockchain"
+name       = "logos_blockchain"
 
 [lints]
 workspace = true

@@ -85,7 +85,6 @@ jobs:
       - name: End-to-end integration tests
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
-          CONSENSUS_SLOT_TIME: 5
           LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
         with:
           command: nextest
@@ -108,6 +107,8 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
           CONSENSUS_SLOT_TIME: 5
+          # TODO: Remove this when the test framework removed all direct references to `NOMOS_NODE_BIN`
+          NOMOS_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
           LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
           LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs/kzgrs_test_params
         with:

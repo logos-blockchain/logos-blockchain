@@ -25,7 +25,7 @@ use tokio::sync::oneshot::channel;
 use tokio_stream::wrappers::WatchStream;
 
 use crate::generic_services::{
-    CryptarchiaLeaderService, CryptarchiaService, SdpService, WalletService,
+    ChainNetworkService, CryptarchiaLeaderService, CryptarchiaService, SdpService, WalletService,
     blend::proofs::{BlendProofsVerifier, CoreProofsGenerator, EdgeProofsGenerator},
 };
 
@@ -73,6 +73,7 @@ where
     RuntimeServiceId: AsServiceId<
             CryptarchiaLeaderService<
                 CryptarchiaService<RuntimeServiceId>,
+                ChainNetworkService<RuntimeServiceId>,
                 WalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>,
                 RuntimeServiceId,
             >,
@@ -94,6 +95,7 @@ where
             Some(Duration::from_secs(60)),
             CryptarchiaLeaderService<
                 CryptarchiaService<RuntimeServiceId>,
+                ChainNetworkService<RuntimeServiceId>,
                 WalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>,
                 RuntimeServiceId,
             >
@@ -103,6 +105,7 @@ where
         let cryptarchia_service_relay = overwatch_handle
             .relay::<CryptarchiaLeaderService<
                 CryptarchiaService<RuntimeServiceId>,
+                ChainNetworkService<RuntimeServiceId>,
                 WalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>,
                 RuntimeServiceId,
             >>()

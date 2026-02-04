@@ -26,9 +26,15 @@ tests/.tmp*
 *ignore*
 
 # C headers
-c-bindings/lib_logos_blockchain.h
+c-bindings/logos_blockchain.h
 
 # Demo sequencer related ignores
 node_modules
 *.database
 /tests/cucumber_tests/temp/
+
+# Nix
+result
+
+# Docker
+tempo-data/

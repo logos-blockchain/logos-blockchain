@@ -8,7 +8,7 @@ use lb_blend_message::{
 use lb_blend_proofs::quota::inputs::prove::{
     private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
 };
-use lb_key_management_system_keys::operators::ed25519::derive_x25519::X25519PrivateKey;
+use lb_key_management_system_keys::keys::X25519PrivateKey;
 
 use crate::{
     membership::Membership,

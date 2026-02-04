@@ -1,0 +1,27 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-key-management-system-operators"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait                   = { default-features = false, version = "0.1" }
+lb-blend-proofs               = { workspace = true }
+lb-core                       = { workspace = true }
+lb-groth16                    = { workspace = true }
+lb-key-management-system-keys = { features = ["unsafe"], workspace = true }
+lb-poseidon2                  = { workspace = true }
+lb-utxotree                   = { workspace = true }
+tokio                         = { default-features = false, features = ["rt"], version = "1" }
+tracing                       = { default-features = false, version = "0.1" }
+
+[features]
+unsafe = []
