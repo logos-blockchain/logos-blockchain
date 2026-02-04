@@ -5,6 +5,7 @@ use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::StreamExt as _;
 use lb_chain_service::{
     LibUpdate,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -316,7 +317,7 @@ where
                     Self::handle_new_block(event.block_id, &mut state, &storage_adapter, &cryptarchia_api).await;
                 }
                 Ok(lib_update) = lib_receiver.recv() => {
-                    Self::handle_lib_update(&lib_update, &mut state);
+                    Self::handle_lib_update(&lib_update, &storage_adapter, &mut state).await;
                 }
             }
         }
@@ -881,7 +882,11 @@ where
         Ok((block, ledger))
     }
 
-    fn handle_lib_update(lib_update: &LibUpdate, state: &mut ServiceState<'_>) {
+    async fn handle_lib_update(
+        lib_update: &LibUpdate,
+        storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+        state: &mut ServiceState<'_>,
+    ) {
         debug!(
             new_lib = ?lib_update.new_lib,
             stale_blocks_count = lib_update.pruned_blocks.stale_blocks.len(),
@@ -890,6 +895,28 @@ where
         );
 
         state.prune_states(lib_update.pruned_blocks.all());
+        let pruned_blocks: Vec<Block<Tx>> =
+            futures::stream::iter(lib_update.pruned_blocks.immutable_blocks.values())
+                .filter_map(async |header_id: &HeaderId| storage_adapter.get_block(header_id).await)
+                .collect::<Vec<_>>()
+                .await;
+        let pruned_nullifiers: Vec<VoucherNullifier> = pruned_blocks
+            .into_iter()
+            .flat_map(|block: Block<Tx>| block.into_transactions().into_iter())
+            .flat_map(|tx: Tx| {
+                tx.ops_with_proof()
+                    .map(|(op, _)| op.clone())
+                    .collect::<Vec<_>>()
+            })
+            .filter_map(|op| {
+                if let Op::LeaderClaim(claim_op) = op {
+                    Some(claim_op.voucher_nullifier)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        state.prune_vouchers(pruned_nullifiers);
     }
 
     async fn backfill_missing_blocks(

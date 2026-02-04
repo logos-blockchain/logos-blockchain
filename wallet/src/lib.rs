@@ -5,6 +5,7 @@ use std::{
     borrow::Borrow,
     cmp::Ordering,
     collections::{BTreeMap, HashMap},
+    fmt::Debug,
 };
 
 pub use error::WalletError;
@@ -227,7 +228,10 @@ pub struct Wallet<KeyId, VoucherId> {
     wallet_states: BTreeMap<HeaderId, WalletState>,
 }
 
-impl<KeyId, VoucherId> Wallet<KeyId, VoucherId> {
+impl<KeyId, VoucherId> Wallet<KeyId, VoucherId>
+where
+    VoucherId: Debug,
+{
     pub fn from_lib(
         known_keys: impl IntoIterator<Item = (ZkPublicKey, KeyId)>,
         known_vouchers: Vouchers<VoucherId>,
@@ -316,9 +320,6 @@ impl<KeyId, VoucherId> Wallet<KeyId, VoucherId> {
     /// This removes wallet states for blocks that are no longer part of the
     /// chain after LIB advancement. Both stale blocks (from abandoned
     /// forks) and immutable blocks (before the new LIB) are removed.
-    //
-    // TODO: Remove vouchers from `Self::known_vouchers` whose nullifiers appear in
-    // immutable blocks.
     pub fn prune_states(&mut self, pruned_blocks: impl IntoIterator<Item = HeaderId>) {
         let mut removed_count = 0;
 
@@ -334,6 +335,17 @@ impl<KeyId, VoucherId> Wallet<KeyId, VoucherId> {
                 remaining_states = self.wallet_states.len(),
                 "Pruned wallet states for pruned blocks"
             );
+        }
+    }
+
+    pub fn prune_vouchers(
+        &mut self,
+        immutable_transactions: impl IntoIterator<Item = VoucherNullifier>,
+    ) {
+        for voucher_nullifier in immutable_transactions {
+            if let Some(id) = self.known_vouchers.remove_by_nullifier(&voucher_nullifier) {
+                tracing::debug!("Pruned voucher {:?} from wallet", id);
+            }
         }
     }
 }
