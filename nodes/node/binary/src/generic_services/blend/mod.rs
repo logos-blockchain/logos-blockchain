@@ -1,7 +1,6 @@
 use core::{
     fmt::{Debug, Display},
     future::ready,
-    time::Duration,
 };
 
 use async_trait::async_trait;

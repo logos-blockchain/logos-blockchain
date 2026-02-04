@@ -5,7 +5,7 @@ mod mempool;
 mod relays;
 
 use core::fmt::Debug;
-use std::{fmt::Display, iter, pin::Pin, time::Duration};
+use std::{fmt::Display, iter, pin::Pin};
 
 use futures::{StreamExt as _, stream};
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
