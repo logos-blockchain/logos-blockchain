@@ -69,6 +69,7 @@ COPY --from=builder /logos-blockchain/target/release/logos-blockchain-cfgsync-se
 COPY --from=builder /logos-blockchain/target/release/logos-blockchain-cfgsync-client /usr/bin/
 COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-sequencer /usr/bin/
 COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-archiver /usr/bin/
+COPY --from=builder /logos-blockchain/target/release/logos-blockchain-faucet /usr/bin/
 
 # Copy Frontend & Nginx config
 COPY --from=builder /logos-blockchain/testnet/l2-sequencer-archival-demo/webapp/dist /var/www/l2-demo
