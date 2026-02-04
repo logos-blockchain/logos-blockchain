@@ -23,56 +23,7 @@ use lb_tests::topology::{
 use lb_tracing_service::{LoggerLayer, MetricsLayer, TracingLayer, TracingSettings};
 use rand::{Rng as _, thread_rng};
 
-const DEFAULT_LIBP2P_NETWORK_PORT: u16 = 3000;
-const DEFAULT_BLEND_PORT: u16 = 3400;
-const DEFAULT_API_PORT: u16 = 18080;
-
-#[derive(Eq, PartialEq, Hash, Clone)]
-pub enum HostKind {
-    Validator,
-}
-
-#[derive(Eq, PartialEq, Hash, Clone)]
-pub struct Host {
-    pub kind: HostKind,
-    pub ip: Ipv4Addr,
-    pub identifier: String,
-    pub network_port: u16,
-    pub blend_port: u16,
-    pub api_port: u16,
-}
-
-impl Host {
-    #[must_use]
-    pub const fn default_node_from_ip(ip: Ipv4Addr, identifier: String) -> Self {
-        Self {
-            kind: HostKind::Validator,
-            ip,
-            identifier,
-            network_port: DEFAULT_LIBP2P_NETWORK_PORT,
-            blend_port: DEFAULT_BLEND_PORT,
-            api_port: DEFAULT_API_PORT,
-        }
-    }
-
-    #[must_use]
-    pub const fn custom_node_from_ip(
-        ip: Ipv4Addr,
-        identifier: String,
-        network_port: u16,
-        blend_port: u16,
-        api_port: u16,
-    ) -> Self {
-        Self {
-            kind: HostKind::Validator,
-            ip,
-            identifier,
-            network_port,
-            blend_port,
-            api_port,
-        }
-    }
-}
+use crate::Host;
 
 #[must_use]
 pub fn create_node_configs(
@@ -292,7 +243,7 @@ mod cfgsync_tests {
     };
     use tracing::Level;
 
-    use super::{Host, HostKind, create_node_configs};
+    use super::{Host, create_node_configs};
     use crate::config::create_node_config_from_template;
 
     fn extract_port(multiaddr: &Multiaddr) -> u16 {
@@ -309,7 +260,6 @@ mod cfgsync_tests {
     fn basic_ip_list() {
         let hosts = (0..10)
             .map(|i| Host {
-                kind: HostKind::Validator,
                 ip: Ipv4Addr::from_str(&format!("10.1.1.{i}")).unwrap(),
                 identifier: "node".into(),
                 network_port: 3000,
@@ -350,17 +300,21 @@ mod cfgsync_tests {
             level: Level::DEBUG,
         };
 
-        let init_host = Host::default_node_from_ip(Ipv4Addr::LOCALHOST, "init".into());
+        let init_host = Host {
+            ip: Ipv4Addr::LOCALHOST,
+            identifier: "init".into(),
+            ..Default::default()
+        };
         let init_configs = create_node_configs(&tracing, vec![init_host.clone()]);
         let template = init_configs.get(&init_host).unwrap();
 
-        let new_host = Host::custom_node_from_ip(
-            Ipv4Addr::new(127, 0, 0, 2),
-            "joiner".into(),
-            4000,
-            5000,
-            9000,
-        );
+        let new_host = Host {
+            ip: Ipv4Addr::new(127, 0, 0, 2),
+            identifier: "joiner".into(),
+            network_port: 4000,
+            blend_port: 5000,
+            api_port: 9000,
+        };
 
         let appended_config = create_node_config_from_template(&tracing, &new_host, template);
 

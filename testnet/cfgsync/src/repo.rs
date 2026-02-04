@@ -9,7 +9,8 @@ use lb_tracing_service::TracingSettings;
 use tokio::{sync::oneshot::Sender, time::timeout};
 
 use crate::{
-    config::{Host, create_node_config_from_template, create_node_configs},
+    Host,
+    config::{create_node_config_from_template, create_node_configs},
     server::CfgSyncConfig,
 };
 
