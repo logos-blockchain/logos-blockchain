@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use lb_common_http_client::CommonHttpClient;
-use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
+use lb_http_api_common::bodies::wallet::transfer_funds::{
+    WalletTransferFundsRequestBody, WalletTransferFundsResponseBody,
+};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_node::{
     UserConfig,
@@ -51,7 +53,10 @@ impl Faucet {
         })
     }
 
-    pub async fn transfer_to_pk(&self, recipient_pk: ZkPublicKey) -> Result<(), String> {
+    pub async fn transfer_to_pk(
+        &self,
+        recipient_pk: ZkPublicKey,
+    ) -> Result<WalletTransferFundsResponseBody, String> {
         let balance_info = self
             .http_client
             .get_wallet_balance(self.base_url.clone(), self.faucet_pk, None)
@@ -83,7 +88,6 @@ impl Faucet {
         self.http_client
             .transfer_funds(self.base_url.clone(), body)
             .await
-            .map(|_| ())
             .map_err(|e| format!("Faucet transfer failed: {e}"))
     }
 }

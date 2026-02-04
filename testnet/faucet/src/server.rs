@@ -33,7 +33,7 @@ async fn transfer_funds(
     };
 
     match faucet.transfer_to_pk(recipient_pk).await {
-        Ok(()) => (StatusCode::OK, "Transfer successful".to_owned()).into_response(),
+        Ok(tx) => (StatusCode::OK, tx).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
 }

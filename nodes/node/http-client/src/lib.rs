@@ -108,7 +108,7 @@ impl CommonHttpClient {
         let body = response.text().await.map_err(Error::Request)?;
 
         match status {
-            StatusCode::OK => serde_json::from_str(&body)
+            StatusCode::OK | StatusCode::CREATED => serde_json::from_str(&body)
                 .map_err(|e| Error::Server(format!("Failed to parse response: {e}"))),
             StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server(body)),
             _ => Err(Error::Server(format!(
