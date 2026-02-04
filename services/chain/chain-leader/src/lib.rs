@@ -344,6 +344,7 @@ where
 
         // Wait until the chain becomes Online mode.
         // We should not propose blocks while the chain is in Bootstrapping mode.
+        info!("Waiting for chain to become Online mode");
         cryptarchia_api
             .subscribe_chain_online()
             .await
@@ -351,6 +352,7 @@ where
             .wait_for(Option::is_some)
             .await
             .expect("Waiting for chain to be online should succeed");
+        info!("Chain is now Online. Starting block proposals.");
 
         self.service_resources_handle.status_updater.notify_ready();
         info!(
