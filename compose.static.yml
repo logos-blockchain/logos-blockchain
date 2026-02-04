@@ -38,6 +38,7 @@ services:
       - CFG_NETWORK_PORT=${NODE0_NET_PORT}
       - CFG_BLEND_PORT=${NODE0_BLEND_PORT}
       - CFG_API_PORT=${NODE0_API_PORT}
+      - FAUCET_PORT=${NODE0_FAUCET_PORT}
     ports:
       - "3000:3000/udp"
       - "3400:3400/udp"
@@ -57,6 +58,7 @@ services:
       - CFG_NETWORK_PORT=${NODE1_NET_PORT}
       - CFG_BLEND_PORT=${NODE1_BLEND_PORT}
       - CFG_API_PORT=${NODE1_API_PORT}
+      - FAUCET_PORT=${NODE1_FAUCET_PORT}
     ports:
       - "3001:3001/udp"
       - "3401:3401/udp"
@@ -76,6 +78,7 @@ services:
       - CFG_NETWORK_PORT=${NODE2_NET_PORT}
       - CFG_BLEND_PORT=${NODE2_BLEND_PORT}
       - CFG_API_PORT=${NODE2_API_PORT}
+      - FAUCET_PORT=${NODE2_FAUCET_PORT}
     ports:
       - "3002:3002/udp"
       - "3402:3402/udp"
@@ -95,6 +98,7 @@ services:
       - CFG_NETWORK_PORT=${NODE3_NET_PORT}
       - CFG_BLEND_PORT=${NODE3_BLEND_PORT}
       - CFG_API_PORT=${NODE3_API_PORT}
+      - FAUCET_PORT=${NODE3_FAUCET_PORT}
     ports:
       - "3003:3003/udp"
       - "3403:3403/udp"
