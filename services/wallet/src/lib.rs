@@ -895,12 +895,12 @@ where
         );
 
         state.prune_states(lib_update.pruned_blocks.all());
-        let pruned_blocks: Vec<Block<Tx>> =
+        let immutable_blocks: Vec<Block<Tx>> =
             futures::stream::iter(lib_update.pruned_blocks.immutable_blocks.values())
                 .filter_map(async |header_id: &HeaderId| storage_adapter.get_block(header_id).await)
                 .collect::<Vec<_>>()
                 .await;
-        let pruned_nullifiers: Vec<VoucherNullifier> = pruned_blocks
+        let claimed_nullifiers: Vec<VoucherNullifier> = immutable_blocks
             .into_iter()
             .flat_map(|block: Block<Tx>| block.into_transactions().into_iter())
             .flat_map(|tx: Tx| {
@@ -916,7 +916,7 @@ where
                 }
             })
             .collect();
-        state.prune_vouchers(pruned_nullifiers);
+        state.prune_vouchers(claimed_nullifiers);
     }
 
     async fn backfill_missing_blocks(

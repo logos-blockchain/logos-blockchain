@@ -94,6 +94,7 @@ impl<'u> ServiceState<'u> {
         pruned_nullifiers: impl IntoIterator<Item = VoucherNullifier>,
     ) {
         self.wallet.prune_vouchers(pruned_nullifiers);
+        self.update_state();
     }
 
     pub const fn wallet(&self) -> &Wallet {
