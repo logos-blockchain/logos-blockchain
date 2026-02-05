@@ -7235,6 +7235,7 @@ dependencies = [
  "logos-blockchain-core 0.1.0",
  "logos-blockchain-key-management-system-service 0.1.0",
  "reqwest 0.12.28",
+ "rpds",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
