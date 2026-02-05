@@ -6,21 +6,21 @@ use core::{
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
-    blend::deployment::Settings as BlendDeploymentSettings,
+    OnUnknownKeys, blend::deployment::Settings as BlendDeploymentSettings,
     cryptarchia::deployment::Settings as CryptarchiaDeploymentSettings,
-    mempool::deployment::Settings as MempoolDeploymentSettings,
+    deserialize_config_from_reader, mempool::deployment::Settings as MempoolDeploymentSettings,
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
 
-const MAINNET: &str = "mainnet";
+const DEVNET: &str = "devnet";
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
 pub enum WellKnownDeployment {
-    // Must match the `MAINNET` definition above.
-    #[serde(rename = "mainnet")]
+    // Must match the `DEVNET` definition above.
+    #[serde(rename = "devnet")]
     #[default]
-    Mainnet,
+    Devnet,
 }
 
 impl FromStr for WellKnownDeployment {
@@ -28,7 +28,7 @@ impl FromStr for WellKnownDeployment {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            MAINNET => Ok(Self::Mainnet),
+            DEVNET => Ok(Self::Devnet),
             _ => Err(()),
         }
     }
@@ -37,7 +37,7 @@ impl FromStr for WellKnownDeployment {
 impl Display for WellKnownDeployment {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Mainnet => write!(f, "{MAINNET}"),
+            Self::Devnet => write!(f, "{DEVNET}"),
         }
     }
 }
@@ -53,12 +53,15 @@ pub struct DeploymentSettings {
 
 impl From<WellKnownDeployment> for DeploymentSettings {
     fn from(value: WellKnownDeployment) -> Self {
-        Self {
-            blend: value.into(),
-            cryptarchia: value.into(),
-            network: value.into(),
-            time: value.into(),
-            mempool: value.into(),
+        match value {
+            WellKnownDeployment::Devnet => devnet_deployment_settings(),
         }
     }
+}
+
+fn devnet_deployment_settings() -> DeploymentSettings {
+    const SERIALIZED_DEVNET_CONFIG: &str =
+        include_str!("../../../well-known-deployments/devnet.yaml");
+    deserialize_config_from_reader(SERIALIZED_DEVNET_CONFIG.as_bytes(), OnUnknownKeys::Fail)
+        .expect("Well-known devnet deployment should have valid structure")
 }

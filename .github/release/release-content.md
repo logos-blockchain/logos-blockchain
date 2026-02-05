@@ -40,7 +40,7 @@ Then, download the `devnet-deployment.yaml` deployment file attached to this rel
 
 After tweaking the node config file to fit your needs, you can run the node binary.
 
-For example: `logos-blockchain-node-macos-aarch64-0.0.1 --deployment devnet-deployment.yaml node-config.yaml`. See the repo's `README.md` for more info.
+For example: `logos-blockchain-node-macos-aarch64-0.0.1 --deployment devnet`. See the repo's `README.md` for more info.
 
 To verify that your node is running correctly and connected, visit http://localhost:{api_port_in_user_config}/cryptarchia/info. The slot and height should both be constantly increasing.
 
