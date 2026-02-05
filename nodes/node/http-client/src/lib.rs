@@ -4,9 +4,18 @@ use futures::{Stream, StreamExt as _};
 use lb_chain_broadcast_service::BlockInfo;
 use lb_chain_service::CryptarchiaInfo;
 use lb_core::{block::Block, header::HeaderId, mantle::SignedMantleTx};
-use lb_http_api_common::paths::{
-    CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, STORAGE_BLOCK,
+use lb_groth16::fr_to_bytes;
+use lb_http_api_common::{
+    bodies::wallet::{
+        balance::WalletBalanceResponseBody,
+        transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+    },
+    paths::{
+        CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, STORAGE_BLOCK,
+        wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
+    },
 };
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -177,5 +186,40 @@ impl CommonHttpClient {
             .join(STORAGE_BLOCK.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.post(request_url, &header_id).await
+    }
+
+    /// Get the balance for a specific `ZkPublicKey`.
+    pub async fn get_wallet_balance(
+        &self,
+        base_url: Url,
+        zk_pk: ZkPublicKey,
+        tip: Option<HeaderId>,
+    ) -> Result<WalletBalanceResponseBody, Error> {
+        let key_id = hex::encode(fr_to_bytes(zk_pk.as_fr()));
+        let mut request_url = base_url
+            .join(&BALANCE.replace(":public_key", &key_id))
+            .map_err(Error::Url)?;
+
+        if let Some(t) = tip {
+            request_url
+                .query_pairs_mut()
+                .append_pair("tip", &t.to_string());
+        }
+
+        self.get::<(), WalletBalanceResponseBody>(request_url, None)
+            .await
+    }
+
+    /// Post a request to transfer funds.
+    pub async fn transfer_funds(
+        &self,
+        base_url: Url,
+        body: WalletTransferFundsRequestBody,
+    ) -> Result<WalletTransferFundsResponseBody, Error> {
+        let request_url = base_url
+            .join(TRANSACTIONS_TRANSFER_FUNDS.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
     }
 }
