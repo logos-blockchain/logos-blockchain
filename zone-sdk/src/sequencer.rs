@@ -28,6 +28,9 @@ const DEFAULT_PUBLISH_CHANNEL_CAPACITY: usize = 256;
 /// Inscription identifier.
 pub type InscriptionId = TxHash;
 
+/// Inscription status.
+pub type InscriptionStatus = TxStatus;
+
 /// Configuration for the zone sequencer.
 pub struct SequencerConfig {
     pub resubmit_interval: Duration,
@@ -153,7 +156,7 @@ impl ZoneSequencer {
     }
 
     /// Get the status of an inscription.
-    pub async fn status(&self, id: InscriptionId) -> Result<TxStatus, Error> {
+    pub async fn status(&self, id: InscriptionId) -> Result<InscriptionStatus, Error> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let request = ActorRequest::Status {
             id,
