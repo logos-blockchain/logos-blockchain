@@ -9,10 +9,9 @@ use logos_blockchain_tests::cucumber::{
 #[tokio::test]
 async fn cucumber_local_idle_smoke() {
     // Required env vars (set on the command line when running this test):
-    // - `POL_PROOF_DEV_MODE=true`
-    // - `NOMOS_NODE_BIN=...`
-    // - `NOMOS_KZGRS_PARAMS_PATH=...` (path to KZG params directory/file, e.g.
-    //   `tests/kzgrs`)
+    // - `LOGOS_BLOCKCHAIN_NODE_BIN=...`
+    // - `LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH=...` (path to KZG params
+    //   directory/file, e.g. `tests/kzgrs`)
     // - `RUST_LOG=info` (optional; better visibility)
 
     init_logging_defaults();

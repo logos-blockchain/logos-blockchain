@@ -5,6 +5,7 @@ use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::StreamExt as _;
 use lb_chain_service::{
     LibUpdate,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -128,6 +129,12 @@ pub enum WalletMsg {
     GenerateNewVoucherSecret {
         resp_tx: oneshot::Sender<VoucherCm>,
     },
+    GetClaimableVoucher {
+        tip: Option<HeaderId>,
+        resp_tx: oneshot::Sender<
+            Result<TipResponse<Option<VoucherCommitmentAndNullifier>>, WalletServiceError>,
+        >,
+    },
 }
 
 #[derive(Debug)]
@@ -142,6 +149,12 @@ pub struct UtxoWithKeyId {
     pub key_id: KeyId,
 }
 
+#[derive(Debug)]
+pub struct VoucherCommitmentAndNullifier {
+    pub commitment: VoucherCm,
+    pub nullifier: VoucherNullifier,
+}
+
 impl WalletMsg {
     /// Returns [`HeaderId`] of the tip if the message is associated
     /// with a specific tip.
@@ -151,7 +164,8 @@ impl WalletMsg {
             Self::GetBalance { tip, .. }
             | Self::FundTx { tip, .. }
             | Self::SignTx { tip, .. }
-            | Self::GetLeaderAgedNotes { tip, .. } => *tip,
+            | Self::GetLeaderAgedNotes { tip, .. }
+            | Self::GetClaimableVoucher { tip, .. } => *tip,
             Self::GenerateNewVoucherSecret { .. } => None,
         }
     }
@@ -316,7 +330,7 @@ where
                     Self::handle_new_block(event.block_id, &mut state, &storage_adapter, &cryptarchia_api).await;
                 }
                 Ok(lib_update) = lib_receiver.recv() => {
-                    Self::handle_lib_update(&lib_update, &mut state);
+                    Self::handle_lib_update(&lib_update, &storage_adapter, &mut state).await;
                 }
             }
         }
@@ -455,6 +469,9 @@ where
                 )
                 .await;
             }
+            WalletMsg::GetClaimableVoucher { tip, resp_tx } => {
+                Self::get_claimable_voucher(tip, resp_tx, state.wallet(), cryptarchia).await;
+            }
         }
     }
 
@@ -584,7 +601,8 @@ where
                     OpProof::ZkSig(zk_sig)
                 }
                 Op::LeaderClaim(claim_op) => {
-                    Self::prove_leader_claim_op(claim_op.clone(), &ledger, wallet, kms).await?
+                    Self::prove_leader_claim_op(claim_op.clone(), tx_hash, &ledger, wallet, kms)
+                        .await?
                 }
             };
             ops_proofs.push(proof);
@@ -649,6 +667,7 @@ where
 
     async fn prove_leader_claim_op(
         op: LeaderClaimOp,
+        tx_hash: TxHash,
         ledger: &LedgerState,
         wallet: &Wallet,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
@@ -667,7 +686,7 @@ where
 
         // TODO: This should happen in KMS
         let poc = tokio::task::spawn_blocking(move || {
-            Self::generate_poc(voucher_secret, &path, op.rewards_root, op.mantle_tx_hash)
+            Self::generate_poc(voucher_secret, &path, op.rewards_root, tx_hash)
         })
         .await??;
 
@@ -792,6 +811,55 @@ where
             .into()
     }
 
+    async fn get_claimable_voucher(
+        tip: Option<HeaderId>,
+        resp_tx: oneshot::Sender<
+            Result<TipResponse<Option<VoucherCommitmentAndNullifier>>, WalletServiceError>,
+        >,
+        wallet: &Wallet,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    ) {
+        let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+            Ok(tip) => tip,
+            Err(err) => {
+                Self::send_err(resp_tx, err);
+                return;
+            }
+        };
+
+        // Get the ledger state at the specified tip
+        let Ok(Some(ledger_state)) = cryptarchia.get_ledger_state(tip).await else {
+            Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(tip));
+            return;
+        };
+
+        let voucher = Self::find_claimable_voucher(wallet, &ledger_state);
+        if resp_tx
+            .send(Ok(TipResponse {
+                tip,
+                response: voucher,
+            }))
+            .is_err()
+        {
+            error!("Failed to respond to GetClaimableVoucher");
+        }
+    }
+
+    fn find_claimable_voucher(
+        wallet: &Wallet,
+        ledger_state: &LedgerState,
+    ) -> Option<VoucherCommitmentAndNullifier> {
+        for (nf, cm) in wallet.voucher_commitments_and_nullifiers() {
+            if ledger_state.mantle_ledger().has_claimable_voucher(cm) {
+                return Some(VoucherCommitmentAndNullifier {
+                    commitment: *cm,
+                    nullifier: *nf,
+                });
+            }
+        }
+        None
+    }
+
     async fn backfill_if_not_in_sync(
         tip: Option<HeaderId>,
         state: &mut ServiceState<'_>,
@@ -829,10 +897,9 @@ where
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
-        let Ok((block, ledger)) = Self::load_block_and_ledger(
+        let Ok(block) = Self::load_block(
             header_id,
             storage_adapter,
-            cryptarchia_api,
         )
         .await
         .inspect_err(|e| {
@@ -842,7 +909,7 @@ where
         };
 
         let wallet_block = WalletBlock::from(block);
-        match state.apply_block(&wallet_block, &ledger) {
+        match state.apply_block(&wallet_block) {
             Ok(()) => {
                 trace!(block_id=?wallet_block.id, "Applied block to wallet");
             }
@@ -865,23 +932,21 @@ where
         }
     }
 
-    async fn load_block_and_ledger(
+    async fn load_block(
         header_id: HeaderId,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
-        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
-    ) -> Result<(Block<Tx>, LedgerState), WalletServiceError> {
-        let block = storage_adapter
+    ) -> Result<Block<Tx>, WalletServiceError> {
+        storage_adapter
             .get_block(&header_id)
             .await
-            .ok_or(WalletServiceError::BlockNotFoundInStorage(header_id))?;
-        let ledger = cryptarchia_api
-            .get_ledger_state(header_id)
-            .await?
-            .ok_or(WalletServiceError::LedgerStateNotFound(header_id))?;
-        Ok((block, ledger))
+            .ok_or(WalletServiceError::BlockNotFoundInStorage(header_id))
     }
 
-    fn handle_lib_update(lib_update: &LibUpdate, state: &mut ServiceState<'_>) {
+    async fn handle_lib_update(
+        lib_update: &LibUpdate,
+        storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+        state: &mut ServiceState<'_>,
+    ) {
         debug!(
             new_lib = ?lib_update.new_lib,
             stale_blocks_count = lib_update.pruned_blocks.stale_blocks.len(),
@@ -890,6 +955,28 @@ where
         );
 
         state.prune_states(lib_update.pruned_blocks.all());
+        let immutable_blocks: Vec<Block<Tx>> =
+            futures::stream::iter(lib_update.pruned_blocks.immutable_blocks.values())
+                .filter_map(async |header_id: &HeaderId| storage_adapter.get_block(header_id).await)
+                .collect::<Vec<_>>()
+                .await;
+        let claimed_nullifiers: Vec<VoucherNullifier> = immutable_blocks
+            .into_iter()
+            .flat_map(|block: Block<Tx>| block.into_transactions().into_iter())
+            .flat_map(|tx: Tx| {
+                tx.ops_with_proof()
+                    .map(|(op, _)| op.clone())
+                    .collect::<Vec<_>>()
+            })
+            .filter_map(|op| {
+                if let Op::LeaderClaim(claim_op) = op {
+                    Some(claim_op.voucher_nullifier)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        state.prune_vouchers(claimed_nullifiers);
     }
 
     async fn backfill_missing_blocks(
@@ -912,10 +999,9 @@ where
                 continue;
             }
 
-            let (block, ledger) =
-                Self::load_block_and_ledger(header_id, storage_adapter, cryptarchia_api).await?;
+            let block = Self::load_block(header_id, storage_adapter).await?;
 
-            if let Err(e) = state.apply_block(&block.into(), &ledger) {
+            if let Err(e) = state.apply_block(&block.into()) {
                 error!(
                     block_id = ?header_id,
                     err = %e,

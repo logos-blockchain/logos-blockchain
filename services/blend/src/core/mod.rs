@@ -395,6 +395,7 @@ where
             time: blend_config.time,
             zk: blend_config.zk,
             data_replication_factor: blend_config.data_replication_factor,
+            activity_threshold_sensitivity: blend_config.activity_threshold_sensitivity,
         };
         let (
             mut remaining_session_stream,
@@ -682,6 +683,7 @@ where
                     &pol_epoch_nonce,
                     current_membership_info.public.membership.size() as u64,
                     current_membership_info.public.poq_core_public_inputs.quota,
+                    blend_config.activity_threshold_sensitivity,
                 ).expect("Reward session info must be created successfully. Panicking since the service cannot continue with this session")
             ),
             None,
@@ -1058,6 +1060,7 @@ where
                 &current_public_info.epoch.pol_epoch_nonce,
                 new_membership.size() as u64,
                 new_core_public_inputs.quota,
+                settings.activity_threshold_sensitivity,
             )
             .expect("Reward session info must be created successfully. Panicking since the service cannot continue with this session");
             let (new_session_blending_token_collector, old_session_blending_token_collector) =

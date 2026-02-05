@@ -48,7 +48,7 @@ use serde_with::serde_as;
 use strum::IntoEnumIterator as _;
 use thiserror::Error;
 use tokio::{
-    sync::{broadcast, mpsc, oneshot},
+    sync::{broadcast, mpsc, oneshot, watch},
     time::Instant,
 };
 use tracing::{Level, debug, error, info, instrument, span, warn};
@@ -140,6 +140,13 @@ pub enum ConsensusMsg<Tx> {
     /// completed. Chain-service should start the prolonged bootstrap timer
     /// upon receiving this.
     IbdCompleted,
+    /// Subscribe to be notified when the chain becomes online mode.
+    /// Since chain never goes back after entering online,
+    /// the notification is delivered at most once.
+    /// Late subscribers are notified immediately.
+    SubscribeChainOnline {
+        sender: oneshot::Sender<watch::Receiver<bool>>,
+    },
 }
 
 #[serde_as]
@@ -432,6 +439,7 @@ where
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     new_block_subscription_sender: broadcast::Sender<ProcessedBlockEvent>,
     lib_subscription_sender: broadcast::Sender<LibUpdate>,
+    chain_online_subscription_channel: watch::Sender<bool>,
     state: <Self as ServiceData>::State,
 }
 
@@ -485,11 +493,13 @@ where
     ) -> Result<Self, DynError> {
         let (new_block_subscription_sender, _) = broadcast::channel(16);
         let (lib_subscription_sender, _) = broadcast::channel(16);
+        let (chain_online_subscription_channel, _) = watch::channel(false);
 
         Ok(Self {
             service_resources_handle,
             new_block_subscription_sender,
             lib_subscription_sender,
+            chain_online_subscription_channel,
             state: initial_state,
         })
     }
@@ -523,7 +533,6 @@ where
 
         let (mut current_slot, mut slot_timer) = Self::get_slot_timer(&relays).await?;
 
-        // TODO: check active slot coeff is exactly 1/30
         let (mut cryptarchia, pruned_blocks) = self
             .initialize_cryptarchia(
                 &bootstrap_config,
@@ -557,7 +566,7 @@ where
         );
 
         // Mark the service as ready. The service is operational and can handle requests
-        // even while in bootstrap mode waiting for IBD to complete.
+        // even while in bootstrap mode waiting for IBD+PBP to complete.
         self.notify_service_ready();
 
         let async_loop = async {
@@ -569,6 +578,7 @@ where
                             cryptarchia,
                             &storage_blocks_to_remove,
                             relays.storage_adapter(),
+                            &self.chain_online_subscription_channel,
                         ).await;
                         Self::update_state(
                             &cryptarchia,
@@ -623,7 +633,7 @@ where
                                 }
                             }
                             msg => {
-                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, msg);
+                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &self.chain_online_subscription_channel, msg);
                             }
                         }
                     }
@@ -720,6 +730,7 @@ where
         cryptarchia: &Cryptarchia,
         new_block_channel: &broadcast::Sender<ProcessedBlockEvent>,
         lib_channel: &broadcast::Sender<LibUpdate>,
+        chain_online_subscription_channel: &watch::Sender<bool>,
         msg: ConsensusMsg<Tx>,
     ) {
         match msg {
@@ -805,6 +816,13 @@ where
                 // the prolonged_bootstrap_timer. This should never be reached since we filter
                 // it out before calling process_message
                 panic!("IbdCompleted should be handled in the run loop, not in process_message");
+            }
+            ConsensusMsg::SubscribeChainOnline { sender } => {
+                sender
+                    .send(chain_online_subscription_channel.subscribe())
+                    .unwrap_or_else(|_| {
+                        error!("Could not subscribe to new block channel");
+                    });
             }
         }
     }
@@ -1244,8 +1262,13 @@ where
         cryptarchia: Cryptarchia,
         storage_blocks_to_remove: &HashSet<HeaderId>,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+        chain_online_subscription_channel: &watch::Sender<bool>,
     ) -> (Cryptarchia, HashSet<HeaderId>) {
         let (cryptarchia, pruned_blocks) = cryptarchia.online();
+        info!("Chain switched to Online mode");
+
+        notify_chain_online_subscribers(chain_online_subscription_channel);
+
         if let Err(e) = storage_adapter
             .store_immutable_block_ids(pruned_blocks.immutable_blocks().clone())
             .await
@@ -1350,4 +1373,49 @@ async fn broadcast_blend_session(
         .send(BlockBroadcastMsg::BroadcastBlendSession(session))
         .await
         .map_err(|(error, _)| Box::new(error) as DynError)
+}
+
+fn notify_chain_online_subscribers(chain_online_subscription_channel: &watch::Sender<bool>) {
+    info!("Notifying chain online subscribers");
+
+    // NOTE: Use `send_replace` to always make a new value available for future
+    // receivers, even if no receiver currently exists
+    let initial_value = chain_online_subscription_channel.send_replace(true);
+    assert!(
+        !initial_value, // must be `false`
+        "Chain online subscribers must be notified only once because chain switches to online only once"
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_notify_chain_online_subscribers() {
+        let (sender, receiver) = watch::channel(false);
+
+        // Initially, the receiver should have 'false'.
+        assert!(!(*receiver.borrow()));
+
+        // Notify subscribers
+        notify_chain_online_subscribers(&sender);
+
+        // New subscribers should be notified immediately
+        assert!(*receiver.borrow());
+    }
+
+    #[test]
+    fn test_notify_chain_online_subscribers_with_no_initial_receiver() {
+        // Drop receiver deliberately to test if a new value is set
+        // even if no receiver exists.
+        let (sender, _) = watch::channel(false);
+
+        // Notify subscribers when no receiver exists
+        notify_chain_online_subscribers(&sender);
+
+        // New subscribers should be notified immediately
+        let receiver = sender.subscribe();
+        assert!(*receiver.borrow());
+    }
 }

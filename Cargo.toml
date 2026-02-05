@@ -27,7 +27,6 @@ members = [
   "blend/network",
   "blend/proofs",
   "blend/scheduling",
-  "bundler",
   "c-bindings",
   "consensus/cryptarchia-engine",
   "consensus/cryptarchia-sync",
@@ -91,7 +90,6 @@ lb-blend-network                   = { default-features = false, package = "logo
 lb-blend-proofs                    = { default-features = false, package = "logos-blockchain-blend-proofs", path = "./blend/proofs" }
 lb-blend-scheduling                = { default-features = false, package = "logos-blockchain-blend-scheduling", path = "./blend/scheduling" }
 lb-blend-service                   = { default-features = false, package = "logos-blockchain-blend-service", path = "./services/blend" }
-lb-bundler                         = { default-features = false, package = "logos-blockchain-bundler", path = "./bundler" }
 lb-cfgsync                         = { default-features = false, package = "logos-blockchain-cfgsync", path = "./testnet/cfgsync" }
 lb-chain-broadcast-service         = { default-features = false, package = "logos-blockchain-chain-broadcast-service", path = "./services/chain/broadcast-service" }
 lb-chain-leader-service            = { default-features = false, package = "logos-blockchain-chain-leader-service", path = "./services/chain/chain-leader" }

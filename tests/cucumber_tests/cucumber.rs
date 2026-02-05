@@ -38,19 +38,31 @@ async fn main() {
     let output_dir = create_scenario_output_dir();
     let junit_xml_file = fs::File::create(output_dir.join("cucumber-output-junit.xml")).unwrap();
     let world = CucumberWorld::cucumber()
+        // Re-outputs Failed steps for easier navigation.
         .repeat_failed()
-        .max_concurrent_scenarios(1)
-        .fail_on_skipped()
         // .fail_fast() // Remove comment to enable fail-fast behavior for development
+        // Makes failed Scenarios being retried the specified number of times.
+        .retries(2)
+        .max_concurrent_scenarios(1)
+        // Ensure that all the steps were covered.
+        .fail_on_skipped()
+        // Replaces Writer.
         .with_writer(
             writer::Summarize::new(writer::Basic::new(
                 io::stdout(),
-                writer::Coloring::Auto,
+                // With `writer::Coloring::Auto`, cucumber treats the output as a TTY and using the
+                // underlying termcolor/console behaviour that can rewrite/clear lines when
+                // printing step statuses (✔ ...). That can visually clobber the
+                // immediately adjacent tracing line, especially the one emitted
+                // right as the step transitions from “running” to “passed”.
+                writer::Coloring::Never,
                 Verbosity::ShowWorldAndDocString,
             ))
             .tee::<CucumberWorld, _>(writer::JUnit::for_tee(junit_xml_file, 0))
             .normalized(),
         )
+        // Sets a hook, executed on each Scenario before running all its Steps, including Background
+        // ones.
         .before(move |feature, _rule, scenario, world| {
             Box::pin(async move {
                 println!(
@@ -63,5 +75,7 @@ async fn main() {
             })
         });
 
+    // Runs Cucumber. Features sourced from a Parser are fed to a Runner, which
+    // produces events handled by a Writer.
     world.run_and_exit(get_feature_path()).await;
 }

@@ -1,11 +1,12 @@
 use core::{num::NonZeroUsize, time::Duration};
 use std::collections::HashSet;
 
+use lb_chain_leader_service::LeaderWalletConfig;
 use lb_chain_network_service::{IbdConfig, OrphanConfig, SyncConfig};
 use lb_chain_service::{OfflineGracePeriodConfig, StartingState};
 use lb_core::{
     mantle::{
-        MantleTx, Note, OpProof, Utxo,
+        MantleTx, Note, OpProof, Utxo, Value,
         genesis_tx::GenesisTx,
         ledger::Tx as LedgerTx,
         ops::{
@@ -19,7 +20,7 @@ use lb_groth16::CompressedGroth16Proof;
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey, ZkPublicKey, ZkSignature};
 use lb_node::{
     SignedMantleTx, Transaction as _,
-    config::cryptarchia::serde::{Config, NetworkConfig, ServiceConfig},
+    config::cryptarchia::serde::{Config, LeaderConfig, NetworkConfig, ServiceConfig},
 };
 use num_bigint::BigUint;
 
@@ -135,42 +136,54 @@ pub fn create_consensus_configs(
     regular_note_keys
         .into_iter()
         .enumerate()
-        .map(|(i, sk)| GeneralConsensusConfig {
-            blend_notes: blend_notes.clone(),
-            genesis_tx: genesis_tx.clone(),
-            utxos: utxos.clone(),
-            known_key: sk,
-            funding_sk: sdp_notes[i].sk.clone(),
-            user_config: Config {
-                network: NetworkConfig {
-                    bootstrap: lb_chain_network_service::BootstrapConfig {
-                        ibd: IbdConfig {
-                            delay_before_new_download: Duration::from_secs(10),
-                            peers: HashSet::new(),
+        .map(|(i, sk)| {
+            let funding_sk = sdp_notes[i].sk.clone();
+            let funding_pk = sdp_notes[i].pk;
+
+            GeneralConsensusConfig {
+                blend_notes: blend_notes.clone(),
+                genesis_tx: genesis_tx.clone(),
+                utxos: utxos.clone(),
+                known_key: sk,
+                funding_sk,
+                user_config: Config {
+                    network: NetworkConfig {
+                        bootstrap: lb_chain_network_service::BootstrapConfig {
+                            ibd: IbdConfig {
+                                delay_before_new_download: Duration::from_secs(10),
+                                peers: HashSet::new(),
+                            },
+                        },
+                        sync: SyncConfig {
+                            orphan: OrphanConfig {
+                                max_orphan_cache_size: NonZeroUsize::new(5)
+                                    .expect("Max orphan cache size must be non-zero"),
+                            },
                         },
                     },
-                    sync: SyncConfig {
-                        orphan: OrphanConfig {
-                            max_orphan_cache_size: NonZeroUsize::new(5)
-                                .expect("Max orphan cache size must be non-zero"),
+                    service: ServiceConfig {
+                        bootstrap: lb_chain_service::BootstrapConfig {
+                            force_bootstrap: false,
+                            offline_grace_period: OfflineGracePeriodConfig {
+                                grace_period: Duration::from_secs(20 * 60),
+                                state_recording_interval: Duration::from_secs(60),
+                            },
+                            prolonged_bootstrap_period,
+                        },
+                        recovery_file: "./recovery/cryptarchia.json".into(),
+                        starting_state: StartingState::Genesis {
+                            genesis_tx: genesis_tx.clone(),
+                        },
+                    },
+                    leader: LeaderConfig {
+                        wallet: LeaderWalletConfig {
+                            max_tx_fee: Value::MAX,
+                            // We use the same funding key used for SDP.
+                            funding_pk,
                         },
                     },
                 },
-                service: ServiceConfig {
-                    bootstrap: lb_chain_service::BootstrapConfig {
-                        force_bootstrap: false,
-                        offline_grace_period: OfflineGracePeriodConfig {
-                            grace_period: Duration::from_secs(20 * 60),
-                            state_recording_interval: Duration::from_secs(60),
-                        },
-                        prolonged_bootstrap_period,
-                    },
-                    recovery_file: "./recovery/cryptarchia.json".into(),
-                    starting_state: StartingState::Genesis {
-                        genesis_tx: genesis_tx.clone(),
-                    },
-                },
-            },
+            }
         })
         .collect()
 }

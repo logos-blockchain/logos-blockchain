@@ -6,7 +6,6 @@ use lb_core::{
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use overwatch::{
-    DynError,
     overwatch::OverwatchHandle,
     services::{
         AsServiceId, ServiceData,
@@ -15,7 +14,10 @@ use overwatch::{
 };
 use tokio::sync::oneshot::{self, error::RecvError};
 
-use crate::{TipResponse, UtxoWithKeyId, WalletMsg, WalletServiceError, WalletServiceSettings};
+use crate::{
+    TipResponse, UtxoWithKeyId, VoucherCommitmentAndNullifier, WalletMsg, WalletServiceError,
+    WalletServiceSettings,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletApiError {
@@ -164,12 +166,22 @@ where
         Ok(rx.await??)
     }
 
-    pub async fn generate_new_voucher(&self) -> Result<VoucherCm, DynError> {
+    pub async fn generate_new_voucher(&self) -> Result<VoucherCm, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
         self.relay
             .send(WalletMsg::GenerateNewVoucherSecret { resp_tx })
-            .await
-            .map_err(|e| format!("Failed to request generating new voucher secret: {e:?}"))?;
+            .await?;
         Ok(rx.await?)
+    }
+
+    pub async fn get_claimable_voucher(
+        &self,
+        tip: Option<HeaderId>,
+    ) -> Result<TipResponse<Option<VoucherCommitmentAndNullifier>>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::GetClaimableVoucher { tip, resp_tx })
+            .await?;
+        Ok(rx.await??)
     }
 }

@@ -13,18 +13,14 @@ use crate::config::{
     time::deployment::Settings as TimeDeploymentSettings,
 };
 
-const MAINNET: &str = "mainnet";
-const TESTNET: &str = "testnet";
+mod devnet;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
 pub enum WellKnownDeployment {
-    // Must match the `MAINNET` definition above.
-    #[serde(rename = "mainnet")]
-    Mainnet,
-    // Must match the `TESTNET` definition above.
-    #[serde(rename = "testnet")]
+    // Must match the `DEVNET` definition in the `devnet` module.
+    #[serde(rename = "devnet")]
     #[default]
-    Testnet,
+    Devnet,
 }
 
 impl FromStr for WellKnownDeployment {
@@ -32,8 +28,7 @@ impl FromStr for WellKnownDeployment {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            MAINNET => Ok(Self::Mainnet),
-            TESTNET => Ok(Self::Testnet),
+            devnet::NAME => Ok(Self::Devnet),
             _ => Err(()),
         }
     }
@@ -42,8 +37,7 @@ impl FromStr for WellKnownDeployment {
 impl Display for WellKnownDeployment {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Mainnet => write!(f, "{MAINNET}"),
-            Self::Testnet => write!(f, "{TESTNET}"),
+            Self::Devnet => write!(f, "{}", devnet::NAME),
         }
     }
 }
@@ -59,12 +53,8 @@ pub struct DeploymentSettings {
 
 impl From<WellKnownDeployment> for DeploymentSettings {
     fn from(value: WellKnownDeployment) -> Self {
-        Self {
-            blend: value.into(),
-            cryptarchia: value.into(),
-            network: value.into(),
-            time: value.into(),
-            mempool: value.into(),
+        match value {
+            WellKnownDeployment::Devnet => devnet::deployment_settings(),
         }
     }
 }

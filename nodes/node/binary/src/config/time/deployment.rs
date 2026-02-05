@@ -3,30 +3,9 @@ use core::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
-use crate::config::deployment::WellKnownDeployment;
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde_as]
 pub struct Settings {
     #[serde_as(as = "lb_utils::bounded_duration::MinimalBoundedDuration<1, SECOND>")]
     pub slot_duration: Duration,
-}
-
-impl From<WellKnownDeployment> for Settings {
-    fn from(value: WellKnownDeployment) -> Self {
-        match value {
-            WellKnownDeployment::Mainnet => mainnet_settings(),
-            WellKnownDeployment::Testnet => testnet_settings(),
-        }
-    }
-}
-
-const fn mainnet_settings() -> Settings {
-    Settings {
-        slot_duration: Duration::from_secs(1),
-    }
-}
-
-const fn testnet_settings() -> Settings {
-    mainnet_settings()
 }

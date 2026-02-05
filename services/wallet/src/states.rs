@@ -74,18 +74,22 @@ impl<'u> ServiceState<'u> {
         self.update_state();
     }
 
-    pub fn apply_block(
-        &mut self,
-        block: &WalletBlock,
-        ledger: &LedgerState,
-    ) -> Result<(), WalletError> {
-        self.wallet.apply_block(block, ledger)?;
+    pub fn apply_block(&mut self, block: &WalletBlock) -> Result<(), WalletError> {
+        self.wallet.apply_block(block)?;
         self.update_state();
         Ok(())
     }
 
     pub fn prune_states(&mut self, pruned_blocks: impl IntoIterator<Item = HeaderId>) {
         self.wallet.prune_states(pruned_blocks);
+        self.update_state();
+    }
+
+    pub fn prune_vouchers(
+        &mut self,
+        pruned_nullifiers: impl IntoIterator<Item = VoucherNullifier>,
+    ) {
+        self.wallet.prune_vouchers(pruned_nullifiers);
         self.update_state();
     }
 

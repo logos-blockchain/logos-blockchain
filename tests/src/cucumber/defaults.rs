@@ -21,7 +21,6 @@ fn set_default_env(key: &str, value: &str) {
 }
 
 pub fn init_logging_defaults() {
-    set_default_env("POL_PROOF_DEV_MODE", "true");
     set_default_env("NOMOS_TESTS_KEEP_LOGS", "1");
     set_default_env("NOMOS_LOG_LEVEL", "info");
     set_default_env("RUST_LOG", "info");
@@ -44,7 +43,11 @@ pub fn init_node_log_dir_defaults(deployer: DeployerKind) {
 
 pub fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let _unused = fmt().with_env_filter(filter).with_target(true).try_init();
+    let _unused = fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 #[must_use]

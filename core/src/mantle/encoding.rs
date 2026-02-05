@@ -11,7 +11,7 @@ use nom::{
 
 use crate::{
     mantle::{
-        MantleTx, Note, NoteId, SignedMantleTx, TxHash,
+        MantleTx, Note, NoteId, SignedMantleTx,
         ledger::Tx as LedgerTx,
         ops::{
             Op, OpProof,
@@ -222,9 +222,6 @@ fn decode_leader_claim(input: &[u8]) -> IResult<&[u8], LeaderClaimOp> {
         LeaderClaimOp {
             rewards_root: RewardsRoot::from(rewards_root_fr),
             voucher_nullifier: VoucherNullifier::from(voucher_nullifier_fr),
-            // The mantle_tx_hash is not part of the wire format per ABNF spec
-            // It should be filled in after decoding when the tx hash is computed
-            mantle_tx_hash: TxHash::default(),
         },
     ))
 }
@@ -692,7 +689,10 @@ mod tests {
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::{mantle::Transaction as _, sdp::blend::ActivityProof};
+    use crate::{
+        mantle::{Transaction as _, TxHash},
+        sdp::blend::ActivityProof,
+    };
 
     fn dbg_test_vector(actual: &str, expected: &str) {
         println!("{:32} {:32}", "actual", "expected");

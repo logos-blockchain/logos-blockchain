@@ -1,6 +1,10 @@
 use cucumber::given;
 
-use crate::cucumber::world::{CucumberWorld, NetworkKind, StepError, StepResult, parse_deployer};
+use crate::cucumber::{
+    error::{StepError, StepResult},
+    utils::parse_deployer,
+    world::{CucumberWorld, NetworkKind},
+};
 
 #[given(expr = "deployer is {string}")]
 #[expect(clippy::needless_pass_by_value, reason = "Required by Cucumber")]

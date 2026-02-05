@@ -314,7 +314,7 @@ impl SignedMantleTx {
                 (Op::LeaderClaim(leader_claim_op), OpProof::PoC(poc)) => {
                     let ok = poc.verify(&LeaderClaimPublic {
                         voucher_root: leader_claim_op.rewards_root.into(),
-                        mantle_tx_hash: leader_claim_op.mantle_tx_hash.into(),
+                        mantle_tx_hash: tx_hash.into(),
                     });
                     if !ok {
                         return Err(VerificationError::InvalidProofOfClaim { op_index: idx });

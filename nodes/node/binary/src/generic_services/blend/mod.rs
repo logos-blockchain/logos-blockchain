@@ -1,7 +1,6 @@
 use core::{
     fmt::{Debug, Display},
     future::ready,
-    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -92,7 +91,9 @@ where
 
         wait_until_services_are_ready!(
             overwatch_handle,
-            Some(Duration::from_secs(60)),
+            // No timeout since chain-leader service becomes ready
+            // only after switching to Online mode.
+            None,
             CryptarchiaLeaderService<
                 CryptarchiaService<RuntimeServiceId>,
                 ChainNetworkService<RuntimeServiceId>,
