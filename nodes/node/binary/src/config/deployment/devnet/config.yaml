@@ -2,12 +2,12 @@ blend:
   common:
     num_blend_layers: 3
     timing:
-      rounds_per_session: 648000
-      rounds_per_interval: 30
+      rounds_per_session: 2000
+      rounds_per_interval: 10
       round_duration: '1.000000000'
-      rounds_per_observation_window: 30
-      rounds_per_session_transition_period: 30
-      epoch_transition_period_in_slots: 2600
+      rounds_per_observation_window: 20
+      rounds_per_session_transition_period: 20
+      epoch_transition_period_in_slots: 20
     minimum_network_size: 1
     protocol_name: /logos-blockchain-devnet/blend/1.0.0
     data_replication_factor: 0
