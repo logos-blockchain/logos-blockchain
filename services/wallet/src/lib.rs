@@ -129,6 +129,12 @@ pub enum WalletMsg {
     GenerateNewVoucherSecret {
         resp_tx: oneshot::Sender<VoucherCm>,
     },
+    GetClaimableVoucher {
+        tip: Option<HeaderId>,
+        resp_tx: oneshot::Sender<
+            Result<TipResponse<Option<VoucherCommitmentAndNullifier>>, WalletServiceError>,
+        >,
+    },
 }
 
 #[derive(Debug)]
@@ -143,6 +149,12 @@ pub struct UtxoWithKeyId {
     pub key_id: KeyId,
 }
 
+#[derive(Debug)]
+pub struct VoucherCommitmentAndNullifier {
+    pub commitment: VoucherCm,
+    pub nullifier: VoucherNullifier,
+}
+
 impl WalletMsg {
     /// Returns [`HeaderId`] of the tip if the message is associated
     /// with a specific tip.
@@ -152,7 +164,8 @@ impl WalletMsg {
             Self::GetBalance { tip, .. }
             | Self::FundTx { tip, .. }
             | Self::SignTx { tip, .. }
-            | Self::GetLeaderAgedNotes { tip, .. } => *tip,
+            | Self::GetLeaderAgedNotes { tip, .. }
+            | Self::GetClaimableVoucher { tip, .. } => *tip,
             Self::GenerateNewVoucherSecret { .. } => None,
         }
     }
@@ -456,6 +469,9 @@ where
                 )
                 .await;
             }
+            WalletMsg::GetClaimableVoucher { tip, resp_tx } => {
+                Self::get_claimable_voucher(tip, resp_tx, state.wallet(), cryptarchia).await;
+            }
         }
     }
 
@@ -585,7 +601,8 @@ where
                     OpProof::ZkSig(zk_sig)
                 }
                 Op::LeaderClaim(claim_op) => {
-                    Self::prove_leader_claim_op(claim_op.clone(), &ledger, wallet, kms).await?
+                    Self::prove_leader_claim_op(claim_op.clone(), tx_hash, &ledger, wallet, kms)
+                        .await?
                 }
             };
             ops_proofs.push(proof);
@@ -650,6 +667,7 @@ where
 
     async fn prove_leader_claim_op(
         op: LeaderClaimOp,
+        tx_hash: TxHash,
         ledger: &LedgerState,
         wallet: &Wallet,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
@@ -668,7 +686,7 @@ where
 
         // TODO: This should happen in KMS
         let poc = tokio::task::spawn_blocking(move || {
-            Self::generate_poc(voucher_secret, &path, op.rewards_root, op.mantle_tx_hash)
+            Self::generate_poc(voucher_secret, &path, op.rewards_root, tx_hash)
         })
         .await??;
 
@@ -791,6 +809,55 @@ where
             .await
             .expect("KMS API should respond with voucher_cm")
             .into()
+    }
+
+    async fn get_claimable_voucher(
+        tip: Option<HeaderId>,
+        resp_tx: oneshot::Sender<
+            Result<TipResponse<Option<VoucherCommitmentAndNullifier>>, WalletServiceError>,
+        >,
+        wallet: &Wallet,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    ) {
+        let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+            Ok(tip) => tip,
+            Err(err) => {
+                Self::send_err(resp_tx, err);
+                return;
+            }
+        };
+
+        // Get the ledger state at the specified tip
+        let Ok(Some(ledger_state)) = cryptarchia.get_ledger_state(tip).await else {
+            Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(tip));
+            return;
+        };
+
+        let voucher = Self::find_claimable_voucher(wallet, &ledger_state);
+        if resp_tx
+            .send(Ok(TipResponse {
+                tip,
+                response: voucher,
+            }))
+            .is_err()
+        {
+            error!("Failed to respond to GetClaimableVoucher");
+        }
+    }
+
+    fn find_claimable_voucher(
+        wallet: &Wallet,
+        ledger_state: &LedgerState,
+    ) -> Option<VoucherCommitmentAndNullifier> {
+        for (nf, cm) in wallet.voucher_commitments_and_nullifiers() {
+            if ledger_state.mantle_ledger().has_claimable_voucher(cm) {
+                return Some(VoucherCommitmentAndNullifier {
+                    commitment: *cm,
+                    nullifier: *nf,
+                });
+            }
+        }
+        None
     }
 
     async fn backfill_if_not_in_sync(

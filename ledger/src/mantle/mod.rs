@@ -9,7 +9,10 @@ use lb_core::{
     crypto::ZkHash,
     mantle::{
         AuthenticatedMantleTx, GasConstants, GenesisTx, NoteId, TxHash, Utxo,
-        ops::{Op, OpProof, leader_claim::VoucherCm},
+        ops::{
+            Op, OpProof,
+            leader_claim::{RewardsRoot, VoucherCm},
+        },
     },
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
 };
@@ -124,6 +127,11 @@ impl LedgerState {
     #[must_use]
     pub fn has_claimable_voucher(&self, voucher_cm: &VoucherCm) -> bool {
         self.leaders.has_claimable_voucher(voucher_cm)
+    }
+
+    #[must_use]
+    pub const fn claimable_vouchers_root(&self) -> RewardsRoot {
+        self.leaders.claimable_vouchers_root()
     }
 
     #[must_use]

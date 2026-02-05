@@ -45,4 +45,10 @@ impl<Id> Vouchers<Id> {
         let cm = self.voucher_nullifiers.remove(nf)?;
         self.vouchers.remove(&cm)
     }
+
+    pub(crate) fn commitments_and_nullifiers(
+        &self,
+    ) -> impl Iterator<Item = (&VoucherNullifier, &VoucherCm)> {
+        self.voucher_nullifiers.iter()
+    }
 }

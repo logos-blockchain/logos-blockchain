@@ -28,7 +28,7 @@ where
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId>,
 {
     blend_relay: BlendRelay<BlendService>,
-    mempool_adapter: adapter::MempoolAdapter<Mempool::Item, Mempool::Item>,
+    mempool_adapter: adapter::MempoolAdapter<Mempool::Item>,
     time_relay: TimeRelay,
     _mempool_adapter: std::marker::PhantomData<(MempoolNetAdapter, RuntimeServiceId)>,
 }
@@ -127,7 +127,7 @@ where
         &self.blend_relay
     }
 
-    pub const fn mempool_adapter(&self) -> &adapter::MempoolAdapter<Mempool::Item, Mempool::Item> {
+    pub const fn mempool_adapter(&self) -> &adapter::MempoolAdapter<Mempool::Item> {
         &self.mempool_adapter
     }
 

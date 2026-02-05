@@ -14,4 +14,6 @@ pub trait MempoolAdapter<Tx>: Send + Sync {
     ) -> Result<Pin<Box<dyn Stream<Item = Tx> + Send>>, overwatch::DynError>;
 
     async fn remove_transactions(&self, ids: &[TxHash]) -> Result<(), overwatch::DynError>;
+
+    async fn post_tx(&self, tx: Tx) -> Result<(), overwatch::DynError>;
 }

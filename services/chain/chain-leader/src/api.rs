@@ -40,9 +40,12 @@ where
                 ApiError::CommsFailure(format!("{relay_err} while sending Claim"))
             })?;
 
-        Ok(resp_rx.await.map_err(|relay_err| {
-            ApiError::CommsFailure(format!("{relay_err} while receiving Claim response"))
-        })??)
+        resp_rx
+            .await
+            .map_err(|relay_err| {
+                ApiError::CommsFailure(format!("{relay_err} while receiving Claim response"))
+            })?
+            .map_err(|e| ApiError::ChainLeaderServiceError(Box::new(e)))
     }
 }
 
@@ -51,5 +54,5 @@ pub enum ApiError {
     #[error("Failed to establish connection to chain-leader-service: {0}")]
     CommsFailure(String),
     #[error("Chain leader service error: {0}")]
-    ChainLeaderServiceError(#[from] crate::Error),
+    ChainLeaderServiceError(#[from] Box<crate::Error>),
 }

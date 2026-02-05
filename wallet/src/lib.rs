@@ -230,6 +230,12 @@ where
         self.known_vouchers.get_by_nullifier(nf)
     }
 
+    pub fn voucher_commitments_and_nullifiers(
+        &self,
+    ) -> impl Iterator<Item = (&VoucherNullifier, &VoucherCm)> {
+        self.known_vouchers.commitments_and_nullifiers()
+    }
+
     #[must_use]
     pub const fn vouchers(&self) -> &Vouchers<VoucherId> {
         &self.known_vouchers
@@ -385,8 +391,10 @@ mod tests {
         );
         assert_eq!(wallet.balance(genesis, alice).unwrap(), Some(104));
         assert_eq!(wallet.balance(genesis, bob).unwrap(), None);
-        // we know the voucher, but it is not claimable (doesn't exist) in the ledger
-        assert!(wallet.vouchers().get(&voucher_cm).is_none());
+        assert_eq!(
+            wallet.vouchers().get(&voucher_cm),
+            Some(&(voucher_master_key, voucher_index))
+        );
 
         let wallet =
             Wallet::<_, TestVoucherId>::from_lib([(bob, 2)], Vouchers::default(), genesis, &ledger);
