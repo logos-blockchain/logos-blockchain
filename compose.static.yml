@@ -99,7 +99,7 @@ services:
       - --storage.tsdb.retention.time=7d
       - --web.enable-otlp-receiver
     ports:
-      - 127.0.0.1:9090:9090
+      - 0.0.0.0:9090:9090
     restart: on-failure
 
   grafana:
