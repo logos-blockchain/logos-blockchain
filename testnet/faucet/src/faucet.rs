@@ -75,7 +75,10 @@ impl Faucet {
             ));
         }
 
-        println!("Dripping {}% of balance: {amount_to_send} units to {recipient_pk:?}", self.drip_rate);
+        println!(
+            "Dripping {}% of balance: {amount_to_send} units to {recipient_pk:?}",
+            self.drip_rate
+        );
 
         let body = WalletTransferFundsRequestBody {
             tip: None,
