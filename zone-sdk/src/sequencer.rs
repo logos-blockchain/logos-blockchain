@@ -317,7 +317,7 @@ fn handle_block_event(
         .block
         .transactions
         .iter()
-        .filter(|tx| is_our_inscription(tx, channel_id))
+        .filter(|tx| matches_channel(tx, channel_id))
         .map(|tx| tx.mantle_tx.hash())
         .collect();
 
@@ -377,7 +377,7 @@ fn enqueue_resubmit(
     }));
 }
 
-fn is_our_inscription(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
+fn matches_channel(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
     tx.mantle_tx
         .ops
         .iter()
