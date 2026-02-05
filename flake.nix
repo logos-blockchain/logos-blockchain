@@ -81,7 +81,7 @@
 
               postInstall = ''
                 mkdir -p $out/include
-                cp c-bindings/logos_blockchain.h $out/include/
+                cp c-bindings/lib_logos_blockchain.h $out/include/
               '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
                 install_name_tool -id @rpath/liblogos_blockchain.dylib $out/lib/liblogos_blockchain.dylib
               '';

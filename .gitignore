@@ -26,7 +26,7 @@ tests/.tmp*
 *ignore*
 
 # C headers
-c-bindings/logos_blockchain.h
+c-bindings/lib_logos_blockchain.h
 
 # Demo sequencer related ignores
 node_modules

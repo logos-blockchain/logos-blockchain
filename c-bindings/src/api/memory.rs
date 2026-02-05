@@ -1,3 +1,5 @@
+use std::ffi::{CString, c_char};
+
 /// Frees memory allocated for a given pointer.
 ///
 /// # Arguments
@@ -9,4 +11,13 @@ pub fn free<Type>(pointer: *mut Type) {
             drop(Box::from_raw(pointer));
         }
     }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_cstring(block: *mut c_char) {
+    if block.is_null() {
+        eprintln!("Trying to free a null 'Block' pointer. Exiting");
+        return;
+    }
+    drop(unsafe { CString::from_raw(block) });
 }
