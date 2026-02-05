@@ -6,18 +6,18 @@ use core::{
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
-    OnUnknownKeys, blend::deployment::Settings as BlendDeploymentSettings,
+    blend::deployment::Settings as BlendDeploymentSettings,
     cryptarchia::deployment::Settings as CryptarchiaDeploymentSettings,
-    deserialize_config_from_reader, mempool::deployment::Settings as MempoolDeploymentSettings,
+    mempool::deployment::Settings as MempoolDeploymentSettings,
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
 
-const DEVNET: &str = "devnet";
+mod devnet;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
 pub enum WellKnownDeployment {
-    // Must match the `DEVNET` definition above.
+    // Must match the `DEVNET` definition in the `devnet` module.
     #[serde(rename = "devnet")]
     #[default]
     Devnet,
@@ -28,7 +28,7 @@ impl FromStr for WellKnownDeployment {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            DEVNET => Ok(Self::Devnet),
+            devnet::NAME => Ok(Self::Devnet),
             _ => Err(()),
         }
     }
@@ -37,7 +37,7 @@ impl FromStr for WellKnownDeployment {
 impl Display for WellKnownDeployment {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Devnet => write!(f, "{DEVNET}"),
+            Self::Devnet => write!(f, "{}", devnet::NAME),
         }
     }
 }
@@ -54,14 +54,7 @@ pub struct DeploymentSettings {
 impl From<WellKnownDeployment> for DeploymentSettings {
     fn from(value: WellKnownDeployment) -> Self {
         match value {
-            WellKnownDeployment::Devnet => devnet_deployment_settings(),
+            WellKnownDeployment::Devnet => devnet::deployment_settings(),
         }
     }
-}
-
-fn devnet_deployment_settings() -> DeploymentSettings {
-    const SERIALIZED_DEVNET_CONFIG: &str =
-        include_str!("../../../well-known-deployments/devnet.yaml");
-    deserialize_config_from_reader(SERIALIZED_DEVNET_CONFIG.as_bytes(), OnUnknownKeys::Fail)
-        .expect("Well-known devnet deployment should have valid structure")
 }
