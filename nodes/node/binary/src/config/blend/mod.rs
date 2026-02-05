@@ -69,6 +69,10 @@ impl From<ServiceConfig>
                 },
                 scheduler: config.deployment.core.scheduler,
                 zk: config.user.core.zk,
+                activity_threshold_sensitivity: config
+                    .deployment
+                    .core
+                    .activity_threshold_sensitivity,
             },
             edge: EdgeSettings::<Libp2pEdgeBlendBackendSettings> {
                 backend: Libp2pEdgeBlendBackendSettings {

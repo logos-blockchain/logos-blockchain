@@ -340,8 +340,6 @@ pub fn create_validator_config(config: GeneralConfig) -> RunConfig {
         http: lb_api_service::ApiServiceSettings {
             backend_settings: AxumBackendSettings {
                 address: config.api_config.address,
-                rate_limit_per_second: 10000,
-                rate_limit_burst: 10000,
                 max_concurrent_requests: 1000,
                 ..Default::default()
             },
@@ -378,8 +376,6 @@ pub fn create_validator_config(config: GeneralConfig) -> RunConfig {
         testing_http: lb_api_service::ApiServiceSettings {
             backend_settings: AxumBackendSettings {
                 address: testing_http_address,
-                rate_limit_per_second: 10000,
-                rate_limit_burst: 10000,
                 max_concurrent_requests: 1000,
                 ..Default::default()
             },

@@ -16,6 +16,7 @@ workspace = true
 [dependencies]
 async-trait                      = "0.1"
 cucumber                         = { features = ["output-junit"], version = "=0.22.0" }
+derivative                       = "2.2.0"
 futures                          = { default-features = false, version = "0.3" }
 futures-util                     = { default-features = false, version = "0.3.31" }
 hex                              = { default-features = false, version = "0.4.3" }
@@ -49,11 +50,16 @@ reqwest                          = { features = ["json"], workspace = true }
 serde_json                       = "1.0"
 serde_yaml                       = "0.9"
 serial_test                      = "3.1.1"
+strum                            = "0.27.2"
 tempfile                         = { workspace = true }
-testing-framework-core           = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "70c40615d04c5dac93babd4cbe6725a0d82dee1d" }
-testing-framework-runner-compose = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "70c40615d04c5dac93babd4cbe6725a0d82dee1d" }
-testing-framework-runner-local   = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "70c40615d04c5dac93babd4cbe6725a0d82dee1d" }
-testing-framework-workflows      = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "70c40615d04c5dac93babd4cbe6725a0d82dee1d" }
+#testing-framework-core           = { branch = "master", git = "https://github.com/logos-blockchain/logos-blockchain-testing.git" }
+#testing-framework-runner-compose = { branch = "master", git = "https://github.com/logos-blockchain/logos-blockchain-testing.git" }
+#testing-framework-runner-local   = { branch = "master", git = "https://github.com/logos-blockchain/logos-blockchain-testing.git" }
+#testing-framework-workflows      = { branch = "master", git = "https://github.com/logos-blockchain/logos-blockchain-testing.git" }
+testing-framework-core           = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "test_ref_04" }
+testing-framework-runner-compose = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "test_ref_04" }
+testing-framework-runner-local   = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "test_ref_04" }
+testing-framework-workflows      = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "test_ref_04" }
 thiserror                        = { default-features = false, version = "2.0" }
 time                             = { default-features = false, version = "0.3" }
 tokio                            = "1"

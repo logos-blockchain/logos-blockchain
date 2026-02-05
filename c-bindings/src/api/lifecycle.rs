@@ -23,8 +23,8 @@ pub type InitializedLogosBlockchainNodeResult = PointerResult<LogosBlockchainNod
 /// - `config_path`: A pointer to a string representing the path to the
 ///   configuration file.
 /// - `deployment`: A pointer to a string representing either a well-known
-///   deployment name (e.g., "mainnet") or a path to a deployment YAML file. If
-///   null, defaults to "testnet".
+///   deployment name (e.g., "devnet") or a path to a deployment YAML file. If
+///   null, defaults to "devnet".
 ///
 /// # Returns
 ///
@@ -49,8 +49,8 @@ pub extern "C" fn start_lb_node(
 /// - `config_path`: A pointer to a string representing the path to the
 ///   configuration file.
 /// - `deployment`: A pointer to a string representing either a well-known
-///   deployment name (e.g., "mainnet") or a path to a deployment YAML file. If
-///   null, defaults to "testnet".
+///   deployment name (e.g., "devnet") or a path to a deployment YAML file. If
+///   null, defaults to "devnet".
 ///
 /// # Returns
 ///

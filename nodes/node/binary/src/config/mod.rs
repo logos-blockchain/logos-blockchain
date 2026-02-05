@@ -1,5 +1,6 @@
 use core::{convert::Infallible, str::FromStr};
 use std::{
+    io::Read,
     net::{IpAddr, SocketAddr, ToSocketAddrs as _},
     path::{Path, PathBuf},
 };
@@ -448,9 +449,21 @@ pub fn deserialize_config_at_path<Config>(
 where
     Config: for<'de> Deserialize<'de>,
 {
+    let file = std::fs::File::open(config_path)?;
+    deserialize_config_from_reader(file, unknown_keys_strategy)
+}
+
+pub fn deserialize_config_from_reader<Config, Reader>(
+    reader: Reader,
+    unknown_keys_strategy: OnUnknownKeys,
+) -> Result<Config, ConfigDeserializationError<Config>>
+where
+    Config: for<'de> Deserialize<'de>,
+    Reader: Read,
+{
     let mut ignored_fields = Vec::new();
     let config = serde_ignored::deserialize::<_, _, Config>(
-        serde_yaml::Deserializer::from_reader(std::fs::File::open(config_path)?),
+        serde_yaml::Deserializer::from_reader(reader),
         |path| {
             ignored_fields.push(path.to_string());
         },
@@ -460,7 +473,7 @@ where
         (ignored_fields, _) if ignored_fields.is_empty() => Ok(config),
         (ignored_fields, OnUnknownKeys::Warn) => {
             warn!(
-                "The following unrecognized fields were found in the config file: {ignored_fields:?}."
+                "The following unrecognized fields were found in the config: {ignored_fields:?}."
             );
             Ok(config)
         }

@@ -25,6 +25,7 @@ async-trait                = "0.1"
 bytes                      = { workspace = true }
 futures                    = { default-features = false, version = "0.3.31" }
 lb-chain-broadcast-service = { workspace = true }
+lb-chain-leader-service    = { workspace = true }
 lb-chain-service           = { features = ["libp2p"], workspace = true }
 lb-core                    = { workspace = true }
 lb-network-service         = { workspace = true }

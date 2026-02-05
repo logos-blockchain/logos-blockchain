@@ -2,14 +2,14 @@ blend:
   common:
     num_blend_layers: 3
     timing:
-      rounds_per_session: 648000
-      rounds_per_interval: 30
+      rounds_per_session: 2000
+      rounds_per_interval: 10
       round_duration: '1.000000000'
-      rounds_per_observation_window: 30
-      rounds_per_session_transition_period: 30
-      epoch_transition_period_in_slots: 2600
-    minimum_network_size: 30
-    protocol_name: /blend/integration-tests
+      rounds_per_observation_window: 20
+      rounds_per_session_transition_period: 20
+      epoch_transition_period_in_slots: 20
+    minimum_network_size: 1
+    protocol_name: /logos-blockchain-devnet/blend/1.0.0
     data_replication_factor: 0
   core:
     scheduler:
@@ -22,15 +22,15 @@ blend:
     normalization_constant: 1.03
     activity_threshold_sensitivity: 1
 network:
-  kademlia_protocol_name: /integration/logos-blockchain/kad/1.0.0
-  identify_protocol_name: /integration/logos-blockchain/identify/1.0.0
-  chain_sync_protocol_name: /integration/logos-blockchain/chainsync/1.0.0
+  kademlia_protocol_name: /logos-blockchain-devnet/kad/1.0.0
+  identify_protocol_name: /logos-blockchain-devnet/identify/1.0.0
+  chain_sync_protocol_name: /logos-blockchain-devnet/chainsync/1.0.0
 cryptarchia:
   epoch_config:
     epoch_stake_distribution_stabilization: 3
     epoch_period_nonce_buffer: 3
     epoch_period_nonce_stabilization: 4
-  security_param: 10
+  security_param: 20
   sdp_config:
     service_params:
       BN:
@@ -41,10 +41,10 @@ cryptarchia:
     min_stake:
       threshold: 1
       timestamp: 0
-  gossipsub_protocol: /integration/logos-blockchain/cryptarchia/proto/1.0.0
+  gossipsub_protocol: /logos-blockchain-devnet/cryptarchia/1.0.0
 time:
   slot_duration:
-    secs: 5
+    secs: 1
     nanos: 0
 mempool:
-  pubsub_topic: mantle_e2e_tests
+  pubsub_topic: /logos-blockchain-devnet/mempool/1.0.0

@@ -40,8 +40,4 @@ impl<Id> Vouchers<Id> {
     pub(crate) fn get_by_nullifier(&self, nf: &VoucherNullifier) -> Option<&Id> {
         self.get(self.voucher_nullifiers.get(nf)?)
     }
-
-    pub(crate) fn commitments(&self) -> impl Iterator<Item = &VoucherCm> {
-        self.vouchers.keys()
-    }
 }

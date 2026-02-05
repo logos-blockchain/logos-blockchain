@@ -114,6 +114,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(clippy::too_many_lines, reason = "Test function")]
     fn save_prunable_forks() {
         let genesis_header_id: HeaderId = [0; 32].into();
         // We don't prune fork stemming from the block before the current tip.
@@ -147,6 +148,7 @@ mod tests {
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
+                        activity_threshold_sensitivity: 1,
                     },
                 },
                 min_stake: MinStake {

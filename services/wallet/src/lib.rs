@@ -584,7 +584,8 @@ where
                     OpProof::ZkSig(zk_sig)
                 }
                 Op::LeaderClaim(claim_op) => {
-                    Self::prove_leader_claim_op(claim_op.clone(), &ledger, wallet, kms).await?
+                    Self::prove_leader_claim_op(claim_op.clone(), tx_hash, &ledger, wallet, kms)
+                        .await?
                 }
             };
             ops_proofs.push(proof);
@@ -649,6 +650,7 @@ where
 
     async fn prove_leader_claim_op(
         op: LeaderClaimOp,
+        tx_hash: TxHash,
         ledger: &LedgerState,
         wallet: &Wallet,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
@@ -667,7 +669,7 @@ where
 
         // TODO: This should happen in KMS
         let poc = tokio::task::spawn_blocking(move || {
-            Self::generate_poc(voucher_secret, &path, op.rewards_root, op.mantle_tx_hash)
+            Self::generate_poc(voucher_secret, &path, op.rewards_root, tx_hash)
         })
         .await??;
 
@@ -829,10 +831,9 @@ where
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
-        let Ok((block, ledger)) = Self::load_block_and_ledger(
+        let Ok(block) = Self::load_block(
             header_id,
             storage_adapter,
-            cryptarchia_api,
         )
         .await
         .inspect_err(|e| {
@@ -842,7 +843,7 @@ where
         };
 
         let wallet_block = WalletBlock::from(block);
-        match state.apply_block(&wallet_block, &ledger) {
+        match state.apply_block(&wallet_block) {
             Ok(()) => {
                 trace!(block_id=?wallet_block.id, "Applied block to wallet");
             }
@@ -865,20 +866,14 @@ where
         }
     }
 
-    async fn load_block_and_ledger(
+    async fn load_block(
         header_id: HeaderId,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
-        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
-    ) -> Result<(Block<Tx>, LedgerState), WalletServiceError> {
-        let block = storage_adapter
+    ) -> Result<Block<Tx>, WalletServiceError> {
+        storage_adapter
             .get_block(&header_id)
             .await
-            .ok_or(WalletServiceError::BlockNotFoundInStorage(header_id))?;
-        let ledger = cryptarchia_api
-            .get_ledger_state(header_id)
-            .await?
-            .ok_or(WalletServiceError::LedgerStateNotFound(header_id))?;
-        Ok((block, ledger))
+            .ok_or(WalletServiceError::BlockNotFoundInStorage(header_id))
     }
 
     fn handle_lib_update(lib_update: &LibUpdate, state: &mut ServiceState<'_>) {
@@ -912,10 +907,9 @@ where
                 continue;
             }
 
-            let (block, ledger) =
-                Self::load_block_and_ledger(header_id, storage_adapter, cryptarchia_api).await?;
+            let block = Self::load_block(header_id, storage_adapter).await?;
 
-            if let Err(e) = state.apply_block(&block.into(), &ledger) {
+            if let Err(e) = state.apply_block(&block.into()) {
                 error!(
                     block_id = ?header_id,
                     err = %e,
