@@ -518,8 +518,6 @@ http:
       nanos: 0
     max_body_size: 10485760
     max_concurrent_requests: 1000
-    rate_limit_per_second: 10000
-    rate_limit_burst: 10000
 storage:
   db_path: ./db
   read_only: false
@@ -534,6 +532,8 @@ wallet:
   known_keys:
     2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26: "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26"
     ed266e6e887b9b97059dc1aa1b7b2e19b934291753c6336a163fe4ebaa28e717: "ed266e6e887b9b97059dc1aa1b7b2e19b934291753c6336a163fe4ebaa28e717"
+  voucher_master_key_id: 2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26
+  recovery_path: ./recovery/wallet.json
 testing_http:
   backend_settings:
     address: 127.0.0.1:50897
@@ -543,5 +543,3 @@ testing_http:
       nanos: 0
     max_body_size: 10485760
     max_concurrent_requests: 1000
-    rate_limit_per_second: 10000
-    rate_limit_burst: 10000

@@ -63,21 +63,23 @@ impl ActivityProof {
     }
 }
 
-/// Sensitivity parameter to control the lottery winning conditions.
-const ACTIVITY_THRESHOLD_SENSITIVITY_PARAM: u64 = 1;
-
 /// Computes the activity threshold, which is the expected maximum Hamming
 /// distance from any blending token in a session to the next session
 /// randomness.
-pub fn activity_threshold(token_count_bit_len: u64, network_size_bit_len: u64) -> HammingDistance {
+pub fn activity_threshold(
+    token_count_bit_len: u64,
+    network_size_bit_len: u64,
+    // Sensitivity parameter to control the lottery winning conditions.
+    activity_threshold_sensitivity: u64,
+) -> HammingDistance {
     debug!(
         target: LOG_TARGET,
-        "Calculating activity threshold: token_count_bit_len={token_count_bit_len}, network_size_repr_bit_len={network_size_bit_len}"
+        "Calculating activity threshold: token_count_bit_len={token_count_bit_len}, network_size_repr_bit_len={network_size_bit_len}, activity_threshold_sensitivity={activity_threshold_sensitivity}"
     );
 
     token_count_bit_len
         .saturating_sub(network_size_bit_len)
-        .saturating_sub(ACTIVITY_THRESHOLD_SENSITIVITY_PARAM)
+        .saturating_sub(activity_threshold_sensitivity)
         .into()
 }
 

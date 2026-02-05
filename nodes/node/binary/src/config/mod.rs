@@ -476,7 +476,7 @@ where
 /// Configuration for a running node. It is the combination of user-provided and
 /// deployment-specific settings.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "testing", derive(serde::Serialize))]
+#[cfg_attr(feature = "testing", derive(serde::Serialize, serde::Deserialize))]
 pub struct RunConfig {
     #[cfg_attr(feature = "testing", serde(flatten))]
     pub user: UserConfig,

@@ -1,4 +1,3 @@
 [target.'cfg(target_os = "macos")']
-# when using osx, we need to link against some golang libraries, it did just work with this missing flags
-# from: https://github.com/golang/go/issues/42459
-rustflags = ["-C", "link-args=-framework CoreFoundation -framework Security -framework CoreServices -lresolv"]
+# Fat LTO relies on LLVM 21 and CI runners use an older version. This should be fixed once we have Nix-based builders.
+rustflags = ["-C", "linker=rust-lld"]

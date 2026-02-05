@@ -1,11 +1,19 @@
-use std::{env, path::PathBuf, time::Duration};
+use std::{collections::HashMap, env, num::NonZero, path::PathBuf, time::Duration};
 
 use cucumber::World;
-use testing_framework_core::scenario::{
-    Builder, NodeControlCapability, Scenario, ScenarioBuildError, ScenarioBuilder,
-};
+use derivative::Derivative;
+use lb_node::config::RunConfig;
+use testing_framework_core::scenario::{Builder, NodeControlCapability, Scenario, StartedNode};
+use testing_framework_runner_local::LocalManualCluster;
 use testing_framework_workflows::{ScenarioBuilderExt as _, expectations::ConsensusLiveness};
-use thiserror::Error;
+
+use crate::{
+    cucumber::{
+        error::{StepError, StepResult},
+        utils::{make_builder, shared_host_bin_path},
+    },
+    non_zero,
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DeployerKind {
@@ -27,7 +35,7 @@ pub struct RunState {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ScenarioSpec {
     pub topology: Option<TopologySpec>,
-    pub duration_secs: Option<u64>,
+    pub duration_secs: Option<NonZero<u64>>,
     pub wallets: Option<WalletSpec>,
     pub transactions: Option<TransactionSpec>,
     pub consensus_liveness: Option<ConsensusLivenessSpec>,
@@ -35,67 +43,85 @@ pub struct ScenarioSpec {
 
 #[derive(Debug, Clone, Copy)]
 pub struct TopologySpec {
-    pub validators: usize,
+    pub validators: NonZero<usize>,
     pub network: NetworkKind,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct WalletSpec {
     pub total_funds: u64,
-    pub users: usize,
+    pub users: NonZero<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct TransactionSpec {
-    pub rate_per_block: u64,
-    pub users: Option<usize>,
+    pub rate_per_block: NonZero<u64>,
+    pub users: Option<NonZero<usize>>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ConsensusLivenessSpec {
-    pub lag_allowance: Option<u64>,
+    pub lag_allowance: Option<NonZero<u64>>,
 }
 
-#[derive(Debug, Error)]
-pub enum StepError {
-    #[error("deployer is not selected; set it first (e.g. `Given deployer is \"local\"`)")]
-    MissingDeployer,
-    #[error("scenario topology is not configured")]
-    MissingTopology,
-    #[error("scenario run duration is not configured")]
-    MissingRunDuration,
-    #[error("unsupported deployer kind: {value}")]
-    UnsupportedDeployer { value: String },
-    #[error("step requires deployer {expected:?}, but current deployer is {actual:?}")]
-    DeployerMismatch {
-        expected: DeployerKind,
-        actual: DeployerKind,
-    },
-    #[error("invalid argument: {message}")]
-    InvalidArgument { message: String },
-    #[error("{message}")]
-    Preflight { message: String },
-    #[error("failed to build scenario: {source}")]
-    ScenarioBuild {
-        #[source]
-        source: ScenarioBuildError,
-    },
-    #[error("{message}")]
-    RunFailed { message: String },
-}
-
-pub type StepResult = Result<(), StepError>;
-
-#[derive(World, Debug, Default)]
+#[derive(World, Derivative)]
+#[derivative(Debug, Default)]
 pub struct CucumberWorld {
     pub deployer: Option<DeployerKind>,
     pub spec: ScenarioSpec,
     pub run: RunState,
     pub membership_check: bool,
     pub readiness_checks: bool,
+    #[derivative(Debug = "ignore")]
+    #[derivative(Default(value = "None"))]
+    pub local_cluster: Option<LocalManualCluster>,
+    #[derivative(Debug = "ignore")]
+    pub nodes_info: HashMap<String, NodeInfo>,
+}
+
+pub type ChainInfoMap = HashMap<u64, String>;
+
+/// Information about a started node in the world
+pub struct NodeInfo {
+    /// Node name
+    pub name: String,
+    pub started_node: StartedNode,
+    /// General node configuration used to start the node
+    pub run_config: Option<RunConfig>,
+    /// Chain height vs. hash at that height
+    pub chain_info: ChainInfoMap,
+}
+
+impl NodeInfo {
+    /// Convenience: record a node's current tip at its current height.
+    pub fn upsert_tip(&mut self, height: u64, tip_hash_hex: String) {
+        self.chain_info.insert(height, tip_hash_hex);
+    }
+
+    /// Returns the highest height for which we have a cached hash (if any).
+    #[must_use]
+    pub fn best_height(&self) -> Option<u64> {
+        self.chain_info.keys().copied().max()
+    }
+
+    /// Returns a reference to the full map of cached height -> hash.
+    #[must_use]
+    pub const fn chain_info(&self) -> &ChainInfoMap {
+        &self.chain_info
+    }
 }
 
 impl CucumberWorld {
+    pub fn node_best_height(&self, node_name: &String) -> Result<Option<u64>, StepError> {
+        let node = self
+            .nodes_info
+            .get(node_name)
+            .ok_or(StepError::LogicalError {
+                message: format!("Runtime node '{node_name}' not found"),
+            })?;
+        Ok(node.best_height())
+    }
+
     pub const fn set_deployer(&mut self, kind: DeployerKind) -> StepResult {
         self.deployer = Some(kind);
         Ok(())
@@ -103,21 +129,21 @@ impl CucumberWorld {
 
     pub fn set_topology(&mut self, validators: usize, network: NetworkKind) -> StepResult {
         self.spec.topology = Some(TopologySpec {
-            validators: positive_usize("validators", validators)?,
+            validators: non_zero!("validators", validators)?,
             network,
         });
         Ok(())
     }
 
     pub fn set_run_duration(&mut self, seconds: u64) -> StepResult {
-        self.spec.duration_secs = Some(positive_u64("duration", seconds)?);
+        self.spec.duration_secs = Some(non_zero!("duration", seconds)?);
         Ok(())
     }
 
     pub fn set_wallets(&mut self, total_funds: u64, users: usize) -> StepResult {
         self.spec.wallets = Some(WalletSpec {
             total_funds,
-            users: positive_usize("wallet users", users)?,
+            users: non_zero!("wallet users", users)?,
         });
         Ok(())
     }
@@ -133,15 +159,12 @@ impl CucumberWorld {
             });
         }
 
-        if users.is_some_and(|u| u == 0) {
-            return Err(StepError::InvalidArgument {
-                message: "transactions users must be > 0".to_owned(),
-            });
-        }
-
         self.spec.transactions = Some(TransactionSpec {
-            rate_per_block: positive_u64("transactions rate", rate_per_block)?,
-            users,
+            rate_per_block: non_zero!("transactions rate", rate_per_block)?,
+            users: match users {
+                Some(val) => Some(non_zero!("transactions users", val)?),
+                None => None,
+            },
         });
         Ok(())
     }
@@ -157,10 +180,8 @@ impl CucumberWorld {
     }
 
     pub fn set_consensus_liveness_lag_allowance(&mut self, blocks: u64) -> StepResult {
-        let blocks = positive_u64("lag allowance", blocks)?;
-
         self.spec.consensus_liveness = Some(ConsensusLivenessSpec {
-            lag_allowance: Some(blocks),
+            lag_allowance: Some(non_zero!("lag allowance", blocks)?),
         });
 
         Ok(())
@@ -189,23 +210,15 @@ impl CucumberWorld {
             return Err(StepError::DeployerMismatch { expected, actual });
         }
 
-        if !is_truthy_env("POL_PROOF_DEV_MODE") {
-            return Err(StepError::Preflight {
-                message:
-                    "POL_PROOF_DEV_MODE must be set to \"true\" (or \"1\") for practical test runs."
-                        .to_owned(),
-            });
-        }
-
         if expected == DeployerKind::Local {
-            let node_ok = env::var_os("NOMOS_NODE_BIN")
+            let node_ok = env::var_os("LOGOS_BLOCKCHAIN_NODE_BIN")
                 .map(PathBuf::from)
                 .is_some_and(|p| p.is_file())
                 || shared_host_bin_path("logos-blockchain-node").is_file();
 
             if !(node_ok) {
                 return Err(StepError::Preflight {
-                    message: "Missing Logos host binaries. Set NOMOS_NODE_BIN, or run \
+                    message: "Missing Logos host binaries. Set LOGOS_BLOCKCHAIN_NODE_BIN, or run \
                     `scripts/run/run-examples.sh host` to restore them into \
                     `testing-framework/assets/stack/bin`."
                         .to_owned(),
@@ -229,21 +242,22 @@ impl CucumberWorld {
         let duration_secs = self
             .spec
             .duration_secs
-            .ok_or(StepError::MissingRunDuration)?;
+            .ok_or(StepError::MissingRunDuration)?
+            .get();
 
         let mut builder: Builder<Caps> = make_builder(topology).with_capabilities(Caps::default());
 
         builder = builder.with_run_duration(Duration::from_secs(duration_secs));
 
         if let Some(wallets) = self.spec.wallets {
-            builder = builder.initialize_wallet(wallets.total_funds, wallets.users);
+            builder = builder.initialize_wallet(wallets.total_funds, wallets.users.get());
         }
 
         if let Some(tx) = self.spec.transactions {
             builder = builder.transactions_with(|flow| {
-                let mut flow = flow.rate(tx.rate_per_block);
+                let mut flow = flow.rate(tx.rate_per_block.get());
                 if let Some(users) = tx.users {
-                    flow = flow.users(users);
+                    flow = flow.users(users.get());
                 }
                 flow
             });
@@ -251,8 +265,8 @@ impl CucumberWorld {
 
         if let Some(liveness) = self.spec.consensus_liveness {
             if let Some(lag) = liveness.lag_allowance {
-                builder =
-                    builder.with_expectation(ConsensusLiveness::default().with_lag_allowance(lag));
+                builder = builder
+                    .with_expectation(ConsensusLiveness::default().with_lag_allowance(lag.get()));
             } else {
                 builder = builder.expect_consensus_liveness();
             }
@@ -260,55 +274,16 @@ impl CucumberWorld {
 
         Ok(builder)
     }
-}
 
-fn make_builder(topology: TopologySpec) -> Builder<()> {
-    ScenarioBuilder::topology_with(|t| {
-        let base = match topology.network {
-            NetworkKind::Star => t.network_star(),
-        };
-        base.nodes(topology.validators)
-    })
-}
-
-fn is_truthy_env(key: &str) -> bool {
-    env::var(key)
-        .ok()
-        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-}
-
-fn positive_usize(label: &str, value: usize) -> Result<usize, StepError> {
-    if value == 0 {
-        Err(StepError::InvalidArgument {
-            message: format!("{label} must be > 0"),
-        })
-    } else {
-        Ok(value)
+    pub fn resolve_node_name(&self, node_name: &str) -> Result<String, StepError> {
+        Ok(self
+            .nodes_info
+            .get(node_name)
+            .ok_or(StepError::LogicalError {
+                message: format!("Runtime node '{node_name}' not found"),
+            })?
+            .started_node
+            .name
+            .clone())
     }
-}
-
-fn positive_u64(label: &str, value: u64) -> Result<u64, StepError> {
-    if value == 0 {
-        Err(StepError::InvalidArgument {
-            message: format!("{label} must be > 0"),
-        })
-    } else {
-        Ok(value)
-    }
-}
-
-pub fn parse_deployer(value: &str) -> Result<DeployerKind, StepError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "local" | "host" => Ok(DeployerKind::Local),
-        "compose" | "docker" => Ok(DeployerKind::Compose),
-        other => Err(StepError::UnsupportedDeployer {
-            value: other.to_owned(),
-        }),
-    }
-}
-
-#[must_use]
-pub fn shared_host_bin_path(binary_name: &str) -> PathBuf {
-    let cucumber_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    cucumber_dir.join("../assets/stack/bin").join(binary_name)
 }

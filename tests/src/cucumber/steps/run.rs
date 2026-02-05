@@ -3,7 +3,10 @@ use testing_framework_core::scenario::Deployer as _;
 use testing_framework_runner_compose::ComposeDeployer;
 use testing_framework_runner_local::LocalDeployer;
 
-use crate::cucumber::world::{CucumberWorld, DeployerKind, StepError, StepResult};
+use crate::cucumber::{
+    error::{StepError, StepResult},
+    world::{CucumberWorld, DeployerKind},
+};
 
 #[when(expr = "run scenario")]
 async fn run_scenario(world: &mut CucumberWorld) -> StepResult {

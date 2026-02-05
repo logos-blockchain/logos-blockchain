@@ -1,9 +1,5 @@
-use std::net::Ipv4Addr;
-
 use reqwest::{Client, Response};
-use serde::de::DeserializeOwned;
-
-use crate::server::ClientIp;
+use serde::{Serialize, de::DeserializeOwned};
 
 async fn deserialize_response<Config: DeserializeOwned>(
     response: Response,
@@ -17,16 +13,16 @@ async fn deserialize_response<Config: DeserializeOwned>(
         .map_err(|error| format!("Failed to deserialize body: {error}, raw body: {body}"))
 }
 
-pub async fn get_config<Config: DeserializeOwned>(
-    ip: Ipv4Addr,
-    identifier: String,
-    url: &str,
-) -> Result<Config, String> {
+pub async fn get_config<Config, Payload>(payload: &Payload, url: &str) -> Result<Config, String>
+where
+    Config: DeserializeOwned,
+    Payload: Serialize + Sync,
+{
     let client = Client::new();
 
     let response = client
         .post(url)
-        .json(&ClientIp { ip, identifier })
+        .json(payload)
         .send()
         .await
         .map_err(|err| format!("Failed to send IP announcement: {err}"))?;

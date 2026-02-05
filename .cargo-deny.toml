@@ -7,20 +7,13 @@ no-default-features = true
 
 [advisories]
 ignore = [
-  { id = "RUSTSEC-2020-0095", reason = "`difference` is unmaintained; consider using an alternative. Use `cargo tree -p difference -i > tmp.txt` to check the dependency tree." },
-  { id = "RUSTSEC-2023-0071", reason = "Marvin Attack: potential key recovery through timing sidechannels" },
   { id = "RUSTSEC-2024-0370", reason = "`proc-macro-error` is unmaintained; consider using an alternative. Use `cargo tree -p proc-macro-error -i > tmp.txt` to check the dependency tree." },
   { id = "RUSTSEC-2024-0388", reason = "`derivative` is unmaintained; consider using an alternative. Use `cargo tree -p derivative -i > tmp.txt` to check the dependency tree." },
   { id = "RUSTSEC-2024-0436", reason = "`paste` has a security vulnerability; consider using an alternative. Use `cargo tree -p paste -i > tmp.txt` to check the dependency tree." },
   { id = "RUSTSEC-2025-0055", reason = "`tracing-subscriber` v0.2.25 pulled in by ark-relations v0.4.0 - will be addressed before mainnet" },
-  { id = "RUSTSEC-2025-0075", reason = "`unic-char-range` is unmaintained; consider using an alternative. Use `cargo tree -p difference -i > tmp.txt` to check the dependency tree." },
-  { id = "RUSTSEC-2025-0080", reason = "`unic-common` is unmaintained; consider using an alternative. Use `cargo tree -p difference -i > tmp.txt` to check the dependency tree." },
-  { id = "RUSTSEC-2025-0081", reason = "`unic-char-property` is unmaintained; consider using an alternative. Use `cargo tree -p difference -i > tmp.txt` to check the dependency tree." },
-  { id = "RUSTSEC-2025-0098", reason = "`unic-ucd-version` is unmaintained; consider using an alternative. Use `cargo tree -p difference -i > tmp.txt` to check the dependency tree." },
-  { id = "RUSTSEC-2025-0100", reason = "`unic-ucd-ident` is unmaintained; consider using an alternative. Use `cargo tree -p difference -i > tmp.txt` to check the dependency tree." },
-  { id = "RUSTSEC-2025-0134", reason = "`rusttls-pemfile` is unmaintained; consider using an alternative. Use `cargo tree -p difference -i > tmp.txt` to check the dependency tree." },
   { id = "RUSTSEC-2025-0141", reason = "`bincode` is unmaintained but continuing to use it." },
 ]
+unused-ignored-advisory = "deny"
 yanked = "deny"
 
 [bans]
@@ -41,17 +34,11 @@ allow = [
   "ISC",
   "MIT",
   "MPL-2.0",
-  "NCSA",
   "Unicode-3.0",
   "Zlib",
 ]
 private = { ignore = false }
 unused-allowed-license = "deny"
-
-[[licenses.clarify]]
-expression    = "MIT AND ISC"
-license-files = [{ hash = 0xbd0eed23, path = "LICENSE" }]
-name          = "ring"
 
 [sources]
 allow-git = [

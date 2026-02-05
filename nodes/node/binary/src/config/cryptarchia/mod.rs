@@ -43,6 +43,9 @@ impl ServiceConfig {
                         num_blend_layers: blend_deployment.common.num_blend_layers,
                         rounds_per_session: blend_deployment.common.timing.rounds_per_session,
                         data_replication_factor: blend_deployment.common.data_replication_factor,
+                        activity_threshold_sensitivity: blend_deployment
+                            .core
+                            .activity_threshold_sensitivity,
                     },
                 },
             },

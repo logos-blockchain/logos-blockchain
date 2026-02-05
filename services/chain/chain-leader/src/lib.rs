@@ -1,3 +1,4 @@
+pub mod api;
 mod blend;
 mod kms;
 mod leadership;
@@ -13,10 +14,7 @@ use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     block::{Block, Error as BlockError, MAX_TRANSACTIONS},
     header::HeaderId,
-    mantle::{
-        AuthenticatedMantleTx, Transaction, TxHash, TxSelect, gas::MainnetGasConstants,
-        ops::leader_claim::VoucherCm,
-    },
+    mantle::{AuthenticatedMantleTx, Transaction, TxHash, TxSelect, gas::MainnetGasConstants},
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
@@ -83,6 +81,9 @@ pub enum LeaderMsg {
     ///   other consumers, if any
     WinningPolEpochSlotStreamSubscribe {
         sender: oneshot::Sender<watch::Receiver<Option<WinningPolInfo>>>,
+    },
+    Claim {
+        sender: oneshot::Sender<Result<(), Error>>,
     },
 }
 
@@ -403,15 +404,7 @@ where
                         // If it's a new epoch or the service just started, pre-compute the first winning slot and notify consumers.
                         winning_pol_slot_notifier.process_epoch(&eligible_utxos.response, &epoch_state, &kms_api).await;
 
-                       if let Some((proof, signing_key)) = build_proof_for(&eligible_utxos.response, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier, &kms_api).await {
-                            let voucher_cm = match wallet_api.generate_new_voucher().await {
-                                Ok(voucher_cm) => voucher_cm,
-                                Err(e) => {
-                                    error!("Failed to get the voucher cm: {:?}", e);
-                                    continue;
-                                }
-                            };
-
+                       if let Some((proof, signing_key)) = build_proof_for(&eligible_utxos.response, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier, &wallet_api, &kms_api).await {
                             // TODO: spawn as a separate task?
                             match Self::propose_block(
                                 parent,
@@ -422,7 +415,6 @@ where
                                 &relays,
                                 tip_state,
                                 &ledger_config,
-                                voucher_cm,
                             )
                             .await
                             {
@@ -539,7 +531,6 @@ where
         >,
         mut ledger_state: lb_ledger::LedgerState,
         ledger_config: &lb_ledger::Config,
-        voucher_cm: VoucherCm,
     ) -> Result<Block<Mempool::Item>, Error> {
         let txs_stream = relays
             .mempool_adapter()
@@ -551,12 +542,7 @@ where
 
         ledger_state = ledger_state
             .clone()
-            .try_apply_header::<Groth16LeaderProof, HeaderId>(
-                slot,
-                &proof,
-                voucher_cm,
-                ledger_config,
-            )?;
+            .try_apply_header::<Groth16LeaderProof, HeaderId>(slot, &proof, ledger_config)?;
 
         let mut valid_txs = Vec::new();
         let mut invalid_tx_hashes = Vec::new();
@@ -633,11 +619,16 @@ fn handle_inbound_message(
     msg: LeaderMsg,
     winning_pol_epoch_slots_sender: &watch::Sender<Option<WinningPolInfo>>,
 ) {
-    let LeaderMsg::WinningPolEpochSlotStreamSubscribe { sender } = msg;
-
-    sender
-        .send(winning_pol_epoch_slots_sender.subscribe())
-        .unwrap_or_else(|_| {
-            error!("Could not subscribe to POL epoch winning slots channel.");
-        });
+    match msg {
+        LeaderMsg::WinningPolEpochSlotStreamSubscribe { sender } => {
+            sender
+                .send(winning_pol_epoch_slots_sender.subscribe())
+                .unwrap_or_else(|_| {
+                    error!("Could not subscribe to POL epoch winning slots channel.");
+                });
+        }
+        LeaderMsg::Claim { .. } => {
+            todo!("build//sign a tx using wallet and submit it to mempool")
+        }
+    }
 }

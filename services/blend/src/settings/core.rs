@@ -7,4 +7,5 @@ pub struct CoreSettings<BackendSettings> {
     pub backend: BackendSettings,
     pub scheduler: SchedulerSettings,
     pub zk: ZkSettings,
+    pub activity_threshold_sensitivity: u64,
 }

@@ -13,10 +13,7 @@ use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use cryptarchia::{EpochState, UtxoTree};
 use lb_core::{
     block::BlockNumber,
-    mantle::{
-        AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, gas::GasConstants,
-        ops::leader_claim::VoucherCm,
-    },
+    mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, gas::GasConstants},
     proofs::leader_proof,
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
 };
@@ -81,7 +78,6 @@ where
         parent_id: Id,
         slot: Slot,
         proof: &LeaderProof,
-        voucher: VoucherCm,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx>,
     ) -> Result<Self, LedgerError<Id>>
     where
@@ -93,13 +89,10 @@ where
             .get(&parent_id)
             .ok_or(LedgerError::ParentNotFound(parent_id))?;
 
-        let new_state = parent_state.clone().try_update::<_, _, Constants>(
-            slot,
-            proof,
-            voucher,
-            txs,
-            &self.config,
-        )?;
+        let new_state =
+            parent_state
+                .clone()
+                .try_update::<_, _, Constants>(slot, proof, txs, &self.config)?;
 
         let mut states = self.states.clone();
         states.insert(id, new_state);
@@ -148,7 +141,6 @@ impl LedgerState {
         self,
         slot: Slot,
         proof: &LeaderProof,
-        voucher: VoucherCm,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx>,
         config: &Config,
     ) -> Result<Self, LedgerError<Id>>
@@ -156,7 +148,7 @@ impl LedgerState {
         LeaderProof: leader_proof::LeaderProof,
         Constants: GasConstants,
     {
-        self.try_apply_header(slot, proof, voucher, config)?
+        self.try_apply_header(slot, proof, config)?
             .try_apply_contents::<_, Constants>(config, txs)
     }
 
@@ -167,7 +159,6 @@ impl LedgerState {
         self,
         slot: Slot,
         proof: &LeaderProof,
-        voucher: VoucherCm,
         config: &Config,
     ) -> Result<Self, LedgerError<Id>>
     where
@@ -178,7 +169,7 @@ impl LedgerState {
             .try_apply_header::<LeaderProof, Id>(slot, proof, config)?;
         let (mantle_ledger, reward_utxos) = self.mantle_ledger.try_apply_header(
             cryptarchia_ledger.epoch_state(),
-            voucher,
+            *proof.voucher_cm(),
             config,
         )?;
 
@@ -393,7 +384,6 @@ mod tests {
                 genesis_id,
                 Slot::from(1u64),
                 &proof,
-                VoucherCm::default(),
                 std::iter::once(&tx),
             )
             .unwrap();

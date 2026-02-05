@@ -42,6 +42,7 @@ pub struct CoreSettings {
     pub scheduler: SchedulerSettings,
     pub minimum_messages_coefficient: NonZeroU64,
     pub normalization_constant: NonNegativeF64,
+    pub activity_threshold_sensitivity: u64,
 }
 
 fn mainnet_settings() -> Settings {
@@ -73,6 +74,7 @@ fn mainnet_settings() -> Settings {
                     maximum_release_delay_in_rounds: 3.try_into().unwrap(),
                 },
             },
+            activity_threshold_sensitivity: 1,
         },
     }
 }

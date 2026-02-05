@@ -72,6 +72,7 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
                             .expect("Maximum release delay between rounds cannot be zero."),
                     },
                 },
+                activity_threshold_sensitivity: 1,
             },
         },
         network: NetworkDeploymentSettings {

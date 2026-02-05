@@ -1,6 +1,7 @@
-use std::{num::NonZero, time::Duration};
+use std::{num::NonZero, ops::Mul as _, time::Duration};
 
 use futures_util::StreamExt as _;
+use lb_pol::slot_activation_coefficient;
 use logos_blockchain_tests::{
     adjust_timeout,
     nodes::validator::{Validator, create_validator_config},
@@ -8,8 +9,10 @@ use logos_blockchain_tests::{
 };
 use serial_test::serial;
 
-const IMMUTABLE_BLOCK_COUNT: u64 = 5;
-const TEST_DURATION_SECS: u64 = 120;
+const SLOT_DURATION: Duration = Duration::from_secs(1);
+const SECURITY_PARAM: u32 = 5;
+const TARGET_IMMUTABLE_BLOCK_COUNT: u32 = 5;
+const TIMEOUT_MULTIPLIER: f64 = 2.0;
 
 #[tokio::test]
 #[serial]
@@ -18,18 +21,23 @@ async fn immutable_blocks_two_nodes() {
         .into_iter()
         .map(|c| {
             let mut config = create_validator_config(c);
-            config.deployment.time.slot_duration = Duration::from_secs(3);
+            config.deployment.time.slot_duration = SLOT_DURATION;
             config
                 .user
                 .cryptarchia
                 .service
                 .bootstrap
                 .prolonged_bootstrap_period = Duration::ZERO;
-            config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
+            config.deployment.cryptarchia.security_param = NonZero::new(SECURITY_PARAM).unwrap();
 
             config
         })
         .collect::<Vec<_>>();
+
+    let blocks_to_wait = SECURITY_PARAM + TARGET_IMMUTABLE_BLOCK_COUNT;
+    let timeout = (SLOT_DURATION.div_f64(slot_activation_coefficient()))
+        .mul(blocks_to_wait)
+        .mul_f64(TIMEOUT_MULTIPLIER);
 
     let nodes = futures_util::future::join_all(configs.into_iter().map(Validator::spawn))
         .await
@@ -49,7 +57,7 @@ async fn immutable_blocks_two_nodes() {
     tokio::pin!(stream1);
     tokio::pin!(stream2);
 
-    let timeout = tokio::time::sleep(adjust_timeout(Duration::from_secs(TEST_DURATION_SECS)));
+    let timeout = tokio::time::sleep(adjust_timeout(timeout));
 
     tokio::select! {
         () = timeout => panic!("Timed out waiting for matching LIBs"),
@@ -63,7 +71,7 @@ async fn immutable_blocks_two_nodes() {
                 assert!(!(lib1 != lib2),
                     "LIBs mismatched! Node 1: {lib1:?}, Node 2: {lib2:?}");
 
-                if lib1.height >= IMMUTABLE_BLOCK_COUNT { return; }
+                if lib1.height >= u64::from(TARGET_IMMUTABLE_BLOCK_COUNT) { return; }
             }
 
             panic!("LIB stream failed");
