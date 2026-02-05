@@ -93,6 +93,7 @@ pub type ApiService = lb_api_service::ApiService<
         RocksStorageAdapter<SignedMantleTx, TxHash>,
         SdpMempoolAdapter<RuntimeServiceId>,
         SdpWalletAdapter<RuntimeServiceId>,
+        CryptarchiaLeaderService,
     >,
     RuntimeServiceId,
 >;

@@ -44,6 +44,7 @@ impl<CoreBackendSettings, EdgeBackendSettings>
                     backend,
                     scheduler,
                     zk,
+                    activity_threshold_sensitivity,
                 },
             ..
         }: Settings<CoreBackendSettings, EdgeBackendSettings>,
@@ -63,6 +64,7 @@ impl<CoreBackendSettings, EdgeBackendSettings>
             minimum_network_size,
             recovery_path,
             data_replication_factor,
+            activity_threshold_sensitivity,
         }
     }
 }

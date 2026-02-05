@@ -127,7 +127,7 @@ mod tests {
         let num_core_nodes = 2;
         let core_quota = 15;
         let session_info =
-            SessionInfo::new(1, &ZkHash::from(1), num_core_nodes, core_quota).unwrap();
+            SessionInfo::new(1, &ZkHash::from(1), num_core_nodes, core_quota, 1).unwrap();
         let mut tokens = SessionBlendingTokenCollector::new(&session_info);
         assert!(tokens.tokens().is_empty());
 
@@ -145,7 +145,7 @@ mod tests {
 
         // Prepare a new session info.
         let session_info =
-            SessionInfo::new(2, &ZkHash::from(2), num_core_nodes, core_quota).unwrap();
+            SessionInfo::new(2, &ZkHash::from(2), num_core_nodes, core_quota, 1).unwrap();
         let (_, mut tokens) = tokens.rotate_session(&session_info);
 
         // Insert one more tokens.

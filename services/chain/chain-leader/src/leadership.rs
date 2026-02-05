@@ -473,6 +473,7 @@ mod pol_tests {
                         num_blend_layers: NonZero::new(3u64).unwrap(),
                         minimum_network_size: NonZero::new(1u64).unwrap(),
                         data_replication_factor: 0,
+                        activity_threshold_sensitivity: 1,
                     },
                 },
                 min_stake: MinStake {

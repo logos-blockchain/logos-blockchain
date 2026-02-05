@@ -112,6 +112,7 @@ pub fn settings<BackendSettings>(
         minimum_network_size,
         recovery_path: recovery_file.path().to_path_buf(),
         data_replication_factor,
+        activity_threshold_sensitivity: 1,
     };
     (settings, recovery_file)
 }
@@ -361,6 +362,7 @@ pub fn reward_session_info(public_info: &PublicInfo<NodeId>) -> reward::SessionI
             .try_into()
             .expect("num_core_nodes must fit into u64"),
         public_info.session.core_public_inputs.quota,
+        1,
     )
     .expect("session info must be created successfully")
 }

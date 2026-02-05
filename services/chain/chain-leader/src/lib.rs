@@ -1,3 +1,4 @@
+pub mod api;
 mod blend;
 mod kms;
 mod leadership;
@@ -80,6 +81,9 @@ pub enum LeaderMsg {
     ///   other consumers, if any
     WinningPolEpochSlotStreamSubscribe {
         sender: oneshot::Sender<watch::Receiver<Option<WinningPolInfo>>>,
+    },
+    Claim {
+        sender: oneshot::Sender<Result<(), Error>>,
     },
 }
 
@@ -615,11 +619,16 @@ fn handle_inbound_message(
     msg: LeaderMsg,
     winning_pol_epoch_slots_sender: &watch::Sender<Option<WinningPolInfo>>,
 ) {
-    let LeaderMsg::WinningPolEpochSlotStreamSubscribe { sender } = msg;
-
-    sender
-        .send(winning_pol_epoch_slots_sender.subscribe())
-        .unwrap_or_else(|_| {
-            error!("Could not subscribe to POL epoch winning slots channel.");
-        });
+    match msg {
+        LeaderMsg::WinningPolEpochSlotStreamSubscribe { sender } => {
+            sender
+                .send(winning_pol_epoch_slots_sender.subscribe())
+                .unwrap_or_else(|_| {
+                    error!("Could not subscribe to POL epoch winning slots channel.");
+                });
+        }
+        LeaderMsg::Claim { .. } => {
+            todo!("build//sign a tx using wallet and submit it to mempool")
+        }
+    }
 }

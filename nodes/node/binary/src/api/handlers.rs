@@ -14,6 +14,7 @@ use lb_api_service::http::{
     storage::StorageAdapter,
 };
 use lb_chain_broadcast_service::BlockBroadcastService;
+use lb_chain_leader_service::api::ChainLeaderServiceData;
 use lb_chain_service::ConsensusMsg;
 use lb_core::{
     block::Block,
@@ -444,6 +445,24 @@ where
         WalletAdapter,
         RuntimeServiceId,
     >(handle, declaration_id))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::LEADER_CLAIM,
+    responses(
+        (status = 200, description = "Leader claim transaction submitted"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn leader_claim<ChainLeader, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    ChainLeader: ChainLeaderServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<ChainLeader>,
+{
+    make_request_and_return_response!(consensus::leader::claim(&handle))
 }
 
 #[utoipa::path(

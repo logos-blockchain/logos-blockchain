@@ -518,8 +518,6 @@ http:
       nanos: 0
     max_body_size: 10485760
     max_concurrent_requests: 1000
-    rate_limit_per_second: 10000
-    rate_limit_burst: 10000
 storage:
   db_path: ./db
   read_only: false
@@ -545,5 +543,3 @@ testing_http:
       nanos: 0
     max_body_size: 10485760
     max_concurrent_requests: 1000
-    rate_limit_per_second: 10000
-    rate_limit_burst: 10000

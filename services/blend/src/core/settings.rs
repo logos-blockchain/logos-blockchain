@@ -20,6 +20,7 @@ pub struct StartingBlendConfig<BackendSettings> {
     pub recovery_path: PathBuf,
     /// `R_c`: replication factor for data messages.
     pub data_replication_factor: u64,
+    pub activity_threshold_sensitivity: u64,
 }
 
 /// Same values as [`StartingBlendConfig`] but with the secret key exfiltrated
@@ -35,6 +36,7 @@ pub struct RunningBlendConfig<BackendSettings> {
     pub minimum_network_size: NonZeroU64,
     pub recovery_path: PathBuf,
     pub data_replication_factor: u64,
+    pub activity_threshold_sensitivity: u64,
 }
 
 impl<BackendSettings> RunningBlendConfig<BackendSettings> {
