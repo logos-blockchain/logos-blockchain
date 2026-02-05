@@ -1,24 +1,24 @@
 [package]
-name = "logos-blockchain-faucet"
-categories.workspace = true
+categories.workspace  = true
 description.workspace = true
-edition.workspace = true
-keywords.workspace = true
-license.workspace = true
-readme.workspace = true
-repository.workspace = true
-version.workspace = true
+edition.workspace     = true
+keywords.workspace    = true
+license.workspace     = true
+name                  = "logos-blockchain-faucet"
+readme.workspace      = true
+repository.workspace  = true
+version.workspace     = true
 
 [dependencies]
 axum                          = { default-features = false, features = ["http1", "http2", "json", "tokio"], version = "0.7.5" }
 clap                          = { default-features = false, version = "4" }
-reqwest                       = { workspace = true }
 hex                           = { default-features = false, features = ["alloc"], optional = true, version = "0.4" }
 lb-common-http-client         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-node                       = { workspace = true }
+reqwest                       = { workspace = true }
 tokio                         = { default-features = false, features = ["macros", "net", "rt-multi-thread"], version = "1" }
 
 [lints]
