@@ -47,9 +47,9 @@ use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt as _;
 
 use crate::api::{
+    openapi::schema,
     queries::BlockRangeQuery,
-    responses,
-    responses::overwatch::get_relay_or_500,
+    responses::{self, overwatch::get_relay_or_500},
     serializers::blocks::{ApiBlock, ApiProcessedBlockEvent},
 };
 
@@ -73,7 +73,7 @@ macro_rules! make_request_and_return_response {
     get,
     path = paths::MANTLE_METRICS,
     responses(
-        (status = 200, description = "Get the mempool metrics of the cl service", body = MempoolMetrics),
+        (status = 200, description = "Get the mempool metrics of the cl service", body = inline(schema::MempoolMetrics)),
         (status = 500, description = "Internal server error", body = String),
     )
 )]
