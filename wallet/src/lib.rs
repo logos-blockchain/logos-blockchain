@@ -373,8 +373,10 @@ mod tests {
         );
         assert_eq!(wallet.balance(genesis, alice).unwrap(), Some(104));
         assert_eq!(wallet.balance(genesis, bob).unwrap(), None);
-        // we know the voucher, but it is not claimable (doesn't exist) in the ledger
-        assert!(wallet.vouchers().get(&voucher_cm).is_none());
+        assert_eq!(
+            wallet.vouchers().get(&voucher_cm),
+            Some(&(voucher_master_key, voucher_index))
+        );
 
         let wallet =
             Wallet::<_, TestVoucherId>::from_lib([(bob, 2)], Vouchers::default(), genesis, &ledger);
