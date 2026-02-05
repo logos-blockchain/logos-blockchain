@@ -17,4 +17,4 @@ echo "Starting Faucet..."
     --drip-rate 5 &
 
 echo "Starting Node..."
-exec /usr/bin/logos-blockchain-node /config.yaml
+exec /usr/bin/logos-blockchain-node  --deployment devnet /config.yaml
