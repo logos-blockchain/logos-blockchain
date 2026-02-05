@@ -21,7 +21,7 @@ use lb_core::{
     mantle::{SignedMantleTx, Transaction},
 };
 pub use lb_http_api_common::settings::AxumBackendSettings;
-use lb_http_api_common::{paths, utils::create_rate_limit_layer};
+use lb_http_api_common::paths;
 use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
@@ -260,7 +260,6 @@ where
             .layer(ConcurrencyLimitLayer::new(
                 self.settings.max_concurrent_requests,
             ))
-            .layer(create_rate_limit_layer(&self.settings))
             .layer(TraceLayer::new_for_http());
 
         let cors_layer = builder

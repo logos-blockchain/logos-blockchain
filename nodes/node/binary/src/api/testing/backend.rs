@@ -9,7 +9,7 @@ use axum::{
     routing::get,
 };
 use lb_api_service::Backend;
-use lb_http_api_common::{paths::MANTLE_SDP_DECLARATIONS, utils::create_rate_limit_layer};
+use lb_http_api_common::paths::MANTLE_SDP_DECLARATIONS;
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 use overwatch::{DynError, overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;
@@ -93,7 +93,6 @@ where
             .layer(ConcurrencyLimitLayer::new(
                 self.settings.max_concurrent_requests,
             ))
-            .layer(create_rate_limit_layer(&self.settings))
             .layer(TraceLayer::new_for_http())
             .layer(
                 builder
