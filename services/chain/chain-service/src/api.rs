@@ -77,7 +77,7 @@ where
             })?;
 
         rx.await.map_err(|relay_error| {
-            ApiError::CommsFailure(format!("{relay_error} while recving GetInfo"))
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetInfo"))
         })
     }
 
@@ -95,7 +95,7 @@ where
             })?;
 
         receiver.await.map_err(|relay_error| {
-            ApiError::CommsFailure(format!("{relay_error} while recving NewBlockSubscribe"))
+            ApiError::CommsFailure(format!("{relay_error} while receiving NewBlockSubscribe"))
         })
     }
 
@@ -111,7 +111,7 @@ where
             })?;
 
         receiver.await.map_err(|relay_error| {
-            ApiError::CommsFailure(format!("{relay_error} while recving LibSubscribe"))
+            ApiError::CommsFailure(format!("{relay_error} while receiving LibSubscribe"))
         })
     }
 
@@ -133,7 +133,7 @@ where
             })?;
 
         rx.await.map_err(|relay_error| {
-            ApiError::CommsFailure(format!("{relay_error} while recving GetHeaders"))
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetHeaders"))
         })
     }
 
@@ -162,7 +162,7 @@ where
             })?;
 
         rx.await.map_err(|relay_error| {
-            ApiError::CommsFailure(format!("{relay_error} while recving GetLedgerState"))
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetLedgerState"))
         })
     }
 
@@ -181,7 +181,7 @@ where
             })?;
 
         rx.await.map_err(|relay_error| {
-            ApiError::CommsFailure(format!("{relay_error} while recving GetEpochState resp"))
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetEpochState resp"))
         })
     }
 
@@ -206,7 +206,7 @@ where
 
         rx.await
             .map_err(|relay_error| {
-                ApiError::CommsFailure(format!("{relay_error} while recving ApplyBlock resp"))
+                ApiError::CommsFailure(format!("{relay_error} while receiving ApplyBlock resp"))
             })?
             .map_err(|err| match err {
                 crate::Error::ParentMissing { parent, info } => {
@@ -257,7 +257,9 @@ where
             })?;
 
         receiver.await.map_err(|relay_error| {
-            ApiError::CommsFailure(format!("{relay_error} while recving SubscribeChainOnline"))
+            ApiError::CommsFailure(format!(
+                "{relay_error} while receiving SubscribeChainOnline"
+            ))
         })
     }
 }
