@@ -34,8 +34,6 @@ curl -X POST -L --location-trusted https://devnet.blockchain.logos.co/node/0/cfg
      -o my_logos_node_config.yaml
 ```
 
-Then, download the `devnet-deployment.yaml` deployment file attached to this release.
-
 ## Run the binary
 
 After tweaking the node config file to fit your needs, you can run the node binary.
@@ -51,6 +49,5 @@ Before publishing please ensure:
 - [ ] Changelog is correct, compared to last release
 - [ ] Binaries for Mac and Linux platforms are present
 - [ ] Circuits of the expected version for Mac and Linux platforms are present (need to be manually downloaded and included for now)
-- [ ] Well-known deployment files are included in the release
 - [ ] Pre-release is checked if necessary
 - [ ] Remove this checklist and address all TODOs before publishing the release.
