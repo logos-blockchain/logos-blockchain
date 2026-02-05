@@ -20,8 +20,8 @@ use lb_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction},
 };
-pub use lb_http_api_common::settings::AxumBackendSettings;
 use lb_http_api_common::paths;
+pub use lb_http_api_common::settings::AxumBackendSettings;
 use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
