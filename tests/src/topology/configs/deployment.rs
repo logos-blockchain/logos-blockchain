@@ -2,20 +2,19 @@ use core::{
     num::{NonZero, NonZeroU64},
     time::Duration,
 };
-use std::sync::Arc;
 
 use lb_blend_service::{
     core::settings::{CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings},
     settings::TimingSettings,
 };
-use lb_core::sdp::{ServiceParameters, ServiceType};
+use lb_core::sdp::ServiceType;
 use lb_libp2p::protocol_name::StreamProtocol;
 use lb_node::config::{
     blend::deployment::{
         CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
         Settings as BlendDeploymentSettings,
     },
-    cryptarchia::deployment::Settings as CryptarchiaDeploymentSettings,
+    cryptarchia::deployment::{ServiceParameters, Settings as CryptarchiaDeploymentSettings},
     deployment::DeploymentSettings,
     mempool::deployment::Settings as MempoolDeploymentSettings,
     network::deployment::Settings as NetworkDeploymentSettings,
@@ -98,19 +97,16 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
                 epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
             },
             sdp_config: lb_node::config::cryptarchia::deployment::SdpConfig {
-                service_params: Arc::new(
-                    [(
-                        ServiceType::BlendNetwork,
-                        ServiceParameters {
-                            lock_period: 10,
-                            inactivity_period: 20,
-                            retention_period: 100,
-                            timestamp: 0,
-                            session_duration: 21_600,
-                        },
-                    )]
-                    .into(),
-                ),
+                service_params: [(
+                    ServiceType::BlendNetwork,
+                    ServiceParameters {
+                        lock_period: 10,
+                        inactivity_period: 20,
+                        retention_period: 100,
+                        timestamp: 0,
+                    },
+                )]
+                .into(),
                 min_stake: lb_core::sdp::MinStake {
                     threshold: 1,
                     timestamp: 0,

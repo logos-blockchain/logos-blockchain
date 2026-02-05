@@ -38,7 +38,6 @@ cryptarchia:
         inactivity_period: 20
         retention_period: 100
         timestamp: 0
-        session_duration: 200
     min_stake:
       threshold: 1
       timestamp: 0

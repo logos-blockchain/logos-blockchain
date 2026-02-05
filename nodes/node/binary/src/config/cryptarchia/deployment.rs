@@ -1,7 +1,10 @@
 use core::num::NonZeroU32;
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
-use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
+use lb_core::{
+    block::BlockNumber,
+    sdp::{MinStake, ServiceType},
+};
 use lb_cryptarchia_engine::{Config as ConsensusConfig, EpochConfig};
 use lb_pol::slot_activation_coefficient;
 use serde::{Deserialize, Serialize};
@@ -26,6 +29,17 @@ impl Settings {
 // config instead.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SdpConfig {
-    pub service_params: Arc<HashMap<ServiceType, ServiceParameters>>,
+    pub service_params: HashMap<ServiceType, ServiceParameters>,
     pub min_stake: MinStake,
+}
+
+// The same as `lb_core::sdp::ServiceParameters`, minus the
+// `session_duration` values which are calculated from the other values
+// provided.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ServiceParameters {
+    pub lock_period: u64,
+    pub inactivity_period: u64,
+    pub retention_period: u64,
+    pub timestamp: BlockNumber,
 }

@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use lb_blend_service::core::network::libp2p::Libp2pBroadcastSettings;
 use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
+use lb_core::sdp::ServiceParameters;
 use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
 use lb_libp2p::PeerId;
 
@@ -26,12 +29,46 @@ impl ServiceConfig {
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
         lb_chain_leader_service::LeaderSettings<(), Libp2pBroadcastSettings>,
     ) {
+        let epoch_schedule = u64::from(
+            self.deployment.epoch_config.epoch_period_nonce_buffer.get()
+                + self
+                    .deployment
+                    .epoch_config
+                    .epoch_period_nonce_stabilization
+                    .get()
+                + self
+                    .deployment
+                    .epoch_config
+                    .epoch_stake_distribution_stabilization
+                    .get(),
+        );
+        // Session duration is given by epoch schedule * `k` (security parameter).
+        let session_duration_in_blocks =
+            epoch_schedule * u64::from(self.deployment.security_param.get());
         let ledger_config = lb_ledger::Config {
             consensus_config: self.deployment.consensus_config(),
             epoch_config: self.deployment.epoch_config,
             sdp_config: lb_ledger::mantle::sdp::Config {
                 min_stake: self.deployment.sdp_config.min_stake,
-                service_params: self.deployment.sdp_config.service_params,
+                service_params: Arc::new(
+                    self.deployment
+                        .sdp_config
+                        .service_params
+                        .into_iter()
+                        .map(|(service_type, service_params)| {
+                            (
+                                service_type,
+                                ServiceParameters {
+                                    session_duration: session_duration_in_blocks,
+                                    inactivity_period: service_params.inactivity_period,
+                                    lock_period: service_params.lock_period,
+                                    retention_period: service_params.retention_period,
+                                    timestamp: service_params.timestamp,
+                                },
+                            )
+                        })
+                        .collect(),
+                ),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
                         message_frequency_per_round: blend_deployment
