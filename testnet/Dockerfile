@@ -46,7 +46,18 @@ LABEL maintainer="augustinas@status.im" \
 
 RUN apt-get update && apt-get install -yq \
     libstdc++6 libssl3 ca-certificates nginx \
+    python3 python3-pip curl git \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Block Explorer
+ENV UV_INSTALL_DIR=/usr/local/bin
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+RUN git clone https://github.com/logos-blockchain/logos-blockchain-block-explorer-template.git /opt/explorer \
+    && cd /opt/explorer \
+    && git checkout dda9e4e714d4c8e6b67c1d723ddcfce3d3773cbf \
+    && uv venv /opt/explorer/.venv \
+    && uv pip compile pyproject.toml -o requirements.txt \
+    && uv pip install --python /opt/explorer/.venv/bin/python -r requirements.txt
 
 # Copy Circuits
 COPY --from=builder /opt/circuits /opt/circuits
@@ -63,5 +74,8 @@ COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-archi
 COPY --from=builder /logos-blockchain/testnet/l2-sequencer-archival-demo/webapp/dist /var/www/l2-demo
 COPY --from=builder /logos-blockchain/testnet/l2-sequencer-archival-demo/nginx/nginx.conf /etc/nginx/nginx.conf
 
-EXPOSE 80 3000 8080 8090 9000 18080 60000
+# Copy Scripts
+COPY --from=builder /logos-blockchain/testnet/scripts /opt/scripts
+
+EXPOSE 80 3000 8000 8080 8090 9000 18080 60000
 ENTRYPOINT ["/usr/bin/logos-blockchain-node"]
