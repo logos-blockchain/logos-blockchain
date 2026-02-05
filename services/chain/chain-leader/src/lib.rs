@@ -5,7 +5,7 @@ mod mempool;
 mod relays;
 
 use core::fmt::Debug;
-use std::{fmt::Display, iter, pin::Pin};
+use std::{fmt::Display, iter, pin::Pin, time::Duration};
 
 use futures::{StreamExt as _, stream};
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
@@ -318,10 +318,10 @@ where
             blend_broadcast_settings.clone(),
         );
 
+        // Wait for other service (except ChainLeader) to become ready, with timeout.
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
-            // No timeout since ChainNetwork service becomes ready only after IBD is complete.
-            None,
+            Some(Duration::from_secs(60)),
             BlendService,
             TxMempoolService<_, _, _, _>,
             TimeService<_, _>,
@@ -329,6 +329,14 @@ where
             ChainNetwork,
             Wallet,
             PreloadKmsService<_>
+        )
+        .await?;
+        // Wait for ChainLeader service to become ready.
+        // No timeout since it becomes ready only after IBD is complete.
+        wait_until_services_are_ready!(
+            &self.service_resources_handle.overwatch_handle,
+            None,
+            ChainNetwork
         )
         .await?;
 
