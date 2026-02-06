@@ -117,7 +117,7 @@ where
             .ok()?;
         let (sender, receiver) = channel();
         cryptarchia_service_relay
-            .send(LeaderMsg::WinningPolEpochSlotStreamSubscribe { sender })
+            .send(LeaderMsg::PotentialWinningPolEpochSlotStreamSubscribe { sender })
             .await
             .ok()?;
         let pol_winning_slot_receiver = receiver.await.ok()?;
