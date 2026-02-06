@@ -178,6 +178,7 @@ services:
       - cfgsync
     volumes:
       - ./testnet/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./testnet/static:/usr/share/nginx/html:ro
     entrypoint: [ "nginx", "-g", "daemon off;" ]
 
   l2-sequencer:

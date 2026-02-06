@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logos Testnet Faucet</title>
+    <style>
+        body { font-family: sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; line-height: 1.6; }
+        .field { margin-bottom: 15px; }
+        label { display: block; font-weight: bold; }
+        input, select { width: 100%; padding: 8px; margin-top: 5px; box-sizing: border-box; }
+        button { background: #007bff; color: white; border: none; padding: 10px 15px; cursor: pointer; border-radius: 4px; }
+        button:disabled { background: #ccc; }
+        #response { margin-top: 20px; padding: 15px; border-radius: 4px; display: none; word-break: break-all; }
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    </style>
+</head>
+<body>
+    <h2>Logos Faucet</h2>
+    
+    <div class="field">
+        <label for="node">Select Node</label>
+        <select id="node">
+            <option value="0">Node 0</option>
+            <option value="1">Node 1</option>
+            <option value="2">Node 2</option>
+            <option value="3">Node 3</option>
+        </select>
+    </div>
+
+    <div class="field">
+        <label for="pk">Destination Public Key (Hex)</label>
+        <input type="text" id="pk" placeholder="e.g. 7d069d39...">
+    </div>
+
+    <button id="sendBtn">Request Funds</button>
+
+    <div id="response"></div>
+
+    <script>
+        const btn = document.getElementById('sendBtn');
+        const respDiv = document.getElementById('response');
+
+        btn.onclick = async () => {
+            const nodeId = document.getElementById('node').value;
+            const pk = document.getElementById('pk').value.trim();
+
+            if (!pk) return alert("Please enter a Public Key");
+
+            btn.disabled = true;
+            respDiv.style.display = 'none';
+            respDiv.className = '';
+
+            try {
+                const response = await fetch(`./faucet/${nodeId}/${pk}`, {
+                    method: 'POST'
+                });
+
+                const text = await response.text();
+                respDiv.style.display = 'block';
+                
+                if (response.ok) {
+                    respDiv.className = 'success';
+                    respDiv.innerHTML = `<strong>Success!</strong><br>${text}`;
+                } else {
+                    respDiv.className = 'error';
+                    respDiv.innerHTML = `<strong>Error:</strong><br>${text}`;
+                }
+            } catch (err) {
+                respDiv.style.display = 'block';
+                respDiv.className = 'error';
+                respDiv.innerText = "Network error: " + err.message;
+            } finally {
+                btn.disabled = false;
+            }
+        };
+    </script>
+</body>
+</html>

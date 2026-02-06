@@ -63,7 +63,7 @@ async fn test_nodes_and_faucet() {
             if i == 0 {
                 let faucet_port = 3000;
                 println!(">>>> Spawning Faucet on port {faucet_port} using config {out}...");
-                
+
                 let mut faucet_proc = Command::new(FAUCET_BIN)
                     .arg("--port")
                     .arg(faucet_port.to_string())
@@ -89,7 +89,7 @@ async fn test_nodes_and_faucet() {
 
     println!("\nNodes & Faucet live. Use Ctrl+C to shutdown.\n");
     println!("Faucet: http://localhost:3000/faucet/<hex_pk>\n");
-    
+
     tokio::signal::ctrl_c().await.unwrap();
 
     server.kill().unwrap();
