@@ -18,8 +18,6 @@ use num_bigint::BigUint;
 use reqwest::Url;
 use serial_test::serial;
 
-const BLOCKS_TO_WAIT: u32 = 6;
-
 /// Verifies that invalid transactions don't prevent valid transactions from
 /// being included in blocks.
 #[tokio::test]
@@ -57,7 +55,7 @@ async fn invalid_transactions_are_handled() {
     let first_batch_hashes = [first_valid_hash];
 
     let timeout = max_block_propagation_time(
-        BLOCKS_TO_WAIT,
+        6, // Expecting that the tx will be included within 6 blocks (arbitrary chosen)
         topology.validators().len().try_into().unwrap(),
         &validator.config().deployment,
         2.0,
