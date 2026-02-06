@@ -4130,6 +4130,7 @@ name = "logos-blockchain-blend-proofs"
 version = "0.1.0"
 dependencies = [
  "const-hex",
+ "derivative",
  "ed25519-dalek",
  "generic-array 1.3.5",
  "logos-blockchain-blend-crypto 0.1.0",
