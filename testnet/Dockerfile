@@ -31,7 +31,7 @@ RUN VITE_SEQUENCER_URL=/api/sequencer VITE_ARCHIVER_URL=/api/archiver bun run bu
 WORKDIR /logos-blockchain
 ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 RUN scripts/setup-logos-blockchain-circuits.sh "$VERSION" "$LOGOS_BLOCKCHAIN_CIRCUITS"
-RUN cargo build --locked --release --all-features
+RUN cargo build --locked --features high-active-slot-coefficient --all-features
 
 # ===========================
 # NODE IMAGE
@@ -64,12 +64,12 @@ COPY --from=builder /opt/circuits /opt/circuits
 ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 
 # Copy Binaries
-COPY --from=builder /logos-blockchain/target/release/logos-blockchain-node /usr/bin/
-COPY --from=builder /logos-blockchain/target/release/logos-blockchain-cfgsync-server /usr/bin/
-COPY --from=builder /logos-blockchain/target/release/logos-blockchain-cfgsync-client /usr/bin/
-COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-sequencer /usr/bin/
-COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-archiver /usr/bin/
-COPY --from=builder /logos-blockchain/target/release/logos-blockchain-faucet /usr/bin/
+COPY --from=builder /logos-blockchain/target/debug/logos-blockchain-node /usr/bin/
+COPY --from=builder /logos-blockchain/target/debug/logos-blockchain-cfgsync-server /usr/bin/
+COPY --from=builder /logos-blockchain/target/debug/logos-blockchain-cfgsync-client /usr/bin/
+COPY --from=builder /logos-blockchain/target/debug/logos-blockchain-demo-sequencer /usr/bin/
+COPY --from=builder /logos-blockchain/target/debug/logos-blockchain-demo-archiver /usr/bin/
+COPY --from=builder /logos-blockchain/target/debug/logos-blockchain-faucet /usr/bin/
 
 # Copy Frontend & Nginx config
 COPY --from=builder /logos-blockchain/testnet/l2-sequencer-archival-demo/webapp/dist /var/www/l2-demo
