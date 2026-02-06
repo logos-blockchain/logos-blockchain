@@ -3,7 +3,10 @@ use std::{slice, time::Duration};
 use futures::stream::{self, StreamExt as _};
 use logos_blockchain_tests::{
     adjust_timeout,
-    common::sync::{format_cryptarhica_info, wait_for_validators_mode_and_height},
+    common::{
+        sync::{format_cryptarhica_info, wait_for_validators_mode_and_height},
+        time::estimate_time_for_blocks,
+    },
     nodes::validator::{Validator, create_validator_config},
     topology::configs::{
         create_general_configs_with_blend_core_subset,
@@ -39,8 +42,13 @@ async fn test_orphan_handling() {
     wait_for_validators_mode_and_height(
         &validators,
         lb_cryptarchia_engine::State::Online,
-        min_height,
-        Duration::from_secs(500),
+        min_height.into(),
+        estimate_time_for_blocks(
+            min_height,
+            validators.len().try_into().unwrap(),
+            &validators[0].config().deployment,
+            3.0,
+        ),
     )
     .await;
 

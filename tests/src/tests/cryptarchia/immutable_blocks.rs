@@ -1,18 +1,15 @@
-use std::{num::NonZero, ops::Mul as _, time::Duration};
+use std::{num::NonZero, time::Duration};
 
 use futures_util::StreamExt as _;
-use lb_pol::slot_activation_coefficient;
 use logos_blockchain_tests::{
     adjust_timeout,
+    common::time::estimate_time_for_blocks,
     nodes::validator::{Validator, create_validator_config},
     topology::configs::create_general_configs,
 };
 use serial_test::serial;
 
-const SLOT_DURATION: Duration = Duration::from_secs(1);
-const SECURITY_PARAM: u32 = 5;
 const TARGET_IMMUTABLE_BLOCK_COUNT: u32 = 5;
-const TIMEOUT_MULTIPLIER: f64 = 2.0;
 
 #[tokio::test]
 #[serial]
@@ -21,23 +18,27 @@ async fn immutable_blocks_two_nodes() {
         .into_iter()
         .map(|c| {
             let mut config = create_validator_config(c);
-            config.deployment.time.slot_duration = SLOT_DURATION;
+            config.deployment.time.slot_duration = Duration::from_secs(1);
             config
                 .user
                 .cryptarchia
                 .service
                 .bootstrap
                 .prolonged_bootstrap_period = Duration::ZERO;
-            config.deployment.cryptarchia.security_param = NonZero::new(SECURITY_PARAM).unwrap();
+            config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
 
             config
         })
         .collect::<Vec<_>>();
 
-    let blocks_to_wait = SECURITY_PARAM + TARGET_IMMUTABLE_BLOCK_COUNT;
-    let timeout = (SLOT_DURATION.div_f64(slot_activation_coefficient()))
-        .mul(blocks_to_wait)
-        .mul_f64(TIMEOUT_MULTIPLIER);
+    let deployment = &configs[0].deployment;
+    let blocks_to_wait = deployment.cryptarchia.security_param.get() + TARGET_IMMUTABLE_BLOCK_COUNT;
+    let timeout = estimate_time_for_blocks(
+        blocks_to_wait,
+        configs.len().try_into().unwrap(),
+        deployment,
+        2.0,
+    );
 
     let nodes = futures_util::future::join_all(configs.into_iter().map(Validator::spawn))
         .await
