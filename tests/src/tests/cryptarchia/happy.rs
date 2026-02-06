@@ -3,7 +3,7 @@ use std::{collections::HashSet, time::Duration};
 use futures::stream::{self, StreamExt as _};
 use logos_blockchain_tests::{
     adjust_timeout,
-    common::time::estimate_time_for_blocks,
+    common::time::max_block_propagation_time,
     topology::{Topology, TopologyConfig},
 };
 use serial_test::serial;
@@ -17,7 +17,7 @@ async fn happy_test(topology: &Topology) {
     let config = nodes[0].config();
 
     let n_blocks = config.deployment.cryptarchia.security_param.get() * CHAIN_LENGTH_MULTIPLIER;
-    let timeout = adjust_timeout(estimate_time_for_blocks(
+    let timeout = adjust_timeout(max_block_propagation_time(
         n_blocks,
         nodes.len().try_into().unwrap(),
         &config.deployment,

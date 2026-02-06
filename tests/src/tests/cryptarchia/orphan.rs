@@ -5,7 +5,7 @@ use logos_blockchain_tests::{
     adjust_timeout,
     common::{
         sync::{format_cryptarhica_info, wait_for_validators_mode_and_height},
-        time::estimate_time_for_blocks,
+        time::max_block_propagation_time,
     },
     nodes::validator::{Validator, create_validator_config},
     topology::configs::{
@@ -43,7 +43,7 @@ async fn test_orphan_handling() {
         &validators,
         lb_cryptarchia_engine::State::Online,
         min_height.into(),
-        estimate_time_for_blocks(
+        max_block_propagation_time(
             min_height,
             validators.len().try_into().unwrap(),
             &validators[0].config().deployment,

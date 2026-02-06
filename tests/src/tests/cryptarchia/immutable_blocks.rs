@@ -3,7 +3,7 @@ use std::{num::NonZero, time::Duration};
 use futures_util::StreamExt as _;
 use logos_blockchain_tests::{
     adjust_timeout,
-    common::time::estimate_time_for_blocks,
+    common::time::max_block_propagation_time,
     nodes::validator::{Validator, create_validator_config},
     topology::configs::create_general_configs,
 };
@@ -33,7 +33,7 @@ async fn immutable_blocks_two_nodes() {
 
     let deployment = &configs[0].deployment;
     let blocks_to_wait = deployment.cryptarchia.security_param.get() + TARGET_IMMUTABLE_BLOCK_COUNT;
-    let timeout = estimate_time_for_blocks(
+    let timeout = max_block_propagation_time(
         blocks_to_wait,
         configs.len().try_into().unwrap(),
         deployment,

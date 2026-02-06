@@ -10,7 +10,7 @@ use logos_blockchain_tests::{
     adjust_timeout,
     common::{
         sync::{wait_for_validators_mode, wait_for_validators_mode_and_height},
-        time::estimate_time_for_blocks,
+        time::max_block_propagation_time,
     },
     nodes::validator::{Validator, create_validator_config},
     secret_key_to_peer_id,
@@ -58,7 +58,7 @@ async fn test_ibd_behind_nodes() {
         &initial_validators,
         lb_cryptarchia_engine::State::Online,
         minimum_height.into(),
-        adjust_timeout(estimate_time_for_blocks(
+        adjust_timeout(max_block_propagation_time(
             minimum_height,
             initial_validators.len().try_into().unwrap(),
             &initial_validators[0].config().deployment,

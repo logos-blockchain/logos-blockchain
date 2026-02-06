@@ -6,12 +6,12 @@ use std::{
 use lb_node::config::{blend, deployment::DeploymentSettings};
 use lb_pol::slot_activation_coefficient;
 
-/// Estimates the time required for `num_blocks` blocks to be proposed
+/// Calculates the maximum time required for `num_blocks` blocks to be proposed
 /// and fully propagated across the network.
 ///
-/// `margin_factor` is a multiplier to add some margin to the estimate.
+/// `margin_factor` is a multiplier to add some margin to the calculated time.
 #[must_use]
-pub fn estimate_time_for_blocks(
+pub fn max_block_propagation_time(
     num_blocks: u32,
     blend_network_size: u64,
     deployment: &DeploymentSettings,
@@ -22,7 +22,7 @@ pub fn estimate_time_for_blocks(
         .slot_duration
         .div_f64(slot_activation_coefficient());
 
-    let blend_latency = estimate_blend_latency_per_block(blend_network_size, &deployment.blend);
+    let blend_latency = max_blend_latency_per_block(blend_network_size, &deployment.blend);
 
     let broadcast_latency = Duration::from_secs(1);
 
@@ -33,9 +33,9 @@ pub fn estimate_time_for_blocks(
         .mul_f64(margin_factor)
 }
 
-/// Estimate the time for a block to be fully blended.
+/// Calculates the maximum time for a block to be fully blended.
 /// This ignores the gossiping latency in the blend network.
-fn estimate_blend_latency_per_block(
+fn max_blend_latency_per_block(
     network_size: u64,
     deployment: &blend::deployment::Settings,
 ) -> Duration {

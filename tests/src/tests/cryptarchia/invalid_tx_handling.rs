@@ -9,7 +9,7 @@ use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use logos_blockchain_tests::{
     common::{
         chain::scan_chain_until, mantle_tx::create_inscription_transaction_with_id,
-        time::estimate_time_for_blocks,
+        time::max_block_propagation_time,
     },
     nodes::validator::Validator,
     topology::{Topology, TopologyConfig},
@@ -56,7 +56,7 @@ async fn invalid_transactions_are_handled() {
 
     let first_batch_hashes = [first_valid_hash];
 
-    let timeout = estimate_time_for_blocks(
+    let timeout = max_block_propagation_time(
         BLOCKS_TO_WAIT,
         topology.validators().len().try_into().unwrap(),
         &validator.config().deployment,
