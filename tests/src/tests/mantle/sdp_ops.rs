@@ -11,7 +11,6 @@ use lb_core::{
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
 use logos_blockchain_tests::{
-    adjust_timeout,
     common::mantle_tx::{create_sdp_active_tx, create_sdp_declare_tx, create_sdp_withdraw_tx},
     nodes::validator::Validator,
     topology::{GenesisNoteSpec, Topology, TopologyConfig},
@@ -44,7 +43,7 @@ async fn sdp_ops_e2e() {
 
     let validator = &topology.validators()[0];
 
-    wait_for_height(validator, 1, adjust_timeout(Duration::from_secs(30)))
+    wait_for_height(validator, 1, Duration::from_secs(30))
         .await
         .expect("validator should produce the first block before submitting declare");
 
@@ -117,8 +116,7 @@ async fn sdp_ops_e2e() {
         .get(&ServiceType::BlendNetwork)
         .expect("blend network parameters must exist")
         .lock_period;
-    let height_timeout =
-        adjust_timeout(Duration::from_secs(lock_period.saturating_mul(12).max(90)));
+    let height_timeout = Duration::from_secs(lock_period.saturating_mul(12).max(90));
 
     let created_height = declaration_state.created;
     let initial_active = declaration_state.active;

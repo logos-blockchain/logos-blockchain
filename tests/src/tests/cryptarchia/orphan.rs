@@ -2,7 +2,6 @@ use std::{slice, time::Duration};
 
 use futures::stream::{self, StreamExt as _};
 use logos_blockchain_tests::{
-    adjust_timeout,
     common::{
         sync::{format_cryptarhica_info, wait_for_validators_mode_and_height},
         time::max_block_propagation_time,
@@ -66,7 +65,7 @@ async fn test_orphan_handling() {
     // a new block and it is delivered to the behind node.
     // We set a timeout long enough, since there is a non-zero probability that the
     // behind node also proposes blocks (which wouldn't trigger orphan handling).
-    tokio::time::timeout(adjust_timeout(Duration::from_secs(300)), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         loop {
             let initial_nodes_info: Vec<_> = stream::iter(&validators)
                 .then(async |n| n.consensus_info(false).await)

@@ -7,7 +7,6 @@ use futures::stream::{self, StreamExt as _};
 use lb_libp2p::PeerId;
 use lb_pol::slot_activation_coefficient;
 use logos_blockchain_tests::{
-    adjust_timeout,
     common::{
         sync::{wait_for_validators_mode, wait_for_validators_mode_and_height},
         time::max_block_propagation_time,
@@ -59,12 +58,12 @@ async fn test_ibd_behind_nodes() {
         &initial_validators,
         lb_cryptarchia_engine::State::Online,
         minimum_height.into(),
-        adjust_timeout(max_block_propagation_time(
+        max_block_propagation_time(
             minimum_height,
             initial_validators.len().try_into().unwrap(),
             &initial_validators[0].config().deployment,
             2.0,
-        )),
+        ),
     )
     .await;
 
@@ -106,7 +105,7 @@ async fn test_ibd_behind_nodes() {
     wait_for_validators_mode(
         &[&behind_node],
         lb_cryptarchia_engine::State::Online,
-        adjust_timeout(Duration::from_secs(10)),
+        Duration::from_secs(10),
     )
     .await;
 

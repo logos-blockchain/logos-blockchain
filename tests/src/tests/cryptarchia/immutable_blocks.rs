@@ -2,9 +2,8 @@ use std::{num::NonZero, time::Duration};
 
 use futures_util::StreamExt as _;
 use logos_blockchain_tests::{
-    adjust_timeout,
     common::time::max_block_propagation_time,
-    nodes::validator::{Validator, create_validator_config},
+    nodes::{Validator, create_validator_config},
     topology::configs::{create_general_configs, deployment::default_e2e_deployment_settings},
 };
 use serial_test::serial;
@@ -58,7 +57,7 @@ async fn immutable_blocks_two_nodes() {
     tokio::pin!(stream1);
     tokio::pin!(stream2);
 
-    let timeout = tokio::time::sleep(adjust_timeout(timeout));
+    let timeout = tokio::time::sleep(timeout);
 
     tokio::select! {
         () = timeout => panic!("Timed out waiting for matching LIBs"),

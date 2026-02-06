@@ -4,24 +4,15 @@ pub mod cucumber;
 pub mod nodes;
 pub mod topology;
 
-use std::{env, ops::Mul as _, sync::LazyLock, time::Duration};
+use std::{env, sync::LazyLock};
 
 use lb_libp2p::{Multiaddr, PeerId, multiaddr};
-
-static IS_SLOW_TEST_ENV: LazyLock<bool> =
-    LazyLock::new(|| env::var("SLOW_TEST_ENV").is_ok_and(|s| s == "true"));
 
 /// Global flag indicating whether debug tracing configuration is enabled to
 /// send traces to local grafana stack.
 pub static IS_DEBUG_TRACING: LazyLock<bool> = LazyLock::new(|| {
     env::var("LOGOS_BLOCKCHAIN_TESTS_TRACING").is_ok_and(|val| val.eq_ignore_ascii_case("true"))
 });
-
-/// In slow test environments like Codecov, use 2x timeout.
-#[must_use]
-pub fn adjust_timeout(d: Duration) -> Duration {
-    if *IS_SLOW_TEST_ENV { d.mul(2) } else { d }
-}
 
 fn node_address_from_port(port: u16) -> Multiaddr {
     multiaddr(std::net::Ipv4Addr::LOCALHOST, port)

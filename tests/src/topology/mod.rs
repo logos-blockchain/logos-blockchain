@@ -1,6 +1,6 @@
 pub mod configs;
 
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
 use configs::{
     GeneralConfig,
@@ -18,7 +18,6 @@ use lb_utils::net::get_available_udp_port;
 use rand::{Rng as _, thread_rng};
 
 use crate::{
-    adjust_timeout,
     common::kms::key_id_for_preload_backend,
     nodes::validator::{Validator, create_validator_config},
     topology::configs::{
@@ -269,14 +268,13 @@ trait ReadinessCheck<'a> {
     fn timeout_message(&self, data: Self::Data) -> String;
 
     async fn wait(&'a self) {
-        let timeout_duration = adjust_timeout(std::time::Duration::from_secs(60));
-        let timeout = tokio::time::timeout(timeout_duration, async {
+        let timeout = tokio::time::timeout(Duration::from_secs(60), async {
             loop {
                 let data = self.collect().await;
                 if self.is_ready(&data) {
                     return;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
         });
 

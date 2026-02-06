@@ -39,7 +39,7 @@ use tokio::time::error::Elapsed;
 
 use super::{CLIENT, create_tempdir, get_exe_path, persist_tempdir};
 use crate::{
-    IS_DEBUG_TRACING, adjust_timeout, common::kms::key_id_for_preload_backend, nodes::LOGS_PREFIX,
+    IS_DEBUG_TRACING, common::kms::key_id_for_preload_backend, nodes::LOGS_PREFIX,
     topology::configs::GeneralConfig,
 };
 
@@ -133,7 +133,7 @@ impl Validator {
             http_client: CommonHttpClient::new_with_client(CLIENT.clone(), None),
         };
 
-        tokio::time::timeout(adjust_timeout(Duration::from_secs(10)), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
             node.wait_online().await;
         })
         .await?;
