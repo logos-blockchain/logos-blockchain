@@ -73,7 +73,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build node binary
-        run: cargo build -p logos-blockchain-node --release --target ${{ matrix.platform.target_triple }}
+        run: cargo build -p logos-blockchain-node --features high-active-slot-coefficient --release --target ${{ matrix.platform.target_triple }}
 
       - name: Upload binary (${{ matrix.platform.arch }})
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
