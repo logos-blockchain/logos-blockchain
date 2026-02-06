@@ -5,7 +5,7 @@ use logos_blockchain_tests::{
     adjust_timeout,
     common::time::max_block_propagation_time,
     nodes::validator::{Validator, create_validator_config},
-    topology::configs::create_general_configs,
+    topology::configs::{create_general_configs, deployment::default_e2e_deployment_settings},
 };
 use serial_test::serial;
 
@@ -17,7 +17,7 @@ async fn immutable_blocks_two_nodes() {
     let configs = create_general_configs(2)
         .into_iter()
         .map(|c| {
-            let mut config = create_validator_config(c);
+            let mut config = create_validator_config(c, default_e2e_deployment_settings());
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
                 .user

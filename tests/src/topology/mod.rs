@@ -25,6 +25,7 @@ use crate::{
         api::create_api_configs,
         blend::{GeneralBlendConfig, create_blend_configs},
         consensus::{SHORT_PROLONGED_BOOTSTRAP_PERIOD, create_consensus_configs},
+        deployment::default_e2e_deployment_settings,
         time::default_time_config,
     },
 };
@@ -178,7 +179,7 @@ impl Topology {
     async fn spawn_validators(config: Vec<GeneralConfig>) -> Vec<Validator> {
         let mut validators = Vec::new();
         for general_config in config {
-            let config = create_validator_config(general_config);
+            let config = create_validator_config(general_config, default_e2e_deployment_settings());
             validators.push(Validator::spawn(config).await.unwrap());
         }
         validators

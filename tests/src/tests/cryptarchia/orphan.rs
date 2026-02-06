@@ -10,6 +10,7 @@ use logos_blockchain_tests::{
     nodes::validator::{Validator, create_validator_config},
     topology::configs::{
         create_general_configs_with_blend_core_subset,
+        deployment::default_e2e_deployment_settings,
         network::{Libp2pNetworkLayout, NetworkParams},
     },
 };
@@ -32,7 +33,7 @@ async fn test_orphan_handling() {
 
     let mut validators = vec![];
     for config in general_configs.iter().take(n_initial_validators) {
-        let config = create_validator_config(config.clone());
+        let config = create_validator_config(config.clone(), default_e2e_deployment_settings());
         validators.push(Validator::spawn(config).await.unwrap());
     }
     println!("Initial validators started: {}", validators.len());
@@ -55,7 +56,10 @@ async fn test_orphan_handling() {
     // Start the 3rd node. We don't set IBD peers for the node,
     // so it has to catch up via orphan handling
     println!("Starting 3rd node ...");
-    let config = create_validator_config(general_configs[n_initial_validators].clone());
+    let config = create_validator_config(
+        general_configs[n_initial_validators].clone(),
+        default_e2e_deployment_settings(),
+    );
     let behind_node = [Validator::spawn(config).await.unwrap()];
 
     // Orphan handling will be triggered once one of the initial nodes proposes

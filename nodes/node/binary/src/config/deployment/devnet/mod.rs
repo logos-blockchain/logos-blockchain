@@ -4,6 +4,7 @@ use crate::config::{
 
 pub const NAME: &str = "devnet";
 
+#[must_use]
 pub fn deployment_settings() -> DeploymentSettings {
     const SERIALIZED_DEVNET_CONFIG: &str = include_str!("config.yaml");
     deserialize_config_from_reader(SERIALIZED_DEVNET_CONFIG.as_bytes(), OnUnknownKeys::Fail)

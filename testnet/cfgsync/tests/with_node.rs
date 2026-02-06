@@ -1,9 +1,10 @@
 use std::{fs, time::Duration};
 
-use lb_node::{UserConfig, config::RunConfig};
-use lb_tests::{
-    nodes::validator::Validator, topology::configs::deployment::default_e2e_deployment_settings,
+use lb_node::{
+    UserConfig,
+    config::{RunConfig, deployment::devnet},
 };
+use lb_tests::nodes::validator::Validator;
 use lb_utils::net::{get_available_tcp_port, get_available_udp_port};
 use tokio::{process::Command, task::JoinSet, time::sleep};
 
@@ -50,7 +51,7 @@ async fn test_spawn_nodes_from_cfgsync_custom_ports() {
 
             let run_config = RunConfig {
                 user: user_config,
-                deployment: default_e2e_deployment_settings(),
+                deployment: devnet::deployment_settings(),
             };
 
             println!(

@@ -25,7 +25,7 @@ use lb_key_management_system_service::keys::secured_key::SecuredKey as _;
 use lb_network_service::backends::libp2p::Libp2pInfo;
 use lb_node::{
     HeaderId, RocksBackendSettings, UserConfig,
-    config::{RunConfig, mempool::serde::Config as MempoolConfig},
+    config::{RunConfig, deployment::DeploymentSettings, mempool::serde::Config as MempoolConfig},
 };
 use lb_sdp_service::SdpSettings;
 use lb_tracing::logging::local::FileConfig;
@@ -39,10 +39,8 @@ use tokio::time::error::Elapsed;
 
 use super::{CLIENT, create_tempdir, get_exe_path, persist_tempdir};
 use crate::{
-    IS_DEBUG_TRACING, adjust_timeout,
-    common::kms::key_id_for_preload_backend,
-    nodes::LOGS_PREFIX,
-    topology::configs::{GeneralConfig, deployment::default_e2e_deployment_settings},
+    IS_DEBUG_TRACING, adjust_timeout, common::kms::key_id_for_preload_backend, nodes::LOGS_PREFIX,
+    topology::configs::GeneralConfig,
 };
 
 const BIN_PATH_DEBUG: &str = "../target/debug/logos-blockchain-node";
@@ -323,7 +321,10 @@ impl Validator {
 }
 
 #[must_use]
-pub fn create_validator_config(config: GeneralConfig) -> RunConfig {
+pub fn create_validator_config(
+    config: GeneralConfig,
+    deployment_config: DeploymentSettings,
+) -> RunConfig {
     let testing_http_address = format!("127.0.0.1:{}", get_available_tcp_port().unwrap())
         .parse()
         .unwrap();
@@ -381,7 +382,6 @@ pub fn create_validator_config(config: GeneralConfig) -> RunConfig {
             },
         },
     };
-    let deployment_config = default_e2e_deployment_settings();
 
     RunConfig {
         deployment: deployment_config,
