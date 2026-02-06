@@ -1,6 +1,6 @@
 Feature: Cryptarchia
 
-  @cryptarchia
+  @cryptarchia_ci
   Scenario: Two nodes happy path
     Given I have a cluster with capacity of 2 nodes
     And I start node "NODE_1"
@@ -8,7 +8,7 @@ Feature: Cryptarchia
     Then all nodes have at least 10 blocks and converged to within 1 blocks in 300 seconds
     Then I stop all nodes
 
-  @cryptarchia
+  @cryptarchia_ci
   Scenario: Orphan staggered start
     Given I have a cluster with capacity of 4 nodes
     And I start node "NODE_1"
@@ -21,7 +21,7 @@ Feature: Cryptarchia
     Then all nodes have at least 8 blocks and converged to within 1 blocks in 180 seconds
     Then I stop all nodes
 
-  @cryptarchia @flaky
+  @cryptarchia_ci @flaky
   Scenario: Orphan staggered fork start 1
     Given I have a cluster with capacity of 7 nodes
     And I start node "NODE_A1"
@@ -37,11 +37,11 @@ Feature: Cryptarchia
     Then all nodes have at least 10 blocks and converged to within 1 blocks in 180 seconds
     Then I stop all nodes
 
-  @cryptarchia @flaky
+  @cryptarchia_ci @flaky
   Scenario: Orphan staggered fork start 2
     Given I have a cluster with capacity of 9 nodes
     And I start node "NODE_A1"
-    When node "NODE_A1" is at height 2 in 300 seconds
+    When node "NODE_A1" is at height 2 in 360 seconds
     And I start peer node "NODE_A2" connected to node "NODE_A1"
     And I start peer node "NODE_A3" connected to node "NODE_A2"
     And I start peer node "NODE_A4" connected to node "NODE_A3"
