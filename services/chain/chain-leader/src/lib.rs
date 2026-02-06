@@ -47,7 +47,7 @@ pub use crate::wallet::LeaderWalletConfig;
 use crate::{
     blend::BlendAdapter,
     kms::PreloadKmsService,
-    leadership::{WinningPoLSlotNotifier, build_proof_for},
+    leadership::{PotentialWinningPoLSlotNotifier, build_proof_for},
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::CryptarchiaConsensusRelays,
     wallet::{LeaderWalletError, fund_and_sign_leader_claim_tx},
@@ -90,14 +90,14 @@ pub enum LeaderMsg {
     /// Request a new receiver that yields PoL-winning slot information.
     ///
     /// The stream will yield items in one of the following cases:
-    /// * a new epoch starts -> immediately the first winning slot of the new
-    ///   epoch, if any
-    /// * this service is started mid-epoch -> immediately the first winning
-    ///   slot of the ongoing epoch (the slot can also be in the past compared
-    ///   to the current slot as returned by the time service), if any
+    /// * a new epoch starts -> immediately the first potential winning slot of
+    ///   the new epoch, if any
+    /// * this service is started mid-epoch -> immediately the first potential
+    ///   winning slot of the ongoing epoch (the slot can also be in the past
+    ///   compared to the current slot as returned by the time service), if any
     /// * a new consumer subscribes -> the latest value that was sent to all the
     ///   other consumers, if any
-    WinningPolEpochSlotStreamSubscribe {
+    PotentialWinningPolEpochSlotStreamSubscribe {
         sender: oneshot::Sender<watch::Receiver<Option<WinningPolInfo>>>,
     },
     Claim {
@@ -321,8 +321,10 @@ where
             .notifier()
             .get_updated_settings();
 
-        let mut winning_pol_slot_notifier =
-            WinningPoLSlotNotifier::new(&ledger_config, &self.winning_pol_epoch_slots_sender);
+        let mut winning_pol_slot_notifier = PotentialWinningPoLSlotNotifier::new(
+            &ledger_config,
+            &self.winning_pol_epoch_slots_sender,
+        );
 
         let wallet_api = WalletApi::<Wallet, RuntimeServiceId>::new(
             self.service_resources_handle
@@ -654,7 +656,7 @@ where
         mempool: &MempoolAdapter<Mempool::Item>,
     ) {
         match msg {
-            LeaderMsg::WinningPolEpochSlotStreamSubscribe { sender } => {
+            LeaderMsg::PotentialWinningPolEpochSlotStreamSubscribe { sender } => {
                 sender
                     .send(winning_pol_epoch_slots_sender.subscribe())
                     .unwrap_or_else(|_| {
