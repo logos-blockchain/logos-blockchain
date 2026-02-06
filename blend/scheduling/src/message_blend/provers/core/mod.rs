@@ -1,4 +1,4 @@
-use core::pin::Pin;
+use core::{future::ready, pin::Pin};
 
 use async_trait::async_trait;
 use futures::stream::{self, Stream, StreamExt as _};
@@ -10,6 +10,7 @@ use lb_blend_proofs::{
     selection::VerifiedProofOfSelection,
 };
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
+use tokio_util::sync::CancellationToken;
 
 use crate::message_blend::{
     CoreProofOfQuotaGenerator,
@@ -41,6 +42,7 @@ pub struct RealCoreProofsGenerator<PoQGenerator> {
     pub(super) settings: ProofsGeneratorSettings,
     pub(super) proof_of_quota_generator: PoQGenerator,
     proof_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send + Sync>>,
+    cancellation_token: CancellationToken,
 }
 
 #[async_trait]
@@ -49,15 +51,19 @@ where
     PoQGenerator: CoreProofOfQuotaGenerator + Clone + Send + Sync + 'static,
 {
     fn new(settings: ProofsGeneratorSettings, proof_of_quota_generator: PoQGenerator) -> Self {
+        let cancellation_token = CancellationToken::new();
+
         Self {
             proof_stream: Box::pin(create_proof_stream(
                 settings.public_inputs,
                 proof_of_quota_generator.clone(),
                 0,
+                cancellation_token.clone(),
             )),
             proof_of_quota_generator,
             remaining_quota: settings.public_inputs.core.quota,
             settings,
+            cancellation_token,
         }
     }
 
@@ -96,14 +102,20 @@ where
     // channel, hence the old task will fail to send new proofs and will abort on
     // its own.
     fn generate_new_proofs_stream(&mut self, starting_key_index: u64) {
+        self.cancellation_token.cancel();
+
         if self.remaining_quota == 0 {
             return;
         }
+
+        let new_cancellation_token = CancellationToken::new();
+        self.cancellation_token = new_cancellation_token.clone();
 
         self.proof_stream = Box::pin(create_proof_stream(
             self.settings.public_inputs,
             self.proof_of_quota_generator.clone(),
             starting_key_index,
+            new_cancellation_token,
         ));
     }
 }
@@ -112,6 +124,7 @@ fn create_proof_stream<Generator>(
     public_inputs: PoQVerificationInputsMinusSigningKey,
     proof_of_quota_generator: Generator,
     starting_key_index: u64,
+    cancellation_token: CancellationToken,
 ) -> impl Stream<Item = BlendLayerProof>
 where
     Generator: CoreProofOfQuotaGenerator + Clone + Send + Sync + 'static,
@@ -125,11 +138,25 @@ where
 
     let quota = public_inputs.core.quota;
     stream::iter(starting_key_index..quota)
+        // Stop producing new items once cancelled
+        .take_while({
+            let token = cancellation_token.clone();
+            move |_| {
+                let is_active = !token.is_cancelled();
+                async move { is_active }
+            }
+        })
         .map(move |key_index| {
             let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
             let proof_of_quota_generator = proof_of_quota_generator.clone();
+            let token = cancellation_token.clone();
 
             async move {
+                if token.is_cancelled() {
+                    tracing::debug!(target: LOG_TARGET, "Core proof generation cancelled before starting.");
+                    return None;
+                }
+
                 let (proof_of_quota, secret_selection_randomness) = proof_of_quota_generator
                     .generate_poq(
                         &PublicInputs {
@@ -139,16 +166,22 @@ where
                             session: public_inputs.session,
                         },
                         key_index,
-                    )
-                    .await
-                    .expect("Core PoQ generation should not fail.");
+                    ).await.expect("Core PoQ generation should not fail.");
+
+                if token.is_cancelled() {
+                    tracing::debug!(target: LOG_TARGET, "Core proof generation cancelled after completion.");
+                    return None;
+                }
+
                 let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
-                BlendLayerProof {
+                Some(BlendLayerProof {
                     proof_of_quota,
                     proof_of_selection,
                     ephemeral_signing_key,
-                }
+                })
             }
         })
         .buffered(PROOFS_GENERATOR_BUFFER_SIZE)
+        // Filter out cancelled/failed proofs
+        .filter_map(ready)
 }

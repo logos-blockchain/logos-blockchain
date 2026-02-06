@@ -4179,6 +4179,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tracing",
 ]
 
@@ -5196,7 +5197,6 @@ dependencies = [
  "serde_json",
  "serde_with",
  "serde_yaml",
- "test-log",
  "thiserror 2.0.18",
  "time",
  "tokio",

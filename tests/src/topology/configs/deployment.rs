@@ -33,7 +33,7 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
     DeploymentSettings {
         blend: BlendDeploymentSettings {
             common: BlendCommonSettings {
-                minimum_network_size: NonZeroU64::try_from(30u64)
+                minimum_network_size: NonZeroU64::try_from(1u64)
                     .expect("Minimum network size cannot be zero."),
                 num_blend_layers: NonZeroU64::try_from(3)
                     .expect("Number of blend layers cannot be zero."),
@@ -67,7 +67,7 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
                             .expect("Message frequency per round cannot be negative."),
                     },
                     delayer: MessageDelayerSettings {
-                        maximum_release_delay_in_rounds: NonZeroU64::try_from(3u64)
+                        maximum_release_delay_in_rounds: NonZeroU64::try_from(1u64)
                             .expect("Maximum release delay between rounds cannot be zero."),
                     },
                 },
