@@ -81,10 +81,7 @@ fn devnet_settings() -> Settings {
             .into(),
         },
         security_param: 20.try_into().unwrap(),
-        // We use a dummy genesis state here, since the deployment setting will be overridden by
-        // `cfgsync` binary when spinning up devnets in the beginning. Once we will have a
-        // stable devnet, this will be a proper genesis state with real initial validators and their
-        // stakes.
+        // TODO: Change this once the devnet genesis state is finalized.
         genesis_state: GenesisTx::new_mocked(),
     }
 }
