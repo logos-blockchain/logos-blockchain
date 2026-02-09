@@ -115,13 +115,12 @@ pub fn create_node_config_from_template(
     tracing_settings: &TracingSettings,
     new_host: &Host,
     template: &GeneralConfig,
-) -> (GeneralConfig, GenesisTx) {
+) -> GeneralConfig {
     let mut id = [0u8; 32];
     thread_rng().fill(&mut id);
     let ids = vec![id];
 
-    let (consensus_configs, genesis_tx) =
-        create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+    let (consensus_configs, _) = create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
     let network_configs = create_network_configs(&ids, &NetworkParams::default());
     let blend_configs = create_blend_configs(&ids, &[new_host.blend_port]);
 
@@ -144,23 +143,20 @@ pub fn create_node_config_from_template(
         .unwrap(),
     };
 
-    (
-        GeneralConfig {
-            consensus_config: consensus_configs[0].clone(),
-            network_config,
-            blend_config: blend_configs[0].clone(),
-            api_config: GeneralApiConfig {
-                address: format!("0.0.0.0:{}", new_host.api_port).parse().unwrap(),
-            },
-            tracing_config: update_tracing_identifier(
-                tracing_settings.clone(),
-                new_host.identifier.clone(),
-            ),
-            time_config: template.time_config.clone(),
-            kms_config: kms_configs[0].clone(),
+    GeneralConfig {
+        consensus_config: consensus_configs[0].clone(),
+        network_config,
+        blend_config: blend_configs[0].clone(),
+        api_config: GeneralApiConfig {
+            address: format!("0.0.0.0:{}", new_host.api_port).parse().unwrap(),
         },
-        genesis_tx,
-    )
+        tracing_config: update_tracing_identifier(
+            tracing_settings.clone(),
+            new_host.identifier.clone(),
+        ),
+        time_config: template.time_config.clone(),
+        kms_config: kms_configs[0].clone(),
+    }
 }
 
 fn create_providers(
@@ -233,7 +229,6 @@ mod cfgsync_tests {
     use std::{net::Ipv4Addr, str::FromStr as _};
 
     use lb_libp2p::{Multiaddr, Protocol};
-    use lb_node::Transaction as _;
     use lb_tracing_service::{
         ConsoleLayer, FilterLayer, LoggerLayer, MetricsLayer, TracingLayer, TracingSettings,
     };
@@ -301,8 +296,7 @@ mod cfgsync_tests {
             identifier: "init".into(),
             ..Default::default()
         };
-        let (init_configs, initial_genesis_tx) =
-            create_node_configs(&tracing, vec![init_host.clone()]);
+        let (init_configs, _) = create_node_configs(&tracing, vec![init_host.clone()]);
         let template = init_configs.get(&init_host).unwrap();
 
         let new_host = Host {
@@ -313,14 +307,7 @@ mod cfgsync_tests {
             api_port: 9000,
         };
 
-        let (appended_config, appended_genesis_tx) =
-            create_node_config_from_template(&tracing, &new_host, template);
-
-        assert_eq!(
-            appended_genesis_tx.hash(),
-            initial_genesis_tx.hash(),
-            "Appended node MUST have the same Genesis TX hash to join the same chain"
-        );
+        let appended_config = create_node_config_from_template(&tracing, &new_host, template);
 
         assert_eq!(
             appended_config.network_config.backend.initial_peers,

@@ -52,7 +52,6 @@ impl ProviderInfo {
 #[derive(Clone)]
 pub struct GeneralConsensusConfig {
     user_config: Config,
-    pub utxos: Vec<Utxo>,
     pub known_key: ZkKey,
     pub blend_notes: Vec<ServiceNote>,
     pub funding_sk: ZkKey,
@@ -130,7 +129,6 @@ pub fn create_consensus_configs(
 
                 GeneralConsensusConfig {
                     blend_notes: blend_notes.clone(),
-                    utxos: utxos.clone(),
                     known_key: sk,
                     funding_sk,
                     user_config: Config {

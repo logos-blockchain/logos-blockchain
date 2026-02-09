@@ -93,7 +93,7 @@ impl Topology {
             blend_ports.push(get_available_udp_port().unwrap());
         }
 
-        let (mut consensus_configs, genesis_tx) =
+        let (consensus_configs, genesis_tx) =
             create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
         let network_configs = create_network_configs(&ids, &config.network_params);
         let blend_configs = create_blend_configs(&ids, &blend_ports);
@@ -130,10 +130,6 @@ impl Topology {
             .utxos()
             .skip(base_outputs)
             .collect::<Vec<_>>();
-
-        for c in &mut consensus_configs {
-            c.utxos.extend(injected_utxos.iter().copied());
-        }
 
         let injected_infos = injected_utxos
             .iter()

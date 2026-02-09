@@ -16,13 +16,11 @@ const TARGET_IMMUTABLE_BLOCK_COUNT: u32 = 5;
 #[serial]
 async fn immutable_blocks_two_nodes() {
     let (configs, genesis_tx) = create_general_configs(2);
+    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
     let configs = configs
         .into_iter()
         .map(|c| {
-            let mut config = create_validator_config(
-                c,
-                e2e_deployment_settings_with_genesis_tx(genesis_tx.clone()),
-            );
+            let mut config = create_validator_config(c, deployment_settings.clone());
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
                 .user
@@ -36,12 +34,12 @@ async fn immutable_blocks_two_nodes() {
         })
         .collect::<Vec<_>>();
 
-    let deployment = &configs[0].deployment;
-    let blocks_to_wait = deployment.cryptarchia.security_param.get() + TARGET_IMMUTABLE_BLOCK_COUNT;
+    let blocks_to_wait =
+        deployment_settings.cryptarchia.security_param.get() + TARGET_IMMUTABLE_BLOCK_COUNT;
     let timeout = max_block_propagation_time(
         blocks_to_wait,
         configs.len().try_into().unwrap(),
-        deployment,
+        &deployment_settings,
         2.0,
     );
 

@@ -46,39 +46,6 @@ time:
       listening_interface: 0.0.0.0
 cryptarchia:
   service: 
-    starting_state: !Genesis
-      genesis_tx:
-        mantle_tx:
-          ops:
-            - opcode: 0
-              payload:
-                channel_id: "0000000000000000000000000000000000000000000000000000000000000000"
-                inscription: [ 103, 101, 110, 101, 115, 105, 115 ]  # "genesis" in bytes
-                parent: "0000000000000000000000000000000000000000000000000000000000000000"
-                signer: "0000000000000000000000000000000000000000000000000000000000000000"
-          ledger_tx:
-            inputs: []
-            outputs:
-              - value: 1
-                pk: d204000000000000000000000000000000000000000000000000000000000000
-          execution_gas_price: 0
-          storage_gas_price: 0
-        ops_proofs: [NoProof]
-        ledger_tx_proof:
-          pi_a: [
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-          ]
-          pi_b: [
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-          ]
-          pi_c: [
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-          ]
     recovery_file: ./recovery/cryptarchia.json
     bootstrap:
       prolonged_bootstrap_period: [ 86400, 0 ]
