@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf, sync::Arc};
 
 use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
-use lb_node::config::deployment::devnet;
+use lb_node::config::deployment::WellKnownDeployment;
 use lb_tests::nodes::validator::create_validator_config;
 use lb_tracing_service::TracingSettings;
 use reqwest::header::CONTENT_TYPE;
@@ -48,7 +48,7 @@ async fn init_node(
         |_| (StatusCode::INTERNAL_SERVER_ERROR, "Error receiving config").into_response(),
         |config_response| match config_response {
             RepoResponse::Config(config) => {
-                let config = create_validator_config(*config, devnet::deployment_settings());
+                let config = create_validator_config(*config, WellKnownDeployment::Devnet.into());
                 (StatusCode::OK, Json(config)).into_response()
             }
             RepoResponse::Timeout => (StatusCode::REQUEST_TIMEOUT).into_response(),
@@ -71,7 +71,7 @@ async fn generate_config(
                 .into_response()
         },
         |cfg| {
-            let node_config = create_validator_config(cfg, devnet::deployment_settings());
+            let node_config = create_validator_config(cfg, WellKnownDeployment::Devnet.into());
             let yaml = serde_yaml::to_string(&node_config).unwrap_or_default();
 
             (StatusCode::OK, [(CONTENT_TYPE, "text/yaml")], yaml).into_response()

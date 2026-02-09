@@ -9,6 +9,8 @@ use lb_cryptarchia_engine::{Config as ConsensusConfig, EpochConfig};
 use lb_pol::slot_activation_coefficient;
 use serde::{Deserialize, Serialize};
 
+use crate::config::deployment::WellKnownDeployment;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Settings {
     pub epoch_config: EpochConfig,
@@ -42,4 +44,40 @@ pub struct ServiceParameters {
     pub inactivity_period: u64,
     pub retention_period: u64,
     pub timestamp: BlockNumber,
+}
+
+impl From<WellKnownDeployment> for Settings {
+    fn from(value: WellKnownDeployment) -> Self {
+        match value {
+            WellKnownDeployment::Devnet => devnet_settings(),
+        }
+    }
+}
+
+fn devnet_settings() -> Settings {
+    Settings {
+        epoch_config: EpochConfig {
+            epoch_period_nonce_buffer: 3.try_into().unwrap(),
+            epoch_period_nonce_stabilization: 4.try_into().unwrap(),
+            epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
+        },
+        gossipsub_protocol: "/logos-blockchain-devnet/cryptarchia/1.0.0".to_owned(),
+        sdp_config: SdpConfig {
+            min_stake: MinStake {
+                threshold: 1,
+                timestamp: 0,
+            },
+            service_params: [(
+                ServiceType::BlendNetwork,
+                ServiceParameters {
+                    inactivity_period: 20,
+                    lock_period: 10,
+                    retention_period: 100,
+                    timestamp: 0,
+                },
+            )]
+            .into(),
+        },
+        security_param: 20.try_into().unwrap(),
+    }
 }

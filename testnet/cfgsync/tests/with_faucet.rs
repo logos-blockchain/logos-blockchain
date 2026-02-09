@@ -2,7 +2,7 @@ use std::{fs, time::Duration};
 
 use lb_node::{
     UserConfig,
-    config::{RunConfig, deployment::devnet},
+    config::{RunConfig, deployment::WellKnownDeployment},
 };
 use lb_tests::nodes::validator::Validator;
 use lb_utils::net::{get_available_tcp_port, get_available_udp_port};
@@ -53,7 +53,7 @@ async fn test_nodes_and_faucet() {
 
             let run_config = RunConfig {
                 user: user_config,
-                deployment: devnet::deployment_settings(),
+                deployment: WellKnownDeployment::Devnet.into(),
             };
 
             println!(
