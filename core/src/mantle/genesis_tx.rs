@@ -79,11 +79,6 @@ impl GenesisTx {
             ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0; _])),
         ))
     }
-
-    #[must_use]
-    pub const fn from_tx_unchecked(signed_mantle_tx: SignedMantleTx) -> Self {
-        Self(signed_mantle_tx)
-    }
 }
 
 fn valid_cryptarchia_inscription(inscription: &InscriptionOp) -> Result<(), Error> {

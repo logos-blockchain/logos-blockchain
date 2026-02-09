@@ -42,6 +42,38 @@ cryptarchia:
       threshold: 1
       timestamp: 0
   gossipsub_protocol: /integration/logos-blockchain/cryptarchia/proto/1.0.0
+  genesis_state: !Genesis
+    mantle_tx:
+      ops:
+        - opcode: 0
+          payload:
+            channel_id: "0000000000000000000000000000000000000000000000000000000000000000"
+            inscription: [ 103, 101, 110, 101, 115, 105, 115 ]  # "genesis" in bytes
+            parent: "0000000000000000000000000000000000000000000000000000000000000000"
+            signer: "0000000000000000000000000000000000000000000000000000000000000000"
+      ledger_tx:
+        inputs: []
+        outputs:
+          - value: 1
+            pk: d204000000000000000000000000000000000000000000000000000000000000
+      execution_gas_price: 0
+      storage_gas_price: 0
+    ops_proofs: [NoProof]
+    ledger_tx_proof:
+      pi_a: [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+      ]
+      pi_b: [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+      ]
+      pi_c: [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+      ]
 time:
   slot_duration:
     secs: 5
