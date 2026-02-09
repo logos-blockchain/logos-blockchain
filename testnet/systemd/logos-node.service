@@ -1,0 +1,43 @@
+[Unit]
+Description=Logos Blockchain Node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=<username>
+Group=<username>
+WorkingDirectory=/home/<username>
+
+# Path to the node binary and config file
+ExecStart=/home/<username>/logos-blockchain-node /home/<username>/config.yaml
+
+# Restart on failure (use 'always' if you want restart on clean exit too)
+Restart=on-failure
+RestartSec=10
+
+# Clean shutdown behavior
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+# Basic hardening (safe defaults)
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Environment variables (uncomment and adjust as needed)
+# Environment=LOG_LEVEL=INFO
+# Environment=RUST_BACKTRACE=1
+
+# Logging: by default logs go to journald, view with:
+#   journalctl -u logos-blockchain-node -f
+#
+# If journald is not persisting logs (common on Raspberry Pi with volatile
+# storage), uncomment these lines to write directly to a file:
+# StandardOutput=append:/home/<username>/logos-blockchain-node.log
+# StandardError=append:/home/<username>/logos-blockchain-node.log
+#
+# If you enable file logging, optionally set up logrotate to avoid disk fill.
+# See: logrotate-logos-blockchain-node.conf
+
+[Install]
+WantedBy=multi-user.target
