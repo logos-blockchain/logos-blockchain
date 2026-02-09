@@ -7,12 +7,15 @@ use futures::stream::{self, StreamExt as _};
 use lb_libp2p::PeerId;
 use lb_pol::slot_activation_coefficient;
 use logos_blockchain_tests::{
-    adjust_timeout,
-    common::sync::{wait_for_validators_mode, wait_for_validators_mode_and_height},
+    common::{
+        sync::{wait_for_validators_mode, wait_for_validators_mode_and_height},
+        time::max_block_propagation_time,
+    },
     nodes::validator::{Validator, create_validator_config},
     secret_key_to_peer_id,
     topology::configs::{
         create_general_configs_with_blend_core_subset,
+        deployment::default_e2e_deployment_settings,
         network::{Libp2pNetworkLayout, NetworkParams},
     },
 };
@@ -35,7 +38,7 @@ async fn test_ibd_behind_nodes() {
 
     let mut initial_validators = vec![];
     for config in general_configs.iter().take(n_initial_validators) {
-        let config = create_validator_config(config.clone());
+        let config = create_validator_config(config.clone(), default_e2e_deployment_settings());
         initial_validators.push(Validator::spawn(config).await.unwrap());
     }
 
@@ -54,14 +57,22 @@ async fn test_ibd_behind_nodes() {
     wait_for_validators_mode_and_height(
         &initial_validators,
         lb_cryptarchia_engine::State::Online,
-        minimum_height,
-        adjust_timeout(Duration::from_secs(300)),
+        minimum_height.into(),
+        max_block_propagation_time(
+            minimum_height,
+            initial_validators.len().try_into().unwrap(),
+            &initial_validators[0].config().deployment,
+            2.0,
+        ),
     )
     .await;
 
     println!("Starting a behind node with IBD peers...");
 
-    let mut config = create_validator_config(general_configs[n_initial_validators].clone());
+    let mut config = create_validator_config(
+        general_configs[n_initial_validators].clone(),
+        default_e2e_deployment_settings(),
+    );
     config.user.cryptarchia.network.bootstrap.ibd.peers = initial_peer_ids.clone();
     // Shorten the delay to quickly catching up with peers that grow during IBD.
     // e.g. We start a download only for peer1 because two peers have the same tip
@@ -94,7 +105,7 @@ async fn test_ibd_behind_nodes() {
     wait_for_validators_mode(
         &[&behind_node],
         lb_cryptarchia_engine::State::Online,
-        adjust_timeout(Duration::from_secs(10)),
+        Duration::from_secs(10),
     )
     .await;
 

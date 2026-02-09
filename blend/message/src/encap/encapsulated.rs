@@ -1,3 +1,4 @@
+use derivative::Derivative;
 use itertools::Itertools as _;
 use lb_blend_crypto::cipher::Cipher;
 use lb_blend_proofs::{
@@ -28,11 +29,13 @@ use crate::{
 pub type MessageIdentifier = Ed25519PublicKey;
 
 /// An unverified encapsulated message that is received from a peer.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Derivative, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derivative(Debug)]
 pub struct EncapsulatedMessage {
     /// A public header that is not encapsulated.
     public_header: PublicHeader,
     /// Encapsulated parts
+    #[derivative(Debug = "ignore")] // too long
     encapsulated_part: EncapsulatedPart,
 }
 

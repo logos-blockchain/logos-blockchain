@@ -9,9 +9,18 @@ use lb_core::{
     mantle::SignedMantleTx,
     proofs::leader_proof::Groth16LeaderProof,
 };
-use lb_http_api_common::paths::{
-    BLOCKS_STREAM, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, STORAGE_BLOCK,
+use lb_groth16::fr_to_bytes;
+use lb_http_api_common::{
+    bodies::wallet::{
+        balance::WalletBalanceResponseBody,
+        transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+    },
+    paths::{
+        BLOCKS_STREAM, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, STORAGE_BLOCK,
+        wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
+    },
 };
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -132,7 +141,7 @@ impl CommonHttpClient {
         let body = response.text().await.map_err(Error::Request)?;
 
         match status {
-            StatusCode::OK => serde_json::from_str(&body)
+            StatusCode::OK | StatusCode::CREATED => serde_json::from_str(&body)
                 .map_err(|e| Error::Server(format!("Failed to parse response: {e}"))),
             StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server(body)),
             _ => Err(Error::Server(format!(
@@ -239,5 +248,40 @@ impl CommonHttpClient {
             StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server("Error".to_owned())),
             _ => Err(Error::Server(format!("Unexpected response [{status}]",))),
         }
+    }
+
+    /// Get the balance for a specific `ZkPublicKey`.
+    pub async fn get_wallet_balance(
+        &self,
+        base_url: Url,
+        zk_pk: ZkPublicKey,
+        tip: Option<HeaderId>,
+    ) -> Result<WalletBalanceResponseBody, Error> {
+        let key_id = hex::encode(fr_to_bytes(zk_pk.as_fr()));
+        let mut request_url = base_url
+            .join(&BALANCE.replace(":public_key", &key_id))
+            .map_err(Error::Url)?;
+
+        if let Some(t) = tip {
+            request_url
+                .query_pairs_mut()
+                .append_pair("tip", &t.to_string());
+        }
+
+        self.get::<(), WalletBalanceResponseBody>(request_url, None)
+            .await
+    }
+
+    /// Post a request to transfer funds.
+    pub async fn transfer_funds(
+        &self,
+        base_url: Url,
+        body: WalletTransferFundsRequestBody,
+    ) -> Result<WalletTransferFundsResponseBody, Error> {
+        let request_url = base_url
+            .join(TRANSACTIONS_TRANSFER_FUNDS.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
     }
 }

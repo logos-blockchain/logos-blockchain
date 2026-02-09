@@ -58,6 +58,7 @@ members = [
   "services/utils",
   "services/wallet",
   "testnet/cfgsync",
+  "testnet/faucet",
   "testnet/l2-sequencer-archival-demo/archiver",
   "testnet/l2-sequencer-archival-demo/sequencer",
   "tests",

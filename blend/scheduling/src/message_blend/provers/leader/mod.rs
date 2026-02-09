@@ -1,7 +1,7 @@
-use core::pin::Pin;
+use core::{future::ready, pin::Pin};
 
 use async_trait::async_trait;
-use futures::{FutureExt as _, Stream, StreamExt as _, stream};
+use futures::{Stream, StreamExt as _, stream};
 use lb_blend_message::crypto::{
     key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
 };
@@ -17,6 +17,7 @@ use lb_blend_proofs::{
 };
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use tokio::task::spawn_blocking;
+use tokio_util::sync::CancellationToken;
 
 use crate::message_blend::provers::{BlendLayerProof, ProofsGeneratorSettings};
 
@@ -48,6 +49,7 @@ pub trait LeaderProofsGenerator: Sized {
 pub struct RealLeaderProofsGenerator {
     pub(super) settings: ProofsGeneratorSettings,
     proof_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send + Sync>>,
+    cancellation_token: CancellationToken,
 }
 
 #[async_trait]
@@ -56,12 +58,16 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
         settings: ProofsGeneratorSettings,
         private_inputs: ProofOfLeadershipQuotaInputs,
     ) -> Self {
+        let cancellation_token = CancellationToken::new();
+
         Self {
             proof_stream: Box::pin(create_leadership_proof_stream(
                 settings.public_inputs,
                 private_inputs,
+                cancellation_token.clone(),
             )),
             settings,
+            cancellation_token,
         }
     }
 
@@ -93,9 +99,15 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
 
 impl RealLeaderProofsGenerator {
     fn generate_new_proofs_stream(&mut self, private_inputs: ProofOfLeadershipQuotaInputs) {
+        self.cancellation_token.cancel();
+
+        let new_cancellation_token = CancellationToken::new();
+        self.cancellation_token = new_cancellation_token.clone();
+
         self.proof_stream = Box::pin(create_leadership_proof_stream(
             self.settings.public_inputs,
             private_inputs,
+            new_cancellation_token,
         ));
     }
 }
@@ -103,10 +115,19 @@ impl RealLeaderProofsGenerator {
 fn create_leadership_proof_stream(
     public_inputs: PoQVerificationInputsMinusSigningKey,
     private_inputs: ProofOfLeadershipQuotaInputs,
+    cancellation_token: CancellationToken,
 ) -> impl Stream<Item = BlendLayerProof> {
     let message_quota = public_inputs.leader.message_quota;
 
     stream::iter(0u64..)
+        // Stop producing new items once cancelled
+        .take_while({
+            let token = cancellation_token.clone();
+            move |_| {
+                let is_active = !token.is_cancelled();
+                async move { is_active }
+            }
+        })
         .map(move |current_index| {
             // This represents the total number of encapsulations sent out for each message.
             // E.g., for a session with data message replication factor of `1`, we get
@@ -121,30 +142,45 @@ fn create_leadership_proof_stream(
             // message scheduler.
             let message_release_index = current_index % message_quota;
             let private_inputs = private_inputs.clone();
+            let token = cancellation_token.clone();
 
-            spawn_blocking(move || {
-                let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
-                let (proof_of_quota, secret_selection_randomness) = VerifiedProofOfQuota::new(
-                    &PublicInputs {
-                        signing_key: ephemeral_signing_key.public_key().into_inner(),
-                        core: public_inputs.core,
-                        leader: public_inputs.leader,
-                        session: public_inputs.session,
-                    },
-                    PrivateInputs::new_proof_of_leadership_quota_inputs(
-                        message_release_index,
-                        private_inputs,
-                    ),
-                )
-                .expect("Leadership PoQ proof creation should not fail.");
-                let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
-                BlendLayerProof {
-                    proof_of_quota,
-                    proof_of_selection,
-                    ephemeral_signing_key,
+            async move {
+                let token_clone = token.clone();
+                let leadership_proof = spawn_blocking(move || {
+                    if token_clone.is_cancelled() {
+                        tracing::debug!(target: LOG_TARGET, "Leadership proof generation cancelled before starting.");
+                        return None;
+                    }
+
+                    let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
+                    let (proof_of_quota, secret_selection_randomness) = VerifiedProofOfQuota::new(
+                        &PublicInputs {
+                            signing_key: ephemeral_signing_key.public_key().into_inner(),
+                            core: public_inputs.core,
+                            leader: public_inputs.leader,
+                            session: public_inputs.session,
+                        },
+                        PrivateInputs::new_proof_of_leadership_quota_inputs(
+                            message_release_index,
+                            private_inputs,
+                        ),
+                    )
+                    .expect("Leadership PoQ proof creation should not fail.");
+                    let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
+                    Some(BlendLayerProof {
+                        proof_of_quota,
+                        proof_of_selection,
+                        ephemeral_signing_key,
+                    })
+                }).await.expect("Spawning task for leadership proof generation should not fail.");
+
+                if token.is_cancelled() {
+                    tracing::debug!(target: LOG_TARGET, "Leadership proof generation cancelled after completion.");
+                    return None;
                 }
-            })
-            .map(|res| res.expect("Spawning task for leadership proof generation should not fail."))
+                leadership_proof
+            }
         })
         .buffered(PROOFS_GENERATOR_BUFFER_SIZE)
+        .filter_map(ready)
 }

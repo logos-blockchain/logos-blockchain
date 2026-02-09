@@ -1,0 +1,29 @@
+[package]
+categories.workspace  = true
+description.workspace = true
+edition.workspace     = true
+keywords.workspace    = true
+license.workspace     = true
+name                  = "logos-blockchain-faucet"
+readme.workspace      = true
+repository.workspace  = true
+version.workspace     = true
+
+[dependencies]
+axum                          = { default-features = false, features = ["http1", "http2", "json", "tokio"], version = "0.7.5" }
+clap                          = { default-features = false, version = "4" }
+hex                           = { default-features = false, features = ["alloc"], workspace = true }
+lb-common-http-client         = { workspace = true }
+lb-groth16                    = { workspace = true }
+lb-http-api-common            = { workspace = true }
+lb-key-management-system-keys = { workspace = true }
+lb-node                       = { workspace = true }
+reqwest                       = { workspace = true }
+tokio                         = { default-features = false, features = ["macros", "net", "rt-multi-thread"], version = "1" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "logos-blockchain-faucet"
+path = "src/bin/faucet.rs"

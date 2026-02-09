@@ -7,16 +7,16 @@ use lb_core::mantle::{
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use logos_blockchain_tests::{
-    common::{chain::scan_chain_until, mantle_tx::create_inscription_transaction_with_id},
+    common::{
+        chain::scan_chain_until, mantle_tx::create_inscription_transaction_with_id,
+        time::max_block_propagation_time,
+    },
     nodes::validator::Validator,
     topology::{Topology, TopologyConfig},
 };
 use num_bigint::BigUint;
 use reqwest::Url;
 use serial_test::serial;
-use tokio::time::timeout;
-
-const PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Verifies that invalid transactions don't prevent valid transactions from
 /// being included in blocks.
@@ -54,8 +54,15 @@ async fn invalid_transactions_are_handled() {
 
     let first_batch_hashes = [first_valid_hash];
 
-    timeout(
-        PROCESS_TIMEOUT,
+    let timeout = max_block_propagation_time(
+        6, // Expecting that the tx will be included within 6 blocks (arbitrary chosen)
+        topology.validators().len().try_into().unwrap(),
+        &validator.config().deployment,
+        2.0,
+    );
+
+    tokio::time::timeout(
+        timeout,
         wait_for_transactions_processing(validator, &first_batch_hashes, &invalid_tx_hashes),
     )
     .await
@@ -70,8 +77,8 @@ async fn invalid_transactions_are_handled() {
 
     let second_batch_hashes = [second_valid_hash];
 
-    timeout(
-        PROCESS_TIMEOUT,
+    tokio::time::timeout(
+        timeout,
         wait_for_transactions_processing(validator, &second_batch_hashes, &invalid_tx_hashes),
     )
     .await

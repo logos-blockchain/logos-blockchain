@@ -1,16 +1,12 @@
 use std::{collections::HashSet, time::Duration};
 
 use futures::stream::{self, StreamExt as _};
-use lb_pol::slot_activation_coefficient;
 use logos_blockchain_tests::{
-    adjust_timeout,
+    common::time::max_block_propagation_time,
     topology::{Topology, TopologyConfig},
 };
 use serial_test::serial;
 
-// how many times more than the expected time to produce a predefined number of
-// blocks we wait before timing out
-const TIMEOUT_MULTIPLIER: f64 = 3.0;
 // how long we let the chain grow before checking the block at tip - k is the
 // same in all chains
 const CHAIN_LENGTH_MULTIPLIER: u32 = 2;
@@ -19,14 +15,14 @@ async fn happy_test(topology: &Topology) {
     let nodes = topology.validators();
     let config = nodes[0].config();
 
-    let security_param = config.deployment.cryptarchia.security_param;
-    let n_blocks = security_param.get() * CHAIN_LENGTH_MULTIPLIER;
-    println!("waiting for {n_blocks} blocks");
-    let timeout = (f64::from(n_blocks) / slot_activation_coefficient()
-        * config.deployment.time.slot_duration.as_secs() as f64
-        * TIMEOUT_MULTIPLIER)
-        .floor() as u64;
-    let timeout = adjust_timeout(Duration::from_secs(timeout));
+    let n_blocks = config.deployment.cryptarchia.security_param.get() * CHAIN_LENGTH_MULTIPLIER;
+    let timeout = max_block_propagation_time(
+        n_blocks,
+        nodes.len().try_into().unwrap(),
+        &config.deployment,
+        3.0,
+    );
+    println!("waiting for {n_blocks} blocks: timeout:{timeout:?}");
     let timeout = tokio::time::sleep(timeout);
     {
         let mut tick: u32 = 0;

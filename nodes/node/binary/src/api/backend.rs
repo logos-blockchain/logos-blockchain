@@ -27,9 +27,7 @@ pub use lb_http_api_common::settings::AxumBackendSettings;
 use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
-use lb_tx_service::{
-    MempoolMetrics, TxMempoolService, backend::Mempool, tx::service::openapi::Status,
-};
+use lb_tx_service::{TxMempoolService, backend::Mempool};
 use overwatch::{DynError, overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
@@ -39,7 +37,7 @@ use tower_http::{
     timeout::TimeoutLayer,
     trace::TraceLayer,
 };
-use utoipa::OpenApi;
+use utoipa::OpenApi as _;
 use utoipa_swagger_ui::SwaggerUi;
 
 use super::handlers::{
@@ -48,7 +46,10 @@ use super::handlers::{
 };
 use crate::{
     WalletService,
-    api::handlers::{leader_claim, post_activity, post_declaration, post_withdrawal},
+    api::{
+        handlers::{leader_claim, post_activity, post_declaration, post_withdrawal},
+        openapi::ApiDoc,
+    },
 };
 
 pub(crate) type BlockStorageBackend = RocksBackend;
@@ -72,10 +73,6 @@ pub struct AxumBackend<
         ChainLeader,
     )>,
 }
-
-#[derive(OpenApi)]
-#[openapi(paths(), components(schemas(Status, MempoolMetrics)), tags())]
-struct ApiDoc;
 
 #[async_trait::async_trait]
 impl<

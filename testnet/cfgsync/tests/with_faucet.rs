@@ -10,11 +10,12 @@ use tokio::{process::Command, task::JoinSet, time::sleep};
 
 const SERVER_BIN: &str = "../../target/debug/logos-blockchain-cfgsync-server";
 const CLIENT_BIN: &str = "../../target/debug/logos-blockchain-cfgsync-client";
+const FAUCET_BIN: &str = "../../target/debug/logos-blockchain-faucet";
 const SERVER_CFG: &str = "./tests/cfgsync.yaml";
 
 #[ignore = "For local debugging"]
 #[tokio::test]
-async fn test_spawn_nodes_from_cfgsync_custom_ports() {
+async fn test_nodes_and_faucet() {
     let mut server = std::process::Command::new(SERVER_BIN)
         .arg(SERVER_CFG)
         .spawn()
@@ -23,6 +24,7 @@ async fn test_spawn_nodes_from_cfgsync_custom_ports() {
     sleep(Duration::from_secs(1)).await;
 
     let mut set = JoinSet::new();
+
     for i in 0..4 {
         let net_port = get_available_udp_port().expect("no free port for network");
         let blend_port = get_available_udp_port().expect("no free port for blend");
@@ -59,13 +61,36 @@ async fn test_spawn_nodes_from_cfgsync_custom_ports() {
             );
             let _node = Validator::spawn(run_config).await.expect("spawn failed");
 
+            if i == 0 {
+                let faucet_port = 3000;
+                println!(">>>> Spawning Faucet on port {faucet_port} using config {out}...");
+
+                let mut faucet_proc = Command::new(FAUCET_BIN)
+                    .arg("--port")
+                    .arg(faucet_port.to_string())
+                    .arg("--node-config-path")
+                    .arg(&out)
+                    .arg("--drip-rate")
+                    .arg("5") // Give 5% drip
+                    .spawn()
+                    .expect("faucet failed to start");
+
+                // Clean up faucet on exit
+                tokio::spawn(async move {
+                    drop(tokio::signal::ctrl_c().await);
+                    drop(faucet_proc.kill());
+                });
+            }
+
             loop {
                 sleep(Duration::from_secs(3600)).await;
             }
         });
     }
 
-    println!("\nNodes live with custom ports. Use Ctrl+C to shutdown.\n");
+    println!("\nNodes & Faucet live. Use Ctrl+C to shutdown.\n");
+    println!("Faucet: http://localhost:3000/faucet/<hex_pk>\n");
+
     tokio::signal::ctrl_c().await.unwrap();
 
     server.kill().unwrap();
