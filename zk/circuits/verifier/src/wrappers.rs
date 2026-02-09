@@ -19,7 +19,12 @@ fn verifier_binary() -> PathBuf {
     let circuits_dir = circuits_dir();
 
     // Check for verifier binary at the root of logos-blockchain-circuits directory
-    let verifier_path = circuits_dir.join(BINARY_NAME);
+    let binary_name = if cfg!(windows) {
+        &format!("{BINARY_NAME}{}", std::env::consts::EXE_SUFFIX)
+    } else {
+        BINARY_NAME
+    };
+    let verifier_path = circuits_dir.join(binary_name);
     if verifier_path.is_file() {
         return verifier_path;
     }

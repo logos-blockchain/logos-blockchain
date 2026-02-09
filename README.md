@@ -221,7 +221,7 @@ YAML
 ```bash
 time:
   backend:
-    ntp_server: pool.ntp.org
+    ntp_server: pool.ntp.org:123
     # ... other settings ...
   chain_start_time: 2026-01-07 10:45:00.000000 +00:00:00 # <--- Update this line
 ```

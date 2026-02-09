@@ -19,7 +19,12 @@ fn prover_binary() -> PathBuf {
     let circuits_dir = circuits_dir();
 
     // Check for prover binary at the root of logos-blockchain-circuits directory
-    let prover_path = circuits_dir.join(BINARY_NAME);
+    let binary_name = if cfg!(windows) {
+        &format!("{BINARY_NAME}{}", std::env::consts::EXE_SUFFIX)
+    } else {
+        BINARY_NAME
+    };
+    let prover_path = circuits_dir.join(binary_name);
     if prover_path.is_file() {
         return prover_path;
     }

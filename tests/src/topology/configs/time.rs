@@ -20,7 +20,7 @@ pub fn default_time_config() -> GeneralTimeConfig {
                 timeout: Duration::from_secs(5),
                 listening_interface: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             },
-            ntp_server: "pool.ntp.org".to_owned(),
+            ntp_server: "pool.ntp.org:123".to_owned(),
             update_interval: Duration::from_secs(16),
         },
         chain_start_time: OffsetDateTime::now_utc(),

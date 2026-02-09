@@ -493,7 +493,7 @@ cryptarchia:
       funding_pk: "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26"
 time:
   backend:
-    ntp_server: pool.ntp.org
+    ntp_server: pool.ntp.org:123
     ntp_client_settings:
       timeout: '5.000000000'
       listening_interface: 0.0.0.0

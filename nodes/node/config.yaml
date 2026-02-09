@@ -40,7 +40,7 @@ time:
   chain_start_time: [ 2025, 41, 9, 38, 29, 993653000, 0, 0, 0 ]
   backend:
     update_interval: [ 16, 0 ]
-    ntp_server: pool.ntp.org
+    ntp_server: pool.ntp.org:123
     ntp_client_settings:
       timeout: [ 5, 0 ]
       listening_interface: 0.0.0.0

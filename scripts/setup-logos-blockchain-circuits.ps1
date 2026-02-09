@@ -3,7 +3,7 @@ param(
     [string]$InstallDir = "$env:USERPROFILE\.logos-blockchain-circuits"
 )
 
-$Repo               = "logos-co/logos-blockchain-circuits"
+$Repo               = "logos-blockchain/logos-blockchain-circuits"
 $DefaultInstallDir  = "$env:USERPROFILE\.logos-blockchain-circuits"
 
 # --- Pretty printing helpers -------------------------------------------------
