@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use lb_core::{
     block::BlockNumber,
+    mantle::genesis_tx::GenesisTx,
     sdp::{MinStake, ServiceType},
 };
 use lb_cryptarchia_engine::{Config as ConsensusConfig, EpochConfig};
@@ -17,6 +18,7 @@ pub struct Settings {
     pub security_param: NonZeroU32,
     pub sdp_config: SdpConfig,
     pub gossipsub_protocol: String,
+    pub genesis_state: GenesisTx,
 }
 
 impl Settings {
@@ -79,5 +81,10 @@ fn devnet_settings() -> Settings {
             .into(),
         },
         security_param: 20.try_into().unwrap(),
+        // We use a dummy genesis state here, since the deployment setting will be overridden by
+        // `cfgsync` binary when spinning up devnets in the beginning. Once we will have a
+        // stable devnet, this will be a proper genesis state with real initial validators and their
+        // stakes.
+        genesis_state: GenesisTx::new_mocked(),
     }
 }

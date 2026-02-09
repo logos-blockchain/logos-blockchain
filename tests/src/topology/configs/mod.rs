@@ -9,7 +9,7 @@ pub mod tracing;
 use blend::GeneralBlendConfig;
 use consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_tx_with_declarations};
 use lb_core::{
-    mantle::GenesisTx as _,
+    mantle::{GenesisTx as _, genesis_tx::GenesisTx},
     sdp::{Locator, ServiceType},
 };
 use lb_key_management_system_service::backend::preload::PreloadKMSBackendSettings;
@@ -38,7 +38,7 @@ pub struct GeneralConfig {
 }
 
 #[must_use]
-pub fn create_general_configs(n_nodes: usize) -> Vec<GeneralConfig> {
+pub fn create_general_configs(n_nodes: usize) -> (Vec<GeneralConfig>, GenesisTx) {
     create_general_configs_with_network(n_nodes, &NetworkParams::default())
 }
 
@@ -46,7 +46,7 @@ pub fn create_general_configs(n_nodes: usize) -> Vec<GeneralConfig> {
 pub fn create_general_configs_with_network(
     n_nodes: usize,
     network_params: &NetworkParams,
-) -> Vec<GeneralConfig> {
+) -> (Vec<GeneralConfig>, GenesisTx) {
     create_general_configs_with_blend_core_subset(n_nodes, n_nodes, network_params)
 }
 
@@ -57,7 +57,7 @@ pub fn create_general_configs_with_blend_core_subset(
     // That would be also useful for non-even token distributions: https://github.com/logos-blockchain/logos-blockchain/issues/1888
     n_blend_core_nodes: usize,
     network_params: &NetworkParams,
-) -> Vec<GeneralConfig> {
+) -> (Vec<GeneralConfig>, GenesisTx) {
     assert!(
         n_blend_core_nodes <= n_nodes,
         "n_blend_core_nodes({n_blend_core_nodes}) must be less than or equal to n_nodes({n_nodes})",
@@ -73,7 +73,7 @@ pub fn create_general_configs_with_blend_core_subset(
         blend_ports.push(get_available_udp_port().unwrap());
     }
 
-    let mut consensus_configs =
+    let (consensus_configs, genesis_tx) =
         consensus::create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
     let network_configs = network::create_network_configs(&ids, network_params);
     let api_configs = api::create_api_configs(&ids);
@@ -95,15 +95,8 @@ pub fn create_general_configs_with_blend_core_subset(
             },
         )
         .collect();
-    let ledger_tx = consensus_configs[0]
-        .genesis_tx()
-        .mantle_tx()
-        .ledger_tx
-        .clone();
-    let genesis_tx = create_genesis_tx_with_declarations(ledger_tx, providers);
-    for c in &mut consensus_configs {
-        c.override_genesis_tx(genesis_tx.clone());
-    }
+    let ledger_tx = genesis_tx.mantle_tx().ledger_tx.clone();
+    let genesis_tx_with_declarations = create_genesis_tx_with_declarations(ledger_tx, providers);
 
     // Set note keys and Blend keys in KMS of each node config.
     let kms_configs: Vec<_> = blend_configs
@@ -149,5 +142,5 @@ pub fn create_general_configs_with_blend_core_subset(
         });
     }
 
-    general_configs
+    (general_configs, genesis_tx_with_declarations)
 }

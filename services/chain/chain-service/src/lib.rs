@@ -422,6 +422,12 @@ pub enum StartingState {
     },
 }
 
+impl From<GenesisTx> for StartingState {
+    fn from(value: GenesisTx) -> Self {
+        Self::Genesis { genesis_tx: value }
+    }
+}
+
 impl FileBackendSettings for CryptarchiaSettings {
     fn recovery_file(&self) -> &PathBuf {
         &self.recovery_file

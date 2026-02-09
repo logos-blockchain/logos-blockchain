@@ -79,7 +79,7 @@ impl ConfigRepo {
             .cloned();
 
         if let Some(template) = template {
-            let new_config =
+            let (new_config, _) =
                 create_node_config_from_template(&TracingSettings::default(), &host, &template);
 
             self.generated_configs
@@ -102,7 +102,7 @@ impl ConfigRepo {
             let mut waiting_hosts = self.waiting_hosts.lock().unwrap();
             let hosts = waiting_hosts.keys().cloned().collect();
 
-            let configs = create_node_configs(&self.tracing_settings, hosts);
+            let (configs, _) = create_node_configs(&self.tracing_settings, hosts);
 
             {
                 let mut storage = self.generated_configs.lock().unwrap();

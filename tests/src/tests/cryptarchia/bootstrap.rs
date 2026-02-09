@@ -15,7 +15,7 @@ use logos_blockchain_tests::{
     secret_key_to_peer_id,
     topology::configs::{
         create_general_configs_with_blend_core_subset,
-        deployment::default_e2e_deployment_settings,
+        deployment::e2e_deployment_settings_with_genesis_tx,
         network::{Libp2pNetworkLayout, NetworkParams},
     },
 };
@@ -30,7 +30,7 @@ async fn test_ibd_behind_nodes() {
     let network_params = NetworkParams {
         libp2p_network_layout: Libp2pNetworkLayout::Full,
     };
-    let general_configs = create_general_configs_with_blend_core_subset(
+    let (general_configs, genesis_tx) = create_general_configs_with_blend_core_subset(
         n_validators,
         n_initial_validators,
         &network_params,
@@ -38,7 +38,10 @@ async fn test_ibd_behind_nodes() {
 
     let mut initial_validators = vec![];
     for config in general_configs.iter().take(n_initial_validators) {
-        let config = create_validator_config(config.clone(), default_e2e_deployment_settings());
+        let config = create_validator_config(
+            config.clone(),
+            e2e_deployment_settings_with_genesis_tx(genesis_tx.clone()),
+        );
         initial_validators.push(Validator::spawn(config).await.unwrap());
     }
 
@@ -71,7 +74,7 @@ async fn test_ibd_behind_nodes() {
 
     let mut config = create_validator_config(
         general_configs[n_initial_validators].clone(),
-        default_e2e_deployment_settings(),
+        e2e_deployment_settings_with_genesis_tx(genesis_tx),
     );
     config.user.cryptarchia.network.bootstrap.ibd.peers = initial_peer_ids.clone();
     // Shorten the delay to quickly catching up with peers that grow during IBD.
