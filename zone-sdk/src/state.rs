@@ -64,14 +64,12 @@ impl TxState {
         self.parent_map.insert(block_id, parent_id);
 
         // Build cumulative safe set from parent
-        let parent_state = self.block_states.get(&parent_id).cloned();
-
-        // TODO: backfill missing blocks
-        debug_assert!(
-            parent_state.is_some(),
-            "Missing parent state for {parent_id:?}, cumulative safe set will be incomplete"
-        );
-        let mut safe_set = parent_state.unwrap_or_else(HashTrieSetSync::new_sync);
+        // TODO: implement backfilling for missing blocks
+        let mut safe_set = self
+            .block_states
+            .get(&parent_id)
+            .cloned()
+            .expect("parent state should exist");
 
         for tx in our_txs {
             if self.pending.contains_key(&tx) {
@@ -82,21 +80,38 @@ impl TxState {
 
         // When lib advances: finalize txs and prune
         if lib != self.current_lib {
-            // Finalize txs at new lib
-            if let Some(lib_safe) = self.block_states.get(&lib) {
-                for tx_hash in lib_safe.iter() {
+            // Finalize txs in all blocks from old lib to new lib (inclusive)
+            let mut block = lib;
+
+            loop {
+                let block_safe = self
+                    .block_states
+                    .get(&block)
+                    .expect("block state should exist for blocks between old LIB and new LIB");
+
+                for tx_hash in block_safe.iter() {
                     if self.pending.remove(tx_hash).is_some() {
                         self.finalized.insert(*tx_hash);
                     }
                 }
+
+                if block == self.current_lib {
+                    break;
+                }
+
+                block = self
+                    .parent_map
+                    .get(&block)
+                    .copied()
+                    .expect("parent_map should contain block while finalizing LIB advance");
             }
 
             // Prune ancestors of new lib (up to and including old lib)
-            let mut cursor = self.parent_map.get(&lib).copied();
-            while let Some(block) = cursor {
-                self.block_states.remove(&block);
-                cursor = self.parent_map.remove(&block);
-                if block == self.current_lib {
+            let mut prune_cursor = self.parent_map.get(&lib).copied();
+            while let Some(b) = prune_cursor {
+                self.block_states.remove(&b);
+                prune_cursor = self.parent_map.remove(&b);
+                if b == self.current_lib {
                     break;
                 }
             }
@@ -373,5 +388,38 @@ mod tests {
         assert!(!state.block_states.contains_key(&a4), "a4 should be pruned");
         assert!(state.block_states.contains_key(&a5), "new lib should exist");
         assert!(state.block_states.contains_key(&a6), "tip should exist");
+    }
+
+    #[test]
+    fn multi_block_lib_advance_finalizes_intermediate() {
+        // When LIB advances multiple blocks at once, all intermediate txs must finalize
+        // genesis <- b1 (tx1) <- b2 (tx2) <- b3
+        //                                     ^
+        //                                    LIB jumps here
+        let genesis = header_id(0);
+        let b1 = header_id(1);
+        let b2 = header_id(2);
+        let b3 = header_id(3);
+        let mut state = TxState::new(genesis);
+
+        let tx1 = make_dummy_tx(1);
+        let tx2 = make_dummy_tx(2);
+        let hash1 = tx1.mantle_tx.hash();
+        let hash2 = tx2.mantle_tx.hash();
+
+        state.submit(hash1, tx1);
+        state.submit(hash2, tx2);
+
+        // b1 has tx1
+        state.process_block(b1, genesis, genesis, vec![hash1]);
+        // b2 has tx2
+        state.process_block(b2, b1, genesis, vec![hash2]);
+        // b3, lib jumps from genesis to b2 (skipping b1)
+        state.process_block(b3, b2, b2, vec![]);
+
+        // Both tx1 (in b1) and tx2 (in b2) should be finalized
+        assert_eq!(state.status(&hash1, b3), TxStatus::Finalized);
+        assert_eq!(state.status(&hash2, b3), TxStatus::Finalized);
+        assert_eq!(state.finalized_count(), 2);
     }
 }
