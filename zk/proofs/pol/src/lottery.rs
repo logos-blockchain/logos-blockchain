@@ -6,7 +6,8 @@ use num_bigint::BigUint;
 use num_traits::{CheckedSub as _, Num as _};
 
 /// The BN254 scalar field order,
-/// defined in [Proof of Leadership spec](https://nomos-tech.notion.site/v1-1-Proof-of-Leadership-Specification-2e9261aa09df80058244c902defc6da2#2e9261aa09df807abe78c815e7a31809)
+///
+/// The value is defined in [Proof of Leadership spec](https://nomos-tech.notion.site/v1-1-Proof-of-Leadership-Specification-2e9261aa09df80058244c902defc6da2#2e9261aa09df807abe78c815e7a31809)
 pub static P: LazyLock<BigUint> = LazyLock::new(|| {
     BigUint::from_str_radix(
         "30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001",
