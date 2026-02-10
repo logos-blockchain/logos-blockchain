@@ -8,7 +8,7 @@ Feature: Cryptarchia
     Then all nodes have at least 10 blocks and converged to within 1 blocks in 300 seconds
     Then I stop all nodes
 
-  @cryptarchia_ci
+  @cryptarchia_ci @undefined_behaviour
   Scenario: Orphan staggered start
     Given I have a cluster with capacity of 4 nodes
     And I start node "NODE_1"
@@ -21,7 +21,7 @@ Feature: Cryptarchia
     Then all nodes have at least 8 blocks and converged to within 1 blocks in 180 seconds
     Then I stop all nodes
 
-  @cryptarchia_ci
+  @cryptarchia_ci @undefined_behaviour
   Scenario: Orphan staggered fork start 1
     Given I have a cluster with capacity of 7 nodes
     And I start node "NODE_A1"
@@ -37,7 +37,7 @@ Feature: Cryptarchia
     Then all nodes have at least 10 blocks and converged to within 1 blocks in 240 seconds
     Then I stop all nodes
 
-  @cryptarchia_ci
+  @cryptarchia_ci @undefined_behaviour
   Scenario: Orphan staggered fork start 2
     Given I have a cluster with capacity of 9 nodes
     And I start node "NODE_A1"

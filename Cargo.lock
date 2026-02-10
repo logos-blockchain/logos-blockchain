@@ -4745,9 +4745,11 @@ dependencies = [
  "async-trait",
  "cucumber",
  "derivative",
+ "ed25519",
  "futures",
  "futures-util",
  "hex",
+ "libp2p",
  "logos-blockchain-blend-proofs",
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-chain-service",
@@ -4762,9 +4764,12 @@ dependencies = [
  "logos-blockchain-node",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
+ "logos-blockchain-wallet",
+ "logos-blockchain-zksign",
  "num-bigint",
  "rand 0.8.5",
  "reqwest",
+ "rpds",
  "serde_json",
  "serde_yaml",
  "serial_test",
@@ -8739,7 +8744,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

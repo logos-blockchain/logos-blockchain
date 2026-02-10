@@ -18,6 +18,8 @@ pub mod time;
 #[path = "../../../../src/topology/configs/tracing.rs"]
 pub mod tracing;
 
+use std::time::Duration;
+
 use blend::GeneralBlendConfig;
 use consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_tx_with_declarations};
 use lb_core::{
@@ -28,11 +30,10 @@ use lb_node::config::{KmsConfig, kms::serde::PreloadKmsBackendSettings};
 use network::GeneralNetworkConfig;
 use tracing::GeneralTracingConfig;
 
-use self::{
-    api::GeneralApiConfig, consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD, network::NetworkParams,
-    time::GeneralTimeConfig,
-};
+use self::{api::GeneralApiConfig, network::NetworkParams, time::GeneralTimeConfig};
 use crate::common::kms::key_id_for_preload_backend;
+
+const PROLONGED_BOOTSTRAP_PERIOD: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub struct GeneralConfig {
@@ -68,7 +69,7 @@ pub fn create_general_configs_from_ids(
     );
 
     let (consensus_configs, genesis_tx) =
-        consensus::create_consensus_configs(ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+        consensus::create_consensus_configs(ids, PROLONGED_BOOTSTRAP_PERIOD);
     let network_configs = network::create_network_configs(ids, network_params);
     let api_configs = api::create_api_configs(ids);
     let blend_configs = blend::create_blend_configs(ids, blend_ports);

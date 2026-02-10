@@ -78,7 +78,7 @@ pub fn init_node_log_dir_defaults(deployer: &DeployerKind, log_dir: Option<&Path
                 )
             },
             |dir| {
-                set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
+                // set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
                 PathBuf::from(dir)
             },
         ),

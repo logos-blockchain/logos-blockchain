@@ -50,7 +50,7 @@ pub enum Rewards<ProofsVerifier> {
     /// during the current session `s`.
     WithTargetSession {
         target_session_state: TargetSessionState<ProofsVerifier>,
-        target_session_tracker: TargetSessionTracker,
+        target_session_tracker: Box<TargetSessionTracker>,
         current_session_state: CurrentSessionState,
         current_session_tracker: CurrentSessionTracker,
         settings: RewardsParameters,
@@ -97,7 +97,7 @@ where
 
                 Ok(Self::WithTargetSession {
                     target_session_state: target_session_state.clone(),
-                    target_session_tracker,
+                    target_session_tracker: Box::new(target_session_tracker),
                     current_session_state: current_session_state.clone(),
                     current_session_tracker: current_session_tracker.clone(),
                     settings: settings.clone(),
@@ -214,7 +214,7 @@ where
                 current_session_tracker,
             } => Self::WithTargetSession {
                 target_session_state,
-                target_session_tracker,
+                target_session_tracker: Box::new(target_session_tracker),
                 current_session_state,
                 current_session_tracker,
                 settings,
