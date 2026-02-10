@@ -38,6 +38,10 @@ use crate::{
 
 const LOGS_PREFIX: &str = "__logs";
 const DEFAULT_BLEND_NETWORK_PORT: u16 = 3400;
+/// The default filename for the user config.
+pub const USER_CONFIG_FILE: &str = "node.yaml";
+/// The default filename for the deployment config.
+pub const DEPLOYMENT_CONFIG_FILE: &str = "deployment.yaml";
 
 struct BuiltNodeConfigPlan {
     node_config: Config,
@@ -136,8 +140,8 @@ impl LocalDeployerEnv for LbcEnv {
         config.user.state.base_folder = dir.to_path_buf();
         "db".clone_into(&mut config.user.storage.backend.folder_name);
 
-        let config_path = dir.join("node.yaml");
-        let deployment_path = dir.join("deployment.yaml");
+        let config_path = dir.join(USER_CONFIG_FILE);
+        let deployment_path = dir.join(DEPLOYMENT_CONFIG_FILE);
 
         let user_yaml = serde_yaml::to_string(&config.user).map_err(io::Error::other)?;
         let deployment_yaml =
@@ -152,11 +156,11 @@ impl LocalDeployerEnv for LbcEnv {
             binary,
             files: vec![
                 LaunchFile {
-                    relative_path: PathBuf::from("node.yaml"),
+                    relative_path: PathBuf::from(USER_CONFIG_FILE),
                     contents: user_yaml.into_bytes(),
                 },
                 LaunchFile {
-                    relative_path: PathBuf::from("deployment.yaml"),
+                    relative_path: PathBuf::from(DEPLOYMENT_CONFIG_FILE),
                     contents: deployment_yaml.into_bytes(),
                 },
             ],
@@ -504,7 +508,7 @@ fn build_cryptarchia_user_config(
             },
             sync: network::SyncConfig {
                 orphan: network::OrphanConfig {
-                    max_orphan_cache_size: NonZeroUsize::new(5)
+                    max_orphan_cache_size: NonZeroUsize::new(1000)
                         .expect("max orphan cache size must be non-zero"),
                 },
             },

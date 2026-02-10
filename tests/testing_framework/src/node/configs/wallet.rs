@@ -57,12 +57,13 @@ impl WalletConfig {
                 WalletAccount::deterministic(
                     idx as u64,
                     allocation_for(idx, base_allocation, remainder),
+                    false,
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
 
         let wallet = Self { accounts };
-        wallet.validate()?;
+        wallet.validate(false, false)?;
 
         Ok(wallet)
     }
@@ -77,12 +78,20 @@ impl WalletConfig {
         self.accounts.len()
     }
 
-    pub fn validate(&self) -> Result<(), WalletConfigError> {
+    pub fn validate(
+        &self,
+        allow_multiple_genesis_tokens_per_wallet: bool,
+        allow_zero_value_genesis_tokens: bool,
+    ) -> Result<(), WalletConfigError> {
         let mut seen_public_keys = HashSet::new();
 
         for account in &self.accounts {
-            validate_account_value(account)?;
-            ensure_unique_public_key(account, &mut seen_public_keys)?;
+            if !allow_zero_value_genesis_tokens {
+                validate_account_value(account)?;
+            }
+            if !allow_multiple_genesis_tokens_per_wallet {
+                ensure_unique_public_key(account, &mut seen_public_keys)?;
+            }
         }
 
         Ok(())
@@ -114,8 +123,13 @@ pub struct WalletAccount {
 }
 
 impl WalletAccount {
-    pub fn new(label: String, secret_key: ZkKey, value: u64) -> Result<Self, WalletConfigError> {
-        if value == 0 {
+    pub fn new(
+        label: String,
+        secret_key: ZkKey,
+        value: u64,
+        allow_zero_value_genesis_tokens: bool,
+    ) -> Result<Self, WalletConfigError> {
+        if value == 0 && !allow_zero_value_genesis_tokens {
             return Err(WalletConfigError::ZeroAccountValue { label });
         }
 
@@ -126,13 +140,22 @@ impl WalletAccount {
         })
     }
 
-    pub fn deterministic(index: u64, value: u64) -> Result<Self, WalletConfigError> {
+    pub fn deterministic(
+        index: u64,
+        value: u64,
+        allow_zero_value_genesis_tokens: bool,
+    ) -> Result<Self, WalletConfigError> {
         let mut seed = [0u8; 32];
         seed[..2].copy_from_slice(b"wl");
         seed[2..10].copy_from_slice(&index.to_le_bytes());
 
         let secret_key = ZkKey::from(BigUint::from_bytes_le(&seed));
-        Self::new(format!("wallet-user-{index}"), secret_key, value)
+        Self::new(
+            format!("wallet-user-{index}"),
+            secret_key,
+            value,
+            allow_zero_value_genesis_tokens,
+        )
     }
 
     #[must_use]

@@ -10,6 +10,7 @@ use std::{net::Ipv4Addr, sync::LazyLock};
 use lb_libp2p::{Multiaddr, multiaddr};
 
 mod framework;
+pub use framework::local::USER_CONFIG_FILE;
 mod node;
 pub mod workloads;
 

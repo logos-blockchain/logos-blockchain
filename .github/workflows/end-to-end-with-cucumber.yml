@@ -79,15 +79,12 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
-          # Note: Trying without the `high-active-slot-coefficient` feature flag for now, as locally tests seem to
-          #       converge faster without it, especially with release mode binaries. We can re-enable it later if
-          #       needed.
           args: --locked --release --all
-          # args: --locked --all --features high-active-slot-coefficient
         env:
           CARGO_INCREMENTAL: 0  # Disable incremental compilation
 
       - name: End-to-end integration tests
+        timeout-minutes: 90
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: nextest
@@ -106,6 +103,8 @@ jobs:
       # Special exclusion tags (we want to run the rest of the tests and not fail the workflow):
       # - @broken = tests that are broken and must still be fixed
       # - @undefined_behaviour = tests that trigger undefined system-level behaviour in the logos-blockchain-node binary
+
+      # Feature: Smoke (@smoke_ci)
       - name: Run cucumber - @smoke_ci
         # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
         if: ${{ !cancelled() }}
@@ -125,14 +124,11 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
         with:
-          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}  # ✅ Unique per OS
+          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-smoke  # ✅ Unique per OS
           include-hidden-files: true
           path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Smoke/**
 
-      # Run cucumber integration tests with environment variables for binaries and test params
-      # Special exclusion tags (we want to run the rest of the tests and not fail the workflow):
-      # - @broken = tests that are broken and must still be fixed
-      # - @undefined_behaviour = tests that trigger undefined system-level behaviour in the logos-blockchain-node binary
+      # Feature: Cryptarchia (@cryptarchia_ci)
       - name: Run cucumber - @cryptarchia_ci
         # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
         if: ${{ !cancelled() }}
@@ -152,9 +148,33 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
         with:
-          name: cucumber-artifacts-${{ runner.os }}  # ✅ Unique per OS
+          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-cryptarchia  # ✅ Unique per OS
           include-hidden-files: true
           path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Cryptarchia/**
+
+      # Feature: Transactions (@transactions_ci)
+      - name: Run cucumber - @transactions_ci
+        # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
+        if: ${{ !cancelled() }}
+        timeout-minutes: 60  # Safety net timeout - this needs to be adjusted as more tests are added
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+        env:
+          CUCUMBER_LOG_LEVEL: debug
+        with:
+          command: test
+          args: >-
+            --locked -p logos-blockchain-tests --features cucumber
+            --test cucumber -- --tags "@transactions_ci and not (@broken or @undefined_behaviour)"
+
+      # On failure, upload cucumber logs and artifacts for debugging
+      - name: Upload cucumber logs on failure
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
+        with:
+          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-transactions  # ✅ Unique per OS
+          include-hidden-files: true
+          path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Transactions/**
 
       # Always upload JUnit test results for reporting, even if tests fail
       - name: Upload cucumber JUnit results

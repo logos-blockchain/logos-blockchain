@@ -1,5 +1,11 @@
-use std::{env, path::PathBuf, time::Duration};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
+use lb_libp2p::{PeerId, identity, identity::ed25519};
+use lb_node::UserConfig;
 use lb_testing_framework::{CoreBuilderExt as _, ScenarioBuilder};
 use tokio::time::{Instant, MissedTickBehavior};
 use tracing::{info, warn};
@@ -98,4 +104,50 @@ macro_rules! non_zero {
             message: format!("'{}' must be > 0", $field),
         })
     };
+}
+
+/// Reads a node YAML user config file and extracts the `PeerId` from the node
+/// key.
+pub fn peer_id_from_node_yaml(path: &Path) -> Result<PeerId, StepError> {
+    let config: UserConfig = {
+        let text = fs::read_to_string(path).map_err(|e| StepError::LogicalError {
+            message: format!("Failed to read '{}': {e}", path.display()),
+        })?;
+
+        serde_yaml::from_str(&text).map_err(|e| StepError::LogicalError {
+            message: format!("Failed to parse '{}': {e}", path.display()),
+        })?
+    };
+
+    let node_key = config.network.backend.swarm.node_key;
+
+    let keypair = identity::Keypair::from(ed25519::Keypair::from(node_key));
+
+    Ok(PeerId::from(keypair.public()))
+}
+
+/// Extracts the child directory name that starts with a known prefix.
+pub fn extract_child_dir_name(base_dir: &Path, prefix: &str) -> Result<String, StepError> {
+    base_dir
+        .read_dir()
+        .map_err(|e| StepError::LogicalError {
+            message: format!("Failed to read scenario_base_dir: {e}"),
+        })?
+        .filter_map(Result::ok)
+        .find(|entry| {
+            entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
+                && entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(prefix))
+        })
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("No directory found starting with {prefix}",),
+        })?
+        .file_name()
+        .to_str()
+        .map(String::from)
+        .ok_or_else(|| StepError::LogicalError {
+            message: "Invalid UTF-8 in directory name".to_owned(),
+        })
 }
