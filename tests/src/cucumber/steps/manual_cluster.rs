@@ -3,11 +3,8 @@ use std::{collections::HashMap, time::Duration};
 use cucumber::{given, then, when};
 use futures::future::try_join_all;
 use hex::ToHex as _;
-use testing_framework_core::{
-    scenario::{PeerSelection, StartNodeOptions},
-    topology::config::TopologyConfig,
-};
-use testing_framework_runner_local::LocalDeployer;
+use lb_framework::{DeploymentBuilder, LbcLocalDeployer, TopologyConfig};
+use testing_framework_core::scenario::{PeerSelection, StartNodeOptions};
 use tokio::time::sleep;
 use tracing::{info, warn};
 
@@ -40,13 +37,21 @@ struct MaybeSnapshot {
 #[when(expr = "I have a cluster with capacity of {int} nodes")]
 fn manual_cluster(world: &mut CucumberWorld, nodes_count: usize) -> StepResult {
     let config = TopologyConfig::with_node_numbers(nodes_count);
-    let deployer = LocalDeployer::new();
-    let cluster = deployer.manual_cluster(config).inspect_err(|e| {
-        warn!(
-            target: TARGET,
-            "Step 'I have a we have a cluster with capacity of {nodes_count} nodes' error: {e}"
-        );
-    })?;
+    let deployment = match DeploymentBuilder::new(config).build() {
+        Ok(deployment) => deployment,
+        Err(source) => {
+            warn!(
+                target: TARGET,
+                "Step 'I have a we have a cluster with capacity of {nodes_count} nodes' error: \
+                 {source}"
+            );
+            return Err(StepError::LogicalError {
+                message: format!("failed to build manual cluster: {source}"),
+            });
+        }
+    };
+    let deployer = LbcLocalDeployer::new();
+    let cluster = deployer.manual_cluster_from_descriptors(deployment);
     world.local_cluster = Some(cluster);
 
     Ok(())
@@ -55,7 +60,7 @@ fn manual_cluster(world: &mut CucumberWorld, nodes_count: usize) -> StepResult {
 #[given(expr = "I start node {string}")]
 #[when(expr = "I start node {string}")]
 async fn start_manual_stand_alone_node(world: &mut CucumberWorld, node_name: String) -> StepResult {
-    start_node(world, node_name, &Vec::new()).await
+    Box::pin(start_node(world, node_name, &Vec::new())).await
 }
 
 #[given(expr = "I start peer node {string} connected to node {string}")]
@@ -65,7 +70,7 @@ async fn start_manual_connected_node(
     node_name: String,
     peer_name: String,
 ) -> StepResult {
-    start_node(world, node_name, &[peer_name]).await
+    Box::pin(start_node(world, node_name, &[peer_name])).await
 }
 
 #[given(expr = "I start peer node {string} connected to node {string} and node {string}")]
@@ -76,7 +81,7 @@ async fn start_manual_two_connected_nodes(
     peer_name1: String,
     peer_name2: String,
 ) -> StepResult {
-    start_node(world, node_name, &[peer_name1, peer_name2]).await
+    Box::pin(start_node(world, node_name, &[peer_name1, peer_name2])).await
 }
 
 async fn start_node(world: &mut CucumberWorld, node_name: String, peers: &[String]) -> StepResult {
@@ -95,26 +100,25 @@ async fn start_node(world: &mut CucumberWorld, node_name: String, peers: &[Strin
             .collect::<Result<Vec<String>, StepError>>()?;
         PeerSelection::Named(named)
     };
-    let started_node = cluster
-        .start_node_with(
+    let started_node = Box::pin(
+        cluster.start_node_with(
             &node_name,
-            StartNodeOptions {
-                peers: peer_selection,
-                config_patch: None,
-                persist_dir: Some(world.scenario_base_dir.join(node_name.as_str())),
-            }
-            .create_patch(move |config| {
-                // Placeholder - Add any custom configuration changes here if needed.
-                Ok(config)
-            }),
-        )
-        .await
-        .inspect_err(|e| {
-            warn!(
-                target: TARGET,
-                "Step `I start node/peer node {node_name} (connected to {peers:?})` error: {e}"
-            );
-        })?;
+            StartNodeOptions::default()
+                .with_peers(peer_selection)
+                .with_persist_dir(world.scenario_base_dir.join(node_name.as_str()))
+                .create_patch(move |config| {
+                    // Placeholder - Add any custom configuration changes here if needed.
+                    Ok(config)
+                }),
+        ),
+    )
+    .await
+    .inspect_err(|e| {
+        warn!(
+            target: TARGET,
+            "Step `I start node/peer node {node_name} (connected to {peers:?})` error: {e}"
+        );
+    })?;
     world.nodes_info.insert(
         node_name.clone(),
         NodeInfo {
@@ -414,7 +418,7 @@ async fn poll_all_nodes_and_update_consensus_cache(
     let info_futures = nodes.iter().map(async |node| {
         let node_name = node.name.clone();
         node.started_node
-            .api
+            .client
             .consensus_info()
             .await
             .map(|info| ConsensusSnapshot {

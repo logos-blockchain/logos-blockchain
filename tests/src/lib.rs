@@ -19,7 +19,8 @@ pub const BIN_PATH_DEBUG: &str = "../target/debug/logos-blockchain-node";
 /// The default path to the node binary for release builds.
 pub const BIN_PATH_RELEASE: &str = "../target/release/logos-blockchain-node";
 
-fn node_address_from_port(port: u16) -> Multiaddr {
+#[must_use]
+pub fn node_address_from_port(port: u16) -> Multiaddr {
     multiaddr(std::net::Ipv4Addr::LOCALHOST, port)
 }
 

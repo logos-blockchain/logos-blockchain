@@ -1,0 +1,89 @@
+use std::net::SocketAddr;
+
+use common_http_client::{CommonHttpClient, Error};
+use lb_chain_service::CryptarchiaInfo;
+use lb_core::{block::Block, header::HeaderId, mantle::SignedMantleTx};
+use lb_http_api_common::paths::NETWORK_INFO;
+use lb_network_service::backends::libp2p::Libp2pInfo;
+use reqwest::Url;
+
+#[derive(Clone)]
+pub struct NodeHttpClient {
+    base_url: Url,
+    testing_url: Option<Url>,
+    http_client: CommonHttpClient,
+}
+
+impl NodeHttpClient {
+    #[must_use]
+    pub fn new(base_addr: SocketAddr, testing_addr: Option<SocketAddr>) -> Self {
+        let base_url = Url::parse(&format!("http://{base_addr}"))
+            .expect("SocketAddr should always render as a valid URL host:port");
+        let testing_url = testing_addr.map(|addr| {
+            Url::parse(&format!("http://{addr}"))
+                .expect("SocketAddr should always render as a valid URL host:port")
+        });
+
+        Self::from_urls(base_url, testing_url)
+    }
+
+    #[must_use]
+    pub fn from_urls(base_url: Url, testing_url: Option<Url>) -> Self {
+        Self {
+            base_url,
+            testing_url,
+            http_client: CommonHttpClient::new(None),
+        }
+    }
+
+    pub async fn consensus_info(&self) -> Result<CryptarchiaInfo, Error> {
+        self.http_client.consensus_info(self.base_url.clone()).await
+    }
+
+    pub async fn network_info(&self) -> Result<Libp2pInfo, Error> {
+        match self.network_info_at(self.base_url.clone()).await {
+            Ok(info) => Ok(info),
+            Err(base_err) => {
+                if let Some(testing_url) = self.testing_url.clone() {
+                    self.network_info_at(testing_url)
+                        .await
+                        .map_err(|_| base_err)
+                } else {
+                    Err(base_err)
+                }
+            }
+        }
+    }
+
+    pub async fn storage_block(
+        &self,
+        id: &HeaderId,
+    ) -> Result<Option<Block<SignedMantleTx>>, Error> {
+        self.http_client.get_block(self.base_url.clone(), *id).await
+    }
+
+    pub async fn submit_transaction(&self, tx: &SignedMantleTx) -> Result<(), Error> {
+        self.http_client
+            .post_transaction(self.base_url.clone(), tx.clone())
+            .await
+    }
+
+    #[must_use]
+    pub const fn base_url(&self) -> &Url {
+        &self.base_url
+    }
+
+    #[must_use]
+    pub const fn testing_url(&self) -> Option<&Url> {
+        self.testing_url.as_ref()
+    }
+
+    async fn network_info_at(&self, base_url: Url) -> Result<Libp2pInfo, Error> {
+        let request_url = base_url
+            .join(NETWORK_INFO.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.http_client
+            .get::<(), Libp2pInfo>(request_url, None)
+            .await
+    }
+}

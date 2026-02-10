@@ -8,10 +8,9 @@ use std::{
 
 use cucumber::World;
 use derivative::Derivative;
+use lb_framework::{LbcEnv, LbcManualCluster, ScenarioBuilder, ScenarioBuilderExt as _, workloads};
 use lb_node::config::RunConfig;
-use testing_framework_core::scenario::{Builder, NodeControlCapability, Scenario, StartedNode};
-use testing_framework_runner_local::LocalManualCluster;
-use testing_framework_workflows::{ScenarioBuilderExt as _, expectations::ConsensusLiveness};
+use testing_framework_core::scenario::{NodeControlCapability, Scenario, StartedNode};
 use tracing::warn;
 
 use crate::{
@@ -24,6 +23,9 @@ use crate::{
     },
     non_zero,
 };
+
+type ScenarioBuilderWith = ScenarioBuilder;
+type ConsensusLiveness = workloads::ConsensusLiveness;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DeployerKind {
@@ -85,7 +87,7 @@ pub struct CucumberWorld {
     pub readiness_checks: bool,
     #[derivative(Debug = "ignore")]
     #[derivative(Default(value = "None"))]
-    pub local_cluster: Option<LocalManualCluster>,
+    pub local_cluster: Option<LbcManualCluster>,
     #[derivative(Debug = "ignore")]
     pub nodes_info: HashMap<String, NodeInfo>,
     pub scenario_base_dir: PathBuf,
@@ -97,7 +99,7 @@ pub type ChainInfoMap = HashMap<u64, String>;
 pub struct NodeInfo {
     /// Node name
     pub name: String,
-    pub started_node: StartedNode,
+    pub started_node: StartedNode<LbcEnv>,
     /// General node configuration used to start the node
     pub run_config: Option<RunConfig>,
     /// Chain height vs. hash at that height
@@ -146,7 +148,10 @@ impl CucumberWorld {
     pub fn set_scenario_base_dir(&mut self, log_dir: &Path, deployer: &DeployerKind) {
         let log_dir = PathBuf::from(log_dir);
         init_node_log_dir_defaults(deployer, Some(&log_dir));
-        self.scenario_base_dir = log_dir;
+        self.scenario_base_dir.clone_from(&log_dir);
+        if let Some(topology) = self.spec.topology.as_mut() {
+            topology.scenario_base_dir = log_dir;
+        }
     }
 
     /// Configure the scenario topology (number of nodes and network layout).
@@ -220,8 +225,8 @@ impl CucumberWorld {
     /// Build a scenario for local deployment based on the current world
     /// configuration. This performs necessary preflight checks and returns
     /// a built scenario ready for deployment.
-    pub fn build_local_scenario(&self) -> Result<Scenario<()>, StepError> {
-        let builder = self.make_builder_for_deployer::<()>(DeployerKind::Local)?;
+    pub fn build_local_scenario(&self) -> Result<Scenario<LbcEnv>, StepError> {
+        let builder = self.make_builder_for_deployer(DeployerKind::Local)?;
         builder
             .build()
             .map_err(|source| StepError::ScenarioBuild { source })
@@ -230,10 +235,12 @@ impl CucumberWorld {
     /// Build a scenario for compose deployment based on the current world
     /// configuration. This performs necessary preflight checks and returns
     /// a built scenario ready for deployment.
-    pub fn build_compose_scenario(&self) -> Result<Scenario<NodeControlCapability>, StepError> {
-        let builder =
-            self.make_builder_for_deployer::<NodeControlCapability>(DeployerKind::Compose)?;
+    pub fn build_compose_scenario(
+        &self,
+    ) -> Result<Scenario<LbcEnv, NodeControlCapability>, StepError> {
+        let builder = self.make_builder_for_deployer(DeployerKind::Compose)?;
         builder
+            .enable_node_control()
             .build()
             .map_err(|source| StepError::ScenarioBuild { source })
     }
@@ -298,10 +305,10 @@ impl CucumberWorld {
     // expected deployer kind. This checks that the deployer kind matches the
     // expected kind, and then applies the world configuration (topology,
     // duration, workloads, expectations) to the builder.
-    fn make_builder_for_deployer<Caps: Default>(
+    fn make_builder_for_deployer(
         &self,
         expected: DeployerKind,
-    ) -> Result<Builder<Caps>, StepError> {
+    ) -> Result<ScenarioBuilderWith, StepError> {
         let actual = self.deployer.ok_or(StepError::MissingDeployer)?;
         if actual != expected {
             return Err(StepError::DeployerMismatch { expected, actual });
@@ -318,10 +325,9 @@ impl CucumberWorld {
             .ok_or(StepError::MissingRunDuration)?
             .get();
 
-        let mut builder: Builder<Caps> = make_builder(topology).with_capabilities(Caps::default());
+        let mut builder: ScenarioBuilderWith = make_builder(&topology);
 
         builder = builder.with_run_duration(Duration::from_secs(duration_secs));
-
         if let Some(wallets) = self.spec.wallets {
             builder = builder.initialize_wallet(wallets.total_funds, wallets.users.get());
         }

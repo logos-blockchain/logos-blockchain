@@ -68,6 +68,7 @@ pub fn create_node_configs(
         .iter()
         .map(|host| GeneralApiConfig {
             address: format!("0.0.0.0:{}", host.api_port).parse().unwrap(),
+            testing_http_address: format!("0.0.0.0:{}", host.api_port).parse().unwrap(),
         })
         .collect::<Vec<_>>();
     let mut configured_hosts = HashMap::new();
@@ -171,6 +172,7 @@ pub fn create_node_config_from_template(
         blend_config: blend_configs[0].clone(),
         api_config: GeneralApiConfig {
             address: format!("0.0.0.0:{}", new_host.api_port).parse().unwrap(),
+            testing_http_address: format!("0.0.0.0:{}", new_host.api_port).parse().unwrap(),
         },
         tracing_config: update_tracing_identifier(
             tracing_settings.clone(),

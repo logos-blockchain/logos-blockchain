@@ -40,6 +40,8 @@ pub enum StepError {
     ParseError(#[from] strum::ParseError),
     #[error(transparent)]
     ReqwestError(#[from] reqwest::Error),
+    #[error(transparent)]
+    CommonHttpError(#[from] lb_common_http_client::Error),
 }
 
 pub type StepResult = Result<(), StepError>;

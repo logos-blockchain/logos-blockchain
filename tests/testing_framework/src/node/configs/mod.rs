@@ -1,0 +1,29 @@
+pub mod deployment;
+mod dynamic;
+pub(crate) mod node_configs;
+pub mod postprocess;
+pub mod wallet;
+use lb_node::config::deployment::DeploymentSettings;
+
+pub use crate::framework::local::build_node_run_config;
+
+pub mod network {
+    pub use super::node_configs::network::{
+        Libp2pNetworkLayout as NetworkLayout, Libp2pNetworkLayout, NetworkParams,
+    };
+}
+
+pub(crate) use dynamic::create_node_config_for_node;
+pub(crate) use node_configs::{
+    GeneralConfig as Config, create_general_configs_from_ids as create_node_configs_from_ids,
+    network::{Libp2pNetworkLayout, NetworkParams},
+};
+
+pub(crate) use crate::common::kms::key_id_for_preload_backend;
+
+#[must_use]
+pub fn default_e2e_deployment_settings(
+    genesis_tx: lb_core::mantle::genesis_tx::GenesisTx,
+) -> DeploymentSettings {
+    node_configs::deployment::e2e_deployment_settings_with_genesis_tx(genesis_tx)
+}

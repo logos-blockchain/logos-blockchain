@@ -23,7 +23,7 @@ use lb_node::config::{
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use time::OffsetDateTime;
 
-use crate::topology::configs::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
+use super::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
 static CHAIN_START_TIME: OnceLock<OffsetDateTime> = OnceLock::new();
 

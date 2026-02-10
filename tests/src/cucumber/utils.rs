@@ -1,20 +1,22 @@
 use std::{env, path::PathBuf};
 
-use testing_framework_core::scenario::{Builder, ScenarioBuilder};
+use lb_framework::{CoreBuilderExt as _, ScenarioBuilder};
 
 use crate::cucumber::{
     error::StepError,
     world::{DeployerKind, NetworkKind, TopologySpec},
 };
 
+type ScenarioBuilderWith = ScenarioBuilder;
+
 #[must_use]
-pub fn make_builder(topology: TopologySpec) -> Builder<()> {
-    ScenarioBuilder::topology_with(|t| {
+pub fn make_builder(topology: &TopologySpec) -> ScenarioBuilderWith {
+    ScenarioBuilder::deployment_with(|t| {
         let base = match topology.network {
-            NetworkKind::Star => t.network_star(),
+            NetworkKind::Star => t,
         };
         base.nodes(topology.nodes.get())
-            .scenario_base_dir(topology.scenario_base_dir)
+            .scenario_base_dir(topology.scenario_base_dir.clone())
     })
 }
 
