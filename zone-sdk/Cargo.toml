@@ -19,6 +19,7 @@ lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 reqwest                          = { workspace = true }
+rpds                             = { default-features = false, version = "1.1.1" }
 thiserror                        = { workspace = true }
 tokio                            = { default-features = false, features = ["macros", "rt", "sync", "time"], version = "1" }
 tracing                          = { workspace = true }

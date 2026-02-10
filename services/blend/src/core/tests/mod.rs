@@ -526,10 +526,10 @@ async fn complete_old_session_after_main_loop_done() {
     let initial_session = 0;
     let mut membership_info = MembershipInfo {
         membership: membership.clone(),
-        zk: ZkInfo {
+        zk: Some(ZkInfo {
             root: ZkHash::ZERO,
             core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
-        },
+        }),
         session_number: initial_session,
     };
     membership_sender

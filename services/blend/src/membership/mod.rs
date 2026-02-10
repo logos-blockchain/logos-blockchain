@@ -13,7 +13,8 @@ use overwatch::services::{ServiceData, relay::OutboundRelay};
 #[derive(Clone, Debug)]
 pub struct MembershipInfo<NodeId> {
     pub membership: Membership<NodeId>,
-    pub zk: ZkInfo,
+    // `None` if membership is empty.
+    pub zk: Option<ZkInfo>,
     pub session_number: u64,
 }
 
@@ -27,7 +28,7 @@ impl<NodeId> MembershipInfo<NodeId> {
         Self {
             membership,
             session_number,
-            zk: ZkInfo::default(),
+            zk: Some(ZkInfo::default()),
         }
     }
 }

@@ -2,8 +2,13 @@ use std::sync::Arc;
 
 use futures::{Stream, StreamExt as _};
 use lb_chain_broadcast_service::BlockInfo;
-use lb_chain_service::CryptarchiaInfo;
-use lb_core::{block::Block, header::HeaderId, mantle::SignedMantleTx};
+use lb_chain_service::{CryptarchiaInfo, Slot};
+use lb_core::{
+    block::Block,
+    header::{ContentId, HeaderId},
+    mantle::SignedMantleTx,
+    proofs::leader_proof::Groth16LeaderProof,
+};
 use lb_groth16::fr_to_bytes;
 use lb_http_api_common::{
     bodies::wallet::{
@@ -11,13 +16,41 @@ use lb_http_api_common::{
         transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
     },
     paths::{
-        CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, STORAGE_BLOCK,
+        BLOCKS_STREAM, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, STORAGE_BLOCK,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+/// Client-side header representation matching the server's
+/// `ApiHeaderSerializer`.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ApiHeader {
+    pub id: HeaderId,
+    pub parent_block: HeaderId,
+    pub slot: Slot,
+    pub block_root: ContentId,
+    pub proof_of_leadership: Groth16LeaderProof,
+}
+
+/// Client-side block representation matching the server's `ApiBlockSerializer`.
+/// Note: The server omits the signature field.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ApiBlock {
+    pub header: ApiHeader,
+    pub transactions: Vec<SignedMantleTx>,
+}
+
+/// Processed block event from the blocks stream.
+/// Matches the server's `ApiProcessedBlockEvent`.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ProcessedBlockEvent {
+    pub block: ApiBlock,
+    pub tip: HeaderId,
+    pub lib: HeaderId,
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -186,6 +219,35 @@ impl CommonHttpClient {
             .join(STORAGE_BLOCK.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.post(request_url, &header_id).await
+    }
+
+    /// Subscribe to the processed blocks stream.
+    /// Each event contains the block, current tip, and current LIB.
+    pub async fn get_blocks_stream(
+        &self,
+        base_url: Url,
+    ) -> Result<impl Stream<Item = ProcessedBlockEvent>, Error> {
+        let request_url = base_url
+            .join(BLOCKS_STREAM.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        let mut request = self.client.get(request_url);
+
+        if let Some(basic_auth) = &self.basic_auth {
+            request = request.basic_auth(&basic_auth.username, basic_auth.password.as_deref());
+        }
+
+        let response = request.send().await.map_err(Error::Request)?;
+        let status = response.status();
+
+        let blocks_stream = response.bytes_stream().filter_map(async |item| {
+            let bytes = item.ok()?;
+            serde_json::from_slice::<ProcessedBlockEvent>(&bytes).ok()
+        });
+        match status {
+            StatusCode::OK => Ok(blocks_stream),
+            StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server("Error".to_owned())),
+            _ => Err(Error::Server(format!("Unexpected response [{status}]",))),
+        }
     }
 
     /// Get the balance for a specific `ZkPublicKey`.
