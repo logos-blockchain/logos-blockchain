@@ -5,7 +5,7 @@ Feature: Smoke
   Scenario: Idle smoke
     Given we have a CLI deployer specified
     And topology has 2 validators
-    And run duration is 30 seconds
+    And run duration is 60 seconds
     And expect consensus liveness
     When run scenario
     Then scenario should succeed

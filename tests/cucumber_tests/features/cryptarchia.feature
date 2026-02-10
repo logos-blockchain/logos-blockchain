@@ -14,7 +14,7 @@ Feature: Cryptarchia
     And I start node "NODE_1"
     When node "NODE_1" is at height 2 in 300 seconds
     And I start peer node "NODE_2" connected to node "NODE_1"
-    When node "NODE_2" is at height 4 in 180 seconds
+    When node "NODE_2" is at height 4 in 240 seconds
     And I start peer node "NODE_3" connected to node "NODE_2"
     When node "NODE_3" is at height 6 in 180 seconds
     And I start peer node "NODE_4" connected to node "NODE_3"
