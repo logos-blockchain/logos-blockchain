@@ -12,11 +12,12 @@ Template files for running the Logos Blockchain Node as a systemd service on bar
    # Adjust paths to binary and config file
    ```
 
-2. Reload systemd and enable the service:
+2. Reload systemd and start the service:
    ```bash
    sudo systemctl daemon-reload
-   sudo systemctl enable logos-blockchain-node
    sudo systemctl start logos-blockchain-node
+   # Optional: enable auto-start at boot
+   sudo systemctl enable logos-blockchain-node
    ```
 
 3. Check status and logs:
