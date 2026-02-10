@@ -20,7 +20,7 @@ use lb_node::config::{
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
-use lb_utils::math::NonNegativeF64;
+use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use time::OffsetDateTime;
 
 use crate::topology::configs::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
@@ -98,6 +98,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
             // nodes have some time to sync before deciding on the
             // longest chain.
             security_param: NonZero::new(10).unwrap(),
+            slot_activation_coeff: NonNegativeRatio::new(1, 10).unwrap(),
             epoch_config: EpochConfig {
                 epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),

@@ -18,11 +18,7 @@ Ensure that the following are installed on your system:
 Integration tests involving nodes run the binaries directly by spawning. Ensure the binaries are built and available in 
 your `target/debug` or `target/release` directory. You can build the project using:
 
-`cargo build --features high-active-slot-coefficient` or `cargo build --release --features high-active-slot-coefficient`
-
-**Important:**
-Make sure to build the node binaries in advance with the `high-active-slot-coefficient` feature enabled, which increases the lottery winning rate and results in more frequent block production.
-Integration tests rely on these pre-built binaries and will not build them automatically.
+`cargo build` or `cargo build --release`
 
 ## Setup and Usage (using Docker)
 
@@ -85,11 +81,6 @@ or
 $env:USE_RELEASE_BINARIES="1"; cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
 
 ```
-
-**Important:**
-Make sure to build the node binaries in advance with the `high-active-slot-coefficient` feature enabled, which increases the lottery winning rate and results in more frequent block production.
-Integration tests rely on these pre-built binaries and will not build them automatically.
-
 
 ### 2. Run Tests with Debug Feature Flag
 

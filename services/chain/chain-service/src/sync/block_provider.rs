@@ -564,10 +564,12 @@ mod tests {
     use lb_cryptarchia_engine::Config;
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
+    use lb_pol::init_lottery_constants;
     use lb_storage_service::{
         StorageService,
         backends::rocksdb::{RocksBackend, RocksBackendSettings},
     };
+    use lb_utils::math::NonNegativeRatio;
     use lb_utxotree::UtxoTree;
     use num_bigint::BigUint;
     use overwatch::{derive_services, overwatch::OverwatchRunner};
@@ -609,7 +611,9 @@ mod tests {
         let mut env = TestEnv::new().await;
 
         let storage_blocks = env.create_storage_only_blocks(5).await;
-        let engine_blocks = env.create_engine_only_blocks(3).await;
+        let engine_blocks = env
+            .create_engine_only_blocks(3, env.slot_activation_coeff)
+            .await;
 
         let known_blocks = HashSet::from([storage_blocks[2]]);
         let target_block = engine_blocks[1];
@@ -690,14 +694,18 @@ mod tests {
         service: overwatch::overwatch::Overwatch<RuntimeServiceId>,
         storage_relay: StorageRelay<RocksBackend>,
         cryptarchia: lb_cryptarchia_engine::Cryptarchia<HeaderId>,
+        slot_activation_coeff: NonNegativeRatio,
         proof: lb_core::proofs::leader_proof::Groth16LeaderProof,
         provider: BlockProvider<RocksBackend, SignedMantleTx>,
     }
 
     impl TestEnv {
         async fn new() -> Self {
+            let slot_activation_coeff = NonNegativeRatio::new(99, 100).unwrap();
+            init_lottery_constants(slot_activation_coeff);
+
             let (service, storage_relay) = Self::setup_storage().await;
-            let cryptarchia = Self::new_cryptarchia(HeaderId::from([0; 32]));
+            let cryptarchia = Self::new_cryptarchia(HeaderId::from([0; 32]), slot_activation_coeff);
             let proof = Self::make_test_proof();
             let provider = BlockProvider::new(storage_relay.clone());
 
@@ -705,6 +713,7 @@ mod tests {
                 service,
                 storage_relay,
                 cryptarchia,
+                slot_activation_coeff,
                 proof,
                 provider,
             }
@@ -789,13 +798,17 @@ mod tests {
             ids
         }
 
-        async fn create_engine_only_blocks(&mut self, count: usize) -> Vec<HeaderId> {
+        async fn create_engine_only_blocks(
+            &mut self,
+            count: usize,
+            slot_activation_coeff: NonNegativeRatio,
+        ) -> Vec<HeaderId> {
             let blocks = self.create_block_sequence(count, 100);
             let mut ids = Vec::new();
 
             for (i, (block, header_id, prev_header, slot)) in blocks.iter().enumerate() {
                 if i == 0 {
-                    self.cryptarchia = Self::new_cryptarchia(*header_id);
+                    self.cryptarchia = Self::new_cryptarchia(*header_id, slot_activation_coeff);
                 }
 
                 if i > 0 {
@@ -990,10 +1003,13 @@ mod tests {
             .expect("Proof generation should succeed")
         }
 
-        fn new_cryptarchia(lib: HeaderId) -> lb_cryptarchia_engine::Cryptarchia<HeaderId> {
+        fn new_cryptarchia(
+            lib: HeaderId,
+            slot_activation_coeff: NonNegativeRatio,
+        ) -> lb_cryptarchia_engine::Cryptarchia<HeaderId> {
             <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib,
-                Config::new(NonZero::new(1).unwrap(), 1.0),
+                Config::new(NonZero::new(1).unwrap(), slot_activation_coeff),
                 lb_cryptarchia_engine::State::Bootstrapping,
             )
         }

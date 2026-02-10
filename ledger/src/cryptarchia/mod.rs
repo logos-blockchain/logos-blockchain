@@ -12,7 +12,6 @@ use lb_core::{
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Fr, fr_from_bytes};
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_pol::slot_activation_coefficient;
 use lb_utxotree::MerklePath;
 
 use crate::cryptarchia::{
@@ -392,7 +391,7 @@ impl LedgerState {
         let slot: Slot = 0.into();
         let stake_inference = Arc::new(StakeInference::new(
             LEARNING_RATE,
-            slot_activation_coefficient(),
+            config.consensus_config.slot_activation_coeff().as_f64(),
             config.consensus_config.security_param().get().into(),
         ));
         let block_density = BlockDensity::new(stake_inference.period(), slot);
@@ -447,7 +446,7 @@ pub mod tests {
     use lb_cryptarchia_engine::EpochConfig;
     use lb_groth16::Field as _;
     use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkKey};
-    use lb_utils::math::NonNegativeF64;
+    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
 
@@ -590,7 +589,10 @@ pub mod tests {
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(3).unwrap(),
             },
-            consensus_config: lb_cryptarchia_engine::Config::new(NonZero::new(1).unwrap(), 1.0),
+            consensus_config: lb_cryptarchia_engine::Config::new(
+                NonZero::new(1).unwrap(),
+                NonNegativeRatio::new(1, 1).unwrap(),
+            ),
             sdp_config: crate::mantle::sdp::Config {
                 service_params: Arc::new(service_params),
                 service_rewards_params: ServiceRewardsParameters {
@@ -621,7 +623,7 @@ pub mod tests {
             .collect::<UtxoTree>();
         let stake_inference = Arc::new(StakeInference::new(
             LEARNING_RATE,
-            slot_activation_coefficient(),
+            config.consensus_config.slot_activation_coeff().as_f64(),
             config.consensus_config.security_param().get().into(),
         ));
         let block_density_inference = BlockDensity::new(stake_inference.period(), 0.into());

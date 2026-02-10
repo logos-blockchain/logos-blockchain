@@ -252,6 +252,31 @@ impl TryFrom<u64> for F64Ge1 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(::serde::Serialize, ::serde::Deserialize))]
+pub struct NonNegativeRatio {
+    pub numerator: u32,
+    pub denominator: u32,
+}
+
+impl NonNegativeRatio {
+    pub const fn new(numerator: u32, denominator: u32) -> Result<Self, &'static str> {
+        if denominator == 0 {
+            Err("Denominator cannot be zero")
+        } else {
+            Ok(Self {
+                numerator,
+                denominator,
+            })
+        }
+    }
+
+    #[must_use]
+    pub const fn as_f64(&self) -> f64 {
+        self.numerator as f64 / self.denominator as f64
+    }
+}
+
 #[cfg(feature = "serde")]
 mod serde {
     use serde::Deserialize as _;

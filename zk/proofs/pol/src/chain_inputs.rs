@@ -1,7 +1,7 @@
 use lb_groth16::{Fr, Groth16Input, Groth16InputDeser};
 use serde::{Deserialize, Serialize};
 
-use crate::lottery::compute_lottery_values;
+use crate::lottery_constants;
 
 /// Public inputs of the POL cirmcom circuit with circom specific types.
 #[derive(Copy, Clone, Debug)]
@@ -113,7 +113,7 @@ impl From<PolChainInputsData> for PolChainInputs {
     ) -> Self {
         let slot_number = Fr::from(slot_number);
 
-        let (lottery_0, lottery_1) = compute_lottery_values(total_stake);
+        let (lottery_0, lottery_1) = lottery_constants().compute_lottery_values(total_stake);
 
         Self {
             slot_number: Groth16Input::new(slot_number),

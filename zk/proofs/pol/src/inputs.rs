@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     PolChainInputsData, PolWalletInputsData,
     chain_inputs::{PolChainInputs, PolChainInputsJson},
+    lottery_constants,
     wallet_inputs::{PolWalletInputs, PolWalletInputsJson},
 };
 
@@ -148,7 +149,7 @@ impl PolVerifierInput {
         total_stake: u64,
         leader_pk: (Fr, Fr),
     ) -> Self {
-        let (lottery_0, lottery_1) = crate::lottery::compute_lottery_values(total_stake);
+        let (lottery_0, lottery_1) = lottery_constants().compute_lottery_values(total_stake);
         Self {
             entropy_contribution: entropy_contribution.into(),
             slot_number: Fr::from(slot_number).into(),

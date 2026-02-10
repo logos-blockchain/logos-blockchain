@@ -10,9 +10,11 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
+astro-float          = "0.9"
 lb-circuits-prover   = { workspace = true }
 lb-circuits-utils    = { workspace = true }
 lb-groth16           = { features = ["deser"], workspace = true }
+lb-utils             = { workspace = true }
 lb-witness-generator = { workspace = true }
 num-bigint           = "0.4"
 num-traits           = "0.2.19"
@@ -28,6 +30,5 @@ lb-circuits-utils = { workspace = true }
 workspace = true
 
 [features]
-build-verification-key       = []
-default                      = ["build-verification-key"]
-high-active-slot-coefficient = []
+build-verification-key = []
+default                = ["build-verification-key"]

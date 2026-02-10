@@ -58,7 +58,7 @@ mod tests {
 
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
     use lb_cryptarchia_engine::EpochConfig;
-    use lb_utils::math::NonNegativeF64;
+    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
     use crate::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
 
@@ -70,7 +70,10 @@ mod tests {
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
             },
-            consensus_config: lb_cryptarchia_engine::Config::new(NonZero::new(5).unwrap(), 0.5),
+            consensus_config: lb_cryptarchia_engine::Config::new(
+                NonZero::new(5).unwrap(),
+                NonNegativeRatio::new(1, 2).unwrap(),
+            ),
             sdp_config: crate::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(
@@ -116,7 +119,10 @@ mod tests {
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
             },
-            consensus_config: lb_cryptarchia_engine::Config::new(NonZero::new(5).unwrap(), 0.5),
+            consensus_config: lb_cryptarchia_engine::Config::new(
+                NonZero::new(5).unwrap(),
+                NonNegativeRatio::new(1, 2).unwrap(),
+            ),
             sdp_config: crate::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(

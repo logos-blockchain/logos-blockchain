@@ -1,4 +1,6 @@
 use lb_blend_proofs::selection::inputs::VerifyInputs;
+use lb_pol::init_lottery_constants;
+use lb_utils::math::NonNegativeRatio;
 use test_log::test;
 
 use crate::message_blend::provers::{
@@ -12,6 +14,8 @@ use crate::message_blend::provers::{
 
 #[test(tokio::test)]
 async fn proof_generation() {
+    init_lottery_constants(NonNegativeRatio::new(1, 10).unwrap());
+
     let core_quota = 10;
     let (public_inputs, private_inputs) = valid_proof_of_quota_inputs(core_quota);
 
@@ -54,6 +58,8 @@ async fn proof_generation() {
 
 #[test(tokio::test)]
 async fn epoch_rotation() {
+    init_lottery_constants(NonNegativeRatio::new(1, 10).unwrap());
+
     let core_quota = 10;
     let (public_inputs, private_inputs) = valid_proof_of_quota_inputs(core_quota);
 

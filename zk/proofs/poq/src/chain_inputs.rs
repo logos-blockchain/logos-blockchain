@@ -1,5 +1,5 @@
 use lb_groth16::{Fr, Groth16Input, Groth16InputDeser};
-use lb_pol::{P, compute_lottery_values};
+use lb_pol::{P, lottery_constants};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -106,7 +106,7 @@ impl TryFrom<PoQChainInputsData> for PoQChainInputs {
             return Err(PoQInputsFromDataError::SessionGreaterThanP);
         }
 
-        let (lottery_0, lottery_1) = compute_lottery_values(total_stake);
+        let (lottery_0, lottery_1) = lottery_constants().compute_lottery_values(total_stake);
 
         Ok(Self {
             session: Groth16Input::new(session.into()),

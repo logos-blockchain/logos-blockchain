@@ -70,16 +70,12 @@ jobs:
         with:
           tool: cargo-nextest
 
-      # Build release binary for logos-blockchain-node (so runtimes can be reduced) with required test features
+      # Build release binary for logos-blockchain-node (so runtimes can be reduced)
       - name: Build binaries with required features
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
-          # Note: Trying without the `high-active-slot-coefficient` feature flag for now, as locally tests seem to
-          #       converge faster without it, especially with release mode binaries. We can re-enable it later if
-          #       needed.
           args: --locked --release --all
-          # args: --locked --all --features high-active-slot-coefficient
         env:
           CARGO_INCREMENTAL: 0  # Disable incremental compilation
 

@@ -3,9 +3,9 @@ use std::sync::LazyLock;
 use ark_ff::{Field as _, PrimeField as _};
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_pol::lottery_constants;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use lb_utxotree::MerklePath;
-use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -168,18 +168,11 @@ impl LeaderPublic {
 
     #[must_use]
     pub fn check_winning(&self, value: u64, note_id: Fr, sk: Fr) -> bool {
-        let (t0, t1) = self.scaled_phi_approx();
+        let (t0, t1) = lottery_constants().compute_lottery_values(self.total_stake);
         let threshold =
             Self::phi_approx(&Fr::from(value), &(Fr::from(t0), Fr::from(t1))).into_bigint();
         let ticket = Self::ticket(note_id, sk, self.epoch_nonce, Fr::from(self.slot)).into_bigint();
         ticket < threshold
-    }
-
-    fn scaled_phi_approx(&self) -> (BigUint, BigUint) {
-        let t0 = &*lb_pol::T0_CONSTANT / &BigUint::from(self.total_stake);
-        let total_stake_sq = &BigUint::from(self.total_stake) * &BigUint::from(self.total_stake);
-        let t1 = &*lb_pol::P - (&*lb_pol::T1_CONSTANT / &total_stake_sq);
-        (t0, t1)
     }
 
     fn phi_approx(stake: &Fr, approx: &(Fr, Fr)) -> Fr {
@@ -287,6 +280,8 @@ fn ed25519_pk_to_fr_tuple(pk: &Ed25519PublicKey) -> (Fr, Fr) {
 mod tests {
     use std::str::FromStr as _;
 
+    use lb_pol::init_lottery_constants;
+    use lb_utils::math::NonNegativeRatio;
     use rand::RngCore as _;
 
     use super::*;
@@ -376,8 +371,11 @@ mod tests {
 
     #[test]
     fn test_check_winning() {
+        let slot_activation_coeff = NonNegativeRatio::new(1, 10).unwrap();
+        init_lottery_constants(slot_activation_coeff);
+
         // winning rate of all the stake should be ~ active slot coeff
-        check_prob(lb_pol::slot_activation_coefficient(), || {
+        check_prob(slot_activation_coeff.as_f64(), || {
             let (public, note_id, sk) = rand_inputs();
             public.check_winning(1, note_id, sk)
         });

@@ -85,10 +85,9 @@ tower-http = { default-features = false, features = ["cors", "limit", "timeout",
 rand = { workspace = true }
 
 [features]
-config-gen                   = ["lb-key-management-system-service/unsafe"]
-default                      = ["config-gen", "tracing"]
-high-active-slot-coefficient = ["lb-pol/high-active-slot-coefficient"]
-instrumentation              = []
-profiling                    = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
-testing                      = ["lb-key-management-system-service/unsafe"]
-tracing                      = []
+config-gen      = ["lb-key-management-system-service/unsafe"]
+default         = ["config-gen", "tracing"]
+instrumentation = []
+profiling       = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
+testing         = ["lb-key-management-system-service/unsafe"]
+tracing         = []

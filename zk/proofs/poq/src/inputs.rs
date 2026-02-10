@@ -1,5 +1,5 @@
 use lb_groth16::{Field as _, Fr, Groth16Input, Groth16InputDeser};
-use lb_pol::compute_lottery_values;
+use lb_pol::lottery_constants;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -164,7 +164,7 @@ impl PoQVerifierInput {
 
 impl From<PoQVerifierInputData> for PoQVerifierInput {
     fn from(value: PoQVerifierInputData) -> Self {
-        let (lottery_0, lottery_1) = compute_lottery_values(value.total_stake);
+        let (lottery_0, lottery_1) = lottery_constants().compute_lottery_values(value.total_stake);
 
         Self {
             core_quota: Groth16Input::new(value.core_quota.into()),

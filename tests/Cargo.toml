@@ -32,7 +32,6 @@ lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-network-service               = { features = ["libp2p"], workspace = true }
 lb-node                          = { default-features = false, features = ["testing"], workspace = true }
-lb-pol                           = { features = ["high-active-slot-coefficient"], workspace = true }
 lb-tx-service                    = { features = ["libp2p", "mock"], workspace = true }
 lb-utils                         = { workspace = true }
 logos-blockchain-zone-sdk        = { path = "../zone-sdk" }

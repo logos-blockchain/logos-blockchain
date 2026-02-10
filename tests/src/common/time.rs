@@ -4,7 +4,6 @@ use std::{
 };
 
 use lb_node::config::{blend, deployment::DeploymentSettings};
-use lb_pol::slot_activation_coefficient;
 
 /// Calculates the maximum time required for `num_blocks` blocks to be proposed
 /// and fully propagated across the network.
@@ -20,7 +19,7 @@ pub fn max_block_propagation_time(
     let proposal_interval = deployment
         .time
         .slot_duration
-        .div_f64(slot_activation_coefficient());
+        .div_f64(deployment.cryptarchia.slot_activation_coeff.as_f64());
 
     let blend_latency = max_blend_latency_per_block(blend_network_size, &deployment.blend);
 

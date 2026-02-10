@@ -1,25 +1,28 @@
 use std::num::NonZero;
 
+use lb_utils::math::NonNegativeRatio;
+
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Config {
-    // The k parameter in the Common Prefix property.
-    // Blocks deeper than k are generally considered stable and forks deeper than that
-    // trigger the additional fork selection rule, which is however only expected to be used
-    // during bootstrapping.
+    /// The `k` parameter in the Common Prefix property.
+    /// Blocks deeper than k are generally considered stable and forks deeper
+    /// than that trigger the additional fork selection rule, which is
+    /// however only expected to be used during bootstrapping.
     security_param: NonZero<u32>,
-    base_period_length: NonZero<u64>,
+    /// `f`, the rate of occupied slots
+    slot_activation_coeff: NonNegativeRatio,
 }
 
 impl Config {
     #[must_use]
-    pub const fn new(security_param: NonZero<u32>, active_slot_coefficient: f64) -> Self {
+    pub const fn new(
+        security_param: NonZero<u32>,
+        slot_activation_coeff: NonNegativeRatio,
+    ) -> Self {
         Self {
             security_param,
-            base_period_length: Self::compute_base_period_length(
-                security_param,
-                active_slot_coefficient,
-            ),
+            slot_activation_coeff,
         }
     }
 
@@ -29,17 +32,17 @@ impl Config {
     }
 
     #[must_use]
-    const fn compute_base_period_length(
-        security_param: NonZero<u32>,
-        active_slot_coefficient: f64,
-    ) -> NonZero<u64> {
-        NonZero::new(((security_param.get() as f64) / active_slot_coefficient).floor() as u64)
-            .expect("base_period_length with proper configuration should never be zero")
+    pub const fn slot_activation_coeff(&self) -> NonNegativeRatio {
+        self.slot_activation_coeff
     }
 
     #[must_use]
     pub const fn base_period_length(&self) -> NonZero<u64> {
-        self.base_period_length
+        NonZero::new(
+            ((self.security_param.get() as f64) / self.slot_activation_coeff.as_f64()).floor()
+                as u64,
+        )
+        .expect("base_period_length with proper configuration should never be zero")
     }
 
     // return the number of slots required to have great confidence at least k

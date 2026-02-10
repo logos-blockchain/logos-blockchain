@@ -508,6 +508,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "155a5a185e42c6b77ac7b88a15143d930a9e9727a5b7b77eed417404ab15c247"
 
 [[package]]
+name = "astro-float"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96034cc871c05bb65ad7fb77e6a8bebf45d8b055ed0311769e2f83a1d373c1ec"
+dependencies = [
+ "astro-float-macro",
+ "astro-float-num",
+]
+
+[[package]]
+name = "astro-float-macro"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05cfe0f6df5a74fb25b9e713470ad77e091f35f798730673c8772f26ed438963"
+dependencies = [
+ "astro-float-num",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "astro-float-num"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86887daca11d02e0b04f37a9cb81888aae881397fb48ff66494e356aea97554a"
+dependencies = [
+ "itertools 0.10.5",
+ "lazy_static",
+ "rand 0.8.5",
+ "serde",
+]
+
+[[package]]
 name = "async-channel"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1736,7 +1770,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ab67060fc6b8ef687992d439ca0fa36e7ed17e9a0b16b25b601e8757df720de"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.114",
 ]
 
 [[package]]
@@ -4092,7 +4126,9 @@ dependencies = [
  "logos-blockchain-core 0.1.0",
  "logos-blockchain-groth16 0.1.0",
  "logos-blockchain-key-management-system-keys 0.1.0",
+ "logos-blockchain-pol 0.1.0",
  "logos-blockchain-poq 0.1.0",
+ "logos-blockchain-utils 0.1.0",
  "num-bigint",
  "serde",
  "thiserror 1.0.69",
@@ -4127,6 +4163,7 @@ dependencies = [
  "logos-blockchain-core 0.1.0",
  "logos-blockchain-groth16 0.1.0",
  "logos-blockchain-key-management-system-keys 0.1.0",
+ "logos-blockchain-pol 0.1.0",
  "logos-blockchain-utils 0.1.0",
  "multiaddr",
  "rand 0.8.5",
@@ -4324,6 +4361,7 @@ dependencies = [
  "logos-blockchain-groth16 0.1.0",
  "logos-blockchain-key-management-system-service 0.1.0",
  "logos-blockchain-ledger 0.1.0",
+ "logos-blockchain-pol 0.1.0",
  "logos-blockchain-services-utils 0.1.0",
  "logos-blockchain-time-service 0.1.0",
  "logos-blockchain-tx-service 0.1.0",
@@ -4437,6 +4475,7 @@ dependencies = [
  "logos-blockchain-key-management-system-keys 0.1.0",
  "logos-blockchain-ledger 0.1.0",
  "logos-blockchain-network-service 0.1.0",
+ "logos-blockchain-pol 0.1.0",
  "logos-blockchain-services-utils 0.1.0",
  "logos-blockchain-storage-service 0.1.0",
  "logos-blockchain-time-service 0.1.0",
@@ -4984,7 +5023,6 @@ dependencies = [
  "logos-blockchain-cryptarchia-engine 0.1.0",
  "logos-blockchain-groth16 0.1.0",
  "logos-blockchain-key-management-system-keys 0.1.0",
- "logos-blockchain-pol 0.1.0",
  "logos-blockchain-utils 0.1.0",
  "logos-blockchain-utxotree 0.1.0",
  "num-bigint",
@@ -5284,9 +5322,11 @@ dependencies = [
 name = "logos-blockchain-pol"
 version = "0.1.0"
 dependencies = [
+ "astro-float",
  "logos-blockchain-circuits-prover 0.1.0",
  "logos-blockchain-circuits-utils 0.1.0",
  "logos-blockchain-groth16 0.1.0",
+ "logos-blockchain-utils 0.1.0",
  "logos-blockchain-witness-generator 0.1.0",
  "num-bigint",
  "num-traits",
@@ -5320,6 +5360,7 @@ dependencies = [
  "logos-blockchain-circuits-utils 0.1.0",
  "logos-blockchain-groth16 0.1.0",
  "logos-blockchain-pol 0.1.0",
+ "logos-blockchain-utils 0.1.0",
  "logos-blockchain-witness-generator 0.1.0",
  "num-bigint",
  "serde",
@@ -5506,7 +5547,6 @@ dependencies = [
  "logos-blockchain-libp2p 0.1.0",
  "logos-blockchain-network-service 0.1.0",
  "logos-blockchain-node 0.1.0",
- "logos-blockchain-pol 0.1.0",
  "logos-blockchain-tx-service 0.1.0",
  "logos-blockchain-utils 0.1.0",
  "logos-blockchain-zone-sdk",

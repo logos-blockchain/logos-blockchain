@@ -1,6 +1,8 @@
 use core::time::Duration;
 
 use lb_blend_proofs::selection::inputs::VerifyInputs;
+use lb_pol::init_lottery_constants;
+use lb_utils::math::NonNegativeRatio;
 use test_log::test;
 use tokio::time::timeout;
 
@@ -14,6 +16,8 @@ use crate::message_blend::provers::{
 
 #[test(tokio::test)]
 async fn proof_generation() {
+    init_lottery_constants(NonNegativeRatio::new(1, 10).unwrap());
+
     let leadership_quota = 15;
     let (public_inputs, private_inputs) = valid_proof_of_leader_inputs(leadership_quota);
 
@@ -62,6 +66,8 @@ async fn proof_generation() {
 
 #[test(tokio::test)]
 async fn epoch_rotation() {
+    init_lottery_constants(NonNegativeRatio::new(1, 10).unwrap());
+
     let leadership_quota = 15;
     let (public_inputs, private_inputs) = valid_proof_of_leader_inputs(leadership_quota);
 

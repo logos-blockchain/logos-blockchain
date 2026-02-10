@@ -342,7 +342,8 @@ mod pol_tests {
     use lb_ledger::mantle::sdp::{
         Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
     };
-    use lb_utils::math::NonNegativeF64;
+    use lb_pol::init_lottery_constants;
+    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
     use lb_wallet_service::{WalletMsg, WalletServiceSettings, api::WalletServiceData};
     use overwatch::services::{
         ServiceData,
@@ -357,12 +358,14 @@ mod pol_tests {
     /// verified successfully.
     #[tokio::test]
     async fn test_build_proof_for() {
+        let config = test_config();
+        init_lottery_constants(config.consensus_config.slot_activation_coeff());
+
         // Create secret key and leader
         let kms = DummyKms;
         let key_id = KeyId::from("0");
         let sk = UnsecuredZkKey::new(Fr::from(0u64));
         let pk = sk.to_public_key();
-        let config = test_config();
 
         // Create a UTXO
         let utxo = Tx::new(vec![], vec![Note::new(1000u64, pk)])
@@ -451,7 +454,10 @@ mod pol_tests {
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
             },
-            consensus_config: lb_cryptarchia_engine::Config::new(NonZero::new(5).unwrap(), 0.05),
+            consensus_config: lb_cryptarchia_engine::Config::new(
+                NonZero::new(5).unwrap(),
+                NonNegativeRatio::new(1, 10).unwrap(),
+            ),
             sdp_config: SdpConfig {
                 service_params: Arc::new(
                     [(

@@ -220,6 +220,8 @@ mod tests {
 
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::UnsecuredZkKey;
+    use lb_pol::init_lottery_constants;
+    use lb_utils::math::NonNegativeRatio;
     use lb_utxotree::UtxoTree;
     use num_bigint::BigUint;
 
@@ -286,6 +288,8 @@ mod tests {
 
     #[test]
     fn test_block_signature_validation() {
+        init_lottery_constants(NonNegativeRatio::new(1, 10).unwrap());
+
         let parent_block = [0u8; 32].into();
         let slot = Slot::from(42u64);
         let proof_of_leadership = create_proof();
@@ -323,6 +327,8 @@ mod tests {
 
     #[test]
     fn test_block_transaction_count_validation() {
+        init_lottery_constants(NonNegativeRatio::new(1, 10).unwrap());
+
         let parent_block = [0u8; 32].into();
         let slot = Slot::from(42u64);
         let proof_of_leadership = create_proof();

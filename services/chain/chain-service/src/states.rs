@@ -109,7 +109,7 @@ mod tests {
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
     use lb_cryptarchia_engine::State::Bootstrapping;
     use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
-    use lb_utils::math::NonNegativeF64;
+    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
     use super::*;
 
@@ -119,7 +119,10 @@ mod tests {
         let genesis_header_id: HeaderId = [0; 32].into();
         // We don't prune fork stemming from the block before the current tip.
         let security_param: NonZero<u32> = 2.try_into().unwrap();
-        let cryptarchia_engine_config = lb_cryptarchia_engine::Config::new(security_param, 1f64);
+        let cryptarchia_engine_config = lb_cryptarchia_engine::Config::new(
+            security_param,
+            NonNegativeRatio::new(1, 10).unwrap(),
+        );
         let ledger_config = lb_ledger::Config {
             epoch_config: lb_cryptarchia_engine::EpochConfig {
                 epoch_stake_distribution_stabilization: 1.try_into().unwrap(),

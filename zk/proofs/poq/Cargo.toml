@@ -21,6 +21,9 @@ serde_json           = { version = "1.0" }
 thiserror            = "2.0"
 tracing              = { default-features = false, workspace = true }
 
+[dev-dependencies]
+lb-utils = { workspace = true }
+
 [build-dependencies]
 lb-circuits-utils = { workspace = true }
 

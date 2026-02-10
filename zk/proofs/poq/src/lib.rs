@@ -120,6 +120,8 @@ pub fn verify(proof: &PoQProof, public_inputs: PoQVerifierInput) -> Result<bool,
 mod tests {
     use std::str::FromStr as _;
 
+    use lb_pol::init_lottery_constants;
+    use lb_utils::math::NonNegativeRatio;
     use num_bigint::BigUint;
 
     use super::*;
@@ -127,6 +129,8 @@ mod tests {
     #[test]
     #[expect(clippy::too_many_lines, reason = "Test function.")]
     fn test_core_node_full_flow() {
+        init_lottery_constants(NonNegativeRatio::new(1, 10).unwrap());
+
         let blend_data = PoQBlendInputsData {
             core_sk: BigUint::from_str(
                 "6576495977526760241501499963811136028674473098047722736567052812753357178145",
@@ -274,6 +278,8 @@ mod tests {
     #[expect(clippy::too_many_lines, reason = "For the sake of the test let it be")]
     #[test]
     fn test_leader_full_flow() {
+        init_lottery_constants(NonNegativeRatio::new(1, 10).unwrap());
+
         let chain_data = PoQChainInputsData {
             session: 150,
             core_root: BigUint::from_str(
