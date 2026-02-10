@@ -13,7 +13,7 @@ use overwatch::services::{ServiceData, relay::OutboundRelay};
 #[derive(Clone, Debug)]
 pub struct MembershipInfo<NodeId> {
     pub membership: Membership<NodeId>,
-    // Empty if membership is empty.
+    // `None` if membership is empty.
     pub zk: Option<ZkInfo>,
     pub session_number: u64,
 }
@@ -21,19 +21,20 @@ pub struct MembershipInfo<NodeId> {
 impl<NodeId> MembershipInfo<NodeId> {
     #[cfg(test)]
     #[must_use]
-    pub const fn from_membership_and_session_number(
+    pub fn from_membership_and_session_number(
         membership: Membership<NodeId>,
         session_number: u64,
     ) -> Self {
         Self {
             membership,
             session_number,
-            zk: None,
+            zk: Some(ZkInfo::default()),
         }
     }
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(test, derive(Default))]
 /// ZK info for a new session.
 pub struct ZkInfo {
     /// The merkle root of the ZK public keys of all core nodes.
