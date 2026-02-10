@@ -191,19 +191,13 @@ cargo build --release
 
 ### Setting `chain_start_time` timestamp
 
-When running a node locally with a custom config or `config-one-node.yaml`, you may encounter the following error if the 
-configuration's start time is too far in the past:
+When running a node locally, you may encounter the following error if the configuration's start time is too far in the past:
 ```
 ERROR chain_leader: trying to propose a block for slot XXXX but epoch state is not available
 ```
 
-To resolve this, you must manually update the chain_start_time in the config file to a recent timestamp (ideally within 
-a few minutes of your current system time) before launching the node, **or use a command-line flag to start the node** 
-with the chain start time set to the current time:
-
-```bash
-logos-blockchain-node nodes/node/config-one-node.yaml --dev-mode-reset-chain-clock
-```
+To resolve this, you must manually update the `chain_start_time` in the deployment config file to a recent timestamp (ideally within 
+a few minutes of your current system time) before launching the node.
 
 #### Manually set chain start time in config
 
@@ -214,15 +208,13 @@ Bash
 date -u +"%Y-%m-%d %H:%M:%S.000000 +00:00:00"
 ```
 
-Open nodes/node/config-one-node.yaml and locate the time section. Replace the `chain_start_time` value with the 
+Open `nodes/node/standalone-deployment-config.yaml` and locate the `time` section. Replace the `chain_start_time` value with the 
 output from the command above:
 YAML
 
 ```bash
 time:
-  backend:
-    ntp_server: pool.ntp.org:123
-    # ... other settings ...
+  # ... other settings ...
   chain_start_time: 2026-01-07 10:45:00.000000 +00:00:00 # <--- Update this line
 ```
 
@@ -247,7 +239,7 @@ When the node is built locally, it can be run with example config for one node n
 cargo build --all-features --all-targets
 
 # Run node without connecting to any other node.
-target/debug/logos-blockchain-node nodes/node/config-one-node.yaml
+target/debug/logos-blockchain-node nodes/node/standalone-node-config.yaml
 ```
 
 Node stores its state inside the `db` directory. If there are any issues when restarting the node, please try removing 
@@ -255,7 +247,7 @@ Node stores its state inside the `db` directory. If there are any issues when re
 
 **Notes**
 
-- To use an example configuration located at `nodes/node/config.yaml`, first run the test that generates the 
+- To use an example configuration located at `nodes/node/standalone-node-config.yaml`, first run the test that generates the 
 random kzgrs file (`kzgrs_test_params`), leave it in `./tests/kzgrs/kzgrs_test_params` or place it in a convenient 
 location:
 

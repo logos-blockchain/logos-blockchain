@@ -5,7 +5,6 @@ use std::{
 
 use lb_node::config::time::serde::Config;
 use lb_time_service::backends::{NtpTimeBackendSettings, ntp::async_client::NTPClientSettings};
-use time::OffsetDateTime;
 
 pub(crate) const DEFAULT_SLOT_TIME_IN_SECS: u64 = 1;
 pub(crate) const CONSENSUS_SLOT_TIME_VAR: &str = "CONSENSUS_SLOT_TIME";
@@ -23,6 +22,5 @@ pub fn default_time_config() -> GeneralTimeConfig {
             ntp_server: "pool.ntp.org:123".to_owned(),
             update_interval: Duration::from_secs(16),
         },
-        chain_start_time: OffsetDateTime::now_utc(),
     }
 }

@@ -21,6 +21,7 @@ use lb_node::config::{
     time::deployment::Settings as TimeDeploymentSettings,
 };
 use lb_utils::math::NonNegativeF64;
+use time::OffsetDateTime;
 
 use crate::topology::configs::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
@@ -116,6 +117,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
         },
         time: TimeDeploymentSettings {
             slot_duration: Duration::from_secs(slot_duration_in_secs),
+            chain_start_time: OffsetDateTime::now_utc(),
         },
         mempool: MempoolDeploymentSettings {
             pubsub_topic: "mantle_e2e_tests".to_owned(),

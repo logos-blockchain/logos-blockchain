@@ -23,7 +23,7 @@ impl ServiceConfig {
         TimeServiceSettings {
             slot_config: SlotConfig {
                 slot_duration: self.deployment.slot_duration,
-                chain_start_time: self.user.chain_start_time,
+                chain_start_time: self.deployment.chain_start_time,
             },
             epoch_config: cryptarchia_deployment.epoch_config,
             base_period_length: cryptarchia_deployment

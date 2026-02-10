@@ -78,5 +78,6 @@ time:
   slot_duration:
     secs: 5
     nanos: 0
+  chain_start_time: 2026-01-10 07:47:56.891858 +00:00:00
 mempool:
   pubsub_topic: mantle_e2e_tests
