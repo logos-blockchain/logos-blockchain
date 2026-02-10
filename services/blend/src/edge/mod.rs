@@ -60,7 +60,7 @@ use crate::{
         PolInfoProvider as PolInfoProviderTrait,
     },
     kms::PreloadKmsService,
-    membership::{self, MembershipInfo, ZkInfo},
+    membership::{self, MembershipInfo},
     message::{NetworkMessage, ServiceMessage},
     settings::FIRST_STREAM_ITEM_READY_TIMEOUT,
 };
@@ -329,6 +329,7 @@ where
 ///   handler.
 /// - If the initial secret `PoL` info is not yielded immediately by the `PoL`
 ///   info provider.
+#[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
 async fn run<Backend, NodeId, ProofsGenerator, ChainService, PolInfoProvider, RuntimeServiceId>(
     session_stream: UninitializedSessionEventStream<
         impl Stream<Item = MembershipInfo<NodeId>> + Unpin,
@@ -416,7 +417,10 @@ where
 
     let mut current_public_inputs = PoQVerificationInputsMinusSigningKey {
         core: CoreInputs {
-            zk_root: current_membership_info.zk.root,
+            zk_root: current_membership_info
+                .zk
+                .expect("Membership should have ZK info")
+                .root,
             quota: settings.cover.session_core_quota(
                 settings.num_blend_layers,
                 &settings.time,
@@ -477,9 +481,7 @@ fn handle_new_session<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
     MembershipInfo {
         membership: new_membership,
         session_number: new_session_number,
-        zk: ZkInfo {
-            root: new_zk_root, ..
-        },
+        zk,
     }: MembershipInfo<NodeId>,
     settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
     current_epoch_private_info: ProofOfLeadershipQuotaInputs,
@@ -510,7 +512,7 @@ where
                 &settings.time,
                 new_membership.size(),
             ),
-            zk_root: new_zk_root,
+            zk_root: zk.expect("Membership should have ZK info").root,
         },
         ..current_public_inputs
     };

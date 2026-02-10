@@ -568,27 +568,29 @@ where
             move |MembershipInfo {
                       membership,
                       session_number,
-                      zk:
-                          ZkInfo {
-                              core_and_path_selectors,
-                              root: zk_root,
-                          },
-                  }| CoreSessionInfo {
-                public: CoreSessionPublicInfo {
-                    poq_core_public_inputs: CoreInputs {
-                        quota: config.session_core_quota(membership.size()),
-                        zk_root,
+                      zk,
+                  }| {
+                let ZkInfo {
+                    root,
+                    core_and_path_selectors,
+                } = zk.expect("ZK info should be present for the membership set.");
+                CoreSessionInfo {
+                    public: CoreSessionPublicInfo {
+                        poq_core_public_inputs: CoreInputs {
+                            quota: config.session_core_quota(membership.size()),
+                            zk_root: root,
+                        },
+                        membership,
+                        session: session_number,
                     },
-                    membership,
-                    session: session_number,
-                },
-                core_poq_generator: kms_adapter.core_poq_generator(
-                    zk_sk_id.clone(),
-                    Box::new(
-                        core_and_path_selectors
-                            .expect("Core merkle path should be present for a core node."),
+                    core_poq_generator: kms_adapter.core_poq_generator(
+                        zk_sk_id.clone(),
+                        Box::new(
+                            core_and_path_selectors
+                                .expect("Core merkle path should be present for a core node."),
+                        ),
                     ),
-                ),
+                }
             },
         )
     }
