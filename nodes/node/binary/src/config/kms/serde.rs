@@ -1,15 +1,16 @@
 use std::collections::HashMap;
 
 use lb_key_management_system_service::{backend::preload::KeyId, keys::Key};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "testing", derive(serde::Serialize))]
 pub struct Config {
     pub backend: PreloadKmsBackendSettings,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[cfg_attr(feature = "testing", derive(Serialize))]
+#[cfg_attr(feature = "testing", derive(serde::Serialize))]
 pub struct PreloadKmsBackendSettings {
     pub keys: HashMap<KeyId, Key>,
 }

@@ -132,20 +132,13 @@ time:
     update_interval: '16.000000000'
 mempool:
   recovery_path: ./recovery/mempool.json
-tracing:
-  logger: Stdout
-  tracing: None
-  filter: None
-  metrics: None
-  console: None
-  level: DEBUG
 sdp:
   declaration: null
-  wallet_config:
+  wallet:
     max_tx_fee: 18446744073709551615
     funding_pk: ed266e6e887b9b97059dc1aa1b7b2e19b934291753c6336a163fe4ebaa28e717
-http:
-  backend_settings:
+api:
+  backend:
     address: 127.0.0.1:8080
     cors_origins: []
     timeout:
@@ -153,24 +146,7 @@ http:
       nanos: 0
     max_body_size: 10485760
     max_concurrent_requests: 1000
-storage:
-  db_path: ./db
-  read_only: false
-  column_family: blocks
-key_management:
-  keys:
-    2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26: !Zk 6c645cd4636d9c4c36a37a9aeabcaa3300000000000000000000000000000000
-    64249c75c2cb813578b75d05b215fc95f67cea5862fff047228183f22e63460e: !Zk 83c851cf4436e8d2fdac33d56d2b235f66431be97e2a20bf241d431713dc720f
-    ed266e6e887b9b97059dc1aa1b7b2e19b934291753c6336a163fe4ebaa28e717: !Zk 7364705cd4636d9c4c36a37a9aeabcaa00000000000000000000000000000000
-    86c8519f00178e9eb1fe5f4247e4bed77d4c9f6da2fb10e8a1fdd7ba6bc79fa0: !Ed25519 5cd4636d9c4c36a37a9aeabcaa332c3ec796226af0af48a0b2e70167205af749
-wallet:
-  known_keys:
-    2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26: "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26"
-    ed266e6e887b9b97059dc1aa1b7b2e19b934291753c6336a163fe4ebaa28e717: "ed266e6e887b9b97059dc1aa1b7b2e19b934291753c6336a163fe4ebaa28e717"
-  voucher_master_key_id: 2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26
-  recovery_path: ./recovery/wallet.json
-testing_http:
-  backend_settings:
+  testing:
     address: 127.0.0.1:50897
     cors_origins: []
     timeout:
@@ -178,3 +154,28 @@ testing_http:
       nanos: 0
     max_body_size: 10485760
     max_concurrent_requests: 1000
+storage:
+  backend:
+    path: ./db
+    read_only: false
+    column_family: blocks
+kms:
+  backend:
+    keys:
+      2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26: !Zk 6c645cd4636d9c4c36a37a9aeabcaa3300000000000000000000000000000000
+      64249c75c2cb813578b75d05b215fc95f67cea5862fff047228183f22e63460e: !Zk 83c851cf4436e8d2fdac33d56d2b235f66431be97e2a20bf241d431713dc720f
+      ed266e6e887b9b97059dc1aa1b7b2e19b934291753c6336a163fe4ebaa28e717: !Zk 7364705cd4636d9c4c36a37a9aeabcaa00000000000000000000000000000000
+      86c8519f00178e9eb1fe5f4247e4bed77d4c9f6da2fb10e8a1fdd7ba6bc79fa0: !Ed25519 5cd4636d9c4c36a37a9aeabcaa332c3ec796226af0af48a0b2e70167205af749
+wallet:
+  known_keys:
+    2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26: "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26"
+    ed266e6e887b9b97059dc1aa1b7b2e19b934291753c6336a163fe4ebaa28e717: "ed266e6e887b9b97059dc1aa1b7b2e19b934291753c6336a163fe4ebaa28e717"
+  voucher_master_key_id: 2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26
+  recovery_path: ./recovery/wallet.json
+tracing:
+  logger: Stdout
+  tracing: None
+  filter: None
+  metrics: None
+  console: None
+  level: DEBUG
