@@ -178,7 +178,7 @@ Currently the `"profiling"` feature is not supported in Windows builds.
 To build the Logos blockchain Docker image, run:
 
 ```bash
-docker build -t logos-blockchain .
+docker build -t logos-blockchain-node .
 ```
 
 #### Command line
@@ -236,19 +236,7 @@ To run a docker container with the Logos blockchain node you need to mount both 
 the configuration.
 
 ```bash
-docker run -v "/path/to/config.yml" -v "/path/to/global_params:global/params/path" logos-blockchain /etc/logos-blockchain/config.yml
-```
-
-To use an example configuration located at `nodes/node/config.yaml`, first run the test that generates the random
-kzgrs file and then run the docker container with the appropriate config and global params:
-
-```bash
-cargo test --package logos-blockchain-kzgrs-backend write_random_kzgrs_params_to_file -- --ignored
-
-docker run -v "$(pwd)/nodes/node/config.yaml:/etc/logos-blockchain/config.yml" \
-  -v "$(pwd)/logos-blockchain-da/kzgrs-backend/kzgrs_test_params:/app/tests/kzgrs/kzgrs_test_params" \
-  logos-blockchain /etc/logos-blockchain/config.yml
-
+docker run -v "/path/to/config.yml:/config.yml" logos-blockchain-node /config.yml
 ```
 
 #### Running Logos Blockchain Node locally
