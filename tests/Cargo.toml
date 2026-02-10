@@ -20,7 +20,6 @@ derivative                       = "2.2.0"
 futures                          = { default-features = false, version = "0.3" }
 futures-util                     = { default-features = false, version = "0.3.31" }
 hex                              = { default-features = false, version = "0.4.3" }
-lb-api-service                   = { workspace = true }
 lb-blend-proofs                  = { workspace = true }
 lb-blend-service                 = { features = ["libp2p"], workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
