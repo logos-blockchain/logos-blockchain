@@ -10,9 +10,7 @@ pub struct Poseidon2Hasher {
 
 impl Clone for Poseidon2Hasher {
     fn clone(&self) -> Self {
-        Self {
-            state: self.state.to_vec().try_into().unwrap(),
-        }
+        Self { state: self.state }
     }
 }
 

@@ -9,6 +9,7 @@ mod witness;
 
 use std::error::Error;
 
+use ark_serialize::SerializationError;
 pub use blend_inputs::{
     CORE_MERKLE_TREE_HEIGHT, CorePathAndSelectors, PoQBlendInputs, PoQBlendInputsData,
 };
@@ -38,6 +39,8 @@ pub enum ProveError {
     Groth16JsonInput(<Groth16Input as TryFrom<Groth16InputDeser>>::Error),
     #[error(transparent)]
     Groth16JsonProof(<Groth16Proof as TryFrom<Groth16ProofJsonDeser>>::Error),
+    #[error("Serialization error: {0}")]
+    SerializationError(#[from] SerializationError),
 }
 
 ///
@@ -69,7 +72,7 @@ pub fn prove(inputs: PoQWitnessInputs) -> Result<(PoQProof, PoQVerifierInput), P
         serde_json::from_slice(&verifier_inputs).map_err(ProveError::Json)?;
     let proof: Groth16Proof = proof.try_into().map_err(ProveError::Groth16JsonProof)?;
     Ok((
-        CompressedGroth16Proof::try_from(&proof).unwrap(),
+        CompressedGroth16Proof::try_from(&proof)?,
         verifier_inputs
             .try_into()
             .map_err(ProveError::Groth16JsonInput)?,

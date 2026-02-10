@@ -16,7 +16,13 @@ pub mod balance {
 
     impl IntoResponse for WalletBalanceResponseBody {
         fn into_response(self) -> Response {
-            (StatusCode::OK, serde_json::to_string(&self).unwrap()).into_response()
+            match serde_json::to_string(&self) {
+                Ok(json) => (StatusCode::OK, json).into_response(),
+                Err(e) => {
+                    eprintln!("Failed to serialize WalletBalanceResponseBody: {e}");
+                    (StatusCode::INTERNAL_SERVER_ERROR, "Serialization error").into_response()
+                }
+            }
         }
     }
 }
@@ -57,7 +63,13 @@ pub mod transfer_funds {
 
     impl IntoResponse for WalletTransferFundsResponseBody {
         fn into_response(self) -> Response {
-            (StatusCode::CREATED, serde_json::to_string(&self).unwrap()).into_response()
+            match serde_json::to_string(&self) {
+                Ok(json) => (StatusCode::CREATED, json).into_response(),
+                Err(e) => {
+                    eprintln!("Failed to serialize WalletTransferFundsResponseBody: {e}");
+                    (StatusCode::INTERNAL_SERVER_ERROR, "Serialization error").into_response()
+                }
+            }
         }
     }
 }

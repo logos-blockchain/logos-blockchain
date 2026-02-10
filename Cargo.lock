@@ -5287,6 +5287,7 @@ dependencies = [
 name = "logos-blockchain-poc"
 version = "0.1.0"
 dependencies = [
+ "ark-serialize 0.4.2",
  "logos-blockchain-circuits-prover 0.1.0",
  "logos-blockchain-circuits-utils 0.1.0",
  "logos-blockchain-groth16 0.1.0",
@@ -5316,6 +5317,7 @@ dependencies = [
 name = "logos-blockchain-pol"
 version = "0.1.0"
 dependencies = [
+ "ark-serialize 0.4.2",
  "logos-blockchain-circuits-prover 0.1.0",
  "logos-blockchain-circuits-utils 0.1.0",
  "logos-blockchain-groth16 0.1.0",
@@ -5347,6 +5349,7 @@ dependencies = [
 name = "logos-blockchain-poq"
 version = "0.1.0"
 dependencies = [
+ "ark-serialize 0.4.2",
  "logos-blockchain-circuits-prover 0.1.0",
  "logos-blockchain-circuits-utils 0.1.0",
  "logos-blockchain-groth16 0.1.0",

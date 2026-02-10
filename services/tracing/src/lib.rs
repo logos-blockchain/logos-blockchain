@@ -48,11 +48,23 @@ pub struct SharedWriter {
 
 impl Write for SharedWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.inner.lock().unwrap().write(buf)
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                eprintln!("WARNING: Tracing writer mutex poisoned on write, recovering");
+                poisoned.into_inner()
+            })
+            .write(buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.lock().unwrap().flush()
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                eprintln!("WARNING: Tracing writer mutex poisoned on flush, recovering");
+                poisoned.into_inner()
+            })
+            .flush()
     }
 }
 
