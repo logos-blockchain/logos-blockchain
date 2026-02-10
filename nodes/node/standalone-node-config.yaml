@@ -130,7 +130,6 @@ time:
       timeout: '5.000000000'
       listening_interface: 0.0.0.0
     update_interval: '16.000000000'
-  chain_start_time: 2026-01-10 07:47:56.891858 +00:00:00
 mempool:
   recovery_path: ./recovery/mempool.json
 tracing:

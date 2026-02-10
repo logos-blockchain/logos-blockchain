@@ -182,19 +182,13 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run the node binary to check the example config file validity
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: run
-          args: --locked -p logos-blockchain-node -- nodes/node/config.yaml --check-config
-
       - name: Run the node binary with the testing feature to check the one-node config files validity
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: run
           args: >-
             --locked -p logos-blockchain-node --features testing 
-            -- nodes/node/config-one-node.yaml --check-config --deployment nodes/node/one-node-custom-deployment.yaml
+            -- nodes/node/standalone-node-config.yaml --check-config --deployment nodes/node/standalone-deployment-config.yaml
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35
