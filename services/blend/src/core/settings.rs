@@ -120,7 +120,7 @@ pub struct MessageDelayerSettings {
     pub maximum_release_delay_in_rounds: NonZeroU64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct ZkSettings {
     pub secret_key_kms_id: KeyId,
 }

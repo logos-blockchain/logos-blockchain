@@ -10,9 +10,8 @@ use lb_core::{
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_wallet_service::api::{WalletApi, WalletApiError, WalletServiceData};
 use overwatch::services::AsServiceId;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LeaderWalletConfig {
     // Hard cap on the transaction fee for LEADER_CLAIM
     pub max_tx_fee: Value,

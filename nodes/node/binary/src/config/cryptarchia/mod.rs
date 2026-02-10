@@ -89,17 +89,17 @@ impl ServiceConfig {
         };
 
         let chain_service_settings = lb_chain_service::CryptarchiaSettings {
-            bootstrap: self.user.service.bootstrap,
+            bootstrap: self.user.service.bootstrap.into(),
             config: ledger_config.clone(),
             recovery_file: self.user.service.recovery_file,
             starting_state: self.deployment.genesis_state.into(),
         };
         let chain_network_settings = lb_chain_network_service::ChainNetworkSettings {
-            bootstrap: self.user.network.bootstrap,
+            bootstrap: self.user.network.bootstrap.into(),
             network_adapter_settings: LibP2pAdapterSettings {
                 topic: self.deployment.gossipsub_protocol.clone(),
             },
-            sync: self.user.network.sync,
+            sync: self.user.network.sync.into(),
         };
         let chain_leader_settings = lb_chain_leader_service::LeaderSettings {
             blend_broadcast_settings: Libp2pBroadcastSettings {
@@ -107,7 +107,7 @@ impl ServiceConfig {
             },
             config: ledger_config,
             transaction_selector_settings: (),
-            wallet_config: self.user.leader.wallet,
+            wallet_config: self.user.leader.wallet.into(),
         };
         (
             chain_service_settings,
