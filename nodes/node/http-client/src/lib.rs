@@ -16,7 +16,8 @@ use lb_http_api_common::{
         transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
     },
     paths::{
-        BLOCKS_STREAM, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, STORAGE_BLOCK,
+        BLOCKS, BLOCKS_STREAM, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX,
+        STORAGE_BLOCK,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
 };
@@ -219,6 +220,23 @@ impl CommonHttpClient {
             .join(STORAGE_BLOCK.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.post(request_url, &header_id).await
+    }
+
+    /// Get blocks in a slot range.
+    pub async fn get_blocks(
+        &self,
+        base_url: Url,
+        slot_from: u64,
+        slot_to: u64,
+    ) -> Result<Vec<ApiBlock>, Error> {
+        let mut request_url = base_url
+            .join(BLOCKS.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        request_url
+            .query_pairs_mut()
+            .append_pair("slot_from", &slot_from.to_string())
+            .append_pair("slot_to", &slot_to.to_string());
+        self.get::<(), Vec<ApiBlock>>(request_url, None).await
     }
 
     /// Subscribe to the processed blocks stream.
