@@ -5,6 +5,7 @@ pub mod generic_services;
 pub mod init;
 
 use color_eyre::eyre::{Result, eyre};
+use lb_api_service::ApiServiceSettings;
 pub use lb_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackend as BlendBackend,
@@ -39,7 +40,7 @@ use overwatch::{
     overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
 };
 
-pub use crate::config::{HttpArgs, LogArgs, NetworkArgs, UserConfig};
+pub use crate::config::{ApiArgs, LogArgs, NetworkArgs, UserConfig};
 use crate::{
     api::backend::AxumBackend,
     config::{
@@ -110,8 +111,6 @@ type TestingApiService<RuntimeServiceId> =
 
 #[derive_services]
 pub struct LogosBlockchain {
-    #[cfg(feature = "tracing")]
-    tracing: TracingService,
     network: NetworkService,
     blend: BlendService,
     blend_core: BlendCoreService,
@@ -128,8 +127,12 @@ pub struct LogosBlockchain {
     system_sig: SystemSigService,
     key_management: KeyManagementService,
     wallet: WalletService,
+
     #[cfg(feature = "testing")]
     testing_http: TestingApiService<RuntimeServiceId>,
+
+    #[cfg(feature = "tracing")]
+    tracing: TracingService,
 }
 
 pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServiceId>, DynError> {
@@ -168,21 +171,27 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
             blend_core: blend_core_config,
             blend_edge: blend_edge_config,
             block_broadcast: (),
-            #[cfg(feature = "tracing")]
-            tracing: config.user.tracing,
-            http: config.user.http,
             mempool: mempool_service_config,
             cryptarchia: chain_service_config,
             chain_network: chain_network_config,
             cryptarchia_leader: chain_leader_config,
             time: time_service_config,
-            storage: config.user.storage,
+            http: ApiServiceSettings {
+                backend_settings: config.user.api.backend.into(),
+            },
+            storage: config.user.storage.backend.into(),
             system_sig: (),
-            key_management: config.user.key_management,
-            sdp: config.user.sdp,
-            wallet: config.user.wallet,
+            key_management: config.user.kms.backend.into(),
+            sdp: config.user.sdp.into(),
+            wallet: config.user.wallet.into(),
+
+            #[cfg(feature = "tracing")]
+            tracing: config.user.tracing.into(),
+
             #[cfg(feature = "testing")]
-            testing_http: config.user.testing_http,
+            testing_http: ApiServiceSettings {
+                backend_settings: config.user.api.testing.into(),
+            },
         },
         None,
     )

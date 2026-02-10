@@ -25,7 +25,10 @@ use lb_key_management_system_service::keys::secured_key::SecuredKey as _;
 use lb_network_service::backends::libp2p::Libp2pInfo;
 use lb_node::{
     HeaderId, RocksBackendSettings, UserConfig,
-    config::{RunConfig, deployment::DeploymentSettings, mempool::serde::Config as MempoolConfig},
+    config::{
+        ApiConfig, KmsConfig, RunConfig, StorageConfig, deployment::DeploymentSettings,
+        mempool::serde::Config as MempoolConfig,
+    },
 };
 use lb_sdp_service::SdpSettings;
 use lb_tracing::logging::local::FileConfig;
@@ -110,7 +113,7 @@ impl Validator {
             });
         }
 
-        config.user.storage.db_path = dir.path().join("db");
+        config.user.storage.backend.path = dir.path().join("db");
 
         serde_yaml::to_writer(&mut user_config_file, &config.user).unwrap();
         serde_yaml::to_writer(&mut deployment_config_file, &config.deployment).unwrap();
@@ -125,8 +128,8 @@ impl Validator {
             .spawn()
             .unwrap();
         let node = Self {
-            addr: config.user.http.backend_settings.address,
-            testing_http_addr: config.user.testing_http.backend_settings.address,
+            addr: config.user.api.backend.address,
+            testing_http_addr: config.user.api.testing.address,
             child,
             tempdir: dir,
             config,
@@ -337,18 +340,28 @@ pub fn create_validator_config(
         mempool: MempoolConfig {
             recovery_path: "./recovery/mempool.json".into(),
         },
-        tracing: config.tracing_config.tracing_settings,
-        http: lb_api_service::ApiServiceSettings {
-            backend_settings: AxumBackendSettings {
+        tracing: config.tracing_config.tracing_settings.into(),
+        api: ApiConfig {
+            backend: AxumBackendSettings {
                 address: config.api_config.address,
                 max_concurrent_requests: 1000,
                 ..Default::default()
-            },
+            }
+            .into(),
+            testing: AxumBackendSettings {
+                address: testing_http_address,
+                max_concurrent_requests: 1000,
+                ..Default::default()
+            }
+            .into(),
         },
-        storage: RocksBackendSettings {
-            db_path: "./db".into(),
-            read_only: false,
-            column_family: Some("blocks".into()),
+        storage: StorageConfig {
+            backend: RocksBackendSettings {
+                db_path: "./db".into(),
+                read_only: false,
+                column_family: Some("blocks".into()),
+            }
+            .into(),
         },
         sdp: SdpSettings {
             declaration: None,
@@ -356,7 +369,8 @@ pub fn create_validator_config(
                 max_tx_fee: Value::MAX,
                 funding_pk: config.consensus_config.funding_sk.as_public_key(),
             },
-        },
+        }
+        .into(),
         wallet: WalletServiceSettings {
             known_keys: HashMap::from_iter([
                 (
@@ -372,14 +386,10 @@ pub fn create_validator_config(
                 &config.consensus_config.known_key.clone().into(),
             ),
             recovery_path: "./recovery/wallet.json".into(),
-        },
-        key_management: config.kms_config,
-        testing_http: lb_api_service::ApiServiceSettings {
-            backend_settings: AxumBackendSettings {
-                address: testing_http_address,
-                max_concurrent_requests: 1000,
-                ..Default::default()
-            },
+        }
+        .into(),
+        kms: KmsConfig {
+            backend: config.kms_config.into(),
         },
     };
 

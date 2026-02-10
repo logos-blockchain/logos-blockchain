@@ -1,6 +1,7 @@
 use std::{fs, path::PathBuf, sync::Arc};
 
 use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
+use lb_node::config::TracingConfig;
 use lb_tests::nodes::validator::create_validator_config;
 use lb_tracing_service::TracingSettings;
 use reqwest::header::CONTENT_TYPE;
@@ -19,7 +20,7 @@ pub struct CfgSyncConfig {
     pub timeout: u64,
 
     // Tracing params
-    pub tracing_settings: TracingSettings,
+    pub tracing_settings: TracingConfig,
 }
 
 impl CfgSyncConfig {
@@ -32,7 +33,7 @@ impl CfgSyncConfig {
 
     #[must_use]
     pub fn to_tracing_settings(&self) -> TracingSettings {
-        self.tracing_settings.clone()
+        self.tracing_settings.clone().into()
     }
 }
 

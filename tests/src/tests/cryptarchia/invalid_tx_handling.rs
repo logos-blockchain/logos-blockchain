@@ -26,14 +26,9 @@ async fn invalid_transactions_are_handled() {
     let topology = Topology::spawn(TopologyConfig::two_validators()).await;
     let validator = &topology.validators()[0];
 
-    let validator_url = Url::parse(
-        format!(
-            "http://{}",
-            validator.config().user.http.backend_settings.address
-        )
-        .as_str(),
-    )
-    .unwrap();
+    let validator_url =
+        Url::parse(format!("http://{}", validator.config().user.api.backend.address).as_str())
+            .unwrap();
 
     let client = CommonHttpClient::new(None);
 

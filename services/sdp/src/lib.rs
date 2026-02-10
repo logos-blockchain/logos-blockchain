@@ -56,7 +56,7 @@ pub struct BlockEvent {
 
 pub type BlockUpdateStream = Pin<Box<dyn Stream<Item = BlockEvent> + Send + Sync + Unpin>>;
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct SdpSettings {
     /// Declaration info for this node (set after posting declaration and
     /// restarting).

@@ -37,11 +37,8 @@ impl Faucet {
                 "Faucet config contains no usable keys (only master key found or empty)".to_owned()
             })?;
 
-        let base_url = Url::parse(&format!(
-            "http://{}",
-            user_config.http.backend_settings.address
-        ))
-        .map_err(|e| format!("Invalid node address in config: {e}"))?;
+        let base_url = Url::parse(&format!("http://{}", user_config.api.backend.address))
+            .map_err(|e| format!("Invalid node address in config: {e}"))?;
 
         let http_client = CommonHttpClient::new(None);
 

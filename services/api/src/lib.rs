@@ -53,7 +53,7 @@ pub trait Backend<RuntimeServiceId> {
     async fn serve(self, handle: OverwatchHandle<RuntimeServiceId>) -> Result<(), Self::Error>;
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ApiServiceSettings<S> {
     pub backend_settings: S,
 }

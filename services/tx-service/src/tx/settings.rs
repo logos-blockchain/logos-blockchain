@@ -1,10 +1,9 @@
 use std::path::PathBuf;
 
 use lb_services_utils::overwatch::recovery::backends::FileBackendSettings;
-use serde::{Deserialize, Serialize};
 
 /// Settings for the tx mempool service.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default)]
 pub struct TxMempoolSettings<PoolSettings, NetworkAdapterSettings> {
     /// The mempool settings.
     pub pool: PoolSettings,

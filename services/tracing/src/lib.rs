@@ -122,14 +122,13 @@ pub enum ConsoleLayer {
     None,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct TracingSettings {
     pub logger: LoggerLayer,
     pub tracing: TracingLayer,
     pub filter: FilterLayer,
     pub metrics: MetricsLayer,
     pub console: ConsoleLayer,
-    #[serde(with = "serde_level")]
     pub level: Level,
 }
 
@@ -298,31 +297,5 @@ where
         // pending logs.
         std::future::pending::<()>().await;
         Ok(())
-    }
-}
-
-mod serde_level {
-    use serde::{Deserialize as _, Deserializer, Serialize as _, Serializer, de::Error as _};
-
-    use super::Level;
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Level, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let v = <String>::deserialize(deserializer)?;
-        v.parse()
-            .map_err(|e| D::Error::custom(format!("invalid log level {e}")))
-    }
-
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "Signature must match serde requirement."
-    )]
-    pub fn serialize<S>(value: &Level, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        value.as_str().serialize(serializer)
     }
 }

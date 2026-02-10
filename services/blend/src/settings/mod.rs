@@ -1,7 +1,5 @@
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
-
 use crate::{
     core::settings::{SchedulerSettings, StartingBlendConfig as CoreConfig},
     edge::settings::StartingBlendConfig as EdgeConfig,
@@ -18,7 +16,7 @@ pub use self::timing::TimingSettings;
 
 pub(crate) const FIRST_STREAM_ITEM_READY_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct Settings<CoreBackendSettings, EdgeBackendSettings> {
     pub common: CommonSettings,
     pub core: CoreSettings<CoreBackendSettings>,
