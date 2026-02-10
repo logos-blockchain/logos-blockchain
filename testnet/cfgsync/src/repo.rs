@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use lb_node::config::deployment::{DeploymentSettings, WellKnownDeployment};
 use lb_tests::topology::configs::GeneralConfig;
 use lb_tracing_service::TracingSettings;
 use tokio::{sync::oneshot::Sender, time::timeout};
@@ -15,13 +16,14 @@ use crate::{
 };
 
 pub enum RepoResponse {
-    Config(Box<GeneralConfig>),
+    Config(Box<(GeneralConfig, DeploymentSettings)>),
     Timeout,
 }
 
 pub struct ConfigRepo {
     waiting_hosts: Mutex<HashMap<Host, Sender<RepoResponse>>>,
     generated_configs: Mutex<HashMap<Host, GeneralConfig>>,
+    deployment_settings: Mutex<Option<DeploymentSettings>>,
     n_hosts: usize,
     tracing_settings: TracingSettings,
     timeout_duration: Duration,
@@ -49,6 +51,7 @@ impl ConfigRepo {
         let repo = Arc::new(Self {
             waiting_hosts: Mutex::new(HashMap::new()),
             generated_configs: Mutex::new(HashMap::new()),
+            deployment_settings: Mutex::new(None),
             n_hosts,
             tracing_settings,
             timeout_duration,
@@ -66,6 +69,10 @@ impl ConfigRepo {
     pub fn register(&self, host: Host, reply_tx: Sender<RepoResponse>) {
         let mut waiting_hosts = self.waiting_hosts.lock().unwrap();
         waiting_hosts.insert(host, reply_tx);
+    }
+
+    pub fn deployment_settings(&self) -> Option<DeploymentSettings> {
+        self.deployment_settings.lock().unwrap().clone()
     }
 
     /// Generates a new node config for host based on the initial nodes config.
@@ -102,7 +109,12 @@ impl ConfigRepo {
             let mut waiting_hosts = self.waiting_hosts.lock().unwrap();
             let hosts = waiting_hosts.keys().cloned().collect();
 
-            let configs = create_node_configs(&self.tracing_settings, hosts);
+            let (configs, genesis_tx) = create_node_configs(&self.tracing_settings, hosts);
+            let devnet_settings = {
+                let mut default_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
+                default_settings.cryptarchia.genesis_state = genesis_tx;
+                default_settings
+            };
 
             {
                 let mut storage = self.generated_configs.lock().unwrap();
@@ -111,7 +123,10 @@ impl ConfigRepo {
 
             for (host, sender) in waiting_hosts.drain() {
                 let config = configs.get(&host).expect("host should have a config");
-                drop(sender.send(RepoResponse::Config(Box::new(config.to_owned()))));
+                drop(sender.send(RepoResponse::Config(Box::new((
+                    config.to_owned(),
+                    devnet_settings.clone(),
+                )))));
             }
         } else {
             println!("Timeout: Not all hosts announced within the time limit");

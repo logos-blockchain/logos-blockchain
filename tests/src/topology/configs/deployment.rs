@@ -7,7 +7,7 @@ use lb_blend_service::{
     core::settings::{CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings},
     settings::TimingSettings,
 };
-use lb_core::sdp::ServiceType;
+use lb_core::{mantle::genesis_tx::GenesisTx, sdp::ServiceType};
 use lb_libp2p::protocol_name::StreamProtocol;
 use lb_node::config::{
     blend::deployment::{
@@ -25,7 +25,7 @@ use lb_utils::math::NonNegativeF64;
 use crate::topology::configs::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
 #[must_use]
-pub fn default_e2e_deployment_settings() -> DeploymentSettings {
+pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> DeploymentSettings {
     let slot_duration_in_secs = std::env::var(CONSENSUS_SLOT_TIME_VAR)
         .map(|s| s.parse::<u64>().unwrap())
         .unwrap_or(DEFAULT_SLOT_TIME_IN_SECS);
@@ -112,6 +112,7 @@ pub fn default_e2e_deployment_settings() -> DeploymentSettings {
                     timestamp: 0,
                 },
             },
+            genesis_state: genesis_tx,
         },
         time: TimeDeploymentSettings {
             slot_duration: Duration::from_secs(slot_duration_in_secs),

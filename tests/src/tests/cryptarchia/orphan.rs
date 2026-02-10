@@ -9,7 +9,7 @@ use logos_blockchain_tests::{
     nodes::validator::{Validator, create_validator_config},
     topology::configs::{
         create_general_configs_with_blend_core_subset,
-        deployment::default_e2e_deployment_settings,
+        deployment::e2e_deployment_settings_with_genesis_tx,
         network::{Libp2pNetworkLayout, NetworkParams},
     },
 };
@@ -22,7 +22,7 @@ async fn test_orphan_handling() {
     let n_initial_validators = 2;
     let min_height = 5;
 
-    let general_configs = create_general_configs_with_blend_core_subset(
+    let (general_configs, genesis_tx) = create_general_configs_with_blend_core_subset(
         n_validators,
         n_initial_validators,
         &NetworkParams {
@@ -32,7 +32,10 @@ async fn test_orphan_handling() {
 
     let mut validators = vec![];
     for config in general_configs.iter().take(n_initial_validators) {
-        let config = create_validator_config(config.clone(), default_e2e_deployment_settings());
+        let config = create_validator_config(
+            config.clone(),
+            e2e_deployment_settings_with_genesis_tx(genesis_tx.clone()),
+        );
         validators.push(Validator::spawn(config).await.unwrap());
     }
     println!("Initial validators started: {}", validators.len());
@@ -57,7 +60,7 @@ async fn test_orphan_handling() {
     println!("Starting 3rd node ...");
     let config = create_validator_config(
         general_configs[n_initial_validators].clone(),
-        default_e2e_deployment_settings(),
+        e2e_deployment_settings_with_genesis_tx(genesis_tx),
     );
     let behind_node = [Validator::spawn(config).await.unwrap()];
 

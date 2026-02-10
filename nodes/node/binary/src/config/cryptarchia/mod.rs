@@ -92,7 +92,7 @@ impl ServiceConfig {
             bootstrap: self.user.service.bootstrap,
             config: ledger_config.clone(),
             recovery_file: self.user.service.recovery_file,
-            starting_state: self.user.service.starting_state,
+            starting_state: self.deployment.genesis_state.into(),
         };
         let chain_network_settings = lb_chain_network_service::ChainNetworkSettings {
             bootstrap: self.user.network.bootstrap,

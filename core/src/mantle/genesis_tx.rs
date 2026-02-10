@@ -64,6 +64,21 @@ impl GenesisTx {
 
         Ok(Self(signed_mantle_tx))
     }
+
+    #[cfg(feature = "mock")]
+    #[must_use]
+    pub fn new_mocked() -> Self {
+        use lb_groth16::CompressedGroth16Proof;
+        use lb_key_management_system_keys::keys::ZkSignature;
+
+        use crate::mantle::tx_builder::MantleTxBuilder;
+
+        Self(SignedMantleTx::new_unverified(
+            MantleTxBuilder::new().build(),
+            vec![],
+            ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0; _])),
+        ))
+    }
 }
 
 fn valid_cryptarchia_inscription(inscription: &InscriptionOp) -> Result<(), Error> {

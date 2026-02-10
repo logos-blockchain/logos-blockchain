@@ -9,7 +9,7 @@ use configs::{
     tracing::create_tracing_configs,
 };
 use lb_core::{
-    mantle::{GenesisTx as _, Note, NoteId},
+    mantle::{GenesisTx as _, Note, NoteId, genesis_tx::GenesisTx},
     sdp::{Locator, ServiceType},
 };
 use lb_key_management_system_service::{backend::preload::PreloadKMSBackendSettings, keys::ZkKey};
@@ -24,7 +24,7 @@ use crate::{
         api::create_api_configs,
         blend::{GeneralBlendConfig, create_blend_configs},
         consensus::{SHORT_PROLONGED_BOOTSTRAP_PERIOD, create_consensus_configs},
-        deployment::default_e2e_deployment_settings,
+        deployment::e2e_deployment_settings_with_genesis_tx,
         time::default_time_config,
     },
 };
@@ -93,7 +93,7 @@ impl Topology {
             blend_ports.push(get_available_udp_port().unwrap());
         }
 
-        let mut consensus_configs =
+        let (consensus_configs, genesis_tx) =
             create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
         let network_configs = create_network_configs(&ids, &config.network_params);
         let blend_configs = create_blend_configs(&ids, &blend_ports);
@@ -102,11 +102,7 @@ impl Topology {
         let time_config = default_time_config();
 
         // Setup genesis TX with Blend service declarations.
-        let base_ledger_tx = consensus_configs[0]
-            .genesis_tx()
-            .mantle_tx()
-            .ledger_tx
-            .clone();
+        let base_ledger_tx = genesis_tx.mantle_tx().ledger_tx.clone();
         let mut ledger_tx = base_ledger_tx.clone();
         let base_outputs = ledger_tx.outputs.len();
         for note_spec in &config.extra_genesis_notes {
@@ -127,25 +123,18 @@ impl Topology {
             .collect();
 
         // Update genesis TX to contain Blend providers.
-        let genesis_tx = create_genesis_tx_with_declarations(ledger_tx, providers);
-        let updated_ledger_tx = genesis_tx.mantle_tx().ledger_tx.clone();
+        let genesis_tx_with_declarations =
+            create_genesis_tx_with_declarations(ledger_tx, providers);
+        let updated_ledger_tx = genesis_tx_with_declarations.mantle_tx().ledger_tx.clone();
         let injected_utxos: Vec<_> = updated_ledger_tx
             .utxos()
             .skip(base_outputs)
             .collect::<Vec<_>>();
 
-        for c in &mut consensus_configs {
-            c.utxos.extend(injected_utxos.iter().copied());
-        }
-
         let injected_infos = injected_utxos
             .iter()
             .map(|utxo| InjectedGenesisNote { note_id: utxo.id() })
             .collect::<Vec<_>>();
-
-        for c in &mut consensus_configs {
-            c.override_genesis_tx(genesis_tx.clone());
-        }
 
         // Set Blend keys in KMS of each node config.
         let kms_configs = create_kms_configs(&blend_configs, &consensus_configs);
@@ -166,7 +155,7 @@ impl Topology {
 
         let general_configs = node_configs.clone();
 
-        let validators = Self::spawn_validators(node_configs).await;
+        let validators = Self::spawn_validators(node_configs, genesis_tx_with_declarations).await;
 
         Self {
             validators,
@@ -175,10 +164,13 @@ impl Topology {
         }
     }
 
-    async fn spawn_validators(config: Vec<GeneralConfig>) -> Vec<Validator> {
+    async fn spawn_validators(config: Vec<GeneralConfig>, genesis_tx: GenesisTx) -> Vec<Validator> {
         let mut validators = Vec::new();
         for general_config in config {
-            let config = create_validator_config(general_config, default_e2e_deployment_settings());
+            let config = create_validator_config(
+                general_config,
+                e2e_deployment_settings_with_genesis_tx(genesis_tx.clone()),
+            );
             validators.push(Validator::spawn(config).await.unwrap());
         }
         validators

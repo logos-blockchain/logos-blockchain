@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use lb_chain_leader_service::LeaderWalletConfig;
 use lb_chain_network_service::SyncConfig;
-use lb_chain_service::StartingState;
 use lb_libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +14,6 @@ pub struct Config {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServiceConfig {
-    pub starting_state: StartingState,
     pub recovery_file: PathBuf,
     pub bootstrap: lb_chain_service::BootstrapConfig,
 }

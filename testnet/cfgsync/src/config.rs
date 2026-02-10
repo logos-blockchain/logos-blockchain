@@ -1,7 +1,7 @@
 use std::{collections::HashMap, net::Ipv4Addr, str::FromStr as _};
 
 use lb_core::{
-    mantle::GenesisTx as _,
+    mantle::{GenesisTx as _, genesis_tx::GenesisTx},
     sdp::{Locator, ServiceType},
 };
 use lb_libp2p::{Multiaddr, multiaddr};
@@ -29,13 +29,14 @@ use crate::Host;
 pub fn create_node_configs(
     tracing_settings: &TracingSettings,
     hosts: Vec<Host>,
-) -> HashMap<Host, GeneralConfig> {
+) -> (HashMap<Host, GeneralConfig>, GenesisTx) {
     let mut ids = vec![[0; 32]; hosts.len()];
     for id in &mut ids {
         thread_rng().fill(id);
     }
 
-    let mut consensus_configs = create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+    let (consensus_configs, genesis_tx) =
+        create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
     let network_configs = create_network_configs(&ids, &NetworkParams::default());
     let blend_configs = create_blend_configs(
         &ids,
@@ -59,15 +60,8 @@ pub fn create_node_configs(
     let providers = create_providers(&hosts, &consensus_configs, &blend_configs);
 
     // Update genesis TX to contain Blend providers.
-    let ledger_tx = consensus_configs[0]
-        .genesis_tx()
-        .mantle_tx()
-        .ledger_tx
-        .clone();
-    let genesis_tx = create_genesis_tx_with_declarations(ledger_tx, providers);
-    for c in &mut consensus_configs {
-        c.override_genesis_tx(genesis_tx.clone());
-    }
+    let ledger_tx = genesis_tx.mantle_tx().ledger_tx.clone();
+    let genesis_tx_with_declarations = create_genesis_tx_with_declarations(ledger_tx, providers);
 
     // Set Blend keys in KMS of each node config.
     let kms_configs = create_kms_configs(&blend_configs, &consensus_configs);
@@ -113,7 +107,7 @@ pub fn create_node_configs(
         );
     }
 
-    configured_hosts
+    (configured_hosts, genesis_tx_with_declarations)
 }
 
 #[must_use]
@@ -126,11 +120,9 @@ pub fn create_node_config_from_template(
     thread_rng().fill(&mut id);
     let ids = vec![id];
 
-    let mut consensus_configs = create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+    let (consensus_configs, _) = create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
     let network_configs = create_network_configs(&ids, &NetworkParams::default());
     let blend_configs = create_blend_configs(&ids, &[new_host.blend_port]);
-
-    consensus_configs[0].override_genesis_tx(template.consensus_config.genesis_tx().clone());
 
     let kms_configs = create_kms_configs(&blend_configs, &consensus_configs);
 
@@ -237,7 +229,6 @@ mod cfgsync_tests {
     use std::{net::Ipv4Addr, str::FromStr as _};
 
     use lb_libp2p::{Multiaddr, Protocol};
-    use lb_node::Transaction as _;
     use lb_tracing_service::{
         ConsoleLayer, FilterLayer, LoggerLayer, MetricsLayer, TracingLayer, TracingSettings,
     };
@@ -268,7 +259,7 @@ mod cfgsync_tests {
             })
             .collect();
 
-        let configs = create_node_configs(
+        let (configs, _) = create_node_configs(
             &TracingSettings {
                 logger: LoggerLayer::None,
                 tracing: TracingLayer::None,
@@ -305,7 +296,7 @@ mod cfgsync_tests {
             identifier: "init".into(),
             ..Default::default()
         };
-        let init_configs = create_node_configs(&tracing, vec![init_host.clone()]);
+        let (init_configs, _) = create_node_configs(&tracing, vec![init_host.clone()]);
         let template = init_configs.get(&init_host).unwrap();
 
         let new_host = Host {
@@ -317,12 +308,6 @@ mod cfgsync_tests {
         };
 
         let appended_config = create_node_config_from_template(&tracing, &new_host, template);
-
-        assert_eq!(
-            appended_config.consensus_config.genesis_tx().hash(),
-            template.consensus_config.genesis_tx().hash(),
-            "Appended node MUST have the same Genesis TX hash to join the same chain"
-        );
 
         assert_eq!(
             appended_config.network_config.backend.initial_peers,

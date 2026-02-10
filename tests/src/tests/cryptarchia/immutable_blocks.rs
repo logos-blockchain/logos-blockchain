@@ -4,7 +4,9 @@ use futures_util::StreamExt as _;
 use logos_blockchain_tests::{
     common::time::max_block_propagation_time,
     nodes::{Validator, create_validator_config},
-    topology::configs::{create_general_configs, deployment::default_e2e_deployment_settings},
+    topology::configs::{
+        create_general_configs, deployment::e2e_deployment_settings_with_genesis_tx,
+    },
 };
 use serial_test::serial;
 
@@ -13,10 +15,12 @@ const TARGET_IMMUTABLE_BLOCK_COUNT: u32 = 5;
 #[tokio::test]
 #[serial]
 async fn immutable_blocks_two_nodes() {
-    let configs = create_general_configs(2)
+    let (configs, genesis_tx) = create_general_configs(2);
+    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
+    let configs = configs
         .into_iter()
         .map(|c| {
-            let mut config = create_validator_config(c, default_e2e_deployment_settings());
+            let mut config = create_validator_config(c, deployment_settings.clone());
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
                 .user
@@ -30,12 +34,12 @@ async fn immutable_blocks_two_nodes() {
         })
         .collect::<Vec<_>>();
 
-    let deployment = &configs[0].deployment;
-    let blocks_to_wait = deployment.cryptarchia.security_param.get() + TARGET_IMMUTABLE_BLOCK_COUNT;
+    let blocks_to_wait =
+        deployment_settings.cryptarchia.security_param.get() + TARGET_IMMUTABLE_BLOCK_COUNT;
     let timeout = max_block_propagation_time(
         blocks_to_wait,
         configs.len().try_into().unwrap(),
-        deployment,
+        &deployment_settings,
         2.0,
     );
 

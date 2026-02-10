@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use lb_core::{
     block::BlockNumber,
+    mantle::genesis_tx::GenesisTx,
     sdp::{MinStake, ServiceType},
 };
 use lb_cryptarchia_engine::{Config as ConsensusConfig, EpochConfig};
@@ -17,6 +18,7 @@ pub struct Settings {
     pub security_param: NonZeroU32,
     pub sdp_config: SdpConfig,
     pub gossipsub_protocol: String,
+    pub genesis_state: GenesisTx,
 }
 
 impl Settings {
@@ -79,5 +81,7 @@ fn devnet_settings() -> Settings {
             .into(),
         },
         security_param: 20.try_into().unwrap(),
+        // TODO: Change this once the devnet genesis state is finalized.
+        genesis_state: GenesisTx::new_mocked(),
     }
 }
