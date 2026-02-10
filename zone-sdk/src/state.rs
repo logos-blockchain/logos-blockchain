@@ -80,10 +80,9 @@ impl TxState {
 
         // When lib advances: finalize txs and prune
         if lib != self.current_lib {
-            // Finalize txs in all blocks from old lib to new lib (inclusive)
-            let mut block = lib;
-
-            loop {
+            // Finalize txs in all blocks from new lib back to old lib (inclusive)
+            let mut block_opt = Some(lib);
+            while let Some(block) = block_opt {
                 let block_safe = self
                     .block_states
                     .get(&block)
@@ -99,21 +98,14 @@ impl TxState {
                     break;
                 }
 
-                block = self
-                    .parent_map
-                    .get(&block)
-                    .copied()
-                    .expect("parent_map should contain block while finalizing LIB advance");
+                block_opt = self.parent_map.get(&block).copied();
             }
 
-            // Prune ancestors of new lib (up to and including old lib)
+            // Prune ancestors of new lib (but not lib itself)
             let mut prune_cursor = self.parent_map.get(&lib).copied();
             while let Some(b) = prune_cursor {
                 self.block_states.remove(&b);
                 prune_cursor = self.parent_map.remove(&b);
-                if b == self.current_lib {
-                    break;
-                }
             }
 
             self.prune_orphans(lib);
