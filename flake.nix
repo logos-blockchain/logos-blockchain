@@ -53,7 +53,8 @@
 
           commonArgs = {
             inherit src;
-            buildInputs = [ pkgs.openssl ];
+            buildInputs = [ pkgs.openssl ]
+              ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.libiconv ];
             nativeBuildInputs = [
               pkgs.pkg-config
               pkgs.clang
@@ -61,6 +62,8 @@
             ];
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
             LOGOS_BLOCKCHAIN_CIRCUITS = logos-blockchain-circuits.packages.${system}.default;
+          } // pkgs.lib.optionalAttrs pkgs.stdenv.isDarwin {
+            RUSTFLAGS = "-L ${pkgs.libiconv}/lib";
           };
 
           logosBlockchainDependencies = craneLib.buildDepsOnly (
