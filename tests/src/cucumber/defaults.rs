@@ -13,6 +13,14 @@ const CONTAINER_NODE_LOG_DIR: &str = "/tmp/node_logs";
 
 const TARGET: &str = "cucumber_defaults";
 
+const LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS: &str = "LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS";
+const LOGOS_BLOCKCHAIN_TESTS_TRACING: &str = "LOGOS_BLOCKCHAIN_TESTS_TRACING";
+const CUCUMBER_LOG_LEVEL: &str = "CUCUMBER_LOG_LEVEL";
+const LOGOS_BLOCKCHAIN_LOG_LEVEL: &str = "LOGOS_BLOCKCHAIN_LOG_LEVEL";
+const RUST_LOG: &str = "RUST_LOG";
+const LOGOS_BLOCKCHAIN_LOG_DIR: &str = "LOGOS_BLOCKCHAIN_LOG_DIR";
+const CUCUMBER_RETRIES: &str = "CUCUMBER_RETRIES";
+
 fn set_default_env(key: &str, value: &str) {
     if std::env::var_os(key).is_none() {
         // SAFETY: Used as an early-run default. Prefer setting env vars in the
@@ -24,28 +32,28 @@ fn set_default_env(key: &str, value: &str) {
 }
 
 pub fn init_logging_defaults() {
-    set_default_env("LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS", "true");
-    set_default_env("LOGOS_BLOCKCHAIN_TESTS_TRACING", "true");
+    set_default_env(LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS, "true");
+    set_default_env(LOGOS_BLOCKCHAIN_TESTS_TRACING, "true");
 
-    std::env::var_os("CUCUMBER_LOG_LEVEL").map_or_else(
+    std::env::var_os(CUCUMBER_LOG_LEVEL).map_or_else(
         || {
-            set_default_env("LOGOS_BLOCKCHAIN_LOG_LEVEL", "info");
-            set_default_env("RUST_LOG", "info");
+            set_default_env(LOGOS_BLOCKCHAIN_LOG_LEVEL, "info");
+            set_default_env(RUST_LOG, "info");
         },
         |log_level| {
             let log_level = log_level.to_string_lossy().to_lowercase();
             match log_level.as_str() {
                 "trace" | "debug" | "info" | "warn" | "error" => {
-                    set_default_env("LOGOS_BLOCKCHAIN_LOG_LEVEL", log_level.as_str());
-                    set_default_env("RUST_LOG", log_level.as_str());
+                    set_default_env(LOGOS_BLOCKCHAIN_LOG_LEVEL, log_level.as_str());
+                    set_default_env(RUST_LOG, log_level.as_str());
                 }
                 other => {
                     warn!(
                         target: TARGET,
-                        "Invalid log level '{other}' in CUCUMBER_LOG_LEVEL; using 'info' level"
+                        "Invalid log level '{other}' in {CUCUMBER_LOG_LEVEL}; using 'info' level"
                     );
-                    set_default_env("LOGOS_BLOCKCHAIN_LOG_LEVEL", "info");
-                    set_default_env("RUST_LOG", "info");
+                    set_default_env(LOGOS_BLOCKCHAIN_LOG_LEVEL, "info");
+                    set_default_env(RUST_LOG, "info");
                 }
             }
         },
@@ -56,10 +64,10 @@ pub fn init_node_log_dir_defaults(deployer: &DeployerKind, log_dir: Option<&Path
     let host_dir = match deployer {
         DeployerKind::Local => log_dir.as_ref().map_or_else(
             || {
-                std::env::var_os("LOGOS_BLOCKCHAIN_LOG_DIR").map_or_else(
+                std::env::var_os(LOGOS_BLOCKCHAIN_LOG_DIR).map_or_else(
                     || {
                         let dir = PathBuf::from(SCENARIO_OUTPUT_DIR_REL).join(ARTEFACTS);
-                        set_default_env("LOGOS_BLOCKCHAIN_LOG_DIR", &dir.display().to_string());
+                        set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
                         dir
                     },
                     |dir| {
@@ -69,13 +77,13 @@ pub fn init_node_log_dir_defaults(deployer: &DeployerKind, log_dir: Option<&Path
                 )
             },
             |dir| {
-                set_default_env("LOGOS_BLOCKCHAIN_LOG_DIR", &dir.display().to_string());
+                set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
                 PathBuf::from(dir)
             },
         ),
-        DeployerKind::Compose => std::env::var_os("LOGOS_BLOCKCHAIN_LOG_DIR").map_or_else(
+        DeployerKind::Compose => std::env::var_os(LOGOS_BLOCKCHAIN_LOG_DIR).map_or_else(
             || {
-                set_default_env("LOGOS_BLOCKCHAIN_LOG_DIR", CONTAINER_NODE_LOG_DIR);
+                set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, CONTAINER_NODE_LOG_DIR);
                 PathBuf::from(CONTAINER_NODE_LOG_DIR)
             },
             |dir| {
@@ -100,7 +108,7 @@ pub fn init_tracing() {
 /// environment variable. If the variable is not set, defaults to 2 retries. If
 /// the variable is set to 0, returns None.
 pub fn get_retries() -> Result<Option<usize>, String> {
-    std::env::var_os("CUCUMBER_RETRIES").map_or_else(
+    std::env::var_os(CUCUMBER_RETRIES).map_or_else(
         || Ok(Some(2)),
         |retries| {
             retries
@@ -111,7 +119,7 @@ pub fn get_retries() -> Result<Option<usize>, String> {
                 .map_or_else(
                     |_| {
                         Err(format!(
-                            "Invalid value for CUCUMBER_RETRIES: '{}'",
+                            "Invalid value for {CUCUMBER_RETRIES}: '{}'",
                             retries.to_string_lossy()
                         ))
                     },

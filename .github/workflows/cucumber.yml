@@ -81,8 +81,6 @@ jobs:
 
       - name: End-to-end integration tests
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        env:
-          LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
         with:
           command: nextest
           # - We don't test benches as they take 6h+, leading to a timeout
@@ -120,7 +118,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
         with:
-          name: cucumber-artifacts-${{ runner.os }}  # ✅ Unique per OS
+          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}  # ✅ Unique per OS
           include-hidden-files: true
           path: ${{ github.workspace }}/tests/temp/cucumber_tests/cucumber_artefacts/Smoke/**
 
@@ -154,7 +152,7 @@ jobs:
 
       # Always upload JUnit test results for reporting, even if tests fail
       - name: Upload cucumber JUnit results
-        if: always()
+        if: ${{ !cancelled() }}
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
         with:
@@ -164,7 +162,7 @@ jobs:
 
       # Always publish a test report for visibility, do not fail workflow if this step fails
       - name: Publish cucumber test report
-        if: always()
+        if: ${{ !cancelled() }}
         continue-on-error: true
         uses: dorny/test-reporter@v1
         with:

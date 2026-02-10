@@ -53,10 +53,10 @@ serde_yaml                       = "0.9"
 serial_test                      = "3.1.1"
 strum                            = "0.27.2"
 tempfile                         = { workspace = true }
-testing-framework-core           = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "test_ref_06" }
-testing-framework-runner-compose = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "test_ref_06" }
-testing-framework-runner-local   = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "test_ref_06" }
-testing-framework-workflows      = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "test_ref_06" }
+testing-framework-core           = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "tagged_ref_01" }
+testing-framework-runner-compose = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "tagged_ref_01" }
+testing-framework-runner-local   = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "tagged_ref_01" }
+testing-framework-workflows      = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "tagged_ref_01" }
 thiserror                        = { default-features = false, version = "2.0" }
 time                             = { default-features = false, version = "0.3" }
 tokio                            = "1"
