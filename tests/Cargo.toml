@@ -45,6 +45,7 @@ lb-tracing-service               = { workspace = true }
 lb-tx-service                    = { features = ["libp2p", "mock"], workspace = true }
 lb-utils                         = { workspace = true }
 lb-wallet-service                = { workspace = true }
+logos-blockchain-zone-sdk        = { path = "../zone-sdk" }
 num-bigint                       = { default-features = false, version = "0.4" }
 rand                             = { workspace = true }
 reqwest                          = { features = ["json"], workspace = true }
@@ -115,3 +116,7 @@ harness           = false                        # Cucumber will have its own ma
 name              = "cucumber"
 path              = "cucumber_tests/cucumber.rs"
 required-features = ["cucumber"]
+
+[[test]]
+name = "test_zone_e2e"
+path = "src/tests/zone_sdk/e2e.rs"

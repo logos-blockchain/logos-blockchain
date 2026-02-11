@@ -63,13 +63,16 @@ impl TxState {
         // Store parent relationship for pruning
         self.parent_map.insert(block_id, parent_id);
 
-        // Build cumulative safe set from parent
-        // TODO: implement backfilling for missing blocks
+        // Build cumulative safe set from parent.
+        // If parent state is missing (e.g., first event after subscribe is a snapshot
+        // where we receive a block whose parent we never saw), start with an empty set.
+        // This is conservative: txs might show as "pending" when they should be "safe",
+        // but they'll be correctly detected when seen in subsequent blocks.
         let mut safe_set = self
             .block_states
             .get(&parent_id)
             .cloned()
-            .expect("parent state should exist");
+            .unwrap_or_default();
 
         for tx in our_txs {
             if self.pending.contains_key(&tx) {
@@ -80,17 +83,16 @@ impl TxState {
 
         // When lib advances: finalize txs and prune
         if lib != self.current_lib {
-            // Finalize txs in all blocks from new lib back to old lib (inclusive)
+            // Finalize txs in all blocks from new lib back to old lib (inclusive).
+            // We may not have state for all intermediate blocks if we missed events,
+            // so we skip blocks we don't know about.
             let mut block_opt = Some(lib);
             while let Some(block) = block_opt {
-                let block_safe = self
-                    .block_states
-                    .get(&block)
-                    .expect("block state should exist for blocks between old LIB and new LIB");
-
-                for tx_hash in block_safe.iter() {
-                    if self.pending.remove(tx_hash).is_some() {
-                        self.finalized.insert(*tx_hash);
+                if let Some(block_safe) = self.block_states.get(&block) {
+                    for tx_hash in block_safe.iter() {
+                        if self.pending.remove(tx_hash).is_some() {
+                            self.finalized.insert(*tx_hash);
+                        }
                     }
                 }
 

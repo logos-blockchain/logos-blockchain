@@ -5549,6 +5549,7 @@ dependencies = [
  "logos-blockchain-tx-service 0.1.0",
  "logos-blockchain-utils 0.1.0",
  "logos-blockchain-wallet-service 0.1.0",
+ "logos-blockchain-zone-sdk",
  "num-bigint",
  "rand 0.8.5",
  "reqwest",

@@ -9,6 +9,13 @@ use tracing::warn;
 
 use crate::ZoneBlock;
 
+/// Indexer errors.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("HTTP error: {0}")]
+    Http(#[from] lb_common_http_client::Error),
+}
+
 /// Opaque cursor for pagination. Pass to `next_messages` to resume.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Cursor {
@@ -92,6 +99,28 @@ impl ZoneIndexer {
         Ok(stream.flatten())
     }
 
+    /// Fetch the LIB slot.
+    ///
+    /// TODO(node-api): expose `lib_slot` in /cryptarchia/info so indexer
+    /// doesn't need two calls (consensus_info + get_block(lib)).
+    async fn lib_slot(&self) -> Result<u64, Error> {
+        let info = self
+            .http_client
+            .consensus_info(self.node_url.clone())
+            .await?;
+
+        // Genesis block isn't stored as a regular block, so get_block returns None.
+        // If lib can't be fetched, it must be genesis (slot 0).
+        match self
+            .http_client
+            .get_block(self.node_url.clone(), info.lib)
+            .await?
+        {
+            Some(block) => Ok(block.header().slot().into()),
+            None => Ok(0),
+        }
+    }
+
     /// Poll for the next batch of messages.
     ///
     /// Returns up to `limit` messages and a cursor for the next call.
@@ -101,12 +130,8 @@ impl ZoneIndexer {
         &self,
         cursor: Option<Cursor>,
         limit: usize,
-    ) -> Result<PollResult, lb_common_http_client::Error> {
-        let info = self
-            .http_client
-            .consensus_info(self.node_url.clone())
-            .await?;
-        let lib_slot: u64 = info.slot.into();
+    ) -> Result<PollResult, Error> {
+        let lib_slot = self.lib_slot().await?;
 
         let (cursor, mut current_slot) = cursor.map_or_else(
             || (Cursor::default(), 0),
@@ -144,12 +169,14 @@ impl ZoneIndexer {
 
                 for tx in &block.transactions {
                     for op in &tx.mantle_tx.ops {
-                        if let Op::ChannelInscribe(inscribe) = op
-                            && inscribe.channel_id == self.channel_id
-                            && let Some(done) =
-                                scan.push_msg(block_slot, inscribe.id(), &inscribe.inscription)
-                        {
-                            return Ok(done);
+                        if let Op::ChannelInscribe(inscribe) = op {
+                            if inscribe.channel_id == self.channel_id {
+                                if let Some(done) =
+                                    scan.push_msg(block_slot, inscribe.id(), &inscribe.inscription)
+                                {
+                                    return Ok(done);
+                                }
+                            }
                         }
                     }
                 }

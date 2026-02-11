@@ -184,8 +184,26 @@ async fn run_loop(
     http_client: CommonHttpClient,
     config: SequencerConfig,
 ) {
-    let mut state: Option<TxState> = None;
-    let mut current_tip: Option<HeaderId> = None;
+    // Initialize state from consensus info before subscribing to blocks
+    let (mut state, mut current_tip) = loop {
+        match http_client.consensus_info(node_url.clone()).await {
+            Ok(info) => {
+                info!(
+                    "Sequencer initialized from consensus info: tip={:?}, lib={:?}",
+                    info.tip, info.lib
+                );
+                break (Some(TxState::new(info.lib)), Some(info.tip));
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to fetch consensus info: {e}, retrying in {:?}",
+                    config.reconnect_delay
+                );
+                tokio::time::sleep(config.reconnect_delay).await;
+            }
+        }
+    };
+
     let mut last_msg_id = MsgId::root();
     let mut resubmit_interval = tokio::time::interval(config.resubmit_interval);
     let mut resubmit_active = false;

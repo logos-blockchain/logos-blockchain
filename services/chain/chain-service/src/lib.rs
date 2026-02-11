@@ -923,7 +923,14 @@ where
             .await
             .map_err(|e| Error::Storage(format!("Failed to store block: {e}")))?;
 
-        let immutable_blocks = pruned_blocks.immutable_blocks().clone();
+        let mut immutable_blocks = pruned_blocks.immutable_blocks().clone();
+        // The new LIB is also immutable and should be immediately queryable by slot.
+        // prune_immutable_blocks() only returns blocks older than the new LIB,
+        // so we explicitly add the new LIB here.
+        if prev_lib != new_lib {
+            let new_lib_slot = cryptarchia.consensus.lib_branch().slot();
+            immutable_blocks.insert(new_lib_slot, new_lib);
+        }
         relays
             .storage_adapter()
             .store_immutable_block_ids(immutable_blocks)
@@ -1271,12 +1278,22 @@ where
         chain_online_subscription_channel: &watch::Sender<bool>,
     ) -> (Cryptarchia, HashSet<HeaderId>) {
         let (cryptarchia, pruned_blocks) = cryptarchia.online();
-        info!("Chain switched to Online mode");
+        info!(
+            "Chain switched to Online mode: lib={:?}, tip={:?}, immutable_blocks={}, stale_blocks={}",
+            cryptarchia.lib(),
+            cryptarchia.tip(),
+            pruned_blocks.immutable_blocks().len(),
+            pruned_blocks.stale_blocks().count()
+        );
+        // Include the current LIB so it's immediately queryable by slot
+        let mut immutable_blocks = pruned_blocks.immutable_blocks().clone();
+        let lib_slot = cryptarchia.consensus.lib_branch().slot();
+        immutable_blocks.insert(lib_slot, cryptarchia.lib());
 
         notify_chain_online_subscribers(chain_online_subscription_channel);
 
         if let Err(e) = storage_adapter
-            .store_immutable_block_ids(pruned_blocks.immutable_blocks().clone())
+            .store_immutable_block_ids(immutable_blocks)
             .await
         {
             error!("Could not store immutable block IDs: {e}");
