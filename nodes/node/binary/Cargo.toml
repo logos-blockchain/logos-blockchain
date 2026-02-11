@@ -41,6 +41,7 @@ lb-key-management-system-service = { workspace = true }
 lb-ledger                        = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-network-service               = { workspace = true }
+num-bigint                       = { default-features = false, version = "0.4" }
 lb-pol                           = { workspace = true }
 lb-poq                           = { workspace = true }
 lb-sdp-service                   = { workspace = true }
@@ -54,6 +55,7 @@ lb-tx-service                    = { features = ["rocksdb-backend"], workspace =
 lb-utils                         = { features = ["serde"], workspace = true }
 lb-wallet-service                = { workspace = true }
 overwatch                        = { workspace = true }
+rand                             = { workspace = true }
 serde                            = { workspace = true }
 serde_ignored                    = { workspace = true }
 serde_json                       = { workspace = true }
@@ -76,7 +78,8 @@ tower      = { default-features = false, features = ["limit"], version = "0.4" }
 tower-http = { default-features = false, features = ["cors", "limit", "timeout", "trace"], version = "0.5" }
 
 [features]
-default                      = ["tracing"]
+default                      = ["tracing", "config-gen"]
+config-gen                   = ["lb-key-management-system-service/unsafe"]
 high-active-slot-coefficient = ["lb-pol/high-active-slot-coefficient"]
 instrumentation              = []
 profiling                    = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]

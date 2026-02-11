@@ -1,6 +1,7 @@
 pub mod api;
 pub mod config;
 pub mod generic_services;
+pub mod init;
 
 use color_eyre::eyre::{Result, eyre};
 pub use lb_blend_service::{
