@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(feature = "config-gen")]
+use clap::Subcommand;
 use clap::{Parser, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
@@ -38,10 +40,16 @@ pub mod time;
 mod tests;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about, long_about = None,
+          args_conflicts_with_subcommands = true,
+          subcommand_negates_reqs = true)]
 pub struct CliArgs {
+    #[cfg(feature = "config-gen")]
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// Path for a yaml-encoded network config file
-    config: PathBuf,
+    config: Option<PathBuf>,
     /// Dry-run flag. If active, the binary will try to deserialize the config
     /// file and then exit.
     #[clap(long = "check-config", action)]
@@ -62,10 +70,48 @@ pub struct CliArgs {
     deployment: DeploymentArgs,
 }
 
+#[cfg(feature = "config-gen")]
+#[derive(Subcommand, Debug)]
+pub enum Command {
+    /// Initialize a new user config with generated keys
+    Init(InitArgs),
+}
+
+#[cfg(feature = "config-gen")]
+#[derive(Parser, Debug)]
+pub struct InitArgs {
+    /// Trusted peers to bootstrap from (multiaddr format)
+    #[clap(long = "initial-peers", short = 'p', num_args = 1.., value_delimiter = ',', required = true)]
+    pub initial_peers: Vec<Multiaddr>,
+
+    /// Output file path for the generated config
+    #[clap(long = "output", short = 'o', default_value = "user_config.yaml")]
+    pub output: PathBuf,
+
+    /// Network listen port
+    #[clap(long = "net-port", default_value = "3000")]
+    pub net_port: u16,
+
+    /// Blend listen port
+    #[clap(long = "blend-port", default_value = "3400")]
+    pub blend_port: u16,
+
+    /// HTTP API listen address
+    #[clap(long = "http-addr", default_value = "0.0.0.0:8080")]
+    pub http_addr: SocketAddr,
+
+    /// External address for nodes with a known public IP (disables NAT
+    /// traversal). Format: /ip4/<public-ip>/udp/<port>/quic-v1
+    #[clap(long = "external-address")]
+    pub external_address: Option<Multiaddr>,
+}
+
 impl CliArgs {
     #[must_use]
     pub fn config_path(&self) -> &Path {
-        &self.config
+        self.config
+            .as_deref()
+            .expect("config path is required when not using a subcommand")
     }
 
     #[must_use]
@@ -224,7 +270,10 @@ impl FromStr for DeploymentType {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-#[cfg_attr(feature = "testing", derive(serde::Serialize))]
+#[cfg_attr(
+    any(feature = "testing", feature = "config-gen"),
+    derive(serde::Serialize)
+)]
 pub struct UserConfig {
     pub network: NetworkConfig,
     pub blend: BlendConfig,
