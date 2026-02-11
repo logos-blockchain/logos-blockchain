@@ -2,19 +2,13 @@ use core::{
     num::{NonZero, NonZeroU64},
     time::Duration,
 };
-use std::{
-    collections::HashMap,
-    sync::{LazyLock, Mutex},
-};
+use std::sync::OnceLock;
 
 use lb_blend_service::{
     core::settings::{CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings},
     settings::TimingSettings,
 };
-use lb_core::{
-    mantle::{Transaction as _, TxHash, genesis_tx::GenesisTx},
-    sdp::ServiceType,
-};
+use lb_core::{mantle::genesis_tx::GenesisTx, sdp::ServiceType};
 use lb_libp2p::protocol_name::StreamProtocol;
 use lb_node::config::{
     blend::deployment::{
@@ -32,14 +26,10 @@ use time::OffsetDateTime;
 
 use crate::topology::configs::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
-static CHAIN_START_TIMES: LazyLock<Mutex<HashMap<TxHash, OffsetDateTime>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static CHAIN_START_TIME: OnceLock<OffsetDateTime> = OnceLock::new();
 
-fn get_or_init_chain_start_time(genesis_tx: &GenesisTx) -> OffsetDateTime {
-    let mut times = CHAIN_START_TIMES.lock().unwrap();
-    *times
-        .entry(genesis_tx.hash())
-        .or_insert_with(OffsetDateTime::now_utc)
+fn get_or_init_chain_start_time() -> OffsetDateTime {
+    *CHAIN_START_TIME.get_or_init(OffsetDateTime::now_utc)
 }
 
 #[must_use]
@@ -101,10 +91,6 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
                 "/integration/logos-blockchain/chainsync/1.0.0",
             ),
         },
-        time: TimeDeploymentSettings {
-            slot_duration: Duration::from_secs(slot_duration_in_secs),
-            chain_start_time: get_or_init_chain_start_time(&genesis_tx),
-        },
         cryptarchia: CryptarchiaDeploymentSettings {
             gossipsub_protocol: "/integration/logos-blockchain/cryptarchia/proto/1.0.0".to_owned(),
             // by setting the slot coeff to 1, we also increase the probability of multiple
@@ -135,6 +121,10 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
                 },
             },
             genesis_state: genesis_tx,
+        },
+        time: TimeDeploymentSettings {
+            slot_duration: Duration::from_secs(slot_duration_in_secs),
+            chain_start_time: get_or_init_chain_start_time(),
         },
         mempool: MempoolDeploymentSettings {
             pubsub_topic: "mantle_e2e_tests".to_owned(),
