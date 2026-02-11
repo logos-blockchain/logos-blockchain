@@ -6,6 +6,8 @@ pub mod balance {
     use lb_core::{header::HeaderId, mantle::Value};
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use serde::{Deserialize, Serialize};
+    #[cfg(feature = "tracing")]
+    use tracing::error;
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletBalanceResponseBody {
@@ -16,13 +18,16 @@ pub mod balance {
 
     impl IntoResponse for WalletBalanceResponseBody {
         fn into_response(self) -> Response {
-            match serde_json::to_string(&self) {
-                Ok(json) => (StatusCode::OK, json).into_response(),
-                Err(e) => {
-                    eprintln!("Failed to serialize WalletBalanceResponseBody: {e}");
-                    (StatusCode::INTERNAL_SERVER_ERROR, "Serialization error").into_response()
-                }
-            }
+            let json = serde_json::to_string(&self).unwrap_or_else(|e| {
+                #[cfg(feature = "tracing")]
+                error!("WalletBalanceResponseBody serialization error: {e}");
+                // We panic here because this should never happen, and if it does, it's a
+                // critical error that we want to be immediately visible during
+                // development and testing.
+                panic!("WalletBalanceResponseBody serialization failed: {e}")
+            });
+
+            (StatusCode::OK, json).into_response()
         }
     }
 }
@@ -38,6 +43,8 @@ pub mod transfer_funds {
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use serde::{Deserialize, Serialize};
+    #[cfg(feature = "tracing")]
+    use tracing::log::error;
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletTransferFundsRequestBody {
@@ -63,13 +70,16 @@ pub mod transfer_funds {
 
     impl IntoResponse for WalletTransferFundsResponseBody {
         fn into_response(self) -> Response {
-            match serde_json::to_string(&self) {
-                Ok(json) => (StatusCode::CREATED, json).into_response(),
-                Err(e) => {
-                    eprintln!("Failed to serialize WalletTransferFundsResponseBody: {e}");
-                    (StatusCode::INTERNAL_SERVER_ERROR, "Serialization error").into_response()
-                }
-            }
+            let json = serde_json::to_string(&self).unwrap_or_else(|e| {
+                #[cfg(feature = "tracing")]
+                error!("WalletTransferFundsResponseBody serialization failed: {e}");
+                // We panic here because this should never happen, and if it does, it's a
+                // critical error that we want to be immediately visible during
+                // development and testing.
+                panic!("WalletTransferFundsResponseBody serialization failed: {e}")
+            });
+
+            (StatusCode::CREATED, json).into_response()
         }
     }
 }

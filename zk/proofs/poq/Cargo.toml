@@ -19,8 +19,10 @@ num-bigint           = "0.4"
 serde                = { features = ["derive"], workspace = true }
 serde_json           = { version = "1.0" }
 thiserror            = "2.0"
+tracing              = { default-features = false, optional = true, workspace = true }
 
-[dev-dependencies]
+[features]
+default = []
 
 [build-dependencies]
 lb-circuits-utils = { workspace = true }

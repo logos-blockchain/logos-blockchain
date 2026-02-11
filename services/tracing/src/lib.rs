@@ -24,7 +24,7 @@ use overwatch::{
     },
 };
 use serde::{Deserialize, Serialize};
-use tracing::Level;
+use tracing::{Level, log::warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
     filter::LevelFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _,
@@ -51,7 +51,7 @@ impl Write for SharedWriter {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| {
-                eprintln!("WARNING: Tracing writer mutex poisoned on write, recovering");
+                warn!("Tracing writer mutex poisoned on write, recovering");
                 poisoned.into_inner()
             })
             .write(buf)
@@ -61,7 +61,7 @@ impl Write for SharedWriter {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| {
-                eprintln!("WARNING: Tracing writer mutex poisoned on flush, recovering");
+                warn!("Tracing writer mutex poisoned on flush, recovering");
                 poisoned.into_inner()
             })
             .flush()
