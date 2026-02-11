@@ -36,14 +36,11 @@ async fn test_ibd_behind_nodes() {
         &network_params,
     );
 
-    // Create deployment settings once to ensure all validators have the same chain start time
-    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx.clone());
-
     let mut initial_validators = vec![];
     for config in general_configs.iter().take(n_initial_validators) {
         let config = create_validator_config(
             config.clone(),
-            deployment_settings.clone(),
+            e2e_deployment_settings_with_genesis_tx(genesis_tx.clone()),
         );
         initial_validators.push(Validator::spawn(config).await.unwrap());
     }
@@ -77,7 +74,7 @@ async fn test_ibd_behind_nodes() {
 
     let mut config = create_validator_config(
         general_configs[n_initial_validators].clone(),
-        deployment_settings,
+        e2e_deployment_settings_with_genesis_tx(genesis_tx),
     );
     config.user.cryptarchia.network.bootstrap.ibd.peers = initial_peer_ids.clone();
     // Shorten the delay to quickly catching up with peers that grow during IBD.
