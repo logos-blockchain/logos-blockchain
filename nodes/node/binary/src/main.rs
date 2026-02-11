@@ -13,7 +13,7 @@ use logos_blockchain_node::{
 async fn main() -> Result<()> {
     let cli_args = CliArgs::parse();
 
-    if let Some(Command::Init(init_args)) = cli_args.command {
+    if let Some(Command::Init(init_args)) = &cli_args.command {
         return init::run(init_args);
     }
 

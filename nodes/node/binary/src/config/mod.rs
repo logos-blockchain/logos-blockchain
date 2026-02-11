@@ -260,7 +260,10 @@ impl FromStr for DeploymentType {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-#[cfg_attr(any(feature = "testing", feature = "config-gen"), derive(serde::Serialize))]
+#[cfg_attr(
+    any(feature = "testing", feature = "config-gen"),
+    derive(serde::Serialize)
+)]
 pub struct UserConfig {
     pub network: NetworkConfig,
     pub blend: BlendConfig,

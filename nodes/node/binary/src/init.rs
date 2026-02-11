@@ -19,7 +19,7 @@ use lb_key_management_system_service::{
     backend::preload::{KeyId, PreloadKMSBackendSettings},
     keys::{Ed25519Key, Key, ZkKey, ZkPublicKey, secured_key::SecuredKey as _},
 };
-use lb_libp2p::Multiaddr;
+use lb_libp2p::{IdentifySettings, KademliaSettings, Multiaddr, NatSettings, cryptarchia_sync};
 use lb_sdp_service::{SdpSettings, wallet::SdpWalletConfig};
 use lb_storage_service::backends::rocksdb::RocksBackendSettings;
 use lb_time_service::backends::{NtpTimeBackendSettings, ntp::async_client::NTPClientSettings};
@@ -61,41 +61,90 @@ fn generate_zk_key_from_random_bytes() -> ZkKey {
     ZkKey::from(BigUint::from_bytes_le(&bytes))
 }
 
-pub fn run(args: InitArgs) -> Result<()> {
-    // 1. Generate Ed25519 network key (libp2p)
-    let network_key = lb_libp2p::ed25519::SecretKey::generate();
+struct GeneratedKeys {
+    blend_signing_key: Ed25519Key,
+    blend_zk_key: ZkKey,
+    leader_key: ZkKey,
+    funding_key: ZkKey,
+    blend_signing_key_id: KeyId,
+    blend_zk_key_id: KeyId,
+    leader_key_id: KeyId,
+    funding_key_id: KeyId,
+    leader_pk: ZkPublicKey,
+    funding_pk: ZkPublicKey,
+}
 
-    // 2. Generate Ed25519 blend signing key
+fn generate_keys() -> GeneratedKeys {
     let blend_signing_key = Ed25519Key::generate(&mut OsRng);
-
-    // 3. Derive ZK blend key from blend Ed25519 public key
     let blend_zk_key = ZkKey::from(BigUint::from_bytes_le(
         blend_signing_key.public_key().as_bytes(),
     ));
-
-    // 4. Generate ZK leader/voucher key (random)
     let leader_key = generate_zk_key_from_random_bytes();
-
-    // 5. Generate ZK SDP funding key (random)
     let funding_key = generate_zk_key_from_random_bytes();
 
-    // Compute key IDs
     let blend_signing_key_id = key_id(&blend_signing_key.clone().into());
     let blend_zk_key_id = key_id(&blend_zk_key.clone().into());
     let leader_key_id = key_id(&leader_key.clone().into());
     let funding_key_id = key_id(&funding_key.clone().into());
 
-    // Get public keys for wallet config
     let leader_pk: ZkPublicKey = leader_key.as_public_key();
     let funding_pk: ZkPublicKey = funding_key.as_public_key();
 
-    let blend_listening_address = Multiaddr::from_str(&format!(
-        "/ip4/0.0.0.0/udp/{}/quic-v1",
-        args.blend_port
-    ))
-    .map_err(|e| eyre!("Invalid blend listening address: {e}"))?;
+    GeneratedKeys {
+        blend_signing_key,
+        blend_zk_key,
+        leader_key,
+        funding_key,
+        blend_signing_key_id,
+        blend_zk_key_id,
+        leader_key_id,
+        funding_key_id,
+        leader_pk,
+        funding_pk,
+    }
+}
 
-    let user_config = UserConfig {
+pub fn run(args: &InitArgs) -> Result<()> {
+    let network_key = lb_libp2p::ed25519::SecretKey::generate();
+    let keys = generate_keys();
+
+    let blend_listening_address =
+        Multiaddr::from_str(&format!("/ip4/0.0.0.0/udp/{}/quic-v1", args.blend_port))
+            .map_err(|e| eyre!("Invalid blend listening address: {e}"))?;
+
+    let user_config = build_user_config(args, network_key, keys, blend_listening_address);
+
+    let yaml = serde_yaml::to_string(&user_config)?;
+    std::fs::write(&args.output, &yaml)?;
+
+    println!("Config written to {}", args.output.display());
+    Ok(())
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "Single struct literal assembling all config fields."
+)]
+fn build_user_config(
+    args: &InitArgs,
+    network_key: lb_libp2p::ed25519::SecretKey,
+    keys: GeneratedKeys,
+    blend_listening_address: Multiaddr,
+) -> UserConfig {
+    let GeneratedKeys {
+        blend_signing_key,
+        blend_zk_key,
+        leader_key,
+        funding_key,
+        blend_signing_key_id,
+        blend_zk_key_id,
+        leader_key_id,
+        funding_key_id,
+        leader_pk,
+        funding_pk,
+    } = keys;
+
+    UserConfig {
         network: NetworkConfig {
             backend: BackendSettings {
                 swarm: SwarmConfig {
@@ -103,12 +152,12 @@ pub fn run(args: InitArgs) -> Result<()> {
                     port: args.net_port,
                     node_key: network_key,
                     gossipsub_config: lb_libp2p::gossipsub::Config::default(),
-                    kademlia_config: Default::default(),
-                    identify_config: Default::default(),
-                    chain_sync_config: Default::default(),
-                    nat_config: Default::default(),
+                    kademlia_config: KademliaSettings::default(),
+                    identify_config: IdentifySettings::default(),
+                    chain_sync_config: cryptarchia_sync::Config::default(),
+                    nat_config: NatSettings::default(),
                 },
-                initial_peers: args.initial_peers,
+                initial_peers: args.initial_peers.clone(),
             },
         },
         blend: BlendConfig {
@@ -189,7 +238,7 @@ pub fn run(args: InitArgs) -> Result<()> {
         http: ApiServiceSettings {
             backend_settings: AxumBackendSettings {
                 address: args.http_addr,
-                ..Default::default()
+                ..AxumBackendSettings::default()
             },
         },
         storage: RocksBackendSettings {
@@ -199,8 +248,8 @@ pub fn run(args: InitArgs) -> Result<()> {
         },
         key_management: PreloadKMSBackendSettings {
             keys: HashMap::from([
-                (blend_signing_key_id.clone(), blend_signing_key.into()),
-                (blend_zk_key_id.clone(), blend_zk_key.into()),
+                (blend_signing_key_id, blend_signing_key.into()),
+                (blend_zk_key_id, blend_zk_key.into()),
                 (leader_key_id.clone(), leader_key.into()),
                 (funding_key_id.clone(), funding_key.into()),
             ]),
@@ -208,7 +257,7 @@ pub fn run(args: InitArgs) -> Result<()> {
         wallet: WalletServiceSettings {
             known_keys: HashMap::from([
                 (leader_key_id.clone(), leader_pk),
-                (funding_key_id.clone(), funding_pk),
+                (funding_key_id, funding_pk),
             ]),
             voucher_master_key_id: leader_key_id,
             recovery_path: "./recovery/wallet.json".into(),
@@ -217,11 +266,5 @@ pub fn run(args: InitArgs) -> Result<()> {
         testing_http: ApiServiceSettings {
             backend_settings: AxumBackendSettings::default(),
         },
-    };
-
-    let yaml = serde_yaml::to_string(&user_config)?;
-    std::fs::write(&args.output, &yaml)?;
-
-    println!("Config written to {}", args.output.display());
-    Ok(())
+    }
 }
