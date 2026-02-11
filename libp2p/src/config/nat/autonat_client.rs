@@ -1,22 +1,30 @@
 use std::time::Duration;
 
 use libp2p::autonat::v2::client::Config;
+use serde::{Deserialize, Serialize};
 
 /// A serializable representation of `AutoNAT` configuration options.
 /// When a value is None, the libp2p defaults are used.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct Settings {
     /// How many candidates we will test at most.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_candidates: Option<usize>,
 
     /// The interval at which we will attempt to confirm candidates as external
     /// addresses, only used for new candidates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe_interval_millisecs: Option<u64>,
 
     /// The interval at which we will retest successful external addresses.
     /// This is used to ensure that the external address is still valid and
     /// reachable.
+    #[serde(default = "default_retest_interval")]
     pub retest_successful_external_addresses_interval: Duration,
+}
+
+const fn default_retest_interval() -> Duration {
+    Duration::from_secs(60)
 }
 
 impl Settings {

@@ -18,6 +18,7 @@ lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 serde                         = { features = ["alloc", "derive"], workspace = true }
 serde_json                    = { workspace = true }
+serde_with                    = { default-features = false, features = ["macros"], workspace = true }
 tokio                         = { default-features = false, features = ["time"], optional = true, version = "1" }
 tracing                       = { default-features = false, optional = true, workspace = true }
 

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use lb_key_management_system_keys::keys::{
     Key, KeyOperators, errors::KeyError, secured_key::SecuredKey,
 };
+use serde::Deserialize;
 
 use crate::backend::KMSBackend;
 
@@ -25,8 +26,10 @@ pub struct PreloadKMSBackend {
 }
 
 /// This setting contains all [`Key`]s to be loaded into the
-/// [`PreloadKMSBackend`].
-#[derive(Clone, Debug)]
+/// [`PreloadKMSBackend`]. This implements [`serde::Serialize`] for users to
+/// populate the settings from bytes.
+#[derive(Deserialize, Clone, Debug)]
+#[cfg_attr(any(test, feature = "unsafe"), derive(serde::Serialize))]
 pub struct PreloadKMSBackendSettings {
     pub keys: HashMap<KeyId, Key>,
 }
@@ -118,8 +121,9 @@ mod tests {
 
     use bytes::{Bytes as RawBytes, Bytes};
     use lb_key_management_system_keys::keys::{
-        Ed25519Key, PayloadEncoding, secured_key::SecureKeyOperator,
+        Ed25519Key, PayloadEncoding, ZkKey, secured_key::SecureKeyOperator,
     };
+    use num_bigint::BigUint;
     use rand::rngs::OsRng;
 
     use super::*;
@@ -228,5 +232,32 @@ mod tests {
 
         // Registering the key works
         assert!(matches!(backend.register(&key_id, key), Ok(())));
+    }
+
+    #[test]
+    fn serde_keys_from_yaml() {
+        let preloaded_keys = PreloadKMSBackendSettings {
+            keys: [
+                (
+                    "test1".into(),
+                    Key::Ed25519(Ed25519Key::generate(&mut OsRng)),
+                ),
+                (
+                    "test2".into(),
+                    Key::Zk(ZkKey::new(BigUint::from_bytes_le(&[1u8; 32]).into())),
+                ),
+            ]
+            .into(),
+        };
+
+        let mut serialized_ouput = Vec::new();
+        serde_yaml::to_writer(&mut serialized_ouput, &preloaded_keys).unwrap();
+
+        let deserialized_keys: PreloadKMSBackendSettings =
+            serde_yaml::from_slice(&serialized_ouput).unwrap();
+
+        assert_eq!(preloaded_keys.keys.len(), deserialized_keys.keys.len());
+        let original_key = preloaded_keys.keys.keys().next().unwrap();
+        assert!(deserialized_keys.keys.contains_key(original_key));
     }
 }

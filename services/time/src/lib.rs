@@ -53,6 +53,7 @@ impl Debug for TimeServiceMessage {
     }
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub struct TimeServiceSettings<BackendSettings> {
     /// Slot settings in order to compute proper slot times

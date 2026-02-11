@@ -402,7 +402,7 @@ impl Cryptarchia {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CryptarchiaSettings {
     pub config: lb_ledger::Config,
     pub starting_state: StartingState,

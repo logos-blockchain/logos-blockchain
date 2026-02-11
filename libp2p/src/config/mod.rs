@@ -1,44 +1,55 @@
 pub use identify::Settings as IdentifySettings;
 pub use kademlia::{CachingSettings, KBucketInserts, Settings as KademliaSettings};
 pub use lb_cryptarchia_sync::Config as ChainSyncSettings;
-use libp2p::{gossipsub, identity::ed25519};
+use libp2p::identity::ed25519;
 pub use nat::{
     Settings as NatSettings, TraversalSettings, autonat_client::Settings as AutonatClientSettings,
     gateway::Settings as GatewaySettings, mapping::Settings as NatMappingSettings,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::protocol_name::StreamProtocol;
 
+pub mod gossipsub;
 mod identify;
 mod kademlia;
 mod nat;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwarmConfig {
     /// Listening IPv4 address
     pub host: std::net::Ipv4Addr,
     /// UDP/QUIC listening port. Use 0 for random.
     pub port: u16,
     /// Ed25519 private key in hex format. Default: random.
+    #[serde(with = "secret_key_serde", default = "ed25519::SecretKey::generate")]
     pub node_key: ed25519::SecretKey,
 
     /// Gossipsub config
-    pub gossipsub_config: gossipsub::Config,
+    #[serde(
+        with = "gossipsub::ConfigDef",
+        default = "libp2p::gossipsub::Config::default"
+    )]
+    pub gossipsub_config: libp2p::gossipsub::Config,
 
     pub kad_protocol_name: StreamProtocol,
     pub identify_protocol_name: StreamProtocol,
     pub chain_sync_protocol_name: StreamProtocol,
 
     /// Kademlia config (required; Identify must be enabled too)
+    #[serde(default)]
     pub kademlia_config: kademlia::Settings,
 
     /// Identify config (required)
+    #[serde(default)]
     pub identify_config: identify::Settings,
 
     /// Chain sync config
+    #[serde(default)]
     pub chain_sync_config: ChainSyncSettings,
 
     /// Nat config
+    #[serde(default)]
     pub nat_config: nat::Settings,
 }
 
@@ -75,7 +86,7 @@ mod tests {
                 host: std::net::Ipv4Addr::UNSPECIFIED,
                 port: 60000,
                 node_key: ed25519::SecretKey::generate(),
-                gossipsub_config: gossipsub::Config::default(),
+                gossipsub_config: libp2p::gossipsub::Config::default(),
                 identify_protocol_name: StreamProtocol::new("/identify/test"),
                 kad_protocol_name: StreamProtocol::new("/kademlia/test"),
                 chain_sync_protocol_name: StreamProtocol::new("/chainsync/test"),
@@ -85,5 +96,18 @@ mod tests {
                 nat_config: nat::Settings::default(),
             }
         }
+    }
+
+    #[test]
+    fn config_serde() {
+        let config = SwarmConfig::default();
+
+        let serialized = serde_json::to_string(&config).unwrap();
+        println!("{serialized}");
+
+        let deserialized: SwarmConfig = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.host, config.host);
+        assert_eq!(deserialized.port, config.port);
+        assert_eq!(deserialized.node_key.as_ref(), config.node_key.as_ref());
     }
 }

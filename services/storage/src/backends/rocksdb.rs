@@ -3,11 +3,12 @@ use std::{num::NonZeroUsize, path::PathBuf, sync::Arc};
 use async_trait::async_trait;
 use bytes::Bytes;
 use rocksdb::{DB, Direction, Error, IteratorMode, Options};
+use serde::{Deserialize, Serialize};
 
 use super::{StorageBackend, StorageTransaction};
 
 /// Rocks backend setting
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RocksBackendSettings {
     /// File path to the db file
     pub db_path: PathBuf,

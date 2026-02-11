@@ -37,7 +37,7 @@ use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData},
 };
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::sync::{oneshot, watch};
 use tracing::{Level, debug, error, info, instrument, span};
@@ -105,8 +105,9 @@ pub enum LeaderMsg {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct LeaderSettings<Ts, BlendBroadcastSettings> {
+    #[serde(default)]
     pub transaction_selector_settings: Ts,
     pub config: lb_ledger::Config,
     pub blend_broadcast_settings: BlendBroadcastSettings,
