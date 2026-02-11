@@ -3,7 +3,7 @@ on:
   push:
     branches: [ master ]
 
-name: Cucumber and end-to-end integration tests
+name: End-to-end integration tests (including cucumber)
 
 # Ensure only one workflow run per branch/workflow is active at a time.
 # Cancels any in-progress runs for the same group to avoid overlap.
@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   tests:
-    name: Run cucumber integration tests, not long running
+    name: Run end-to-end integration tests (including cucumber)
 
     # Only run if not a WIP or DO NOT MERGE PR
     if: >
@@ -120,7 +120,7 @@ jobs:
         with:
           name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}  # ✅ Unique per OS
           include-hidden-files: true
-          path: ${{ github.workspace }}/tests/temp/cucumber_tests/cucumber_artefacts/Smoke/**
+          path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Smoke/**
 
       # Run cucumber integration tests with environment variables for binaries and test params
       # Special exclusion tags (we want to run the rest of the tests and not fail the workflow):
@@ -148,7 +148,7 @@ jobs:
         with:
           name: cucumber-artifacts-${{ runner.os }}  # ✅ Unique per OS
           include-hidden-files: true
-          path: ${{ github.workspace }}/tests/temp/cucumber_tests/cucumber_artefacts/Cryptarchia/**
+          path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Cryptarchia/**
 
       # Always upload JUnit test results for reporting, even if tests fail
       - name: Upload cucumber JUnit results
@@ -157,7 +157,7 @@ jobs:
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
         with:
           name: cucumber-junit-${{ runner.os }}  # ✅ Unique per OS
-          path: ${{ github.workspace }}/tests/temp/cucumber_tests/cucumber-output-junit.xml
+          path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber-output-junit.xml
           if-no-files-found: warn
 
       # Always publish a test report for visibility, do not fail workflow if this step fails
@@ -167,7 +167,7 @@ jobs:
         uses: dorny/test-reporter@v1
         with:
           name: Cucumber-${{ runner.os }}  # Optional: distinguish Linux vs macOS
-          path: ${{ github.workspace }}/tests/temp/cucumber_tests/cucumber-output-junit.xml
+          path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber-output-junit.xml
           reporter: java-junit
 
       - name: Clean up build artifacts
@@ -175,3 +175,7 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: clean
+
+      - name: Clean up cucumber artifacts
+        if: success() || failure()
+        run: rm -rf ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts
