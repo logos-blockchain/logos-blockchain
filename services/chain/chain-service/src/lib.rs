@@ -1278,13 +1278,7 @@ where
         chain_online_subscription_channel: &watch::Sender<bool>,
     ) -> (Cryptarchia, HashSet<HeaderId>) {
         let (cryptarchia, pruned_blocks) = cryptarchia.online();
-        info!(
-            "Chain switched to Online mode: lib={:?}, tip={:?}, immutable_blocks={}, stale_blocks={}",
-            cryptarchia.lib(),
-            cryptarchia.tip(),
-            pruned_blocks.immutable_blocks().len(),
-            pruned_blocks.stale_blocks().count()
-        );
+        info!("Chain switched to Online mode");
         // Include the current LIB so it's immediately queryable by slot
         let mut immutable_blocks = pruned_blocks.immutable_blocks().clone();
         let lib_slot = cryptarchia.consensus.lib_branch().slot();

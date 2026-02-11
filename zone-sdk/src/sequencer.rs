@@ -176,6 +176,31 @@ impl ZoneSequencer {
     }
 }
 
+async fn initialize_state(
+    http_client: &CommonHttpClient,
+    node_url: &Url,
+    reconnect_delay: Duration,
+) -> (TxState, HeaderId) {
+    loop {
+        match http_client.consensus_info(node_url.clone()).await {
+            Ok(info) => {
+                info!(
+                    "Sequencer initialized from consensus info: tip={:?}, lib={:?}",
+                    info.tip, info.lib
+                );
+                return (TxState::new(info.lib), info.tip);
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to fetch consensus info: {e}, retrying in {:?}",
+                    reconnect_delay
+                );
+                tokio::time::sleep(reconnect_delay).await;
+            }
+        }
+    }
+}
+
 async fn run_loop(
     mut request_rx: mpsc::Receiver<ActorRequest>,
     channel_id: ChannelId,
@@ -184,25 +209,10 @@ async fn run_loop(
     http_client: CommonHttpClient,
     config: SequencerConfig,
 ) {
-    // Initialize state from consensus info before subscribing to blocks
-    let (mut state, mut current_tip) = loop {
-        match http_client.consensus_info(node_url.clone()).await {
-            Ok(info) => {
-                info!(
-                    "Sequencer initialized from consensus info: tip={:?}, lib={:?}",
-                    info.tip, info.lib
-                );
-                break (Some(TxState::new(info.lib)), Some(info.tip));
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to fetch consensus info: {e}, retrying in {:?}",
-                    config.reconnect_delay
-                );
-                tokio::time::sleep(config.reconnect_delay).await;
-            }
-        }
-    };
+    let (state, current_tip) =
+        initialize_state(&http_client, &node_url, config.reconnect_delay).await;
+    let mut state = Some(state);
+    let mut current_tip = Some(current_tip);
 
     let mut last_msg_id = MsgId::root();
     let mut resubmit_interval = tokio::time::interval(config.resubmit_interval);

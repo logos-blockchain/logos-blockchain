@@ -102,7 +102,7 @@ impl ZoneIndexer {
     /// Fetch the LIB slot.
     ///
     /// TODO(node-api): expose `lib_slot` in /cryptarchia/info so indexer
-    /// doesn't need two calls (consensus_info + get_block(lib)).
+    /// doesn't need two calls (`consensus_info` + `get_block(lib)`).
     async fn lib_slot(&self) -> Result<u64, Error> {
         let info = self
             .http_client
@@ -110,15 +110,13 @@ impl ZoneIndexer {
             .await?;
 
         // Genesis block isn't stored as a regular block, so get_block returns None.
-        // If lib can't be fetched, it must be genesis (slot 0).
-        match self
+        // We assume None means genesis (slot 0). If this assumption is wrong (e.g.,
+        // due to pruning or transient errors), the indexer will behave incorrectly.
+        Ok(self
             .http_client
             .get_block(self.node_url.clone(), info.lib)
             .await?
-        {
-            Some(block) => Ok(block.header().slot().into()),
-            None => Ok(0),
-        }
+            .map_or(0, |block| block.header().slot().into()))
     }
 
     /// Poll for the next batch of messages.
@@ -169,14 +167,12 @@ impl ZoneIndexer {
 
                 for tx in &block.transactions {
                     for op in &tx.mantle_tx.ops {
-                        if let Op::ChannelInscribe(inscribe) = op {
-                            if inscribe.channel_id == self.channel_id {
-                                if let Some(done) =
-                                    scan.push_msg(block_slot, inscribe.id(), &inscribe.inscription)
-                                {
-                                    return Ok(done);
-                                }
-                            }
+                        if let Op::ChannelInscribe(inscribe) = op
+                            && inscribe.channel_id == self.channel_id
+                            && let Some(done) =
+                                scan.push_msg(block_slot, inscribe.id(), &inscribe.inscription)
+                        {
+                            return Ok(done);
                         }
                     }
                 }
