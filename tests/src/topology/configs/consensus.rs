@@ -1,9 +1,6 @@
 use core::{num::NonZeroUsize, time::Duration};
 use std::collections::HashSet;
 
-use lb_chain_leader_service::LeaderWalletConfig;
-use lb_chain_network_service::{IbdConfig, OrphanConfig, SyncConfig};
-use lb_chain_service::OfflineGracePeriodConfig;
 use lb_core::{
     mantle::{
         MantleTx, Note, OpProof, Utxo, Value,
@@ -18,10 +15,7 @@ use lb_core::{
 };
 use lb_groth16::CompressedGroth16Proof;
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey, ZkPublicKey, ZkSignature};
-use lb_node::{
-    SignedMantleTx, Transaction as _,
-    config::cryptarchia::serde::{Config, LeaderConfig, NetworkConfig, ServiceConfig},
-};
+use lb_node::{SignedMantleTx, Transaction as _, config::cryptarchia::serde as cryptarchia};
 use num_bigint::BigUint;
 
 pub const SHORT_PROLONGED_BOOTSTRAP_PERIOD: Duration = Duration::from_secs(1);
@@ -51,7 +45,7 @@ impl ProviderInfo {
 /// be converted into a specific service or services configuration.
 #[derive(Clone)]
 pub struct GeneralConsensusConfig {
-    user_config: Config,
+    user_config: cryptarchia::Config,
     pub known_key: ZkKey,
     pub blend_notes: Vec<ServiceNote>,
     pub funding_sk: ZkKey,
@@ -59,7 +53,7 @@ pub struct GeneralConsensusConfig {
 
 impl GeneralConsensusConfig {
     #[must_use]
-    pub const fn user_config(&self) -> &Config {
+    pub const fn user_config(&self) -> &cryptarchia::Config {
         &self.user_config
     }
 }
@@ -131,34 +125,35 @@ pub fn create_consensus_configs(
                     blend_notes: blend_notes.clone(),
                     known_key: sk,
                     funding_sk,
-                    user_config: Config {
-                        network: NetworkConfig {
-                            bootstrap: lb_chain_network_service::BootstrapConfig {
-                                ibd: IbdConfig {
+                    user_config: cryptarchia::Config {
+                        network: cryptarchia::network::Config {
+                            bootstrap: cryptarchia::network::BootstrapConfig {
+                                ibd: cryptarchia::network::IbdConfig {
                                     delay_before_new_download: Duration::from_secs(10),
                                     peers: HashSet::new(),
                                 },
                             },
-                            sync: SyncConfig {
-                                orphan: OrphanConfig {
+                            sync: cryptarchia::network::SyncConfig {
+                                orphan: cryptarchia::network::OrphanConfig {
                                     max_orphan_cache_size: NonZeroUsize::new(5)
                                         .expect("Max orphan cache size must be non-zero"),
                                 },
                             },
                         },
-                        service: ServiceConfig {
-                            bootstrap: lb_chain_service::BootstrapConfig {
+                        service: cryptarchia::service::Config {
+                            bootstrap: cryptarchia::service::BootstrapConfig {
                                 force_bootstrap: false,
-                                offline_grace_period: OfflineGracePeriodConfig {
-                                    grace_period: Duration::from_secs(20 * 60),
-                                    state_recording_interval: Duration::from_secs(60),
-                                },
+                                offline_grace_period:
+                                    cryptarchia::service::OfflineGracePeriodConfig {
+                                        grace_period: Duration::from_secs(20 * 60),
+                                        state_recording_interval: Duration::from_secs(60),
+                                    },
                                 prolonged_bootstrap_period,
                             },
                             recovery_file: "./recovery/cryptarchia.json".into(),
                         },
-                        leader: LeaderConfig {
-                            wallet: LeaderWalletConfig {
+                        leader: cryptarchia::leader::Config {
+                            wallet: cryptarchia::leader::WalletConfig {
                                 max_tx_fee: Value::MAX,
                                 // We use the same funding key used for SDP.
                                 funding_pk,

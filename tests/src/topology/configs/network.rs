@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use lb_libp2p::{IdentifySettings, KademliaSettings, Multiaddr, NatSettings, ed25519, gossipsub};
-use lb_node::config::network::serde::{BackendSettings, Config, SwarmConfig};
+use lb_libp2p::{Multiaddr, ed25519, gossipsub, libp2p};
+use lb_node::config::network::serde as network;
 use lb_utils::net::get_available_udp_port;
 
 use crate::node_address_from_port;
@@ -19,18 +19,18 @@ pub struct NetworkParams {
     pub libp2p_network_layout: Libp2pNetworkLayout,
 }
 
-pub type GeneralNetworkConfig = Config;
+pub type GeneralNetworkConfig = network::Config;
 
-fn default_swarm_config() -> SwarmConfig {
-    SwarmConfig {
+fn default_swarm_config() -> network::SwarmConfig {
+    network::SwarmConfig {
         host: std::net::Ipv4Addr::UNSPECIFIED,
         port: 60000,
         node_key: ed25519::SecretKey::generate(),
-        gossipsub_config: gossipsub::Config::default(),
-        kademlia_config: KademliaSettings::default(),
-        identify_config: IdentifySettings::default(),
-        chain_sync_config: lb_cryptarchia_sync::Config::default(),
-        nat_config: NatSettings::default(),
+        chain_sync: network::chainsync::Config::default(),
+        gossipsub: libp2p::gossipsub::Config::default(),
+        identify: network::identify::Config::default(),
+        kademlia: network::kademlia::Config::default(),
+        nat: network::nat::Config::default(),
     }
 }
 
@@ -39,17 +39,17 @@ pub fn create_network_configs(
     ids: &[[u8; 32]],
     network_params: &NetworkParams,
 ) -> Vec<GeneralNetworkConfig> {
-    let swarm_configs: Vec<SwarmConfig> = ids
+    let swarm_configs: Vec<network::SwarmConfig> = ids
         .iter()
         .map(|id| {
             let mut node_key_bytes = *id;
             let node_key = ed25519::SecretKey::try_from_bytes(&mut node_key_bytes)
                 .expect("Failed to generate secret key from bytes");
 
-            SwarmConfig {
+            network::SwarmConfig {
                 node_key,
                 port: get_available_udp_port().unwrap(),
-                chain_sync_config: lb_cryptarchia_sync::Config {
+                chain_sync: network::chainsync::Config {
                     peer_response_timeout: Duration::from_secs(60),
                 },
                 ..default_swarm_config()
@@ -63,7 +63,7 @@ pub fn create_network_configs(
         .iter()
         .zip(all_initial_peers)
         .map(|(swarm_config, initial_peers)| GeneralNetworkConfig {
-            backend: BackendSettings {
+            backend: network::BackendSettings {
                 initial_peers,
                 swarm: swarm_config.to_owned(),
             },
@@ -72,7 +72,7 @@ pub fn create_network_configs(
 }
 
 fn initial_peers_by_network_layout(
-    swarm_configs: &[SwarmConfig],
+    swarm_configs: &[network::SwarmConfig],
     network_params: &NetworkParams,
 ) -> Vec<Vec<Multiaddr>> {
     let mut all_initial_peers = vec![];

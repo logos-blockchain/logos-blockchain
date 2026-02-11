@@ -1,23 +1,20 @@
+use lb_node::config::tracing::serde as tracing;
 use lb_tracing::{
     logging::loki::LokiConfig, metrics::otlp::OtlpMetricsConfig, tracing::otlp::OtlpTracingConfig,
 };
-use lb_tracing_service::{
-    ConsoleLayer, FilterLayer, LoggerLayer, MetricsLayer, TracingLayer, TracingSettings,
-};
-use tracing::Level;
 
 use crate::IS_DEBUG_TRACING;
 
 #[derive(Clone, Default)]
 pub struct GeneralTracingConfig {
-    pub tracing_settings: TracingSettings,
+    pub tracing_settings: tracing::Config,
 }
 
 impl GeneralTracingConfig {
     fn local_debug_tracing(id: usize) -> Self {
         let host_identifier = format!("node-{id}");
         Self {
-            tracing_settings: TracingSettings {
+            tracing_settings: tracing::Config {
                 logger: LoggerLayer::Loki(LokiConfig {
                     endpoint: "http://localhost:3100".try_into().unwrap(),
                     host_identifier: host_identifier.clone(),

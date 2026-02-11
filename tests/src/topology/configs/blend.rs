@@ -1,19 +1,14 @@
 use core::time::Duration;
 use std::{num::NonZeroU64, str::FromStr as _};
 
-use lb_blend_service::core::settings::ZkSettings;
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
 use lb_libp2p::Multiaddr;
-use lb_node::config::blend::serde::{
-    Config,
-    core::{BackendConfig as CoreBackendConfig, Config as CoreConfig},
-    edge::{BackendConfig as EdgeBackendConfig, Config as EdgeConfig},
-};
+use lb_node::config::blend::serde as blend;
 use num_bigint::BigUint;
 
 use crate::common::kms::key_id_for_preload_backend;
 
-pub type GeneralBlendConfig = (Config, Ed25519Key, ZkKey);
+pub type GeneralBlendConfig = (blend::Config, Ed25519Key, ZkKey);
 
 #[must_use]
 pub fn create_blend_configs(ids: &[[u8; 32]], ports: &[u16]) -> Vec<GeneralBlendConfig> {
@@ -27,13 +22,13 @@ pub fn create_blend_configs(ids: &[[u8; 32]], ports: &[u16]) -> Vec<GeneralBlend
             let secret_zk_key =
                 ZkKey::from(BigUint::from_bytes_le(private_key.public_key().as_bytes()));
             (
-                Config {
+                blend::Config {
                     non_ephemeral_signing_key_id: key_id_for_preload_backend(
                         &private_key.clone().into(),
                     ),
                     recovery_path_prefix: "./recovery/blend".into(),
-                    core: CoreConfig {
-                        backend: CoreBackendConfig {
+                    core: blend::core::Config {
+                        backend: blend::core::BackendConfig {
                             core_peering_degree: 1..=3,
                             edge_node_connection_timeout: Duration::from_secs(1),
                             listening_address: Multiaddr::from_str(&format!(
@@ -44,14 +39,14 @@ pub fn create_blend_configs(ids: &[[u8; 32]], ports: &[u16]) -> Vec<GeneralBlend
                                 .expect("Max dial attempts per peer cannot be zero."),
                             max_edge_node_incoming_connections: 300,
                         },
-                        zk: ZkSettings {
+                        zk: blend::core::ZkSettings {
                             secret_key_kms_id: key_id_for_preload_backend(
                                 &secret_zk_key.clone().into(),
                             ),
                         },
                     },
-                    edge: EdgeConfig {
-                        backend: EdgeBackendConfig {
+                    edge: blend::edge::Config {
+                        backend: blend::edge::BackendConfig {
                             max_dial_attempts_per_peer_per_message: 1.try_into().unwrap(),
                             replication_factor: 1.try_into().unwrap(),
                         },

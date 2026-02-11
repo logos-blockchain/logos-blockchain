@@ -1,0 +1,28 @@
+use lb_tracing::metrics::otlp::OtlpMetricsConfig;
+use lb_tracing_service::MetricsLayer;
+use serde::{Deserialize, Serialize};
+use url::Url;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Layer {
+    Otlp(OtlpConfig),
+    None,
+}
+
+impl From<Layer> for MetricsLayer {
+    fn from(value: Layer) -> Self {
+        match value {
+            Layer::Otlp(config) => MetricsLayer::Otlp(OtlpMetricsConfig {
+                endpoint: config.endpoint,
+                host_identifier: config.host_identifier,
+            }),
+            Layer::None => MetricsLayer::None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OtlpConfig {
+    pub endpoint: Url,
+    pub host_identifier: String,
+}

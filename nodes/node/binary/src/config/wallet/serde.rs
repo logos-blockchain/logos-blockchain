@@ -1,7 +1,6 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use lb_key_management_system_service::{backend::preload::KeyId, keys::ZkPublicKey};
-use lb_wallet_service::WalletServiceSettings;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

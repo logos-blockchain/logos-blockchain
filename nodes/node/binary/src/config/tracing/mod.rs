@@ -10,12 +10,12 @@ pub struct ServiceConfig {
 
 impl From<ServiceConfig> for TracingSettings {
     fn from(value: ServiceConfig) -> Self {
-        TracingSettings {
-            logger: value.user.logger,
-            tracing: value.user.tracing,
-            filter: value.user.filter,
-            metrics: value.user.metrics,
-            console: value.user.console,
+        Self {
+            logger: value.user.logger.into(),
+            tracing: value.user.tracing.into(),
+            filter: value.user.filter.into(),
+            metrics: value.user.metrics.into(),
+            console: value.user.console.into(),
             level: value.user.level,
         }
     }

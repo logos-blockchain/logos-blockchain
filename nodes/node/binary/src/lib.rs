@@ -4,8 +4,8 @@ pub mod generic_services;
 #[cfg(feature = "config-gen")]
 pub mod init;
 
+use cfg_if::cfg_if;
 use color_eyre::eyre::{Result, eyre};
-use lb_api_service::ApiServiceSettings;
 pub use lb_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackend as BlendBackend,
@@ -44,9 +44,11 @@ pub use crate::config::{ApiArgs, LogArgs, NetworkArgs, UserConfig};
 use crate::{
     api::backend::AxumBackend,
     config::{
-        RunConfig, blend::ServiceConfig as BlendConfig,
-        cryptarchia::ServiceConfig as CryptarchiaConfig, mempool::ServiceConfig as MempoolConfig,
-        network::ServiceConfig as NetworkConfig, time::ServiceConfig as TimeConfig,
+        RunConfig, api::ServiceConfig as ApiConfig, blend::ServiceConfig as BlendConfig,
+        cryptarchia::ServiceConfig as CryptarchiaConfig, kms::ServiceConfig as KmsConfig,
+        mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
+        sdp::ServiceConfig as SdpConfig, storage::ServiceConfig as StorageConfig,
+        time::ServiceConfig as TimeConfig, wallet::ServiceConfig as WalletConfig,
     },
     generic_services::{SdpMempoolAdapter, SdpService, SdpWalletAdapter},
 };
@@ -160,13 +162,54 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
     }
     .into();
 
+    let network_service_config = NetworkConfig {
+        user: config.user.network,
+        deployment: config.deployment.network,
+    }
+    .into();
+
+    let storage_config = StorageConfig {
+        user: config.user.storage,
+    }
+    .into();
+
+    let kms_config = KmsConfig {
+        user: config.user.kms,
+    }
+    .into();
+
+    let sdp_config = SdpConfig {
+        user: config.user.sdp,
+    }
+    .into();
+
+    let wallet_config = WalletConfig {
+        user: config.user.wallet,
+    }
+    .into();
+
+    #[cfg(feature = "tracing")]
+    let tracing_config = config::tracing::ServiceConfig {
+        user: config.user.tracing,
+    }
+    .into();
+
+    let api_config = ApiConfig {
+        user: config.user.api,
+    };
+
+    cfg_if! {
+        if #[cfg(feature = "testing")] {
+            let (http_config, testing_config) = api_config.into_backend_and_testing_settings();
+        } else {
+            let http_config = api_config.into_backend_settings();
+        }
+    }
+
+    #[cfg(feature = "testing")]
     let app = OverwatchRunner::<LogosBlockchain>::run(
         LogosBlockchainServiceSettings {
-            network: NetworkConfig {
-                user: config.user.network,
-                deployment: config.deployment.network,
-            }
-            .into(),
+            network: network_service_config,
             blend: blend_config,
             blend_core: blend_core_config,
             blend_edge: blend_edge_config,
@@ -176,22 +219,18 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
             chain_network: chain_network_config,
             cryptarchia_leader: chain_leader_config,
             time: time_service_config,
-            http: ApiServiceSettings {
-                backend_settings: config.user.api.backend.into(),
-            },
-            storage: config.user.storage.backend.into(),
+            http: http_config,
+            storage: storage_config,
             system_sig: (),
-            key_management: config.user.kms.backend.into(),
-            sdp: config.user.sdp.into(),
-            wallet: config.user.wallet.into(),
+            key_management: kms_config,
+            sdp: sdp_config,
+            wallet: wallet_config,
 
             #[cfg(feature = "tracing")]
-            tracing: config.user.tracing.into(),
+            tracing: tracing_config,
 
             #[cfg(feature = "testing")]
-            testing_http: ApiServiceSettings {
-                backend_settings: config.user.api.testing.into(),
-            },
+            testing_http: testing_config,
         },
         None,
     )

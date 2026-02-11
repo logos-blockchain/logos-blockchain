@@ -10,7 +10,7 @@ pub struct ServiceConfig {
 
 impl From<ServiceConfig> for WalletServiceSettings {
     fn from(value: ServiceConfig) -> Self {
-        WalletServiceSettings {
+        Self {
             known_keys: value.user.known_keys,
             voucher_master_key_id: value.user.voucher_master_key_id,
             recovery_path: value.user.recovery_path,

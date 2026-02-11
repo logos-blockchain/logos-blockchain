@@ -21,6 +21,7 @@ workspace = true
 
 [dependencies]
 async-trait                      = "0.1"
+cfg-if                           = { workspace = true }
 clap                             = { default-features = false, features = ["derive", "env", "help", "std", "string"], version = "4" }
 color-eyre                       = { default-features = false, version = "0.6.0" }
 futures                          = { default-features = false, version = "0.3" }
@@ -66,6 +67,7 @@ thiserror                        = { workspace = true }
 tokio                            = "1"
 tokio-stream                     = { default-features = false, version = "0.1" }
 tracing                          = { workspace = true }
+url                              = { version = "2.5.8", default-features = false }
 
 # openapi related dependencies
 utoipa = { workspace = true }

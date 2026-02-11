@@ -3,23 +3,22 @@ use std::{
     time::Duration,
 };
 
-use lb_node::config::time::serde::Config;
-use lb_time_service::backends::{NtpTimeBackendSettings, ntp::async_client::NTPClientSettings};
+use lb_node::config::time::serde as time;
 
 pub(crate) const DEFAULT_SLOT_TIME_IN_SECS: u64 = 1;
 pub(crate) const CONSENSUS_SLOT_TIME_VAR: &str = "CONSENSUS_SLOT_TIME";
 
-pub type GeneralTimeConfig = Config;
+pub type GeneralTimeConfig = time::Config;
 
 #[must_use]
 pub fn default_time_config() -> GeneralTimeConfig {
     GeneralTimeConfig {
-        backend: NtpTimeBackendSettings {
-            ntp_client_settings: NTPClientSettings {
+        backend: time::NtpSettings {
+            client: time::NtpClientSettings {
                 timeout: Duration::from_secs(5),
                 listening_interface: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             },
-            ntp_server: "pool.ntp.org:123".to_owned(),
+            server: "pool.ntp.org:123".to_owned(),
             update_interval: Duration::from_secs(16),
         },
     }

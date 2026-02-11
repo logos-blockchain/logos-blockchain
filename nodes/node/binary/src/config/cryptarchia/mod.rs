@@ -21,6 +21,10 @@ pub struct ServiceConfig {
 
 impl ServiceConfig {
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Conversion. Useful to have in a single place."
+    )]
     pub fn into_cryptarchia_services_settings(
         self,
         blend_deployment: &BlendDeploymentSettings,

@@ -340,7 +340,7 @@ pub fn create_validator_config(
         mempool: MempoolConfig {
             recovery_path: "./recovery/mempool.json".into(),
         },
-        tracing: config.tracing_config.tracing_settings.into(),
+        tracing: config.tracing_config.tracing_settings,
         api: ApiConfig {
             backend: AxumBackendSettings {
                 address: config.api_config.address,

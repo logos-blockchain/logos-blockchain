@@ -11,10 +11,9 @@ use clap::Subcommand;
 use clap::{Parser, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
-use lb_tracing::logging::{gelf::GelfConfig, local::FileConfig};
-use lb_tracing_service::LoggerLayer;
 use serde::Deserialize;
 
+use crate::config::tracing::serde::logger::{FileConfig, GelfConfig, Layer};
 pub use crate::config::{
     api::serde::Config as ApiConfig,
     blend::serde::Config as BlendConfig,
@@ -341,20 +340,21 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
     // Override the file config with the one from env variables.
     if let Some(backend) = backend {
         tracing.logger = match backend {
-            LoggerLayerType::Gelf => LoggerLayer::Gelf(GelfConfig {
+            LoggerLayerType::Gelf => Layer::Gelf(GelfConfig {
                 addr: addr
                     .ok_or_else(|| eyre!("Gelf backend requires an address."))?
                     .to_socket_addrs()?
                     .next()
                     .ok_or_else(|| eyre!("Invalid gelf address"))?,
             }),
-            LoggerLayerType::File => LoggerLayer::File(FileConfig {
+            LoggerLayerType::File => Layer::File(FileConfig {
                 directory: directory.ok_or_else(|| eyre!("File backend requires a directory."))?,
                 prefix,
             }),
-            LoggerLayerType::Stdout => LoggerLayer::Stdout,
-            LoggerLayerType::Stderr => LoggerLayer::Stderr,
+            LoggerLayerType::Stdout => Layer::Stdout,
+            LoggerLayerType::Stderr => Layer::Stderr,
         }
+        .into();
     }
 
     if let Some(level_str) = level {
