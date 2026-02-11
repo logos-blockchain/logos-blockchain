@@ -3,8 +3,8 @@ n_hosts: 4
 timeout: 10
 
 faucet_settings:
-  note_count: 100
-  note_value: 10
+  note_count: 3
+  note_value: 10000000
 
 # Tracing
 tracing_settings:
