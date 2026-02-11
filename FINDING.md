@@ -30,14 +30,22 @@ Find the merged to master PR before this one where the test first started to fai
    - PR #2115: "fix(chain-leader): do not propose blocks while chain is in Bootstrapping mode"
    - Workflow run: 21715094606
 
-### Why This PR Likely Caused the Failure
+### Why This PR Caused the Failure
 
-The PR modified the chain leader behavior to prevent block proposals during the Bootstrapping mode. The "Orphan staggered fork start 2" cucumber test scenario likely tests:
-- Orphaned block handling
-- Fork resolution during chain startup
+The PR modified the chain leader behavior to prevent block proposals during the Bootstrapping mode. Specifically, it added a wait condition where the chain leader service now waits until the chain switches to "Online mode" (after IBD + Prolonged Bootstrap Period) before starting block proposals.
+
+**Key changes from PR #2115:**
+- Added `wait_until_chain_becomes_online()` API to chain service
+- Chain leader now waits for the chain to exit Bootstrapping mode before proposing blocks
+- Previously, blocks could be proposed immediately after IBD completed, even during Bootstrapping
+
+**Impact on tests:**
+The "Orphan staggered fork start 2" cucumber test scenario likely tests:
+- Orphaned block handling during early chain operation
+- Fork resolution during chain startup/bootstrapping
 - Timing-sensitive block proposal behavior
 
-By changing when blocks can be proposed, this PR affected the test's expected behavior for handling orphan blocks in a staggered fork scenario during chain bootstrapping.
+By delaying block proposals until after the chain is fully online (post-Bootstrapping), this PR fundamentally changed the timing of when blocks are created in test scenarios. The test likely expected blocks to be proposed during the Bootstrapping phase, and this behavioral change broke that assumption.
 
 ### Methodology
 
