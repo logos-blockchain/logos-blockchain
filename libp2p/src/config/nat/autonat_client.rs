@@ -19,10 +19,6 @@ pub struct Settings {
     pub retest_successful_external_addresses_interval: Duration,
 }
 
-const fn default_retest_interval() -> Duration {
-    Duration::from_secs(60)
-}
-
 impl Settings {
     #[must_use]
     pub fn to_libp2p_config(&self) -> Config {

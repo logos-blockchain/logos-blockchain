@@ -14,25 +14,6 @@ pub struct Config {
 pub struct PreloadKmsBackendSettings {
     pub keys: HashMap<KeyId, Key>,
 }
-
-impl From<PreloadKmsBackendSettings>
-    for lb_key_management_system_service::backend::preload::PreloadKMSBackendSettings
-{
-    fn from(value: PreloadKmsBackendSettings) -> Self {
-        Self { keys: value.keys }
-    }
-}
-
-impl From<lb_key_management_system_service::backend::preload::PreloadKMSBackendSettings>
-    for PreloadKmsBackendSettings
-{
-    fn from(
-        value: lb_key_management_system_service::backend::preload::PreloadKMSBackendSettings,
-    ) -> Self {
-        Self { keys: value.keys }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use lb_key_management_system_service::keys::{Ed25519Key, Key, ZkKey};

@@ -1,6 +1,6 @@
 pub use identify::Settings as IdentifySettings;
-pub use kademlia::Settings as KademliaSettings;
-use libp2p::identity::ed25519;
+pub use kademlia::{CachingSettings, KBucketInserts, Settings as KademliaSettings};
+use libp2p::{gossipsub, identity::ed25519};
 pub use nat::{
     Settings as NatSettings, TraversalSettings, autonat_client::Settings as AutonatClientSettings,
     gateway::Settings as GatewaySettings, mapping::Settings as NatMappingSettings,
@@ -8,7 +8,6 @@ pub use nat::{
 
 use crate::protocol_name::StreamProtocol;
 
-pub mod gossipsub;
 mod identify;
 mod kademlia;
 mod nat;
@@ -23,7 +22,7 @@ pub struct SwarmConfig {
     pub node_key: ed25519::SecretKey,
 
     /// Gossipsub config
-    pub gossipsub_config: libp2p::gossipsub::Config,
+    pub gossipsub_config: gossipsub::Config,
 
     pub kad_protocol_name: StreamProtocol,
     pub identify_protocol_name: StreamProtocol,
@@ -75,7 +74,7 @@ mod tests {
                 host: std::net::Ipv4Addr::UNSPECIFIED,
                 port: 60000,
                 node_key: ed25519::SecretKey::generate(),
-                gossipsub_config: libp2p::gossipsub::Config::default(),
+                gossipsub_config: gossipsub::Config::default(),
                 identify_protocol_name: StreamProtocol::new("/identify/test"),
                 kad_protocol_name: StreamProtocol::new("/kademlia/test"),
                 chain_sync_protocol_name: StreamProtocol::new("/chainsync/test"),

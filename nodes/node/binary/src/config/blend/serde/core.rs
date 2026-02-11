@@ -1,5 +1,6 @@
 use core::{num::NonZeroU64, ops::RangeInclusive, time::Duration};
 
+use lb_key_management_system_service::backend::preload::KeyId;
 use lb_libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;

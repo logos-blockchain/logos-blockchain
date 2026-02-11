@@ -1,7 +1,7 @@
 use lb_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pCoreBlendBackendSettings,
-        settings::StartingBlendConfig as BlendCoreSettings,
+        settings::{StartingBlendConfig as BlendCoreSettings, ZkSettings},
     },
     edge::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pEdgeBlendBackendSettings,
@@ -68,7 +68,9 @@ impl From<ServiceConfig>
                     protocol_name: config.deployment.common.protocol_name.clone(),
                 },
                 scheduler: config.deployment.core.scheduler,
-                zk: config.user.core.zk,
+                zk: ZkSettings {
+                    secret_key_kms_id: config.user.core.zk.secret_key_kms_id,
+                },
                 activity_threshold_sensitivity: config
                     .deployment
                     .core

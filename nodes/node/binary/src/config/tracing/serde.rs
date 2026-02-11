@@ -1,6 +1,4 @@
-use lb_tracing_service::{
-    ConsoleLayer, FilterLayer, LoggerLayer, MetricsLayer, TracingLayer, TracingSettings,
-};
+use lb_tracing_service::{ConsoleLayer, FilterLayer, LoggerLayer, MetricsLayer, TracingLayer};
 use serde::{Deserialize, Serialize};
 use tracing::Level;
 
@@ -13,32 +11,6 @@ pub struct Config {
     pub console: ConsoleLayer,
     #[serde(with = "serde_level")]
     pub level: Level,
-}
-
-impl From<Config> for TracingSettings {
-    fn from(value: Config) -> Self {
-        Self {
-            console: value.console,
-            filter: value.filter,
-            logger: value.logger,
-            metrics: value.metrics,
-            tracing: value.tracing,
-            level: value.level,
-        }
-    }
-}
-
-impl From<TracingSettings> for Config {
-    fn from(value: TracingSettings) -> Self {
-        Self {
-            console: value.console,
-            filter: value.filter,
-            logger: value.logger,
-            metrics: value.metrics,
-            tracing: value.tracing,
-            level: value.level,
-        }
-    }
 }
 
 mod serde_level {

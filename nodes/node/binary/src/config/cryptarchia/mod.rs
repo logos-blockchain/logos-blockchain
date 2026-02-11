@@ -89,17 +89,48 @@ impl ServiceConfig {
         };
 
         let chain_service_settings = lb_chain_service::CryptarchiaSettings {
-            bootstrap: self.user.service.bootstrap.into(),
+            bootstrap: lb_chain_service::BootstrapConfig {
+                force_bootstrap: self.user.service.bootstrap.force_bootstrap,
+                prolonged_bootstrap_period: self.user.service.bootstrap.prolonged_bootstrap_period,
+                offline_grace_period: lb_chain_service::OfflineGracePeriodConfig {
+                    grace_period: self
+                        .user
+                        .service
+                        .bootstrap
+                        .offline_grace_period
+                        .grace_period,
+                    state_recording_interval: self
+                        .user
+                        .service
+                        .bootstrap
+                        .offline_grace_period
+                        .state_recording_interval,
+                },
+            },
             config: ledger_config.clone(),
             recovery_file: self.user.service.recovery_file,
             starting_state: self.deployment.genesis_state.into(),
         };
         let chain_network_settings = lb_chain_network_service::ChainNetworkSettings {
-            bootstrap: self.user.network.bootstrap.into(),
+            bootstrap: lb_chain_network_service::BootstrapConfig {
+                ibd: lb_chain_network_service::IbdConfig {
+                    delay_before_new_download: self
+                        .user
+                        .network
+                        .bootstrap
+                        .ibd
+                        .delay_before_new_download,
+                    peers: self.user.network.bootstrap.ibd.peers,
+                },
+            },
             network_adapter_settings: LibP2pAdapterSettings {
                 topic: self.deployment.gossipsub_protocol.clone(),
             },
-            sync: self.user.network.sync.into(),
+            sync: lb_chain_network_service::SyncConfig {
+                orphan: lb_chain_network_service::OrphanConfig {
+                    max_orphan_cache_size: self.user.network.sync.orphan.max_orphan_cache_size,
+                },
+            },
         };
         let chain_leader_settings = lb_chain_leader_service::LeaderSettings {
             blend_broadcast_settings: Libp2pBroadcastSettings {
@@ -107,7 +138,10 @@ impl ServiceConfig {
             },
             config: ledger_config,
             transaction_selector_settings: (),
-            wallet_config: self.user.leader.wallet.into(),
+            wallet_config: lb_chain_leader_service::LeaderWalletConfig {
+                funding_pk: self.user.leader.wallet.funding_pk,
+                max_tx_fee: self.user.leader.wallet.max_tx_fee,
+            },
         };
         (
             chain_service_settings,

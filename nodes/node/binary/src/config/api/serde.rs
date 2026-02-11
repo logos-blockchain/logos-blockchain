@@ -39,27 +39,3 @@ const fn default_max_body_size() -> usize {
 const fn default_max_concurrent_requests() -> usize {
     500
 }
-
-impl From<AxumBackendSettings> for lb_http_api_common::settings::AxumBackendSettings {
-    fn from(value: AxumBackendSettings) -> Self {
-        Self {
-            address: value.address,
-            cors_origins: value.cors_origins,
-            timeout: value.timeout,
-            max_body_size: value.max_body_size,
-            max_concurrent_requests: value.max_concurrent_requests,
-        }
-    }
-}
-
-impl From<lb_http_api_common::settings::AxumBackendSettings> for AxumBackendSettings {
-    fn from(value: lb_http_api_common::settings::AxumBackendSettings) -> Self {
-        Self {
-            address: value.address,
-            cors_origins: value.cors_origins,
-            timeout: value.timeout,
-            max_body_size: value.max_body_size,
-            max_concurrent_requests: value.max_concurrent_requests,
-        }
-    }
-}

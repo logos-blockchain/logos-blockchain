@@ -1,4 +1,3 @@
-use lb_libp2p::SwarmConfig;
 use lb_network_service::{backends::libp2p::config::Libp2pConfig, config::NetworkConfig};
 
 use crate::config::network::{deployment::Settings as DeploymentSettings, serde::Config};
@@ -21,19 +20,7 @@ impl From<ServiceConfig> for NetworkConfig<Libp2pConfig> {
         Self {
             backend: Libp2pConfig {
                 initial_peers: value.user.backend.initial_peers,
-                inner: SwarmConfig {
-                    chain_sync_config: value.user.backend.swarm.chain_sync_config,
-                    gossipsub_config: value.user.backend.swarm.gossipsub_config,
-                    host: value.user.backend.swarm.host,
-                    identify_config: value.user.backend.swarm.identify_config,
-                    identify_protocol_name: value.deployment.identify_protocol_name,
-                    kad_protocol_name: value.deployment.kademlia_protocol_name,
-                    chain_sync_protocol_name: value.deployment.chain_sync_protocol_name,
-                    kademlia_config: value.user.backend.swarm.kademlia_config,
-                    nat_config: value.user.backend.swarm.nat_config,
-                    node_key: value.user.backend.swarm.node_key,
-                    port: value.user.backend.swarm.port,
-                },
+                inner: value.user.backend.swarm.into(),
             },
         }
     }

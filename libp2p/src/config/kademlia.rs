@@ -1,7 +1,6 @@
 use std::{num::NonZeroUsize, time::Duration};
 
 use libp2p::{StreamProtocol, kad};
-use serde::{Deserialize, Serialize};
 
 /// A serializable representation of Kademlia configuration options.
 /// When a value is None, the libp2p defaults are used.
@@ -49,15 +48,13 @@ pub struct Settings {
     pub client_mode: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KBucketInserts {
     OnConnected,
     Manual,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", content = "config")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CachingSettings {
     Disabled,
     Enabled { max_peers: u16 },

@@ -1,5 +1,8 @@
 use lb_cryptarchia_engine::time::SlotConfig;
-use lb_time_service::{TimeServiceSettings, backends::NtpTimeBackendSettings};
+use lb_time_service::{
+    TimeServiceSettings,
+    backends::{NtpTimeBackendSettings, ntp::async_client::NTPClientSettings},
+};
 
 use crate::config::{
     cryptarchia::deployment::Settings as CryptarchiaDeploymentSettings,
@@ -29,7 +32,14 @@ impl ServiceConfig {
             base_period_length: cryptarchia_deployment
                 .consensus_config()
                 .base_period_length(),
-            backend: self.user.backend,
+            backend: NtpTimeBackendSettings {
+                ntp_client_settings: NTPClientSettings {
+                    timeout: self.user.backend.client.timeout,
+                    listening_interface: self.user.backend.client.listening_interface,
+                },
+                ntp_server: self.user.backend.server,
+                update_interval: self.user.backend.update_interval,
+            },
         }
     }
 }
