@@ -109,9 +109,7 @@ impl ZoneIndexer {
             .consensus_info(self.node_url.clone())
             .await?;
 
-        // Genesis block isn't stored as a regular block, so get_block returns None.
-        // We assume None means genesis (slot 0). If this assumption is wrong (e.g.,
-        // due to pruning or transient errors), the indexer will behave incorrectly.
+        // Genesis block isn't stored as a regular block, so None here means slot 0.
         Ok(self
             .http_client
             .get_block(self.node_url.clone(), info.lib)
