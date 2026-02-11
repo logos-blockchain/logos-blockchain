@@ -52,7 +52,7 @@ lb-time-service                  = { features = ["ntp", "serde"], workspace = tr
 lb-tracing                       = { workspace = true }
 lb-tracing-service               = { workspace = true }
 lb-tx-service                    = { features = ["rocksdb-backend"], workspace = true }
-lb-utils                         = { features = ["serde"], workspace = true }
+lb-utils                         = { features = ["serde", "time"], workspace = true }
 lb-wallet-service                = { workspace = true }
 libp2p                           = { workspace = true, features = ["gossipsub", "identify", "kad"] }
 num-bigint                       = { default-features = false, version = "0.4" }

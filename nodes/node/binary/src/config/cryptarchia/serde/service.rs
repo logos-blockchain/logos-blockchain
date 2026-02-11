@@ -1,6 +1,7 @@
 use core::time::Duration;
 use std::path::PathBuf;
 
+use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
@@ -10,8 +11,8 @@ pub struct Config {
     pub bootstrap: BootstrapConfig,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde_as]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BootstrapConfig {
     #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub prolonged_bootstrap_period: Duration,
@@ -20,8 +21,8 @@ pub struct BootstrapConfig {
     pub offline_grace_period: OfflineGracePeriodConfig,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde_as]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OfflineGracePeriodConfig {
     /// Maximum duration a node can be offline before forcing bootstrap mode
     #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]

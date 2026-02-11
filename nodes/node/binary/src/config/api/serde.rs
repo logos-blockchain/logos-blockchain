@@ -13,8 +13,8 @@ pub struct Config {
     pub testing: AxumBackendSettings,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AxumBackendSettings {
     pub address: SocketAddr,
     /// Allowed origins for this server deployment requests.

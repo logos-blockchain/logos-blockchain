@@ -1,6 +1,7 @@
 use core::{net::IpAddr, time::Duration};
 
 use serde::{Deserialize, Serialize};
+use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use serde_with::serde_as;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -8,8 +9,8 @@ pub struct Config {
     pub backend: NtpSettings,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NtpSettings {
     /// Ntp server address
     pub server: String,
@@ -20,8 +21,8 @@ pub struct NtpSettings {
     pub update_interval: Duration,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NtpClientSettings {
     #[serde_as(as = "MinimalBoundedDuration<1, NANO>")]
     pub timeout: Duration,

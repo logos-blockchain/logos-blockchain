@@ -11,8 +11,8 @@ pub struct Config {
     pub sync: SyncConfig,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde_as]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BootstrapConfig {
     pub ibd: IbdConfig,
 }

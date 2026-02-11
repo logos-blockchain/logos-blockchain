@@ -21,15 +21,11 @@ futures                          = { default-features = false, version = "0.3" }
 futures-util                     = { default-features = false, version = "0.3.31" }
 hex                              = { default-features = false, version = "0.4.3" }
 lb-blend-proofs                  = { workspace = true }
-lb-blend-service                 = { features = ["libp2p"], workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
-lb-chain-leader-service          = { workspace = true }
-lb-chain-network-service         = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { features = ["serde"], workspace = true }
-lb-cryptarchia-sync              = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
@@ -37,13 +33,8 @@ lb-libp2p                        = { workspace = true }
 lb-network-service               = { features = ["libp2p"], workspace = true }
 lb-node                          = { default-features = false, features = ["testing"], workspace = true }
 lb-pol                           = { features = ["high-active-slot-coefficient"], workspace = true }
-lb-sdp-service                   = { workspace = true }
-lb-time-service                  = { workspace = true }
-lb-tracing                       = { workspace = true }
-lb-tracing-service               = { workspace = true }
 lb-tx-service                    = { features = ["libp2p", "mock"], workspace = true }
 lb-utils                         = { workspace = true }
-lb-wallet-service                = { workspace = true }
 logos-blockchain-zone-sdk        = { path = "../zone-sdk" }
 num-bigint                       = { default-features = false, version = "0.4" }
 rand                             = { workspace = true }

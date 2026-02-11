@@ -11,8 +11,8 @@ pub struct Config {
     pub zk: ZkSettings,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BackendConfig {
     pub listening_address: Multiaddr,
     pub core_peering_degree: RangeInclusive<u64>,

@@ -206,7 +206,6 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
         }
     }
 
-    #[cfg(feature = "testing")]
     let app = OverwatchRunner::<LogosBlockchain>::run(
         LogosBlockchainServiceSettings {
             network: network_service_config,
