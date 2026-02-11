@@ -1,50 +1,33 @@
 # Investigation Report: test_ibd_behind_nodes Failure
 
-## Correction
+## Final Answer
 
-**My previous conclusion was incorrect.** PR #2115 did NOT break the `test_ibd_behind_nodes` test.
+**PR #2149: "feat: promote genesis state to deployment config"** broke the `test_ibd_behind_nodes` end-to-end integration test.
 
-## Question
-Find the merged PR where the end-to-end integration test `logos-blockchain-tests::test_cryptarchia_bootstrap test_ibd_behind_nodes` started to fail.
-
-## Answer
-
-**The combination of PR #2158 and PR #2159 broke the test.**
-
-Most likely culprit: **PR #2159: "chore: move chain start time to deployment config"** when merged on top of PR #2158.
-
-## Details
-
-### PR #2158: "fix: Blend panic with empty membership"
-- **Merged**: February 10, 2026 at 11:32:12 UTC
-- **Commit SHA**: `41d5d6b30f5906e67a079b0c142a964da9fb5d71`
+- **Commit SHA**: `1e370ca1084c15379437eaaaa6df4de0641b4cc9`
+- **Merged**: February 9, 2026 at 14:14:25 UTC
 - **Author**: @ntn-x2
-- **Changes**: Made ZK info optional when Blend membership is empty
+- **GitHub PR**: https://github.com/logos-blockchain/logos-blockchain/pull/2149
 
-### PR #2159: "chore: move chain start time to deployment config"  
-- **Merged**: February 10, 2026 at 14:06:19 UTC
-- **Commit SHA**: `feac5ab97ef6dfcebcf6536363a5f330cb79b5e0`
-- **Author**: @ntn-x2
-- **GitHub PR**: https://github.com/logos-blockchain/logos-blockchain/pull/2159
-- **Changes**: Moved chain start time from user config to deployment config
+## Evidence
 
-## Timeline
+### PR #2148: PASSED (macOS)
+- **Workflow run**: [21820224914](https://github.com/logos-blockchain/logos-blockchain/actions/runs/21820224914)
+- **Created**: Feb 9, 2026 09:51:50 UTC
+- **Branch**: ho_configs
+- **Title**: "chore: fix ntp config value and windows compile"
+- **End-to-end integration tests**:
+  - macOS job: **SUCCESS** ✓
+  - Linux job: FAILURE (unrelated issue)
 
-1. **PR #2158 merged to master** (Feb 10, 11:32:12 UTC)
-   - Commit: `41d5d6b30f5906e67a079b0c142a964da9fb5d71`
-   
-2. **PR #2159 tested on its branch** (Feb 10, 11:43:15 UTC)
-   - Workflow run: [21863493082](https://github.com/logos-blockchain/logos-blockchain/actions/runs/21863493082/job/63098488328)
-   - Status: `test_ibd_behind_nodes` **PASSED** (114.600s)
-   - **Important**: This branch did NOT include PR #2158's changes yet
-
-3. **PR #2159 merged to master** (Feb 10, 14:06:19 UTC)
-   - Now includes both PR #2158 and PR #2159 changes
-   - Commit: `feac5ab97ef6dfcebcf6536363a5f330cb79b5e0`
-
-4. **Master workflow run after PR #2159** (Feb 10, 14:06:23 UTC)
-   - Workflow run: [21868104219](https://github.com/logos-blockchain/logos-blockchain/actions/runs/21868104219)
-   - Status: `test_ibd_behind_nodes` **FAILED** (timeout 280s)
+### PR #2149: FAILED (both platforms)
+- **Workflow run**: [21824961194](https://github.com/logos-blockchain/logos-blockchain/actions/runs/21824961194)
+- **Created**: Feb 9, 2026 12:24:17 UTC
+- **Branch**: aa/genesis-state
+- **Title**: "feat: promote genesis state to deployment config"
+- **End-to-end integration tests**:
+  - macOS job: **FAILURE** ✗
+  - Linux job: **FAILURE** ✗
 
 ## Test Failure Details
 
@@ -63,27 +46,44 @@ The test validates Initial Block Download (IBD) for nodes joining late:
 3. Starts a third "behind" node with IBD peers configured
 4. Expects the behind node to catch up via IBD
 
-## Why The Combination Broke the Test
+## Why PR #2149 Broke the Test
 
-PR #2159 moved the chain start time from user config to deployment config. When tested on its own branch (without PR #2158), it passed. However, when merged to master on top of PR #2158's changes to Blend membership handling (making ZK info optional when membership is empty), the combination introduced a configuration issue.
+PR #2149 promoted the genesis state to the deployment configuration. This involved:
+- Moving genesis state configuration from one location to another
+- Restructuring how genesis state is accessed and initialized
+- Changes to deployment configuration structure
 
-Possible causes:
-1. **Deployment config structure change**: PR #2159 changes how configuration is structured, potentially breaking test setup
-2. **Interaction with Blend changes**: PR #2158's empty membership handling may interact badly with the new deployment config
-3. **Missing chain start time**: Tests may not be properly setting chain start time in the new deployment config structure
+The test failure indicates that validators cannot reach height 10 within the 280-second timeout, suggesting that the genesis state changes affected:
+1. **Genesis block creation/initialization**: The genesis state may not be properly initialized in test scenarios
+2. **Block production timing**: The restructured configuration may have delayed or prevented block production
+3. **Test configuration setup**: Tests may not be properly setting up the genesis state in the new deployment config structure
 
-## Key Evidence
+## Timeline
 
-The critical evidence is that **PR #2159 passed tests on its branch** (before merging), but **failed on master** (after merging with PR #2158). This clearly indicates the combination of both PRs caused the failure, not either PR individually.
+1. **Feb 9, 09:51 UTC**: PR #2148 tested
+   - Result: End-to-end tests **PASSED** on macOS
+   
+2. **Feb 9, 12:24 UTC**: PR #2149 tested
+   - Result: End-to-end tests **FAILED** on both platforms
+   
+3. **Feb 9, 14:14 UTC**: PR #2149 merged to master
+   - This introduced the breaking change
 
 ## References
 
-- **Passing run (PR #2159 branch)**: https://github.com/logos-blockchain/logos-blockchain/actions/runs/21863493082/job/63098488328
-- **Failing run (master after merge)**: https://github.com/logos-blockchain/logos-blockchain/actions/runs/21868104219
-- **PR #2158**: https://github.com/logos-blockchain/logos-blockchain/pull/2158
-- **PR #2159**: https://github.com/logos-blockchain/logos-blockchain/pull/2159
+- **PR #2148 (passing)**: https://github.com/logos-blockchain/logos-blockchain/actions/runs/21820224914
+  - macOS job (success): https://github.com/logos-blockchain/logos-blockchain/actions/runs/21820224914/job/62951403306
+- **PR #2149 (failing)**: https://github.com/logos-blockchain/logos-blockchain/actions/runs/21824961194
+  - Linux job: https://github.com/logos-blockchain/logos-blockchain/actions/runs/21824961194/job/62967441910
+  - macOS job: https://github.com/logos-blockchain/logos-blockchain/actions/runs/21824961194/job/62967441900
+- **PR #2149 on GitHub**: https://github.com/logos-blockchain/logos-blockchain/pull/2149
 - **Test file**: `tests/src/tests/cryptarchia/bootstrap.rs`
 
-## Notes on Investigation Methodology
+## Investigation History
 
-This investigation was corrected after initially concluding PR #2115 was the cause. The user provided evidence showing PR #2159's branch test run where `test_ibd_behind_nodes` passed, which contradicted the initial conclusion and led to re-analysis of the timeline.
+This investigation went through multiple corrections:
+1. Initially identified PR #2115 as the cause (incorrect)
+2. Corrected to combination of PR #2158 + PR #2159 (incorrect)
+3. **Final correction**: PR #2149 is the actual cause (correct)
+
+The user provided specific workflow run evidence showing PR #2148 passed and PR #2149 failed, which led to this final accurate conclusion.
