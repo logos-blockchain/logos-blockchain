@@ -155,7 +155,12 @@ fn build_user_config(
                     kademlia_config: KademliaSettings::default(),
                     identify_config: IdentifySettings::default(),
                     chain_sync_config: cryptarchia_sync::Config::default(),
-                    nat_config: NatSettings::default(),
+                    nat_config: args.external_address.as_ref().map_or_else(
+                        NatSettings::default,
+                        |addr| NatSettings::Static {
+                            external_address: addr.clone(),
+                        },
+                    ),
                 },
                 initial_peers: args.initial_peers.clone(),
             },

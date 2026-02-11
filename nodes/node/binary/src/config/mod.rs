@@ -94,6 +94,11 @@ pub struct InitArgs {
     /// HTTP API listen address
     #[clap(long = "http-addr", default_value = "0.0.0.0:8080")]
     pub http_addr: SocketAddr,
+
+    /// External address for nodes with a known public IP (disables NAT
+    /// traversal). Format: /ip4/<public-ip>/udp/<port>/quic-v1
+    #[clap(long = "external-address")]
+    pub external_address: Option<Multiaddr>,
 }
 
 impl CliArgs {
