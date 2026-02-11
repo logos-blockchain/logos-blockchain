@@ -70,7 +70,7 @@ pub fn prove(inputs: PoQWitnessInputs) -> Result<(PoQProof, PoQVerifierInput), P
     let proof: Groth16Proof = proof.try_into().map_err(ProveError::Groth16JsonProof)?;
     Ok((
         CompressedGroth16Proof::try_from(&proof)
-            .inspect_err(|e|println!("\nSerialization error: {e}\n"))
+            .inspect_err(|e| println!("\nSerialization error: {e}\n"))
             .expect("Fatal CompressedGroth16Proof::try_from"),
         verifier_inputs
             .try_into()
