@@ -1,6 +1,8 @@
 use lb_key_management_system_service::backend::preload::PreloadKMSBackendSettings;
-use lb_tests::common::kms::key_id_for_preload_backend;
-use lb_tests::topology::configs::{blend::GeneralBlendConfig, consensus::GeneralConsensusConfig};
+use lb_tests::{
+    common::kms::key_id_for_preload_backend,
+    topology::configs::{blend::GeneralBlendConfig, consensus::GeneralConsensusConfig},
+};
 
 use crate::config::FaucetNotes;
 
