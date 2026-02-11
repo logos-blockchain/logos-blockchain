@@ -1,7 +1,7 @@
 use core::{net::IpAddr, time::Duration};
 
-use serde::{Deserialize, Serialize};
 use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
+use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
