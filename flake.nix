@@ -84,6 +84,9 @@
 
               postInstall = ''
                 mkdir -p $out/include
+                mkdir -p $out/circuits
+                cp -r ${logos-blockchain-circuits.packages.${system}.default}/* $out/circuits/
+                chmod -R u+w $out/circuits
                 cp c-bindings/logos_blockchain.h $out/include/
               '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
                 install_name_tool -id @rpath/liblogos_blockchain.dylib $out/lib/liblogos_blockchain.dylib
