@@ -16,7 +16,6 @@ workspace = true
 axum                             = { default-features = false, features = ["http1", "http2", "json", "tokio"], version = "0.7.5" }
 clap                             = { default-features = false, version = "4" }
 lb-core                          = { workspace = true }
-lb-groth16                       = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-node                          = { workspace = true }
