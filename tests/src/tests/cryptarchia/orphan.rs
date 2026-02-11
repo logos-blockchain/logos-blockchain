@@ -30,11 +30,14 @@ async fn test_orphan_handling() {
         },
     );
 
+    // Create deployment settings once to ensure all validators have the same chain start time
+    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
+
     let mut validators = vec![];
     for config in general_configs.iter().take(n_initial_validators) {
         let config = create_validator_config(
             config.clone(),
-            e2e_deployment_settings_with_genesis_tx(genesis_tx.clone()),
+            deployment_settings.clone(),
         );
         validators.push(Validator::spawn(config).await.unwrap());
     }
@@ -60,7 +63,7 @@ async fn test_orphan_handling() {
     println!("Starting 3rd node ...");
     let config = create_validator_config(
         general_configs[n_initial_validators].clone(),
-        e2e_deployment_settings_with_genesis_tx(genesis_tx),
+        deployment_settings,
     );
     let behind_node = [Validator::spawn(config).await.unwrap()];
 
