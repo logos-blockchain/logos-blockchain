@@ -118,36 +118,37 @@ impl LotteryConstants {
     }
 
     /// Floor a non-negative integer-valued [`BigFloat`] to [`BigUint`]
-    /// via hex digits.
     fn floor_bigfloat(val: &BigFloat, cc: &mut Consts) -> BigUint {
+        // Floor the value first
         let floored = val.floor();
         if floored.is_zero() {
             return BigUint::ZERO;
         }
 
+        // Since astro-float doesn't provide direct BigUint conversion,
+        // we extract hex digits and reconstruct the BigUint.
+        //
+        // - digits: mantissa as hex digits (0-15 each)
+        // - exp: num of digits before decimal points
         let (sign, digits, exp) = floored
             .convert_to_radix(Radix::Hex, RoundingMode::None, cc)
             .expect("floored BigFloat should convert to hex");
         assert_eq!(sign, Sign::Pos, "floored BigFloat should be positive");
 
+        // Negative exponent means value < 1, which floors to 0
         let exp = exp.max(0) as usize;
-        let mut hex_str = String::with_capacity(exp);
+
+        // Build BigUint by processing each hex digit left-to-right.
+        // Each hex digit represents 4 bits, so we shift left by 4
+        // and add the digit value (or 0 if beyond mantissa length).
+        let mut result = BigUint::ZERO;
         for i in 0..exp {
+            result <<= 4;
             if i < digits.len() {
-                hex_str.push(
-                    char::from_digit(u32::from(digits[i]), 16).expect("digit should be valid hex"),
-                );
-            } else {
-                hex_str.push('0');
+                result += u64::from(digits[i]);
             }
         }
-
-        if hex_str.is_empty() {
-            BigUint::ZERO
-        } else {
-            BigUint::parse_bytes(hex_str.as_bytes(), 16)
-                .expect("hex string should parse to BigUint")
-        }
+        result
     }
 
     /// Computes the lottery values t₀ and t₁ for a given total stake.
@@ -241,5 +242,50 @@ mod tests {
             )
             .unwrap(),
         );
+    }
+
+    #[test]
+    fn floor_bigfloat() {
+        let mut cc = Consts::new().unwrap();
+
+        assert_eq!(
+            LotteryConstants::floor_bigfloat(
+                &BigFloat::from_u32(0, LotteryConstants::PRECISION),
+                &mut cc
+            ),
+            BigUint::ZERO
+        );
+        assert_eq!(
+            LotteryConstants::floor_bigfloat(
+                &BigFloat::from_u32(42, LotteryConstants::PRECISION),
+                &mut cc
+            ),
+            BigUint::from(42u32)
+        );
+        assert_eq!(
+            LotteryConstants::floor_bigfloat(
+                &make_bigfloat("123456789012345678901234567890", &mut cc),
+                &mut cc
+            ),
+            BigUint::parse_bytes(b"123456789012345678901234567890", 10).unwrap()
+        );
+        assert_eq!(
+            LotteryConstants::floor_bigfloat(&make_bigfloat("99.999", &mut cc), &mut cc),
+            BigUint::from(99u32)
+        );
+        assert_eq!(
+            LotteryConstants::floor_bigfloat(&make_bigfloat("0.999", &mut cc), &mut cc),
+            BigUint::ZERO
+        );
+    }
+
+    fn make_bigfloat(val: &str, cc: &mut Consts) -> BigFloat {
+        BigFloat::parse(
+            val,
+            Radix::Dec,
+            LotteryConstants::PRECISION,
+            RoundingMode::None,
+            cc,
+        )
     }
 }
