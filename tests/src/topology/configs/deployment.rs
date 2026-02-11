@@ -98,7 +98,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
             // nodes have some time to sync before deciding on the
             // longest chain.
             security_param: NonZero::new(10).unwrap(),
-            slot_activation_coeff: NonNegativeRatio::new(1, 10).unwrap(),
+            slot_activation_coeff: NonNegativeRatio::new(1, 10.try_into().unwrap()),
             epoch_config: EpochConfig {
                 epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),

@@ -151,7 +151,7 @@ mod tests {
     #[expect(clippy::too_many_lines, reason = "For the sake of the test let it be")]
     #[test]
     fn test_full_flow() {
-        init_lottery_constants(NonNegativeRatio::new(1, 10).unwrap());
+        init_lottery_constants(NonNegativeRatio::new(1, 10.try_into().unwrap()));
 
         let chain_data = PolChainInputsData {
             slot_number: 135,

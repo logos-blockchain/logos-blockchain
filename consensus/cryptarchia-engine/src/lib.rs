@@ -710,7 +710,7 @@ pub mod tests {
     pub fn config_with(security_param: u32) -> Config {
         Config::new(
             NonZero::new(security_param).unwrap(),
-            NonNegativeRatio::new(99, 100).unwrap(),
+            NonNegativeRatio::new(99, 100.try_into().unwrap()),
         )
     }
 

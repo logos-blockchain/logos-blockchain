@@ -701,7 +701,7 @@ mod tests {
 
     impl TestEnv {
         async fn new() -> Self {
-            let slot_activation_coeff = NonNegativeRatio::new(99, 100).unwrap();
+            let slot_activation_coeff = NonNegativeRatio::new(99, 100.try_into().unwrap());
             init_lottery_constants(slot_activation_coeff);
 
             let (service, storage_relay) = Self::setup_storage().await;

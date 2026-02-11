@@ -16,7 +16,7 @@ use crate::message_blend::provers::{
 
 #[test(tokio::test)]
 async fn proof_generation() {
-    init_lottery_constants(NonNegativeRatio::new(1, 10).unwrap());
+    init_lottery_constants(NonNegativeRatio::new(1, 10.try_into().unwrap()));
 
     let leadership_quota = 15;
     let (public_inputs, private_inputs) = valid_proof_of_leader_inputs(leadership_quota);
@@ -66,7 +66,7 @@ async fn proof_generation() {
 
 #[test(tokio::test)]
 async fn epoch_rotation() {
-    init_lottery_constants(NonNegativeRatio::new(1, 10).unwrap());
+    init_lottery_constants(NonNegativeRatio::new(1, 10.try_into().unwrap()));
 
     let leadership_quota = 15;
     let (public_inputs, private_inputs) = valid_proof_of_leader_inputs(leadership_quota);

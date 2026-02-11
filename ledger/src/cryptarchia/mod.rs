@@ -591,7 +591,7 @@ pub mod tests {
             },
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(1).unwrap(),
-                NonNegativeRatio::new(1, 1).unwrap(),
+                NonNegativeRatio::new(1, 1.try_into().unwrap()),
             ),
             sdp_config: crate::mantle::sdp::Config {
                 service_params: Arc::new(service_params),

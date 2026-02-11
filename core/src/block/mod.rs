@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn test_block_signature_validation() {
-        init_lottery_constants(NonNegativeRatio::new(1, 10).unwrap());
+        init_lottery_constants(NonNegativeRatio::new(1, 10.try_into().unwrap()));
 
         let parent_block = [0u8; 32].into();
         let slot = Slot::from(42u64);
@@ -327,7 +327,7 @@ mod tests {
 
     #[test]
     fn test_block_transaction_count_validation() {
-        init_lottery_constants(NonNegativeRatio::new(1, 10).unwrap());
+        init_lottery_constants(NonNegativeRatio::new(1, 10.try_into().unwrap()));
 
         let parent_block = [0u8; 32].into();
         let slot = Slot::from(42u64);

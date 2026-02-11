@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_check_winning() {
-        let slot_activation_coeff = NonNegativeRatio::new(1, 10).unwrap();
+        let slot_activation_coeff = NonNegativeRatio::new(1, 10.try_into().unwrap());
         init_lottery_constants(slot_activation_coeff);
 
         // winning rate of all the stake should be ~ active slot coeff

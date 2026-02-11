@@ -1,4 +1,5 @@
 use core::ops::{Deref, DerefMut};
+use std::num::NonZeroU32;
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Debug)]
 #[cfg_attr(feature = "serde", derive(::serde::Serialize, ::serde::Deserialize))]
@@ -256,24 +257,21 @@ impl TryFrom<u64> for F64Ge1 {
 #[cfg_attr(feature = "serde", derive(::serde::Serialize, ::serde::Deserialize))]
 pub struct NonNegativeRatio {
     pub numerator: u32,
-    pub denominator: u32,
+    pub denominator: NonZeroU32,
 }
 
 impl NonNegativeRatio {
-    pub const fn new(numerator: u32, denominator: u32) -> Result<Self, &'static str> {
-        if denominator == 0 {
-            Err("Denominator cannot be zero")
-        } else {
-            Ok(Self {
-                numerator,
-                denominator,
-            })
+    #[must_use]
+    pub const fn new(numerator: u32, denominator: NonZeroU32) -> Self {
+        Self {
+            numerator,
+            denominator,
         }
     }
 
     #[must_use]
     pub const fn as_f64(&self) -> f64 {
-        self.numerator as f64 / self.denominator as f64
+        self.numerator as f64 / self.denominator.get() as f64
     }
 }
 

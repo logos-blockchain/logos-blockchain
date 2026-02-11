@@ -71,7 +71,7 @@ impl LotteryConstants {
 
         // f = f_numerator / f_denominator (exact rational arithmetic)
         let f_num = BigFloat::from_u32(f.numerator, Self::PRECISION);
-        let f_den = BigFloat::from_u32(f.denominator, Self::PRECISION);
+        let f_den = BigFloat::from_u32(f.denominator.get(), Self::PRECISION);
         let f = f_num.div(&f_den, Self::PRECISION, Self::ROUNDING_MODE);
 
         // -ln(1-f)
@@ -168,12 +168,12 @@ mod tests {
 
     #[test]
     fn init_get_lottery_constants() {
-        init_lottery_constants(NonNegativeRatio::new(1, 20).unwrap());
+        init_lottery_constants(NonNegativeRatio::new(1, 20.try_into().unwrap()));
         let constants = lottery_constants();
 
         // expect panic if the init is called again
         let result = std::panic::catch_unwind(|| {
-            init_lottery_constants(NonNegativeRatio::new(1, 100).unwrap());
+            init_lottery_constants(NonNegativeRatio::new(1, 100.try_into().unwrap()));
         });
         assert!(result.is_err());
 
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_compute_lottery_constants() {
-        let constants = LotteryConstants::new(NonNegativeRatio::new(1, 30).unwrap());
+        let constants = LotteryConstants::new(NonNegativeRatio::new(1, 30.try_into().unwrap()));
         assert_eq!(
             constants.t0_constant,
             BigUint::from_str_radix(
@@ -201,7 +201,7 @@ mod tests {
             .unwrap()
         );
 
-        let constants = LotteryConstants::new(NonNegativeRatio::new(1, 10).unwrap());
+        let constants = LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()));
         assert_eq!(
             constants.t0_constant,
             BigUint::from_str_radix(
@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     fn test_compute_lottery_values() {
-        let constants = LotteryConstants::new(NonNegativeRatio::new(1, 30).unwrap());
+        let constants = LotteryConstants::new(NonNegativeRatio::new(1, 30.try_into().unwrap()));
         let (lottery_0, lottery_1) = constants.compute_lottery_values(1000);
 
         assert_eq!(
