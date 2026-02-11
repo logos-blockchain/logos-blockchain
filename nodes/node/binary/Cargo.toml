@@ -81,8 +81,7 @@ tower      = { default-features = false, features = ["limit"], version = "0.4" }
 tower-http = { default-features = false, features = ["cors", "limit", "timeout", "trace"], version = "0.5" }
 
 [dev-dependencies]
-num-bigint = { default-features = false, version = "0.4" }
-rand       = { workspace = true }
+rand = { workspace = true }
 
 [features]
 config-gen                   = ["lb-key-management-system-service/unsafe"]

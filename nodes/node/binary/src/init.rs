@@ -1,49 +1,54 @@
+use core::str::FromStr as _;
 use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, Ipv4Addr},
     num::NonZeroU64,
-    str::FromStr as _,
     time::Duration,
 };
 
 use color_eyre::eyre::{Result, eyre};
-use lb_api_service::ApiServiceSettings;
-use lb_blend_service::core::settings::ZkSettings;
-use lb_chain_leader_service::LeaderWalletConfig;
-use lb_chain_network_service::{IbdConfig, OrphanConfig, SyncConfig};
-use lb_chain_service::OfflineGracePeriodConfig;
 use lb_core::mantle::Value;
 use lb_groth16::fr_to_bytes;
-use lb_http_api_common::settings::AxumBackendSettings;
 use lb_key_management_system_service::{
-    backend::preload::{KeyId, PreloadKMSBackendSettings},
+    backend::preload::KeyId,
     keys::{Ed25519Key, Key, ZkKey, ZkPublicKey, secured_key::SecuredKey as _},
 };
-use lb_libp2p::{IdentifySettings, KademliaSettings, Multiaddr, NatSettings, cryptarchia_sync};
-use lb_sdp_service::{SdpSettings, wallet::SdpWalletConfig};
-use lb_storage_service::backends::rocksdb::RocksBackendSettings;
-use lb_time_service::backends::{NtpTimeBackendSettings, ntp::async_client::NTPClientSettings};
-use lb_tracing_service::TracingSettings;
-use lb_wallet_service::WalletServiceSettings;
+use libp2p::Multiaddr;
 use num_bigint::BigUint;
 use rand::rngs::OsRng;
 
 use crate::{
     UserConfig,
     config::{
-        InitArgs,
+        ApiConfig, InitArgs, KmsConfig, SdpConfig, StorageConfig, TracingConfig, WalletConfig,
+        api::serde::AxumBackendSettings,
         blend::serde::{
             Config as BlendConfig,
-            core::{BackendConfig as BlendCoreBackendConfig, Config as BlendCoreConfig},
+            core::{
+                BackendConfig as BlendCoreBackendConfig, Config as BlendCoreConfig, ZkSettings,
+            },
             edge::{BackendConfig as BlendEdgeBackendConfig, Config as BlendEdgeConfig},
         },
         cryptarchia::serde::{
-            Config as CryptarchiaConfig, LeaderConfig, NetworkConfig as CryptarchiaNetworkConfig,
-            ServiceConfig as CryptarchiaServiceConfig,
+            Config as CryptarchiaConfig,
+            leader::{
+                Config as CryptarchiaLeaderConfig, WalletConfig as CryptarchiaLeaderWalletConfig,
+            },
+            network::{
+                BootstrapConfig as CryptarchiaNetworkBootstrapConfig,
+                Config as CryptarchiaNetworkConfig, IbdConfig, OrphanConfig, SyncConfig,
+            },
+            service::{
+                BootstrapConfig as CryptarchiaBootstrapConfig, Config as CryptarchiaServiceConfig,
+                OfflineGracePeriodConfig,
+            },
         },
+        kms::serde::PreloadKmsBackendSettings,
         mempool::serde::Config as MempoolConfig,
-        network::serde::{BackendSettings, Config as NetworkConfig, SwarmConfig},
-        time::serde::Config as TimeConfig,
+        network::serde::{self as network, BackendSettings, Config as NetworkConfig, SwarmConfig},
+        sdp::serde::WalletConfig as SdpWalletConfig,
+        storage::serde::RocksDbSettings,
+        time::serde::{Config as TimeConfig, NtpClientSettings, NtpSettings},
     },
 };
 
@@ -151,13 +156,13 @@ fn build_user_config(
                     host: Ipv4Addr::UNSPECIFIED,
                     port: args.net_port,
                     node_key: network_key,
-                    gossipsub_config: lb_libp2p::gossipsub::Config::default(),
-                    kademlia_config: KademliaSettings::default(),
-                    identify_config: IdentifySettings::default(),
-                    chain_sync_config: cryptarchia_sync::Config::default(),
-                    nat_config: args.external_address.as_ref().map_or_else(
-                        NatSettings::default,
-                        |addr| NatSettings::Static {
+                    gossipsub: lb_libp2p::gossipsub::Config::default(),
+                    kademlia: network::kademlia::Config::default(),
+                    identify: network::identify::Config::default(),
+                    chain_sync: network::chainsync::Config::default(),
+                    nat: args.external_address.as_ref().map_or_else(
+                        network::nat::Config::default,
+                        |addr| network::nat::Config::Static {
                             external_address: addr.clone(),
                         },
                     ),
@@ -192,14 +197,14 @@ fn build_user_config(
         cryptarchia: CryptarchiaConfig {
             service: CryptarchiaServiceConfig {
                 recovery_file: "./recovery/cryptarchia.json".into(),
-                bootstrap: lb_chain_service::BootstrapConfig {
+                bootstrap: CryptarchiaBootstrapConfig {
                     prolonged_bootstrap_period: Duration::from_secs(60),
                     force_bootstrap: false,
                     offline_grace_period: OfflineGracePeriodConfig::default(),
                 },
             },
             network: CryptarchiaNetworkConfig {
-                bootstrap: lb_chain_network_service::BootstrapConfig {
+                bootstrap: CryptarchiaNetworkBootstrapConfig {
                     ibd: IbdConfig {
                         peers: HashSet::new(),
                         delay_before_new_download: Duration::from_secs(10),
@@ -212,17 +217,17 @@ fn build_user_config(
                     },
                 },
             },
-            leader: LeaderConfig {
-                wallet: LeaderWalletConfig {
+            leader: CryptarchiaLeaderConfig {
+                wallet: CryptarchiaLeaderWalletConfig {
                     max_tx_fee: Value::MAX,
                     funding_pk,
                 },
             },
         },
         time: TimeConfig {
-            backend: NtpTimeBackendSettings {
-                ntp_server: "pool.ntp.org:123".to_owned(),
-                ntp_client_settings: NTPClientSettings {
+            backend: NtpSettings {
+                server: "pool.ntp.org:123".to_owned(),
+                client: NtpClientSettings {
                     timeout: Duration::from_secs(5),
                     listening_interface: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
                 },
@@ -232,44 +237,46 @@ fn build_user_config(
         mempool: MempoolConfig {
             recovery_path: "./recovery/mempool.json".into(),
         },
-        tracing: TracingSettings::default(),
-        sdp: SdpSettings {
+        tracing: TracingConfig::default(),
+        sdp: SdpConfig {
             declaration: None,
-            wallet_config: SdpWalletConfig {
+            wallet: SdpWalletConfig {
                 max_tx_fee: Value::MAX,
                 funding_pk,
             },
         },
-        http: ApiServiceSettings {
-            backend_settings: AxumBackendSettings {
+        api: ApiConfig {
+            backend: AxumBackendSettings {
                 address: args.http_addr,
                 ..AxumBackendSettings::default()
             },
+            #[cfg(feature = "testing")]
+            testing: AxumBackendSettings::default(),
         },
-        storage: RocksBackendSettings {
-            db_path: "./db".into(),
-            read_only: false,
-            column_family: Some("blocks".into()),
+        storage: StorageConfig {
+            backend: RocksDbSettings {
+                path: "./db".into(),
+                read_only: false,
+                column_family: Some("blocks".into()),
+            },
         },
-        key_management: PreloadKMSBackendSettings {
-            keys: HashMap::from([
-                (blend_signing_key_id, blend_signing_key.into()),
-                (blend_zk_key_id, blend_zk_key.into()),
-                (leader_key_id.clone(), leader_key.into()),
-                (funding_key_id.clone(), funding_key.into()),
-            ]),
+        kms: KmsConfig {
+            backend: PreloadKmsBackendSettings {
+                keys: HashMap::from([
+                    (blend_signing_key_id, blend_signing_key.into()),
+                    (blend_zk_key_id, blend_zk_key.into()),
+                    (leader_key_id.clone(), leader_key.into()),
+                    (funding_key_id.clone(), funding_key.into()),
+                ]),
+            },
         },
-        wallet: WalletServiceSettings {
+        wallet: WalletConfig {
             known_keys: HashMap::from([
                 (leader_key_id.clone(), leader_pk),
                 (funding_key_id, funding_pk),
             ]),
             voucher_master_key_id: leader_key_id,
             recovery_path: "./recovery/wallet.json".into(),
-        },
-        #[cfg(feature = "testing")]
-        testing_http: ApiServiceSettings {
-            backend_settings: AxumBackendSettings::default(),
         },
     }
 }
