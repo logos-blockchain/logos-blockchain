@@ -3,18 +3,19 @@ use color_eyre::eyre::{Result, eyre};
 use logos_blockchain_node::{
     UserConfig,
     config::{
-        CliArgs, Command, DeploymentType, OnUnknownKeys, deployment::DeploymentSettings,
+        CliArgs, DeploymentType, OnUnknownKeys, deployment::DeploymentSettings,
         deserialize_config_at_path,
     },
-    get_services_to_start, init, run_node_from_config,
+    get_services_to_start, run_node_from_config,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli_args = CliArgs::parse();
 
-    if let Some(Command::Init(init_args)) = &cli_args.command {
-        return init::run(init_args);
+    #[cfg(feature = "config-gen")]
+    if let Some(logos_blockchain_node::config::Command::Init(init_args)) = &cli_args.command {
+        return logos_blockchain_node::init::run(init_args);
     }
 
     let is_dry_run = cli_args.dry_run();

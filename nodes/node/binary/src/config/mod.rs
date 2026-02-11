@@ -5,7 +5,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use clap::{Parser, Subcommand, ValueEnum, builder::OsStr};
+use clap::{Parser, ValueEnum, builder::OsStr};
+#[cfg(feature = "config-gen")]
+use clap::Subcommand;
 use color_eyre::eyre::{Result, eyre};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use lb_tracing::logging::{gelf::GelfConfig, local::FileConfig};
@@ -42,6 +44,7 @@ mod tests;
           args_conflicts_with_subcommands = true,
           subcommand_negates_reqs = true)]
 pub struct CliArgs {
+    #[cfg(feature = "config-gen")]
     #[command(subcommand)]
     pub command: Option<Command>,
 
@@ -67,12 +70,14 @@ pub struct CliArgs {
     deployment: DeploymentArgs,
 }
 
+#[cfg(feature = "config-gen")]
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Initialize a new user config with generated keys
     Init(InitArgs),
 }
 
+#[cfg(feature = "config-gen")]
 #[derive(Parser, Debug)]
 pub struct InitArgs {
     /// Trusted peers to bootstrap from (multiaddr format)
