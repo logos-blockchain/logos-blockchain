@@ -1,42 +1,55 @@
+mod consensus;
+mod kms;
+
 use std::{collections::HashMap, net::Ipv4Addr, str::FromStr as _};
 
 use lb_core::{
     mantle::{GenesisTx as _, genesis_tx::GenesisTx},
     sdp::{Locator, ServiceType},
 };
+use lb_key_management_system_service::keys::ZkKey;
 use lb_libp2p::{Multiaddr, multiaddr};
-use lb_tests::topology::{
-    configs::{
-        GeneralConfig,
-        api::GeneralApiConfig,
-        blend::{GeneralBlendConfig, create_blend_configs},
-        consensus::{
-            GeneralConsensusConfig, ProviderInfo, SHORT_PROLONGED_BOOTSTRAP_PERIOD,
-            create_consensus_configs, create_genesis_tx_with_declarations,
-        },
-        network::{NetworkParams, create_network_configs},
-        time::default_time_config,
-        tracing::GeneralTracingConfig,
+use lb_tests::topology::configs::{
+    GeneralConfig,
+    api::GeneralApiConfig,
+    blend::{GeneralBlendConfig, create_blend_configs},
+    consensus::{
+        GeneralConsensusConfig, ProviderInfo, SHORT_PROLONGED_BOOTSTRAP_PERIOD,
+        create_genesis_tx_with_declarations,
     },
-    create_kms_configs,
+    network::{NetworkParams, create_network_configs},
+    time::default_time_config,
+    tracing::GeneralTracingConfig,
 };
 use lb_tracing_service::{LoggerLayer, MetricsLayer, TracingLayer, TracingSettings};
 use rand::{Rng as _, thread_rng};
 
-use crate::Host;
+use crate::{
+    FaucetSettings, Host,
+    config::{consensus::create_consensus_configs, kms::create_kms_configs},
+};
+
+type FaucetNotes = Vec<ZkKey>;
 
 #[must_use]
 pub fn create_node_configs(
+    faucet_settings: &FaucetSettings,
     tracing_settings: &TracingSettings,
     hosts: Vec<Host>,
 ) -> (HashMap<Host, GeneralConfig>, GenesisTx) {
-    let mut ids = vec![[0; 32]; hosts.len()];
-    for id in &mut ids {
-        thread_rng().fill(id);
+    let mut ids = Vec::with_capacity(hosts.len());
+
+    for host in &hosts {
+        let mut id_bytes = [0u8; 32];
+        let identifier = host.identifier.as_bytes();
+        let len = std::cmp::min(identifier.len(), 32);
+
+        id_bytes[..len].copy_from_slice(&identifier[..len]);
+        ids.push(id_bytes);
     }
 
-    let (consensus_configs, genesis_tx) =
-        create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+    let (consensus_configs, faucet_note_keys, genesis_tx) =
+        create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD, faucet_settings);
     let network_configs = create_network_configs(&ids, &NetworkParams::default());
     let blend_configs = create_blend_configs(
         &ids,
@@ -64,7 +77,7 @@ pub fn create_node_configs(
     let genesis_tx_with_declarations = create_genesis_tx_with_declarations(ledger_tx, providers);
 
     // Set Blend keys in KMS of each node config.
-    let kms_configs = create_kms_configs(&blend_configs, &consensus_configs);
+    let kms_configs = create_kms_configs(&blend_configs, &consensus_configs, &faucet_note_keys);
 
     for (i, host) in hosts.into_iter().enumerate() {
         let consensus_config = consensus_configs[i].clone();
@@ -120,11 +133,15 @@ pub fn create_node_config_from_template(
     thread_rng().fill(&mut id);
     let ids = vec![id];
 
-    let (consensus_configs, _) = create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+    let (consensus_configs, _, _) = create_consensus_configs(
+        &ids,
+        SHORT_PROLONGED_BOOTSTRAP_PERIOD,
+        &FaucetSettings::default(),
+    );
     let network_configs = create_network_configs(&ids, &NetworkParams::default());
     let blend_configs = create_blend_configs(&ids, &[new_host.blend_port]);
 
-    let kms_configs = create_kms_configs(&blend_configs, &consensus_configs);
+    let kms_configs = create_kms_configs(&blend_configs, &consensus_configs, &[]);
 
     let mut network_config = network_configs[0].clone();
     network_config.backend.swarm.host = Ipv4Addr::from_str("0.0.0.0").unwrap();
@@ -235,7 +252,7 @@ mod cfgsync_tests {
     use tracing::Level;
 
     use super::{Host, create_node_configs};
-    use crate::config::create_node_config_from_template;
+    use crate::{FaucetSettings, config::create_node_config_from_template};
 
     fn extract_port(multiaddr: &Multiaddr) -> u16 {
         multiaddr
@@ -260,6 +277,7 @@ mod cfgsync_tests {
             .collect();
 
         let (configs, _) = create_node_configs(
+            &FaucetSettings::default(),
             &TracingSettings {
                 logger: LoggerLayer::None,
                 tracing: TracingLayer::None,
@@ -296,7 +314,11 @@ mod cfgsync_tests {
             identifier: "init".into(),
             ..Default::default()
         };
-        let (init_configs, _) = create_node_configs(&tracing, vec![init_host.clone()]);
+        let (init_configs, _) = create_node_configs(
+            &FaucetSettings::default(),
+            &tracing,
+            vec![init_host.clone()],
+        );
         let template = init_configs.get(&init_host).unwrap();
 
         let new_host = Host {

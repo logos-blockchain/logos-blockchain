@@ -1,6 +1,12 @@
 use std::{fs, path::PathBuf, sync::Arc};
 
-use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+};
 use lb_tests::nodes::validator::create_validator_config;
 use lb_tracing_service::TracingSettings;
 use reqwest::header::CONTENT_TYPE;
@@ -8,7 +14,7 @@ use serde::Deserialize;
 use tokio::sync::oneshot::channel;
 
 use crate::{
-    Host, RegistrationInfo,
+    FaucetSettings, Host, RegistrationInfo,
     repo::{ConfigRepo, RepoResponse},
 };
 
@@ -18,6 +24,7 @@ pub struct CfgSyncConfig {
     pub n_hosts: usize,
     pub timeout: u64,
 
+    pub faucet_settings: FaucetSettings,
     // Tracing params
     pub tracing_settings: TracingSettings,
 }
@@ -31,8 +38,13 @@ impl CfgSyncConfig {
     }
 
     #[must_use]
-    pub fn to_tracing_settings(&self) -> TracingSettings {
+    pub fn tracing_settings(&self) -> TracingSettings {
         self.tracing_settings.clone()
+    }
+
+    #[must_use]
+    pub fn faucet_settings(&self) -> FaucetSettings {
+        self.faucet_settings.clone()
     }
 }
 
@@ -79,9 +91,16 @@ async fn generate_config(
     )
 }
 
+async fn deployment_settings(State(repo): State<Arc<ConfigRepo>>) -> impl IntoResponse {
+    let deployment_settings = repo.deployment_settings();
+    let yaml = serde_yaml::to_string(&deployment_settings).unwrap_or_default();
+    (StatusCode::OK, [(CONTENT_TYPE, "text/yaml")], yaml).into_response()
+}
+
 pub fn cfgsync_app(config_repo: Arc<ConfigRepo>) -> Router {
     Router::new()
         .route("/init-with-node", post(init_node))
         .route("/generate-config", post(generate_config))
+        .route("/deployment-settings", get(deployment_settings))
         .with_state(config_repo)
 }

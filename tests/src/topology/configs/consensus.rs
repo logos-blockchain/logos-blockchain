@@ -1,12 +1,8 @@
-use core::{num::NonZeroUsize, time::Duration};
-use std::collections::HashSet;
+use core::time::Duration;
 
-use lb_chain_leader_service::LeaderWalletConfig;
-use lb_chain_network_service::{IbdConfig, OrphanConfig, SyncConfig};
-use lb_chain_service::OfflineGracePeriodConfig;
 use lb_core::{
     mantle::{
-        MantleTx, Note, OpProof, Utxo, Value,
+        MantleTx, Note, OpProof, Utxo,
         genesis_tx::GenesisTx,
         ledger::Tx as LedgerTx,
         ops::{
@@ -18,10 +14,7 @@ use lb_core::{
 };
 use lb_groth16::CompressedGroth16Proof;
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey, ZkPublicKey, ZkSignature};
-use lb_node::{
-    SignedMantleTx, Transaction as _,
-    config::cryptarchia::serde::{Config, LeaderConfig, NetworkConfig, ServiceConfig},
-};
+use lb_node::{SignedMantleTx, Transaction as _};
 use num_bigint::BigUint;
 
 pub const SHORT_PROLONGED_BOOTSTRAP_PERIOD: Duration = Duration::from_secs(1);
@@ -49,22 +42,17 @@ impl ProviderInfo {
 
 /// General consensus configuration for a chosen participant, that later could
 /// be converted into a specific service or services configuration.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GeneralConsensusConfig {
-    user_config: Config,
     pub known_key: ZkKey,
     pub blend_notes: Vec<ServiceNote>,
     pub funding_sk: ZkKey,
+    pub funding_pk: ZkPublicKey,
+    pub other_keys: Vec<ZkKey>,
+    pub prolonged_bootstrap_period: Duration,
 }
 
-impl GeneralConsensusConfig {
-    #[must_use]
-    pub const fn user_config(&self) -> &Config {
-        &self.user_config
-    }
-}
-
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ServiceNote {
     pub pk: ZkPublicKey,
     pub sk: ZkKey,
@@ -72,7 +60,8 @@ pub struct ServiceNote {
     pub output_index: usize,
 }
 
-fn create_genesis_tx(utxos: &[Utxo]) -> GenesisTx {
+#[must_use]
+pub fn create_genesis_tx(utxos: &[Utxo]) -> GenesisTx {
     // Create a genesis inscription op (similar to config.yaml)
     let inscription = InscriptionOp {
         channel_id: ChannelId::from([0; 32]),
@@ -131,40 +120,9 @@ pub fn create_consensus_configs(
                     blend_notes: blend_notes.clone(),
                     known_key: sk,
                     funding_sk,
-                    user_config: Config {
-                        network: NetworkConfig {
-                            bootstrap: lb_chain_network_service::BootstrapConfig {
-                                ibd: IbdConfig {
-                                    delay_before_new_download: Duration::from_secs(10),
-                                    peers: HashSet::new(),
-                                },
-                            },
-                            sync: SyncConfig {
-                                orphan: OrphanConfig {
-                                    max_orphan_cache_size: NonZeroUsize::new(5)
-                                        .expect("Max orphan cache size must be non-zero"),
-                                },
-                            },
-                        },
-                        service: ServiceConfig {
-                            bootstrap: lb_chain_service::BootstrapConfig {
-                                force_bootstrap: false,
-                                offline_grace_period: OfflineGracePeriodConfig {
-                                    grace_period: Duration::from_secs(20 * 60),
-                                    state_recording_interval: Duration::from_secs(60),
-                                },
-                                prolonged_bootstrap_period,
-                            },
-                            recovery_file: "./recovery/cryptarchia.json".into(),
-                        },
-                        leader: LeaderConfig {
-                            wallet: LeaderWalletConfig {
-                                max_tx_fee: Value::MAX,
-                                // We use the same funding key used for SDP.
-                                funding_pk,
-                            },
-                        },
-                    },
+                    funding_pk,
+                    other_keys: Vec::new(),
+                    prolonged_bootstrap_period,
                 }
             })
             .collect(),

@@ -62,3 +62,9 @@ pub struct RegistrationInfo {
     pub blend_port: Option<u16>,
     pub api_port: Option<u16>,
 }
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct FaucetSettings {
+    pub note_count: usize,
+    pub note_value: u64,
+}
