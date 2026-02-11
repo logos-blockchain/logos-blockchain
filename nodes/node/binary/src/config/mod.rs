@@ -5,9 +5,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use clap::{Parser, ValueEnum, builder::OsStr};
 #[cfg(feature = "config-gen")]
 use clap::Subcommand;
+use clap::{Parser, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use lb_tracing::logging::{gelf::GelfConfig, local::FileConfig};
