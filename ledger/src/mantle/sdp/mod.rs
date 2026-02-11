@@ -647,9 +647,9 @@ mod tests {
         params.insert(
             ServiceType::BlendNetwork,
             ServiceParameters {
-                inactivity_period: 20,
+                inactivity_period: 1,
                 lock_period: 10,
-                retention_period: 1000,
+                retention_period: 1,
                 timestamp: 0,
                 session_duration: 10,
             },

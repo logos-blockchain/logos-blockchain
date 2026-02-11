@@ -35,8 +35,8 @@ cryptarchia:
     service_params:
       BN:
         lock_period: 10
-        inactivity_period: 20
-        retention_period: 100
+        inactivity_period: 1
+        retention_period: 1
         timestamp: 0
     min_stake:
       threshold: 1
