@@ -1,11 +1,74 @@
-# Finding: Which PR Caused "Orphan staggered fork start 2" Test to Fail
+# Finding: Which PR Caused Test Failures
 
-## Question
-Find the merged to master PR before this one where the test first started to fail.
+## Summary
 
-## Answer
+This document investigates TWO separate test failures on master:
+1. ~~Cucumber test: "Orphan staggered fork start 2"~~ (Initial investigation - not the issue)
+2. **End-to-end integration test: `test_ibd_behind_nodes`** (Current focus)
+
+---
+
+## Investigation 2: test_ibd_behind_nodes Failure
+
+### Question
+Find the merged to master PR where the end-to-end integration test `logos-blockchain-tests::test_cryptarchia_bootstrap test_ibd_behind_nodes` first started to fail.
+
+### Answer
 
 **PR #2115: "fix(chain-leader): do not propose blocks while chain is in Bootstrapping mode"**
+
+### Details
+- **Commit SHA**: `271a97ebd03f21a13e9ca72ef8411fd478960296`
+- **Merged**: February 5, 2026 at 14:21:15 UTC
+- **Author**: youngjoon-lee (@youngjoon-lee)
+- **GitHub PR**: https://github.com/logos-blockchain/logos-blockchain/pull/2115
+- **First failing workflow run**: 21715094606 (or 21863167499/21868104219 for confirmed failures)
+
+### Timeline
+
+1. **Last Successful Run** (Feb 4, 2026 14:58:15 UTC)
+   - Commit: `e3d7b9fa1b3b52ed63715dc0fcbb63bf62d2ab81`
+   - PR #2091: "test: add some cryptarchia cucumber tests"
+   - Workflow run: 21676373889
+   - Status: `test_ibd_behind_nodes` test **PASSED**
+
+2. **First Failing Run** (Feb 5, 2026 14:21:19 UTC or Feb 10 confirmed)
+   - Commit: `271a97ebd03f21a13e9ca72ef8411fd478960296`  
+   - PR #2115: "fix(chain-leader): do not propose blocks while chain is in Bootstrapping mode"
+   - Workflow runs: 21715094606, 21863167499 (Feb 10, 11:32 UTC), 21868104219 (Feb 10, 14:06 UTC)
+   - Status: `test_ibd_behind_nodes` test **FAILED** with timeout
+
+### Why This PR Broke test_ibd_behind_nodes
+
+The test failure has the same root cause as the cucumber test failure:
+
+**The Problem:**
+PR #2115 modified the chain leader to wait until the chain enters "Online mode" (after IBD + Prolonged Bootstrap Period) before starting block proposals. Previously, blocks could be proposed immediately after IBD completed, even during the Bootstrapping phase.
+
+**Impact on test_ibd_behind_nodes:**
+The test `test_ibd_behind_nodes` specifically tests Initial Block Download (IBD) for nodes that join late. The test:
+1. Starts 2 initial validators
+2. Waits for them to reach Online mode and height 10
+3. Starts a third "behind" node with IBD peers configured
+4. Expects the behind node to catch up via IBD and switch to Online mode within 10 seconds
+
+**The failure:**
+```
+thread 'test_ibd_behind_nodes' panicked at tests/src/common/sync.rs:35:9:
+Timeout (280s) waiting for validators to reach mode Online and height 10
+```
+
+The test is timing out at step 2 - waiting for the initial validators to reach Online mode and height 10. This is because PR #2115 prevents block proposals during Bootstrapping mode, so the validators can't reach height 10 until they exit Bootstrapping, which takes much longer than the test's timeout allows.
+
+### Relationship to Cucumber Test Failure
+
+Both failures stem from the same PR #2115:
+- **Cucumber test "Orphan staggered fork start 2"**: Failed because it expected orphan blocks during bootstrapping
+- **End-to-end test "test_ibd_behind_nodes"**: Failed because initial validators couldn't reach height 10 before timing out
+
+### Verification
+
+The test file `tests/src/tests/cryptarchia/bootstrap.rs` existed and contained `test_ibd_behind_nodes` in commit e3d7b9f (last successful run), confirming the test was passing before PR #2115.
 
 ### Details
 - **Commit SHA**: `271a97ebd03f21a13e9ca72ef8411fd478960296`
