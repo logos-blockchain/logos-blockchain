@@ -12,6 +12,12 @@ use logos_blockchain_node::{
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli_args = CliArgs::parse();
+
+    #[cfg(feature = "config-gen")]
+    if let Some(logos_blockchain_node::config::Command::Init(init_args)) = &cli_args.command {
+        return logos_blockchain_node::init::run(init_args);
+    }
+
     let is_dry_run = cli_args.dry_run();
 
     // If we are dry-running the binary, fail in case unknown keys in one of the
