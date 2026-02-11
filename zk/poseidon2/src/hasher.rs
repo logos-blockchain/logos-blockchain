@@ -3,15 +3,9 @@ use ark_ff::Field as _;
 
 use crate::{Digest, Poseidon2Bn254};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Poseidon2Hasher {
     state: [Fr; 3],
-}
-
-impl Clone for Poseidon2Hasher {
-    fn clone(&self) -> Self {
-        Self { state: self.state }
-    }
 }
 
 impl Default for Poseidon2Hasher {

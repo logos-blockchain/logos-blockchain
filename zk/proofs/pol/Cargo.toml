@@ -10,7 +10,6 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-ark-serialize        = { default-features = false, version = "0.4.2" }
 lb-circuits-prover   = { workspace = true }
 lb-circuits-utils    = { workspace = true }
 lb-groth16           = { features = ["deser"], workspace = true }
