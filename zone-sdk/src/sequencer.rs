@@ -201,6 +201,25 @@ async fn initialize_state(
     }
 }
 
+async fn connect_blocks_stream(
+    http_client: &CommonHttpClient,
+    node_url: &Url,
+    reconnect_delay: Duration,
+) -> impl futures::Stream<Item = ProcessedBlockEvent> {
+    loop {
+        match http_client.get_blocks_stream(node_url.clone()).await {
+            Ok(stream) => return stream,
+            Err(e) => {
+                warn!(
+                    "Failed to connect to blocks stream: {e}, retrying in {:?}",
+                    reconnect_delay
+                );
+                tokio::time::sleep(reconnect_delay).await;
+            }
+        }
+    }
+}
+
 async fn run_loop(
     mut request_rx: mpsc::Receiver<ActorRequest>,
     channel_id: ChannelId,
@@ -220,18 +239,8 @@ async fn run_loop(
     let mut in_flight: FuturesUnordered<BoxFuture<'static, InFlight>> = FuturesUnordered::new();
 
     loop {
-        let blocks_stream = match http_client.get_blocks_stream(node_url.clone()).await {
-            Ok(stream) => stream,
-            Err(e) => {
-                warn!(
-                    "Failed to connect to blocks stream: {e}, retrying in {:?}",
-                    config.reconnect_delay
-                );
-                tokio::time::sleep(config.reconnect_delay).await;
-                continue;
-            }
-        };
-
+        let blocks_stream =
+            connect_blocks_stream(&http_client, &node_url, config.reconnect_delay).await;
         tokio::pin!(blocks_stream);
 
         loop {
