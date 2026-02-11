@@ -1,4 +1,4 @@
-use ::tracing::Level;
+pub use ::tracing::Level;
 use serde::{Deserialize, Serialize};
 use url::Url;
 

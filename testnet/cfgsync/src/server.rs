@@ -3,7 +3,6 @@ use std::{fs, path::PathBuf, sync::Arc};
 use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
 use lb_node::config::TracingConfig;
 use lb_tests::nodes::validator::create_validator_config;
-use lb_tracing_service::TracingSettings;
 use reqwest::header::CONTENT_TYPE;
 use serde::Deserialize;
 use tokio::sync::oneshot::channel;
@@ -32,8 +31,8 @@ impl CfgSyncConfig {
     }
 
     #[must_use]
-    pub fn to_tracing_settings(&self) -> TracingSettings {
-        self.tracing_settings.clone().into()
+    pub fn to_tracing_settings(&self) -> TracingConfig {
+        self.tracing_settings.clone()
     }
 }
 

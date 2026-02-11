@@ -39,3 +39,15 @@ const fn default_max_body_size() -> usize {
 const fn default_max_concurrent_requests() -> usize {
     500
 }
+
+impl Default for AxumBackendSettings {
+    fn default() -> Self {
+        Self {
+            address: SocketAddr::from(([127, 0, 0, 1], 8080)),
+            cors_origins: Vec::new(),
+            timeout: default_timeout(),
+            max_body_size: default_max_body_size(),
+            max_concurrent_requests: default_max_concurrent_requests(),
+        }
+    }
+}

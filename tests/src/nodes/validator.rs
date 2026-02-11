@@ -15,27 +15,23 @@ use lb_core::{
     mantle::{SignedMantleTx, Transaction as _, TxHash, Value},
     sdp::Declaration,
 };
-use lb_http_api_common::{
-    paths::{
-        CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, MANTLE_SDP_DECLARATIONS, NETWORK_INFO, STORAGE_BLOCK,
-    },
-    settings::AxumBackendSettings,
+use lb_http_api_common::paths::{
+    CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, MANTLE_SDP_DECLARATIONS, NETWORK_INFO, STORAGE_BLOCK,
 };
 use lb_key_management_system_service::keys::secured_key::SecuredKey as _;
 use lb_network_service::backends::libp2p::Libp2pInfo;
 use lb_node::{
-    HeaderId, RocksBackendSettings, UserConfig,
+    HeaderId, UserConfig,
     config::{
-        ApiConfig, KmsConfig, RunConfig, StorageConfig, deployment::DeploymentSettings,
-        mempool::serde::Config as MempoolConfig,
+        ApiConfig, KmsConfig, RunConfig, SdpConfig, StorageConfig, WalletConfig,
+        api::serde::AxumBackendSettings, deployment::DeploymentSettings,
+        kms::serde::PreloadKmsBackendSettings, mempool::serde::Config as MempoolConfig,
+        sdp::serde::WalletConfig as SdpWalletConfig, storage::serde::RocksDbSettings,
+        tracing::serde as tracing,
     },
 };
-use lb_sdp_service::SdpSettings;
-use lb_tracing::logging::local::FileConfig;
-use lb_tracing_service::LoggerLayer;
 use lb_tx_service::MempoolMetrics;
 use lb_utils::net::get_available_tcp_port;
-use lb_wallet_service::WalletServiceSettings;
 use reqwest::Url;
 use tempfile::NamedTempFile;
 use tokio::time::error::Elapsed;
@@ -107,10 +103,11 @@ impl Validator {
 
         if !*IS_DEBUG_TRACING {
             // setup logging so that we can intercept it later in testing
-            config.user.tracing.logger = LoggerLayer::File(FileConfig {
-                directory: dir.path().to_owned(),
-                prefix: Some(LOGS_PREFIX.into()),
-            });
+            config.user.tracing.logger =
+                tracing::logger::Layer::File(tracing::logger::FileConfig {
+                    directory: dir.path().to_owned(),
+                    prefix: Some(LOGS_PREFIX.into()),
+                });
         }
 
         config.user.storage.backend.path = dir.path().join("db");
@@ -346,32 +343,28 @@ pub fn create_validator_config(
                 address: config.api_config.address,
                 max_concurrent_requests: 1000,
                 ..Default::default()
-            }
-            .into(),
+            },
             testing: AxumBackendSettings {
                 address: testing_http_address,
                 max_concurrent_requests: 1000,
                 ..Default::default()
-            }
-            .into(),
+            },
         },
         storage: StorageConfig {
-            backend: RocksBackendSettings {
-                db_path: "./db".into(),
+            backend: RocksDbSettings {
+                path: "./db".into(),
                 read_only: false,
                 column_family: Some("blocks".into()),
-            }
-            .into(),
-        },
-        sdp: SdpSettings {
-            declaration: None,
-            wallet_config: lb_sdp_service::wallet::SdpWalletConfig {
-                max_tx_fee: Value::MAX,
-                funding_pk: config.consensus_config.funding_sk.as_public_key(),
             },
-        }
-        .into(),
-        wallet: WalletServiceSettings {
+        },
+        sdp: SdpConfig {
+            declaration: None,
+            wallet: SdpWalletConfig {
+                funding_pk: config.consensus_config.funding_sk.as_public_key(),
+                max_tx_fee: Value::MAX,
+            },
+        },
+        wallet: WalletConfig {
             known_keys: HashMap::from_iter([
                 (
                     key_id_for_preload_backend(&config.consensus_config.known_key.clone().into()),
@@ -386,10 +379,11 @@ pub fn create_validator_config(
                 &config.consensus_config.known_key.clone().into(),
             ),
             recovery_path: "./recovery/wallet.json".into(),
-        }
-        .into(),
+        },
         kms: KmsConfig {
-            backend: config.kms_config.into(),
+            backend: PreloadKmsBackendSettings {
+                keys: config.kms_config.keys,
+            },
         },
     };
 

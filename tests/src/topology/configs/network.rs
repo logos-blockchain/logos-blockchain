@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use lb_libp2p::{Multiaddr, ed25519, gossipsub, libp2p};
+use lb_libp2p::{Multiaddr, ed25519, libp2p};
 use lb_node::config::network::serde as network;
 use lb_utils::net::get_available_udp_port;
 

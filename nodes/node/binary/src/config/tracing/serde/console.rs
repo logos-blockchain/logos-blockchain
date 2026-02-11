@@ -10,11 +10,11 @@ pub enum Layer {
 impl From<Layer> for ConsoleLayer {
     fn from(value: Layer) -> Self {
         match value {
-            Layer::Console(config) => ConsoleLayer::Console(TokioConsoleConfig {
+            Layer::Console(config) => Self::Console(TokioConsoleConfig {
                 bind_address: config.bind_address,
                 port: config.port,
             }),
-            Layer::None => ConsoleLayer::None,
+            Layer::None => Self::None,
         }
     }
 }

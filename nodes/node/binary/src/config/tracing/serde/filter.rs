@@ -6,17 +6,17 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Layer {
-    EnvFilter(EnvConfig),
+    Env(EnvConfig),
     None,
 }
 
 impl From<Layer> for FilterLayer {
     fn from(value: Layer) -> Self {
         match value {
-            Layer::EnvFilter(config) => FilterLayer::EnvFilter(EnvFilterConfig {
+            Layer::Env(config) => Self::EnvFilter(EnvFilterConfig {
                 filters: config.filters,
             }),
-            Layer::None => FilterLayer::None,
+            Layer::None => Self::None,
         }
     }
 }

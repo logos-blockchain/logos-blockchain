@@ -20,19 +20,19 @@ impl From<Layer> for LoggerLayer {
     fn from(value: Layer) -> Self {
         match value {
             Layer::Gelf(config) => {
-                LoggerLayer::Gelf(lb_tracing::logging::gelf::GelfConfig { addr: config.addr })
+                Self::Gelf(lb_tracing::logging::gelf::GelfConfig { addr: config.addr })
             }
-            Layer::File(config) => LoggerLayer::File(lb_tracing::logging::local::FileConfig {
+            Layer::File(config) => Self::File(lb_tracing::logging::local::FileConfig {
                 directory: config.directory,
                 prefix: config.prefix,
             }),
-            Layer::Loki(config) => LoggerLayer::Loki(lb_tracing::logging::loki::LokiConfig {
+            Layer::Loki(config) => Self::Loki(lb_tracing::logging::loki::LokiConfig {
                 endpoint: config.endpoint,
                 host_identifier: config.host_identifier,
             }),
-            Layer::Stdout => LoggerLayer::Stdout,
-            Layer::Stderr => LoggerLayer::Stderr,
-            Layer::None => LoggerLayer::None,
+            Layer::Stdout => Self::Stdout,
+            Layer::Stderr => Self::Stderr,
+            Layer::None => Self::None,
         }
     }
 }

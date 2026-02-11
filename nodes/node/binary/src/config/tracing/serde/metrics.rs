@@ -12,11 +12,11 @@ pub enum Layer {
 impl From<Layer> for MetricsLayer {
     fn from(value: Layer) -> Self {
         match value {
-            Layer::Otlp(config) => MetricsLayer::Otlp(OtlpMetricsConfig {
+            Layer::Otlp(config) => Self::Otlp(OtlpMetricsConfig {
                 endpoint: config.endpoint,
                 host_identifier: config.host_identifier,
             }),
-            Layer::None => MetricsLayer::None,
+            Layer::None => Self::None,
         }
     }
 }

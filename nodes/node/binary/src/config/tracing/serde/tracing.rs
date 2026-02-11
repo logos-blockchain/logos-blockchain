@@ -12,12 +12,12 @@ pub enum Layer {
 impl From<Layer> for TracingLayer {
     fn from(value: Layer) -> Self {
         match value {
-            Layer::Otlp(config) => TracingLayer::Otlp(OtlpTracingConfig {
+            Layer::Otlp(config) => Self::Otlp(OtlpTracingConfig {
                 endpoint: config.endpoint,
                 sample_ratio: config.sample_ratio,
                 service_name: config.service_name,
             }),
-            Layer::None => TracingLayer::None,
+            Layer::None => Self::None,
         }
     }
 }

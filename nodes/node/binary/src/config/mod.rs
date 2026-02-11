@@ -353,8 +353,7 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
             }),
             LoggerLayerType::Stdout => Layer::Stdout,
             LoggerLayerType::Stderr => Layer::Stderr,
-        }
-        .into();
+        };
     }
 
     if let Some(level_str) = level {

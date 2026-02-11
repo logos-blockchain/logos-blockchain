@@ -4,9 +4,11 @@ use std::{
     time::Duration,
 };
 
-use lb_node::config::deployment::{DeploymentSettings, WellKnownDeployment};
+use lb_node::config::{
+    TracingConfig,
+    deployment::{DeploymentSettings, WellKnownDeployment},
+};
 use lb_tests::topology::configs::GeneralConfig;
-use lb_tracing_service::TracingSettings;
 use tokio::{sync::oneshot::Sender, time::timeout};
 
 use crate::{
@@ -25,7 +27,7 @@ pub struct ConfigRepo {
     generated_configs: Mutex<HashMap<Host, GeneralConfig>>,
     deployment_settings: Mutex<Option<DeploymentSettings>>,
     n_hosts: usize,
-    tracing_settings: TracingSettings,
+    tracing_settings: TracingConfig,
     timeout_duration: Duration,
 }
 
@@ -45,7 +47,7 @@ impl ConfigRepo {
     #[must_use]
     pub fn new(
         n_hosts: usize,
-        tracing_settings: TracingSettings,
+        tracing_settings: TracingConfig,
         timeout_duration: Duration,
     ) -> Arc<Self> {
         let repo = Arc::new(Self {
@@ -87,7 +89,7 @@ impl ConfigRepo {
 
         if let Some(template) = template {
             let new_config =
-                create_node_config_from_template(&TracingSettings::default(), &host, &template);
+                create_node_config_from_template(&TracingConfig::default(), &host, &template);
 
             self.generated_configs
                 .lock()
