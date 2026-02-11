@@ -54,7 +54,7 @@ lb-tracing-service               = { workspace = true }
 lb-tx-service                    = { features = ["rocksdb-backend"], workspace = true }
 lb-utils                         = { features = ["serde", "time"], workspace = true }
 lb-wallet-service                = { workspace = true }
-libp2p                           = { workspace = true, features = ["gossipsub", "identify", "kad"] }
+libp2p                           = { features = ["gossipsub", "identify", "kad"], workspace = true }
 num-bigint                       = { default-features = false, version = "0.4" }
 overwatch                        = { workspace = true }
 rand                             = { workspace = true }
@@ -67,7 +67,7 @@ thiserror                        = { workspace = true }
 tokio                            = "1"
 tokio-stream                     = { default-features = false, version = "0.1" }
 tracing                          = { workspace = true }
-url                              = { version = "2.5.8", default-features = false }
+url                              = { default-features = false, version = "2.5.8" }
 
 # openapi related dependencies
 utoipa = { workspace = true }
