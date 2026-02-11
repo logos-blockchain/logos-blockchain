@@ -291,8 +291,6 @@ pub struct UserConfig {
     pub storage: StorageConfig,
     pub kms: KmsConfig,
     pub wallet: WalletConfig,
-
-    #[cfg(feature = "tracing")]
     pub tracing: TracingConfig,
 }
 
