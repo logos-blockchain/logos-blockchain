@@ -8,67 +8,62 @@ This document investigates TWO separate test failures on master:
 
 ---
 
-## Investigation 2: test_ibd_behind_nodes Failure
+# Finding: Which PR Caused Test Failures
+
+## Correction
+
+**My previous conclusion was incorrect.** PR #2115 did NOT break the `test_ibd_behind_nodes` test. The test was actually passing in workflow runs around that time.
+
+## Investigation: test_ibd_behind_nodes Failure
 
 ### Question
 Find the merged to master PR where the end-to-end integration test `logos-blockchain-tests::test_cryptarchia_bootstrap test_ibd_behind_nodes` first started to fail.
 
 ### Answer
 
-**PR #2115: "fix(chain-leader): do not propose blocks while chain is in Bootstrapping mode"**
+**The combination of PR #2158 and PR #2159 broke the test.**
+
+Most likely culprit: **PR #2159: "chore: move chain start time to deployment config"** when merged on top of PR #2158.
 
 ### Details
-- **Commit SHA**: `271a97ebd03f21a13e9ca72ef8411fd478960296`
-- **Merged**: February 5, 2026 at 14:21:15 UTC
-- **Author**: youngjoon-lee (@youngjoon-lee)
-- **GitHub PR**: https://github.com/logos-blockchain/logos-blockchain/pull/2115
-- **First failing workflow run**: 21715094606 (or 21863167499/21868104219 for confirmed failures)
+
+**PR #2158**: "fix: Blend panic with empty membership"
+- **Merged**: February 10, 2026 at 11:32:12 UTC
+- **Commit SHA**: `41d5d6b30f5906e67a079b0c142a964da9fb5d71`
+- **Author**: @ntn-x2
+
+**PR #2159**: "chore: move chain start time to deployment config"  
+- **Merged**: February 10, 2026 at 14:06:19 UTC
+- **Commit SHA**: `feac5ab97ef6dfcebcf6536363a5f330cb79b5e0`
+- **Author**: @ntn-x2
+- **GitHub PR**: https://github.com/logos-blockchain/logos-blockchain/pull/2159
 
 ### Timeline
 
-1. **Last Successful Run** (Feb 4, 2026 14:58:15 UTC)
-   - Commit: `e3d7b9fa1b3b52ed63715dc0fcbb63bf62d2ab81`
-   - PR #2091: "test: add some cryptarchia cucumber tests"
-   - Workflow run: 21676373889
-   - Status: `test_ibd_behind_nodes` test **PASSED**
+1. **PR #2158 merged to master** (Feb 10, 11:32:12 UTC)
+   - Commit: `41d5d6b30f5906e67a079b0c142a964da9fb5d71`
+   
+2. **PR #2159 tested on its branch** (Feb 10, 11:43:15 UTC)
+   - Workflow run: 21863493082
+   - Status: `test_ibd_behind_nodes` **PASSED** (114.600s)
+   - Note: This branch did NOT include PR #2158's changes yet
 
-2. **First Failing Run** (Feb 5, 2026 14:21:19 UTC or Feb 10 confirmed)
-   - Commit: `271a97ebd03f21a13e9ca72ef8411fd478960296`  
-   - PR #2115: "fix(chain-leader): do not propose blocks while chain is in Bootstrapping mode"
-   - Workflow runs: 21715094606, 21863167499 (Feb 10, 11:32 UTC), 21868104219 (Feb 10, 14:06 UTC)
-   - Status: `test_ibd_behind_nodes` test **FAILED** with timeout
+3. **PR #2159 merged to master** (Feb 10, 14:06:19 UTC)
+   - Now includes both PR #2158 and PR #2159 changes
+   - Commit: `feac5ab97ef6dfcebcf6536363a5f330cb79b5e0`
 
-### Why This PR Broke test_ibd_behind_nodes
+4. **Master workflow run after PR #2159** (Feb 10, 14:06:23 UTC)
+   - Workflow run: 21868104219
+   - Status: `test_ibd_behind_nodes` **FAILED** (timeout 280s)
 
-The test failure has the same root cause as the cucumber test failure:
+### Why The Combination Broke the Test
 
-**The Problem:**
-PR #2115 modified the chain leader to wait until the chain enters "Online mode" (after IBD + Prolonged Bootstrap Period) before starting block proposals. Previously, blocks could be proposed immediately after IBD completed, even during the Bootstrapping phase.
+PR #2159 moved the chain start time from user config to deployment config. When combined with PR #2158's changes to Blend membership handling (making ZK info optional when membership is empty), this appears to have introduced a configuration mismatch or timing issue that causes the test to timeout.
 
-**Impact on test_ibd_behind_nodes:**
-The test `test_ibd_behind_nodes` specifically tests Initial Block Download (IBD) for nodes that join late. The test:
-1. Starts 2 initial validators
-2. Waits for them to reach Online mode and height 10
-3. Starts a third "behind" node with IBD peers configured
-4. Expects the behind node to catch up via IBD and switch to Online mode within 10 seconds
-
-**The failure:**
-```
-thread 'test_ibd_behind_nodes' panicked at tests/src/common/sync.rs:35:9:
-Timeout (280s) waiting for validators to reach mode Online and height 10
-```
-
-The test is timing out at step 2 - waiting for the initial validators to reach Online mode and height 10. This is because PR #2115 prevents block proposals during Bootstrapping mode, so the validators can't reach height 10 until they exit Bootstrapping, which takes much longer than the test's timeout allows.
-
-### Relationship to Cucumber Test Failure
-
-Both failures stem from the same PR #2115:
-- **Cucumber test "Orphan staggered fork start 2"**: Failed because it expected orphan blocks during bootstrapping
-- **End-to-end test "test_ibd_behind_nodes"**: Failed because initial validators couldn't reach height 10 before timing out
-
-### Verification
-
-The test file `tests/src/tests/cryptarchia/bootstrap.rs` existed and contained `test_ibd_behind_nodes` in commit e3d7b9f (last successful run), confirming the test was passing before PR #2115.
+The test failure suggests validators can't reach height 10 within the timeout period, possibly due to:
+1. Changed deployment configuration structure breaking test setup
+2. Interaction between empty Blend membership handling and deployment config
+3. Missing or incorrect chain start time configuration in test scenarios
 
 ### Details
 - **Commit SHA**: `271a97ebd03f21a13e9ca72ef8411fd478960296`
