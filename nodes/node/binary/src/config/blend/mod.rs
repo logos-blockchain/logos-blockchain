@@ -1,13 +1,18 @@
 use lb_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pCoreBlendBackendSettings,
-        settings::{StartingBlendConfig as BlendCoreSettings, ZkSettings},
+        settings::{
+            CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings,
+            StartingBlendConfig as BlendCoreSettings, ZkSettings,
+        },
     },
     edge::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pEdgeBlendBackendSettings,
         settings::StartingBlendConfig as BlendEdgeSettings,
     },
-    settings::{CommonSettings, CoreSettings, EdgeSettings, Settings as BlendSettings},
+    settings::{
+        CommonSettings, CoreSettings, EdgeSettings, Settings as BlendSettings, TimingSettings,
+    },
 };
 
 use crate::config::blend::{deployment::Settings as DeploymentSettings, serde::Config};
@@ -32,6 +37,7 @@ impl From<ServiceConfig>
         BlendEdgeSettings<Libp2pEdgeBlendBackendSettings>,
     )
 {
+    #[expect(clippy::too_many_lines, reason = "From implementation.")]
     fn from(config: ServiceConfig) -> Self {
         let blend_service_settings = BlendSettings::<
             Libp2pCoreBlendBackendSettings,
@@ -42,7 +48,26 @@ impl From<ServiceConfig>
                 num_blend_layers: config.deployment.common.num_blend_layers,
                 minimum_network_size: config.deployment.common.minimum_network_size,
                 recovery_path_prefix: config.user.recovery_path_prefix,
-                time: config.deployment.common.timing,
+                time: TimingSettings {
+                    epoch_transition_period_in_slots: config
+                        .deployment
+                        .common
+                        .timing
+                        .epoch_transition_period_in_slots,
+                    round_duration: config.deployment.common.timing.round_duration,
+                    rounds_per_interval: config.deployment.common.timing.rounds_per_interval,
+                    rounds_per_observation_window: config
+                        .deployment
+                        .common
+                        .timing
+                        .rounds_per_observation_window,
+                    rounds_per_session: config.deployment.common.timing.rounds_per_session,
+                    rounds_per_session_transition_period: config
+                        .deployment
+                        .common
+                        .timing
+                        .rounds_per_session_transition_period,
+                },
                 data_replication_factor: config.deployment.common.data_replication_factor,
             },
             core: CoreSettings {
@@ -67,7 +92,30 @@ impl From<ServiceConfig>
                     normalization_constant: config.deployment.core.normalization_constant,
                     protocol_name: config.deployment.common.protocol_name.clone(),
                 },
-                scheduler: config.deployment.core.scheduler,
+                scheduler: SchedulerSettings {
+                    cover: CoverTrafficSettings {
+                        intervals_for_safety_buffer: config
+                            .deployment
+                            .core
+                            .scheduler
+                            .cover
+                            .intervals_for_safety_buffer,
+                        message_frequency_per_round: config
+                            .deployment
+                            .core
+                            .scheduler
+                            .cover
+                            .message_frequency_per_round,
+                    },
+                    delayer: MessageDelayerSettings {
+                        maximum_release_delay_in_rounds: config
+                            .deployment
+                            .core
+                            .scheduler
+                            .delayer
+                            .maximum_release_delay_in_rounds,
+                    },
+                },
                 zk: ZkSettings {
                     secret_key_kms_id: config.user.core.zk.secret_key_kms_id,
                 },

@@ -1,6 +1,5 @@
 pub use ::tracing::Level;
 use serde::{Deserialize, Serialize};
-use url::Url;
 
 pub mod console;
 pub mod filter;
@@ -17,30 +16,6 @@ pub struct Config {
     pub console: console::Layer,
     #[serde(with = "serde_level")]
     pub level: Level,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum MetricsLayer {
-    Otlp(OtlpMetricsConfig),
-    None,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct OtlpMetricsConfig {
-    pub endpoint: Url,
-    pub host_identifier: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ConsoleLayer {
-    Console(TokioConsoleConfig),
-    None,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TokioConsoleConfig {
-    pub bind_address: String,
-    pub port: u16,
 }
 
 impl Default for Config {

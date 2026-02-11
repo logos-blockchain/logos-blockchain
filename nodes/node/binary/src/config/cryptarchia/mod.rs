@@ -3,6 +3,7 @@ use std::sync::Arc;
 use lb_blend_service::core::network::libp2p::Libp2pBroadcastSettings;
 use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
 use lb_core::sdp::ServiceParameters;
+use lb_cryptarchia_engine::EpochConfig;
 use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
 use lb_libp2p::PeerId;
 
@@ -51,7 +52,17 @@ impl ServiceConfig {
             epoch_schedule * u64::from(self.deployment.security_param.get());
         let ledger_config = lb_ledger::Config {
             consensus_config: self.deployment.consensus_config(),
-            epoch_config: self.deployment.epoch_config,
+            epoch_config: EpochConfig {
+                epoch_period_nonce_buffer: self.deployment.epoch_config.epoch_period_nonce_buffer,
+                epoch_period_nonce_stabilization: self
+                    .deployment
+                    .epoch_config
+                    .epoch_period_nonce_stabilization,
+                epoch_stake_distribution_stabilization: self
+                    .deployment
+                    .epoch_config
+                    .epoch_stake_distribution_stabilization,
+            },
             sdp_config: lb_ledger::mantle::sdp::Config {
                 min_stake: self.deployment.sdp_config.min_stake,
                 service_params: Arc::new(

@@ -1,4 +1,3 @@
-#[cfg(feature = "testing")]
 use lb_api_service::ApiServiceSettings;
 use lb_http_api_common::settings::AxumBackendSettings;
 

@@ -14,6 +14,7 @@ pub struct Config {
 pub struct PreloadKmsBackendSettings {
     pub keys: HashMap<KeyId, Key>,
 }
+
 #[cfg(test)]
 mod tests {
     use lb_key_management_system_service::keys::{Ed25519Key, Key, ZkKey};

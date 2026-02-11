@@ -3,18 +3,17 @@ use core::{
     time::Duration,
 };
 
-use lb_blend_service::{
-    core::settings::{CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings},
-    settings::TimingSettings,
-};
 use lb_core::{mantle::genesis_tx::GenesisTx, sdp::ServiceType};
 use lb_libp2p::protocol_name::StreamProtocol;
 use lb_node::config::{
     blend::deployment::{
         CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
-        Settings as BlendDeploymentSettings,
+        CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings,
+        Settings as BlendDeploymentSettings, TimingSettings,
     },
-    cryptarchia::deployment::{ServiceParameters, Settings as CryptarchiaDeploymentSettings},
+    cryptarchia::deployment::{
+        EpochConfig, ServiceParameters, Settings as CryptarchiaDeploymentSettings,
+    },
     deployment::DeploymentSettings,
     mempool::deployment::Settings as MempoolDeploymentSettings,
     network::deployment::Settings as NetworkDeploymentSettings,
@@ -92,7 +91,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
             // nodes have some time to sync before deciding on the
             // longest chain.
             security_param: NonZero::new(10).unwrap(),
-            epoch_config: lb_cryptarchia_engine::EpochConfig {
+            epoch_config: EpochConfig {
                 epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),

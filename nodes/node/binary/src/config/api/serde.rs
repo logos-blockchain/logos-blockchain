@@ -1,4 +1,7 @@
-use core::{net::SocketAddr, time::Duration};
+use core::{
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    time::Duration,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -43,7 +46,7 @@ const fn default_max_concurrent_requests() -> usize {
 impl Default for AxumBackendSettings {
     fn default() -> Self {
         Self {
-            address: SocketAddr::from(([127, 0, 0, 1], 8080)),
+            address: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8080).into(),
             cors_origins: Vec::new(),
             timeout: default_timeout(),
             max_body_size: default_max_body_size(),
