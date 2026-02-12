@@ -4,13 +4,19 @@ use lb_key_management_system_service::{backend::preload::KeyId, keys::Key};
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
-#[cfg_attr(any(test, feature = "testing"), derive(serde::Serialize))]
+#[cfg_attr(
+    any(test, feature = "testing", feature = "config-gen"),
+    derive(serde::Serialize)
+)]
 pub struct Config {
     pub backend: PreloadKmsBackendSettings,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[cfg_attr(any(test, feature = "testing"), derive(serde::Serialize))]
+#[cfg_attr(
+    any(test, feature = "testing", feature = "config-gen"),
+    derive(serde::Serialize)
+)]
 pub struct PreloadKmsBackendSettings {
     pub keys: HashMap<KeyId, Key>,
 }
