@@ -184,6 +184,23 @@ impl TxState {
     pub fn finalized_count(&self) -> usize {
         self.finalized.len()
     }
+
+    /// Check if we have state for a block.
+    #[must_use]
+    pub fn has_block(&self, block_id: &HeaderId) -> bool {
+        self.block_states.contains_key(block_id)
+    }
+
+    /// Current LIB.
+    #[must_use]
+    pub const fn lib(&self) -> HeaderId {
+        self.current_lib
+    }
+
+    /// All pending transactions (for checkpoint serialization).
+    pub fn all_pending_txs(&self) -> impl Iterator<Item = (&TxHash, &SignedMantleTx)> {
+        self.pending.iter()
+    }
 }
 
 #[cfg(test)]
