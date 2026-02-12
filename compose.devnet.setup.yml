@@ -6,12 +6,13 @@ services:
     container_name: cfgsync
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
+      - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
     ports:
       - "4400:4400/tcp"
     environment:
       - CHAIN_START_TIME=${CFG_CHAIN_START_TIME}
-    entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_server.sh
+    entrypoint: /etc/logos-blockchain/scripts/setup_cfgsync_server.sh
 
   client-0:
     container_name: client_0
@@ -27,7 +28,7 @@ services:
       - CFG_NETWORK_PORT=${NODE0_NET_PORT}
       - CFG_BLEND_PORT=${NODE0_BLEND_PORT}
       - CFG_API_PORT=${NODE0_API_PORT}
-    entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_client.sh
+    entrypoint: /etc/logos-blockchain/scripts/setup_cfgsync_client.sh
 
   client-1:
     container_name: client_1
@@ -43,7 +44,7 @@ services:
       - CFG_NETWORK_PORT=${NODE1_NET_PORT}
       - CFG_BLEND_PORT=${NODE1_BLEND_PORT}
       - CFG_API_PORT=${NODE1_API_PORT}
-    entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_client.sh
+    entrypoint: /etc/logos-blockchain/scripts/setup_cfgsync_client.sh
 
   client-2:
     container_name: client_2
@@ -59,7 +60,7 @@ services:
       - CFG_NETWORK_PORT=${NODE2_NET_PORT}
       - CFG_BLEND_PORT=${NODE2_BLEND_PORT}
       - CFG_API_PORT=${NODE2_API_PORT}
-    entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_client.sh
+    entrypoint: /etc/logos-blockchain/scripts/setup_cfgsync_client.sh
 
   client-3:
     container_name: client_3
@@ -75,7 +76,7 @@ services:
       - CFG_NETWORK_PORT=${NODE3_NET_PORT}
       - CFG_BLEND_PORT=${NODE3_BLEND_PORT}
       - CFG_API_PORT=${NODE3_API_PORT}
-    entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_client.sh
+    entrypoint: /etc/logos-blockchain/scripts/setup_cfgsync_client.sh
 
 volumes:
   node-data:
