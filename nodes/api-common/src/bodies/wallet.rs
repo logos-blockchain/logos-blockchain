@@ -41,7 +41,7 @@ pub mod transfer_funds {
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use serde::{Deserialize, Serialize};
-    use tracing::log::error;
+    use tracing::error;
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletTransferFundsRequestBody {
