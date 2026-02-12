@@ -272,7 +272,7 @@ mod cfgsync_tests {
             .collect();
 
         let (configs, _) =
-            create_node_configs(&FaucetSettings::default(), &TracingConfig::default(), hosts);
+            create_node_configs(&FaucetSettings::default(), &TracingConfig::none(), hosts);
 
         for (host, config) in &configs {
             let network_port = config.network_config.backend.swarm.port;

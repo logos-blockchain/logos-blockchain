@@ -19,6 +19,8 @@ pub struct Config {
     pub level: Level,
 }
 
+const DEFAULT_LOG_LEVEL: Level = Level::DEBUG;
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -27,7 +29,21 @@ impl Default for Config {
             filter: filter::Layer::default(),
             metrics: metrics::Layer::default(),
             console: console::Layer::default(),
-            level: Level::DEBUG,
+            level: DEFAULT_LOG_LEVEL,
+        }
+    }
+}
+
+impl Config {
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            logger: logger::Layer::None,
+            tracing: tracing::Layer::None,
+            filter: filter::Layer::None,
+            metrics: metrics::Layer::None,
+            console: console::Layer::None,
+            level: DEFAULT_LOG_LEVEL,
         }
     }
 }
