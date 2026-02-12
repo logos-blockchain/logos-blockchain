@@ -5,44 +5,56 @@ use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct Config {
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
 }
 
 #[serde_as]
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
 pub struct BootstrapConfig {
     pub ibd: IbdConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct IbdConfig {
     /// Peers to download blocks from.
     pub peers: HashSet<PeerId>,
     /// Delay before attempting the next download
     /// when no download is needed at the moment from a peer.
-    #[serde(default = "default_delay_before_new_download")]
     pub delay_before_new_download: Duration,
 }
 
-const fn default_delay_before_new_download() -> Duration {
-    Duration::from_secs(10)
+impl Default for IbdConfig {
+    fn default() -> Self {
+        Self {
+            peers: HashSet::default(),
+            delay_before_new_download: Duration::from_secs(10),
+        }
+    }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
 pub struct SyncConfig {
     pub orphan: OrphanConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct OrphanConfig {
     /// The maximum number of pending orphans to keep in the cache.
-    #[serde(default = "default_max_orphan_cache_size")]
     pub max_orphan_cache_size: NonZeroUsize,
 }
 
-const fn default_max_orphan_cache_size() -> NonZeroUsize {
-    NonZeroUsize::new(5).unwrap()
+impl Default for OrphanConfig {
+    fn default() -> Self {
+        Self {
+            max_orphan_cache_size: NonZeroUsize::new(5).unwrap(),
+        }
+    }
 }

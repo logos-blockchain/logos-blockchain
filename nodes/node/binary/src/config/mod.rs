@@ -281,16 +281,23 @@ impl FromStr for DeploymentType {
     derive(serde::Serialize)
 )]
 pub struct UserConfig {
+    #[serde(default)]
     pub network: NetworkConfig,
     pub blend: BlendConfig,
     pub cryptarchia: CryptarchiaConfig,
+    #[serde(default)]
     pub time: TimeConfig,
+    #[serde(default)]
     pub mempool: MempoolConfig,
     pub sdp: SdpConfig,
+    #[serde(default)]
     pub api: ApiConfig,
+    #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default)]
     pub kms: KmsConfig,
     pub wallet: WalletConfig,
+    #[serde(default)]
     pub tracing: TracingConfig,
 }
 
@@ -410,7 +417,7 @@ pub fn update_api(api: &mut ApiConfig, args: ApiArgs) -> Result<()> {
     let ApiArgs { addr, cors_origins } = args;
 
     if let Some(addr) = addr {
-        api.backend.address = addr;
+        api.backend.listen_address = addr;
     }
 
     if let Some(cors) = cors_origins {

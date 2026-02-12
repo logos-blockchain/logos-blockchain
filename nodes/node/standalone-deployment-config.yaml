@@ -42,7 +42,7 @@ cryptarchia:
       threshold: 1
       timestamp: 0
   gossipsub_protocol: /integration/logos-blockchain/cryptarchia/proto/1.0.0
-  genesis_state: !Genesis
+  genesis_state:
     mantle_tx:
       ops:
         - opcode: 0

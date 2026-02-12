@@ -28,7 +28,7 @@ impl From<ServiceConfig> for NetworkConfig<Libp2pConfig> {
                     kad_protocol_name: value.deployment.kademlia_protocol_name,
                     identify_protocol_name: value.deployment.identify_protocol_name,
                     chain_sync_protocol_name: value.deployment.chain_sync_protocol_name,
-                    gossipsub_config: value.user.backend.swarm.gossipsub,
+                    gossipsub_config: value.user.backend.swarm.gossipsub.into(),
                     kademlia_config: KademliaSettings {
                         caching: value.user.backend.swarm.kademlia.caching.map(Into::into),
                         replication_factor: value.user.backend.swarm.kademlia.replication_factor,

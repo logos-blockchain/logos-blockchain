@@ -8,6 +8,7 @@ pub mod metrics;
 pub mod tracing;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct Config {
     pub logger: logger::Layer,
     pub tracing: tracing::Layer,
@@ -21,11 +22,11 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            logger: logger::Layer::Stdout,
-            tracing: tracing::Layer::None,
-            filter: filter::Layer::None,
-            metrics: metrics::Layer::None,
-            console: console::Layer::None,
+            logger: logger::Layer::default(),
+            tracing: tracing::Layer::default(),
+            filter: filter::Layer::default(),
+            metrics: metrics::Layer::default(),
+            console: console::Layer::default(),
             level: Level::DEBUG,
         }
     }

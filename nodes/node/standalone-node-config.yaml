@@ -1,165 +1,15 @@
-network:
-  backend:
-    swarm:
-      host: 0.0.0.0
-      port: 63663
-      node_key: 5cd4636d9c4c36a37a9aeabcaa332c3ec796226af0af48a0b2e70167205af749
-      gossipsub:
-        history_length: 5
-        history_gossip: 3
-        mesh_n: 6
-        mesh_n_low: 5
-        mesh_n_high: 12
-        retain_scores: 4
-        gossip_lazy: 6
-        gossip_factor: 0.25
-        heartbeat_initial_delay:
-          secs: 5
-          nanos: 0
-        heartbeat_interval:
-          secs: 1
-          nanos: 0
-        fanout_ttl:
-          secs: 60
-          nanos: 0
-        check_explicit_peers_ticks: 300
-        duplicate_cache_time:
-          secs: 60
-          nanos: 0
-        validate_messages: false
-        allow_self_origin: false
-        do_px: false
-        prune_peers: 0
-        prune_backoff:
-          secs: 60
-          nanos: 0
-        unsubscribe_backoff:
-          secs: 10
-          nanos: 0
-        backoff_slack: 1
-        flood_publish: true
-        graft_flood_threshold:
-          secs: 10
-          nanos: 0
-        mesh_outbound_min: 2
-        opportunistic_graft_ticks: 60
-        opportunistic_graft_peers: 2
-        gossip_retransimission: 3
-        max_messages_per_rpc: null
-        max_ihave_length: 5000
-        max_ihave_messages: 10
-        iwant_followup_time:
-          secs: 3
-          nanos: 0
-        published_message_ids_cache_time:
-          secs: 10
-          nanos: 0
-      kademlia:
-        client_mode: false
-      identify: {}
-      chain_sync:
-        peer_response_timeout: 60000
-      nat:
-        type: traversal
-        autonat:
-          retest_successful_external_addresses_interval:
-            secs: 0
-            nanos: 0
-        mapping:
-          timeout: '1.000000000'
-          lease_duration:
-            secs: 7200
-            nanos: 0
-          max_retries: 3
-          renewal_delay_fraction: 0.8
-          retry_interval:
-            secs: 30
-            nanos: 0
-        gateway_monitor:
-          check_interval:
-            secs: 300
-            nanos: 0
-    initial_peers: []
 blend:
   non_ephemeral_signing_key_id: 86c8519f00178e9eb1fe5f4247e4bed77d4c9f6da2fb10e8a1fdd7ba6bc79fa0
-  recovery_path_prefix: ./recovery/blend
   core:
-    backend:
-      listening_address: /ip4/127.0.0.1/udp/58068/quic-v1
-      core_peering_degree:
-        start: 1
-        end: 3
-      edge_node_connection_timeout: '1.0'
-      max_edge_node_incoming_connections: 300
-      max_dial_attempts_per_peer: 3
     zk:
       secret_key_kms_id: 64249c75c2cb813578b75d05b215fc95f67cea5862fff047228183f22e63460e
-  edge:
-    backend:
-      max_dial_attempts_per_peer_per_message: 1
-      replication_factor: 1
 cryptarchia:
-  service:
-    recovery_file: ./recovery/cryptarchia.json
-    bootstrap:
-      prolonged_bootstrap_period: '1.000000000'
-      force_bootstrap: false
-      offline_grace_period:
-        grace_period: '1200.000000000'
-        state_recording_interval: '60.000000000'
-  network:
-    bootstrap:
-      ibd:
-        peers: []
-        delay_before_new_download:
-          secs: 10
-          nanos: 0
-    sync:
-      orphan:
-        max_orphan_cache_size: 5
   leader:
     wallet:
-      max_tx_fee: 18446744073709551615
       funding_pk: "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26"
-time:
-  backend:
-    server: pool.ntp.org:123
-    client:
-      timeout: '5.000000000'
-      listening_interface: 0.0.0.0
-    update_interval: '16.000000000'
-mempool:
-  recovery_path: ./recovery/mempool.json
-tracing:
-  logger: Stdout
-  tracing: None
-  filter: None
-  metrics: None
-  console: None
-  level: DEBUG
 sdp:
-  declaration: null
   wallet:
-    max_tx_fee: 18446744073709551615
     funding_pk: ed266e6e887b9b97059dc1aa1b7b2e19b934291753c6336a163fe4ebaa28e717
-api:
-  backend:
-    address: 127.0.0.1:8080
-    cors_origins: []
-    timeout: 30
-    max_body_size: 10485760
-    max_concurrent_requests: 1000
-  testing:
-    address: 127.0.0.1:50897
-    cors_origins: []
-    timeout: 30
-    max_body_size: 10485760
-    max_concurrent_requests: 1000
-storage:
-  backend:
-    path: ./db
-    read_only: false
-    column_family: blocks
 kms:
   backend:
     keys:
@@ -172,4 +22,3 @@ wallet:
     2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26: "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26"
     ed266e6e887b9b97059dc1aa1b7b2e19b934291753c6336a163fe4ebaa28e717: "ed266e6e887b9b97059dc1aa1b7b2e19b934291753c6336a163fe4ebaa28e717"
   voucher_master_key_id: 2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26
-  recovery_path: ./recovery/wallet.json

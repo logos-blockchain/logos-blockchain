@@ -3,9 +3,10 @@ use lb_tracing_service::TracingLayer;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub enum Layer {
     Otlp(OtlpConfig),
+    #[default]
     None,
 }
 
@@ -25,6 +26,11 @@ impl From<Layer> for TracingLayer {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OtlpConfig {
     pub endpoint: Url,
+    #[serde(default = "default_sample_ratio")]
     pub sample_ratio: f64,
     pub service_name: String,
+}
+
+const fn default_sample_ratio() -> f64 {
+    0.5
 }

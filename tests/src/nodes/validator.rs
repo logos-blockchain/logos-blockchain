@@ -125,8 +125,8 @@ impl Validator {
             .spawn()
             .unwrap();
         let node = Self {
-            addr: config.user.api.backend.address,
-            testing_http_addr: config.user.api.testing.address,
+            addr: config.user.api.backend.listen_address,
+            testing_http_addr: config.user.api.testing.listen_address,
             child,
             tempdir: dir,
             config,
@@ -340,12 +340,12 @@ pub fn create_validator_config(
         tracing: config.tracing_config.tracing_settings,
         api: ApiConfig {
             backend: AxumBackendSettings {
-                address: config.api_config.address,
+                listen_address: config.api_config.address,
                 max_concurrent_requests: 1000,
                 ..Default::default()
             },
             testing: AxumBackendSettings {
-                address: testing_http_address,
+                listen_address: testing_http_address,
                 max_concurrent_requests: 1000,
                 ..Default::default()
             },

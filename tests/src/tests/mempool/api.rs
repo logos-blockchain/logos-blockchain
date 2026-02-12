@@ -11,9 +11,14 @@ async fn test_post_mantle_tx() {
     let topology = Topology::spawn(TopologyConfig::two_validators()).await;
     let validator = &topology.validators()[0];
 
-    let validator_url =
-        Url::parse(format!("http://{}", validator.config().user.api.backend.address).as_str())
-            .unwrap();
+    let validator_url = Url::parse(
+        format!(
+            "http://{}",
+            validator.config().user.api.backend.listen_address
+        )
+        .as_str(),
+    )
+    .unwrap();
 
     let mantle_tx = MantleTx {
         ops: Vec::new(),
