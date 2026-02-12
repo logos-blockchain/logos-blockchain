@@ -1,15 +1,16 @@
-use core::net::SocketAddr;
+use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 
 use lb_tracing_service::LoggerLayer;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub enum Layer {
     Gelf(GelfConfig),
     File(FileConfig),
     Loki(LokiConfig),
+    #[default]
     Stdout,
     Stderr,
     // do not collect logs
@@ -38,14 +39,33 @@ impl From<Layer> for LoggerLayer {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct GelfConfig {
     pub addr: SocketAddr,
 }
 
+impl Default for GelfConfig {
+    fn default() -> Self {
+        Self {
+            addr: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 9_000).into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FileConfig {
     pub directory: PathBuf,
     pub prefix: Option<PathBuf>,
+}
+
+impl Default for FileConfig {
+    fn default() -> Self {
+        Self {
+            directory: "./logs".into(),
+            prefix: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -3,9 +3,10 @@ use lb_tracing_service::MetricsLayer;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub enum Layer {
     Otlp(OtlpConfig),
+    #[default]
     None,
 }
 
