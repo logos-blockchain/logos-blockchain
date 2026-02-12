@@ -285,13 +285,19 @@ pub struct UserConfig {
     pub network: NetworkConfig,
     pub blend: BlendConfig,
     pub cryptarchia: CryptarchiaConfig,
+    #[serde(default)]
     pub time: TimeConfig,
+    #[serde(default)]
     pub mempool: MempoolConfig,
     pub sdp: SdpConfig,
+    #[serde(default)]
     pub api: ApiConfig,
+    #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default)]
     pub kms: KmsConfig,
     pub wallet: WalletConfig,
+    #[serde(default)]
     pub tracing: TracingConfig,
 }
 

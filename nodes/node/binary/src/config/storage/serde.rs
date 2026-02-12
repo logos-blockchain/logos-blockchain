@@ -19,7 +19,7 @@ pub struct RocksDbSettings {
 impl Default for RocksDbSettings {
     fn default() -> Self {
         Self {
-            column_family: None,
+            column_family: Some("blocks".to_owned()),
             path: "./db".into(),
             read_only: false,
         }
