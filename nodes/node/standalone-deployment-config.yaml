@@ -48,7 +48,13 @@ cryptarchia:
         - opcode: 0
           payload:
             channel_id: "0000000000000000000000000000000000000000000000000000000000000000"
-            inscription: [ 103, 101, 110, 101, 115, 105, 115 ]  # "genesis" in bytes
+            inscription: [  # CryptarchiaParameter
+              12, 0, 0, 0, 0, 0, 0, 0,                          # chain_id_len = 12 (little-endian u64)
+              108, 111, 103, 111, 115, 45, 100, 101, 118, 110, 101, 116,  # "logos-devnet" (UTF-8)
+              44, 4, 98, 105, 0, 0, 0, 0,                       # genesis_time = 2026-01-10T07:47:56Z (little-endian u64)
+              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  # epoch_nonce = [0u8; 32]
+              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ]
             parent: "0000000000000000000000000000000000000000000000000000000000000000"
             signer: "0000000000000000000000000000000000000000000000000000000000000000"
       ledger_tx:
@@ -78,6 +84,5 @@ cryptarchia:
       ]
 time:
   slot_duration: '5.0'
-  chain_start_time: 2026-01-10 07:47:56.891858 +00:00:00
 mempool:
   pubsub_topic: mantle_e2e_tests

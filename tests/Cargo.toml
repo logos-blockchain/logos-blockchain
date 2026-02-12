@@ -49,7 +49,7 @@ testing-framework-runner-compose = { git = "https://github.com/logos-blockchain/
 testing-framework-runner-local   = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "intermediate_ref_02" }
 testing-framework-workflows      = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "intermediate_ref_02" }
 thiserror                        = { default-features = false, version = "2.0" }
-time                             = { default-features = false, version = "0.3" }
+time                             = { workspace = true }
 tokio                            = "1"
 tracing                          = { workspace = true }
 tracing-subscriber               = { features = ["env-filter", "fmt"], version = "0.3" }

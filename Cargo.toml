@@ -162,6 +162,7 @@ serde_yaml        = { default-features = false, version = "0.9.33" }
 subtle            = { default-features = false, version = "2.6.1" }
 tempfile          = { default-features = false, version = "3" }
 thiserror         = { default-features = false, version = "2.0" }
+time              = { default-features = false, version = "0.3" }
 tokio             = { default-features = false, version = "1" }
 tracing           = { default-features = false, version = "0.1" }
 utoipa            = { default-features = false, version = "4.0" }

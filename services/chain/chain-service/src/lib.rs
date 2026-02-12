@@ -413,7 +413,7 @@ pub struct CryptarchiaSettings {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub enum StartingState {
     Genesis {
-        genesis_tx: GenesisTx,
+        genesis_tx: Box<GenesisTx>,
     },
     Lib {
         lib_id: HeaderId,
@@ -424,7 +424,9 @@ pub enum StartingState {
 
 impl From<GenesisTx> for StartingState {
     fn from(value: GenesisTx) -> Self {
-        Self::Genesis { genesis_tx: value }
+        Self::Genesis {
+            genesis_tx: Box::new(value),
+        }
     }
 }
 

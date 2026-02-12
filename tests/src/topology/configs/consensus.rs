@@ -1,8 +1,9 @@
 use core::time::Duration;
+use std::sync::OnceLock;
 
 use lb_core::{
     mantle::{
-        MantleTx, Note, OpProof, Utxo,
+        CryptarchiaParameter, MantleTx, Note, OpProof, Utxo,
         genesis_tx::GenesisTx,
         ledger::Tx as LedgerTx,
         ops::{
@@ -12,10 +13,11 @@ use lb_core::{
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
-use lb_groth16::CompressedGroth16Proof;
+use lb_groth16::{CompressedGroth16Proof, Field as _, Fr};
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey, ZkPublicKey, ZkSignature};
 use lb_node::{SignedMantleTx, Transaction as _};
 use num_bigint::BigUint;
+use time::OffsetDateTime;
 
 pub const SHORT_PROLONGED_BOOTSTRAP_PERIOD: Duration = Duration::from_secs(1);
 
@@ -60,12 +62,23 @@ pub struct ServiceNote {
     pub output_index: usize,
 }
 
+static GENESIS_TIME: OnceLock<OffsetDateTime> = OnceLock::new();
+
+fn get_or_init_genesis_time() -> OffsetDateTime {
+    *GENESIS_TIME.get_or_init(OffsetDateTime::now_utc)
+}
+
 #[must_use]
 pub fn create_genesis_tx(utxos: &[Utxo]) -> GenesisTx {
     // Create a genesis inscription op (similar to config.yaml)
     let inscription = InscriptionOp {
         channel_id: ChannelId::from([0; 32]),
-        inscription: vec![103, 101, 110, 101, 115, 105, 115], // "genesis" in bytes
+        inscription: CryptarchiaParameter {
+            chain_id: "test-chain-id".to_owned(),
+            genesis_time: get_or_init_genesis_time(),
+            epoch_nonce: Fr::ZERO,
+        }
+        .encode(),
         parent: MsgId::root(),
         signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
     };
@@ -210,7 +223,12 @@ pub fn create_genesis_tx_with_declarations(
 ) -> GenesisTx {
     let inscription = InscriptionOp {
         channel_id: ChannelId::from([0; 32]),
-        inscription: vec![103, 101, 110, 101, 115, 105, 115], // "genesis" in bytes
+        inscription: CryptarchiaParameter {
+            chain_id: "test-chain-id".to_owned(),
+            genesis_time: get_or_init_genesis_time(),
+            epoch_nonce: Fr::ZERO,
+        }
+        .encode(),
         parent: MsgId::root(),
         signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
     };

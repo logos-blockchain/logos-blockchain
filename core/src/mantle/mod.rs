@@ -16,6 +16,7 @@ pub mod tx;
 pub mod tx_builder;
 
 pub use gas::{GasConstants, GasCost};
+pub use genesis_tx::CryptarchiaParameter;
 use lb_groth16::Fr;
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
@@ -54,6 +55,7 @@ pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCost {
 //  https://www.notion.so/nomos-tech/Bedrock-Genesis-Block-21d261aa09df80bb8dc3c768802eb527?d=27a261aa09df808e9c66001cf0585dee
 pub trait GenesisTx: Transaction<Hash = TxHash> {
     fn genesis_inscription(&self) -> &InscriptionOp;
+    fn cryptarchia_parameter(&self) -> CryptarchiaParameter;
     fn sdp_declarations(&self) -> impl Iterator<Item = (&SDPDeclareOp, &OpProof)>;
     fn mantle_tx(&self) -> &MantleTx;
 }
@@ -84,6 +86,10 @@ impl<T: AuthenticatedMantleTx> AuthenticatedMantleTx for &T {
 impl<T: GenesisTx> GenesisTx for &T {
     fn genesis_inscription(&self) -> &InscriptionOp {
         T::genesis_inscription(self)
+    }
+
+    fn cryptarchia_parameter(&self) -> CryptarchiaParameter {
+        T::cryptarchia_parameter(self)
     }
 
     fn sdp_declarations(&self) -> impl Iterator<Item = (&SDPDeclareOp, &OpProof)> {

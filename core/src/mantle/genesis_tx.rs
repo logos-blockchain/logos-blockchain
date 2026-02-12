@@ -1,6 +1,7 @@
-use lb_groth16::Fr;
+use lb_groth16::{Fr, FrBytes, fr_from_bytes, fr_to_bytes};
 use lb_poseidon2::Digest;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use super::{OpProof, SignedMantleTx, ops::sdp::SDPDeclareOp};
 use crate::{
@@ -15,8 +16,11 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct GenesisTx(SignedMantleTx);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenesisTx {
+    tx: SignedMantleTx,
+    cryptarchia_parameter: CryptarchiaParameter,
+}
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -30,6 +34,8 @@ pub enum Error {
     MissingInscription,
     #[error("Invalid genesis inscription: {0:?}")]
     InvalidInscription(Box<Op>),
+    #[error("Invalid cryptarchia inscription: {0}")]
+    InvalidCryptarchiaParameter(String),
 }
 
 impl GenesisTx {
@@ -49,10 +55,10 @@ impl GenesisTx {
         // Genesis transactions must contain exactly one inscription as the first op
         // and then may contain other SDP declarations
         let mut ops = mantle_tx.ops.iter();
-        match ops.next() {
+        let cryptarchia_parameter = match ops.next() {
             Some(Op::ChannelInscribe(op)) => valid_cryptarchia_inscription(op)?,
             _ => return Err(Error::MissingInscription),
-        }
+        };
 
         let unsupported_ops = ops
             .filter(|op| !matches!(op, Op::SDPDeclare(_)))
@@ -62,26 +68,47 @@ impl GenesisTx {
             return Err(Error::UnsupportedGenesisOp(unsupported_ops));
         }
 
-        Ok(Self(signed_mantle_tx))
+        Ok(Self {
+            tx: signed_mantle_tx,
+            cryptarchia_parameter,
+        })
     }
 
     #[cfg(feature = "mock")]
     #[must_use]
     pub fn new_mocked() -> Self {
-        use lb_groth16::CompressedGroth16Proof;
+        use lb_groth16::{CompressedGroth16Proof, Field as _};
         use lb_key_management_system_keys::keys::ZkSignature;
 
-        use crate::mantle::tx_builder::MantleTxBuilder;
+        use crate::mantle::{ops::channel::Ed25519PublicKey, tx_builder::MantleTxBuilder};
 
-        Self(SignedMantleTx::new_unverified(
-            MantleTxBuilder::new().build(),
-            vec![],
-            ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0; _])),
-        ))
+        let cryptarchia_parameter = CryptarchiaParameter {
+            chain_id: "mock-chain-id".to_owned(),
+            genesis_time: OffsetDateTime::now_utc(),
+            epoch_nonce: Fr::ZERO,
+        };
+        let inscription_op = InscriptionOp {
+            channel_id: ChannelId::from([0; 32]),
+            inscription: cryptarchia_parameter.encode(),
+            parent: MsgId::root(),
+            signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+        };
+        Self {
+            tx: SignedMantleTx::new_unverified(
+                MantleTxBuilder::new()
+                    .push_op(Op::ChannelInscribe(inscription_op))
+                    .build(),
+                vec![OpProof::NoProof],
+                ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0; _])),
+            ),
+            cryptarchia_parameter,
+        }
     }
 }
 
-fn valid_cryptarchia_inscription(inscription: &InscriptionOp) -> Result<(), Error> {
+fn valid_cryptarchia_inscription(
+    inscription: &InscriptionOp,
+) -> Result<CryptarchiaParameter, Error> {
     if inscription.parent != MsgId::root() {
         return Err(Error::InvalidInscription(Box::new(Op::ChannelInscribe(
             inscription.clone(),
@@ -100,7 +127,7 @@ fn valid_cryptarchia_inscription(inscription: &InscriptionOp) -> Result<(), Erro
         ))));
     }
 
-    Ok(())
+    CryptarchiaParameter::decode(&inscription.inscription)
 }
 
 impl Transaction for GenesisTx {
@@ -108,7 +135,7 @@ impl Transaction for GenesisTx {
         |tx| <ZkHasher as Digest>::digest(&tx.as_signing_frs()).into();
     type Hash = TxHash;
     fn as_signing_frs(&self) -> Vec<Fr> {
-        self.0.mantle_tx.as_signing_frs()
+        self.tx.mantle_tx.as_signing_frs()
     }
 }
 
@@ -128,11 +155,15 @@ impl crate::mantle::GenesisTx for GenesisTx {
         }
     }
 
+    fn cryptarchia_parameter(&self) -> CryptarchiaParameter {
+        self.cryptarchia_parameter.clone()
+    }
+
     fn sdp_declarations(&self) -> impl Iterator<Item = (&SDPDeclareOp, &OpProof)> {
         self.mantle_tx()
             .ops
             .iter()
-            .zip(self.0.ops_proofs.iter())
+            .zip(self.tx.ops_proofs.iter())
             .filter_map(|(op, proof)| {
                 if let Op::SDPDeclare(sdp_msg) = op {
                     Some((sdp_msg, proof))
@@ -143,7 +174,17 @@ impl crate::mantle::GenesisTx for GenesisTx {
     }
 
     fn mantle_tx(&self) -> &MantleTx {
-        &self.0.mantle_tx
+        &self.tx.mantle_tx
+    }
+}
+
+impl Serialize for GenesisTx {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Skip self.cryptarchia_parameter as it is parsed from the inscription op
+        self.tx.serialize(serializer)
     }
 }
 
@@ -157,8 +198,93 @@ impl<'de> Deserialize<'de> for GenesisTx {
     }
 }
 
+/// Cryptarchia parameters encoded as an inscription in the genesis block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CryptarchiaParameter {
+    pub chain_id: String,
+    pub genesis_time: OffsetDateTime,
+    pub epoch_nonce: Fr,
+}
+
+impl CryptarchiaParameter {
+    /// Encode the inscription into the deterministic ad-hoc binary format.
+    ///
+    /// Ad-hoc encoding format:
+    /// [u64-chain-id-bytes-len][utf8-encoded-chain-id][u64-genesis-time-as-unix-timestamp-in-seconds][256bit-epoch-nonce]
+    ///
+    /// All integers are little-endian. The epoch nonce is 32 raw bytes.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let chain_id = self.chain_id.as_bytes();
+        let chain_id_len = u64::try_from(chain_id.len())
+            .expect("chain_id length fits in u64")
+            .to_le_bytes();
+        let genesis_time = u64::try_from(self.genesis_time.unix_timestamp())
+            .expect("genesis_time fits in u64")
+            .to_le_bytes();
+        let epoch_nonce = fr_to_bytes(&self.epoch_nonce);
+
+        let mut buf = Vec::with_capacity(
+            chain_id_len.len() + chain_id.len() + genesis_time.len() + epoch_nonce.len(),
+        );
+        buf.extend_from_slice(&chain_id_len);
+        buf.extend_from_slice(chain_id);
+        buf.extend_from_slice(&genesis_time);
+        buf.extend_from_slice(&epoch_nonce);
+        buf
+    }
+
+    /// Decode the inscription from the ad-hoc binary format.
+    pub fn decode(data: &[u8]) -> Result<Self, Error> {
+        let chain_id_len = u64::from_le_bytes(
+            data.get(..8)
+                .ok_or_else(|| Error::InvalidCryptarchiaParameter("inscription too short".into()))?
+                .try_into()
+                .expect("8-bytes fits in u64"),
+        ) as usize;
+
+        let chain_id = data
+            .get(8..8 + chain_id_len)
+            .ok_or_else(|| Error::InvalidCryptarchiaParameter("inscription too short".into()))?;
+        let chain_id = String::from_utf8(chain_id.to_vec()).map_err(|e| {
+            Error::InvalidCryptarchiaParameter(format!("invalid chain_id utf8: {e}"))
+        })?;
+
+        let genesis_time_offset = 8 + chain_id_len;
+        let genesis_time = u64::from_le_bytes(
+            data.get(genesis_time_offset..genesis_time_offset + 8)
+                .ok_or_else(|| Error::InvalidCryptarchiaParameter("inscription too short".into()))?
+                .try_into()
+                .expect("8-bytes fits in u64"),
+        );
+        let genesis_time =
+            OffsetDateTime::from_unix_timestamp(genesis_time.try_into().map_err(|e| {
+                Error::InvalidCryptarchiaParameter(format!("genesis_time out of range: {e}"))
+            })?)
+            .map_err(|e| {
+                Error::InvalidCryptarchiaParameter(format!("invalid genesis_time: {e}"))
+            })?;
+
+        let nonce_offset = genesis_time_offset + 8;
+        let epoch_nonce = fr_from_bytes(
+            data.get(nonce_offset..nonce_offset + size_of::<FrBytes>())
+                .ok_or_else(|| {
+                    Error::InvalidCryptarchiaParameter("inscription too short".into())
+                })?,
+        )
+        .map_err(|e| Error::InvalidCryptarchiaParameter(format!("invalid epoch_nonce: {e}")))?;
+
+        Ok(Self {
+            chain_id,
+            genesis_time,
+            epoch_nonce,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use lb_groth16::Field as _;
     use lb_key_management_system_keys::keys::{ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
 
@@ -173,14 +299,23 @@ mod tests {
 
     fn inscription_op(
         channel_id: ChannelId,
+        cryptarchia_param: &CryptarchiaParameter,
         parent: MsgId,
         signer: Ed25519PublicKey,
     ) -> InscriptionOp {
         InscriptionOp {
             channel_id,
-            inscription: vec![1, 2, 3, 4],
+            inscription: cryptarchia_param.encode(),
             parent,
             signer,
+        }
+    }
+
+    fn cryptarchia_param() -> CryptarchiaParameter {
+        CryptarchiaParameter {
+            chain_id: "test".to_owned(),
+            genesis_time: OffsetDateTime::from_unix_timestamp(1000).unwrap(),
+            epoch_nonce: Fr::ZERO,
         }
     }
 
@@ -226,6 +361,7 @@ mod tests {
         let tx = create_tx(
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([1; 32]),
+                &cryptarchia_param(),
                 MsgId::root(),
                 Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
@@ -240,6 +376,7 @@ mod tests {
         let tx = create_tx(
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
+                &cryptarchia_param(),
                 MsgId::from([1; 32]),
                 Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
@@ -254,6 +391,7 @@ mod tests {
         let tx = create_tx(
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
+                &cryptarchia_param(),
                 MsgId::root(),
                 Ed25519PublicKey::from_bytes(&[1; 32]).unwrap(),
             ))],
@@ -268,6 +406,7 @@ mod tests {
         let tx = create_tx(
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
+                &cryptarchia_param(),
                 MsgId::root(),
                 Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
@@ -281,6 +420,7 @@ mod tests {
         let inscription_op = || {
             inscription_op(
                 ChannelId::from([0; 32]),
+                &cryptarchia_param(),
                 MsgId::root(),
                 Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             )
@@ -321,6 +461,7 @@ mod tests {
         let inscription_op = || {
             inscription_op(
                 ChannelId::from([0; 32]),
+                &cryptarchia_param(),
                 MsgId::root(),
                 Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             )
@@ -375,6 +516,7 @@ mod tests {
         let mut signed_mantle_tx = create_tx(
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
+                &cryptarchia_param(),
                 MsgId::root(),
                 Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
@@ -406,6 +548,7 @@ mod tests {
         let signed_mantle_tx = create_tx(
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
+                &cryptarchia_param(),
                 MsgId::root(),
                 Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
@@ -421,5 +564,56 @@ mod tests {
 
         // Verify they're equal
         assert_eq!(genesis_tx, deserialized);
+    }
+
+    #[test]
+    fn test_cryptarchia_parameter_roundtrip() {
+        let param = cryptarchia_param();
+        let encoded = param.encode();
+        let decoded = CryptarchiaParameter::decode(&encoded).unwrap();
+        assert_eq!(param, decoded);
+    }
+
+    #[test]
+    fn test_cryptarchia_parameter_decode_errors() {
+        // Too short
+        assert!(matches!(
+            CryptarchiaParameter::decode(&[0; 1]),
+            Err(Error::InvalidCryptarchiaParameter(_))
+        ));
+
+        // Wrong length (chain_id_len says 100 but only a few bytes follow)
+        let mut bad = vec![0; 48];
+        bad[0] = 100; // chain_id_len = 100
+        assert!(matches!(
+            CryptarchiaParameter::decode(&bad),
+            Err(Error::InvalidCryptarchiaParameter(_))
+        ));
+
+        // Invalid UTF-8 chain_id
+        let mut encoded = cryptarchia_param().encode();
+        encoded[8] = 0xFF; // corrupt the UTF-8 byte
+        assert!(matches!(
+            CryptarchiaParameter::decode(&bad),
+            Err(Error::InvalidCryptarchiaParameter(_))
+        ));
+    }
+
+    #[test]
+    fn test_genesis_tx_cryptarchia_parameter() {
+        use crate::mantle::GenesisTx as _;
+
+        let param = cryptarchia_param();
+        let tx = create_tx(
+            vec![Op::ChannelInscribe(inscription_op(
+                ChannelId::from([0; 32]),
+                &param,
+                MsgId::root(),
+                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+            ))],
+            vec![OpProof::NoProof],
+        );
+        let genesis_tx = GenesisTx::from_tx(tx).unwrap();
+        assert_eq!(genesis_tx.cryptarchia_parameter(), param);
     }
 }
