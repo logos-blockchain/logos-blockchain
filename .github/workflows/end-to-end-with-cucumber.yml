@@ -3,7 +3,7 @@ on:
   push:
     branches: [ master ]
 
-name: Cucumber and end-to-end integration tests
+name: End-to-end integration tests (including cucumber)
 
 # Ensure only one workflow run per branch/workflow is active at a time.
 # Cancels any in-progress runs for the same group to avoid overlap.
@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   tests:
-    name: Run cucumber integration tests, not long running
+    name: Run end-to-end integration tests (including cucumber)
 
     # Only run if not a WIP or DO NOT MERGE PR
     if: >
@@ -64,9 +64,6 @@ jobs:
       # shell variables
       - name: Set circuits path environment variable (new)
         run: echo "LOGOS_BLOCKCHAIN_CIRCUITS=$HOME/.logos-blockchain-circuits" >> $GITHUB_ENV
-      # TODO: Remove this when the test runners removed all direct references to `NOMOS_CIRCUITS`
-      - name: Set circuits path environment variable (old)
-        run: echo "NOMOS_CIRCUITS=$HOME/.logos-blockchain-circuits" >> $GITHUB_ENV
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35
@@ -78,14 +75,16 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
-          args: --release --locked --all --features high-active-slot-coefficient
+          # Note: Trying without the `high-active-slot-coefficient` feature flag for now, as locally tests seem to
+          #       converge faster without it, especially with release mode binaries. We can re-enable it later if
+          #       needed.
+          args: --locked --release --all
+          # args: --locked --all --features high-active-slot-coefficient
         env:
           CARGO_INCREMENTAL: 0  # Disable incremental compilation
 
       - name: End-to-end integration tests
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        env:
-          LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
         with:
           command: nextest
           # - We don't test benches as they take 6h+, leading to a timeout
@@ -100,53 +99,48 @@ jobs:
           path: tests/.tmp*
 
       # Run cucumber integration tests with environment variables for binaries and test params
-      - name: Run cucumber - @normal_ci
+      # Special exclusion tags (we want to run the rest of the tests and not fail the workflow):
+      # - @broken = tests that are broken and must still be fixed
+      # - @undefined_behaviour = tests that trigger undefined system-level behaviour in the logos-blockchain-node binary
+      - name: Run cucumber - @smoke_ci
         # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
         if: ${{ !cancelled() }}
         timeout-minutes: 60  # Safety net timeout - this needs to be adjusted as more tests are added
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
-          LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
-          LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs/kzgrs_test_params
+          CUCUMBER_LOG_LEVEL: debug
         with:
           command: test
-          # The test binary can be debug mode to increase build times
           args: >-
             --locked -p logos-blockchain-tests --features cucumber
-            --test cucumber -- --tags "@normal_ci and not (@broken
-            or @undefined_behaviour)"
+            --test cucumber -- --tags "@smoke_ci and not (@broken or @undefined_behaviour)"
+
+      # On failure, upload cucumber logs and artifacts for debugging
+      - name: Upload cucumber logs on failure
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
+        with:
+          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}  # ✅ Unique per OS
+          include-hidden-files: true
+          path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Smoke/**
 
       # Run cucumber integration tests with environment variables for binaries and test params
-      - name: Run cucumber - @cryptarchia
+      # Special exclusion tags (we want to run the rest of the tests and not fail the workflow):
+      # - @broken = tests that are broken and must still be fixed
+      # - @undefined_behaviour = tests that trigger undefined system-level behaviour in the logos-blockchain-node binary
+      - name: Run cucumber - @cryptarchia_ci
         # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
         if: ${{ !cancelled() }}
         timeout-minutes: 60  # Safety net timeout - this needs to be adjusted as more tests are added
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
-          LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
-          LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs/kzgrs_test_params
+          CUCUMBER_LOG_LEVEL: debug
         with:
           command: test
-          # The test binary can be debug mode to increase build times
           args: >-
             --locked -p logos-blockchain-tests --features cucumber
-            --test cucumber -- --tags "@cryptarchia and not (@broken or @undefined_behaviour)"
-
-      - name: Clean up build artifacts
-        if: success() || failure()
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: clean
-
-      # Always upload JUnit test results for reporting, even if tests fail
-      - name: Upload cucumber JUnit results
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
-        with:
-          name: cucumber-junit-${{ runner.os }}  # ✅ Unique per OS
-          path: cucumber_tests/temp/cucumber-output-junit.xml
-          if-no-files-found: warn
+            --test cucumber -- --tags "@cryptarchia_ci and not (@broken or @undefined_behaviour)"
 
       # On failure, upload cucumber logs and artifacts for debugging
       - name: Upload cucumber logs on failure
@@ -156,18 +150,26 @@ jobs:
         with:
           name: cucumber-artifacts-${{ runner.os }}  # ✅ Unique per OS
           include-hidden-files: true
-          path: |
-            cucumber_tests/temp/**
-            cucumber_tests/temp/node-logs/**
+          path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Cryptarchia/**
+
+      # Always upload JUnit test results for reporting, even if tests fail
+      - name: Upload cucumber JUnit results
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
+        with:
+          name: cucumber-junit-${{ runner.os }}  # ✅ Unique per OS
+          path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber-output-junit.xml
+          if-no-files-found: warn
 
       # Always publish a test report for visibility, do not fail workflow if this step fails
       - name: Publish cucumber test report
-        if: always()
+        if: ${{ !cancelled() }}
         continue-on-error: true
         uses: dorny/test-reporter@v1
         with:
           name: Cucumber-${{ runner.os }}  # Optional: distinguish Linux vs macOS
-          path: cucumber_tests/temp/cucumber-output-junit.xml
+          path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber-output-junit.xml
           reporter: java-junit
 
       - name: Clean up build artifacts
@@ -175,3 +177,7 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: clean
+
+      - name: Clean up cucumber artifacts
+        if: success() || failure()
+        run: rm -rf ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts

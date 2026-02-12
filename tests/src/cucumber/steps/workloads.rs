@@ -23,8 +23,8 @@ fn tx_rate_with_users(world: &mut CucumberWorld, rate: u64, users: usize) -> Ste
 }
 
 #[given(expr = "expect consensus liveness")]
-const fn expect_consensus_liveness(world: &mut CucumberWorld) -> StepResult {
-    world.enable_consensus_liveness()
+const fn expect_consensus_liveness(world: &mut CucumberWorld) {
+    world.enable_consensus_liveness();
 }
 
 #[given(expr = "consensus liveness lag allowance is {int}")]

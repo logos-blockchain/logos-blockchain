@@ -12,7 +12,7 @@ use lb_core::{
     mantle::{GenesisTx as _, genesis_tx::GenesisTx},
     sdp::{Locator, ServiceType},
 };
-use lb_key_management_system_service::backend::preload::PreloadKMSBackendSettings;
+use lb_node::config::{KmsConfig, kms::serde::PreloadKmsBackendSettings};
 use lb_utils::net::get_available_udp_port;
 use network::GeneralNetworkConfig;
 use rand::{Rng as _, thread_rng};
@@ -34,7 +34,7 @@ pub struct GeneralConfig {
     pub blend_config: GeneralBlendConfig,
     pub tracing_config: GeneralTracingConfig,
     pub time_config: GeneralTimeConfig,
-    pub kms_config: PreloadKMSBackendSettings,
+    pub kms_config: KmsConfig,
 }
 
 #[must_use]
@@ -102,8 +102,8 @@ pub fn create_general_configs_with_blend_core_subset(
     let kms_configs: Vec<_> = blend_configs
         .iter()
         .enumerate()
-        .map(
-            |(i, (blend_conf, private_key, zk_secret_key))| PreloadKMSBackendSettings {
+        .map(|(i, (blend_conf, private_key, zk_secret_key))| KmsConfig {
+            backend: PreloadKmsBackendSettings {
                 keys: [
                     (
                         blend_conf.non_ephemeral_signing_key_id.clone(),
@@ -125,7 +125,7 @@ pub fn create_general_configs_with_blend_core_subset(
                 ]
                 .into(),
             },
-        )
+        })
         .collect();
 
     let mut general_configs = vec![];

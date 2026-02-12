@@ -156,10 +156,6 @@ where
     }
 
     #[expect(deprecated, reason = "Self::OutboundOpenInfo is deprecated")]
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: Address this at some point."
-    )]
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     fn poll(
         &mut self,
@@ -326,10 +322,6 @@ where
     #[expect(
         deprecated,
         reason = "Self::InboundOpenInfo and Self::OutboundOpenInfo are deprecated"
-    )]
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: Address this at some point."
     )]
     fn on_connection_event(
         &mut self,

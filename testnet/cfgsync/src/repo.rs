@@ -12,7 +12,7 @@ use lb_tests::topology::configs::GeneralConfig;
 use tokio::{sync::oneshot::Sender, time::timeout};
 
 use crate::{
-    Host,
+    FaucetSettings, Host,
     config::{create_node_config_from_template, create_node_configs},
     server::CfgSyncConfig,
 };
@@ -24,19 +24,22 @@ pub enum RepoResponse {
 
 pub struct ConfigRepo {
     waiting_hosts: Mutex<HashMap<Host, Sender<RepoResponse>>>,
-    generated_configs: Mutex<HashMap<Host, GeneralConfig>>,
+    generated_user_configs: Mutex<HashMap<Host, GeneralConfig>>,
     deployment_settings: Mutex<Option<DeploymentSettings>>,
     n_hosts: usize,
+    faucet_settings: FaucetSettings,
     tracing_settings: TracingConfig,
     timeout_duration: Duration,
 }
 
 impl From<CfgSyncConfig> for Arc<ConfigRepo> {
     fn from(config: CfgSyncConfig) -> Self {
-        let tracing_settings = config.to_tracing_settings();
+        let faucet_settings = config.faucet_settings();
+        let tracing_settings = config.tracing_settings();
 
         ConfigRepo::new(
             config.n_hosts,
+            faucet_settings,
             tracing_settings,
             Duration::from_secs(config.timeout),
         )
@@ -47,14 +50,16 @@ impl ConfigRepo {
     #[must_use]
     pub fn new(
         n_hosts: usize,
+        faucet_settings: FaucetSettings,
         tracing_settings: TracingConfig,
         timeout_duration: Duration,
     ) -> Arc<Self> {
         let repo = Arc::new(Self {
             waiting_hosts: Mutex::new(HashMap::new()),
-            generated_configs: Mutex::new(HashMap::new()),
+            generated_user_configs: Mutex::new(HashMap::new()),
             deployment_settings: Mutex::new(None),
             n_hosts,
+            faucet_settings,
             tracing_settings,
             timeout_duration,
         });
@@ -80,7 +85,7 @@ impl ConfigRepo {
     /// Generates a new node config for host based on the initial nodes config.
     pub fn append(&self, host: Host) -> Option<GeneralConfig> {
         let template = self
-            .generated_configs
+            .generated_user_configs
             .lock()
             .unwrap()
             .values()
@@ -91,7 +96,7 @@ impl ConfigRepo {
             let new_config =
                 create_node_config_from_template(&TracingConfig::default(), &host, &template);
 
-            self.generated_configs
+            self.generated_user_configs
                 .lock()
                 .unwrap()
                 .insert(host, new_config.clone());
@@ -111,7 +116,8 @@ impl ConfigRepo {
             let mut waiting_hosts = self.waiting_hosts.lock().unwrap();
             let hosts = waiting_hosts.keys().cloned().collect();
 
-            let (configs, genesis_tx) = create_node_configs(&self.tracing_settings, hosts);
+            let (configs, genesis_tx) =
+                create_node_configs(&self.faucet_settings, &self.tracing_settings, hosts);
             let devnet_settings = {
                 let mut default_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
                 default_settings.cryptarchia.genesis_state = genesis_tx;
@@ -119,8 +125,13 @@ impl ConfigRepo {
             };
 
             {
-                let mut storage = self.generated_configs.lock().unwrap();
+                let mut storage = self.generated_user_configs.lock().unwrap();
                 (*storage).clone_from(&configs);
+            };
+
+            {
+                let mut deployment_settings = self.deployment_settings.lock().unwrap();
+                *deployment_settings = Some(devnet_settings.clone());
             };
 
             for (host, sender) in waiting_hosts.drain() {

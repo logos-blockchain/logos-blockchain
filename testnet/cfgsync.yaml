@@ -2,18 +2,15 @@ port: 4400
 n_hosts: 4
 timeout: 10
 
+faucet_settings:
+  note_count: 3
+  note_value: 10000000
+
 # Tracing
 tracing_settings:
-  logger: !Loki
-    endpoint: http://loki:3100/
-    host_identifier: node
-  tracing: !Otlp
-    endpoint: http://tempo:4317/
-    sample_ratio: 0.5
-    service_name: node
-  filter: !EnvFilter
-    filters:
-      logos-blockchain: debug
+  logger: Stdout
+  tracing: None
+  filter: None
   metrics: !Otlp
     endpoint: http://prometheus:9090/api/v1/otlp/v1/metrics
     host_identifier: node

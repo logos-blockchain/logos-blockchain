@@ -2,6 +2,7 @@ use core::{
     num::{NonZero, NonZeroU64},
     time::Duration,
 };
+use std::sync::OnceLock;
 
 use lb_core::{mantle::genesis_tx::GenesisTx, sdp::ServiceType};
 use lb_libp2p::protocol_name::StreamProtocol;
@@ -23,6 +24,12 @@ use lb_utils::math::NonNegativeF64;
 use time::OffsetDateTime;
 
 use crate::topology::configs::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
+
+static CHAIN_START_TIME: OnceLock<OffsetDateTime> = OnceLock::new();
+
+fn get_or_init_chain_start_time() -> OffsetDateTime {
+    *CHAIN_START_TIME.get_or_init(OffsetDateTime::now_utc)
+}
 
 #[must_use]
 pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> DeploymentSettings {
@@ -116,7 +123,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
         },
         time: TimeDeploymentSettings {
             slot_duration: Duration::from_secs(slot_duration_in_secs),
-            chain_start_time: OffsetDateTime::now_utc(),
+            chain_start_time: get_or_init_chain_start_time(),
         },
         mempool: MempoolDeploymentSettings {
             pubsub_topic: "mantle_e2e_tests".to_owned(),

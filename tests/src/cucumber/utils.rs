@@ -13,7 +13,8 @@ pub fn make_builder(topology: TopologySpec) -> Builder<()> {
         let base = match topology.network {
             NetworkKind::Star => t.network_star(),
         };
-        base.nodes(topology.validators.get())
+        base.nodes(topology.nodes.get())
+            .scenario_base_dir(topology.scenario_base_dir)
     })
 }
 

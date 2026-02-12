@@ -275,6 +275,9 @@ where
 
         let app = app
             .with_state(handle.clone())
+            .layer(axum::extract::DefaultBodyLimit::max(
+                self.settings.max_body_size,
+            ))
             .layer(TimeoutLayer::new(self.settings.timeout))
             .layer(RequestBodyLimitLayer::new(self.settings.max_body_size))
             .layer(ConcurrencyLimitLayer::new(

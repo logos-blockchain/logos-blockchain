@@ -6,6 +6,8 @@ use reqwest::Client;
 use tempfile::TempDir;
 pub use validator::{Pool, Validator, create_validator_config};
 
+use crate::{BIN_PATH_DEBUG, BIN_PATH_RELEASE};
+
 const LOGS_PREFIX: &str = "__logs";
 static CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
 
@@ -32,9 +34,9 @@ fn persist_tempdir(tempdir: &mut TempDir, label: &str) -> std::io::Result<()> {
 }
 
 #[must_use]
-pub fn get_exe_path(debug_binary: &str, release_binary: &str) -> PathBuf {
-    let debug_binary = std::env::current_dir().unwrap().join(debug_binary);
-    let release_binary = std::env::current_dir().unwrap().join(release_binary);
+pub fn get_exe_path() -> PathBuf {
+    let debug_binary = std::env::current_dir().unwrap().join(BIN_PATH_DEBUG);
+    let release_binary = std::env::current_dir().unwrap().join(BIN_PATH_RELEASE);
     match (
         std::env::var(USE_DEBUG_BINARIES).is_ok(),
         std::env::var(USE_RELEASE_BINARIES).is_ok(),

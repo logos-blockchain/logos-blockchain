@@ -9,7 +9,8 @@ use crate::cucumber::{
 #[given(expr = "deployer is {string}")]
 #[expect(clippy::needless_pass_by_value, reason = "Required by Cucumber")]
 fn deployer_is(world: &mut CucumberWorld, deployer: String) -> StepResult {
-    world.set_deployer(parse_deployer(&deployer)?)
+    world.set_deployer(parse_deployer(&deployer)?);
+    Ok(())
 }
 
 #[given(expr = "we have a CLI deployer specified")]

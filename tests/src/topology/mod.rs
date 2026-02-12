@@ -12,8 +12,9 @@ use lb_core::{
     mantle::{GenesisTx as _, Note, NoteId, genesis_tx::GenesisTx},
     sdp::{Locator, ServiceType},
 };
-use lb_key_management_system_service::{backend::preload::PreloadKMSBackendSettings, keys::ZkKey};
+use lb_key_management_system_service::keys::ZkKey;
 use lb_network_service::backends::libp2p::Libp2pInfo;
+use lb_node::config::{KmsConfig, kms::serde::PreloadKmsBackendSettings};
 use lb_utils::net::get_available_udp_port;
 use rand::{Rng as _, thread_rng};
 
@@ -359,12 +360,12 @@ fn find_expected_peer_counts(
 pub fn create_kms_configs(
     blend_configs: &[GeneralBlendConfig],
     consensus_configs: &[GeneralConsensusConfig],
-) -> Vec<PreloadKMSBackendSettings> {
+) -> Vec<KmsConfig> {
     blend_configs
         .iter()
         .enumerate()
-        .map(
-            |(i, (blend_conf, private_key, zk_secret_key))| PreloadKMSBackendSettings {
+        .map(|(i, (blend_conf, private_key, zk_secret_key))| KmsConfig {
+            backend: PreloadKmsBackendSettings {
                 keys: [
                     (
                         blend_conf.non_ephemeral_signing_key_id.clone(),
@@ -386,6 +387,6 @@ pub fn create_kms_configs(
                 ]
                 .into(),
             },
-        )
+        })
         .collect()
 }

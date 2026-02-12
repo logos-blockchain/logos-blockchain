@@ -361,10 +361,6 @@ where
         }
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "Message dispatch with error handling"
-    )]
     async fn handle_wallet_message(
         msg: WalletMsg,
         state: &mut ServiceState<'_>,
@@ -887,10 +883,6 @@ where
         }
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "Handling new block with error handling"
-    )]
     async fn handle_new_block(
         header_id: HeaderId,
         state: &mut ServiceState<'_>,
