@@ -1,5 +1,7 @@
 #!/bin/sh
 
+rm -rf /node-data/${LB_HOST_IDX}
+
 set -e
 
 export CFG_FILE_PATH="/node-data/${LB_HOST_IDX}/config.yaml" \

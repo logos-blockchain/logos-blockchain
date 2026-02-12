@@ -2,17 +2,10 @@
 
 set -e
 
-export CFG_FILE_PATH="/config.yaml" \
+export CFG_FILE_PATH="/node-data/${LB_HOST_IDX}/config.yaml" \
        CFG_SERVER_ADDR="http://cfgsync:4400" \
        CFG_HOST_IDENTIFIER="validator-$CFG_API_PORT" \
        LOG_LEVEL="INFO" 
-
-# Register to cfgsync client.
-# TODO: Remove when cfgsync persists previous genesis.
-/usr/bin/logos-blockchain-cfgsync-client
-rm /config.yaml
-
-export CFG_FILE_PATH="/node-data/${LB_HOST_IDX}/config.yaml"
 
 echo "Starting Faucet..."
 /usr/bin/logos-blockchain-faucet \
