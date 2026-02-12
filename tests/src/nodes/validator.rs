@@ -343,9 +343,6 @@ pub fn create_validator_config(
 
     let tracing_config = config.tracing_config.tracing_settings;
 
-    let testing_http_address = format!("127.0.0.1:{}", get_available_tcp_port().unwrap())
-        .parse()
-        .unwrap();
     let api_config = ApiConfig {
         backend: AxumBackendSettings {
             listen_address: config.api_config.address,
@@ -353,7 +350,9 @@ pub fn create_validator_config(
             ..Default::default()
         },
         testing: AxumBackendSettings {
-            listen_address: testing_http_address,
+            listen_address: format!("127.0.0.1:{}", get_available_tcp_port().unwrap())
+                .parse()
+                .unwrap(),
             max_concurrent_requests: 1000,
             ..Default::default()
         },

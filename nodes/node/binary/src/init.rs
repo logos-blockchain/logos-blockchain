@@ -20,7 +20,7 @@ use crate::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaConfigRequiredValues,
         },
         mempool::serde::Config as MempoolConfig,
-        network::serde::Config as NetworkConfig,
+        network::serde::{Config as NetworkConfig, nat},
         sdp::serde::RequiredValues as SdpRequiredValues,
         time::serde::Config as TimeConfig,
         wallet::serde::RequiredValues as WalletConfigRequiredValues,
@@ -128,6 +128,12 @@ fn build_user_config(
             .backend
             .initial_peers
             .clone_from(&args.initial_peers);
+        base_config.backend.swarm.nat =
+            args.external_address
+                .as_ref()
+                .map_or_else(nat::Config::default, |addr| nat::Config::Static {
+                    external_address: addr.clone(),
+                });
         base_config
     };
 
