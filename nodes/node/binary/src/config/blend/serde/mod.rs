@@ -18,9 +18,15 @@ pub struct Config {
     /// The non-ephemeral signing key (NSK) ID corresponding to the public key
     /// registered in the membership (SDP).
     pub non_ephemeral_signing_key_id: KeyId,
+    #[serde(default = "default_recovery_path_prefix")]
     pub recovery_path_prefix: PathBuf,
     pub core: CoreConfig,
+    #[serde(default)]
     pub edge: EdgeConfig,
+}
+
+const fn default_recovery_path_prefix() -> PathBuf {
+    PathBuf::from("./blend")
 }
 
 impl Config {
