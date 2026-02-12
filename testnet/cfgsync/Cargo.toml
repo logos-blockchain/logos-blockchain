@@ -20,7 +20,6 @@ lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-node                          = { workspace = true }
 lb-tests                         = { workspace = true }
-lb-tracing-service               = { workspace = true }
 lb-utils                         = { workspace = true }
 num-bigint                       = { default-features = false, version = "0.4" }
 rand                             = { workspace = true }
