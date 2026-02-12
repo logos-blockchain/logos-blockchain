@@ -238,8 +238,8 @@ impl CucumberWorld {
             .map_err(|source| StepError::ScenarioBuild { source })
     }
 
-    /// Perform preflight checks to ensure the world is properly configured for the
-    /// expected deployer kind.
+    /// Perform preflight checks to ensure the world is properly configured for
+    /// the expected deployer kind.
     pub fn preflight(&self, expected: DeployerKind) -> Result<(), StepError> {
         let actual = self.deployer.ok_or(StepError::MissingDeployer)?;
         if actual != expected {
