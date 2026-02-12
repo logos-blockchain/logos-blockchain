@@ -12,7 +12,7 @@ services:
     ports:
       - "4400:4400/tcp"
     environment:
-      - CHAIN_START_TIME="2026-02-12T05:03:03.000Z"
+      - CHAIN_START_TIME=${CFG_CHAIN_START_TIME}
     entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_server.sh
 
   client-0:
@@ -20,6 +20,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
       - node-data:/node-data
+      - ./testnet:/etc/logos-blockchain
     depends_on:
       - cfgsync
     environment:
@@ -35,6 +36,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
       - node-data:/node-data
+      - ./testnet:/etc/logos-blockchain
     depends_on:
       - cfgsync
     environment:
@@ -50,6 +52,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
       - node-data:/node-data
+      - ./testnet:/etc/logos-blockchain
     depends_on:
       - cfgsync
     environment:
@@ -65,6 +68,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
       - node-data:/node-data
+      - ./testnet:/etc/logos-blockchain
     depends_on:
       - cfgsync
     environment:
