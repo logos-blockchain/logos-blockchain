@@ -20,8 +20,10 @@ const LOGOS_BLOCKCHAIN_LOG_LEVEL: &str = "LOGOS_BLOCKCHAIN_LOG_LEVEL";
 const RUST_LOG: &str = "RUST_LOG";
 const LOGOS_BLOCKCHAIN_LOG_DIR: &str = "LOGOS_BLOCKCHAIN_LOG_DIR";
 const CUCUMBER_RETRIES: &str = "CUCUMBER_RETRIES";
+pub const LOGOS_BLOCKCHAIN_NODE_BIN: &str = "LOGOS_BLOCKCHAIN_NODE_BIN";
 
-fn set_default_env(key: &str, value: &str) {
+/// Set an environment variable to a default value if it is not already set.
+pub fn set_default_env(key: &str, value: &str) {
     if std::env::var_os(key).is_none() {
         // SAFETY: Used as an early-run default. Prefer setting env vars in the
         // shell for multi-threaded runs.

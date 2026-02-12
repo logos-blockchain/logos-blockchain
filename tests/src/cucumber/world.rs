@@ -12,10 +12,13 @@ use lb_node::config::RunConfig;
 use testing_framework_core::scenario::{Builder, NodeControlCapability, Scenario, StartedNode};
 use testing_framework_runner_local::LocalManualCluster;
 use testing_framework_workflows::{ScenarioBuilderExt as _, expectations::ConsensusLiveness};
+use tracing::warn;
 
 use crate::{
+    BIN_PATH_DEBUG, BIN_PATH_RELEASE,
     cucumber::{
-        defaults::init_node_log_dir_defaults,
+        TARGET,
+        defaults::{LOGOS_BLOCKCHAIN_NODE_BIN, init_node_log_dir_defaults, set_default_env},
         error::{StepError, StepResult},
         utils::{make_builder, shared_host_bin_path},
     },
@@ -246,17 +249,46 @@ impl CucumberWorld {
         }
 
         if expected == DeployerKind::Local {
-            let node_ok = env::var_os("LOGOS_BLOCKCHAIN_NODE_BIN")
+            let node_ok = env::var_os(LOGOS_BLOCKCHAIN_NODE_BIN)
                 .map(PathBuf::from)
                 .is_some_and(|p| p.is_file())
                 || shared_host_bin_path("logos-blockchain-node").is_file();
 
             if !(node_ok) {
+                if let Some(default_exe_path) = {
+                    env::current_dir().map_or(None, |current_dir| {
+                        let debug_binary = current_dir.join(BIN_PATH_DEBUG);
+                        let release_binary = current_dir.join(BIN_PATH_RELEASE);
+                        if matches!(std::fs::exists(&debug_binary), Ok(true)) {
+                            Some(debug_binary)
+                        } else if matches!(std::fs::exists(&release_binary), Ok(true)) {
+                            Some(release_binary)
+                        } else {
+                            None
+                        }
+                    })
+                } {
+                    if env::var_os(LOGOS_BLOCKCHAIN_NODE_BIN).is_some() {
+                        warn!(
+                            target: TARGET,
+                            "'{LOGOS_BLOCKCHAIN_NODE_BIN:?}' does not point to a valid file, \
+                            Overriding '{LOGOS_BLOCKCHAIN_NODE_BIN}' to point to '{}'.",
+                            default_exe_path.display()
+                        );
+                    }
+                    set_default_env(
+                        LOGOS_BLOCKCHAIN_NODE_BIN,
+                        &default_exe_path.display().to_string(),
+                    );
+                    return Ok(());
+                }
+
                 return Err(StepError::Preflight {
-                    message: "Missing Logos host binaries. Set LOGOS_BLOCKCHAIN_NODE_BIN, or run \
-                    `scripts/run/run-examples.sh host` to restore them into \
+                    message: format!(
+                        "Missing Logos host binaries. Set {LOGOS_BLOCKCHAIN_NODE_BIN}, \
+                    or run `scripts/run/run-examples.sh host` to restore them into \
                     `testing-framework/assets/stack/bin`."
-                        .to_owned(),
+                    ),
                 });
             }
         }
