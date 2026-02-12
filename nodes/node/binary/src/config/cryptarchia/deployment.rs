@@ -72,9 +72,9 @@ fn devnet_settings() -> Settings {
             service_params: [(
                 ServiceType::BlendNetwork,
                 ServiceParameters {
-                    inactivity_period: 20,
+                    inactivity_period: 1,
                     lock_period: 10,
-                    retention_period: 100,
+                    retention_period: 1,
                     timestamp: 0,
                 },
             )]

@@ -44,8 +44,8 @@ pub fn create_provider_id(byte: u8) -> ProviderId {
 pub fn create_service_parameters() -> ServiceParameters {
     ServiceParameters {
         lock_period: 10,
-        inactivity_period: 20,
-        retention_period: 100,
+        inactivity_period: 1,
+        retention_period: 1,
         timestamp: 0,
         session_duration: 10,
     }
