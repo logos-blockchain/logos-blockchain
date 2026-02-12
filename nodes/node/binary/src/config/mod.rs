@@ -281,6 +281,7 @@ impl FromStr for DeploymentType {
     derive(serde::Serialize)
 )]
 pub struct UserConfig {
+    #[serde(default)]
     pub network: NetworkConfig,
     pub blend: BlendConfig,
     pub cryptarchia: CryptarchiaConfig,
@@ -410,7 +411,7 @@ pub fn update_api(api: &mut ApiConfig, args: ApiArgs) -> Result<()> {
     let ApiArgs { addr, cors_origins } = args;
 
     if let Some(addr) = addr {
-        api.backend.address = addr;
+        api.backend.listen_address = addr;
     }
 
     if let Some(cors) = cors_origins {

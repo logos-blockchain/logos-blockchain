@@ -8,9 +8,28 @@ pub struct Config {
     #[serde(default)]
     pub known_keys: HashMap<KeyId, ZkPublicKey>,
     pub voucher_master_key_id: KeyId,
+    #[serde(default = "default_recovery_path")]
     pub recovery_path: PathBuf,
 }
 
 const fn default_recovery_path() -> PathBuf {
     PathBuf::from("./wallet_recovery.json")
+}
+
+pub struct RequiredValues {
+    pub voucher_master_key_id: KeyId,
+}
+
+impl Config {
+    pub fn with_required_values(
+        RequiredValues {
+            voucher_master_key_id,
+        }: RequiredValues,
+    ) -> Self {
+        Self {
+            known_keys: HashMap::new(),
+            voucher_master_key_id,
+            recovery_path: default_recovery_path(),
+        }
+    }
 }

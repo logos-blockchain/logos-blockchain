@@ -29,3 +29,19 @@ pub struct WalletConfig {
 const fn default_max_tx_fee() -> Value {
     Value::MAX
 }
+
+pub struct RequiredValues {
+    pub funding_pk: ZkPublicKey,
+}
+
+impl Config {
+    pub fn with_required_values(RequiredValues { funding_pk }: RequiredValues) -> Self {
+        Self {
+            wallet: WalletConfig {
+                funding_pk,
+                max_tx_fee: default_max_tx_fee(),
+            },
+            declaration: None,
+        }
+    }
+}

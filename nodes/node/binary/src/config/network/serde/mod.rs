@@ -12,7 +12,8 @@ pub mod nat;
 // Definition copied from the `logos-blockchain-network` service settings,
 // assuming the libp2p backend and removing the concrete protocol names, which
 // will be injected via the deployment configuration.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct Config {
     pub backend: BackendSettings,
 }
