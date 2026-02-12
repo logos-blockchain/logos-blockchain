@@ -35,7 +35,8 @@ pub struct RequiredValues {
 }
 
 impl Config {
-    pub fn with_required_values(RequiredValues { funding_pk }: RequiredValues) -> Self {
+    #[must_use]
+    pub const fn with_required_values(RequiredValues { funding_pk }: RequiredValues) -> Self {
         Self {
             wallet: WalletConfig {
                 funding_pk,

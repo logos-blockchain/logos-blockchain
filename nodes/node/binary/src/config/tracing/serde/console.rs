@@ -1,3 +1,5 @@
+use core::net::{IpAddr, Ipv4Addr};
+
 use lb_tracing_service::{ConsoleLayer, TokioConsoleConfig};
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +14,7 @@ impl From<Layer> for ConsoleLayer {
     fn from(value: Layer) -> Self {
         match value {
             Layer::Console(config) => Self::Console(TokioConsoleConfig {
-                bind_address: config.bind_address,
+                bind_address: config.bind_address.to_string(),
                 port: config.port,
             }),
             Layer::None => Self::None,
@@ -23,14 +25,14 @@ impl From<Layer> for ConsoleLayer {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TokioConfig {
-    pub bind_address: String,
+    pub bind_address: IpAddr,
     pub port: u16,
 }
 
 impl Default for TokioConfig {
     fn default() -> Self {
         Self {
-            bind_address: "0.0.0.0".to_string(),
+            bind_address: Ipv4Addr::UNSPECIFIED.into(),
             port: 9_000,
         }
     }

@@ -29,7 +29,7 @@ pub struct NtpSettings {
 impl Default for NtpSettings {
     fn default() -> Self {
         Self {
-            server: "pool.ntp.org:123".to_string(),
+            server: "pool.ntp.org:123".to_owned(),
             client: NtpClientSettings::default(),
             update_interval: Duration::from_secs(15),
         }

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use lb_libp2p::{Multiaddr, ed25519, libp2p};
+use lb_libp2p::{Multiaddr, ed25519};
 use lb_node::config::network::serde as network;
 use lb_utils::net::get_available_udp_port;
 
@@ -27,7 +27,7 @@ fn default_swarm_config() -> network::SwarmConfig {
         port: 60000,
         node_key: ed25519::SecretKey::generate(),
         chain_sync: network::chainsync::Config::default(),
-        gossipsub: libp2p::gossipsub::Config::default(),
+        gossipsub: network::gossipsub::Config::default(),
         identify: network::identify::Config::default(),
         kademlia: network::kademlia::Config::default(),
         nat: network::nat::Config::default(),

@@ -19,6 +19,7 @@ pub struct RequiredValues {
 }
 
 impl Config {
+    #[must_use]
     pub fn with_required_values(RequiredValues { funding_pk }: RequiredValues) -> Self {
         Self {
             leader: leader::Config {

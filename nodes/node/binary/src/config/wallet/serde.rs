@@ -12,8 +12,8 @@ pub struct Config {
     pub recovery_path: PathBuf,
 }
 
-const fn default_recovery_path() -> PathBuf {
-    PathBuf::from("./wallet_recovery.json")
+fn default_recovery_path() -> PathBuf {
+    "./wallet_recovery.json".into()
 }
 
 pub struct RequiredValues {
@@ -21,6 +21,7 @@ pub struct RequiredValues {
 }
 
 impl Config {
+    #[must_use]
     pub fn with_required_values(
         RequiredValues {
             voucher_master_key_id,

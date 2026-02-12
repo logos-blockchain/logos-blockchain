@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 // remotely https://serde.rs/remote-derive.html
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Matches gossipsub::Config fields"
+)]
 pub struct Config {
     pub history_length: usize,
     pub history_gossip: usize,

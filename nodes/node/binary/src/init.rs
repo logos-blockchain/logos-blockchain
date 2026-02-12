@@ -101,10 +101,6 @@ pub fn run(args: &InitArgs) -> Result<()> {
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Single struct literal assembling all config fields."
-)]
 fn build_user_config(
     args: &InitArgs,
     network_key: lb_libp2p::ed25519::SecretKey,
@@ -128,14 +124,21 @@ fn build_user_config(
         let mut base_config = NetworkConfig::default();
         base_config.backend.swarm.port = args.net_port;
         base_config.backend.swarm.node_key = network_key;
-        base_config.backend.initial_peers = args.initial_peers.clone();
+        base_config
+            .backend
+            .initial_peers
+            .clone_from(&args.initial_peers);
         base_config
     };
 
-    let blend_config = BlendConfig::with_required_values(BlendConfigRequiredValues {
-        non_ephemeral_signing_key_id: blend_signing_key_id.clone(),
-        secret_key_kms_id: blend_zk_key_id.clone(),
-    });
+    let blend_config = {
+        let mut base_config = BlendConfig::with_required_values(BlendConfigRequiredValues {
+            non_ephemeral_signing_key_id: blend_signing_key_id.clone(),
+            secret_key_kms_id: blend_zk_key_id.clone(),
+        });
+        base_config.set_listening_address(blend_listening_address);
+        base_config
+    };
 
     let cryptarchia_config =
         CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues { funding_pk });
@@ -169,14 +172,11 @@ fn build_user_config(
 
     let wallet_config = {
         let mut base_config = WalletConfig::with_required_values(WalletConfigRequiredValues {
-            voucher_master_key_id: leader_key_id,
+            voucher_master_key_id: leader_key_id.clone(),
         });
-        base_config.known_keys = [
-            (leader_key_id.clone(), leader_pk),
-            (funding_key_id, funding_pk),
-        ]
-        .into_iter()
-        .collect();
+        base_config.known_keys = [(leader_key_id, leader_pk), (funding_key_id, funding_pk)]
+            .into_iter()
+            .collect();
         base_config
     };
 

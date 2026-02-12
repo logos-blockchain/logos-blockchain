@@ -18,6 +18,7 @@ pub struct WalletConfig {
     pub funding_pk: ZkPublicKey,
 }
 
+#[must_use]
 pub const fn default_max_tx_fee() -> Value {
     Value::MAX
 }

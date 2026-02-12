@@ -28,8 +28,8 @@ pub struct Config {
     pub edge: EdgeConfig,
 }
 
-const fn default_recovery_path_prefix() -> PathBuf {
-    PathBuf::from("./blend")
+fn default_recovery_path_prefix() -> PathBuf {
+    "./blend".into()
 }
 
 pub struct RequiredValues {
@@ -38,6 +38,7 @@ pub struct RequiredValues {
 }
 
 impl Config {
+    #[must_use]
     pub fn with_required_values(
         RequiredValues {
             non_ephemeral_signing_key_id,
