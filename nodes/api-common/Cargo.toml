@@ -20,7 +20,7 @@ serde                         = { features = ["alloc", "derive"], workspace = tr
 serde_json                    = { workspace = true }
 serde_with                    = { default-features = false, features = ["macros"], workspace = true }
 tokio                         = { default-features = false, features = ["time"], optional = true, version = "1" }
-tracing                       = { default-features = false, optional = true, workspace = true }
+tracing                       = { default-features = false, workspace = true }
 
 [target.'cfg(not(windows))'.dependencies]
 pprof = { default-features = false, features = [
@@ -30,4 +30,4 @@ pprof = { default-features = false, features = [
 ], optional = true, version = "0.15" }
 
 [features]
-profiling = ["pprof", "tokio", "tracing"]
+profiling = ["pprof", "tokio"]
