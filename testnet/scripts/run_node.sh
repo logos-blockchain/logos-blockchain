@@ -18,7 +18,7 @@ echo "Starting Faucet..."
 /usr/bin/logos-blockchain-faucet \
     --port $FAUCET_PORT \
     --node-base-url "http://localhost:$CFG_API_PORT"\
-    --host-identifier $CFG_HOST_IDENTIFIER
+    --host-identifier $CFG_HOST_IDENTIFIER \
     --drip-amount 1000 &
 
 echo "Starting Node..."
