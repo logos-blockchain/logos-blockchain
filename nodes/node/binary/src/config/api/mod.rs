@@ -15,7 +15,7 @@ impl ServiceConfig {
     pub fn into_backend_settings(self) -> ApiServiceSettings<AxumBackendSettings> {
         ApiServiceSettings {
             backend_settings: AxumBackendSettings {
-                address: self.user.backend.address,
+                listen_address: self.user.backend.listen_address,
                 cors_origins: self.user.backend.cors_origins,
                 timeout: self.user.backend.timeout,
                 max_body_size: self.user.backend.max_body_size,
@@ -33,19 +33,19 @@ impl ServiceConfig {
         ApiServiceSettings<AxumBackendSettings>,
     ) {
         let backend_settings = AxumBackendSettings {
-            address: self.user.backend.address,
+            address: self.user.backend.listen_address,
             cors_origins: self.user.backend.cors_origins,
             timeout: self.user.backend.timeout,
-            max_body_size: self.user.backend.max_body_size,
-            max_concurrent_requests: self.user.backend.max_concurrent_requests,
+            max_body_size: self.user.backend.max_body_size as usize,
+            max_concurrent_requests: self.user.backend.max_concurrent_requests as usize,
         };
 
         let testing_settings = AxumBackendSettings {
-            address: self.user.testing.address,
+            address: self.user.testing.listen_address,
             cors_origins: self.user.testing.cors_origins,
             timeout: self.user.testing.timeout,
-            max_body_size: self.user.testing.max_body_size,
-            max_concurrent_requests: self.user.testing.max_concurrent_requests,
+            max_body_size: self.user.testing.max_body_size as usize,
+            max_concurrent_requests: self.user.testing.max_concurrent_requests as usize,
         };
 
         (
