@@ -221,7 +221,6 @@ impl CucumberWorld {
     /// configuration. This performs necessary preflight checks and returns
     /// a built scenario ready for deployment.
     pub fn build_local_scenario(&self) -> Result<Scenario<()>, StepError> {
-        self.preflight(DeployerKind::Local)?;
         let builder = self.make_builder_for_deployer::<()>(DeployerKind::Local)?;
         builder
             .build()
@@ -232,7 +231,6 @@ impl CucumberWorld {
     /// configuration. This performs necessary preflight checks and returns
     /// a built scenario ready for deployment.
     pub fn build_compose_scenario(&self) -> Result<Scenario<NodeControlCapability>, StepError> {
-        self.preflight(DeployerKind::Compose)?;
         let builder =
             self.make_builder_for_deployer::<NodeControlCapability>(DeployerKind::Compose)?;
         builder
@@ -240,9 +238,9 @@ impl CucumberWorld {
             .map_err(|source| StepError::ScenarioBuild { source })
     }
 
-    // Perform preflight checks to ensure the world is properly configured for the
-    // expected deployer kind.
-    fn preflight(&self, expected: DeployerKind) -> Result<(), StepError> {
+    /// Perform preflight checks to ensure the world is properly configured for the
+    /// expected deployer kind.
+    pub fn preflight(&self, expected: DeployerKind) -> Result<(), StepError> {
         let actual = self.deployer.ok_or(StepError::MissingDeployer)?;
         if actual != expected {
             return Err(StepError::DeployerMismatch { expected, actual });

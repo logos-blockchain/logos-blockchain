@@ -102,6 +102,9 @@ async fn main() {
                         scenario.keyword, scenario.name, feature.keyword, feature.name,
                     );
                     world.set_deployer(deployer);
+                    if let Err(err) = world.preflight(deployer) {
+                        println!("Preflight failed for scenario '{}': {err}", scenario.name);
+                    }
 
                     let run_attempt =
                         increment_attempts(&scenario_attempts_clone, &feature.name, &scenario.name);
