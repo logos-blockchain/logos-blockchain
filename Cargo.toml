@@ -61,6 +61,7 @@ members = [
   "testnet/faucet",
   "testnet/l2-sequencer-archival-demo/archiver",
   "testnet/l2-sequencer-archival-demo/sequencer",
+  "testnet/tui-zone",
   "tests",
   "tracing",
   "utils",
