@@ -7,8 +7,6 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
       - ./testnet:/etc/logos-blockchain
-    depends_on:
-      - grafana
     ports:
       - "4400:4400/tcp"
     environment:
