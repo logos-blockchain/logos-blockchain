@@ -5,6 +5,7 @@ pub mod server;
 
 use std::net::Ipv4Addr;
 
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_LIBP2P_NETWORK_PORT: u16 = 3000;
@@ -67,4 +68,11 @@ pub struct RegistrationInfo {
 pub struct FaucetSettings {
     pub note_count: usize,
     pub note_value: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum CfgsyncMode {
+    Setup,
+    Run,
 }

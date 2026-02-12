@@ -15,7 +15,7 @@ use time::OffsetDateTime;
 use tokio::sync::oneshot::channel;
 
 use crate::{
-    FaucetSettings, Host, RegistrationInfo,
+    CfgsyncMode, FaucetSettings, Host, RegistrationInfo,
     repo::{ConfigRepo, RepoResponse},
 };
 
@@ -25,6 +25,9 @@ pub struct CfgSyncConfig {
     pub n_hosts: usize,
     pub timeout: u64,
     pub chain_start_time: Option<OffsetDateTime>,
+    pub deployment_settings_storage_path: PathBuf,
+
+    pub mode: CfgsyncMode,
 
     pub faucet_settings: FaucetSettings,
     // Tracing params
@@ -70,15 +73,30 @@ async fn init_node(
     )
 }
 
+async fn handle_mode_error() -> (StatusCode, &'static str) {
+    (
+        StatusCode::METHOD_NOT_ALLOWED,
+        "Setup is disabled: Server is in Read-Only mode.",
+    )
+}
+
 async fn deployment_settings(State(repo): State<Arc<ConfigRepo>>) -> impl IntoResponse {
     let deployment_settings = repo.deployment_settings();
     let yaml = serde_yaml::to_string(&deployment_settings).unwrap_or_default();
     (StatusCode::OK, [(CONTENT_TYPE, "text/yaml")], yaml).into_response()
 }
 
-pub fn cfgsync_app(config_repo: Arc<ConfigRepo>) -> Router {
-    Router::new()
-        .route("/init-with-node", post(init_node))
-        .route("/deployment-settings", get(deployment_settings))
-        .with_state(config_repo)
+pub fn cfgsync_app(config_repo: Arc<ConfigRepo>, mode: CfgsyncMode) -> Router {
+    let mut router = Router::new().route("/deployment-settings", get(deployment_settings));
+
+    match mode {
+        CfgsyncMode::Setup => {
+            router = router.route("/init-with-node", post(init_node));
+        }
+        CfgsyncMode::Run => {
+            router = router.route("/init-with-node", post(handle_mode_error));
+        }
+    }
+
+    router.with_state(config_repo)
 }

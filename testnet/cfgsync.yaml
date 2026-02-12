@@ -6,6 +6,11 @@ faucet_settings:
   note_count: 3
   note_value: 10000000
 
+deployment_settings_storage_path:
+  deployment-settings.yaml
+
+mode: Run
+
 # Tracing
 tracing_settings:
   logger: Stdout

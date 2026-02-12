@@ -1,7 +1,10 @@
 use std::{path::PathBuf, process};
 
 use clap::Parser;
-use logos_blockchain_cfgsync::server::{CfgSyncConfig, cfgsync_app};
+use logos_blockchain_cfgsync::{
+    CfgsyncMode,
+    server::{CfgSyncConfig, cfgsync_app},
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::net::TcpListener;
 
@@ -16,6 +19,10 @@ struct Args {
     config: PathBuf,
     #[arg(short, long, env = "CHAIN_START_TIME", value_parser = parse_rfc3339)]
     chain_start_time: Option<OffsetDateTime>,
+    #[arg(short, long, env = "CFG_SERVER_MODE")]
+    mode: Option<CfgsyncMode>,
+    #[arg(short, long, env = "CFG_SERVER_STORAGE_PATH")]
+    storage_path: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -31,8 +38,17 @@ async fn main() {
         config.chain_start_time = Some(chain_start_time);
     }
 
+    if let Some(storage_path) = cli.storage_path {
+        config.deployment_settings_storage_path = storage_path;
+    }
+
+    if let Some(mode) = cli.mode {
+        config.mode = mode;
+    }
+
     let port = config.port;
-    let app = cfgsync_app(config.into());
+    let mode = config.mode;
+    let app = cfgsync_app(config.into(), mode);
 
     println!("Server running on http://0.0.0.0:{port}");
     let listener = TcpListener::bind(&format!("0.0.0.0:{port}")).await.unwrap();

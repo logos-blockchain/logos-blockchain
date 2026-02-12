@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -26,6 +27,7 @@ pub struct ConfigRepo {
     waiting_hosts: Mutex<HashMap<Host, Sender<RepoResponse>>>,
     generated_user_configs: Mutex<HashMap<Host, GeneralConfig>>,
     deployment_settings: Mutex<Option<DeploymentSettings>>,
+    deployment_settings_storage_path: PathBuf,
     n_hosts: usize,
     faucet_settings: FaucetSettings,
     tracing_settings: TracingConfig,
@@ -39,6 +41,7 @@ impl From<CfgSyncConfig> for Arc<ConfigRepo> {
             config.faucet_settings(),
             config.tracing_settings(),
             Duration::from_secs(config.timeout),
+            config.deployment_settings_storage_path,
         )
     }
 }
@@ -50,11 +53,13 @@ impl ConfigRepo {
         faucet_settings: FaucetSettings,
         tracing_settings: TracingConfig,
         timeout_duration: Duration,
+        deployment_settings_storage_path: PathBuf,
     ) -> Arc<Self> {
         let repo = Arc::new(Self {
             waiting_hosts: Mutex::new(HashMap::new()),
             generated_user_configs: Mutex::new(HashMap::new()),
             deployment_settings: Mutex::new(None),
+            deployment_settings_storage_path,
             n_hosts,
             faucet_settings,
             tracing_settings,
@@ -104,6 +109,14 @@ impl ConfigRepo {
         None
     }
 
+    fn persist_deployment_settings(&self, settings: &DeploymentSettings) -> Result<(), String> {
+        let yaml = serde_yaml::to_string(settings)
+            .map_err(|e| format!("Error: Failed to serialize deployment settings: {e}"))?;
+        std::fs::write(&self.deployment_settings_storage_path, yaml)
+            .map_err(|err| format!("Failed to write config to file: {err}"))?;
+        Ok(())
+    }
+
     async fn run(&self) {
         let timeout_duration = self.timeout_duration;
 
@@ -130,6 +143,9 @@ impl ConfigRepo {
                 let mut deployment_settings = self.deployment_settings.lock().unwrap();
                 *deployment_settings = Some(devnet_settings.clone());
             };
+
+            self.persist_deployment_settings(&devnet_settings)
+                .expect("Settings should be persisted");
 
             for (host, sender) in waiting_hosts.drain() {
                 let config = configs.get(&host).expect("host should have a config");
