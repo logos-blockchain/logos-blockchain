@@ -34,18 +34,18 @@ fn set_default_env(key: &str, value: &str) {
 pub fn init_logging_defaults() {
     set_default_env(LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS, "true");
     set_default_env(LOGOS_BLOCKCHAIN_TESTS_TRACING, "true");
+    // Always keep RUST_LOG at info for console output
+    set_default_env(RUST_LOG, "info");
 
     std::env::var_os(CUCUMBER_LOG_LEVEL).map_or_else(
         || {
             set_default_env(LOGOS_BLOCKCHAIN_LOG_LEVEL, "info");
-            set_default_env(RUST_LOG, "info");
         },
         |log_level| {
             let log_level = log_level.to_string_lossy().to_lowercase();
             match log_level.as_str() {
                 "trace" | "debug" | "info" | "warn" | "error" => {
                     set_default_env(LOGOS_BLOCKCHAIN_LOG_LEVEL, log_level.as_str());
-                    set_default_env(RUST_LOG, log_level.as_str());
                 }
                 other => {
                     warn!(
@@ -53,7 +53,6 @@ pub fn init_logging_defaults() {
                         "Invalid log level '{other}' in {CUCUMBER_LOG_LEVEL}; using 'info' level"
                     );
                     set_default_env(LOGOS_BLOCKCHAIN_LOG_LEVEL, "info");
-                    set_default_env(RUST_LOG, "info");
                 }
             }
         },

@@ -1159,7 +1159,7 @@ dependencies = [
 [[package]]
 name = "cfgsync_tf"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=tagged_ref_03#fd60cc69d893ef2882e0e546e3a7e44c4670af43"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=intermediate_ref_01#d08f7951ee131056d66ded9da7aeee154f7d94db"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -8611,7 +8611,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-config"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=tagged_ref_03#fd60cc69d893ef2882e0e546e3a7e44c4670af43"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=intermediate_ref_01#d08f7951ee131056d66ded9da7aeee154f7d94db"
 dependencies = [
  "hex",
  "logos-blockchain-api-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=feac5ab97ef6dfcebcf6536363a5f330cb79b5e0)",
@@ -8645,7 +8645,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=tagged_ref_03#fd60cc69d893ef2882e0e546e3a7e44c4670af43"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=intermediate_ref_01#d08f7951ee131056d66ded9da7aeee154f7d94db"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8681,12 +8681,12 @@ dependencies = [
 [[package]]
 name = "testing-framework-env"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=tagged_ref_03#fd60cc69d893ef2882e0e546e3a7e44c4670af43"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=intermediate_ref_01#d08f7951ee131056d66ded9da7aeee154f7d94db"
 
 [[package]]
 name = "testing-framework-runner-compose"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=tagged_ref_03#fd60cc69d893ef2882e0e546e3a7e44c4670af43"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=intermediate_ref_01#d08f7951ee131056d66ded9da7aeee154f7d94db"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8710,7 +8710,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-local"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=tagged_ref_03#fd60cc69d893ef2882e0e546e3a7e44c4670af43"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=intermediate_ref_01#d08f7951ee131056d66ded9da7aeee154f7d94db"
 dependencies = [
  "async-trait",
  "logos-blockchain-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=feac5ab97ef6dfcebcf6536363a5f330cb79b5e0)",
@@ -8728,7 +8728,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-workflows"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=tagged_ref_03#fd60cc69d893ef2882e0e546e3a7e44c4670af43"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=intermediate_ref_01#d08f7951ee131056d66ded9da7aeee154f7d94db"
 dependencies = [
  "async-trait",
  "logos-blockchain-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=feac5ab97ef6dfcebcf6536363a5f330cb79b5e0)",
