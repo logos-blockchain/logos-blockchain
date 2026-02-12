@@ -35,7 +35,7 @@ async fn smoke_test_four_clients() {
     while let Some(Ok((success, out))) = set.join_next().await {
         assert!(success);
         assert!(fs::metadata(&out).is_ok());
-        //fs::remove_file(out).unwrap();
+        fs::remove_file(out).unwrap();
     }
 
     sleep(Duration::from_secs(51)).await;
