@@ -54,97 +54,74 @@ impl Default for Config {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct TraversalConfig {
     pub autonat: AutonatClientConfig,
     pub mapping: MappingConfig,
     pub gateway_monitor: GatewayConfig,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AutonatClientConfig {
     /// How many candidates we will test at most.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_candidates: Option<usize>,
 
     /// The interval at which we will attempt to confirm candidates as external
     /// addresses, only used for new candidates.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe_interval_millisecs: Option<u64>,
 
     /// The interval at which we will retest successful external addresses.
     /// This is used to ensure that the external address is still valid and
     /// reachable.
-    #[serde(default = "default_retest_interval")]
     pub retest_successful_external_addresses_interval: Duration,
 }
 
-const fn default_retest_interval() -> Duration {
-    Duration::from_secs(60)
+impl Default for AutonatClientConfig {
+    fn default() -> Self {
+        Self {
+            max_candidates: None,
+            probe_interval_millisecs: None,
+            retest_successful_external_addresses_interval: Duration::from_secs(60),
+        }
+    }
 }
 
 #[serde_as]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MappingConfig {
-    #[serde(default = "default_timeout")]
     #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
     pub timeout: Duration,
-    #[serde(default = "default_lifetime")]
     pub lease_duration: Duration,
-    #[serde(default = "default_max_retries")]
     pub max_retries: u32,
-    #[serde(default = "default_renewal_delay_fraction")]
     pub renewal_delay_fraction: PositiveF64,
-    #[serde(default = "default_retry_interval")]
     pub retry_interval: Duration,
-}
-
-const fn default_timeout() -> Duration {
-    Duration::from_secs(1)
-}
-
-const fn default_lifetime() -> Duration {
-    Duration::from_secs(7200) // 2 hours
-}
-
-const fn default_max_retries() -> u32 {
-    3
-}
-
-fn default_renewal_delay_fraction() -> PositiveF64 {
-    PositiveF64::try_from(0.8).expect("0.8 is positive")
-}
-
-const fn default_retry_interval() -> Duration {
-    Duration::from_secs(30)
 }
 
 impl Default for MappingConfig {
     fn default() -> Self {
         Self {
-            timeout: default_timeout(),
-            lease_duration: default_lifetime(),
-            max_retries: default_max_retries(),
-            renewal_delay_fraction: default_renewal_delay_fraction(),
-            retry_interval: default_retry_interval(),
+            timeout: Duration::from_secs(1),
+            lease_duration: Duration::from_hours(2),
+            max_retries: 3,
+            renewal_delay_fraction: PositiveF64::try_from(0.8).expect("0.8 is positive"),
+            retry_interval: Duration::from_secs(30),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
 pub struct GatewayConfig {
     /// How often to check for gateway address changes
-    #[serde(default = "default_check_interval")]
     pub check_interval: Duration,
-}
-
-const fn default_check_interval() -> Duration {
-    Duration::from_secs(300)
 }
 
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
-            check_interval: default_check_interval(),
+            check_interval: Duration::from_mins(5),
         }
     }
 }
