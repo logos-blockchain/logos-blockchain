@@ -24,7 +24,7 @@ use overwatch::{
     },
 };
 use serde::{Deserialize, Serialize};
-use tracing::{Level, log::warn};
+use tracing::{Level, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
     filter::LevelFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _,
