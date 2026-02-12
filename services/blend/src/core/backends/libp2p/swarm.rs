@@ -367,10 +367,6 @@ where
         }
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "Tracing macros generate more code that triggers this warning."
-    )]
     fn report_message_to_service(&self, msg: EncapsulatedMessageWithVerifiedPublicHeader) {
         tracing::debug!("Received message from a peer: {msg:?}");
 

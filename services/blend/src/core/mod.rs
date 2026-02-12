@@ -496,10 +496,6 @@ where
 /// Initialize the components for the [`BlendService`].
 #[expect(clippy::too_many_lines, reason = "Need to initialize many components")]
 #[expect(
-    clippy::cognitive_complexity,
-    reason = "Need to initialize many components"
-)]
-#[expect(
     clippy::too_many_arguments,
     reason = "Need to initialize many components."
 )]
@@ -1223,10 +1219,6 @@ enum HandleSessionEventOutput<
 /// encapsulate its payload is performed. If encapsulation is successful, the
 /// message is queued with the Blend scheduler and blended during the next
 /// round.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "TODO: Address this at some point."
-)]
 async fn handle_serialized_local_data_message<
     NodeId,
     Rng,
@@ -1500,10 +1492,6 @@ where
 ///
 /// It returns the processed message if it has been scheduled, along with
 /// the blending tokens obtained from the decapsulation.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "TODO: Address this at some point."
-)]
 fn schedule_decapsulated_incoming_message<BroadcastSettings>(
     multi_layer_decapsulation_output: MultiLayerDecapsulationOutput,
     scheduler: &mut impl ProcessedMessageScheduler<ProcessedMessage<BroadcastSettings>>,

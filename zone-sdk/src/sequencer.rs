@@ -176,6 +176,50 @@ impl ZoneSequencer {
     }
 }
 
+async fn initialize_state(
+    http_client: &CommonHttpClient,
+    node_url: &Url,
+    reconnect_delay: Duration,
+) -> (TxState, HeaderId) {
+    loop {
+        match http_client.consensus_info(node_url.clone()).await {
+            Ok(info) => {
+                info!(
+                    "Sequencer initialized from consensus info: tip={:?}, lib={:?}",
+                    info.tip, info.lib
+                );
+                return (TxState::new(info.lib), info.tip);
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to fetch consensus info: {e}, retrying in {:?}",
+                    reconnect_delay
+                );
+                tokio::time::sleep(reconnect_delay).await;
+            }
+        }
+    }
+}
+
+async fn connect_blocks_stream(
+    http_client: &CommonHttpClient,
+    node_url: &Url,
+    reconnect_delay: Duration,
+) -> impl futures::Stream<Item = ProcessedBlockEvent> {
+    loop {
+        match http_client.get_blocks_stream(node_url.clone()).await {
+            Ok(stream) => return stream,
+            Err(e) => {
+                warn!(
+                    "Failed to connect to blocks stream: {e}, retrying in {:?}",
+                    reconnect_delay
+                );
+                tokio::time::sleep(reconnect_delay).await;
+            }
+        }
+    }
+}
+
 async fn run_loop(
     mut request_rx: mpsc::Receiver<ActorRequest>,
     channel_id: ChannelId,
@@ -184,26 +228,19 @@ async fn run_loop(
     http_client: CommonHttpClient,
     config: SequencerConfig,
 ) {
-    let mut state: Option<TxState> = None;
-    let mut current_tip: Option<HeaderId> = None;
+    let (state, current_tip) =
+        initialize_state(&http_client, &node_url, config.reconnect_delay).await;
+    let mut state = Some(state);
+    let mut current_tip = Some(current_tip);
+
     let mut last_msg_id = MsgId::root();
     let mut resubmit_interval = tokio::time::interval(config.resubmit_interval);
     let mut resubmit_active = false;
     let mut in_flight: FuturesUnordered<BoxFuture<'static, InFlight>> = FuturesUnordered::new();
 
     loop {
-        let blocks_stream = match http_client.get_blocks_stream(node_url.clone()).await {
-            Ok(stream) => stream,
-            Err(e) => {
-                warn!(
-                    "Failed to connect to blocks stream: {e}, retrying in {:?}",
-                    config.reconnect_delay
-                );
-                tokio::time::sleep(config.reconnect_delay).await;
-                continue;
-            }
-        };
-
+        let blocks_stream =
+            connect_blocks_stream(&http_client, &node_url, config.reconnect_delay).await;
         tokio::pin!(blocks_stream);
 
         loop {

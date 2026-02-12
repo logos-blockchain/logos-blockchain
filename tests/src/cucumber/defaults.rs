@@ -1,16 +1,29 @@
 use std::{fs, path::PathBuf};
 
+use tracing::warn;
 use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::cucumber::world::DeployerKind;
 
 const FEATURES_DIR_REL: &str = "cucumber_tests/features/";
 
-const SCENARIO_OUTPUT_DIR_REL: &str = "cucumber_tests/temp";
-const SCENARIO_NODE_LOG_DIR_REL: &str = "cucumber_tests/temp/node-logs";
-const CONTAINER_NODE_LOG_DIR: &str = "/tmp/node-logs";
+pub const SCENARIO_OUTPUT_DIR_REL: &str = "cucumber_tests/temp";
+pub const ARTEFACTS: &str = "cucumber_artefacts";
+const CONTAINER_NODE_LOG_DIR: &str = "/tmp/node_logs";
 
-fn set_default_env(key: &str, value: &str) {
+const TARGET: &str = "cucumber_defaults";
+
+const LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS: &str = "LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS";
+const LOGOS_BLOCKCHAIN_TESTS_TRACING: &str = "LOGOS_BLOCKCHAIN_TESTS_TRACING";
+const CUCUMBER_LOG_LEVEL: &str = "CUCUMBER_LOG_LEVEL";
+const LOGOS_BLOCKCHAIN_LOG_LEVEL: &str = "LOGOS_BLOCKCHAIN_LOG_LEVEL";
+const RUST_LOG: &str = "RUST_LOG";
+const LOGOS_BLOCKCHAIN_LOG_DIR: &str = "LOGOS_BLOCKCHAIN_LOG_DIR";
+const CUCUMBER_RETRIES: &str = "CUCUMBER_RETRIES";
+pub const LOGOS_BLOCKCHAIN_NODE_BIN: &str = "LOGOS_BLOCKCHAIN_NODE_BIN";
+
+/// Set an environment variable to a default value if it is not already set.
+pub fn set_default_env(key: &str, value: &str) {
     if std::env::var_os(key).is_none() {
         // SAFETY: Used as an early-run default. Prefer setting env vars in the
         // shell for multi-threaded runs.
@@ -21,24 +34,66 @@ fn set_default_env(key: &str, value: &str) {
 }
 
 pub fn init_logging_defaults() {
-    set_default_env("NOMOS_TESTS_KEEP_LOGS", "1");
-    set_default_env("NOMOS_LOG_LEVEL", "info");
-    set_default_env("RUST_LOG", "info");
+    set_default_env(LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS, "true");
+    set_default_env(LOGOS_BLOCKCHAIN_TESTS_TRACING, "true");
+    // Always keep RUST_LOG at info for console output
+    set_default_env(RUST_LOG, "info");
+
+    std::env::var_os(CUCUMBER_LOG_LEVEL).map_or_else(
+        || {
+            set_default_env(LOGOS_BLOCKCHAIN_LOG_LEVEL, "info");
+        },
+        |log_level| {
+            let log_level = log_level.to_string_lossy().to_lowercase();
+            match log_level.as_str() {
+                "trace" | "debug" | "info" | "warn" | "error" => {
+                    set_default_env(LOGOS_BLOCKCHAIN_LOG_LEVEL, log_level.as_str());
+                }
+                other => {
+                    warn!(
+                        target: TARGET,
+                        "Invalid log level '{other}' in {CUCUMBER_LOG_LEVEL}; using 'info' level"
+                    );
+                    set_default_env(LOGOS_BLOCKCHAIN_LOG_LEVEL, "info");
+                }
+            }
+        },
+    );
 }
 
-pub fn init_node_log_dir_defaults(deployer: DeployerKind) {
-    if std::env::var_os("NOMOS_LOG_DIR").is_some() {
-        return;
-    }
-
-    let current_dir = std::env::current_dir().expect("should exist");
-    let host_dir = current_dir.join(SCENARIO_NODE_LOG_DIR_REL);
+pub fn init_node_log_dir_defaults(deployer: &DeployerKind, log_dir: Option<&PathBuf>) {
+    let host_dir = match deployer {
+        DeployerKind::Local => log_dir.as_ref().map_or_else(
+            || {
+                std::env::var_os(LOGOS_BLOCKCHAIN_LOG_DIR).map_or_else(
+                    || {
+                        let dir = PathBuf::from(SCENARIO_OUTPUT_DIR_REL).join(ARTEFACTS);
+                        set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
+                        dir
+                    },
+                    |dir| {
+                        let dir = dir.to_string_lossy().as_ref().to_owned();
+                        PathBuf::from(dir)
+                    },
+                )
+            },
+            |dir| {
+                set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
+                PathBuf::from(dir)
+            },
+        ),
+        DeployerKind::Compose => std::env::var_os(LOGOS_BLOCKCHAIN_LOG_DIR).map_or_else(
+            || {
+                set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, CONTAINER_NODE_LOG_DIR);
+                PathBuf::from(CONTAINER_NODE_LOG_DIR)
+            },
+            |dir| {
+                let dir = dir.to_string_lossy().as_ref().to_owned();
+                PathBuf::from(dir)
+            },
+        ),
+    };
     fs::create_dir_all(&host_dir).expect("should succeed");
-
-    match deployer {
-        DeployerKind::Local => set_default_env("NOMOS_LOG_DIR", &host_dir.display().to_string()),
-        DeployerKind::Compose => set_default_env("NOMOS_LOG_DIR", CONTAINER_NODE_LOG_DIR),
-    }
 }
 
 pub fn init_tracing() {
@@ -48,6 +103,37 @@ pub fn init_tracing() {
         .with_target(true)
         .with_writer(std::io::stderr)
         .try_init();
+}
+
+/// Get the number of retries for failed scenarios from the `CUCUMBER_RETRIES`
+/// environment variable. If the variable is not set, defaults to 2 retries. If
+/// the variable is set to 0, returns None.
+pub fn get_retries() -> Result<Option<usize>, String> {
+    std::env::var_os(CUCUMBER_RETRIES).map_or_else(
+        || Ok(Some(2)),
+        |retries| {
+            retries
+                .to_string_lossy()
+                .as_ref()
+                .to_owned()
+                .parse()
+                .map_or_else(
+                    |_| {
+                        Err(format!(
+                            "Invalid value for {CUCUMBER_RETRIES}: '{}'",
+                            retries.to_string_lossy()
+                        ))
+                    },
+                    |retries| {
+                        if retries == 0 {
+                            Ok(None)
+                        } else {
+                            Ok(Some(retries))
+                        }
+                    },
+                )
+        },
+    )
 }
 
 #[must_use]

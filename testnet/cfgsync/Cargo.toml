@@ -13,22 +13,24 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-axum                = { default-features = false, features = ["http1", "http2", "json", "tokio"], version = "0.7.5" }
-clap                = { default-features = false, version = "4" }
-lb-core             = { workspace = true }
-lb-libp2p           = { workspace = true }
-lb-node             = { workspace = true }
-lb-tests            = { workspace = true }
-lb-tracing-service  = { workspace = true }
-lb-utils            = { workspace = true }
-rand                = { workspace = true }
-reqwest             = { workspace = true }
-serde               = { workspace = true }
-serde_json          = { default-features = false, version = "1.0" }
-serde_path_to_error = "0.1"
-serde_yaml          = "0.9"
-tokio               = { default-features = false, features = ["macros", "net", "rt-multi-thread"], version = "1" }
-tracing             = { workspace = true }
+axum                             = { default-features = false, features = ["http1", "http2", "json", "tokio"], version = "0.7.5" }
+clap                             = { default-features = false, features = ["derive", "env", "std"], version = "4" }
+lb-core                          = { workspace = true }
+lb-key-management-system-service = { workspace = true }
+lb-libp2p                        = { workspace = true }
+lb-node                          = { workspace = true }
+lb-tests                         = { workspace = true }
+lb-tracing-service               = { workspace = true }
+lb-utils                         = { workspace = true }
+num-bigint                       = { default-features = false, version = "0.4" }
+rand                             = { workspace = true }
+reqwest                          = { workspace = true }
+serde                            = { workspace = true }
+serde_json                       = { default-features = false, version = "1.0" }
+serde_path_to_error              = "0.1"
+serde_yaml                       = "0.9"
+tokio                            = { default-features = false, features = ["macros", "net", "rt-multi-thread"], version = "1" }
+tracing                          = { workspace = true }
 
 [[bin]]
 name = "logos-blockchain-cfgsync-client"

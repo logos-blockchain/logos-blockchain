@@ -17,10 +17,6 @@ use tokio::sync::{oneshot, watch::Sender};
 
 use crate::{WinningPolInfo, kms::KmsAdapter};
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "TODO: Address this at some point"
-)]
 /// Return a leadership proof and signing key if the current slot is a
 /// winning one, and notifies consumers of winning slot info.
 ///
@@ -230,7 +226,6 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
             .await;
     }
 
-    #[expect(clippy::cognitive_complexity, reason = "TODO: extract inner loop")]
     async fn check_epoch_winning_utxos<RuntimeServiceId>(
         &mut self,
         utxos: &[UtxoWithKeyId],

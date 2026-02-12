@@ -1,6 +1,7 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::SocketAddr,
+    num::NonZeroUsize,
     process::{Child, Command, Stdio},
     str::FromStr as _,
     time::Duration,
@@ -8,7 +9,9 @@ use std::{
 
 use futures::Stream;
 use lb_chain_broadcast_service::BlockInfo;
-use lb_chain_service::CryptarchiaInfo;
+use lb_chain_leader_service::LeaderWalletConfig;
+use lb_chain_network_service::{IbdConfig, OrphanConfig, SyncConfig};
+use lb_chain_service::{CryptarchiaInfo, OfflineGracePeriodConfig};
 use lb_common_http_client::CommonHttpClient;
 use lb_core::{
     block::Block,
@@ -25,7 +28,12 @@ use lb_key_management_system_service::keys::secured_key::SecuredKey as _;
 use lb_network_service::backends::libp2p::Libp2pInfo;
 use lb_node::{
     HeaderId, RocksBackendSettings, UserConfig,
-    config::{RunConfig, deployment::DeploymentSettings, mempool::serde::Config as MempoolConfig},
+    config::{
+        RunConfig,
+        cryptarchia::{self, serde::LeaderConfig},
+        deployment::DeploymentSettings,
+        mempool::serde::Config as MempoolConfig,
+    },
 };
 use lb_sdp_service::SdpSettings;
 use lb_tracing::logging::local::FileConfig;
@@ -42,9 +50,6 @@ use crate::{
     IS_DEBUG_TRACING, common::kms::key_id_for_preload_backend, nodes::LOGS_PREFIX,
     topology::configs::GeneralConfig,
 };
-
-const BIN_PATH_DEBUG: &str = "../target/debug/logos-blockchain-node";
-const BIN_PATH_RELEASE: &str = "../target/release/logos-blockchain-node";
 
 pub enum Pool {
     Mantle,
@@ -114,7 +119,7 @@ impl Validator {
 
         serde_yaml::to_writer(&mut user_config_file, &config.user).unwrap();
         serde_yaml::to_writer(&mut deployment_config_file, &config.deployment).unwrap();
-        let exe_path = get_exe_path(BIN_PATH_DEBUG, BIN_PATH_RELEASE);
+        let exe_path = get_exe_path();
         let child = Command::new(exe_path)
             .arg("--deployment")
             .arg(deployment_config_file.path().as_os_str())
@@ -333,7 +338,40 @@ pub fn create_validator_config(
         network: config.network_config,
         blend: config.blend_config.0,
         time: config.time_config,
-        cryptarchia: config.consensus_config.user_config().clone(),
+        cryptarchia: cryptarchia::serde::Config {
+            network: cryptarchia::serde::NetworkConfig {
+                bootstrap: lb_chain_network_service::BootstrapConfig {
+                    ibd: IbdConfig {
+                        delay_before_new_download: Duration::from_secs(10),
+                        peers: HashSet::new(),
+                    },
+                },
+                sync: SyncConfig {
+                    orphan: OrphanConfig {
+                        max_orphan_cache_size: NonZeroUsize::new(5)
+                            .expect("Max orphan cache size must be non-zero"),
+                    },
+                },
+            },
+            service: cryptarchia::serde::ServiceConfig {
+                bootstrap: lb_chain_service::BootstrapConfig {
+                    force_bootstrap: false,
+                    offline_grace_period: OfflineGracePeriodConfig {
+                        grace_period: Duration::from_secs(20 * 60),
+                        state_recording_interval: Duration::from_secs(60),
+                    },
+                    prolonged_bootstrap_period: config.consensus_config.prolonged_bootstrap_period,
+                },
+                recovery_file: "./recovery/cryptarchia.json".into(),
+            },
+            leader: LeaderConfig {
+                wallet: LeaderWalletConfig {
+                    max_tx_fee: Value::MAX,
+                    // We use the same funding key used for SDP.
+                    funding_pk: config.consensus_config.funding_pk,
+                },
+            },
+        },
         mempool: MempoolConfig {
             recovery_path: "./recovery/mempool.json".into(),
         },
@@ -358,7 +396,7 @@ pub fn create_validator_config(
             },
         },
         wallet: WalletServiceSettings {
-            known_keys: HashMap::from_iter([
+            known_keys: [
                 (
                     key_id_for_preload_backend(&config.consensus_config.known_key.clone().into()),
                     config.consensus_config.known_key.as_public_key(),
@@ -367,7 +405,15 @@ pub fn create_validator_config(
                     key_id_for_preload_backend(&config.consensus_config.funding_sk.clone().into()),
                     config.consensus_config.funding_sk.as_public_key(),
                 ),
-            ]),
+            ]
+            .into_iter()
+            .chain(config.consensus_config.other_keys.iter().map(|sk| {
+                (
+                    key_id_for_preload_backend(&sk.clone().into()),
+                    sk.as_public_key(),
+                )
+            }))
+            .collect::<HashMap<_, _>>(),
             voucher_master_key_id: key_id_for_preload_backend(
                 &config.consensus_config.known_key.clone().into(),
             ),

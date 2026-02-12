@@ -923,12 +923,14 @@ where
             .await
             .map_err(|e| Error::Storage(format!("Failed to store block: {e}")))?;
 
-        let immutable_blocks = pruned_blocks.immutable_blocks().clone();
-        relays
-            .storage_adapter()
-            .store_immutable_block_ids(immutable_blocks)
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to store immutable block ids: {e}")))?;
+        Self::store_immutable_blocks_index(
+            &pruned_blocks,
+            Some(prev_lib),
+            new_lib,
+            cryptarchia.consensus.lib_branch().slot(),
+            relays.storage_adapter(),
+        )
+        .await?;
 
         let processed_block_event = ProcessedBlockEvent {
             block_id: header.id(),
@@ -987,6 +989,29 @@ where
         .collect();
 
         Ok((cryptarchia, pruned_blocks, reorged_txs))
+    }
+
+    /// Store immutable block IDs to storage, including the new LIB if needed.
+    /// If `prev_lib` is None, always includes the new LIB.
+    /// If `prev_lib` is Some, only includes new LIB if it changed.
+    async fn store_immutable_blocks_index(
+        pruned_blocks: &PrunedBlocks<HeaderId>,
+        prev_lib: Option<HeaderId>,
+        new_lib: HeaderId,
+        new_lib_slot: Slot,
+        storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+    ) -> Result<(), Error> {
+        let mut immutable_blocks = pruned_blocks.immutable_blocks().clone();
+        // The new LIB is also immutable and should be immediately queryable by slot.
+        // prune_immutable_blocks() only returns blocks older than the new LIB,
+        // so we explicitly add the new LIB here.
+        if prev_lib.is_none_or(|prev| prev != new_lib) {
+            immutable_blocks.insert(new_lib_slot, new_lib);
+        }
+        storage_adapter
+            .store_immutable_block_ids(immutable_blocks)
+            .await
+            .map_err(|e| Error::Storage(format!("Failed to store immutable block ids: {e}")))
     }
 
     /// Retrieves the blocks in the range from `from` to `to` from the storage.
@@ -1275,9 +1300,14 @@ where
 
         notify_chain_online_subscribers(chain_online_subscription_channel);
 
-        if let Err(e) = storage_adapter
-            .store_immutable_block_ids(pruned_blocks.immutable_blocks().clone())
-            .await
+        if let Err(e) = Self::store_immutable_blocks_index(
+            &pruned_blocks,
+            None,
+            cryptarchia.lib(),
+            cryptarchia.consensus.lib_branch().slot(),
+            storage_adapter,
+        )
+        .await
         {
             error!("Could not store immutable block IDs: {e}");
         }

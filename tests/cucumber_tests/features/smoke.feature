@@ -1,17 +1,17 @@
-Feature: Testing Framework - Auto Local/Compose Deployer
+Feature: Smoke
 
   # no workloads, liveness only
-  @normal_ci
+  @smoke_ci
   Scenario: Idle smoke
     Given we have a CLI deployer specified
     And topology has 2 validators
-    And run duration is 30 seconds
+    And run duration is 60 seconds
     And expect consensus liveness
     When run scenario
     Then scenario should succeed
 
   # tx + liveness
-  @normal_ci @broken
+  @smoke_ci
   Scenario: Simple smoke
     Given we have a CLI deployer specified
     And topology has 2 validators

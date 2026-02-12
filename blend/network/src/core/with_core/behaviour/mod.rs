@@ -897,10 +897,6 @@ where
     >;
     type ToSwarm = Event;
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "It's good to keep everything in a single function here."
-    )]
     fn handle_established_inbound_connection(
         &mut self,
         connection_id: ConnectionId,
@@ -945,10 +941,6 @@ where
         })
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "It's good to keep everything in a single function here."
-    )]
     fn handle_established_outbound_connection(
         &mut self,
         connection_id: ConnectionId,

@@ -101,6 +101,7 @@ async fn start_node(world: &mut CucumberWorld, node_name: String, peers: &[Strin
             StartNodeOptions {
                 peers: peer_selection,
                 config_patch: None,
+                persist_dir: Some(world.scenario_base_dir.join(node_name.as_str())),
             }
             .create_patch(move |config| {
                 // Placeholder - Add any custom configuration changes here if needed.
@@ -307,7 +308,7 @@ fn log_waiting_status(
                 "Waiting for all node's hashes at height {peer_min} - elapsed: {:.2?}, diff: \
                 {diff}, heights: {peer_heights:?}, anchors: {:?}",
                 start.elapsed(),
-                anchor_hashes
+                anchor_hashes.iter().map(|snap| &snap.header_hash).collect::<Vec<_>>()
             );
         }
         AlignmentStatus::Fork => {

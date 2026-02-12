@@ -4,7 +4,7 @@ use tokio::{process::Command, task::JoinSet, time::sleep};
 
 const SERVER_BIN: &str = "../../target/debug/logos-blockchain-cfgsync-server";
 const CLIENT_BIN: &str = "../../target/debug/logos-blockchain-cfgsync-client";
-const SERVER_CFG: &str = "./tests/cfgsync.yaml";
+const SERVER_CFG: &str = "../cfgsync.yaml"; // Use config from "testnet" dir.
 
 #[tokio::test]
 async fn smoke_test_four_clients() {
@@ -38,5 +38,6 @@ async fn smoke_test_four_clients() {
         fs::remove_file(out).unwrap();
     }
 
+    sleep(Duration::from_secs(51)).await;
     server.kill().and_then(|()| server.wait()).unwrap();
 }

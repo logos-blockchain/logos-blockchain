@@ -2,7 +2,7 @@ use std::{fs, time::Duration};
 
 use lb_node::{
     UserConfig,
-    config::{RunConfig, deployment::WellKnownDeployment},
+    config::{RunConfig, deployment::DeploymentSettings},
 };
 use lb_tests::nodes::validator::Validator;
 use lb_utils::net::{get_available_tcp_port, get_available_udp_port};
@@ -15,6 +15,7 @@ const SERVER_CFG: &str = "./tests/cfgsync.yaml";
 #[ignore = "For local debugging"]
 #[tokio::test]
 async fn test_spawn_nodes_from_cfgsync_custom_ports() {
+    // Start the configuration server
     let mut server = std::process::Command::new(SERVER_BIN)
         .arg(SERVER_CFG)
         .spawn()
@@ -22,15 +23,16 @@ async fn test_spawn_nodes_from_cfgsync_custom_ports() {
 
     sleep(Duration::from_secs(1)).await;
 
-    let mut set = JoinSet::new();
+    // Collect all UserConfigs by running clients.
+    // Genesis is only generated after all init nodes registers.
+    let mut client_tasks = JoinSet::new();
     for i in 0..4 {
         let net_port = get_available_udp_port().expect("no free port for network");
         let blend_port = get_available_udp_port().expect("no free port for blend");
         let api_port = get_available_tcp_port().expect("no free port for api");
+        let out = format!(".tmp_node_{i}.yaml");
 
-        set.spawn(async move {
-            let out = format!(".tmp_node_{i}.yaml");
-
+        client_tasks.spawn(async move {
             let status = Command::new(CLIENT_BIN)
                 .env("CFG_FILE_PATH", &out)
                 .env("CFG_SERVER_ADDR", "http://127.0.0.1:4400")
@@ -43,31 +45,46 @@ async fn test_spawn_nodes_from_cfgsync_custom_ports() {
                 .await
                 .expect("client failed");
 
-            assert!(status.success());
+            assert!(status.success(), "Client for node {i} failed");
 
             let yaml = fs::read_to_string(&out).expect("read failed");
             let user_config: UserConfig =
                 serde_yaml::from_str(&yaml).expect("UserConfig parse failed");
 
-            let run_config = RunConfig {
-                user: user_config,
-                deployment: WellKnownDeployment::Devnet.into(),
-            };
-
-            println!(
-                ">>>> Spawning Node {i} (Net: {net_port}, Blend: {blend_port}, API: http://localhost:{api_port}/cryptarchia/info)..."
-            );
-            let _node = Validator::spawn(run_config).await.expect("spawn failed");
-
-            loop {
-                sleep(Duration::from_secs(3600)).await;
-            }
+            (i, user_config, api_port)
         });
     }
 
-    println!("\nNodes live with custom ports. Use Ctrl+C to shutdown.\n");
+    let mut user_configs = Vec::new();
+    while let Some(res) = client_tasks.join_next().await {
+        user_configs.push(res.unwrap());
+    }
+
+    // Download the shared deployment config with new genesis.
+    let response = reqwest::get("http://127.0.0.1:4400/deployment-settings")
+        .await
+        .unwrap();
+    let response = response.error_for_status().unwrap();
+    let yaml_bytes = response.bytes().await.unwrap();
+    let deployment: DeploymentSettings = serde_yaml::from_slice(&yaml_bytes).unwrap();
+
+    // Spawn the nodes.
+    let mut nodes = Vec::new();
+    for (i, user_config, api) in user_configs {
+        let run_config = RunConfig {
+            user: user_config,
+            deployment: deployment.clone(),
+        };
+
+        println!(">>>> Spawning Node {i} http://localhost:{api}/cryptarchia/info");
+        let node = Validator::spawn(run_config).await.expect("spawn failed");
+        nodes.push(node);
+    }
+
+    println!("\nAll nodes spawned. Use Ctrl+C to shutdown.\n");
     tokio::signal::ctrl_c().await.unwrap();
 
+    drop(nodes);
     server.kill().unwrap();
     server.wait().unwrap();
 }

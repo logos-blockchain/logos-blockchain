@@ -88,6 +88,9 @@ where
                 get(get_sdp_declarations::<RuntimeServiceId>),
             )
             .with_state(handle)
+            .layer(axum::extract::DefaultBodyLimit::max(
+                self.settings.max_body_size,
+            ))
             .layer(TimeoutLayer::new(self.settings.timeout))
             .layer(RequestBodyLimitLayer::new(self.settings.max_body_size))
             .layer(ConcurrencyLimitLayer::new(
