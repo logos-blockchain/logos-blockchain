@@ -70,29 +70,6 @@ async fn init_node(
     )
 }
 
-async fn generate_config(
-    State(repo): State<Arc<ConfigRepo>>,
-    Json(info): Json<RegistrationInfo>,
-) -> impl IntoResponse {
-    let host = Host::from(info);
-
-    repo.append(host).map_or_else(
-        || {
-            (
-                StatusCode::BAD_REQUEST,
-                "Network not initialized. Initial nodes must sync first.",
-            )
-                .into_response()
-        },
-        |cfg| {
-            let node_config = create_validator_config(cfg, repo.deployment_settings().unwrap());
-            let yaml = serde_yaml::to_string(&node_config).unwrap_or_default();
-
-            (StatusCode::OK, [(CONTENT_TYPE, "text/yaml")], yaml).into_response()
-        },
-    )
-}
-
 async fn deployment_settings(State(repo): State<Arc<ConfigRepo>>) -> impl IntoResponse {
     let deployment_settings = repo.deployment_settings();
     let yaml = serde_yaml::to_string(&deployment_settings).unwrap_or_default();
@@ -102,7 +79,6 @@ async fn deployment_settings(State(repo): State<Arc<ConfigRepo>>) -> impl IntoRe
 pub fn cfgsync_app(config_repo: Arc<ConfigRepo>) -> Router {
     Router::new()
         .route("/init-with-node", post(init_node))
-        .route("/generate-config", post(generate_config))
         .route("/deployment-settings", get(deployment_settings))
         .with_state(config_repo)
 }
