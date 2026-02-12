@@ -15,11 +15,11 @@ impl ServiceConfig {
     pub fn into_backend_settings(self) -> ApiServiceSettings<AxumBackendSettings> {
         ApiServiceSettings {
             backend_settings: AxumBackendSettings {
-                listen_address: self.user.backend.listen_address,
+                address: self.user.backend.listen_address,
                 cors_origins: self.user.backend.cors_origins,
                 timeout: self.user.backend.timeout,
-                max_body_size: self.user.backend.max_body_size,
-                max_concurrent_requests: self.user.backend.max_concurrent_requests,
+                max_body_size: self.user.backend.max_body_size as usize,
+                max_concurrent_requests: self.user.backend.max_concurrent_requests as usize,
             },
         }
     }
