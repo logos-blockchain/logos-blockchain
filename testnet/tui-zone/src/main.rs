@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::Parser as _;
 use logos_blockchain_tui_zone::{InscribeArgs, run};
 
 #[tokio::main]
