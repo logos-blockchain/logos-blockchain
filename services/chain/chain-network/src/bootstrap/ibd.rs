@@ -13,7 +13,7 @@ use lb_core::{
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_tx_service::backend::RecoverableMempool;
 use overwatch::DynError;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::{
     Error as ChainError, IbdConfig,
@@ -71,18 +71,15 @@ where
     }
 }
 
-// TODO: Replace ProcessBlock closures with a trait
-//       that implements block processing.
-//       https://github.com/logos-blockchain/logos-blockchain/issues/1505
 pub struct InitialBlockDownload<NetAdapter, BlockProcessor, RuntimeServiceId>
 where
     NetAdapter: NetworkAdapter<RuntimeServiceId>,
     NetAdapter::PeerId: Clone + Eq + Hash,
     BlockProcessor: IbdBlockProcessor<NetAdapter::Block>,
 {
-    config: IbdConfig<NetAdapter::PeerId>,
     block_processor: BlockProcessor,
     network: NetAdapter,
+    synced_peers: HashSet<NetAdapter::PeerId>,
     _phantom: PhantomData<RuntimeServiceId>,
 }
 
@@ -93,15 +90,11 @@ where
     NetAdapter::PeerId: Clone + Eq + Hash,
     BlockProcessor: IbdBlockProcessor<NetAdapter::Block>,
 {
-    pub const fn new(
-        config: IbdConfig<NetAdapter::PeerId>,
-        block_processor: BlockProcessor,
-        network: NetAdapter,
-    ) -> Self {
+    pub fn new(block_processor: BlockProcessor, network: NetAdapter) -> Self {
         Self {
-            config,
             block_processor,
             network,
+            synced_peers: HashSet::new(),
             _phantom: PhantomData,
         }
     }
@@ -121,36 +114,37 @@ where
     /// It downloads blocks from the peers, and applies them to the
     /// [`Cryptarchia`].
     ///
-    /// An updated [`Cryptarchia`] is returned after downloads from
-    /// **all** peers are completed.
+    /// An updated [`Cryptarchia`] is returned after all downloads
+    /// have completed from all peers except the failed ones.
     ///
-    /// An error is returned if there is no peer available for IBD,
-    /// or if all peers return an error.
-    pub async fn run(self) -> Result<BlockProcessor, Error> {
-        if self.config.peers.is_empty() {
+    /// An error is returned if downloads fail from all peers.
+    pub async fn run(
+        mut self,
+        config: IbdConfig<NetAdapter::PeerId>,
+    ) -> Result<BlockProcessor, Error> {
+        if config.peers.is_empty() {
+            warn!("Skipping IBD as no peers are configured");
             return Ok(self.block_processor);
         }
 
-        let downloads = self.initiate_downloads().await?;
+        let downloads = self.initiate_downloads(config).await?;
         self.proceed_downloads(downloads).await
     }
 
     /// Initiates [`Downloads`] from the configured peers.
     async fn initiate_downloads<'a>(
-        &self,
+        &mut self,
+        config: IbdConfig<NetAdapter::PeerId>,
     ) -> Result<Downloads<'a, NetAdapter::PeerId, NetAdapter::Block>, Error>
     where
         NetAdapter::PeerId: 'a,
         NetAdapter::Block: 'a,
     {
-        let mut downloads = Downloads::new(self.config.delay_before_new_download);
-        for peer in &self.config.peers {
-            match self
-                .initiate_download(*peer, None, downloads.targets())
-                .await
-            {
+        let mut downloads = Downloads::new(config.delay_before_new_download);
+        for peer in &config.peers {
+            match self.initiate_download(*peer, None).await {
                 Ok(Some(download)) => {
-                    downloads.add_download(download);
+                    self.start_download(download, &mut downloads);
                 }
                 Ok(None) => {
                     debug!("No download needed for {peer:?}. Delaying the peer");
@@ -178,10 +172,9 @@ where
     ///
     /// If communication fails, an [`Error`] is returned.
     async fn initiate_download(
-        &self,
+        &mut self,
         peer: NetAdapter::PeerId,
         latest_downloaded_block: Option<HeaderId>,
-        targets_in_progress: &HashSet<HeaderId>,
     ) -> Result<Option<Download<NetAdapter::PeerId, NetAdapter::Block>>, Error> {
         // Get the most recent peer's tip.
         let tip_response = self
@@ -198,7 +191,11 @@ where
             }
         };
 
-        if !self.should_download(&target, targets_in_progress).await? {
+        if self.block_processor.has_processed_block(target).await? {
+            debug!(
+                "No download needed for {peer:?} as target block already exists locally: {target:?}"
+            );
+            self.synced_peers.insert(peer);
             return Ok(None);
         }
 
@@ -220,15 +217,6 @@ where
         Ok(Some(Download::new(peer, target, stream)))
     }
 
-    async fn should_download(
-        &self,
-        target: &HeaderId,
-        targets_in_progress: &HashSet<HeaderId>,
-    ) -> Result<bool, Error> {
-        Ok(!self.block_processor.has_processed_block(*target).await?
-            && !targets_in_progress.contains(target))
-    }
-
     /// Proceeds [`Downloads`] by reading/processing blocks.
     ///
     /// It returns the updated [`Cryptarchia`] if all downloads have
@@ -238,7 +226,7 @@ where
     /// so that new downloads can be initiated after the delays,
     /// as long as there are other peers still in progress.
     ///
-    /// An error is return if all peers fail.
+    /// An error is return if downloads fail from all peers.
     async fn proceed_downloads<'a>(
         mut self,
         mut downloads: Downloads<'a, NetAdapter::PeerId, NetAdapter::Block>,
@@ -247,17 +235,20 @@ where
         NetAdapter::PeerId: 'a,
         NetAdapter::Block: 'a,
     {
-        // Repeat until there is no download remaining.
+        // Repeat until there is no download remaining,
+        // even if there are delays in progress.
         while let Some(output) = downloads.next().await {
             if let Err(e) = self.handle_downloads_output(output, &mut downloads).await {
                 error!("A peer was dropped from IBD due to error: {e:?}");
-                if downloads.is_empty() {
-                    return Err(Error::AllPeersFailed);
-                }
             }
         }
 
-        Ok(self.block_processor)
+        if self.synced_peers.is_empty() {
+            error!("No peers synced successfully during IBD");
+            Err(Error::AllPeersFailed)
+        } else {
+            Ok(self.block_processor)
+        }
     }
 
     /// Handles a [`DownloadsOutput`].
@@ -316,14 +307,14 @@ where
                     download.peer()
                 );
             })?;
-        downloads.add_download(download);
+        self.start_download(download, downloads);
         Ok(())
     }
 
     /// Handles a [`DownloadsOutput::DownloadCompleted`] by trying to
     /// initiate a new download for the same peer.
     async fn handle_download_completed<'a>(
-        &self,
+        &mut self,
         download: Download<NetAdapter::PeerId, NetAdapter::Block>,
         downloads: &mut Downloads<'a, NetAdapter::PeerId, NetAdapter::Block>,
     ) -> Result<(), Error>
@@ -342,7 +333,7 @@ where
     /// Handles a [`DownloadsOutput::DelayCompleted`] by trying to
     /// initiate a new download for the same peer.
     async fn handle_delay_completed<'a>(
-        &self,
+        &mut self,
         delay: Delay<NetAdapter::PeerId>,
         downloads: &mut Downloads<'a, NetAdapter::PeerId, NetAdapter::Block>,
     ) -> Result<(), Error>
@@ -363,7 +354,7 @@ where
     /// If there is no download needed at the moment, a delay is scheduled,
     /// so that a new download can be attempted later.
     async fn try_initiate_download<'a>(
-        &self,
+        &mut self,
         peer: NetAdapter::PeerId,
         latest_downloaded_block: Option<HeaderId>,
         downloads: &mut Downloads<'a, NetAdapter::PeerId, NetAdapter::Block>,
@@ -373,19 +364,31 @@ where
         NetAdapter::Block: 'a,
     {
         match self
-            .initiate_download(peer, latest_downloaded_block, downloads.targets())
+            .initiate_download(peer, latest_downloaded_block)
             .await
             .inspect_err(|e| {
                 error!("Failed to initiate next download for {peer:?}: {e}");
             })? {
             Some(download) => {
-                downloads.add_download(download);
+                self.start_download(download, downloads);
             }
             None => {
                 downloads.add_delay(Delay::new(peer, latest_downloaded_block));
             }
         }
         Ok(())
+    }
+
+    fn start_download<'a>(
+        &mut self,
+        download: Download<NetAdapter::PeerId, NetAdapter::Block>,
+        downloads: &mut Downloads<'a, NetAdapter::PeerId, NetAdapter::Block>,
+    ) where
+        NetAdapter::PeerId: 'a,
+        NetAdapter::Block: 'a,
+    {
+        self.synced_peers.remove(download.peer());
+        downloads.add_download(download);
     }
 }
 
@@ -433,11 +436,10 @@ mod tests {
     #[tokio::test]
     async fn no_peers_configured() {
         let block_processor = InitialBlockDownload::new(
-            config(HashSet::new()),
             MockBlockProcessor::new(),
             MockNetworkAdapter::<()>::new(HashMap::new()),
         )
-        .run()
+        .run(config(HashSet::new()))
         .await
         .unwrap();
 
@@ -461,11 +463,10 @@ mod tests {
             false,
         );
         let block_processor = InitialBlockDownload::new(
-            config([NodeId(0)].into()),
             MockBlockProcessor::new(),
             MockNetworkAdapter::<()>::new(HashMap::from([(NodeId(0), peer.clone())])),
         )
-        .run()
+        .run(config([NodeId(0)].into()))
         .await
         .unwrap();
 
@@ -489,11 +490,10 @@ mod tests {
             false,
         );
         let block_processor = InitialBlockDownload::new(
-            config([NodeId(0)].into()),
             MockBlockProcessor::new(),
             MockNetworkAdapter::<()>::new(HashMap::from([(NodeId(0), peer.clone())])),
         )
-        .run()
+        .run(config([NodeId(0)].into()))
         .await
         .unwrap();
 
@@ -527,14 +527,13 @@ mod tests {
             false,
         );
         let block_processor = InitialBlockDownload::new(
-            config([NodeId(0), NodeId(1)].into()),
             MockBlockProcessor::new(),
             MockNetworkAdapter::<()>::new(HashMap::from([
                 (NodeId(0), peer0.clone()),
                 (NodeId(1), peer1.clone()),
             ])),
         )
-        .run()
+        .run(config([NodeId(0), NodeId(1)].into()))
         .await
         .unwrap();
 
@@ -572,14 +571,13 @@ mod tests {
             false,
         );
         let block_processor = InitialBlockDownload::new(
-            config([NodeId(0), NodeId(1)].into()),
             MockBlockProcessor::new(),
             MockNetworkAdapter::<()>::new(HashMap::from([
                 (NodeId(0), peer0.clone()),
                 (NodeId(1), peer1.clone()),
             ])),
         )
-        .run()
+        .run(config([NodeId(0), NodeId(1)].into()))
         .await
         .unwrap();
 
@@ -616,14 +614,13 @@ mod tests {
             true, // Return error while streaming blocks
         );
         let result = InitialBlockDownload::new(
-            config([NodeId(0), NodeId(1)].into()),
             MockBlockProcessor::new(),
             MockNetworkAdapter::<()>::new(HashMap::from([
                 (NodeId(0), peer0.clone()),
                 (NodeId(1), peer1.clone()),
             ])),
         )
-        .run()
+        .run(config([NodeId(0), NodeId(1)].into()))
         .await;
 
         assert!(matches!(result, Err(Error::AllPeersFailed)));
@@ -656,14 +653,13 @@ mod tests {
             false,
         );
         let block_processor = InitialBlockDownload::new(
-            config([NodeId(0), NodeId(1)].into()),
             MockBlockProcessor::new(),
             MockNetworkAdapter::<()>::new(HashMap::from([
                 (NodeId(0), peer0.clone()),
                 (NodeId(1), peer1.clone()),
             ])),
         )
-        .run()
+        .run(config([NodeId(0), NodeId(1)].into()))
         .await
         .unwrap();
 
@@ -699,14 +695,13 @@ mod tests {
             true,
         );
         let result = InitialBlockDownload::new(
-            config([NodeId(0), NodeId(1)].into()),
             MockBlockProcessor::new(),
             MockNetworkAdapter::<()>::new(HashMap::from([
                 (NodeId(0), peer0.clone()),
                 (NodeId(1), peer1.clone()),
             ])),
         )
-        .run()
+        .run(config([NodeId(0), NodeId(1)].into()))
         .await;
 
         assert!(matches!(result, Err(Error::AllPeersFailed)));
@@ -741,14 +736,13 @@ mod tests {
             false,
         );
         let block_processor = InitialBlockDownload::new(
-            config([NodeId(0), NodeId(1)].into()),
             MockBlockProcessor::new(),
             MockNetworkAdapter::<()>::new(HashMap::from([
                 (NodeId(0), peer0.clone()),
                 (NodeId(1), peer1.clone()),
             ])),
         )
-        .run()
+        .run(config([NodeId(0), NodeId(1)].into()))
         .await
         .unwrap();
 
@@ -803,14 +797,43 @@ mod tests {
             false,
         );
         let result = InitialBlockDownload::new(
-            config([NodeId(0), NodeId(1)].into()),
             MockBlockProcessor::new(),
             MockNetworkAdapter::<()>::new(HashMap::from([
                 (NodeId(0), peer0.clone()),
                 (NodeId(1), peer1.clone()),
             ])),
         )
-        .run()
+        .run(config([NodeId(0), NodeId(1)].into()))
+        .await;
+
+        // Expect an error
+        assert!(matches!(result, Err(Error::AllPeersFailed)));
+    }
+
+    #[tokio::test]
+    async fn block_err_from_all_peers_with_same_tip() {
+        let peer0 = BlockProvider::new(
+            vec![
+                Block::genesis(),
+                Block::new(1, GENESIS_ID, 1, 1),
+                // Invalid block (parent doesn't exist)
+                Block::new(2, 100, 2, 2),
+                Block::new(3, 2, 3, 3),
+            ],
+            Ok(Block::new(3, 2, 3, 3)),
+            2,
+            false,
+        );
+        let peer1 = peer0.clone();
+
+        let result = InitialBlockDownload::new(
+            MockBlockProcessor::new(),
+            MockNetworkAdapter::<()>::new(HashMap::from([
+                (NodeId(0), peer0.clone()),
+                (NodeId(1), peer1.clone()),
+            ])),
+        )
+        .run(config([NodeId(0), NodeId(1)].into()))
         .await;
 
         // Expect an error

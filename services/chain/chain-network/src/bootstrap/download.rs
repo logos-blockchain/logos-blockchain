@@ -142,10 +142,6 @@ where
             delay
         }));
     }
-
-    pub const fn targets(&self) -> &HashSet<HeaderId> {
-        &self.targets
-    }
 }
 
 impl<NodeId, Block> Downloads<'_, NodeId, Block> {
@@ -393,7 +389,7 @@ mod tests {
 
         // Add download to Downloads
         downloads.add_download(download);
-        assert!(downloads.targets().contains(&target));
+        assert!(downloads.targets.contains(&target));
         assert_eq!(downloads.num_peers(), 1);
 
         // Should yield a BlockReceived output
@@ -401,12 +397,12 @@ mod tests {
         else {
             panic!("Expected BlockReceived output");
         };
-        assert!(!downloads.targets().contains(&target));
+        assert!(!downloads.targets.contains(&target));
         assert_eq!(block, 100);
 
         // Add download to Downloads again
         downloads.add_download(download);
-        assert!(downloads.targets().contains(&target));
+        assert!(downloads.targets.contains(&target));
         assert_eq!(downloads.num_peers(), 1);
 
         // Should yield a BlockReceived output
@@ -414,13 +410,13 @@ mod tests {
         else {
             panic!("Expected BlockReceived output");
         };
-        assert!(!downloads.targets().contains(&target));
+        assert!(!downloads.targets.contains(&target));
         assert_eq!(downloads.num_peers(), 0);
         assert_eq!(block, 200);
 
         // Add download to Downloads again
         downloads.add_download(download);
-        assert!(downloads.targets().contains(&target));
+        assert!(downloads.targets.contains(&target));
         assert_eq!(downloads.num_peers(), 1);
 
         // Should yield a DownloadCompleted output
@@ -428,7 +424,7 @@ mod tests {
             downloads.next().await,
             Some(DownloadsOutput::DownloadCompleted(_))
         ));
-        assert!(!downloads.targets().contains(&target));
+        assert!(!downloads.targets.contains(&target));
         assert_eq!(downloads.num_peers(), 0);
 
         // Should yield a None since no download is in the Downloads.
@@ -450,7 +446,7 @@ mod tests {
 
         // Add download to Downloads
         downloads.add_download(download);
-        assert!(downloads.targets().contains(&target));
+        assert!(downloads.targets.contains(&target));
         assert_eq!(downloads.num_peers(), 1);
 
         // Should yield a BlockReceived output
@@ -458,20 +454,20 @@ mod tests {
         else {
             panic!("Expected BlockReceived output");
         };
-        assert!(!downloads.targets().contains(&target));
+        assert!(!downloads.targets.contains(&target));
         assert_eq!(downloads.num_peers(), 0);
         assert_eq!(block, 100);
 
         // Add download to Downloads again
         downloads.add_download(download);
-        assert!(downloads.targets().contains(&target));
+        assert!(downloads.targets.contains(&target));
         assert_eq!(downloads.num_peers(), 1);
 
         // Should yield a Error output
         let DownloadsOutput::Error { .. } = downloads.next().await.unwrap() else {
             panic!("Expected BlockReceived output");
         };
-        assert!(!downloads.targets().contains(&target));
+        assert!(!downloads.targets.contains(&target));
         assert_eq!(downloads.num_peers(), 0);
 
         // Should yield a None since no download is in the Downloads.
@@ -499,8 +495,8 @@ mod tests {
         // Add all downloads to Downloads
         downloads.add_download(download1);
         downloads.add_download(download2);
-        assert!(downloads.targets().contains(&target1));
-        assert!(downloads.targets().contains(&target2));
+        assert!(downloads.targets.contains(&target1));
+        assert!(downloads.targets.contains(&target2));
         assert_eq!(downloads.num_peers(), 2);
 
         let mut expected_blocks = HashSet::<TestBlock>::from([100, 200, 300]);
@@ -584,7 +580,7 @@ mod tests {
         downloads.add_download(download1);
         downloads.add_download(download2);
         // Should only have one target.
-        assert_eq!(downloads.targets(), &HashSet::from([target]));
+        assert_eq!(downloads.targets, HashSet::from([target]));
         // But, should have two peers (one for download and one for delay).
         assert_eq!(downloads.num_peers(), 2);
         // One peer should be delayed due to the duplicate target.

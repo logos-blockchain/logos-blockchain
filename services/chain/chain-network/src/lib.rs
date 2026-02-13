@@ -271,7 +271,6 @@ where
         .await?;
 
         let initial_block_download = InitialBlockDownload::new(
-            bootstrap_config.ibd,
             ChainNetworkIbdBlockProcessor::<_, Mempool, _> {
                 cryptarchia: relays.cryptarchia().clone(),
                 mempool_adapter: relays.mempool_adapter().clone(),
@@ -279,9 +278,9 @@ where
             network_adapter,
         );
 
-        match initial_block_download.run().await {
+        match initial_block_download.run(bootstrap_config.ibd).await {
             Ok(_) => {
-                info!("Initial Block Download completed successfully.");
+                info!("Initial Block Download completed successfully");
                 // Notify chain-service that IBD is complete so it can start the prolonged
                 // bootstrap timer
                 if let Err(e) = relays.cryptarchia().notify_ibd_completed().await {
@@ -289,8 +288,9 @@ where
                 }
             }
             Err(e) => {
-                error!("Initial Block Download failed: {e:?}. Initiating graceful shutdown.");
-
+                error!(
+                    "Initial Block Download failed: {e:?}. Initiating graceful shutdown. Retry with different bootstrap peers"
+                );
                 if let Err(shutdown_err) = self
                     .service_resources_handle
                     .overwatch_handle
@@ -299,11 +299,6 @@ where
                 {
                     error!("Failed to shutdown overwatch: {shutdown_err:?}");
                 }
-
-                error!(
-                    "Initial Block Download did not complete successfully: {e}. Common causes: unresponsive initial peers, \
-                network issues, or incorrect peer addresses. Consider retrying with different bootstrap peers."
-                );
 
                 return Err(DynError::from(format!(
                     "Initial Block Download failed: {e:?}"
