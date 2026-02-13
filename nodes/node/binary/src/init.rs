@@ -7,7 +7,7 @@ use lb_key_management_system_service::{
     backend::preload::KeyId,
     keys::{Ed25519Key, Key, ZkKey, ZkPublicKey, secured_key::SecuredKey as _},
 };
-use libp2p::Multiaddr;
+use libp2p::{Multiaddr, PeerId};
 use num_bigint::BigUint;
 use rand::rngs::OsRng;
 
@@ -146,8 +146,19 @@ fn build_user_config(
         base_config
     };
 
-    let cryptarchia_config =
-        CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues { funding_pk });
+    let cryptarchia_config = {
+        let mut base_config =
+            CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues { funding_pk });
+        base_config.network.bootstrap.ibd.peers = args
+            .initial_peers
+            .iter()
+            .filter_map(|addr| match addr.iter().last() {
+                Some(lb_libp2p::Protocol::P2p(bytes)) => PeerId::from_multihash(bytes.into()).ok(),
+                _ => None,
+            })
+            .collect();
+        base_config
+    };
 
     let time_config = TimeConfig::default();
 
@@ -198,5 +209,58 @@ fn build_user_config(
         storage: storage_config,
         kms: kms_config,
         wallet: wallet_config,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+
+    use super::*;
+
+    fn build_config_from_peers(initial_peers: Vec<Multiaddr>) -> UserConfig {
+        let args = InitArgs {
+            initial_peers,
+            output: "test_output.yaml".into(),
+            net_port: 3000,
+            blend_port: 3400,
+            http_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
+            external_address: None,
+        };
+        let network_key = lb_libp2p::ed25519::SecretKey::generate();
+        let keys = generate_keys();
+        let blend_addr = Multiaddr::from_str("/ip4/0.0.0.0/udp/3400/quic-v1").unwrap();
+        build_user_config(&args, network_key, keys, blend_addr)
+    }
+
+    #[test]
+    fn extracts_peer_ids_into_ibd_config() {
+        let peer1 = PeerId::random();
+        let peer2 = PeerId::random();
+
+        let addr_with_p2p_1: Multiaddr = format!("/ip4/1.2.3.4/udp/3000/quic-v1/p2p/{peer1}")
+            .parse()
+            .unwrap();
+        let addr_with_p2p_2: Multiaddr = format!("/ip4/5.6.7.8/udp/3000/quic-v1/p2p/{peer2}")
+            .parse()
+            .unwrap();
+        let addr_without_p2p: Multiaddr = "/ip4/9.10.11.12/udp/3000/quic-v1".parse().unwrap();
+
+        let config =
+            build_config_from_peers(vec![addr_with_p2p_1, addr_without_p2p, addr_with_p2p_2]);
+
+        let ibd_peers = &config.cryptarchia.network.bootstrap.ibd.peers;
+        assert_eq!(ibd_peers.len(), 2);
+        assert!(ibd_peers.contains(&peer1));
+        assert!(ibd_peers.contains(&peer2));
+    }
+
+    #[test]
+    fn no_peer_ids_yields_empty_ibd_config() {
+        let addr: Multiaddr = "/ip4/1.2.3.4/udp/3000/quic-v1".parse().unwrap();
+
+        let config = build_config_from_peers(vec![addr]);
+
+        assert!(config.cryptarchia.network.bootstrap.ibd.peers.is_empty());
     }
 }
