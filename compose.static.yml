@@ -23,7 +23,7 @@ services:
       - grafana
     ports:
       - "4400:4400/tcp"
-    entrypoint: /etc/logos-blockchain/scripts/run_cfgsync.sh
+    entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_server.sh
 
   logos-blockchain-node-0:
     container_name: logos_blockchain_node_0
@@ -205,5 +205,11 @@ services:
       - TOKEN_NAME=MEM
     entrypoint: [ "/usr/bin/logos-blockchain-demo-archiver" ]
 
+# Node data volume is marked as external and assumes
+# that configuration files were placed by compose.setup.yml
 volumes:
   l2-sequencer-data:
+  node-data:
+    name: logos-node-data
+    external: true
+

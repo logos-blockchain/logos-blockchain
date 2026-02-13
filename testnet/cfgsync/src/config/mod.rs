@@ -48,6 +48,11 @@ pub fn create_node_configs(
         ids.push(id_bytes);
     }
 
+    // Clippy in 1.93.0:
+    // > an unstable sort typically performs faster without any
+    // > observable difference for this data type. [stable_sort_primitive]
+    ids.sort_unstable();
+
     let (consensus_configs, faucet_note_keys, genesis_tx) =
         create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD, faucet_settings);
     let network_configs = create_network_configs(&ids, &NetworkParams::default());

@@ -11,6 +11,7 @@ use lb_node::config::TracingConfig;
 use lb_tests::nodes::create_validator_config;
 use reqwest::header::CONTENT_TYPE;
 use serde::Deserialize;
+use time::OffsetDateTime;
 use tokio::sync::oneshot::channel;
 
 use crate::{
@@ -23,6 +24,7 @@ pub struct CfgSyncConfig {
     pub port: u16,
     pub n_hosts: usize,
     pub timeout: u64,
+    pub chain_start_time: Option<OffsetDateTime>,
 
     pub faucet_settings: FaucetSettings,
     // Tracing params

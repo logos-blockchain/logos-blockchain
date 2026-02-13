@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+
+  cfgsync:
+    container_name: cfgsync
+    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    volumes:
+      - ./testnet:/etc/logos-blockchain
+    depends_on:
+      - grafana
+    ports:
+      - "4400:4400/tcp"
+    environment:
+      - CHAIN_START_TIME="2026-02-12T05:03:03.000Z"
+    entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_server.sh
+
+  client-0:
+    container_name: client_0
+    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    volumes:
+      - node-data:/node-data
+    depends_on:
+      - cfgsync
+    environment:
+      - LB_HOST_IDX=0
+      - CFG_HOST_IP=${PUBLIC_IP_ADDR}
+      - CFG_NETWORK_PORT=${NODE0_NET_PORT}
+      - CFG_BLEND_PORT=${NODE0_BLEND_PORT}
+      - CFG_API_PORT=${NODE0_API_PORT}
+    entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_client.sh
+
+  client-1:
+    container_name: client_1
+    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    volumes:
+      - node-data:/node-data
+    depends_on:
+      - cfgsync
+    environment:
+      - LB_HOST_IDX=1
+      - CFG_HOST_IP=${PUBLIC_IP_ADDR}
+      - CFG_NETWORK_PORT=${NODE1_NET_PORT}
+      - CFG_BLEND_PORT=${NODE1_BLEND_PORT}
+      - CFG_API_PORT=${NODE1_API_PORT}
+    entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_client.sh
+
+  client-2:
+    container_name: client_2
+    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    volumes:
+      - node-data:/node-data
+    depends_on:
+      - cfgsync
+    environment:
+      - LB_HOST_IDX=2
+      - CFG_HOST_IP=${PUBLIC_IP_ADDR}
+      - CFG_NETWORK_PORT=${NODE2_NET_PORT}
+      - CFG_BLEND_PORT=${NODE2_BLEND_PORT}
+      - CFG_API_PORT=${NODE2_API_PORT}
+    entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_client.sh
+
+  client-3:
+    container_name: client_3
+    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    volumes:
+      - node-data:/node-data
+    depends_on:
+      - cfgsync
+    environment:
+      - LB_HOST_IDX=3
+      - CFG_HOST_IP=${PUBLIC_IP_ADDR}
+      - CFG_NETWORK_PORT=${NODE3_NET_PORT}
+      - CFG_BLEND_PORT=${NODE3_BLEND_PORT}
+      - CFG_API_PORT=${NODE3_API_PORT}
+    entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_client.sh
+
+volumes:
+  node-data:
+    name: logos-node-data

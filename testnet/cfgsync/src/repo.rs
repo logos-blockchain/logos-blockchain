@@ -34,13 +34,10 @@ pub struct ConfigRepo {
 
 impl From<CfgSyncConfig> for Arc<ConfigRepo> {
     fn from(config: CfgSyncConfig) -> Self {
-        let faucet_settings = config.faucet_settings();
-        let tracing_settings = config.tracing_settings();
-
         ConfigRepo::new(
             config.n_hosts,
-            faucet_settings,
-            tracing_settings,
+            config.faucet_settings(),
+            config.tracing_settings(),
             Duration::from_secs(config.timeout),
         )
     }

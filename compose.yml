@@ -8,7 +8,7 @@ services:
     image: logos-blockchain:latest
     volumes:
       - ./testnet:/etc/logos-blockchain
-    entrypoint: /etc/logos-blockchain/scripts/run_cfgsync.sh
+    entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_server.sh
 
   logos-blockchain-node:
     build:
