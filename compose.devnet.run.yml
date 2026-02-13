@@ -23,8 +23,6 @@ services:
       - grafana
     ports:
       - "4400:4400/tcp"
-    environment:
-      - CHAIN_START_TIME=${CFG_CHAIN_START_TIME}
     entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_server.sh
 
   logos-blockchain-node-0:
