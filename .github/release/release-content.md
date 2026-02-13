@@ -13,7 +13,7 @@ To run the binary, you will need to create a node config.
 
 ### Config generation
 
-TODO.
+Check the [Notion page][release-notion] for info about how to connect your node to the devnet!
 
 ## Run the binary
 
@@ -32,3 +32,5 @@ Before publishing please ensure:
 - [ ] Circuits of the expected version for Mac and Linux platforms are present (need to be manually downloaded and included for now)
 - [ ] Pre-release is checked if necessary
 - [ ] Remove this checklist and address all TODOs before publishing the release.
+
+[release-notion]: https://www.notion.so/nomos-tech/Internal-Devnet-Launch-February-2026-2fe261aa09df8025ad94e380933b4cf9#2ff261aa09df8058935ecb85aa587564
