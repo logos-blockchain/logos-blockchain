@@ -594,7 +594,7 @@ mod tests {
         let mut encoded = cryptarchia_param().encode();
         encoded[8] = 0xFF; // corrupt the UTF-8 byte
         assert!(matches!(
-            CryptarchiaParameter::decode(&bad),
+            CryptarchiaParameter::decode(&encoded),
             Err(Error::InvalidCryptarchiaParameter(_))
         ));
     }
