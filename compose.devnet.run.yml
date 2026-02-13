@@ -31,7 +31,6 @@ services:
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
-      - ./tests/kzgrs/kzgrs_test_params:/kzgrs_test_params:z
     depends_on:
       - cfgsync
     environment:
@@ -53,7 +52,6 @@ services:
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
-      - ./tests/kzgrs/kzgrs_test_params:/kzgrs_test_params:z
     depends_on:
       - cfgsync
     environment:
@@ -75,7 +73,6 @@ services:
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
-      - ./tests/kzgrs/kzgrs_test_params:/kzgrs_test_params:z
     depends_on:
       - cfgsync
     environment:
@@ -97,7 +94,6 @@ services:
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
-      - ./tests/kzgrs/kzgrs_test_params:/kzgrs_test_params:z
     depends_on:
       - cfgsync
     environment:

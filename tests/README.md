@@ -118,7 +118,6 @@ To run the Cucumber tests, ensure the binaries are built (debug or release) and 
 the corresponding binaries:
 
 ```text
-LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH=/path-to/tests/logos-blockchain-kzgrs
 LOGOS_BLOCKCHAIN__NODE_BIN=/path-to/target/release/logos-blockchain-node
 ```
 
