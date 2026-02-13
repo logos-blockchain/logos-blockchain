@@ -8,6 +8,7 @@ use nom::{
     multi::count,
     number::complete::{le_u32, le_u64, u8 as decode_u8},
 };
+use time::OffsetDateTime;
 
 use crate::{
     mantle::{
@@ -354,7 +355,7 @@ fn decode_ed25519_signature(input: &[u8]) -> IResult<&[u8], Ed25519Signature> {
     .parse(input)
 }
 
-fn decode_field_element(input: &[u8]) -> IResult<&[u8], Fr> {
+pub(crate) fn decode_field_element(input: &[u8]) -> IResult<&[u8], Fr> {
     // FieldElement = 32BYTE
     map_res(take(32usize), |bytes: &[u8]| {
         fr_from_bytes(bytes).map_err(|_| "Invalid field element")
@@ -379,7 +380,16 @@ fn decode_array<const N: usize>(input: &[u8]) -> IResult<&[u8], [u8; N]> {
     .parse(input)
 }
 
-fn decode_uint64(input: &[u8]) -> IResult<&[u8], u64> {
+pub(crate) fn decode_utf8_string(input: &[u8], len: usize) -> IResult<&[u8], String> {
+    map_res(take(len), |bytes: &[u8]| {
+        std::str::from_utf8(bytes)
+            .map(ToOwned::to_owned)
+            .map_err(|_| Error::new(bytes, ErrorKind::Fail))
+    })
+    .parse(input)
+}
+
+pub(crate) fn decode_uint64(input: &[u8]) -> IResult<&[u8], u64> {
     // UINT64 = 8BYTE
     le_u64(input)
 }
@@ -394,6 +404,18 @@ fn decode_byte(input: &[u8]) -> IResult<&[u8], u8> {
     decode_u8(input)
 }
 
+pub(crate) fn decode_unix_timestamp(input: &[u8]) -> IResult<&[u8], OffsetDateTime> {
+    // Timestamp = UINT64
+    map_res(decode_uint64, |ts| {
+        OffsetDateTime::from_unix_timestamp(
+            ts.try_into()
+                .map_err(|_| Error::new(input, ErrorKind::Fail))?,
+        )
+        .map_err(|_| Error::new(input, ErrorKind::Fail))
+    })
+    .parse(input)
+}
+
 // ==============================================================================
 // Binary Encoders
 // ==============================================================================
@@ -403,7 +425,7 @@ use lb_groth16::fr_to_bytes;
 use super::ops::opcode;
 
 /// Encode primitives
-fn encode_uint64(value: u64) -> Vec<u8> {
+pub(crate) fn encode_uint64(value: u64) -> Vec<u8> {
     value.to_le_bytes().to_vec()
 }
 
@@ -415,11 +437,23 @@ fn encode_byte(value: u8) -> Vec<u8> {
     vec![value]
 }
 
+pub(crate) fn encode_string(s: &String) -> Vec<u8> {
+    s.as_bytes().to_vec()
+}
+
+pub(crate) fn encode_unix_timestamp(ts: &OffsetDateTime) -> Vec<u8> {
+    encode_uint64(
+        ts.unix_timestamp()
+            .try_into()
+            .expect("timestamp fits in u64"),
+    )
+}
+
 fn encode_hash32(hash: &[u8; 32]) -> Vec<u8> {
     hash.to_vec()
 }
 
-fn encode_field_element(fr: &Fr) -> Vec<u8> {
+pub(crate) fn encode_field_element(fr: &Fr) -> Vec<u8> {
     fr_to_bytes(fr).to_vec()
 }
 
@@ -733,29 +767,43 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_primitives() {
+    fn test_encode_decode_primitives() {
         // Test UINT64
-        let data = 42u64.to_le_bytes();
+        let data = encode_uint64(42u64);
         let (remaining, value) = decode_uint64(&data).unwrap();
         assert_eq!(value, 42u64);
         assert!(remaining.is_empty());
 
         // Test UINT32
-        let data = 123u32.to_le_bytes();
+        let data = encode_uint32(123u32);
         let (remaining, value) = decode_uint32(&data).unwrap();
         assert_eq!(value, 123u32);
         assert!(remaining.is_empty());
 
         // Test Byte
-        let data = [0xAB];
+        let data = encode_byte(0xAB);
         let (remaining, value) = decode_byte(&data).unwrap();
         assert_eq!(value, 0xAB);
         assert!(remaining.is_empty());
 
         // Test Hash32
-        let data = [0x42u8; 32];
+        let data = encode_hash32(&[0x42u8; 32]);
         let (remaining, value) = decode_hash32(&data).unwrap();
         assert_eq!(value, [0x42u8; 32]);
+        assert!(remaining.is_empty());
+
+        // Test UTF-8 String
+        let str = "hello, world!".to_owned();
+        let data = encode_string(&str);
+        let (remaining, value) = decode_utf8_string(&data, data.len()).unwrap();
+        assert_eq!(value, str);
+        assert!(remaining.is_empty());
+
+        // Test Unix Timestamp
+        let ts = OffsetDateTime::now_utc();
+        let data = encode_unix_timestamp(&ts);
+        let (remaining, value) = decode_unix_timestamp(&data).unwrap();
+        assert_eq!(value, ts.truncate_to_second());
         assert!(remaining.is_empty());
     }
 

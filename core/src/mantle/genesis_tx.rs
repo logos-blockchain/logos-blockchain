@@ -1,5 +1,6 @@
-use lb_groth16::{Fr, FrBytes, fr_from_bytes, fr_to_bytes};
+use lb_groth16::Fr;
 use lb_poseidon2::Digest;
+use nom::IResult;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -8,6 +9,10 @@ use crate::{
     crypto::ZkHasher,
     mantle::{
         MantleTx, Transaction, TransactionHasher, TxHash,
+        encoding::{
+            decode_field_element, decode_uint64, decode_unix_timestamp, decode_utf8_string,
+            encode_field_element, encode_string, encode_uint64, encode_unix_timestamp,
+        },
         gas::{Gas, GasConstants, GasCost},
         ops::{
             Op,
@@ -215,70 +220,37 @@ impl CryptarchiaParameter {
     /// All integers are little-endian. The epoch nonce is 32 raw bytes.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        let chain_id = self.chain_id.as_bytes();
-        let chain_id_len = u64::try_from(chain_id.len())
-            .expect("chain_id length fits in u64")
-            .to_le_bytes();
-        let genesis_time = u64::try_from(self.genesis_time.unix_timestamp())
-            .expect("genesis_time fits in u64")
-            .to_le_bytes();
-        let epoch_nonce = fr_to_bytes(&self.epoch_nonce);
+        let chain_id = encode_string(&self.chain_id);
+        let chain_id_len = u64::try_from(chain_id.len()).expect("chain_id length fits in u64");
 
-        let mut buf = Vec::with_capacity(
-            chain_id_len.len() + chain_id.len() + genesis_time.len() + epoch_nonce.len(),
-        );
-        buf.extend_from_slice(&chain_id_len);
-        buf.extend_from_slice(chain_id);
-        buf.extend_from_slice(&genesis_time);
-        buf.extend_from_slice(&epoch_nonce);
+        let mut buf = Vec::new();
+        buf.extend(encode_uint64(chain_id_len));
+        buf.extend(chain_id);
+        buf.extend(encode_unix_timestamp(&self.genesis_time));
+        buf.extend(encode_field_element(&self.epoch_nonce));
         buf
     }
 
     /// Decode the inscription from the ad-hoc binary format.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let chain_id_len = u64::from_le_bytes(
-            data.get(..8)
-                .ok_or_else(|| Error::InvalidCryptarchiaParameter("inscription too short".into()))?
-                .try_into()
-                .expect("8-bytes fits in u64"),
-        ) as usize;
+        Ok(Self::decode_by_nom(data)
+            .map_err(|e| Error::InvalidCryptarchiaParameter(format!("Decoding error: {e}")))?
+            .1)
+    }
 
-        let chain_id = data
-            .get(8..8 + chain_id_len)
-            .ok_or_else(|| Error::InvalidCryptarchiaParameter("inscription too short".into()))?;
-        let chain_id = String::from_utf8(chain_id.to_vec()).map_err(|e| {
-            Error::InvalidCryptarchiaParameter(format!("invalid chain_id utf8: {e}"))
-        })?;
-
-        let genesis_time_offset = 8 + chain_id_len;
-        let genesis_time = u64::from_le_bytes(
-            data.get(genesis_time_offset..genesis_time_offset + 8)
-                .ok_or_else(|| Error::InvalidCryptarchiaParameter("inscription too short".into()))?
-                .try_into()
-                .expect("8-bytes fits in u64"),
-        );
-        let genesis_time =
-            OffsetDateTime::from_unix_timestamp(genesis_time.try_into().map_err(|e| {
-                Error::InvalidCryptarchiaParameter(format!("genesis_time out of range: {e}"))
-            })?)
-            .map_err(|e| {
-                Error::InvalidCryptarchiaParameter(format!("invalid genesis_time: {e}"))
-            })?;
-
-        let nonce_offset = genesis_time_offset + 8;
-        let epoch_nonce = fr_from_bytes(
-            data.get(nonce_offset..nonce_offset + size_of::<FrBytes>())
-                .ok_or_else(|| {
-                    Error::InvalidCryptarchiaParameter("inscription too short".into())
-                })?,
-        )
-        .map_err(|e| Error::InvalidCryptarchiaParameter(format!("invalid epoch_nonce: {e}")))?;
-
-        Ok(Self {
-            chain_id,
-            genesis_time,
-            epoch_nonce,
-        })
+    fn decode_by_nom(data: &[u8]) -> IResult<&[u8], Self> {
+        let (data, chain_id_len) = decode_uint64(data)?;
+        let (data, chain_id) = decode_utf8_string(data, chain_id_len as usize)?;
+        let (data, genesis_time) = decode_unix_timestamp(data)?;
+        let (data, epoch_nonce) = decode_field_element(data)?;
+        Ok((
+            data,
+            Self {
+                chain_id,
+                genesis_time,
+                epoch_nonce,
+            },
+        ))
     }
 }
 
