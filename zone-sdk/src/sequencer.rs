@@ -32,7 +32,7 @@ pub type InscriptionId = TxHash;
 pub type InscriptionStatus = TxStatus;
 
 /// Checkpoint for stop/resume functionality.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SequencerCheckpoint {
     /// Last message ID for chain continuity.
     pub last_msg_id: MsgId,

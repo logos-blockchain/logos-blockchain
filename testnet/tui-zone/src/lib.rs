@@ -1,19 +1,10 @@
 use std::{fs, io::Write as _, path::Path};
 
 use clap::Parser;
-use lb_common_http_client::Slot;
-use lb_core::{
-    header::HeaderId,
-    mantle::{
-        SignedMantleTx,
-        ops::channel::{ChannelId, MsgId},
-        tx::TxHash,
-    },
-};
+use lb_core::mantle::ops::channel::ChannelId;
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use lb_zone_sdk::sequencer::{SequencerCheckpoint, ZoneSequencer};
 use reqwest::Url;
-use serde::{Deserialize, Serialize};
 
 #[derive(Parser, Debug)]
 #[command(about = "Terminal UI zone sequencer - publish text inscriptions")]
@@ -31,44 +22,8 @@ pub struct InscribeArgs {
     checkpoint_path: String,
 }
 
-#[derive(Serialize, Deserialize)]
-struct CheckpointFile {
-    last_msg_id: MsgId,
-    pending_txs: Vec<(TxHash, SignedMantleTx)>,
-    lib: HeaderId,
-    lib_slot: Slot,
-}
-
-impl From<SequencerCheckpoint> for CheckpointFile {
-    fn from(cp: SequencerCheckpoint) -> Self {
-        Self {
-            last_msg_id: cp.last_msg_id,
-            pending_txs: cp.pending_txs,
-            lib: cp.lib,
-            lib_slot: cp.lib_slot,
-        }
-    }
-}
-
-impl From<CheckpointFile> for SequencerCheckpoint {
-    fn from(f: CheckpointFile) -> Self {
-        Self {
-            last_msg_id: f.last_msg_id,
-            pending_txs: f.pending_txs,
-            lib: f.lib,
-            lib_slot: f.lib_slot,
-        }
-    }
-}
-
 fn save_checkpoint(path: &Path, checkpoint: &SequencerCheckpoint) {
-    let file: CheckpointFile = CheckpointFile {
-        last_msg_id: checkpoint.last_msg_id,
-        pending_txs: checkpoint.pending_txs.clone(),
-        lib: checkpoint.lib,
-        lib_slot: checkpoint.lib_slot,
-    };
-    let data = serde_json::to_vec(&file).expect("failed to serialize checkpoint");
+    let data = serde_json::to_vec(checkpoint).expect("failed to serialize checkpoint");
     fs::write(path, data).expect("failed to write checkpoint file");
 }
 
@@ -77,9 +32,7 @@ fn load_checkpoint(path: &Path) -> Option<SequencerCheckpoint> {
         return None;
     }
     let data = fs::read(path).expect("failed to read checkpoint file");
-    let file: CheckpointFile =
-        serde_json::from_slice(&data).expect("failed to deserialize checkpoint");
-    Some(file.into())
+    Some(serde_json::from_slice(&data).expect("failed to deserialize checkpoint"))
 }
 
 fn load_or_create_signing_key(path: &Path) -> Ed25519Key {

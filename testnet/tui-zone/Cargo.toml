@@ -23,13 +23,11 @@ workspace = true
 [dependencies]
 clap                             = { features = ["derive", "env", "std"], version = "4" }
 hex                              = "0.4"
-lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-zone-sdk                      = { workspace = true }
 rand                             = { workspace = true }
 reqwest                          = { workspace = true }
-serde                            = { features = ["derive"], workspace = true }
 serde_json                       = { workspace = true }
 tokio                            = { default-features = false, features = ["macros", "rt-multi-thread", "signal", "sync"], version = "1" }
 tracing-subscriber               = { features = ["env-filter"], version = "0.3" }
