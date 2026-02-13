@@ -5,6 +5,7 @@ set -e
 export CFG_FILE_PATH="/node-data/${LB_HOST_IDX}/config.yaml" \
        CFG_SERVER_ADDR="http://cfgsync:4400" \
        CFG_HOST_IDENTIFIER="validator-$CFG_API_PORT" \
+       CFG_DEPLOYMENT_PATH="/node-data/cfgsync/deployment-settings.yaml" \
        LOG_LEVEL="INFO" 
 
 echo "Starting Faucet..."
@@ -15,4 +16,4 @@ echo "Starting Faucet..."
     --drip-amount 1000 &
 
 echo "Starting Node..."
-exec /usr/bin/logos-blockchain-node $CFG_FILE_PATH
+exec /usr/bin/logos-blockchain-node --deployment $CFG_DEPLOYMENT_PATH $CFG_FILE_PATH
