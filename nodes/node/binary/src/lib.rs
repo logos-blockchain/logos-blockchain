@@ -40,7 +40,7 @@ use overwatch::{
     overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
 };
 
-pub use crate::config::{ApiArgs, LogArgs, NetworkArgs, UserConfig};
+pub use crate::config::{ApiArgs, Command, LogArgs, NetworkArgs, UserConfig};
 use crate::{
     api::backend::AxumBackend,
     config::{

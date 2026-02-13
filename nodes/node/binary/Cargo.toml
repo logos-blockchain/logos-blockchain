@@ -28,6 +28,7 @@ futures                          = { default-features = false, version = "0.3" }
 hex                              = { default-features = false, version = "0.4.3" }
 http                             = "1.3"
 lb-api-service                   = { workspace = true }
+logos-blockchain-tui-zone        = { path = "../../../testnet/tui-zone" }
 lb-blend                         = { workspace = true }
 lb-blend-service                 = { features = ["libp2p"], workspace = true }
 lb-chain-broadcast-service       = { workspace = true }

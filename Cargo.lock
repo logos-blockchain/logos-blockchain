@@ -5168,6 +5168,7 @@ dependencies = [
  "logos-blockchain-time-service 0.1.0",
  "logos-blockchain-tracing 0.1.0",
  "logos-blockchain-tracing-service 0.1.0",
+ "logos-blockchain-tui-zone",
  "logos-blockchain-tx-service 0.1.0",
  "logos-blockchain-utils 0.1.0",
  "logos-blockchain-wallet-service 0.1.0",

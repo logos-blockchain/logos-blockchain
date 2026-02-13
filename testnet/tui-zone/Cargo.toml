@@ -9,6 +9,10 @@ readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
 
+[lib]
+name = "logos_blockchain_tui_zone"
+path = "src/lib.rs"
+
 [[bin]]
 name = "tui-sequencer"
 path = "src/main.rs"

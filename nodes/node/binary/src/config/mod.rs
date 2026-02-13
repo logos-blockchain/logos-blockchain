@@ -6,9 +6,7 @@ use std::{
 };
 
 use ::tracing::{Level, warn};
-#[cfg(feature = "config-gen")]
-use clap::Subcommand;
-use clap::{Parser, ValueEnum, builder::OsStr};
+use clap::{Parser, Subcommand, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use serde::Deserialize;
@@ -50,7 +48,6 @@ mod tests;
           args_conflicts_with_subcommands = true,
           subcommand_negates_reqs = true)]
 pub struct CliArgs {
-    #[cfg(feature = "config-gen")]
     #[command(subcommand)]
     pub command: Option<Command>,
 
@@ -76,11 +73,13 @@ pub struct CliArgs {
     deployment: DeploymentArgs,
 }
 
-#[cfg(feature = "config-gen")]
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Initialize a new user config with generated keys
+    #[cfg(feature = "config-gen")]
     Init(InitArgs),
+    /// Publish text inscriptions as zone blocks
+    Inscribe(logos_blockchain_tui_zone::InscribeArgs),
 }
 
 #[cfg(feature = "config-gen")]

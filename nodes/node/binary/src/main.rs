@@ -13,9 +13,17 @@ use logos_blockchain_node::{
 async fn main() -> Result<()> {
     let cli_args = CliArgs::parse();
 
-    #[cfg(feature = "config-gen")]
-    if let Some(logos_blockchain_node::config::Command::Init(init_args)) = &cli_args.command {
-        return logos_blockchain_node::init::run(init_args);
+    if let Some(command) = cli_args.command {
+        match command {
+            #[cfg(feature = "config-gen")]
+            logos_blockchain_node::config::Command::Init(init_args) => {
+                return logos_blockchain_node::init::run(&init_args);
+            }
+            logos_blockchain_node::config::Command::Inscribe(inscribe_args) => {
+                logos_blockchain_tui_zone::run(inscribe_args).await;
+                return Ok(());
+            }
+        }
     }
 
     let is_dry_run = cli_args.dry_run();
