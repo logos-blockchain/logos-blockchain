@@ -28,7 +28,7 @@ pub struct ConfigRepo {
     waiting_hosts: Mutex<HashMap<Host, Sender<RepoResponse>>>,
     generated_user_configs: Mutex<HashMap<Host, GeneralConfig>>,
     deployment_settings: Mutex<Option<DeploymentSettings>>,
-    deployment_settings_storage_path: PathBuf,
+    pub deployment_settings_storage_path: PathBuf,
     n_hosts: usize,
     faucet_settings: FaucetSettings,
     tracing_settings: TracingConfig,

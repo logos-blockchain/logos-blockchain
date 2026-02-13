@@ -2,8 +2,9 @@ use std::{fs, path::PathBuf, sync::Arc};
 
 use axum::{
     Json, Router,
+    body::Body,
     extract::State,
-    http::StatusCode,
+    http::{Response, StatusCode},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -81,9 +82,17 @@ async fn handle_mode_error() -> (StatusCode, &'static str) {
 }
 
 async fn deployment_settings(State(repo): State<Arc<ConfigRepo>>) -> impl IntoResponse {
-    let deployment_settings = repo.deployment_settings();
-    let yaml = serde_yaml::to_string(&deployment_settings).unwrap_or_default();
-    (StatusCode::OK, [(CONTENT_TYPE, "text/yaml")], yaml).into_response()
+    match tokio::fs::read(&repo.deployment_settings_storage_path).await {
+        Ok(bytes) => Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "text/yaml")
+            .body(Body::from(bytes))
+            .unwrap(),
+        Err(e) => {
+            eprintln!("Failed to read deployment file: {e}");
+            (StatusCode::NOT_FOUND, "Deployment file not found").into_response()
+        }
+    }
 }
 
 pub fn cfgsync_app(config_repo: Arc<ConfigRepo>, mode: CfgsyncMode) -> Router {
