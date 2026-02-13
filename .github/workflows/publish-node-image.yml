@@ -6,7 +6,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: logos-blockchain-node
+  IMAGE_NAME: ${{ github.repository_owner }}/logos-blockchain-node
 
 jobs:
   push_to_registries:
