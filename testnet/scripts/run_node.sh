@@ -6,7 +6,7 @@ export CFG_FILE_PATH="/node-data/${LB_HOST_IDX}/config.yaml" \
        CFG_SERVER_ADDR="http://cfgsync:4400" \
        CFG_HOST_IDENTIFIER="validator-$CFG_API_PORT" \
        CFG_DEPLOYMENT_PATH="/node-data/cfgsync/deployment-settings.yaml" \
-       LOG_LEVEL="INFO" 
+       LOG_LEVEL="DEBUG"
 
 echo "Starting Faucet..."
 /usr/bin/logos-blockchain-faucet \
