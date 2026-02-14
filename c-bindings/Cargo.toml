@@ -14,6 +14,7 @@ lb-api-service                = { workspace = true }
 lb-chain-service              = { workspace = true }
 lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
+lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-node                       = { default-features = true, workspace = true }
 lb-wallet-service             = { workspace = true }

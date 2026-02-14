@@ -4244,6 +4244,7 @@ dependencies = [
  "logos-blockchain-chain-service 0.1.0",
  "logos-blockchain-core 0.1.0",
  "logos-blockchain-cryptarchia-engine 0.1.0",
+ "logos-blockchain-groth16 0.1.0",
  "logos-blockchain-key-management-system-keys 0.1.0",
  "logos-blockchain-node 0.1.0",
  "logos-blockchain-wallet-service 0.1.0",

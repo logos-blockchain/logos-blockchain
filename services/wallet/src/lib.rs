@@ -50,7 +50,10 @@ use overwatch::{
     services::{AsServiceId, ServiceCore, ServiceData},
 };
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::{sync::oneshot, task::JoinError};
+use tokio::{
+    sync::{oneshot, oneshot::Sender},
+    task::JoinError,
+};
 use tracing::{debug, error, info, trace};
 
 use crate::states::{RecoveryState, ServiceState, Wallet};
@@ -108,32 +111,34 @@ pub enum WalletMsg {
     GetBalance {
         tip: Option<HeaderId>,
         pk: ZkPublicKey,
-        resp_tx: oneshot::Sender<Result<TipResponse<Option<Value>>, WalletServiceError>>,
+        resp_tx: Sender<Result<TipResponse<Option<Value>>, WalletServiceError>>,
     },
     FundTx {
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
-        resp_tx: oneshot::Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
+        resp_tx: Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
     },
     SignTx {
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-        resp_tx: oneshot::Sender<Result<TipResponse<SignedMantleTx>, WalletServiceError>>,
+        resp_tx: Sender<Result<TipResponse<SignedMantleTx>, WalletServiceError>>,
     },
     GetLeaderAgedNotes {
         tip: Option<HeaderId>,
-        resp_tx: oneshot::Sender<Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError>>,
+        resp_tx: Sender<Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError>>,
     },
     GenerateNewVoucherSecret {
-        resp_tx: oneshot::Sender<VoucherCm>,
+        resp_tx: Sender<VoucherCm>,
     },
     GetClaimableVoucher {
         tip: Option<HeaderId>,
-        resp_tx: oneshot::Sender<
-            Result<TipResponse<Option<VoucherCommitmentAndNullifier>>, WalletServiceError>,
-        >,
+        resp_tx:
+            Sender<Result<TipResponse<Option<VoucherCommitmentAndNullifier>>, WalletServiceError>>,
+    },
+    GetKnownAddresses {
+        resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
     },
 }
 
@@ -166,7 +171,7 @@ impl WalletMsg {
             | Self::SignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. }
             | Self::GetClaimableVoucher { tip, .. } => *tip,
-            Self::GenerateNewVoucherSecret { .. } => None,
+            Self::GenerateNewVoucherSecret { .. } | Self::GetKnownAddresses { .. } => None,
         }
     }
 }
@@ -468,13 +473,16 @@ where
             WalletMsg::GetClaimableVoucher { tip, resp_tx } => {
                 Self::get_claimable_voucher(tip, resp_tx, state.wallet(), cryptarchia).await;
             }
+            WalletMsg::GetKnownAddresses { resp_tx } => {
+                Self::get_known_addresses(state.wallet(), resp_tx);
+            }
         }
     }
 
     async fn handle_get_balance(
         tip: Option<HeaderId>,
         pk: ZkPublicKey,
-        resp_tx: oneshot::Sender<Result<TipResponse<Option<u64>>, WalletServiceError>>,
+        resp_tx: Sender<Result<TipResponse<Option<u64>>, WalletServiceError>>,
         wallet: &Wallet,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
@@ -707,7 +715,7 @@ where
 
     async fn get_leader_aged_notes(
         tip: Option<HeaderId>,
-        resp_tx: oneshot::Sender<Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError>>,
+        resp_tx: Sender<Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError>>,
         wallet: &Wallet,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
@@ -769,7 +777,7 @@ where
         state: &mut ServiceState<'_>,
         master_key_id: KeyId,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        resp_tx: oneshot::Sender<VoucherCm>,
+        resp_tx: Sender<VoucherCm>,
     ) {
         let index = state.get_and_inc_next_new_voucher_index();
         let secret = Self::derive_voucher_from_kms(kms, master_key_id.clone(), index).await;
@@ -809,7 +817,7 @@ where
 
     async fn get_claimable_voucher(
         tip: Option<HeaderId>,
-        resp_tx: oneshot::Sender<
+        resp_tx: Sender<
             Result<TipResponse<Option<VoucherCommitmentAndNullifier>>, WalletServiceError>,
         >,
         wallet: &Wallet,
@@ -1007,11 +1015,21 @@ where
     }
 
     fn send_err<T: std::fmt::Debug>(
-        tx: oneshot::Sender<Result<T, WalletServiceError>>,
+        tx: Sender<Result<T, WalletServiceError>>,
         err: WalletServiceError,
     ) {
         if let Err(msg) = tx.send(Err(err)) {
             error!(msg = ?msg, "Wallet failed to send error response");
+        }
+    }
+
+    fn get_known_addresses(
+        wallet: &Wallet,
+        tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
+    ) {
+        let response: Vec<_> = wallet.known_keys().keys().copied().collect();
+        if let Err(e) = tx.send(Ok(response)) {
+            error!(err = ?e, "Failed to send known addresses response");
         }
     }
 }
