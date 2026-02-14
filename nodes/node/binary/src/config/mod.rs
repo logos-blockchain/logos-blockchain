@@ -86,7 +86,7 @@ pub enum Command {
 #[derive(Parser, Debug)]
 pub struct InitArgs {
     /// Trusted peers to bootstrap from (multiaddr format)
-    #[clap(long = "initial-peers", short = 'p', num_args = 1.., value_delimiter = ',', required = true)]
+    #[clap(long = "initial-peers", short = 'p', num_args = 1.., value_delimiter = ',')]
     pub initial_peers: Vec<Multiaddr>,
 
     /// Output file path for the generated config
@@ -109,6 +109,14 @@ pub struct InitArgs {
     /// traversal). Format: /ip4/<public-ip>/udp/<port>/quic-v1
     #[clap(long = "external-address")]
     pub external_address: Option<Multiaddr>,
+
+    /// Skip automatic public IP detection
+    #[clap(long = "no-public-ip-check")]
+    pub no_public_ip_check: bool,
+
+    /// Deployment configuration (well-known name or path to custom config)
+    #[clap(long = "deployment", default_value = DeploymentType::default())]
+    pub deployment: DeploymentType,
 }
 
 impl CliArgs {

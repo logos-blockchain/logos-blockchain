@@ -1,24 +1,31 @@
 use core::str::FromStr as _;
 use std::collections::HashMap;
+use std::io::Write as _;
+use std::net::Ipv4Addr;
+use std::time::Duration;
 
 use color_eyre::eyre::{Result, eyre};
+use futures::StreamExt as _;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::{
     backend::preload::KeyId,
     keys::{Ed25519Key, Key, ZkKey, ZkPublicKey, secured_key::SecuredKey as _},
 };
-use libp2p::{Multiaddr, PeerId};
+use libp2p::{Multiaddr, PeerId, autonat, identify, swarm::SwarmEvent};
 use num_bigint::BigUint;
 use rand::rngs::OsRng;
 
 use crate::{
     UserConfig,
     config::{
-        ApiConfig, InitArgs, KmsConfig, SdpConfig, StorageConfig, TracingConfig, WalletConfig,
+        ApiConfig, DeploymentType, InitArgs, KmsConfig, OnUnknownKeys, SdpConfig, StorageConfig,
+        TracingConfig, WalletConfig,
         blend::serde::{Config as BlendConfig, RequiredValues as BlendConfigRequiredValues},
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaConfigRequiredValues,
         },
+        deployment::DeploymentSettings,
+        deserialize_config_at_path,
         mempool::serde::Config as MempoolConfig,
         network::serde::{Config as NetworkConfig, nat},
         sdp::serde::RequiredValues as SdpRequiredValues,
@@ -84,7 +91,130 @@ fn generate_keys() -> GeneratedKeys {
     }
 }
 
-pub fn run(args: &InitArgs) -> Result<()> {
+fn load_deployment(deployment_type: &DeploymentType) -> Result<DeploymentSettings> {
+    match deployment_type {
+        DeploymentType::WellKnown(well_known) => Ok((*well_known).into()),
+        DeploymentType::Custom(path) => deserialize_config_at_path(path, OnUnknownKeys::Warn)
+            .map_err(|e| eyre!("Failed to load deployment config: {e}")),
+    }
+}
+
+/// Detect and verify this node's public IPv4 address by connecting to an
+/// initial peer. Uses Identify to discover the observed address, then AutoNAT
+/// v2 to verify the address is actually reachable from the outside.
+#[derive(libp2p::swarm::NetworkBehaviour)]
+struct InitBehaviour {
+    identify: identify::Behaviour,
+    autonat: autonat::v2::client::Behaviour<OsRng>,
+}
+
+async fn detect_and_verify_public_ip(
+    initial_peers: &[Multiaddr],
+    identify_protocol_name: &str,
+    listen_port: u16,
+) -> Option<Ipv4Addr> {
+    let keypair = libp2p::identity::Keypair::generate_ed25519();
+
+    let autonat_config = autonat::v2::client::Config::default()
+        .with_probe_interval(Duration::from_millis(100));
+
+    let mut swarm = libp2p::SwarmBuilder::with_existing_identity(keypair)
+        .with_tokio()
+        .with_quic()
+        .with_behaviour(|keypair| InitBehaviour {
+            identify: identify::Behaviour::new(identify::Config::new(
+                identify_protocol_name.to_string(),
+                keypair.public(),
+            )),
+            autonat: autonat::v2::client::Behaviour::new(OsRng, autonat_config),
+        })
+        .expect("infallible behaviour construction")
+        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(30)))
+        .build();
+
+    let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/udp/{listen_port}/quic-v1")
+        .parse()
+        .unwrap();
+    swarm.listen_on(listen_addr).ok()?;
+
+    for peer in initial_peers {
+        drop(swarm.dial(peer.clone()));
+    }
+
+    let mut observed_ip: Option<Ipv4Addr> = None;
+    let timeout = tokio::time::sleep(Duration::from_secs(30));
+    tokio::pin!(timeout);
+
+    loop {
+        tokio::select! {
+            event = swarm.select_next_some() => {
+                match event {
+                    SwarmEvent::Behaviour(InitBehaviourEvent::Identify(
+                        identify::Event::Received { info, .. },
+                    )) => {
+                        if observed_ip.is_none() {
+                            for protocol in info.observed_addr.iter() {
+                                if let libp2p::multiaddr::Protocol::Ip4(ip) = protocol {
+                                    if !ip.is_loopback() && !ip.is_private() && !ip.is_unspecified() && !ip.is_link_local() {
+                                        println!("Peer reports our public IP as: {ip}");
+                                        println!("Verifying reachability via AutoNAT...");
+                                        observed_ip = Some(ip);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    SwarmEvent::Behaviour(InitBehaviourEvent::Autonat(
+                        autonat::v2::client::Event {
+                            tested_addr,
+                            result,
+                            ..
+                        },
+                    )) => {
+                        if let Some(ip) = observed_ip {
+                            let expected_prefix = format!("/ip4/{ip}");
+                            if tested_addr.to_string().starts_with(&expected_prefix) {
+                                if result.is_ok() {
+                                    println!("AutoNAT confirmed: {ip} is publicly reachable.");
+                                    return Some(ip);
+                                }
+                                println!("AutoNAT check failed: {ip} is NOT publicly reachable.");
+                                return None;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ = &mut timeout => {
+                if observed_ip.is_some() {
+                    println!("AutoNAT verification timed out.");
+                }
+                return None;
+            }
+        }
+    }
+}
+
+fn prompt_yes_no(message: &str) -> bool {
+    print!("{message} [Y/n]: ");
+    std::io::stdout().flush().ok();
+    let mut input = String::new();
+    if std::io::stdin().read_line(&mut input).is_err() {
+        return false;
+    }
+    let input = input.trim().to_lowercase();
+    input.is_empty() || input == "y" || input == "yes"
+}
+
+pub async fn run(args: &InitArgs) -> Result<()> {
+    if args.initial_peers.is_empty() {
+        eprintln!("Warning: No initial peers provided. This node will start as a genesis node.");
+    }
+
+    let deployment = load_deployment(&args.deployment)?;
+
     let network_key = lb_libp2p::ed25519::SecretKey::generate();
     let keys = generate_keys();
 
@@ -92,7 +222,50 @@ pub fn run(args: &InitArgs) -> Result<()> {
         Multiaddr::from_str(&format!("/ip4/0.0.0.0/udp/{}/quic-v1", args.blend_port))
             .map_err(|e| eyre!("Invalid blend listening address: {e}"))?;
 
-    let user_config = build_user_config(args, network_key, keys, blend_listening_address);
+    let detected_address = if args.external_address.is_some() || args.no_public_ip_check {
+        None
+    } else if !args.initial_peers.is_empty() {
+        let identify_protocol_name = deployment.network.identify_protocol_name.to_string();
+        println!("Querying peers for observed address...");
+        match detect_and_verify_public_ip(
+            &args.initial_peers,
+            &identify_protocol_name,
+            args.net_port,
+        )
+        .await
+        {
+            Some(ip) => {
+                let addr_str = format!("/ip4/{ip}/udp/{}/quic-v1", args.net_port);
+                if prompt_yes_no(&format!("Use {addr_str} as external address?")) {
+                    Some(
+                        Multiaddr::from_str(&addr_str)
+                            .map_err(|e| eyre!("Failed to construct external address: {e}"))?,
+                    )
+                } else {
+                    println!("Skipping. NAT traversal will be used.");
+                    None
+                }
+            }
+            None => {
+                eprintln!(
+                    "Warning: Could not detect or verify a public IP from peers. \
+                     Falling back to NAT traversal. If this node has a public IP, \
+                     consider using --external-address."
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let user_config = build_user_config(
+        args,
+        network_key,
+        keys,
+        blend_listening_address,
+        detected_address,
+    );
 
     let yaml = serde_yaml::to_string(&user_config)?;
     std::fs::write(&args.output, &yaml)?;
@@ -106,6 +279,7 @@ fn build_user_config(
     network_key: lb_libp2p::ed25519::SecretKey,
     keys: GeneratedKeys,
     blend_listening_address: Multiaddr,
+    detected_address: Option<Multiaddr>,
 ) -> UserConfig {
     let GeneratedKeys {
         blend_signing_key,
@@ -128,12 +302,13 @@ fn build_user_config(
             .backend
             .initial_peers
             .clone_from(&args.initial_peers);
-        base_config.backend.swarm.nat =
-            args.external_address
-                .as_ref()
-                .map_or_else(nat::Config::default, |addr| nat::Config::Static {
-                    external_address: addr.clone(),
-                });
+        let static_addr = args.external_address.clone().or(detected_address);
+        base_config.backend.swarm.nat = match static_addr {
+            Some(addr) => nat::Config::Static {
+                external_address: addr,
+            },
+            None => nat::Config::default(),
+        };
         base_config
     };
 
@@ -226,11 +401,13 @@ mod tests {
             blend_port: 3400,
             http_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
             external_address: None,
+            no_public_ip_check: false,
+            deployment: DeploymentType::default(),
         };
         let network_key = lb_libp2p::ed25519::SecretKey::generate();
         let keys = generate_keys();
         let blend_addr = Multiaddr::from_str("/ip4/0.0.0.0/udp/3400/quic-v1").unwrap();
-        build_user_config(&args, network_key, keys, blend_addr)
+        build_user_config(&args, network_key, keys, blend_addr, None)
     }
 
     #[test]
