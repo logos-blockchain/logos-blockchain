@@ -111,8 +111,7 @@ struct InitBehaviour {
 async fn detect_and_verify_public_ip(
     initial_peers: &[Multiaddr],
     identify_protocol_name: &str,
-    listen_port: u16,
-) -> Option<Ipv4Addr> {
+) -> Result<Option<Ipv4Addr>> {
     let keypair = libp2p::identity::Keypair::generate_ed25519();
 
     let autonat_config = autonat::v2::client::Config::default()
@@ -132,13 +131,14 @@ async fn detect_and_verify_public_ip(
         .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(30)))
         .build();
 
-    let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/udp/{listen_port}/quic-v1")
-        .parse()
-        .unwrap();
-    swarm.listen_on(listen_addr).ok()?;
+    swarm
+        .listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse().unwrap())
+        .map_err(|e| eyre!("Failed to start listener for public IP detection: {e}"))?;
 
     for peer in initial_peers {
-        drop(swarm.dial(peer.clone()));
+        swarm
+            .dial(peer.clone())
+            .map_err(|e| eyre!("Failed to dial peer {peer}: {e}"))?;
     }
 
     let mut observed_ip: Option<Ipv4Addr> = None;
@@ -177,10 +177,10 @@ async fn detect_and_verify_public_ip(
                             if tested_addr.to_string().starts_with(&expected_prefix) {
                                 if result.is_ok() {
                                     println!("AutoNAT confirmed: {ip} is publicly reachable.");
-                                    return Some(ip);
+                                    return Ok(Some(ip));
                                 }
                                 println!("AutoNAT check failed: {ip} is NOT publicly reachable.");
-                                return None;
+                                return Ok(None);
                             }
                         }
                     }
@@ -191,7 +191,7 @@ async fn detect_and_verify_public_ip(
                 if observed_ip.is_some() {
                     println!("AutoNAT verification timed out.");
                 }
-                return None;
+                return Ok(None);
             }
         }
     }
@@ -227,12 +227,7 @@ pub async fn run(args: &InitArgs) -> Result<()> {
     } else if !args.initial_peers.is_empty() {
         let identify_protocol_name = deployment.network.identify_protocol_name.to_string();
         println!("Querying peers for observed address...");
-        match detect_and_verify_public_ip(
-            &args.initial_peers,
-            &identify_protocol_name,
-            args.net_port,
-        )
-        .await
+        match detect_and_verify_public_ip(&args.initial_peers, &identify_protocol_name).await?
         {
             Some(ip) => {
                 let addr_str = format!("/ip4/{ip}/udp/{}/quic-v1", args.net_port);
