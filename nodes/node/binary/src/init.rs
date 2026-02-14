@@ -1,8 +1,5 @@
 use core::str::FromStr as _;
-use std::collections::HashMap;
-use std::io::Write as _;
-use std::net::Ipv4Addr;
-use std::time::Duration;
+use std::{collections::HashMap, net::Ipv4Addr, time::Duration};
 
 use color_eyre::eyre::{Result, eyre};
 use futures::StreamExt as _;
@@ -100,7 +97,7 @@ fn load_deployment(deployment_type: &DeploymentType) -> Result<DeploymentSetting
 }
 
 /// Detect and verify this node's public IPv4 address by connecting to an
-/// initial peer. Uses Identify to discover the observed address, then AutoNAT
+/// initial peer. Uses Identify to discover the observed address, then `AutoNAT`
 /// v2 to verify the address is actually reachable from the outside.
 #[derive(libp2p::swarm::NetworkBehaviour)]
 struct InitBehaviour {
@@ -114,15 +111,15 @@ async fn detect_and_verify_public_ip(
 ) -> Result<Option<Ipv4Addr>> {
     let keypair = libp2p::identity::Keypair::generate_ed25519();
 
-    let autonat_config = autonat::v2::client::Config::default()
-        .with_probe_interval(Duration::from_millis(100));
+    let autonat_config =
+        autonat::v2::client::Config::default().with_probe_interval(Duration::from_millis(100));
 
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
         .with_quic()
         .with_behaviour(|keypair| InitBehaviour {
             identify: identify::Behaviour::new(identify::Config::new(
-                identify_protocol_name.to_string(),
+                identify_protocol_name.to_owned(),
                 keypair.public(),
             )),
             autonat: autonat::v2::client::Behaviour::new(OsRng, autonat_config),
@@ -153,14 +150,12 @@ async fn detect_and_verify_public_ip(
                         identify::Event::Received { info, .. },
                     )) => {
                         if observed_ip.is_none() {
-                            for protocol in info.observed_addr.iter() {
-                                if let libp2p::multiaddr::Protocol::Ip4(ip) = protocol {
-                                    if !ip.is_loopback() && !ip.is_private() && !ip.is_unspecified() && !ip.is_link_local() {
-                                        println!("Peer reports our public IP as: {ip}");
-                                        println!("Verifying reachability via AutoNAT...");
-                                        observed_ip = Some(ip);
-                                        break;
-                                    }
+                            for protocol in &info.observed_addr {
+                                if let libp2p::multiaddr::Protocol::Ip4(ip) = protocol
+                                    && !ip.is_loopback() && !ip.is_private() && !ip.is_unspecified() && !ip.is_link_local()
+                                {
+                                    observed_ip = Some(ip);
+                                    break;
                                 }
                             }
                         }
@@ -175,37 +170,18 @@ async fn detect_and_verify_public_ip(
                         if let Some(ip) = observed_ip {
                             let expected_prefix = format!("/ip4/{ip}");
                             if tested_addr.to_string().starts_with(&expected_prefix) {
-                                if result.is_ok() {
-                                    println!("AutoNAT confirmed: {ip} is publicly reachable.");
-                                    return Ok(Some(ip));
-                                }
-                                println!("AutoNAT check failed: {ip} is NOT publicly reachable.");
-                                return Ok(None);
+                                return Ok(result.is_ok().then_some(ip));
                             }
                         }
                     }
                     _ => {}
                 }
             }
-            _ = &mut timeout => {
-                if observed_ip.is_some() {
-                    println!("AutoNAT verification timed out.");
-                }
+            () = &mut timeout => {
                 return Ok(None);
             }
         }
     }
-}
-
-fn prompt_yes_no(message: &str) -> bool {
-    print!("{message} [Y/n]: ");
-    std::io::stdout().flush().ok();
-    let mut input = String::new();
-    if std::io::stdin().read_line(&mut input).is_err() {
-        return false;
-    }
-    let input = input.trim().to_lowercase();
-    input.is_empty() || input == "y" || input == "yes"
 }
 
 pub async fn run(args: &InitArgs) -> Result<()> {
@@ -226,29 +202,20 @@ pub async fn run(args: &InitArgs) -> Result<()> {
         None
     } else if !args.initial_peers.is_empty() {
         let identify_protocol_name = deployment.network.identify_protocol_name.to_string();
-        println!("Querying peers for observed address...");
-        match detect_and_verify_public_ip(&args.initial_peers, &identify_protocol_name).await?
+        if let Some(ip) =
+            detect_and_verify_public_ip(&args.initial_peers, &identify_protocol_name).await?
         {
-            Some(ip) => {
-                let addr_str = format!("/ip4/{ip}/udp/{}/quic-v1", args.net_port);
-                if prompt_yes_no(&format!("Use {addr_str} as external address?")) {
-                    Some(
-                        Multiaddr::from_str(&addr_str)
-                            .map_err(|e| eyre!("Failed to construct external address: {e}"))?,
-                    )
-                } else {
-                    println!("Skipping. NAT traversal will be used.");
-                    None
-                }
-            }
-            None => {
-                eprintln!(
-                    "Warning: Could not detect or verify a public IP from peers. \
-                     Falling back to NAT traversal. If this node has a public IP, \
-                     consider using --external-address."
-                );
-                None
-            }
+            let addr_str = format!("/ip4/{ip}/udp/{}/quic-v1", args.net_port);
+            let addr = Multiaddr::from_str(&addr_str)
+                .map_err(|e| eyre!("Failed to construct external address: {e}"))?;
+            println!("Detected external address via AutoNAT: {addr}");
+            Some(addr)
+        } else {
+            eprintln!(
+                "Warning: Could not detect external address via AutoNAT, \
+                 falling back to NAT traversal."
+            );
+            None
         }
     } else {
         None
@@ -298,12 +265,10 @@ fn build_user_config(
             .initial_peers
             .clone_from(&args.initial_peers);
         let static_addr = args.external_address.clone().or(detected_address);
-        base_config.backend.swarm.nat = match static_addr {
-            Some(addr) => nat::Config::Static {
+        base_config.backend.swarm.nat =
+            static_addr.map_or_else(nat::Config::default, |addr| nat::Config::Static {
                 external_address: addr,
-            },
-            None => nat::Config::default(),
-        };
+            });
         base_config
     };
 
