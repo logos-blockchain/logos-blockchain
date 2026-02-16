@@ -995,6 +995,8 @@ mod tests {
                 lib,
                 Config::new(NonZero::new(1).unwrap(), 1.0),
                 lb_cryptarchia_engine::State::Bootstrapping,
+                0.into(),
+                0,
             )
         }
     }

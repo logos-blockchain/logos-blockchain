@@ -217,12 +217,16 @@ impl Cryptarchia {
         genesis_id: HeaderId,
         ledger_config: lb_ledger::Config,
         state: lb_cryptarchia_engine::State,
+        lib_slot: Slot,
+        lib_length: u64,
     ) -> Self {
         Self {
             consensus: <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib_id,
                 ledger_config.consensus_config,
                 state,
+                lib_slot,
+                lib_length,
             ),
             ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, ledger_config),
             genesis_id,
@@ -1094,6 +1098,8 @@ where
             genesis_id,
             ledger_config,
             state,
+            self.state.lib_block_slot,
+            self.state.lib_block_length,
         );
 
         // We reapply blocks here instead of saving ledger states to correcly make use

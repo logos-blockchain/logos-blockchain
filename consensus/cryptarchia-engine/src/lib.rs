@@ -200,15 +200,15 @@ impl<Id> Branches<Id>
 where
     Id: Eq + Hash + Copy,
 {
-    pub fn from_lib(lib: Id) -> Self {
+    pub fn from_lib(lib: Id, slot: Slot, length: u64) -> Self {
         let mut branches = HashMap::new();
         branches.insert(
             lib,
             Branch {
                 id: lib,
                 parent: lib,
-                slot: 0.into(),
-                length: 0,
+                slot,
+                length,
             },
         );
         let tips = HashSet::from([lib]);
@@ -360,14 +360,14 @@ impl<Id> Cryptarchia<Id>
 where
     Id: Eq + Hash + Copy + Debug,
 {
-    pub fn from_lib(id: Id, config: Config, state: State) -> Self {
+    pub fn from_lib(id: Id, config: Config, state: State, slot: Slot, length: u64) -> Self {
         Self {
-            branches: Branches::from_lib(id),
+            branches: Branches::from_lib(id, slot, length),
             local_chain: Branch {
                 id,
-                length: 0,
+                length,
                 parent: id,
-                slot: 0.into(),
+                slot,
             },
             config,
             state,
@@ -725,8 +725,13 @@ pub mod tests {
     /// index, so for a chain of length 10, the sequence of block IDs will be
     /// `[0, hash(1), hash(2), ..., hash(9)]`.
     fn create_canonical_chain(length: NonZero<u64>, c: Option<Config>) -> Cryptarchia<[u8; 32]> {
-        let mut engine =
-            Cryptarchia::from_lib(hash(&0u64), c.unwrap_or_else(config), State::Bootstrapping);
+        let mut engine = Cryptarchia::from_lib(
+            hash(&0u64),
+            c.unwrap_or_else(config),
+            State::Bootstrapping,
+            0.into(),
+            0,
+        );
         let mut parent = engine.lib();
         for i in 1..length.get() {
             let new_block = hash(&i);
@@ -752,7 +757,7 @@ pub mod tests {
         // parent
         // └── child
 
-        let mut branches = super::Branches::from_lib(hash(&0u64));
+        let mut branches = super::Branches::from_lib(hash(&0u64), 0.into(), 0);
         let parent = hash(&1u64);
         let child = hash(&2u64);
 
@@ -924,7 +929,8 @@ pub mod tests {
 
     #[test]
     fn test_getters() {
-        let engine = <Cryptarchia<_>>::from_lib(hash(&0u64), config(), State::Bootstrapping);
+        let engine =
+            <Cryptarchia<_>>::from_lib(hash(&0u64), config(), State::Bootstrapping, 0.into(), 0);
         let id_0 = engine.lib();
 
         // Get branch directly from HashMap
