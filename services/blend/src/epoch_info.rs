@@ -6,6 +6,7 @@ use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInput
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::crypto::ZkHash;
 use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_groth16::Fr;
 use lb_ledger::EpochState;
 use lb_time_service::SlotTick;
 use overwatch::overwatch::OverwatchHandle;
@@ -59,22 +60,25 @@ where
 pub struct LeaderInputsMinusQuota {
     pub pol_ledger_aged: ZkHash,
     pub pol_epoch_nonce: ZkHash,
-    pub total_stake: u64,
+    pub lottery_0: Fr,
+    pub lottery_1: Fr,
 }
 
 impl From<EpochState> for LeaderInputsMinusQuota {
     fn from(
         EpochState {
             nonce,
-            total_stake,
             utxos,
+            lottery_0,
+            lottery_1,
             ..
         }: EpochState,
     ) -> Self {
         Self {
             pol_epoch_nonce: nonce,
             pol_ledger_aged: utxos.root(),
-            total_stake,
+            lottery_0,
+            lottery_1,
         }
     }
 }

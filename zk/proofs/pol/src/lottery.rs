@@ -1,10 +1,10 @@
-use std::sync::{LazyLock, OnceLock};
+use std::sync::LazyLock;
 
 use astro_float::{BigFloat, Consts, Radix, RoundingMode, Sign};
+use lb_groth16::Fr;
 use lb_utils::math::NonNegativeRatio;
 use num_bigint::BigUint;
 use num_traits::{CheckedSub as _, Num as _};
-use tracing::info;
 
 /// The BN254 scalar field order,
 ///
@@ -16,34 +16,6 @@ pub static P: LazyLock<BigUint> = LazyLock::new(|| {
     )
     .expect("P constant should parse")
 });
-
-static LOTTERY_CONSTANTS: OnceLock<LotteryConstants> = OnceLock::new();
-
-/// Initializes the lottery constants with the given slot activation
-/// coefficient. This must be called exactly once before using
-/// [`lottery_constants`].
-///
-/// # Panics
-/// Panics if called more than once.
-pub fn init_lottery_constants(slot_activation_coeff: NonNegativeRatio) {
-    info!(
-        "Initializing lottery constants with slot activation coefficient: {slot_activation_coeff:?}"
-    );
-    LOTTERY_CONSTANTS
-        .set(LotteryConstants::new(slot_activation_coeff))
-        .expect("Lottery constants can only be initialized once");
-}
-
-/// Returns a reference to the initialized [`LotteryConstants`].
-/// [`init_lottery_constants`] must be called before using this function.
-///
-/// # Panics
-/// Panics if the lottery constants have not been initialized yet.
-pub fn lottery_constants() -> &'static LotteryConstants {
-    LOTTERY_CONSTANTS
-        .get()
-        .expect("Lottery constants must be initialized before use")
-}
 
 /// Lottery approximation constants used for computing t₀ and t₁.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -156,35 +128,20 @@ impl LotteryConstants {
     }
 
     /// Computes the lottery values t₀ and t₁ for a given total stake.
-    pub fn compute_lottery_values(&self, total_stake: u64) -> (BigUint, BigUint) {
+    pub fn compute_lottery_values(&self, total_stake: u64) -> (Fr, Fr) {
         let total_stake = BigUint::from(total_stake);
 
         let lottery_0 = &self.t0_constant / &total_stake;
         let lottery_1 = P
             .checked_sub(&(&self.t1_constant / &total_stake.pow(2)))
             .expect("(T1 / (S^2)) must be less than P");
-        (lottery_0, lottery_1)
+        (lottery_0.into(), lottery_1.into())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn init_get_lottery_constants() {
-        init_lottery_constants(NonNegativeRatio::new(1, 20.try_into().unwrap()));
-        let constants = lottery_constants();
-
-        // expect panic if the init is called again
-        let result = std::panic::catch_unwind(|| {
-            init_lottery_constants(NonNegativeRatio::new(1, 100.try_into().unwrap()));
-        });
-        assert!(result.is_err());
-
-        // get the constants again and verify they are the same
-        assert_eq!(lottery_constants(), constants);
-    }
 
     #[test]
     fn test_compute_lottery_constants() {
@@ -236,7 +193,8 @@ mod tests {
                 "6b83fe55f9383508b9bbe2d335e8e78d9c133ce0554b4f251b0ca3b6be8c",
                 16,
             )
-            .unwrap(),
+            .unwrap()
+            .into(),
         );
         assert_eq!(
             lottery_1,
@@ -244,7 +202,8 @@ mod tests {
                 "30644e7269c19af80558c2b75767747a6fa9f2beb0e87df2e51121184e5e6c17",
                 16,
             )
-            .unwrap(),
+            .unwrap()
+            .into(),
         );
     }
 

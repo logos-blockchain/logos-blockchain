@@ -13,7 +13,7 @@ use lb_blend_message::{
 use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
 use lb_blend_scheduling::membership::{Membership, Node};
 use lb_core::{crypto::ZkHash, sdp::SessionNumber};
-use lb_groth16::Field as _;
+use lb_groth16::{Field as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_libp2p::{NetworkBehaviour, SwarmEvent};
 use libp2p::{
@@ -182,7 +182,8 @@ pub fn default_poq_verification_inputs_for_session(
             pol_ledger_aged: ZkHash::ZERO,
             pol_epoch_nonce: ZkHash::ZERO,
             message_quota: 0,
-            total_stake: 0,
+            lottery_0: Fr::ZERO,
+            lottery_1: Fr::ZERO,
         },
     }
 }

@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use crate::{
     PolChainInputsData, PolWalletInputsData,
     chain_inputs::{PolChainInputs, PolChainInputsJson},
-    lottery_constants,
     wallet_inputs::{PolWalletInputs, PolWalletInputsJson},
 };
 
@@ -140,22 +139,23 @@ impl PolVerifierInput {
     }
 
     #[must_use]
+    #[expect(clippy::too_many_arguments, reason = "all needed")]
     pub fn new(
         entropy_contribution: Fr,
         slot_number: u64,
         epoch_nonce: Fr,
         aged_root: Fr,
         latest_root: Fr,
-        total_stake: u64,
+        lottery_0: Fr,
+        lottery_1: Fr,
         leader_pk: (Fr, Fr),
     ) -> Self {
-        let (lottery_0, lottery_1) = lottery_constants().compute_lottery_values(total_stake);
         Self {
             entropy_contribution: entropy_contribution.into(),
             slot_number: Fr::from(slot_number).into(),
             epoch_nonce: epoch_nonce.into(),
-            lottery_0: Fr::from(lottery_0).into(),
-            lottery_1: Fr::from(lottery_1).into(),
+            lottery_0: lottery_0.into(),
+            lottery_1: lottery_1.into(),
             aged_root: aged_root.into(),
             latest_root: latest_root.into(),
             leader_pk1: leader_pk.0.into(),

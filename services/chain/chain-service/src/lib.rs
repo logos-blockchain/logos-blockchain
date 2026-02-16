@@ -221,7 +221,7 @@ impl Cryptarchia {
         Self {
             consensus: <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib_id,
-                ledger_config.consensus_config,
+                ledger_config.consensus_config.clone(),
                 state,
             ),
             ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, ledger_config),

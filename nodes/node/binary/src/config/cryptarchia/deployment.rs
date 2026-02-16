@@ -36,7 +36,7 @@ pub struct EpochConfig {
 
 impl Settings {
     #[must_use]
-    pub const fn consensus_config(&self) -> ConsensusConfig {
+    pub fn consensus_config(&self) -> ConsensusConfig {
         ConsensusConfig::new(self.security_param, self.slot_activation_coeff)
     }
 }

@@ -1,9 +1,10 @@
 use std::num::NonZero;
 
+use lb_pol::LotteryConstants;
 use lb_utils::math::NonNegativeRatio;
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
     /// The `k` parameter in the Common Prefix property.
     /// Blocks deeper than k are generally considered stable and forks deeper
@@ -12,17 +13,40 @@ pub struct Config {
     security_param: NonZero<u32>,
     /// `f`, the rate of occupied slots
     slot_activation_coeff: NonNegativeRatio,
+    /// Lottery approximation constants computed from `slot_activation_coeff`
+    #[cfg_attr(feature = "serde", serde(skip))]
+    lottery_constants: LotteryConstants,
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Config {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct RawConfig {
+            security_param: NonZero<u32>,
+            slot_activation_coeff: NonNegativeRatio,
+        }
+
+        let raw = RawConfig::deserialize(deserializer)?;
+
+        Ok(Self {
+            security_param: raw.security_param,
+            slot_activation_coeff: raw.slot_activation_coeff,
+            lottery_constants: LotteryConstants::new(raw.slot_activation_coeff),
+        })
+    }
 }
 
 impl Config {
     #[must_use]
-    pub const fn new(
-        security_param: NonZero<u32>,
-        slot_activation_coeff: NonNegativeRatio,
-    ) -> Self {
+    pub fn new(security_param: NonZero<u32>, slot_activation_coeff: NonNegativeRatio) -> Self {
         Self {
             security_param,
             slot_activation_coeff,
+            lottery_constants: LotteryConstants::new(slot_activation_coeff),
         }
     }
 
@@ -34,6 +58,11 @@ impl Config {
     #[must_use]
     pub const fn slot_activation_coeff(&self) -> NonNegativeRatio {
         self.slot_activation_coeff
+    }
+
+    #[must_use]
+    pub const fn lottery_constants(&self) -> &LotteryConstants {
+        &self.lottery_constants
     }
 
     #[must_use]

@@ -241,6 +241,7 @@ mod tests {
         scheduling::message_blend::crypto::SessionCryptographicProcessorSettings,
     };
     use lb_core::crypto::ZkHash;
+    use lb_groth16::Fr;
     use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 
     use crate::{
@@ -264,7 +265,8 @@ mod tests {
                 pol_ledger_aged: ZkHash::ZERO,
                 pol_epoch_nonce: ZkHash::ZERO,
                 message_quota: 1,
-                total_stake: 1,
+                lottery_0: Fr::ZERO,
+                lottery_1: Fr::ZERO,
             },
         }
     }

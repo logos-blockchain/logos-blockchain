@@ -564,7 +564,6 @@ mod tests {
     use lb_cryptarchia_engine::Config;
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
-    use lb_pol::init_lottery_constants;
     use lb_storage_service::{
         StorageService,
         backends::rocksdb::{RocksBackend, RocksBackendSettings},
@@ -611,9 +610,7 @@ mod tests {
         let mut env = TestEnv::new().await;
 
         let storage_blocks = env.create_storage_only_blocks(5).await;
-        let engine_blocks = env
-            .create_engine_only_blocks(3, env.slot_activation_coeff)
-            .await;
+        let engine_blocks = env.create_engine_only_blocks(3).await;
 
         let known_blocks = HashSet::from([storage_blocks[2]]);
         let target_block = engine_blocks[1];
@@ -694,26 +691,24 @@ mod tests {
         service: overwatch::overwatch::Overwatch<RuntimeServiceId>,
         storage_relay: StorageRelay<RocksBackend>,
         cryptarchia: lb_cryptarchia_engine::Cryptarchia<HeaderId>,
-        slot_activation_coeff: NonNegativeRatio,
         proof: lb_core::proofs::leader_proof::Groth16LeaderProof,
         provider: BlockProvider<RocksBackend, SignedMantleTx>,
     }
 
     impl TestEnv {
         async fn new() -> Self {
-            let slot_activation_coeff = NonNegativeRatio::new(99, 100.try_into().unwrap());
-            init_lottery_constants(slot_activation_coeff);
-
             let (service, storage_relay) = Self::setup_storage().await;
-            let cryptarchia = Self::new_cryptarchia(HeaderId::from([0; 32]), slot_activation_coeff);
-            let proof = Self::make_test_proof();
+            let cryptarchia = Self::new_cryptarchia(
+                HeaderId::from([0; 32]),
+                NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            );
+            let proof = Self::make_test_proof(&cryptarchia);
             let provider = BlockProvider::new(storage_relay.clone());
 
             Self {
                 service,
                 storage_relay,
                 cryptarchia,
-                slot_activation_coeff,
                 proof,
                 provider,
             }
@@ -798,17 +793,16 @@ mod tests {
             ids
         }
 
-        async fn create_engine_only_blocks(
-            &mut self,
-            count: usize,
-            slot_activation_coeff: NonNegativeRatio,
-        ) -> Vec<HeaderId> {
+        async fn create_engine_only_blocks(&mut self, count: usize) -> Vec<HeaderId> {
             let blocks = self.create_block_sequence(count, 100);
             let mut ids = Vec::new();
 
             for (i, (block, header_id, prev_header, slot)) in blocks.iter().enumerate() {
                 if i == 0 {
-                    self.cryptarchia = Self::new_cryptarchia(*header_id, slot_activation_coeff);
+                    self.cryptarchia = Self::new_cryptarchia(
+                        *header_id,
+                        self.cryptarchia.config().slot_activation_coeff(),
+                    );
                 }
 
                 if i > 0 {
@@ -959,7 +953,9 @@ mod tests {
             );
         }
 
-        fn make_test_proof() -> lb_core::proofs::leader_proof::Groth16LeaderProof {
+        fn make_test_proof(
+            cryptarchia: &lb_cryptarchia_engine::Cryptarchia<HeaderId>,
+        ) -> lb_core::proofs::leader_proof::Groth16LeaderProof {
             let leader_sk = UnsecuredZkKey::zero();
             let utxo = Utxo {
                 tx_hash: Fr::from(BigUint::from(1u8)).into(),
@@ -969,13 +965,23 @@ mod tests {
             let utxo_tree = UtxoTree::<_, _, ZkHasher>::new().insert(utxo.id(), utxo).0;
             let utxo_tree_root = utxo_tree.root();
             let utxo_merkle_path = utxo_tree.path(&utxo.id()).expect("note must exist in tree");
+            let (lottery_0, lottery_1) = cryptarchia
+                .config()
+                .lottery_constants()
+                .compute_lottery_values(1000);
 
             // We grind the nonce here to find a winning PoL
             let public_inputs = {
                 let mut nonce = 0;
                 while nonce < 1000 {
-                    let inputs =
-                        LeaderPublic::new(utxo_tree_root, utxo_tree_root, Fr::from(nonce), 0, 1000);
+                    let inputs = LeaderPublic::new(
+                        utxo_tree_root,
+                        utxo_tree_root,
+                        Fr::from(nonce),
+                        0,
+                        lottery_0,
+                        lottery_1,
+                    );
 
                     if inputs.check_winning(utxo.note.value, *utxo.id().as_fr(), *leader_sk.as_fr())
                     {
@@ -984,7 +990,14 @@ mod tests {
 
                     nonce += 1;
                 }
-                LeaderPublic::new(utxo_tree_root, utxo_tree_root, Fr::from(nonce), 0, 1000)
+                LeaderPublic::new(
+                    utxo_tree_root,
+                    utxo_tree_root,
+                    Fr::from(nonce),
+                    0,
+                    lottery_0,
+                    lottery_1,
+                )
             };
 
             let private_inputs = LeaderPrivate::new(

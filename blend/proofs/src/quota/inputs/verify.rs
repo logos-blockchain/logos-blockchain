@@ -46,7 +46,8 @@ impl From<Inputs> for PoQVerifierInput {
             pol_epoch_nonce: value.prove_inputs.leader.pol_epoch_nonce,
             pol_ledger_aged: value.prove_inputs.leader.pol_ledger_aged,
             session: value.prove_inputs.session,
-            total_stake: value.prove_inputs.leader.total_stake,
+            lottery_0: value.prove_inputs.leader.lottery_0,
+            lottery_1: value.prove_inputs.leader.lottery_1,
         }
         .into()
     }

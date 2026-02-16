@@ -156,7 +156,8 @@ fn public_inputs_for_slot(
         latest_tree.root(),
         epoch_state.nonce,
         slot.into(),
-        epoch_state.total_stake(),
+        epoch_state.lottery_0,
+        epoch_state.lottery_1,
     )
 }
 
@@ -342,7 +343,6 @@ mod pol_tests {
     use lb_ledger::mantle::sdp::{
         Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
     };
-    use lb_pol::init_lottery_constants;
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
     use lb_wallet_service::{WalletMsg, WalletServiceSettings, api::WalletServiceData};
     use overwatch::services::{
@@ -359,7 +359,6 @@ mod pol_tests {
     #[tokio::test]
     async fn test_build_proof_for() {
         let config = test_config();
-        init_lottery_constants(config.consensus_config.slot_activation_coeff());
 
         // Create secret key and leader
         let kms = DummyKms;
@@ -377,11 +376,17 @@ mod pol_tests {
         let latest_tree = UtxoTree::new().insert(utxo.id(), utxo).0;
 
         // Create EpochState
+        let total_stake = utxo.note.value;
+        let (lottery_0, lottery_1) = config
+            .lottery_constants()
+            .compute_lottery_values(total_stake);
         let epoch_state = EpochState {
             epoch: 1.into(),
             nonce: Fr::from(999u64),
             utxos: aged_tree.clone(),
-            total_stake: utxo.note.value,
+            total_stake,
+            lottery_0,
+            lottery_1,
         };
 
         // Create notifier channel (not used in this test)
@@ -411,7 +416,8 @@ mod pol_tests {
             latest_tree.root(),
             epoch_state.nonce,
             winning_slot.into(),
-            utxo.note.value,
+            epoch_state.lottery_0,
+            epoch_state.lottery_1,
         );
         assert!(
             proof.verify(&public_inputs),

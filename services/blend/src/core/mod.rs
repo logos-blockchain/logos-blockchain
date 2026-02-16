@@ -609,7 +609,8 @@ where
         LeaderInputsMinusQuota {
             pol_epoch_nonce,
             pol_ledger_aged,
-            total_stake,
+            lottery_0,
+            lottery_1,
         },
         remaining_clock_stream,
     ) = async {
@@ -637,7 +638,8 @@ where
             pol_ledger_aged,
             pol_epoch_nonce,
             message_quota: blend_config.session_leadership_quota(),
-            total_stake,
+            lottery_0,
+            lottery_1,
         },
         session: SessionInfo {
             membership: current_membership_info.public.membership.clone(),
@@ -1814,13 +1816,15 @@ where
         EpochEvent::NewEpoch(LeaderInputsMinusQuota {
             pol_epoch_nonce,
             pol_ledger_aged,
-            total_stake,
+            lottery_0,
+            lottery_1,
         }) => {
             let new_leader_inputs = LeaderInputs {
                 message_quota: settings.session_leadership_quota(),
                 pol_epoch_nonce,
                 pol_ledger_aged,
-                total_stake,
+                lottery_0,
+                lottery_1,
             };
             let new_public_info = PublicInfo {
                 epoch: new_leader_inputs,
@@ -1841,13 +1845,15 @@ where
         EpochEvent::NewEpochAndOldEpochTransitionExpired(LeaderInputsMinusQuota {
             pol_epoch_nonce,
             pol_ledger_aged,
-            total_stake,
+            lottery_0,
+            lottery_1,
         }) => {
             let new_leader_inputs = LeaderInputs {
                 message_quota: settings.session_leadership_quota(),
                 pol_epoch_nonce,
                 pol_ledger_aged,
-                total_stake,
+                lottery_0,
+                lottery_1,
             };
             let new_public_inputs = PublicInfo {
                 epoch: new_leader_inputs,
