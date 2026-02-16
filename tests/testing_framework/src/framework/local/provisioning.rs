@@ -43,6 +43,7 @@ struct BuiltNodeConfigPlan {
     node_config: Config,
     descriptor_override: Option<RunConfig>,
     genesis_tx: GenesisTx,
+    allocate_runtime_ports: bool,
 }
 
 #[async_trait]
@@ -62,13 +63,17 @@ impl LocalDeployerEnv for LbcEnv {
             peer_ports,
         )?;
 
+        let allocate_runtime_ports = built.allocate_runtime_ports;
         let mut config = build_run_config_for_dynamic(built, options.config_override.as_ref());
-        let network_port = allocate_udp_port("network")?;
-        let blend_port = allocate_udp_port("blend")?;
+        let mut network_port = config.user.network.backend.swarm.port;
 
-        config.user.network.backend.swarm.port = network_port;
-        config.user.blend.core.backend.listening_address =
-            lb_libp2p::multiaddr(Ipv4Addr::LOCALHOST, blend_port);
+        if allocate_runtime_ports {
+            network_port = allocate_udp_port("network")?;
+            let blend_port = allocate_udp_port("blend")?;
+            config.user.network.backend.swarm.port = network_port;
+            config.user.blend.core.backend.listening_address =
+                lb_libp2p::multiaddr(Ipv4Addr::LOCALHOST, blend_port);
+        }
 
         Ok(BuiltNodeConfig {
             config,
@@ -298,6 +303,7 @@ fn build_node_config_for(
                 .genesis_tx
                 .clone()
                 .ok_or_else(|| io::Error::other("missing topology genesis tx"))?,
+            allocate_runtime_ports: false,
         });
     }
 
@@ -346,6 +352,7 @@ fn build_node_config_for(
             .genesis_tx
             .clone()
             .ok_or_else(|| io::Error::other("missing topology genesis tx"))?,
+        allocate_runtime_ports: true,
     })
 }
 

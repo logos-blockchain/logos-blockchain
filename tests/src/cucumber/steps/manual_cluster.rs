@@ -128,6 +128,14 @@ async fn start_node(world: &mut CucumberWorld, node_name: String, peers: &[Strin
             chain_info: HashMap::default(),
         },
     );
+
+    cluster
+        .wait_network_ready()
+        .await
+        .map_err(|source| StepError::StepFail {
+            message: format!("network did not become ready after starting '{node_name}': {source}"),
+        })?;
+
     Ok(())
 }
 
