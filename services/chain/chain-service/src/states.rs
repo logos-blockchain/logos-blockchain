@@ -249,6 +249,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::too_many_lines, reason = "Test function")]
     fn restore_preserves_info() {
         let genesis_header_id: HeaderId = [0; 32].into();
         let security_param: NonZero<u32> = 2.try_into().unwrap();
