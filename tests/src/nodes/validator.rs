@@ -25,9 +25,8 @@ use lb_node::{
         ApiConfig, CryptarchiaConfig, RunConfig, SdpConfig, StorageConfig, WalletConfig,
         api::serde::AxumBackendSettings,
         cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
-        deployment::DeploymentSettings, mempool::serde::Config as MempoolConfig,
-        sdp::serde::RequiredValues as SdpConfigRequiredValues, tracing::serde as tracing,
-        wallet::serde::RequiredValues as WalletConfigRequiredValues,
+        deployment::DeploymentSettings, sdp::serde::RequiredValues as SdpConfigRequiredValues,
+        tracing::serde as tracing, wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
 };
 use lb_tx_service::MempoolMetrics;
@@ -339,8 +338,6 @@ pub fn create_validator_config(
         base_config
     };
 
-    let mempool_config = MempoolConfig::default();
-
     let tracing_config = config.tracing_config.tracing_settings;
 
     let api_config = ApiConfig {
@@ -399,7 +396,6 @@ pub fn create_validator_config(
         blend: blend_config,
         time: time_config,
         cryptarchia: cryptarchia_config,
-        mempool: mempool_config,
         tracing: tracing_config,
         api: api_config,
         storage: storage_config,

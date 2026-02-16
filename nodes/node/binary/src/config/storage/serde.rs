@@ -20,7 +20,7 @@ impl Default for RocksDbSettings {
     fn default() -> Self {
         Self {
             column_family: Some("blocks".to_owned()),
-            path: "./db".into(),
+            path: "./state".into(),
             read_only: false,
         }
     }

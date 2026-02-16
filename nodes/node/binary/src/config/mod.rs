@@ -18,7 +18,6 @@ pub use crate::config::{
     cryptarchia::serde::Config as CryptarchiaConfig,
     deployment::{DeploymentSettings, WellKnownDeployment},
     kms::serde::Config as KmsConfig,
-    mempool::serde::Config as MempoolConfig,
     network::serde::Config as NetworkConfig,
     sdp::serde::Config as SdpConfig,
     storage::serde::Config as StorageConfig,
@@ -40,6 +39,7 @@ pub mod time;
 pub mod tracing;
 pub mod wallet;
 
+mod recovery;
 #[cfg(test)]
 mod tests;
 
@@ -294,8 +294,6 @@ pub struct UserConfig {
     pub cryptarchia: CryptarchiaConfig,
     #[serde(default)]
     pub time: TimeConfig,
-    #[serde(default)]
-    pub mempool: MempoolConfig,
     pub sdp: SdpConfig,
     #[serde(default)]
     pub api: ApiConfig,

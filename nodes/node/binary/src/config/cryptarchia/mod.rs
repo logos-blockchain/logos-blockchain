@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use lb_blend_service::core::network::libp2p::Libp2pBroadcastSettings;
 use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
@@ -10,6 +10,8 @@ use lb_libp2p::PeerId;
 use crate::config::{
     blend::deployment::Settings as BlendDeploymentSettings,
     cryptarchia::{deployment::Settings as DeploymentSettings, serde::Config},
+    recovery::get_path_for_base_folder_and_file_name,
+    storage::serde::Config as StorageConfig,
 };
 
 pub mod deployment;
@@ -29,11 +31,21 @@ impl ServiceConfig {
     pub fn into_cryptarchia_services_settings(
         self,
         blend_deployment: &BlendDeploymentSettings,
+        storage_config: &StorageConfig,
     ) -> (
         lb_chain_service::CryptarchiaSettings,
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
         lb_chain_leader_service::LeaderSettings<(), Libp2pBroadcastSettings>,
     ) {
+        let recovery_file = get_path_for_base_folder_and_file_name(
+            &storage_config.backend.path,
+            PathBuf::new()
+                .join("consensus")
+                .with_file_name("chain_service")
+                .with_extension("json")
+                .as_path(),
+        );
+
         let epoch_schedule = u64::from(
             self.deployment.epoch_config.epoch_period_nonce_buffer.get()
                 + self
@@ -123,7 +135,7 @@ impl ServiceConfig {
                 },
             },
             config: ledger_config.clone(),
-            recovery_file: self.user.service.recovery_file,
+            recovery_file,
             starting_state: self.deployment.genesis_state.into(),
         };
         let chain_network_settings = lb_chain_network_service::ChainNetworkSettings {

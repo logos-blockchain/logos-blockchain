@@ -23,7 +23,6 @@ use crate::{
         },
         deployment::DeploymentSettings,
         deserialize_config_at_path,
-        mempool::serde::Config as MempoolConfig,
         network::serde::{Config as NetworkConfig, nat},
         sdp::serde::RequiredValues as SdpRequiredValues,
         time::serde::Config as TimeConfig,
@@ -297,8 +296,6 @@ fn build_user_config(
 
     let time_config = TimeConfig::default();
 
-    let mempool_config = MempoolConfig::default();
-
     let tracing_config = TracingConfig::default();
 
     let sdp_config = SdpConfig::with_required_values(SdpRequiredValues { funding_pk });
@@ -337,7 +334,6 @@ fn build_user_config(
         blend: blend_config,
         cryptarchia: cryptarchia_config,
         time: time_config,
-        mempool: mempool_config,
         tracing: tracing_config,
         sdp: sdp_config,
         api: api_config,

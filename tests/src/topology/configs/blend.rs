@@ -26,7 +26,6 @@ pub fn create_blend_configs(ids: &[[u8; 32]], ports: &[u16]) -> Vec<GeneralBlend
                     non_ephemeral_signing_key_id: key_id_for_preload_backend(
                         &private_key.clone().into(),
                     ),
-                    recovery_path_prefix: "./recovery/blend".into(),
                     core: blend::core::Config {
                         backend: blend::core::BackendConfig {
                             core_peering_degree: 1..=3,

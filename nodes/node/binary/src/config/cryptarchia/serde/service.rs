@@ -1,24 +1,13 @@
 use core::time::Duration;
-use std::path::PathBuf;
 
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
-    pub recovery_file: PathBuf,
     pub bootstrap: BootstrapConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            recovery_file: "./chain_service.json".into(),
-            bootstrap: BootstrapConfig::default(),
-        }
-    }
 }
 
 #[serde_as]

@@ -148,25 +148,29 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
         user: config.user.cryptarchia,
         deployment: config.deployment.cryptarchia,
     }
-    .into_cryptarchia_services_settings(&config.deployment.blend);
+    .into_cryptarchia_services_settings(&config.deployment.blend, &config.user.storage);
 
     let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
         user: config.user.blend,
         deployment: config.deployment.blend,
     }
-    .into();
+    .into_blend_services_settings(&config.user.storage);
 
     let mempool_service_config = MempoolConfig {
-        user: config.user.mempool,
         deployment: config.deployment.mempool,
     }
-    .into();
+    .into_mempool_service_settings(&config.user.storage);
 
     let network_service_config = NetworkConfig {
         user: config.user.network,
         deployment: config.deployment.network,
     }
     .into();
+
+    let wallet_config = WalletConfig {
+        user: config.user.wallet,
+    }
+    .into_wallet_service_settings(&config.user.storage);
 
     let storage_config = StorageConfig {
         user: config.user.storage,
@@ -180,11 +184,6 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
 
     let sdp_config = SdpConfig {
         user: config.user.sdp,
-    }
-    .into();
-
-    let wallet_config = WalletConfig {
-        user: config.user.wallet,
     }
     .into();
 
