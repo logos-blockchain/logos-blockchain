@@ -21,7 +21,7 @@ After generating the node config file to fit your needs, you can untar and run t
 
 To untar the binary, run:
 
-`tar -xf logos-blockchain-node-{your_architecture}-{binary_version}.tar`, for instance `tar -xf logos-blockchain-node-macos-aarch64-0.0.1.tar`.
+`tar -xzf logos-blockchain-node-{your_architecture}-{binary_version}.tar.gz`, for instance `tar -xzf logos-blockchain-node-macos-aarch64-0.0.1.tar.gz`.
 
 The operation will give you the `logos-blockchain-node` binary, which you can now run. See the repo's `README.md` for more info.
 

@@ -76,13 +76,13 @@ jobs:
         run: cargo build -p logos-blockchain-node --features high-active-slot-coefficient --release --target ${{ matrix.platform.target_triple }}
 
       - name: Tar node binary
-        run: tar -cf logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar -C target/${{ matrix.platform.target_triple }}/release logos-blockchain-node
+        run: tar -czf logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz -C target/${{ matrix.platform.target_triple }}/release logos-blockchain-node
 
       - name: Upload binary tar (${{ matrix.platform.arch }})
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
           name: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}
-          path: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar
+          path: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz
           if-no-files-found: error
 
   create-draft-release:
@@ -146,6 +146,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: ${{ env.DOWNLOAD_DIRECTORY }}/${{ env.BINARY_NAME }}.tar
-          asset_name: ${{ env.BINARY_NAME }}.tar
-          asset_content_type: application/x-tar
+          asset_path: ${{ env.DOWNLOAD_DIRECTORY }}/${{ env.BINARY_NAME }}.tar.gz
+          asset_name: ${{ env.BINARY_NAME }}.tar.gz
+          asset_content_type: application/gzip
