@@ -306,6 +306,13 @@ pub struct UserConfig {
     pub tracing: TracingConfig,
 }
 
+pub struct RequiredValues {
+    pub blend: BlendConfig,
+    pub cryptarchia: CryptarchiaConfig,
+    pub sdp: SdpConfig,
+    pub wallet: WalletConfig,
+}
+
 impl UserConfig {
     pub fn update_from_args(mut self, args: CliArgs) -> Result<RunConfig> {
         let CliArgs {
@@ -335,6 +342,23 @@ impl UserConfig {
             deployment: deployment_settings,
             user: self,
         })
+    }
+
+    #[must_use]
+    pub fn with_required_values(required_values: RequiredValues) -> Self {
+        Self {
+            blend: required_values.blend,
+            cryptarchia: required_values.cryptarchia,
+            sdp: required_values.sdp,
+            wallet: required_values.wallet,
+
+            api: ApiConfig::default(),
+            kms: KmsConfig::default(),
+            network: NetworkConfig::default(),
+            storage: StorageConfig::default(),
+            time: TimeConfig::default(),
+            tracing: TracingConfig::default(),
+        }
     }
 }
 
