@@ -10,8 +10,7 @@ use lb_libp2p::PeerId;
 use crate::config::{
     blend::deployment::Settings as BlendDeploymentSettings,
     cryptarchia::{deployment::Settings as DeploymentSettings, serde::Config},
-    recovery::get_path_for_base_folder_and_file_name,
-    storage::serde::Config as StorageConfig,
+    state::Config as StateConfig,
 };
 
 pub mod deployment;
@@ -31,17 +30,16 @@ impl ServiceConfig {
     pub fn into_cryptarchia_services_settings(
         self,
         blend_deployment: &BlendDeploymentSettings,
-        storage_config: &StorageConfig,
+        state_config: &StateConfig,
     ) -> (
         lb_chain_service::CryptarchiaSettings,
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
         lb_chain_leader_service::LeaderSettings<(), Libp2pBroadcastSettings>,
     ) {
-        let recovery_file = get_path_for_base_folder_and_file_name(
-            &storage_config.backend.path,
+        let recovery_file = state_config.get_path_for_recovery_path(
             PathBuf::new()
                 .join("consensus")
-                .with_file_name("chain_service")
+                .join("chain_service")
                 .with_extension("json")
                 .as_path(),
         );

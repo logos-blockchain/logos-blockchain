@@ -15,8 +15,8 @@ use rand::rngs::OsRng;
 use crate::{
     UserConfig,
     config::{
-        ApiConfig, DeploymentType, InitArgs, KmsConfig, OnUnknownKeys, SdpConfig, StorageConfig,
-        TracingConfig, WalletConfig,
+        ApiConfig, DeploymentType, InitArgs, KmsConfig, OnUnknownKeys, SdpConfig, StateConfig,
+        StorageConfig, TracingConfig, WalletConfig,
         blend::serde::{Config as BlendConfig, RequiredValues as BlendConfigRequiredValues},
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaConfigRequiredValues,
@@ -255,6 +255,13 @@ fn build_user_config(
         funding_pk,
     } = keys;
 
+    let state_config = args
+        .state_path
+        .as_ref()
+        .map_or_else(StateConfig::default, |path| StateConfig {
+            base_folder: path.clone(),
+        });
+
     let network_config = {
         let mut base_config = NetworkConfig::default();
         base_config.backend.swarm.port = args.net_port;
@@ -340,6 +347,7 @@ fn build_user_config(
         storage: storage_config,
         kms: kms_config,
         wallet: wallet_config,
+        state: state_config,
     }
 }
 
@@ -359,6 +367,7 @@ mod tests {
             external_address: None,
             no_public_ip_check: false,
             deployment: DeploymentType::default(),
+            state_path: None,
         };
         let network_key = lb_libp2p::ed25519::SecretKey::generate();
         let keys = generate_keys();

@@ -19,8 +19,7 @@ use lb_blend_service::{
 
 use crate::config::{
     blend::{deployment::Settings as DeploymentSettings, serde::Config},
-    recovery::get_path_for_base_folder_and_file_name,
-    storage::serde::Config as StorageConfig,
+    state::Config as StateConfig,
 };
 
 pub mod deployment;
@@ -38,22 +37,15 @@ pub struct ServiceConfig {
 
 impl ServiceConfig {
     #[must_use]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Conversion. Useful to have in a single place."
-    )]
     pub fn into_blend_services_settings(
         self,
-        storage_config: &StorageConfig,
+        state_config: &StateConfig,
     ) -> (
         BlendSettings<Libp2pCoreBlendBackendSettings, Libp2pEdgeBlendBackendSettings>,
         BlendCoreSettings<Libp2pCoreBlendBackendSettings>,
         BlendEdgeSettings<Libp2pEdgeBlendBackendSettings>,
     ) {
-        let recovery_path_prefix = get_path_for_base_folder_and_file_name(
-            &storage_config.backend.path,
-            Path::new("blend"),
-        );
+        let recovery_path_prefix = state_config.get_path_for_recovery_path(Path::new("blend"));
 
         let blend_service_settings = BlendSettings::<
             Libp2pCoreBlendBackendSettings,

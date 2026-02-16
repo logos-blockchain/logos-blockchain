@@ -6,8 +6,7 @@ use lb_tx_service::{
 };
 
 use crate::config::{
-    mempool::deployment::Settings as DeploymentSettings,
-    recovery::get_path_for_base_folder_and_file_name, storage::serde::Config as StorageConfig,
+    mempool::deployment::Settings as DeploymentSettings, state::Config as StateConfig,
 };
 
 pub mod deployment;
@@ -20,14 +19,13 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_mempool_service_settings(
         self,
-        storage_config: &StorageConfig,
+        state_config: &StateConfig,
     ) -> TxMempoolSettings<(), Libp2pNetworkAdapterSettings<TxHash, SignedMantleTx>> {
-        let recovery_path = get_path_for_base_folder_and_file_name(
-            &storage_config.backend.path,
+        let recovery_path = state_config.get_path_for_recovery_path(
             PathBuf::new()
                 .join("mempool")
-                .with_file_name("recovery")
-                .with_added_extension("json")
+                .join("recovery")
+                .with_extension("json")
                 .as_path(),
         );
 

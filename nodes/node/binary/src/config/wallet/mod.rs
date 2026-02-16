@@ -2,10 +2,7 @@ use std::path::PathBuf;
 
 use lb_wallet_service::WalletServiceSettings;
 
-use crate::config::{
-    recovery::get_path_for_base_folder_and_file_name, storage::serde::Config as StorageConfig,
-    wallet::serde::Config,
-};
+use crate::config::{state::Config as StateConfig, wallet::serde::Config};
 
 pub mod serde;
 
@@ -15,16 +12,12 @@ pub struct ServiceConfig {
 
 impl ServiceConfig {
     #[must_use]
-    pub fn into_wallet_service_settings(
-        self,
-        storage_config: &StorageConfig,
-    ) -> WalletServiceSettings {
-        let recovery_path = get_path_for_base_folder_and_file_name(
-            &storage_config.backend.path,
+    pub fn into_wallet_service_settings(self, state_config: &StateConfig) -> WalletServiceSettings {
+        let recovery_path = state_config.get_path_for_recovery_path(
             PathBuf::new()
                 .join("wallet")
-                .with_file_name("recovery")
-                .with_added_extension("json")
+                .join("recovery")
+                .with_extension("json")
                 .as_path(),
         );
         WalletServiceSettings {

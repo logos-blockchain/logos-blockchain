@@ -26,7 +26,8 @@ use lb_node::{
         api::serde::AxumBackendSettings,
         cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
         deployment::DeploymentSettings, sdp::serde::RequiredValues as SdpConfigRequiredValues,
-        tracing::serde as tracing, wallet::serde::RequiredValues as WalletConfigRequiredValues,
+        state::Config as StateConfig, tracing::serde as tracing,
+        wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
 };
 use lb_tx_service::MempoolMetrics;
@@ -391,6 +392,8 @@ pub fn create_validator_config(
 
     let kms_config = config.kms_config;
 
+    let state_config = StateConfig::default();
+
     let user_config = UserConfig {
         network: network_config,
         blend: blend_config,
@@ -402,6 +405,7 @@ pub fn create_validator_config(
         sdp: sdp_config,
         wallet: wallet_config,
         kms: kms_config,
+        state: state_config,
     };
 
     RunConfig {
