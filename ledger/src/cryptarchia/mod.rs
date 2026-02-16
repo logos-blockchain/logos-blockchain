@@ -154,6 +154,14 @@ impl LedgerState {
             })
         } else if new_epoch == current_epoch + 1 {
             // case 2)
+            tracing::info!(
+                old_epoch = ?current_epoch,
+                new_epoch = ?new_epoch,
+                old_total_stake = self.epoch_state.total_stake,
+                new_total_stake = total_stake,
+                slot = ?slot,
+                "epoch transition"
+            );
             let block_density = BlockDensity::new(self.stake_inference.period(), slot);
             let epoch_state = self.next_epoch_state.clone();
             let next_epoch_state = EpochState {
@@ -171,6 +179,14 @@ impl LedgerState {
             })
         } else {
             // case 3)
+            tracing::warn!(
+                old_epoch = ?current_epoch,
+                new_epoch = ?new_epoch,
+                epochs_skipped = u32::from(new_epoch) - u32::from(current_epoch) - 1,
+                total_stake = total_stake,
+                slot = ?slot,
+                "skipped epochs"
+            );
             let block_density = BlockDensity::new(self.stake_inference.period(), slot);
             let epoch_state = EpochState {
                 epoch: new_epoch,

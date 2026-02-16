@@ -57,6 +57,17 @@ impl StakeInference {
             / i128::from(PRECISION);
         let new_total_stake_estimate =
             (total_stake_estimate_with_precision - correction) / i128::from(PRECISION);
+
+        tracing::debug!(
+            old_total_stake = total_stake_estimate,
+            new_total_stake = new_total_stake_estimate,
+            measured_density = measured_block_density,
+            expected_density = expected_density_with_precision / i128::from(PRECISION),
+            learning_rate = self.learning_rate,
+            period = self.period(),
+            "TSI update"
+        );
+
         new_total_stake_estimate
             .max(1)
             .try_into()
