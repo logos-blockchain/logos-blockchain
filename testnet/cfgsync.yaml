@@ -6,6 +6,11 @@ faucet_settings:
   note_count: 3
   note_value: 10000000
 
+deployment_settings_storage_path:
+  deployment-settings.yaml
+
+mode: Run
+
 # Tracing
 tracing_settings:
   logger: Stdout
@@ -15,4 +20,4 @@ tracing_settings:
     endpoint: http://prometheus:9090/api/v1/otlp/v1/metrics
     host_identifier: node
   console: None
-  level: INFO
+  level: DEBUG

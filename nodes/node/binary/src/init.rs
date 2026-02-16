@@ -1,25 +1,28 @@
 use core::str::FromStr as _;
-use std::collections::HashMap;
+use std::{collections::HashMap, net::Ipv4Addr, time::Duration};
 
 use color_eyre::eyre::{Result, eyre};
+use futures::StreamExt as _;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::{
     backend::preload::KeyId,
     keys::{Ed25519Key, Key, ZkKey, ZkPublicKey, secured_key::SecuredKey as _},
 };
-use libp2p::Multiaddr;
+use libp2p::{Multiaddr, PeerId, autonat, identify, swarm::SwarmEvent};
 use num_bigint::BigUint;
 use rand::rngs::OsRng;
 
 use crate::{
     UserConfig,
     config::{
-        ApiConfig, InitArgs, KmsConfig, SdpConfig, StorageConfig, TracingConfig, WalletConfig,
+        ApiConfig, DeploymentType, InitArgs, KmsConfig, OnUnknownKeys, SdpConfig, StateConfig,
+        StorageConfig, TracingConfig, WalletConfig,
         blend::serde::{Config as BlendConfig, RequiredValues as BlendConfigRequiredValues},
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaConfigRequiredValues,
         },
-        mempool::serde::Config as MempoolConfig,
+        deployment::DeploymentSettings,
+        deserialize_config_at_path,
         network::serde::{Config as NetworkConfig, nat},
         sdp::serde::RequiredValues as SdpRequiredValues,
         time::serde::Config as TimeConfig,
@@ -84,7 +87,109 @@ fn generate_keys() -> GeneratedKeys {
     }
 }
 
-pub fn run(args: &InitArgs) -> Result<()> {
+fn load_deployment(deployment_type: &DeploymentType) -> Result<DeploymentSettings> {
+    match deployment_type {
+        DeploymentType::WellKnown(well_known) => Ok((*well_known).into()),
+        DeploymentType::Custom(path) => deserialize_config_at_path(path, OnUnknownKeys::Warn)
+            .map_err(|e| eyre!("Failed to load deployment config: {e}")),
+    }
+}
+
+/// Detect and verify this node's public IPv4 address by connecting to an
+/// initial peer. Uses Identify to discover the observed address, then `AutoNAT`
+/// v2 to verify the address is actually reachable from the outside.
+#[derive(libp2p::swarm::NetworkBehaviour)]
+struct InitBehaviour {
+    identify: identify::Behaviour,
+    autonat: autonat::v2::client::Behaviour<OsRng>,
+}
+
+async fn detect_and_verify_public_ip(
+    initial_peers: &[Multiaddr],
+    identify_protocol_name: &str,
+) -> Result<Option<Ipv4Addr>> {
+    let keypair = libp2p::identity::Keypair::generate_ed25519();
+
+    let autonat_config =
+        autonat::v2::client::Config::default().with_probe_interval(Duration::from_millis(100));
+
+    let mut swarm = libp2p::SwarmBuilder::with_existing_identity(keypair)
+        .with_tokio()
+        .with_quic()
+        .with_behaviour(|keypair| InitBehaviour {
+            identify: identify::Behaviour::new(identify::Config::new(
+                identify_protocol_name.to_owned(),
+                keypair.public(),
+            )),
+            autonat: autonat::v2::client::Behaviour::new(OsRng, autonat_config),
+        })
+        .expect("infallible behaviour construction")
+        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(30)))
+        .build();
+
+    swarm
+        .listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse().unwrap())
+        .map_err(|e| eyre!("Failed to start listener for public IP detection: {e}"))?;
+
+    for peer in initial_peers {
+        swarm
+            .dial(peer.clone())
+            .map_err(|e| eyre!("Failed to dial peer {peer}: {e}"))?;
+    }
+
+    let mut observed_ip: Option<Ipv4Addr> = None;
+    let timeout = tokio::time::sleep(Duration::from_secs(30));
+    tokio::pin!(timeout);
+
+    loop {
+        tokio::select! {
+            event = swarm.select_next_some() => {
+                match event {
+                    SwarmEvent::Behaviour(InitBehaviourEvent::Identify(
+                        identify::Event::Received { info, .. },
+                    )) => {
+                        if observed_ip.is_none() {
+                            for protocol in &info.observed_addr {
+                                if let libp2p::multiaddr::Protocol::Ip4(ip) = protocol
+                                    && !ip.is_loopback() && !ip.is_private() && !ip.is_unspecified() && !ip.is_link_local()
+                                {
+                                    observed_ip = Some(ip);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    SwarmEvent::Behaviour(InitBehaviourEvent::Autonat(
+                        autonat::v2::client::Event {
+                            tested_addr,
+                            result,
+                            ..
+                        },
+                    )) => {
+                        if let Some(ip) = observed_ip {
+                            let expected_prefix = format!("/ip4/{ip}");
+                            if tested_addr.to_string().starts_with(&expected_prefix) {
+                                return Ok(result.is_ok().then_some(ip));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            () = &mut timeout => {
+                return Ok(None);
+            }
+        }
+    }
+}
+
+pub async fn run(args: &InitArgs) -> Result<()> {
+    if args.initial_peers.is_empty() {
+        eprintln!("Warning: No initial peers provided. This node will start as a genesis node.");
+    }
+
+    let deployment = load_deployment(&args.deployment)?;
+
     let network_key = lb_libp2p::ed25519::SecretKey::generate();
     let keys = generate_keys();
 
@@ -92,7 +197,36 @@ pub fn run(args: &InitArgs) -> Result<()> {
         Multiaddr::from_str(&format!("/ip4/0.0.0.0/udp/{}/quic-v1", args.blend_port))
             .map_err(|e| eyre!("Invalid blend listening address: {e}"))?;
 
-    let user_config = build_user_config(args, network_key, keys, blend_listening_address);
+    let detected_address = if args.external_address.is_some() || args.no_public_ip_check {
+        None
+    } else if !args.initial_peers.is_empty() {
+        let identify_protocol_name = deployment.network.identify_protocol_name.to_string();
+        if let Some(ip) =
+            detect_and_verify_public_ip(&args.initial_peers, &identify_protocol_name).await?
+        {
+            let addr_str = format!("/ip4/{ip}/udp/{}/quic-v1", args.net_port);
+            let addr = Multiaddr::from_str(&addr_str)
+                .map_err(|e| eyre!("Failed to construct external address: {e}"))?;
+            println!("Detected external address via AutoNAT: {addr}");
+            Some(addr)
+        } else {
+            eprintln!(
+                "Warning: Could not detect external address via AutoNAT, \
+                 falling back to NAT traversal."
+            );
+            None
+        }
+    } else {
+        None
+    };
+
+    let user_config = build_user_config(
+        args,
+        network_key,
+        keys,
+        blend_listening_address,
+        detected_address,
+    );
 
     let yaml = serde_yaml::to_string(&user_config)?;
     std::fs::write(&args.output, &yaml)?;
@@ -106,6 +240,7 @@ fn build_user_config(
     network_key: lb_libp2p::ed25519::SecretKey,
     keys: GeneratedKeys,
     blend_listening_address: Multiaddr,
+    detected_address: Option<Multiaddr>,
 ) -> UserConfig {
     let GeneratedKeys {
         blend_signing_key,
@@ -120,6 +255,13 @@ fn build_user_config(
         funding_pk,
     } = keys;
 
+    let state_config = args
+        .state_path
+        .as_ref()
+        .map_or_else(StateConfig::default, |path| StateConfig {
+            base_folder: path.clone(),
+        });
+
     let network_config = {
         let mut base_config = NetworkConfig::default();
         base_config.backend.swarm.port = args.net_port;
@@ -128,12 +270,11 @@ fn build_user_config(
             .backend
             .initial_peers
             .clone_from(&args.initial_peers);
+        let static_addr = args.external_address.clone().or(detected_address);
         base_config.backend.swarm.nat =
-            args.external_address
-                .as_ref()
-                .map_or_else(nat::Config::default, |addr| nat::Config::Static {
-                    external_address: addr.clone(),
-                });
+            static_addr.map_or_else(nat::Config::default, |addr| nat::Config::Static {
+                external_address: addr,
+            });
         base_config
     };
 
@@ -146,12 +287,21 @@ fn build_user_config(
         base_config
     };
 
-    let cryptarchia_config =
-        CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues { funding_pk });
+    let cryptarchia_config = {
+        let mut base_config =
+            CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues { funding_pk });
+        base_config.network.bootstrap.ibd.peers = args
+            .initial_peers
+            .iter()
+            .filter_map(|addr| match addr.iter().last() {
+                Some(lb_libp2p::Protocol::P2p(bytes)) => PeerId::from_multihash(bytes.into()).ok(),
+                _ => None,
+            })
+            .collect();
+        base_config
+    };
 
     let time_config = TimeConfig::default();
-
-    let mempool_config = MempoolConfig::default();
 
     let tracing_config = TracingConfig::default();
 
@@ -191,12 +341,68 @@ fn build_user_config(
         blend: blend_config,
         cryptarchia: cryptarchia_config,
         time: time_config,
-        mempool: mempool_config,
         tracing: tracing_config,
         sdp: sdp_config,
         api: api_config,
         storage: storage_config,
         kms: kms_config,
         wallet: wallet_config,
+        state: state_config,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+
+    use super::*;
+
+    fn build_config_from_peers(initial_peers: Vec<Multiaddr>) -> UserConfig {
+        let args = InitArgs {
+            initial_peers,
+            output: "test_output.yaml".into(),
+            net_port: 3000,
+            blend_port: 3400,
+            http_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
+            external_address: None,
+            no_public_ip_check: false,
+            deployment: DeploymentType::default(),
+            state_path: None,
+        };
+        let network_key = lb_libp2p::ed25519::SecretKey::generate();
+        let keys = generate_keys();
+        let blend_addr = Multiaddr::from_str("/ip4/0.0.0.0/udp/3400/quic-v1").unwrap();
+        build_user_config(&args, network_key, keys, blend_addr, None)
+    }
+
+    #[test]
+    fn extracts_peer_ids_into_ibd_config() {
+        let peer1 = PeerId::random();
+        let peer2 = PeerId::random();
+
+        let addr_with_p2p_1: Multiaddr = format!("/ip4/1.2.3.4/udp/3000/quic-v1/p2p/{peer1}")
+            .parse()
+            .unwrap();
+        let addr_with_p2p_2: Multiaddr = format!("/ip4/5.6.7.8/udp/3000/quic-v1/p2p/{peer2}")
+            .parse()
+            .unwrap();
+        let addr_without_p2p: Multiaddr = "/ip4/9.10.11.12/udp/3000/quic-v1".parse().unwrap();
+
+        let config =
+            build_config_from_peers(vec![addr_with_p2p_1, addr_without_p2p, addr_with_p2p_2]);
+
+        let ibd_peers = &config.cryptarchia.network.bootstrap.ibd.peers;
+        assert_eq!(ibd_peers.len(), 2);
+        assert!(ibd_peers.contains(&peer1));
+        assert!(ibd_peers.contains(&peer2));
+    }
+
+    #[test]
+    fn no_peer_ids_yields_empty_ibd_config() {
+        let addr: Multiaddr = "/ip4/1.2.3.4/udp/3000/quic-v1".parse().unwrap();
+
+        let config = build_config_from_peers(vec![addr]);
+
+        assert!(config.cryptarchia.network.bootstrap.ibd.peers.is_empty());
     }
 }

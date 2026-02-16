@@ -9,36 +9,21 @@ If it's the first time configuring your environment, please do the following:
 1. From the artifacts, download and unzip the circuits for your architecture.
 2. Set the `LOGOS_BLOCKCHAIN_CIRCUITS` variable to the folder containing the circuits.
 
-To run the binary, you will need two configuration files: a deployment config and a node config.
+To run the binary, you will need to create a node config.
 
-For the former, please reach out to the Logos Blockchain team on [Discord](https://discord.gg/CXnvqEG7) to get a copy of it and a list of bootnode addresses for the network you intend to join.
+### Config generation
 
-For the latter, you can download the example config from this release and tweak it to your needs.
-Please check the docs for info on what each field means.
-
-## Devnet setup
-
-If you wish to join the devnet at https://devnet.blockchain.logos.co, you can automatically generate and download your node configuration using the following command:
-
-```bash
-curl -X POST -L --location-trusted https://devnet.blockchain.logos.co/node/0/cfgsync/generate-config \
-     -u "username:password" \
-     -H "Content-Type: application/json" \
-     -d '{
-            "ip": "192.168.6.7",
-            "identifier": "marcins-anonymous-node",
-            "network_port": 3000,
-            "blend_port": 4000,
-            "api_port": 8080
-         }' \
-     -o my_logos_node_config.yaml
-```
+Check the [Notion page][release-notion] for info about how to connect your node to the devnet!
 
 ## Run the binary
 
-After tweaking the node config file to fit your needs, you can run the node binary.
+After generating the node config file to fit your needs, you can untar and run the node binary.
 
-For example: `logos-blockchain-node-macos-aarch64-0.0.1 --deployment devnet node-config.yaml`. See the repo's `README.md` for more info.
+To untar the binary, run:
+
+`tar -xzf logos-blockchain-node-{your_architecture}-{binary_version}.tar.gz`, for instance `tar -xzf logos-blockchain-node-macos-aarch64-0.0.1.tar.gz`.
+
+The operation will give you the `logos-blockchain-node` binary, which you can now run. See the repo's `README.md` for more info.
 
 To verify that your node is running correctly and connected, visit http://localhost:{api_port_in_user_config}/cryptarchia/info. The slot and height should both be constantly increasing.
 
@@ -51,3 +36,5 @@ Before publishing please ensure:
 - [ ] Circuits of the expected version for Mac and Linux platforms are present (need to be manually downloaded and included for now)
 - [ ] Pre-release is checked if necessary
 - [ ] Remove this checklist and address all TODOs before publishing the release.
+
+[release-notion]: https://www.notion.so/nomos-tech/Internal-Devnet-Launch-February-2026-2fe261aa09df8025ad94e380933b4cf9#2ff261aa09df8058935ecb85aa587564

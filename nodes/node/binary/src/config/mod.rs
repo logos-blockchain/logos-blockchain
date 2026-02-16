@@ -6,9 +6,7 @@ use std::{
 };
 
 use ::tracing::{Level, warn};
-#[cfg(feature = "config-gen")]
-use clap::Subcommand;
-use clap::{Parser, ValueEnum, builder::OsStr};
+use clap::{Parser, Subcommand, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use serde::Deserialize;
@@ -20,9 +18,9 @@ pub use crate::config::{
     cryptarchia::serde::Config as CryptarchiaConfig,
     deployment::{DeploymentSettings, WellKnownDeployment},
     kms::serde::Config as KmsConfig,
-    mempool::serde::Config as MempoolConfig,
     network::serde::Config as NetworkConfig,
     sdp::serde::Config as SdpConfig,
+    state::Config as StateConfig,
     storage::serde::Config as StorageConfig,
     time::serde::Config as TimeConfig,
     tracing::serde::Config as TracingConfig,
@@ -37,6 +35,7 @@ pub mod kms;
 pub mod mempool;
 pub mod network;
 pub mod sdp;
+pub mod state;
 pub mod storage;
 pub mod time;
 pub mod tracing;
@@ -50,7 +49,6 @@ mod tests;
           args_conflicts_with_subcommands = true,
           subcommand_negates_reqs = true)]
 pub struct CliArgs {
-    #[cfg(feature = "config-gen")]
     #[command(subcommand)]
     pub command: Option<Command>,
 
@@ -74,20 +72,24 @@ pub struct CliArgs {
     api: ApiArgs,
     #[clap(flatten)]
     deployment: DeploymentArgs,
+    #[clap(flatten)]
+    state: StateArgs,
 }
 
-#[cfg(feature = "config-gen")]
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Initialize a new user config with generated keys
+    #[cfg(feature = "config-gen")]
     Init(InitArgs),
+    /// Publish text inscriptions as zone blocks
+    Inscribe(logos_blockchain_tui_zone::InscribeArgs),
 }
 
 #[cfg(feature = "config-gen")]
 #[derive(Parser, Debug)]
 pub struct InitArgs {
     /// Trusted peers to bootstrap from (multiaddr format)
-    #[clap(long = "initial-peers", short = 'p', num_args = 1.., value_delimiter = ',', required = true)]
+    #[clap(long = "initial-peers", short = 'p', num_args = 1.., value_delimiter = ',')]
     pub initial_peers: Vec<Multiaddr>,
 
     /// Output file path for the generated config
@@ -110,6 +112,17 @@ pub struct InitArgs {
     /// traversal). Format: /ip4/<public-ip>/udp/<port>/quic-v1
     #[clap(long = "external-address")]
     pub external_address: Option<Multiaddr>,
+
+    /// Skip automatic public IP detection
+    #[clap(long = "no-public-ip-check")]
+    pub no_public_ip_check: bool,
+
+    /// Deployment configuration (well-known name or path to custom config)
+    #[clap(long = "deployment", default_value = DeploymentType::default())]
+    pub deployment: DeploymentType,
+
+    #[clap(long = "state-path")]
+    pub state_path: Option<PathBuf>,
 }
 
 impl CliArgs {
@@ -217,6 +230,12 @@ pub struct ApiArgs {
 }
 
 #[derive(Parser, Debug, Clone)]
+pub struct StateArgs {
+    #[clap(long = "state-path", env = "STATE_PATH")]
+    pub path: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug, Clone)]
 pub struct DeploymentArgs {
     #[clap(long = "deployment", env = "DEPLOYMENT", default_value = DeploymentType::default())]
     deployment_type: DeploymentType,
@@ -287,8 +306,6 @@ pub struct UserConfig {
     pub cryptarchia: CryptarchiaConfig,
     #[serde(default)]
     pub time: TimeConfig,
-    #[serde(default)]
-    pub mempool: MempoolConfig,
     pub sdp: SdpConfig,
     #[serde(default)]
     pub api: ApiConfig,
@@ -299,6 +316,15 @@ pub struct UserConfig {
     pub wallet: WalletConfig,
     #[serde(default)]
     pub tracing: TracingConfig,
+    #[serde(default)]
+    pub state: StateConfig,
+}
+
+pub struct RequiredValues {
+    pub blend: BlendConfig,
+    pub cryptarchia: CryptarchiaConfig,
+    pub sdp: SdpConfig,
+    pub wallet: WalletConfig,
 }
 
 impl UserConfig {
@@ -309,12 +335,14 @@ impl UserConfig {
             network: network_args,
             blend: blend_args,
             deployment: deployment_args,
+            state: state_args,
             ..
         } = args;
         update_tracing(&mut self.tracing, log_args)?;
         update_network(&mut self.network, network_args)?;
-        update_blend(&mut self.blend, blend_args)?;
-        update_api(&mut self.api, api_args)?;
+        update_blend(&mut self.blend, blend_args);
+        update_api(&mut self.api, api_args);
+        update_state(&mut self.state, state_args);
 
         let deployment_settings = match deployment_args.deployment_type() {
             DeploymentType::WellKnown(well_known_deployment) => (*well_known_deployment).into(),
@@ -330,6 +358,24 @@ impl UserConfig {
             deployment: deployment_settings,
             user: self,
         })
+    }
+
+    #[must_use]
+    pub fn with_required_values(required_values: RequiredValues) -> Self {
+        Self {
+            blend: required_values.blend,
+            cryptarchia: required_values.cryptarchia,
+            sdp: required_values.sdp,
+            wallet: required_values.wallet,
+
+            api: ApiConfig::default(),
+            kms: KmsConfig::default(),
+            network: NetworkConfig::default(),
+            state: StateConfig::default(),
+            storage: StorageConfig::default(),
+            time: TimeConfig::default(),
+            tracing: TracingConfig::default(),
+        }
     }
 }
 
@@ -403,17 +449,15 @@ pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) ->
     Ok(())
 }
 
-pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) -> Result<()> {
+pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) {
     let BlendArgs { blend_addr } = blend_args;
 
     if let Some(addr) = blend_addr {
         blend.set_listening_address(addr);
     }
-
-    Ok(())
 }
 
-pub fn update_api(api: &mut ApiConfig, args: ApiArgs) -> Result<()> {
+pub fn update_api(api: &mut ApiConfig, args: ApiArgs) {
     let ApiArgs { addr, cors_origins } = args;
 
     if let Some(addr) = addr {
@@ -423,8 +467,14 @@ pub fn update_api(api: &mut ApiConfig, args: ApiArgs) -> Result<()> {
     if let Some(cors) = cors_origins {
         api.backend.cors_origins = cors;
     }
+}
 
-    Ok(())
+pub fn update_state(state: &mut StateConfig, args: StateArgs) {
+    let StateArgs { path } = args;
+
+    if let Some(path) = path {
+        state.base_folder = path;
+    }
 }
 
 #[derive(thiserror::Error, Debug)]

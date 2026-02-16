@@ -36,7 +36,7 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
   build:
-    name: "Build binaries for ${{ matrix.platform.os-display }} (${{ matrix.platform.arch }})"
+    name: "Build and tar binaries for ${{ matrix.platform.os-display }} (${{ matrix.platform.arch }})"
     needs: configure-version
     runs-on: ${{ matrix.platform.builder }}
     env:
@@ -75,11 +75,14 @@ jobs:
       - name: Build node binary
         run: cargo build -p logos-blockchain-node --features high-active-slot-coefficient --release --target ${{ matrix.platform.target_triple }}
 
-      - name: Upload binary (${{ matrix.platform.arch }})
+      - name: Tar node binary
+        run: tar -czf logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz -C target/${{ matrix.platform.target_triple }}/release logos-blockchain-node
+
+      - name: Upload binary tar (${{ matrix.platform.arch }})
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
           name: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}
-          path: target/${{ matrix.platform.target_triple }}/release/logos-blockchain-node
+          path: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz
           if-no-files-found: error
 
   create-draft-release:
@@ -143,6 +146,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: ${{ env.DOWNLOAD_DIRECTORY }}/logos-blockchain-node
-          asset_name: ${{ env.BINARY_NAME }}
-          asset_content_type: application/octet-stream
+          asset_path: ${{ env.DOWNLOAD_DIRECTORY }}/${{ env.BINARY_NAME }}.tar.gz
+          asset_name: ${{ env.BINARY_NAME }}.tar.gz
+          asset_content_type: application/gzip

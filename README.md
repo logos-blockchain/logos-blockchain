@@ -245,30 +245,6 @@ target/debug/logos-blockchain-node nodes/node/standalone-node-config.yaml
 Node stores its state inside the `db` directory. If there are any issues when restarting the node, please try removing 
 `db` directory.
 
-**Notes**
-
-- To use an example configuration located at `nodes/node/standalone-node-config.yaml`, first run the test that generates the 
-random kzgrs file (`kzgrs_test_params`), leave it in `./tests/kzgrs/kzgrs_test_params` or place it in a convenient 
-location:
-
-```bash
-cargo test --package logos-blockchain-kzgrs-backend write_random_kzgrs_params_to_file -- --ignored
-```
-
-- To run the Logos blockchain node directly from the command line, edit the `global_params_path:` key in `/path/to/config.yaml` to 
-point to the kzgrs file (`kzgrs_test_params`) and run with:
-
-```bash
-cargo run --package logos-blockchain-node -- /path/to/config.yaml
-```
-
-or copy the executable and run the binary directly:
-
-```bash
-./logos-blockchain-node /path/to/config.yaml
-```
-
-
 #### Running Logos Blockchain Node with integration test
 
 To run the node programatically, one can use `local_testnet_one_node` integration test.

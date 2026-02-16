@@ -77,6 +77,14 @@ where
         }
     }
 
+    pub async fn get_known_addresses(&self) -> Result<Vec<ZkPublicKey>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::GetKnownAddresses { resp_tx })
+            .await?;
+        Ok(rx.await??)
+    }
+
     #[must_use]
     pub async fn from_overwatch_handle(handle: &OverwatchHandle<RuntimeServiceId>) -> Self {
         let relay = handle.relay::<Wallet>().await.unwrap();

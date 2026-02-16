@@ -14,9 +14,11 @@ const SERVER_CFG: &str = "./tests/cfgsync.yaml";
 
 #[ignore = "For local debugging"]
 #[tokio::test]
-async fn test_spawn_nodes_from_cfgsync_custom_ports() {
+async fn test_deploy_setup_stage() {
     // Start the configuration server
     let mut server = std::process::Command::new(SERVER_BIN)
+        .arg("--mode")
+        .arg("setup")
         .arg(SERVER_CFG)
         .spawn()
         .expect("server failed");
@@ -87,4 +89,52 @@ async fn test_spawn_nodes_from_cfgsync_custom_ports() {
     drop(nodes);
     server.kill().unwrap();
     server.wait().unwrap();
+}
+
+#[ignore = "For local debugging"]
+#[tokio::test]
+async fn test_deploy_run_stage() {
+    let server = std::process::Command::new(SERVER_BIN)
+        .arg("--mode")
+        .arg("run")
+        .arg("--storage-path")
+        .arg("cfgsync-deployment-settings.yaml")
+        .arg(SERVER_CFG)
+        .spawn()
+        .expect("server failed to start in run mode");
+
+    sleep(Duration::from_secs(15)).await;
+
+    let response = reqwest::get("http://127.0.0.1:4400/deployment-settings")
+        .await
+        .expect("Failed to hit deployment-settings endpoint");
+    let yaml_bytes = response.bytes().await.unwrap();
+    let deployment: DeploymentSettings = serde_yaml::from_slice(&yaml_bytes).unwrap();
+
+    let mut nodes = Vec::new();
+
+    for i in 0..4 {
+        let node_cfg_path = format!(".tmp_node_{i}.yaml");
+
+        let user_yaml = fs::read_to_string(&node_cfg_path).expect("Node config file missing.");
+        let user_config: UserConfig =
+            serde_yaml::from_str(&user_yaml).expect("Failed to parse user config");
+
+        let run_config = RunConfig {
+            user: user_config,
+            deployment: deployment.clone(),
+        };
+
+        println!(">>>> Spawning Node {i} from disk (.tmp_node_{i}.yaml)");
+        let node = Validator::spawn(run_config)
+            .await
+            .expect("Node spawn failed");
+        nodes.push(node);
+    }
+
+    println!("\nIndependent network spawned from disk. Press Ctrl+C to terminate.\n");
+
+    tokio::signal::ctrl_c().await.unwrap();
+    drop(nodes);
+    drop(server);
 }

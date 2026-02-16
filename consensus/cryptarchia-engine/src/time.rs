@@ -11,7 +11,7 @@ use time::OffsetDateTime;
 use tokio::time::{Interval, MissedTickBehavior};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug, Eq, PartialEq, Copy, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Copy, Hash, PartialOrd, Ord)]
 pub struct Slot(u64);
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use lb_blend_service::core::network::libp2p::Libp2pBroadcastSettings;
 use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
@@ -10,6 +10,7 @@ use lb_libp2p::PeerId;
 use crate::config::{
     blend::deployment::Settings as BlendDeploymentSettings,
     cryptarchia::{deployment::Settings as DeploymentSettings, serde::Config},
+    state::Config as StateConfig,
 };
 
 pub mod deployment;
@@ -29,6 +30,7 @@ impl ServiceConfig {
     pub fn into_cryptarchia_services_settings(
         self,
         blend_deployment: &BlendDeploymentSettings,
+        state_config: &StateConfig,
     ) -> (
         lb_chain_service::CryptarchiaSettings,
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
@@ -123,7 +125,13 @@ impl ServiceConfig {
                 },
             },
             config: ledger_config.clone(),
-            recovery_file: self.user.service.recovery_file,
+            recovery_file: state_config.get_path_for_recovery_state(
+                PathBuf::new()
+                    .join("consensus")
+                    .join("chain_service")
+                    .with_extension("json")
+                    .as_path(),
+            ),
             starting_state: self.deployment.genesis_state.into(),
         };
         let chain_network_settings = lb_chain_network_service::ChainNetworkSettings {

@@ -1,0 +1,33 @@
+[package]
+categories  = { workspace = true }
+description = "Terminal UI zone sequencer - prompts for messages and publishes them as zone blocks"
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-tui-zone"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lib]
+name = "logos_blockchain_tui_zone"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tui-sequencer"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap                             = { features = ["derive", "env", "std"], version = "4" }
+hex                              = "0.4"
+lb-core                          = { workspace = true }
+lb-key-management-system-service = { workspace = true }
+lb-zone-sdk                      = { workspace = true }
+rand                             = { workspace = true }
+reqwest                          = { workspace = true }
+serde_json                       = { workspace = true }
+tokio                            = { default-features = false, features = ["macros", "rt-multi-thread", "signal", "sync"], version = "1" }
+tracing-subscriber               = { features = ["env-filter"], version = "0.3" }

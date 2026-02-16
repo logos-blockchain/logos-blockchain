@@ -17,7 +17,7 @@ use lb_utxotree::MerklePath;
 
 use crate::cryptarchia::{
     block_density::BlockDensity,
-    stake::{LEARNING_RATE, PRECISION, StakeInference},
+    stake::{PRECISION, StakeInference},
 };
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
@@ -154,6 +154,14 @@ impl LedgerState {
             })
         } else if new_epoch == current_epoch + 1 {
             // case 2)
+            tracing::info!(
+                old_epoch = ?current_epoch,
+                new_epoch = ?new_epoch,
+                old_total_stake = self.epoch_state.total_stake,
+                new_total_stake = total_stake,
+                slot = ?slot,
+                "epoch transition"
+            );
             let block_density = BlockDensity::new(self.stake_inference.period(), slot);
             let epoch_state = self.next_epoch_state.clone();
             let next_epoch_state = EpochState {
@@ -171,6 +179,14 @@ impl LedgerState {
             })
         } else {
             // case 3)
+            tracing::warn!(
+                old_epoch = ?current_epoch,
+                new_epoch = ?new_epoch,
+                epochs_skipped = u32::from(new_epoch) - u32::from(current_epoch) - 1,
+                total_stake = total_stake,
+                slot = ?slot,
+                "skipped epochs"
+            );
             let block_density = BlockDensity::new(self.stake_inference.period(), slot);
             let epoch_state = EpochState {
                 epoch: new_epoch,
@@ -391,7 +407,7 @@ impl LedgerState {
             .sum::<Value>();
         let slot: Slot = 0.into();
         let stake_inference = Arc::new(StakeInference::new(
-            LEARNING_RATE,
+            config.consensus_config.stake_inference_learning_rate(),
             slot_activation_coefficient(),
             config.consensus_config.security_param().get().into(),
         ));
@@ -590,7 +606,11 @@ pub mod tests {
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
                 epoch_period_nonce_stabilization: NonZero::new(3).unwrap(),
             },
-            consensus_config: lb_cryptarchia_engine::Config::new(NonZero::new(1).unwrap(), 1.0),
+            consensus_config: lb_cryptarchia_engine::Config::new(
+                NonZero::new(1).unwrap(),
+                1.0,
+                1f64.try_into().expect("1 > 0"),
+            ),
             sdp_config: crate::mantle::sdp::Config {
                 service_params: Arc::new(service_params),
                 service_rewards_params: ServiceRewardsParameters {
@@ -620,7 +640,7 @@ pub mod tests {
             .map(|utxo| (utxo.id(), *utxo))
             .collect::<UtxoTree>();
         let stake_inference = Arc::new(StakeInference::new(
-            LEARNING_RATE,
+            config.consensus_config.stake_inference_learning_rate(),
             slot_activation_coefficient(),
             config.consensus_config.security_param().get().into(),
         ));

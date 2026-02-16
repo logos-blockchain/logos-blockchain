@@ -1,7 +1,9 @@
 use std::num::NonZero;
 
+use lb_utils::math::NonNegativeF64;
+
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
     // The k parameter in the Common Prefix property.
     // Blocks deeper than k are generally considered stable and forks deeper than that
@@ -9,17 +11,23 @@ pub struct Config {
     // during bootstrapping.
     security_param: NonZero<u32>,
     base_period_length: NonZero<u64>,
+    stake_inference_learning_rate: NonNegativeF64,
 }
 
 impl Config {
     #[must_use]
-    pub const fn new(security_param: NonZero<u32>, active_slot_coefficient: f64) -> Self {
+    pub const fn new(
+        security_param: NonZero<u32>,
+        active_slot_coefficient: f64,
+        stake_inference_learning_rate: NonNegativeF64,
+    ) -> Self {
         Self {
             security_param,
             base_period_length: Self::compute_base_period_length(
                 security_param,
                 active_slot_coefficient,
             ),
+            stake_inference_learning_rate,
         }
     }
 
@@ -40,6 +48,11 @@ impl Config {
     #[must_use]
     pub const fn base_period_length(&self) -> NonZero<u64> {
         self.base_period_length
+    }
+
+    #[must_use]
+    pub const fn stake_inference_learning_rate(&self) -> f64 {
+        self.stake_inference_learning_rate.get()
     }
 
     // return the number of slots required to have great confidence at least k

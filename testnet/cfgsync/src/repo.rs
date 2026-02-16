@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -9,6 +10,7 @@ use lb_node::config::{
     deployment::{DeploymentSettings, WellKnownDeployment},
 };
 use lb_tests::topology::configs::GeneralConfig;
+use time::OffsetDateTime;
 use tokio::{sync::oneshot::Sender, time::timeout};
 
 use crate::{
@@ -26,22 +28,25 @@ pub struct ConfigRepo {
     waiting_hosts: Mutex<HashMap<Host, Sender<RepoResponse>>>,
     generated_user_configs: Mutex<HashMap<Host, GeneralConfig>>,
     deployment_settings: Mutex<Option<DeploymentSettings>>,
+    pub deployment_settings_storage_path: PathBuf,
     n_hosts: usize,
     faucet_settings: FaucetSettings,
     tracing_settings: TracingConfig,
+    chain_start_time: OffsetDateTime,
     timeout_duration: Duration,
 }
 
 impl From<CfgSyncConfig> for Arc<ConfigRepo> {
     fn from(config: CfgSyncConfig) -> Self {
-        let faucet_settings = config.faucet_settings();
-        let tracing_settings = config.tracing_settings();
-
         ConfigRepo::new(
             config.n_hosts,
-            faucet_settings,
-            tracing_settings,
+            config.faucet_settings(),
+            config
+                .chain_start_time
+                .unwrap_or_else(OffsetDateTime::now_utc),
+            config.tracing_settings(),
             Duration::from_secs(config.timeout),
+            config.deployment_settings_storage_path,
         )
     }
 }
@@ -51,15 +56,19 @@ impl ConfigRepo {
     pub fn new(
         n_hosts: usize,
         faucet_settings: FaucetSettings,
+        chain_start_time: OffsetDateTime,
         tracing_settings: TracingConfig,
         timeout_duration: Duration,
+        deployment_settings_storage_path: PathBuf,
     ) -> Arc<Self> {
         let repo = Arc::new(Self {
             waiting_hosts: Mutex::new(HashMap::new()),
             generated_user_configs: Mutex::new(HashMap::new()),
             deployment_settings: Mutex::new(None),
+            deployment_settings_storage_path,
             n_hosts,
             faucet_settings,
+            chain_start_time,
             tracing_settings,
             timeout_duration,
         });
@@ -107,6 +116,14 @@ impl ConfigRepo {
         None
     }
 
+    fn persist_deployment_settings(&self, settings: &DeploymentSettings) -> Result<(), String> {
+        let yaml = serde_yaml::to_string(settings)
+            .map_err(|e| format!("Error: Failed to serialize deployment settings: {e}"))?;
+        std::fs::write(&self.deployment_settings_storage_path, yaml)
+            .map_err(|err| format!("Failed to write config to file: {err}"))?;
+        Ok(())
+    }
+
     async fn run(&self) {
         let timeout_duration = self.timeout_duration;
 
@@ -121,6 +138,7 @@ impl ConfigRepo {
             let devnet_settings = {
                 let mut default_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
                 default_settings.cryptarchia.genesis_state = genesis_tx;
+                default_settings.time.chain_start_time = self.chain_start_time;
                 default_settings
             };
 
@@ -133,6 +151,9 @@ impl ConfigRepo {
                 let mut deployment_settings = self.deployment_settings.lock().unwrap();
                 *deployment_settings = Some(devnet_settings.clone());
             };
+
+            self.persist_deployment_settings(&devnet_settings)
+                .expect("Settings should be persisted");
 
             for (host, sender) in waiting_hosts.drain() {
                 let config = configs.get(&host).expect("host should have a config");

@@ -9,6 +9,8 @@ const SERVER_CFG: &str = "../cfgsync.yaml"; // Use config from "testnet" dir.
 #[tokio::test]
 async fn smoke_test_four_clients() {
     let mut server = std::process::Command::new(SERVER_BIN)
+        .arg("--mode")
+        .arg("setup")
         .arg(SERVER_CFG)
         .spawn()
         .expect("server failed");
@@ -38,6 +40,5 @@ async fn smoke_test_four_clients() {
         fs::remove_file(out).unwrap();
     }
 
-    sleep(Duration::from_secs(51)).await;
     server.kill().and_then(|()| server.wait()).unwrap();
 }
