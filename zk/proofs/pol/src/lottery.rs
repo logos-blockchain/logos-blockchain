@@ -4,6 +4,7 @@ use astro_float::{BigFloat, Consts, Radix, RoundingMode, Sign};
 use lb_utils::math::NonNegativeRatio;
 use num_bigint::BigUint;
 use num_traits::{CheckedSub as _, Num as _};
+use tracing::info;
 
 /// The BN254 scalar field order,
 ///
@@ -24,9 +25,12 @@ static LOTTERY_CONSTANTS: OnceLock<LotteryConstants> = OnceLock::new();
 ///
 /// # Panics
 /// Panics if called more than once.
-pub fn init_lottery_constants(f: NonNegativeRatio) {
+pub fn init_lottery_constants(slot_activation_coeff: NonNegativeRatio) {
+    info!(
+        "Initializing lottery constants with slot activation coefficient: {slot_activation_coeff:?}"
+    );
     LOTTERY_CONSTANTS
-        .set(LotteryConstants::new(f))
+        .set(LotteryConstants::new(slot_activation_coeff))
         .expect("Lottery constants can only be initialized once");
 }
 
