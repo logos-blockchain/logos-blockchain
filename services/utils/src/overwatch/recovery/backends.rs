@@ -64,7 +64,11 @@ where
 
     fn save_state(&self, state: &Self::State) -> RecoveryResult<()> {
         let serialized_state = Serializer::serialize(state)?;
-        std::fs::write(&self.recovery_file, serialized_state).map_err(RecoveryError::from)
+        if let Some(parent) = self.recovery_file.parent() {
+            std::fs::create_dir_all(parent).map_err(RecoveryError::from)?;
+        }
+        std::fs::write(&self.recovery_file, serialized_state).map_err(RecoveryError::from)?;
+        Ok(())
     }
 }
 
