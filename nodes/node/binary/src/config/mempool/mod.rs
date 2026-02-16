@@ -21,7 +21,7 @@ impl ServiceConfig {
         self,
         state_config: &StateConfig,
     ) -> TxMempoolSettings<(), Libp2pNetworkAdapterSettings<TxHash, SignedMantleTx>> {
-        let recovery_path = state_config.get_path_for_recovery_path(
+        let recovery_path = state_config.get_path_for_recovery_state(
             PathBuf::new()
                 .join("mempool")
                 .join("recovery")

@@ -45,7 +45,7 @@ impl ServiceConfig {
         BlendCoreSettings<Libp2pCoreBlendBackendSettings>,
         BlendEdgeSettings<Libp2pEdgeBlendBackendSettings>,
     ) {
-        let recovery_path_prefix = state_config.get_path_for_recovery_path(Path::new("blend"));
+        let recovery_path_prefix = state_config.get_path_for_recovery_state(Path::new("blend"));
 
         let blend_service_settings = BlendSettings::<
             Libp2pCoreBlendBackendSettings,

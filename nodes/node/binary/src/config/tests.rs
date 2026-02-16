@@ -53,7 +53,7 @@ fn common_recovery_folder() {
     });
     let storage_config = StorageConfig {
         backend: RocksDbSettings {
-            path: "db".into(),
+            folder_name: "db".into(),
             ..RocksDbSettings::default()
         },
     };

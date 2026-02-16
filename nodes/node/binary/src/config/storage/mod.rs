@@ -13,7 +13,7 @@ impl ServiceConfig {
     pub fn into_rocks_backend_settings(self, state_config: &StateConfig) -> RocksBackendSettings {
         RocksBackendSettings {
             column_family: self.user.backend.column_family,
-            db_path: state_config.base_folder.join(self.user.backend.path),
+            db_path: state_config.base_folder.join(self.user.backend.folder_name),
             read_only: self.user.backend.read_only,
         }
     }

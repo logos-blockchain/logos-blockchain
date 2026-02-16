@@ -18,7 +18,7 @@ impl Default for Config {
 
 impl Config {
     #[must_use]
-    pub fn get_path_for_recovery_path(&self, recovery_path: &Path) -> PathBuf {
+    pub fn get_path_for_recovery_state(&self, recovery_path: &Path) -> PathBuf {
         self.base_folder.join("recovery").join(recovery_path)
     }
 }

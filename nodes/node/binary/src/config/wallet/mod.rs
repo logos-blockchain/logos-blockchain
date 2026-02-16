@@ -13,7 +13,7 @@ pub struct ServiceConfig {
 impl ServiceConfig {
     #[must_use]
     pub fn into_wallet_service_settings(self, state_config: &StateConfig) -> WalletServiceSettings {
-        let recovery_path = state_config.get_path_for_recovery_path(
+        let recovery_path = state_config.get_path_for_recovery_state(
             PathBuf::new()
                 .join("wallet")
                 .join("recovery")

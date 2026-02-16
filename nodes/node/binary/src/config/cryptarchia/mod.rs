@@ -36,14 +36,6 @@ impl ServiceConfig {
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
         lb_chain_leader_service::LeaderSettings<(), Libp2pBroadcastSettings>,
     ) {
-        let recovery_file = state_config.get_path_for_recovery_path(
-            PathBuf::new()
-                .join("consensus")
-                .join("chain_service")
-                .with_extension("json")
-                .as_path(),
-        );
-
         let epoch_schedule = u64::from(
             self.deployment.epoch_config.epoch_period_nonce_buffer.get()
                 + self
@@ -133,7 +125,13 @@ impl ServiceConfig {
                 },
             },
             config: ledger_config.clone(),
-            recovery_file,
+            recovery_file: state_config.get_path_for_recovery_state(
+                PathBuf::new()
+                    .join("consensus")
+                    .join("chain_service")
+                    .with_extension("json")
+                    .as_path(),
+            ),
             starting_state: self.deployment.genesis_state.into(),
         };
         let chain_network_settings = lb_chain_network_service::ChainNetworkSettings {

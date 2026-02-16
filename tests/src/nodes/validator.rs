@@ -107,7 +107,8 @@ impl Validator {
                 });
         }
 
-        config.user.storage.backend.path = dir.path().join("db");
+        config.user.state.base_folder = dir.path().to_path_buf();
+        "db".clone_into(&mut config.user.storage.backend.folder_name);
 
         serde_yaml::to_writer(&mut user_config_file, &config.user).unwrap();
         serde_yaml::to_writer(&mut deployment_config_file, &config.deployment).unwrap();
