@@ -3,7 +3,10 @@ use core::{
     time::Duration,
 };
 
-use lb_core::{mantle::genesis_tx::GenesisTx, sdp::ServiceType};
+use lb_core::{
+    mantle::{GenesisTx as _, genesis_tx::GenesisTx},
+    sdp::ServiceType,
+};
 use lb_libp2p::protocol_name::StreamProtocol;
 use lb_node::config::{
     blend::deployment::{
@@ -28,6 +31,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
     let slot_duration_in_secs = std::env::var(CONSENSUS_SLOT_TIME_VAR)
         .map(|s| s.parse::<u64>().unwrap())
         .unwrap_or(DEFAULT_SLOT_TIME_IN_SECS);
+    let genesis_time = genesis_tx.cryptarchia_parameter().genesis_time;
 
     DeploymentSettings {
         blend: BlendDeploymentSettings {
@@ -116,6 +120,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
         },
         time: TimeDeploymentSettings {
             slot_duration: Duration::from_secs(slot_duration_in_secs),
+            genesis_time,
         },
         mempool: MempoolDeploymentSettings {
             pubsub_topic: "mantle_e2e_tests".to_owned(),

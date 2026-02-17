@@ -5,12 +5,12 @@ use std::{
     time::Duration,
 };
 
+use lb_core::mantle::GenesisTx as _;
 use lb_node::config::{
     TracingConfig,
     deployment::{DeploymentSettings, WellKnownDeployment},
 };
 use lb_tests::topology::configs::GeneralConfig;
-use time::OffsetDateTime;
 use tokio::{sync::oneshot::Sender, time::timeout};
 
 use crate::{
@@ -32,7 +32,6 @@ pub struct ConfigRepo {
     n_hosts: usize,
     faucet_settings: FaucetSettings,
     tracing_settings: TracingConfig,
-    chain_start_time: OffsetDateTime,
     timeout_duration: Duration,
 }
 
@@ -41,9 +40,6 @@ impl From<CfgSyncConfig> for Arc<ConfigRepo> {
         ConfigRepo::new(
             config.n_hosts,
             config.faucet_settings(),
-            config
-                .chain_start_time
-                .unwrap_or_else(OffsetDateTime::now_utc),
             config.tracing_settings(),
             Duration::from_secs(config.timeout),
             config.deployment_settings_storage_path,
@@ -56,7 +52,6 @@ impl ConfigRepo {
     pub fn new(
         n_hosts: usize,
         faucet_settings: FaucetSettings,
-        chain_start_time: OffsetDateTime,
         tracing_settings: TracingConfig,
         timeout_duration: Duration,
         deployment_settings_storage_path: PathBuf,
@@ -68,7 +63,6 @@ impl ConfigRepo {
             deployment_settings_storage_path,
             n_hosts,
             faucet_settings,
-            chain_start_time,
             tracing_settings,
             timeout_duration,
         });
@@ -137,8 +131,9 @@ impl ConfigRepo {
                 create_node_configs(&self.faucet_settings, &self.tracing_settings, hosts);
             let devnet_settings = {
                 let mut default_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
+                default_settings.time.genesis_time =
+                    genesis_tx.cryptarchia_parameter().genesis_time;
                 default_settings.cryptarchia.genesis_state = genesis_tx;
-                default_settings.time.chain_start_time = self.chain_start_time;
                 default_settings
             };
 

@@ -85,5 +85,6 @@ cryptarchia:
       ]
 time:
   slot_duration: '5.0'
+  chain_start_time: 2026-01-10 07:47:56 +00:00:00
 mempool:
   pubsub_topic: mantle_e2e_tests
