@@ -717,6 +717,8 @@ mod tests {
             nonce: ZkHash::ZERO,
             utxos: UtxoTree::default(),
             total_stake: 100,
+            lottery_0: Fr::ZERO,
+            lottery_1: Fr::ZERO,
         }
     }
 

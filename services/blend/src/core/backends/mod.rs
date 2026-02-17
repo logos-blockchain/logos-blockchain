@@ -38,14 +38,15 @@ where
 {
     fn default() -> Self {
         use lb_core::crypto::ZkHash;
-        use lb_groth16::Field as _;
+        use lb_groth16::{Field as _, Fr};
 
         Self {
             epoch: LeaderInputs {
                 message_quota: 1,
                 pol_epoch_nonce: ZkHash::ZERO,
                 pol_ledger_aged: ZkHash::ZERO,
-                total_stake: 1,
+                lottery_0: Fr::ZERO,
+                lottery_1: Fr::ZERO,
             },
             session: SessionInfo {
                 membership: Membership::new_without_local(&[]),
@@ -63,14 +64,15 @@ where
 impl<NodeId> From<Membership<NodeId>> for PublicInfo<NodeId> {
     fn from(value: Membership<NodeId>) -> Self {
         use lb_core::crypto::ZkHash;
-        use lb_groth16::Field as _;
+        use lb_groth16::{Field as _, Fr};
 
         Self {
             epoch: LeaderInputs {
                 message_quota: 1,
                 pol_epoch_nonce: ZkHash::ZERO,
                 pol_ledger_aged: ZkHash::ZERO,
-                total_stake: 1,
+                lottery_0: Fr::ZERO,
+                lottery_1: Fr::ZERO,
             },
             session: SessionInfo {
                 membership: value,

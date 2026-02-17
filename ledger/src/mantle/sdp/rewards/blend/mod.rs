@@ -268,7 +268,8 @@ impl RewardsParameters {
             pol_ledger_aged: epoch_state.utxos.root(),
             pol_epoch_nonce: epoch_state.nonce,
             message_quota,
-            total_stake: epoch_state.total_stake,
+            lottery_0: epoch_state.lottery_0,
+            lottery_1: epoch_state.lottery_1,
         }
     }
 }

@@ -34,7 +34,7 @@ use lb_blend::{
     },
 };
 use lb_core::{crypto::ZkHash, sdp::SessionNumber};
-use lb_groth16::Field as _;
+use lb_groth16::{Field as _, Fr};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_network_service::{NetworkService, backends::NetworkBackend};
 use lb_poq::CorePathAndSelectors;
@@ -339,7 +339,8 @@ pub fn new_public_info<BackendSettings>(
             pol_ledger_aged: ZkHash::ZERO,
             pol_epoch_nonce: ZkHash::ZERO,
             message_quota: settings.session_leadership_quota(),
-            total_stake: 10,
+            lottery_0: Fr::ZERO,
+            lottery_1: Fr::ZERO,
         },
     }
 }

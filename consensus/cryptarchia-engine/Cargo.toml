@@ -18,6 +18,7 @@ workspace = true
 
 [dependencies]
 cfg_eval   = { optional = true, version = "0.1" }
+lb-pol     = { workspace = true }
 lb-utils   = { workspace = true }
 serde      = { optional = true, workspace = true }
 serde_with = { features = ["macros"], optional = true, workspace = true }
@@ -27,5 +28,5 @@ tokio      = { default-features = false, features = ["time"], optional = true, v
 tracing    = { workspace = true }
 
 [features]
-serde = ["dep:cfg_eval", "dep:serde", "dep:serde_with", "lb-utils/time"]
+serde = ["dep:cfg_eval", "dep:serde", "dep:serde_with", "lb-utils/serde", "lb-utils/time"]
 tokio = ["dep:tokio"]

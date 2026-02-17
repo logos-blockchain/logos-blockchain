@@ -37,7 +37,6 @@ tracing-futures                  = { default-features = false, version = "0.2" }
 
 [dev-dependencies]
 lb-groth16 = { workspace = true }
-lb-pol     = { workspace = true }
 lb-utils   = { workspace = true }
 
 [features]

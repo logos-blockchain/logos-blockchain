@@ -363,7 +363,8 @@ where
         let EpochEvent::NewEpoch(LeaderInputsMinusQuota {
             pol_epoch_nonce,
             pol_ledger_aged,
-            total_stake,
+            lottery_0,
+            lottery_1,
         }) = epoch_handler
             .tick(slot_tick)
             .await
@@ -376,7 +377,8 @@ where
                 message_quota: settings.session_leadership_quota(),
                 pol_epoch_nonce,
                 pol_ledger_aged,
-                total_stake,
+                lottery_0,
+                lottery_1,
             },
             remaining_clock_stream,
         )
@@ -573,17 +575,20 @@ where
         EpochEvent::NewEpoch(LeaderInputsMinusQuota {
             pol_epoch_nonce,
             pol_ledger_aged,
-            total_stake,
+            lottery_0,
+            lottery_1,
         })
         | EpochEvent::NewEpochAndOldEpochTransitionExpired(LeaderInputsMinusQuota {
             pol_epoch_nonce,
             pol_ledger_aged,
-            total_stake,
+            lottery_0,
+            lottery_1,
         }) => LeaderInputs {
             message_quota: settings.session_leadership_quota(),
             pol_epoch_nonce,
             pol_ledger_aged,
-            total_stake,
+            lottery_0,
+            lottery_1,
         },
         // We don't handle the epoch transitions in edge node.
         EpochEvent::OldEpochTransitionPeriodExpired => current_public_inputs.leader,

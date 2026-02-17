@@ -1,9 +1,7 @@
 use const_hex::FromHex as _;
 use lb_blend_crypto::{ZkHash, merkle::MerkleTree};
-use lb_groth16::{Field as _, fr_from_bytes_unchecked};
+use lb_groth16::{Field as _, Fr, fr_from_bytes_unchecked};
 use lb_key_management_system_keys::keys::UnsecuredZkKey;
-use lb_pol::init_lottery_constants;
-use lb_utils::math::NonNegativeRatio;
 
 use crate::{
     quota::{
@@ -31,8 +29,6 @@ fn secret_selection_randomness_dst_encoding() {
 
 #[test]
 fn valid_proof_of_core_quota() {
-    init_lottery_constants(NonNegativeRatio::new(1, 10.try_into().unwrap()));
-
     let (public_inputs, private_inputs) = valid_proof_of_core_quota_inputs(
         Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
         1,
@@ -55,8 +51,6 @@ fn valid_proof_of_core_quota() {
 // private inputs but different ephemeral key still produce the same nullifier.
 #[test]
 fn same_key_nullifier_for_different_public_keys() {
-    init_lottery_constants(NonNegativeRatio::new(1, 10.try_into().unwrap()));
-
     let key_1: Ed25519PublicKey =
         Ed25519PublicKey::from_bytes(&[200; ED25519_PUBLIC_KEY_SIZE]).unwrap();
     let key_2: Ed25519PublicKey =
@@ -92,8 +86,6 @@ fn same_key_nullifier_for_different_public_keys() {
 
 #[test]
 fn valid_proof_of_leadership_quota() {
-    init_lottery_constants(NonNegativeRatio::new(1, 10.try_into().unwrap()));
-
     let (public_inputs, private_inputs) = valid_proof_of_leadership_quota_inputs(
         Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
         1,
@@ -138,7 +130,8 @@ fn generate_inputs<const INPUTS: usize>() -> PoQInputs<INPUTS> {
             message_quota: 1,
             pol_epoch_nonce: ZkHash::ZERO,
             pol_ledger_aged: ZkHash::ZERO,
-            total_stake: 1,
+            lottery_0: Fr::ZERO,
+            lottery_1: Fr::ZERO,
         };
         let session = 1;
         let signing_key = Ed25519PublicKey::from_bytes(&[10; ED25519_PUBLIC_KEY_SIZE]).unwrap();
@@ -165,8 +158,6 @@ fn generate_inputs<const INPUTS: usize>() -> PoQInputs<INPUTS> {
 
 #[test]
 fn poq_interaction_single_key() {
-    init_lottery_constants(NonNegativeRatio::new(1, 10.try_into().unwrap()));
-
     let PoQInputs {
         public_inputs,
         secret_inputs,
@@ -184,8 +175,6 @@ fn poq_interaction_single_key() {
 
 #[test]
 fn poq_interaction_two_keys() {
-    init_lottery_constants(NonNegativeRatio::new(1, 10.try_into().unwrap()));
-
     let PoQInputs {
         public_inputs,
         secret_inputs,
@@ -203,8 +192,6 @@ fn poq_interaction_two_keys() {
 
 #[test]
 fn poq_interaction_three_keys() {
-    init_lottery_constants(NonNegativeRatio::new(1, 10.try_into().unwrap()));
-
     let PoQInputs {
         public_inputs,
         secret_inputs,
@@ -222,8 +209,6 @@ fn poq_interaction_three_keys() {
 
 #[test]
 fn poq_interaction_four_keys() {
-    init_lottery_constants(NonNegativeRatio::new(1, 10.try_into().unwrap()));
-
     let PoQInputs {
         public_inputs,
         secret_inputs,
@@ -241,8 +226,6 @@ fn poq_interaction_four_keys() {
 
 #[test]
 fn poq_interaction_one_hundred_keys() {
-    init_lottery_constants(NonNegativeRatio::new(1, 10.try_into().unwrap()));
-
     let PoQInputs {
         public_inputs,
         secret_inputs,

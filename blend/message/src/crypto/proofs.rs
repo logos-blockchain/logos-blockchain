@@ -30,6 +30,7 @@ pub struct PoQVerificationInputsMinusSigningKey {
 impl Default for PoQVerificationInputsMinusSigningKey {
     fn default() -> Self {
         use lb_core::crypto::ZkHash;
+        use lb_groth16::{Field as _, Fr};
 
         Self {
             session: 1,
@@ -41,7 +42,8 @@ impl Default for PoQVerificationInputsMinusSigningKey {
                 pol_ledger_aged: ZkHash::default(),
                 pol_epoch_nonce: ZkHash::default(),
                 message_quota: 1,
-                total_stake: 1,
+                lottery_0: Fr::ZERO,
+                lottery_1: Fr::ZERO,
             },
         }
     }

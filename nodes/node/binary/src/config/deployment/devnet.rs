@@ -34,6 +34,9 @@ cryptarchia:
     epoch_period_nonce_buffer: 3
     epoch_period_nonce_stabilization: 4
   security_param: 20
+  slot_activation_coeff:
+    numerator: 1
+    denominator: 10
   sdp_config:
     service_params:
       BN:

@@ -19,7 +19,6 @@ pub use lb_core::{
     mantle::{SignedMantleTx, Transaction, TxHash, select::FillSize as FillSizeWithTx},
 };
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
-use lb_pol::init_lottery_constants;
 pub use lb_storage_service::backends::{
     SerdeOp,
     rocksdb::{RocksBackend, RocksBackendSettings},
@@ -139,8 +138,6 @@ pub struct LogosBlockchain {
 }
 
 pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServiceId>, DynError> {
-    init_lottery_constants(config.deployment.cryptarchia.slot_activation_coeff);
-
     let time_service_config = TimeConfig {
         user: config.user.time,
         deployment: config.deployment.time,

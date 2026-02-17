@@ -579,6 +579,10 @@ where
         let pruned_blocks = new.update_lib();
         (new, pruned_blocks)
     }
+
+    pub const fn config(&self) -> &Config {
+        &self.config
+    }
 }
 
 /// The output of applying a new block to [`Cryptarchia`]
@@ -710,7 +714,7 @@ pub mod tests {
     pub fn config_with(security_param: u32) -> Config {
         Config::new(
             NonZero::new(security_param).unwrap(),
-            NonNegativeRatio::new(99, 100.try_into().unwrap()),
+            NonNegativeRatio::new(1, 10.try_into().unwrap()),
         )
     }
 
@@ -801,30 +805,34 @@ pub mod tests {
         // by setting a low k we trigger the density choice rule, and the shorter chain
         // is denser after the fork
         let config = config_with(10);
-        let orig_engine = create_canonical_chain(50.try_into().unwrap(), Some(config));
+        let s = config.s();
+        let initial_height = 50;
+        let orig_engine = create_canonical_chain(initial_height.try_into().unwrap(), Some(config));
 
         let mut engine = orig_engine.clone();
         let mut long_p = engine.tip();
         let mut short_p = engine.tip();
         // the node sees first the short chain
-        for slot in 50..70 {
-            let new_block = hash(&format!("short-{slot}"));
-            let UpdatedCryptarchia {
-                cryptarchia,
-                reorged_blocks,
-                ..
-            } = engine
-                .receive_block(new_block, short_p, slot.into())
-                .unwrap();
-            assert!(reorged_blocks.is_empty());
-            engine = cryptarchia;
-            short_p = new_block;
+        for slot in initial_height..(initial_height + s) {
+            if slot % 2 == 0 {
+                let new_block = hash(&format!("short-{slot}"));
+                let UpdatedCryptarchia {
+                    cryptarchia,
+                    reorged_blocks,
+                    ..
+                } = engine
+                    .receive_block(new_block, short_p, slot.into())
+                    .unwrap();
+                assert!(reorged_blocks.is_empty());
+                engine = cryptarchia;
+                short_p = new_block;
+            }
         }
         assert_eq!(engine.tip(), short_p);
 
         // then it receives a longer chain which is however less dense after the fork
-        for slot in 50..70 {
-            if slot % 2 == 0 {
+        for slot in initial_height..(initial_height + s) {
+            if slot % 3 == 0 {
                 let new_block = hash(&format!("long-{slot}"));
                 let UpdatedCryptarchia {
                     cryptarchia,
@@ -841,7 +849,7 @@ pub mod tests {
         }
         // even if the long chain is much longer, it will never be accepted as it's not
         // dense enough
-        for slot in 70..100 {
+        for slot in (initial_height + s)..(initial_height + 2 * s) {
             let new_block = hash(&format!("long-{slot}"));
             let UpdatedCryptarchia {
                 cryptarchia,
@@ -870,11 +878,10 @@ pub mod tests {
                 long_p
             );
 
-            // a longer chain which is equally dense after the fork will be selected as the
-            // main tip
+            // a new denser chain will be selected as the main tip
             let mut parent = orig_engine.tip();
-            for slot in 50..71 {
-                let new_block = hash(&format!("long-dense-{slot}"));
+            for slot in initial_height..=(initial_height + s / 2) {
+                let new_block = hash(&format!("dense-{slot}"));
                 let UpdatedCryptarchia {
                     cryptarchia,
                     reorged_blocks,
@@ -883,15 +890,16 @@ pub mod tests {
                     .receive_block(new_block, parent, slot.into())
                     .unwrap();
 
-                if slot < 70 {
+                if slot < initial_height + s / 2 {
                     assert!(reorged_blocks.is_empty());
                 } else {
                     // on the last block we trigger the reorg
+                    let expected_reorg_len = (s as usize) / 2;
                     assert_reorged_blocks(
                         &reorged_blocks,
                         &orig_engine.tip(),
                         &short_p,
-                        20,
+                        expected_reorg_len,
                         &cryptarchia,
                     );
                 }

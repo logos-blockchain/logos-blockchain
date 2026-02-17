@@ -1,6 +1,7 @@
 use std::num::{NonZero, NonZeroU64};
 
 use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_pol::LotteryConstants;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
@@ -11,6 +12,11 @@ pub struct Config {
 }
 
 impl Config {
+    #[must_use]
+    pub const fn lottery_constants(&self) -> &LotteryConstants {
+        self.consensus_config.lottery_constants()
+    }
+
     #[must_use]
     pub const fn base_period_length(&self) -> NonZero<u64> {
         self.consensus_config.base_period_length()

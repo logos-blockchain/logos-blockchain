@@ -140,7 +140,7 @@ mod test {
     use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
     use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
     use lb_core::crypto::ZkHash;
-    use lb_groth16::Field as _;
+    use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
     use multiaddr::{Multiaddr, PeerId};
 
@@ -183,7 +183,8 @@ mod test {
                     message_quota: 1,
                     pol_epoch_nonce: ZkHash::ZERO,
                     pol_ledger_aged: ZkHash::ZERO,
-                    total_stake: 1,
+                    lottery_0: Fr::ZERO,
+                    lottery_1: Fr::ZERO,
                 },
             },
             MockCorePoQGenerator,
@@ -193,7 +194,8 @@ mod test {
             pol_ledger_aged: ZkHash::ONE,
             pol_epoch_nonce: ZkHash::ONE,
             message_quota: 2,
-            total_stake: 2,
+            lottery_0: Fr::ONE,
+            lottery_1: Fr::ONE,
         };
 
         processor.rotate_epoch(new_leader_inputs);
@@ -205,7 +207,8 @@ mod test {
                 message_quota: 1,
                 pol_epoch_nonce: ZkHash::ZERO,
                 pol_ledger_aged: ZkHash::ZERO,
-                total_stake: 1,
+                lottery_0: Fr::ZERO,
+                lottery_1: Fr::ZERO,
             })
         );
         assert_eq!(

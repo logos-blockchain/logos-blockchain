@@ -129,7 +129,7 @@ mod tests {
                 epoch_period_nonce_buffer: 1.try_into().unwrap(),
                 epoch_period_nonce_stabilization: 1.try_into().unwrap(),
             },
-            consensus_config: cryptarchia_engine_config,
+            consensus_config: cryptarchia_engine_config.clone(),
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(

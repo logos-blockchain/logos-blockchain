@@ -1,3 +1,4 @@
+use lb_groth16::Fr;
 use serde::{Deserialize, Serialize};
 
 use crate::{ZkHash, quota::Ed25519PublicKey};
@@ -41,5 +42,8 @@ pub struct LeaderInputs {
     #[serde(with = "lb_groth16::serde::serde_fr")]
     pub pol_epoch_nonce: ZkHash,
     pub message_quota: u64,
-    pub total_stake: u64,
+    #[serde(with = "lb_groth16::serde::serde_fr")]
+    pub lottery_0: Fr,
+    #[serde(with = "lb_groth16::serde::serde_fr")]
+    pub lottery_1: Fr,
 }
