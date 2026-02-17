@@ -12,7 +12,7 @@ env:
   TEST_TAG_NAME: release-ci-test
 
 jobs:
-  check-skip-and-configure-version:
+  configure-version:
     name: Configure release version
     if: ${{ github.ref_type == 'tag' }}
     runs-on: ubuntu-latest
@@ -41,10 +41,10 @@ jobs:
 
   build:
     name: "Build and tar binaries for ${{ matrix.platform.os-display }} (${{ matrix.platform.arch }})"
-    needs: check-skip-and-configure-version
+    needs: configure-version
     runs-on: ${{ matrix.platform.builder }}
     env:
-      VERSION: ${{ needs.check-skip-and-configure-version.outputs.version }}
+      VERSION: ${{ needs.configure-version.outputs.version }}
     strategy:
       matrix:
         platform:
@@ -80,18 +80,18 @@ jobs:
         run: cargo build -p logos-blockchain-node --features high-active-slot-coefficient --release --target ${{ matrix.platform.target_triple }}
 
       - name: Tar node binary
-        run: tar -czf logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.check-skip-and-configure-version.outputs.version }}.tar.gz -C target/${{ matrix.platform.target_triple }}/release logos-blockchain-node
+        run: tar -czf logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz -C target/${{ matrix.platform.target_triple }}/release logos-blockchain-node
 
       - name: Upload binary tar (${{ matrix.platform.arch }})
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
-          name: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.check-skip-and-configure-version.outputs.version }}
-          path: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.check-skip-and-configure-version.outputs.version }}.tar.gz
+          name: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}
+          path: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz
           if-no-files-found: error
 
   download-circuits:
     name: "Download circuits for ${{ matrix.platform.os-display }} (${{ matrix.platform.arch }})"
-    needs: check-skip-and-configure-version
+    needs: configure-version
     runs-on: ubuntu-latest
     env:
       LB_CIRCUITS_REPO_NAME: logos-blockchain/logos-blockchain-circuits
@@ -130,12 +130,12 @@ jobs:
   create-draft-release:
     name: Create draft release
     needs:
-      - check-skip-and-configure-version
+      - configure-version
       - build
       - download-circuits
     runs-on: ubuntu-latest
     env:
-      VERSION: ${{ needs.check-skip-and-configure-version.outputs.version }}
+      VERSION: ${{ needs.configure-version.outputs.version }}
     outputs:
       upload_url: ${{ steps.create-draft-release.outputs.upload_url }}
 
@@ -158,7 +158,7 @@ jobs:
   upload-binaries:
     name: Upload binaries to release
     needs:
-      - check-skip-and-configure-version
+      - configure-version
       - create-draft-release
     runs-on: ubuntu-latest
     strategy:
@@ -172,7 +172,7 @@ jobs:
             arch: aarch64
     env:
       UPLOAD_URL: ${{ needs.create-draft-release.outputs.upload_url }}
-      BINARY_NAME: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.check-skip-and-configure-version.outputs.version }}
+      BINARY_NAME: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}
       DOWNLOAD_DIRECTORY: binaries
 
     steps:
