@@ -90,7 +90,7 @@ jobs:
           if-no-files-found: error
 
   download-circuits:
-    name: "Download circuits for ${{ matrix.platform.os }} (${{ matrix.platform.arch }})"
+    name: "Download circuits for ${{ matrix.platform.os-display }} (${{ matrix.platform.arch }})"
     needs: check-skip-and-configure-version
     runs-on: ubuntu-latest
     env:
@@ -99,10 +99,13 @@ jobs:
       matrix:
         platform:
           - os: linux
+            os-display: Linux
             arch: x86_64
           - os: linux
+            os-display: Linux
             arch: aarch64
           - os: macos
+            os-display: MacOS
             arch: aarch64
 
     steps:
