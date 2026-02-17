@@ -682,7 +682,7 @@ mod tests {
             },
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(1).unwrap(),
-                1.0,
+                0.1,
                 1f64.try_into().expect("1 > 0"),
             ),
             sdp_config: lb_ledger::mantle::sdp::Config {

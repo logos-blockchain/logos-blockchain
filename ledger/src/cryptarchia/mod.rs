@@ -608,7 +608,7 @@ pub mod tests {
             },
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(1).unwrap(),
-                1.0,
+                0.1,
                 1f64.try_into().expect("1 > 0"),
             ),
             sdp_config: crate::mantle::sdp::Config {
@@ -729,46 +729,46 @@ pub mod tests {
         let utxos = std::iter::repeat_with(utxo).take(4).collect::<Vec<_>>();
         let utxo_4 = utxo();
         let utxo_5 = utxo();
-        let (mut ledger, genesis) = ledger(&utxos, config());
 
-        // An epoch will be 10 slots long, with stake distribution snapshot taken at the
-        // start of the epoch and nonce snapshot before slot 7
+        let config = config();
+        assert_eq!(config.epoch_length(), 100);
+        let (mut ledger, genesis) = ledger(&utxos, config);
 
-        let h_1 = update_ledger(&mut ledger, genesis, 1, utxos[0]).unwrap();
+        let h_1 = update_ledger(&mut ledger, genesis, 10, utxos[0]).unwrap();
         assert_eq!(
             ledger.states[&h_1].cryptarchia_ledger.epoch_state.epoch,
             0.into()
         );
 
-        let h_2 = update_ledger(&mut ledger, h_1, 6, utxos[1]).unwrap();
+        let h_2 = update_ledger(&mut ledger, h_1, 60, utxos[1]).unwrap();
 
-        let h_3 = apply_and_add_utxo(&mut ledger, h_2, 9, utxos[2], utxo_4);
+        let h_3 = apply_and_add_utxo(&mut ledger, h_2, 90, utxos[2], utxo_4);
 
         // test epoch jump
-        let h_4 = update_ledger(&mut ledger, h_3, 20, utxos[3]).unwrap();
-        // nonce for epoch 2 should be taken at the end of slot 16, but in our case the
-        // last block is at slot 9
+        let h_4 = update_ledger(&mut ledger, h_3, 200, utxos[3]).unwrap();
+        // nonce for epoch 2 should be taken at the end of slot 160, but in our case the
+        // last block is at slot 90
         assert_eq!(
             ledger.states[&h_4].cryptarchia_ledger.epoch_state.nonce,
             ledger.states[&h_3].cryptarchia_ledger.nonce,
         );
-        // stake distribution snapshot should be taken at the end of slot 9
+        // stake distribution snapshot should be taken at the end of slot 90
         assert_eq!(
             ledger.states[&h_4].cryptarchia_ledger.epoch_state.utxos,
             ledger.states[&h_3].cryptarchia_ledger.utxos,
         );
 
-        // nonce for epoch 1 should be taken at the end of slot 6
-        update_ledger(&mut ledger, h_3, 10, utxos[3]).unwrap();
-        let h_5 = apply_and_add_utxo(&mut ledger, h_3, 10, utxos[3], utxo_5);
+        // nonce for epoch 1 should be taken at the end of slot 60
+        update_ledger(&mut ledger, h_3, 100, utxos[3]).unwrap();
+        let h_5 = apply_and_add_utxo(&mut ledger, h_3, 100, utxos[3], utxo_5);
         assert_eq!(
             ledger.states[&h_5].cryptarchia_ledger.epoch_state.nonce,
             ledger.states[&h_2].cryptarchia_ledger.nonce,
         );
 
-        let h_6 = update_ledger(&mut ledger, h_5, 20, utxos[3]).unwrap();
-        // stake distribution snapshot should be taken at the end of slot 9, check that
-        // changes in slot 10 are ignored
+        let h_6 = update_ledger(&mut ledger, h_5, 200, utxos[3]).unwrap();
+        // stake distribution snapshot should be taken at the end of slot 90, check that
+        // changes in slot 100 are ignored
         assert_eq!(
             ledger.states[&h_6].cryptarchia_ledger.epoch_state.utxos,
             ledger.states[&h_3].cryptarchia_ledger.utxos,
@@ -779,8 +779,10 @@ pub mod tests {
     fn test_new_utxos_becoming_eligible_after_stake_distribution_stabilizes() {
         let utxo_1 = utxo();
         let utxo = utxo();
+        let config = config();
+        let epoch_length = config.epoch_length();
 
-        let (mut ledger, genesis) = ledger(&[utxo], config());
+        let (mut ledger, genesis) = ledger(&[utxo], config);
 
         // EPOCH 0
         // mint a new utxo to be used for leader elections in upcoming epochs
@@ -793,7 +795,7 @@ pub mod tests {
         ));
 
         // EPOCH 1
-        for i in 10..20 {
+        for i in epoch_length..(2 * epoch_length) {
             // the newly minted utxo is still not eligible in the following epoch since the
             // stake distribution snapshot is taken at the beginning of the previous epoch
             assert!(matches!(
@@ -804,7 +806,7 @@ pub mod tests {
 
         // EPOCH 2
         // the utxo is finally eligible 2 epochs after it was first minted
-        update_ledger(&mut ledger, h_0_1, 20, utxo_1).unwrap();
+        update_ledger(&mut ledger, h_0_1, 2 * epoch_length, utxo_1).unwrap();
     }
 
     #[test]
@@ -1089,6 +1091,7 @@ pub mod tests {
     fn test_epoch_state_for_slot_with_empty_epochs() {
         let utxo = utxo();
         let config = config();
+        let epoch_length = config.epoch_length();
         let ledger_state = genesis_state(&[utxo]);
 
         // Genesis state is at epoch 0, with epoch_state for epoch 0 and
@@ -1098,7 +1101,7 @@ pub mod tests {
         let initial_total_stake = ledger_state.epoch_state.total_stake;
 
         // Query for epoch 0 (current epoch) - should return epoch_state
-        let epoch_0_slot: Slot = 5.into();
+        let epoch_0_slot: Slot = (epoch_length - 1).into();
         let epoch_0_state = ledger_state
             .epoch_state_for_slot(epoch_0_slot, &config)
             .expect("Should return epoch state for current epoch");
@@ -1106,7 +1109,7 @@ pub mod tests {
         assert_eq!(epoch_0_state.total_stake, initial_total_stake);
 
         // Query for epoch 1 (next epoch) - should return next_epoch_state
-        let epoch_1_slot: Slot = 15.into(); // epoch length is 10
+        let epoch_1_slot: Slot = (epoch_length + 1).into();
         let epoch_1_state = ledger_state
             .epoch_state_for_slot(epoch_1_slot, &config)
             .expect("Should return epoch state for next epoch");
@@ -1115,7 +1118,7 @@ pub mod tests {
 
         // Query for epoch 2 (skipped epoch) - should synthesize with reduced total
         // stake
-        let epoch_2_slot: Slot = 25.into();
+        let epoch_2_slot: Slot = (2 * epoch_length + 1).into();
         let epoch_2_state = ledger_state
             .epoch_state_for_slot(epoch_2_slot, &config)
             .expect("Should synthesize epoch state for skipped epoch");
@@ -1127,7 +1130,7 @@ pub mod tests {
         );
 
         // Query for epoch 3 (multiple skipped epochs) - stake stays at minimum
-        let epoch_3_slot: Slot = 35.into();
+        let epoch_3_slot: Slot = (3 * epoch_length + 1).into();
         let epoch_3_state = ledger_state
             .epoch_state_for_slot(epoch_3_slot, &config)
             .expect("Should synthesize epoch state for multiple skipped epochs");

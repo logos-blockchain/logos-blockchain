@@ -125,7 +125,7 @@ mod tests {
         let security_param: NonZero<u32> = 2.try_into().unwrap();
         let cryptarchia_engine_config = lb_cryptarchia_engine::Config::new(
             security_param,
-            1f64,
+            0.1,
             1f64.try_into().expect("1 > 0"),
         );
         let ledger_config = lb_ledger::Config {
@@ -259,7 +259,7 @@ mod tests {
         let security_param: NonZero<u32> = 2.try_into().unwrap();
         let cryptarchia_engine_config = lb_cryptarchia_engine::Config::new(
             security_param,
-            1f64,
+            0.1,
             1f64.try_into().expect("1 > 0"),
         );
         let ledger_config = lb_ledger::Config {
