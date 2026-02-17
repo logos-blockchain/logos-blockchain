@@ -9,6 +9,7 @@ concurrency:
 
 env:
   LB_CIRCUITS_VERSION: v0.4.1
+  TEST_TAG_NAME: release-ci-test
 
 jobs:
   check-skip-and-configure-version:
@@ -25,14 +26,14 @@ jobs:
         env:
           TAG_NAME: ${{ github.ref_name }}
         run: |
-          if [[ "$TAG_NAME" == "release-ci-test" ]]; then
+          if [[ "$TAG_NAME" == "${{ env.TEST_TAG_NAME }}" ]]; then
             echo "Test workflow run. Setting version to 0.0.0 for testing."
             VERSION=0.0.0
           elif [[ "$TAG_NAME" =~ ^([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             echo "Release workflow run for tag '$TAG_NAME'. Setting version to '$TAG_NAME'."
             VERSION="$TAG_NAME"
           else
-            echo "Tag name '$TAG_NAME' is not valid. It must either be 'release-ci-test' or follow the format 'X.Y.Z'."
+            echo "Tag name '$TAG_NAME' is not valid. It must either be '${{ env.TEST_TAG_NAME }}' or follow the format 'X.Y.Z'."
             exit 1
           fi
 
