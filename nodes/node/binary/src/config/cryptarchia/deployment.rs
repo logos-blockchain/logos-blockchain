@@ -7,8 +7,7 @@ use lb_core::{
     sdp::{MinStake, ServiceType},
 };
 use lb_cryptarchia_engine::Config as ConsensusConfig;
-use lb_utils::math::NonNegativeF64;
-use lb_utils::math::NonNegativeRatio;
+use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
