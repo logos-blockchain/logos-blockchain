@@ -146,10 +146,7 @@ where
                     None
                 },
                 |msg| match msg {
-                    NetworkMessage::Proposal(proposal) => {
-                        debug!("Received proposal with ID: {:?}", proposal.header().id());
-                        Some(proposal)
-                    }
+                    NetworkMessage::Proposal(proposal) => Some(proposal),
                 },
             ),
             Err(BroadcastStreamRecvError::Lagged(n)) => {

@@ -284,7 +284,7 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
                     .send(Some((leader_private, epoch_state.epoch)))
                     .is_err()
                 {
-                    tracing::trace!(
+                    tracing::debug!(
                         "No active listeners for pre-calculated PoL winning slots. Not broadcasting."
                     );
                 } else {
@@ -321,7 +321,7 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
         }
 
         if self.sender.send(Some((private_inputs, epoch))).is_err() {
-            tracing::trace!(
+            tracing::debug!(
                 "No active listeners for pre-calculated PoL winning slots. Not broadcasting."
             );
         }
