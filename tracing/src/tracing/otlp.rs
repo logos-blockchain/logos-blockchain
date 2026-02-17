@@ -5,7 +5,7 @@ use opentelemetry_otlp::WithExportConfig as _;
 use opentelemetry_sdk::{
     Resource,
     propagation::TraceContextPropagator,
-    trace::{BatchConfig, Sampler, Tracer},
+    trace::{Sampler, SdkTracerProvider, Tracer},
 };
 use opentelemetry_semantic_conventions::resource::SERVICE_NAME;
 use serde::{Deserialize, Serialize};
@@ -27,26 +27,26 @@ pub fn create_otlp_tracing_layer<S>(
 where
     S: Subscriber + for<'span> LookupSpan<'span>,
 {
-    let resource = Resource::new(vec![KeyValue::new(SERVICE_NAME, config.service_name)]);
-    let tracer_provider = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_trace_config(
-            opentelemetry_sdk::trace::Config::default()
-                .with_sampler(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(
-                    config.sample_ratio,
-                ))))
-                .with_resource(resource),
-        )
-        .with_batch_config(BatchConfig::default())
-        .with_exporter(
-            opentelemetry_otlp::new_exporter()
-                .tonic()
-                .with_endpoint(config.endpoint),
-        )
-        .install_batch(opentelemetry_sdk::runtime::Tokio)?;
+    let resource = Resource::builder()
+        .with_attributes(vec![KeyValue::new(SERVICE_NAME, config.service_name)])
+        .build();
+
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(config.endpoint.to_string())
+        .build()?;
+
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_resource(resource)
+        .with_sampler(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(
+            config.sample_ratio,
+        ))))
+        .with_batch_exporter(exporter)
+        .build();
 
     global::set_text_map_propagator(TraceContextPropagator::new());
     global::set_tracer_provider(tracer_provider.clone());
+
     let tracer: Tracer = tracer_provider.tracer("LogosBlockchainTracer");
 
     Ok(OpenTelemetryLayer::new(tracer))

@@ -12,6 +12,7 @@ use lb_tracing::{
         gelf::{GelfConfig, create_gelf_layer},
         local::{FileConfig, create_file_layer, create_writer_layer},
         loki::{LokiConfig, create_loki_layer},
+        otlp::{OtlpConfig, create_otlp_layer},
     },
     metrics::otlp::{OtlpMetricsConfig, create_otlp_metrics_layer},
     tracing::otlp::{OtlpTracingConfig, create_otlp_tracing_layer},
@@ -96,6 +97,7 @@ pub enum LoggerLayer {
     Gelf(GelfConfig),
     File(FileConfig),
     Loki(LokiConfig),
+    Otlp(OtlpConfig),
     Stdout,
     Stderr,
     #[serde(skip)]
@@ -236,6 +238,10 @@ where
             LoggerLayer::Writer(writer) => {
                 let (layer, guard) = create_writer_layer(writer);
                 (Box::new(layer), Some(guard))
+            }
+            LoggerLayer::Otlp(config) => {
+                let otlp_logging_layer = create_otlp_layer(config)?;
+                (Box::new(otlp_logging_layer), None)
             }
             LoggerLayer::None => (Box::new(tracing_subscriber::fmt::Layer::new()), None),
         };
