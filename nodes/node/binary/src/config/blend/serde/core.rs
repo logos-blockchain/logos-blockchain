@@ -40,8 +40,13 @@ pub struct BackendConfig {
     pub max_dial_attempts_per_peer: NonZeroU64,
 }
 
+#[must_use]
+pub fn default_listening_address_with_port(port: u16) -> Multiaddr {
+    format!("/ip4/0.0.0.0/udp/{port}/quic-v1").parse().unwrap()
+}
+
 fn default_listening_address() -> Multiaddr {
-    "/ip4/0.0.0.0/udp/10000/quic-v1".parse().unwrap()
+    default_listening_address_with_port(10_000)
 }
 
 fn is_default_listening_address(addr: &Multiaddr) -> bool {

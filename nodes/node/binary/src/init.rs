@@ -1,4 +1,3 @@
-use core::str::FromStr as _;
 use std::{collections::HashMap, net::Ipv4Addr, time::Duration};
 
 use color_eyre::eyre::{Result, eyre};
@@ -17,7 +16,10 @@ use crate::{
     config::{
         ApiConfig, DeploymentType, InitArgs, KmsConfig, OnUnknownKeys, SdpConfig, StateConfig,
         StorageConfig, TracingConfig, WalletConfig,
-        blend::serde::{Config as BlendConfig, RequiredValues as BlendConfigRequiredValues},
+        blend::serde::{
+            Config as BlendConfig, RequiredValues as BlendConfigRequiredValues,
+            core::default_listening_address_with_port,
+        },
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaConfigRequiredValues,
         },
@@ -193,9 +195,7 @@ pub async fn run(args: &InitArgs) -> Result<()> {
     let network_key = lb_libp2p::ed25519::SecretKey::generate();
     let keys = generate_keys();
 
-    let blend_listening_address = args
-        .blend_port
-        .map(|port| Multiaddr::from_str(&format!("/ip4/0.0.0.0/udp/{port}/quic-v1")).unwrap());
+    let blend_listening_address = args.blend_port.map(default_listening_address_with_port);
 
     let detected_address = if args.external_address.is_some() || args.no_public_ip_check {
         None
@@ -212,7 +212,7 @@ pub async fn run(args: &InitArgs) -> Result<()> {
                     None
                 },
                 |ip| {
-                    println!("Detected externally reachable IP address via AutoNAT: {ip}");
+                    println!("Detected externally reachable IPv4 address via AutoNAT: {ip}");
                     Some(ip)
                 },
             )
@@ -275,11 +275,10 @@ fn build_user_config(
             .clone_from(&args.initial_peers);
         let static_addr = args.external_address.clone().or_else(|| {
             detected_address.map(|ip| {
-                Multiaddr::from_str(&format!(
-                    "/ip4/{ip}/udp/{}/quic-v1",
-                    base_config.backend.swarm.port
-                ))
-                .unwrap()
+                // Uses the specified network port or the default one if none is specified.
+                format!("/ip4/{ip}/udp/{}/quic-v1", base_config.backend.swarm.port)
+                    .parse()
+                    .unwrap()
             })
         });
         base_config.backend.swarm.nat =
@@ -368,7 +367,10 @@ fn build_user_config(
 mod tests {
     use std::net::SocketAddr;
 
+    use lb_libp2p::ed25519::SecretKey;
+
     use super::*;
+    use crate::config::WellKnownDeployment;
 
     fn build_config_from_peers(initial_peers: Vec<Multiaddr>) -> UserConfig {
         let args = InitArgs {
@@ -382,9 +384,9 @@ mod tests {
             deployment: DeploymentType::default(),
             state_path: None,
         };
-        let network_key = lb_libp2p::ed25519::SecretKey::generate();
+        let network_key = SecretKey::generate();
         let keys = generate_keys();
-        let blend_addr = Multiaddr::from_str("/ip4/0.0.0.0/udp/3400/quic-v1").unwrap();
+        let blend_addr = "/ip4/0.0.0.0/udp/3400/quic-v1".parse().unwrap();
         build_user_config(&args, network_key, keys, Some(blend_addr), None)
     }
 
@@ -417,5 +419,40 @@ mod tests {
         let config = build_config_from_peers(vec![addr]);
 
         assert!(config.cryptarchia.network.bootstrap.ibd.peers.is_empty());
+    }
+
+    #[test]
+    fn same_network_port_for_libp2p_and_autonat() {
+        let args = InitArgs {
+            blend_port: None,
+            deployment: WellKnownDeployment::Devnet.into(),
+            external_address: None,
+            http_addr: "0.0.0.0:8080".parse().unwrap(),
+            initial_peers: vec![],
+            no_public_ip_check: false,
+            output: "test_output.yaml".into(),
+            state_path: None,
+
+            // What we are testing
+            net_port: Some(3_000),
+        };
+
+        let config = build_user_config(
+            &args,
+            SecretKey::generate(),
+            generate_keys(),
+            None,
+            Some("8.8.8.8".parse().unwrap()),
+        );
+
+        // Test that the libp2p stack port is the same as specified in the args.
+        assert_eq!(config.network.backend.swarm.port, 3_000);
+        // Test that the same port is used in the NAT configuration.
+        assert_eq!(
+            config.network.backend.swarm.nat,
+            nat::Config::Static {
+                external_address: "/ip4/8.8.8.8/udp/3000/quic-v1".parse().unwrap(),
+            }
+        );
     }
 }
