@@ -85,8 +85,6 @@ jobs:
 
       - name: End-to-end integration tests
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        env:
-          USE_RELEASE_BINARIES: "1"
         with:
           command: nextest
           # - We don't test benches as they take 6h+, leading to a timeout
@@ -111,7 +109,6 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
           CUCUMBER_LOG_LEVEL: debug
-          LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
         with:
           command: test
           args: >-
@@ -139,7 +136,6 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
           CUCUMBER_LOG_LEVEL: debug
-          LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
         with:
           command: test
           args: >-

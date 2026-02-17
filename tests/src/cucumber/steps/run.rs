@@ -1,5 +1,5 @@
 use cucumber::{then, when};
-use lb_framework::LbcLocalDeployer;
+use lb_testing_framework::LbcLocalDeployer;
 use testing_framework_core::scenario::Deployer as _;
 
 use crate::cucumber::{

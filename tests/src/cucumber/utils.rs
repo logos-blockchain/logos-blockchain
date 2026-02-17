@@ -1,6 +1,6 @@
 use std::{env, path::PathBuf, time::Duration};
 
-use lb_framework::{CoreBuilderExt as _, ScenarioBuilder};
+use lb_testing_framework::{CoreBuilderExt as _, ScenarioBuilder};
 use tokio::time::{Instant, MissedTickBehavior};
 use tracing::{info, warn};
 

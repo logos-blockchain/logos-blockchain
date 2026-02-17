@@ -8,8 +8,10 @@ use std::{
 
 use cucumber::World;
 use derivative::Derivative;
-use lb_framework::{LbcEnv, LbcManualCluster, ScenarioBuilder, ScenarioBuilderExt as _, workloads};
 use lb_node::config::RunConfig;
+use lb_testing_framework::{
+    LbcEnv, LbcManualCluster, ScenarioBuilder, ScenarioBuilderExt as _, workloads,
+};
 use testing_framework_core::scenario::{NodeControlCapability, Scenario, StartedNode};
 use tracing::warn;
 

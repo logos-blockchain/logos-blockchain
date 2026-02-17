@@ -3,7 +3,7 @@ use std::{collections::HashMap, time::Duration};
 use cucumber::{given, then, when};
 use futures::future::try_join_all;
 use hex::ToHex as _;
-use lb_framework::{DeploymentBuilder, LbcLocalDeployer, TopologyConfig};
+use lb_testing_framework::{DeploymentBuilder, LbcLocalDeployer, TopologyConfig};
 use testing_framework_core::scenario::{PeerSelection, StartNodeOptions};
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
@@ -61,7 +61,7 @@ fn manual_cluster(world: &mut CucumberWorld, nodes_count: usize) -> StepResult {
 #[given(expr = "I start node {string}")]
 #[when(expr = "I start node {string}")]
 async fn start_manual_stand_alone_node(world: &mut CucumberWorld, node_name: String) -> StepResult {
-    Box::pin(start_node(world, node_name, &Vec::new())).await
+    start_node(world, node_name, &Vec::new()).await
 }
 
 #[given(expr = "I start peer node {string} connected to node {string}")]
@@ -71,7 +71,7 @@ async fn start_manual_connected_node(
     node_name: String,
     peer_name: String,
 ) -> StepResult {
-    Box::pin(start_node(world, node_name, &[peer_name])).await
+    start_node(world, node_name, &[peer_name]).await
 }
 
 #[given(expr = "I start peer node {string} connected to node {string} and node {string}")]
@@ -82,7 +82,7 @@ async fn start_manual_two_connected_nodes(
     peer_name1: String,
     peer_name2: String,
 ) -> StepResult {
-    Box::pin(start_node(world, node_name, &[peer_name1, peer_name2])).await
+    start_node(world, node_name, &[peer_name1, peer_name2]).await
 }
 
 async fn start_node(world: &mut CucumberWorld, node_name: String, peers: &[String]) -> StepResult {

@@ -86,7 +86,6 @@ resolver = "2"
 # Internal
 common-http-client                 = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
 lb-api-service                     = { default-features = false, package = "logos-blockchain-api-service", path = "./services/api" }
-lb-app                             = { default-features = false, package = "testing_framework", path = "./tests/testing_framework" }
 lb-blend                           = { default-features = false, package = "logos-blockchain-blend", path = "./blend/core" }
 lb-blend-crypto                    = { default-features = false, package = "logos-blockchain-blend-crypto", path = "./blend/crypto" }
 lb-blend-message                   = { default-features = false, package = "logos-blockchain-blend-message", path = "./blend/message" }
@@ -109,7 +108,6 @@ lb-cryptarchia-engine              = { default-features = false, package = "logo
 lb-cryptarchia-sync                = { default-features = false, package = "logos-blockchain-cryptarchia-sync", path = "./consensus/cryptarchia-sync" }
 lb-demo-archiver                   = { default-features = false, package = "logos-blockchain-demo-archiver", path = "./testnet/l2-sequencer-archival-demo/archiver" }
 lb-demo-sequencer                  = { default-features = false, package = "logos-blockchain-demo-sequencer", path = "./testnet/l2-sequencer-archival-demo/sequencer" }
-lb-framework                       = { default-features = false, package = "testing_framework", path = "./tests/testing_framework" }
 lb-groth16                         = { default-features = false, package = "logos-blockchain-groth16", path = "./zk/groth16" }
 lb-http-api-common                 = { default-features = false, package = "logos-blockchain-http-api-common", path = "./nodes/api-common" }
 lb-key-management-system-keys      = { default-features = false, package = "logos-blockchain-key-management-system-keys", path = "./kms/keys" }
@@ -129,9 +127,9 @@ lb-sdp-service                     = { default-features = false, package = "logo
 lb-services-utils                  = { default-features = false, package = "logos-blockchain-services-utils", path = "./services/utils" }
 lb-storage-service                 = { default-features = false, package = "logos-blockchain-storage-service", path = "./services/storage" }
 lb-system-sig-service              = { default-features = false, package = "logos-blockchain-system-sig-service", path = "./services/system-sig" }
+lb-testing-framework               = { default-features = false, package = "testing_framework", path = "./tests/testing_framework" }
 lb-tests                           = { default-features = false, package = "logos-blockchain-tests", path = "./tests" }
 lb-time-service                    = { default-features = false, package = "logos-blockchain-time-service", path = "./services/time" }
-lb-topology                        = { default-features = false, package = "testing_framework", path = "./tests/testing_framework" }
 lb-tracing                         = { default-features = false, package = "logos-blockchain-tracing", path = "./tracing" }
 lb-tracing-service                 = { default-features = false, package = "logos-blockchain-tracing-service", path = "./services/tracing" }
 lb-tx-service                      = { default-features = false, package = "logos-blockchain-tx-service", path = "./services/tx-service" }

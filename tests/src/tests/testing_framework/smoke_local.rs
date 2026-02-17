@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use lb_framework::{
+use lb_testing_framework::{
     CoreBuilderExt as _, LbcLocalDeployer, ScenarioBuilder, ScenarioBuilderExt as _,
 };
 use testing_framework_core::scenario::Deployer as _;
