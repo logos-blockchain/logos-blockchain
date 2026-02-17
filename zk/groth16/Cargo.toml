@@ -16,7 +16,7 @@ ark-ff        = { version = "0.4" }
 ark-groth16   = { default-features = false, features = ["std"], version = "0.4" }
 ark-serialize = { default-features = false, version = "0.4.2" }
 generic-array = { default-features = false, version = "1.2" }
-hex           = { default-features = false, version = "0.4" }
+hex           = { default-features = false, version = "0.4", features = ["alloc"] }
 num-bigint    = { default-features = false, version = "0.4" }
 serde         = { features = ["derive"], optional = true, workspace = true }
 serde_json    = { default-features = false, features = ["alloc"], optional = true, version = "1.0" }
@@ -31,4 +31,4 @@ workspace = true
 
 [features]
 default = []
-deser   = ["dep:serde", "dep:serde_json", "generic-array/serde", "hex/alloc"]
+deser   = ["dep:serde", "dep:serde_json", "generic-array/serde"]

@@ -72,7 +72,7 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
         let stream = receiver.await.unwrap();
         Box::new(Box::pin(stream.filter_map(async |event| match event {
             Ok(NetworkEvent::RawMessage(message)) => {
-                tracing::info!("Received message: {:?}", message.payload());
+                tracing::debug!("Received message: {:?}", message.payload());
                 message.content_topic().eq(&MOCK_TX_CONTENT_TOPIC).then(|| {
                     let tx = MockTransaction::new(message);
                     (tx.id(), tx)

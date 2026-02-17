@@ -531,7 +531,7 @@ where
 
         drop(tx_broadcast.send(item));
 
-        tracing::info!(counter.tx_mempool_pending_items = pool.pending_item_count());
+        tracing::debug!(counter.tx_mempool_pending_items = pool.pending_item_count());
 
         state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
     }

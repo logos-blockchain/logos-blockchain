@@ -218,8 +218,7 @@ where
             } => Self::handle_execute(backend, transaction, reply_channel).await,
             StorageMsg::Api { request: api_call } => Self::handle_api_call(api_call, backend).await,
         } {
-            // TODO: add proper logging
-            println!("{e}");
+            tracing::error!("Error handling storage message: {e}");
         }
     }
     /// Handle load message

@@ -342,9 +342,9 @@ where
             .validate_and_publish_message(msg)
         {
             tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
-            tracing::info!(counter.failed_outbound_messages = 1);
+            tracing::trace!(counter.failed_outbound_messages = 1);
         } else {
-            tracing::info!(counter.successful_outbound_messages = 1);
+            tracing::trace!(counter.successful_outbound_messages = 1);
         }
     }
 
@@ -361,20 +361,20 @@ where
             .validate_and_forward_message(msg, except)
         {
             tracing::error!(target: LOG_TARGET, "Failed to forward message to blend network: {e:?}");
-            tracing::info!(counter.failed_outbound_messages = 1);
+            tracing::trace!(counter.failed_outbound_messages = 1);
         } else {
-            tracing::info!(counter.successful_outbound_messages = 1);
+            tracing::trace!(counter.successful_outbound_messages = 1);
         }
     }
 
     fn report_message_to_service(&self, msg: EncapsulatedMessageWithVerifiedPublicHeader) {
-        tracing::debug!("Received message from a peer: {msg:?}");
+        tracing::trace!("Received message from a peer: {msg:?}");
 
         if let Err(e) = self.incoming_message_sender.send(msg) {
             tracing::error!(target: LOG_TARGET, "Failed to send incoming message to channel: {e}");
-            tracing::info!(counter.failed_inbound_messages = 1);
+            tracing::trace!(counter.failed_inbound_messages = 1);
         } else {
-            tracing::info!(counter.successful_inbound_messages = 1);
+            tracing::trace!(counter.successful_inbound_messages = 1);
         }
     }
 
@@ -422,9 +422,9 @@ where
             .validate_and_publish_message(msg)
         {
             tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
-            tracing::info!(counter.failed_outbound_messages = 1);
+            tracing::trace!(counter.failed_outbound_messages = 1);
         } else {
-            tracing::info!(counter.successful_outbound_messages = 1);
+            tracing::trace!(counter.successful_outbound_messages = 1);
         }
     }
 }
@@ -496,7 +496,7 @@ where
                 connection_id,
                 error,
             } => {
-                tracing::error!(
+                tracing::warn!(
                     target: LOG_TARGET,
                     "Dialing error for peer: {peer_id:?} on connection: {connection_id:?}. Error: {error:?}"
                 );
@@ -510,7 +510,7 @@ where
             }
             _ => {
                 tracing::debug!(target: LOG_TARGET, "Received event from blend network that will be ignored.");
-                tracing::info!(counter.ignored_event = 1);
+                tracing::trace!(counter.ignored_event = 1);
             }
         }
     }

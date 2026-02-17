@@ -1263,7 +1263,7 @@ where
                     height: tip.length(),
                 });
 
-                info!("Sending tip response: {response:?}");
+                debug!("Sending tip response: {response:?}");
                 if let Err(e) = reply_sender.send(response).await {
                     error!("Failed to send tip header: {e}");
                 }

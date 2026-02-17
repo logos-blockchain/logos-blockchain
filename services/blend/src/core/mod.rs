@@ -1301,11 +1301,11 @@ where
             let deserialized_data_message =
                 NetworkMessage::from_bytes(fully_decapsulated_message.payload_body())
                     .expect("Locally-generated and serialized message should be deserializable.");
-            tracing::debug!(target: LOG_TARGET, "Locally generated data message {deserialized_data_message:?} had all the {} layers addressed to this same node. Propagating only the fully decapsulated message.", blending_tokens.len());
+            tracing::trace!(target: LOG_TARGET, "Locally generated data message {deserialized_data_message:?} had all the {} layers addressed to this same node. Propagating only the fully decapsulated message.", blending_tokens.len());
             ProcessedMessage::from(deserialized_data_message)
         }
         DecapsulatedMessageType::Incompleted(remaining_encapsulated_message) => {
-            tracing::debug!(target: LOG_TARGET, "Locally generated data message had the outermost {} layers addressed to this same node. Propagating only the remaining encapsulated layers.", blending_tokens.len());
+            tracing::trace!(target: LOG_TARGET, "Locally generated data message had the outermost {} layers addressed to this same node. Propagating only the remaining encapsulated layers.", blending_tokens.len());
             ProcessedMessage::from(*remaining_encapsulated_message)
         }
     };
@@ -1512,21 +1512,21 @@ where
         DecapsulatedMessageType::Completed(fully_decapsulated_message) => {
             match fully_decapsulated_message.into_components() {
                 (PayloadType::Cover, _) => {
-                    tracing::info!(target: LOG_TARGET, "Discarding received cover message.");
+                    tracing::trace!(target: LOG_TARGET, "Discarding received cover message.");
                     (None, blending_tokens.into_iter())
                 }
                 (PayloadType::Data, serialized_data_message) => {
-                    tracing::debug!(target: LOG_TARGET, "Processing a fully decapsulated data message.");
+                    tracing::trace!(target: LOG_TARGET, "Processing a fully decapsulated data message.");
                     match NetworkMessage::from_bytes(&serialized_data_message) {
                         Ok(deserialized_network_message) => {
-                            tracing::debug!(target: LOG_TARGET, "Fully decapsulated and deserialized processed data message: {deserialized_network_message:?}");
+                            tracing::trace!(target: LOG_TARGET, "Fully decapsulated and deserialized processed data message: {deserialized_network_message:?}");
                             let processed_message =
                                 ProcessedMessage::from(deserialized_network_message);
                             scheduler.schedule_processed_message(processed_message.clone());
                             (Some(processed_message), blending_tokens.into_iter())
                         }
                         Err(e) => {
-                            tracing::debug!(target: LOG_TARGET, "Unrecognized data message from blend backend. Dropping: {e:?}");
+                            tracing::trace!(target: LOG_TARGET, "Unrecognized data message from blend backend. Dropping: {e:?}");
                             (None, blending_tokens.into_iter())
                         }
                     }

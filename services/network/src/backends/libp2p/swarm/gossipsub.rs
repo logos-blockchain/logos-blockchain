@@ -72,7 +72,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             }
             Err(gossipsub::PublishError::InsufficientPeers) if retry_count < MAX_RETRY => {
                 let wait = exp_backoff(retry_count);
-                tracing::error!(
+                tracing::debug!(
                     "failed to broadcast message to topic due to insufficient peers, trying again in {wait:?}"
                 );
 
