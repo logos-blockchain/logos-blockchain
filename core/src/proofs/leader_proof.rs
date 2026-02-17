@@ -1,3 +1,4 @@
+use core::fmt::Debug;
 use std::sync::LazyLock;
 
 use ark_ff::{Field as _, PrimeField as _};
@@ -16,7 +17,7 @@ use crate::{
     proofs::merkle::merkle_path_to_witness,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Groth16LeaderProof {
     #[serde(with = "proof_serde")]
     proof: lb_pol::PoLProof,
@@ -24,6 +25,20 @@ pub struct Groth16LeaderProof {
     entropy_contribution: Fr,
     leader_key: Ed25519PublicKey,
     voucher_cm: VoucherCm,
+}
+
+impl Debug for Groth16LeaderProof {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Groth16LeaderProof")
+            .field(
+                "proof",
+                &format_args!("{} bytes", size_of::<lb_pol::PoLProof>()),
+            )
+            .field("entropy_contribution", &self.entropy_contribution)
+            .field("leader_key", &self.leader_key)
+            .field("voucher_cm", &self.voucher_cm)
+            .finish()
+    }
 }
 
 #[derive(Debug, Error)]
