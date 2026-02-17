@@ -25,8 +25,8 @@ use lb_node::{
         ApiConfig, CryptarchiaConfig, RunConfig, SdpConfig, StorageConfig, WalletConfig,
         api::serde::AxumBackendSettings,
         cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
-        deployment::DeploymentSettings, mempool::serde::Config as MempoolConfig,
-        sdp::serde::RequiredValues as SdpConfigRequiredValues, tracing::serde as tracing,
+        deployment::DeploymentSettings, sdp::serde::RequiredValues as SdpConfigRequiredValues,
+        state::Config as StateConfig, tracing::serde as tracing,
         wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
 };
@@ -107,7 +107,8 @@ impl Validator {
                 });
         }
 
-        config.user.storage.backend.path = dir.path().join("db");
+        config.user.state.base_folder = dir.path().to_path_buf();
+        "db".clone_into(&mut config.user.storage.backend.folder_name);
 
         serde_yaml::to_writer(&mut user_config_file, &config.user).unwrap();
         serde_yaml::to_writer(&mut deployment_config_file, &config.deployment).unwrap();
@@ -339,8 +340,6 @@ pub fn create_validator_config(
         base_config
     };
 
-    let mempool_config = MempoolConfig::default();
-
     let tracing_config = config.tracing_config.tracing_settings;
 
     let api_config = ApiConfig {
@@ -394,18 +393,20 @@ pub fn create_validator_config(
 
     let kms_config = config.kms_config;
 
+    let state_config = StateConfig::default();
+
     let user_config = UserConfig {
         network: network_config,
         blend: blend_config,
         time: time_config,
         cryptarchia: cryptarchia_config,
-        mempool: mempool_config,
         tracing: tracing_config,
         api: api_config,
         storage: storage_config,
         sdp: sdp_config,
         wallet: wallet_config,
         kms: kms_config,
+        state: state_config,
     };
 
     RunConfig {

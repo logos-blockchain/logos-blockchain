@@ -34,6 +34,7 @@ cryptarchia:
   slot_activation_coeff:
     numerator: 1
     denominator: 10
+  learning_rate: 1.0
   sdp_config:
     service_params:
       BN:
@@ -55,7 +56,7 @@ cryptarchia:
             parent: "0000000000000000000000000000000000000000000000000000000000000000"
             signer: "0000000000000000000000000000000000000000000000000000000000000000"
       ledger_tx:
-        inputs: []
+        inputs: [ ]
         outputs:
           - value: 1
             pk: d204000000000000000000000000000000000000000000000000000000000000
@@ -63,7 +64,7 @@ cryptarchia:
             pk: 2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26
       execution_gas_price: 0
       storage_gas_price: 0
-    ops_proofs: [NoProof]
+    ops_proofs: [ NoProof ]
     ledger_tx_proof:
       pi_a: [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,

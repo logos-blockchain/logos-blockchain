@@ -148,19 +148,18 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
         user: config.user.cryptarchia,
         deployment: config.deployment.cryptarchia,
     }
-    .into_cryptarchia_services_settings(&config.deployment.blend);
+    .into_cryptarchia_services_settings(&config.deployment.blend, &config.user.state);
 
     let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
         user: config.user.blend,
         deployment: config.deployment.blend,
     }
-    .into();
+    .into_blend_services_settings(&config.user.state);
 
     let mempool_service_config = MempoolConfig {
-        user: config.user.mempool,
         deployment: config.deployment.mempool,
     }
-    .into();
+    .into_mempool_service_settings(&config.user.state);
 
     let network_service_config = NetworkConfig {
         user: config.user.network,
@@ -168,10 +167,15 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
     }
     .into();
 
+    let wallet_config = WalletConfig {
+        user: config.user.wallet,
+    }
+    .into_wallet_service_settings(&config.user.state);
+
     let storage_config = StorageConfig {
         user: config.user.storage,
     }
-    .into();
+    .into_rocks_backend_settings(&config.user.state);
 
     let kms_config = KmsConfig {
         user: config.user.kms,
@@ -180,11 +184,6 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
 
     let sdp_config = SdpConfig {
         user: config.user.sdp,
-    }
-    .into();
-
-    let wallet_config = WalletConfig {
-        user: config.user.wallet,
     }
     .into();
 

@@ -7,6 +7,10 @@ concurrency:
   group: ${{ github.workflow }}@${{ github.ref_name }}
   cancel-in-progress: true
 
+env:
+  LB_CIRCUITS_VERSION: v0.4.1
+  TEST_TAG_NAME: release-ci-test
+
 jobs:
   configure-version:
     name: Configure release version
@@ -22,21 +26,21 @@ jobs:
         env:
           TAG_NAME: ${{ github.ref_name }}
         run: |
-          if [[ "$TAG_NAME" == "release-ci-test" ]]; then
+          if [[ "$TAG_NAME" == "${{ env.TEST_TAG_NAME }}" ]]; then
             echo "Test workflow run. Setting version to 0.0.0 for testing."
             VERSION=0.0.0
           elif [[ "$TAG_NAME" =~ ^([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             echo "Release workflow run for tag '$TAG_NAME'. Setting version to '$TAG_NAME'."
             VERSION="$TAG_NAME"
           else
-            echo "Tag name '$TAG_NAME' is not valid. It must either be 'release-ci-test' or follow the format 'X.Y.Z'."
+            echo "Tag name '$TAG_NAME' is not valid. It must either be '${{ env.TEST_TAG_NAME }}' or follow the format 'X.Y.Z'."
             exit 1
           fi
 
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
   build:
-    name: "Build binaries for ${{ matrix.platform.os-display }} (${{ matrix.platform.arch }})"
+    name: "Build and tar binaries for ${{ matrix.platform.os-display }} (${{ matrix.platform.arch }})"
     needs: configure-version
     runs-on: ${{ matrix.platform.builder }}
     env:
@@ -75,11 +79,52 @@ jobs:
       - name: Build node binary
         run: cargo build -p logos-blockchain-node --release --target ${{ matrix.platform.target_triple }}
 
-      - name: Upload binary (${{ matrix.platform.arch }})
+      - name: Tar node binary
+        run: tar -czf logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz -C target/${{ matrix.platform.target_triple }}/release logos-blockchain-node
+
+      - name: Upload binary tar (${{ matrix.platform.arch }})
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
           name: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}
-          path: target/${{ matrix.platform.target_triple }}/release/logos-blockchain-node
+          path: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz
+          if-no-files-found: error
+
+  download-circuits:
+    name: "Download circuits for ${{ matrix.platform.os-display }} (${{ matrix.platform.arch }})"
+    needs: configure-version
+    runs-on: ubuntu-latest
+    env:
+      LB_CIRCUITS_REPO_NAME: logos-blockchain/logos-blockchain-circuits
+    strategy:
+      matrix:
+        platform:
+          - os: linux
+            os-display: Linux
+            arch: x86_64
+          - os: linux
+            os-display: Linux
+            arch: aarch64
+          - os: macos
+            os-display: MacOS
+            arch: aarch64
+
+    steps:
+      - name: Download circuits from ${{ env.LB_CIRCUITS_REPO_NAME }} repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LB_CIRCUIT_NAME: logos-blockchain-circuits-${{ env.LB_CIRCUITS_VERSION }}-${{ matrix.platform.os }}-${{ matrix.platform.arch }}.tar.gz
+        run: |
+          gh release download "${{ env.LB_CIRCUITS_VERSION }}" \
+            --repo ${{ env.LB_CIRCUITS_REPO_NAME }} \
+            --pattern "${{ env.LB_CIRCUIT_NAME }}"
+
+      - name: Upload circuits artifact
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
+        env:
+          LB_CIRCUIT_NAME: logos-blockchain-circuits-${{ env.LB_CIRCUITS_VERSION }}-${{ matrix.platform.os }}-${{ matrix.platform.arch }}.tar.gz
+        with:
+          name: ${{ env.LB_CIRCUIT_NAME }}
+          path: ${{ env.LB_CIRCUIT_NAME }}
           if-no-files-found: error
 
   create-draft-release:
@@ -87,6 +132,7 @@ jobs:
     needs:
       - configure-version
       - build
+      - download-circuits
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.configure-version.outputs.version }}
@@ -109,8 +155,8 @@ jobs:
           draft: true
           prerelease: true
 
-  upload-artifacts:
-    name: Upload artifacts to release
+  upload-binaries:
+    name: Upload binaries to release
     needs:
       - configure-version
       - create-draft-release
@@ -127,7 +173,7 @@ jobs:
     env:
       UPLOAD_URL: ${{ needs.create-draft-release.outputs.upload_url }}
       BINARY_NAME: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}
-      DOWNLOAD_DIRECTORY: artifacts
+      DOWNLOAD_DIRECTORY: binaries
 
     steps:
       - name: Download artifact
@@ -143,6 +189,45 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: ${{ env.DOWNLOAD_DIRECTORY }}/logos-blockchain-node
-          asset_name: ${{ env.BINARY_NAME }}
-          asset_content_type: application/octet-stream
+          asset_path: ${{ env.DOWNLOAD_DIRECTORY }}/${{ env.BINARY_NAME }}.tar.gz
+          asset_name: ${{ env.BINARY_NAME }}.tar.gz
+          asset_content_type: application/gzip
+
+  upload-circuits:
+    name: Upload circuits to release
+    needs:
+      - create-draft-release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform:
+          - os: linux
+            arch: x86_64
+          - os: linux
+            arch: aarch64
+          - os: macos
+            arch: aarch64
+    env:
+      UPLOAD_URL: ${{ needs.create-draft-release.outputs.upload_url }}
+      DOWNLOAD_DIRECTORY: circuits
+
+    steps:
+      - name: Download circuits artifact
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # Version 4.2.1
+        env:
+          LB_CIRCUIT_NAME: logos-blockchain-circuits-${{ env.LB_CIRCUITS_VERSION }}-${{ matrix.platform.os }}-${{ matrix.platform.arch }}.tar.gz
+        with:
+          name: ${{ env.LB_CIRCUIT_NAME }}
+          path: ${{ env.DOWNLOAD_DIRECTORY }}
+          merge-multiple: true
+
+      - name: Upload circuits ${{ matrix.platform.os }} (${{ matrix.platform.arch }}) to release
+        uses: actions/upload-release-asset@ef2adfe8cb8ebfa540930c452c576b3819990faa  # Version 1.0.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LB_CIRCUIT_NAME: logos-blockchain-circuits-${{ env.LB_CIRCUITS_VERSION }}-${{ matrix.platform.os }}-${{ matrix.platform.arch }}.tar.gz
+        with:
+          upload_url: ${{ env.UPLOAD_URL }}
+          asset_path: ${{ env.DOWNLOAD_DIRECTORY }}/${{ env.LB_CIRCUIT_NAME }}
+          asset_name: ${{ env.LB_CIRCUIT_NAME }}
+          asset_content_type: application/gzip

@@ -16,7 +16,7 @@ use lb_utxotree::MerklePath;
 
 use crate::cryptarchia::{
     block_density::BlockDensity,
-    stake::{LEARNING_RATE, PRECISION, StakeInference},
+    stake::{PRECISION, StakeInference},
 };
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
@@ -168,6 +168,14 @@ impl LedgerState {
             })
         } else if new_epoch == current_epoch + 1 {
             // case 2)
+            tracing::info!(
+                old_epoch = ?current_epoch,
+                new_epoch = ?new_epoch,
+                old_total_stake = self.epoch_state.total_stake,
+                new_total_stake = total_stake,
+                slot = ?slot,
+                "epoch transition"
+            );
             let block_density = BlockDensity::new(self.stake_inference.period(), slot);
             let epoch_state = self.next_epoch_state.clone();
             let next_epoch_state = EpochState {
@@ -187,6 +195,14 @@ impl LedgerState {
             })
         } else {
             // case 3)
+            tracing::warn!(
+                old_epoch = ?current_epoch,
+                new_epoch = ?new_epoch,
+                epochs_skipped = u32::from(new_epoch) - u32::from(current_epoch) - 1,
+                total_stake = total_stake,
+                slot = ?slot,
+                "skipped epochs"
+            );
             let block_density = BlockDensity::new(self.stake_inference.period(), slot);
             let epoch_state = EpochState {
                 epoch: new_epoch,
@@ -422,7 +438,7 @@ impl LedgerState {
             .compute_lottery_values(total_stake);
         let slot: Slot = 0.into();
         let stake_inference = Arc::new(StakeInference::new(
-            LEARNING_RATE,
+            config.consensus_config.stake_inference_learning_rate(),
             config.consensus_config.slot_activation_coeff().as_f64(),
             config.consensus_config.security_param().get().into(),
         ));
@@ -629,6 +645,7 @@ pub mod tests {
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(1).unwrap(),
                 NonNegativeRatio::new(1, 10.try_into().unwrap()),
+                1f64.try_into().expect("1 > 0"),
             ),
             sdp_config: crate::mantle::sdp::Config {
                 service_params: Arc::new(service_params),
@@ -662,7 +679,7 @@ pub mod tests {
             .map(|utxo| (utxo.id(), *utxo))
             .collect::<UtxoTree>();
         let stake_inference = Arc::new(StakeInference::new(
-            LEARNING_RATE,
+            config.consensus_config.stake_inference_learning_rate(),
             config.consensus_config.slot_activation_coeff().as_f64(),
             config.consensus_config.security_param().get().into(),
         ));
@@ -755,12 +772,11 @@ pub mod tests {
         let utxos = std::iter::repeat_with(utxo).take(4).collect::<Vec<_>>();
         let utxo_4 = utxo();
         let utxo_5 = utxo();
+
         let config = config();
         assert_eq!(config.epoch_length(), 100);
         let (mut ledger, genesis) = ledger(&utxos, config);
 
-        // An epoch will be 100 slots long, with stake distribution snapshot taken at
-        // the start of the epoch and nonce snapshot before slot 70
         let h_1 = update_ledger(&mut ledger, genesis, 10, utxos[0]).unwrap();
         assert_eq!(
             ledger.states[&h_1].cryptarchia_ledger.epoch_state.epoch,
@@ -773,7 +789,7 @@ pub mod tests {
 
         // test epoch jump
         let h_4 = update_ledger(&mut ledger, h_3, 200, utxos[3]).unwrap();
-        // nonce for epoch 2 should be taken at the end of slot 16, but in our case the
+        // nonce for epoch 2 should be taken at the end of slot 160, but in our case the
         // last block is at slot 90
         assert_eq!(
             ledger.states[&h_4].cryptarchia_ledger.epoch_state.nonce,

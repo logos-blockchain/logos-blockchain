@@ -463,6 +463,7 @@ mod pol_tests {
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(5).unwrap(),
                 NonNegativeRatio::new(1, 10.try_into().unwrap()),
+                1f64.try_into().expect("1 > 0"),
             ),
             sdp_config: SdpConfig {
                 service_params: Arc::new(

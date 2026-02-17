@@ -121,6 +121,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
                 },
             },
             genesis_state: genesis_tx,
+            learning_rate: 1f64.try_into().expect("1 > 0"),
         },
         time: TimeDeploymentSettings {
             slot_duration: Duration::from_secs(slot_duration_in_secs),

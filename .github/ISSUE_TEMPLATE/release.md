@@ -12,6 +12,8 @@ Progress on the checklist must be provided as comments to the issue.
 ## Ceremony (optional, only whenever a ceremony is required)
 
 - [ ] Checkout `master` and tag commit with `pre-X.Y.Z` and push the tag
+- [ ] Manually trigger the [testnet Docker workflow][testnet-docker-workflow] using the `pre-X.Y.Z` tag and using the `devnet` image tag
+- [ ] Wait for the workflow run to complete
 - [ ] Checkout and force reset the `testnet` branch to point to the tagged commit
 - [ ] Create a new symlink `compose.static.yml` -> `compose.devnet.setup.yml`
 - [ ] Push to `testnet` branch to trigger a new deployment
@@ -43,5 +45,6 @@ Progress on the checklist must be provided as comments to the issue.
 
 ---
 
+[testnet-docker-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/publish-testnet-image.yml 
 [bundling-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/prepare-release.yml
 [docker-build-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/publish-node-image.yml

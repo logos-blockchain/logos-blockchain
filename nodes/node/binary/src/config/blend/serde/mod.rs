@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use lb_key_management_system_service::backend::preload::KeyId;
 use lb_libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
@@ -21,15 +19,9 @@ pub struct Config {
     /// The non-ephemeral signing key (NSK) ID corresponding to the public key
     /// registered in the membership (SDP).
     pub non_ephemeral_signing_key_id: KeyId,
-    #[serde(default = "default_recovery_path_prefix")]
-    pub recovery_path_prefix: PathBuf,
     pub core: CoreConfig,
     #[serde(default)]
     pub edge: EdgeConfig,
-}
-
-fn default_recovery_path_prefix() -> PathBuf {
-    "./blend".into()
 }
 
 pub struct RequiredValues {
@@ -52,7 +44,6 @@ impl Config {
                 backend: BackendConfig::default(),
             },
             edge: EdgeConfig::default(),
-            recovery_path_prefix: default_recovery_path_prefix(),
         }
     }
     pub fn set_listening_address(&mut self, addr: Multiaddr) {

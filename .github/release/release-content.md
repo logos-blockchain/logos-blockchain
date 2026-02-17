@@ -17,9 +17,13 @@ Check the [Notion page][release-notion] for info about how to connect your node 
 
 ## Run the binary
 
-After generating the node config file to fit your needs, you can run the node binary.
+After generating the node config file to fit your needs, you can untar and run the node binary.
 
-For example: `logos-blockchain-node-macos-aarch64-0.0.1 node-config.yaml`. See the repo's `README.md` for more info.
+To untar the binary, run:
+
+`tar -xzf logos-blockchain-node-{your_architecture}-{binary_version}.tar.gz`, for instance `tar -xzf logos-blockchain-node-macos-aarch64-0.0.1.tar.gz`.
+
+The operation will give you the `logos-blockchain-node` binary, which you can now run. See the repo's `README.md` for more info.
 
 To verify that your node is running correctly and connected, visit http://localhost:{api_port_in_user_config}/cryptarchia/info. The slot and height should both be constantly increasing.
 
@@ -29,7 +33,7 @@ Before publishing please ensure:
 - [ ] Description is complete
 - [ ] Changelog is correct, compared to last release
 - [ ] Binaries for Mac and Linux platforms are present
-- [ ] Circuits of the expected version for Mac and Linux platforms are present (need to be manually downloaded and included for now)
+- [ ] Circuits of the expected version for Mac and Linux platforms are present
 - [ ] Pre-release is checked if necessary
 - [ ] Remove this checklist and address all TODOs before publishing the release.
 

@@ -1022,8 +1022,14 @@ mod tests {
         ) -> lb_cryptarchia_engine::Cryptarchia<HeaderId> {
             <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib,
-                Config::new(NonZero::new(1).unwrap(), slot_activation_coeff),
+                Config::new(
+                    NonZero::new(1).unwrap(),
+                    slot_activation_coeff,
+                    1f64.try_into().expect("1 > 0"),
+                ),
                 lb_cryptarchia_engine::State::Bootstrapping,
+                0.into(),
+                0,
             )
         }
     }

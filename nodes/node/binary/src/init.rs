@@ -15,15 +15,14 @@ use rand::rngs::OsRng;
 use crate::{
     UserConfig,
     config::{
-        ApiConfig, DeploymentType, InitArgs, KmsConfig, OnUnknownKeys, SdpConfig, StorageConfig,
-        TracingConfig, WalletConfig,
+        ApiConfig, DeploymentType, InitArgs, KmsConfig, OnUnknownKeys, SdpConfig, StateConfig,
+        StorageConfig, TracingConfig, WalletConfig,
         blend::serde::{Config as BlendConfig, RequiredValues as BlendConfigRequiredValues},
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaConfigRequiredValues,
         },
         deployment::DeploymentSettings,
         deserialize_config_at_path,
-        mempool::serde::Config as MempoolConfig,
         network::serde::{Config as NetworkConfig, nat},
         sdp::serde::RequiredValues as SdpRequiredValues,
         time::serde::Config as TimeConfig,
@@ -256,6 +255,13 @@ fn build_user_config(
         funding_pk,
     } = keys;
 
+    let state_config = args
+        .state_path
+        .as_ref()
+        .map_or_else(StateConfig::default, |path| StateConfig {
+            base_folder: path.clone(),
+        });
+
     let network_config = {
         let mut base_config = NetworkConfig::default();
         base_config.backend.swarm.port = args.net_port;
@@ -297,8 +303,6 @@ fn build_user_config(
 
     let time_config = TimeConfig::default();
 
-    let mempool_config = MempoolConfig::default();
-
     let tracing_config = TracingConfig::default();
 
     let sdp_config = SdpConfig::with_required_values(SdpRequiredValues { funding_pk });
@@ -337,13 +341,13 @@ fn build_user_config(
         blend: blend_config,
         cryptarchia: cryptarchia_config,
         time: time_config,
-        mempool: mempool_config,
         tracing: tracing_config,
         sdp: sdp_config,
         api: api_config,
         storage: storage_config,
         kms: kms_config,
         wallet: wallet_config,
+        state: state_config,
     }
 }
 
@@ -363,6 +367,7 @@ mod tests {
             external_address: None,
             no_public_ip_check: false,
             deployment: DeploymentType::default(),
+            state_path: None,
         };
         let network_key = lb_libp2p::ed25519::SecretKey::generate();
         let keys = generate_keys();
