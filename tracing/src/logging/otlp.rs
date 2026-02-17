@@ -9,13 +9,13 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct OtlpLoggingConfig {
+pub struct OtlpConfig {
     pub endpoint: Url,
     pub service_name: String,
 }
 
-pub fn create_otlp_logging_layer(
-    config: OtlpLoggingConfig,
+pub fn create_otlp_layer(
+    config: OtlpConfig,
 ) -> Result<
     OpenTelemetryTracingBridge<SdkLoggerProvider, opentelemetry_sdk::logs::SdkLogger>,
     Box<dyn Error + Send + Sync>,
