@@ -3,11 +3,15 @@ use std::collections::HashMap;
 use lb_key_management_system_service::{backend::preload::KeyId, keys::ZkPublicKey};
 use serde::{Deserialize, Serialize};
 
+use crate::config::utils;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
-    #[serde(default)]
-    pub known_keys: HashMap<KeyId, ZkPublicKey>,
     pub voucher_master_key_id: KeyId,
+
+    #[serde(default)]
+    #[serde(skip_serializing_if = "utils::is_default")]
+    pub known_keys: HashMap<KeyId, ZkPublicKey>,
 }
 
 pub struct RequiredValues {

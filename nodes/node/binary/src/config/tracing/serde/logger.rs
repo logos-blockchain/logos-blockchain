@@ -5,7 +5,9 @@ use lb_tracing_service::LoggerLayer;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+use crate::config::utils;
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub enum Layer {
     Gelf(GelfConfig),
     File(FileConfig),
@@ -38,37 +40,56 @@ impl From<Layer> for LoggerLayer {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct GelfConfig {
+    #[serde(skip_serializing_if = "is_default_addr")]
     pub addr: SocketAddr,
+}
+
+fn default_addr() -> SocketAddr {
+    SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 9_000).into()
+}
+
+fn is_default_addr(addr: &SocketAddr) -> bool {
+    *addr == default_addr()
 }
 
 impl Default for GelfConfig {
     fn default() -> Self {
         Self {
-            addr: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 9_000).into(),
+            addr: default_addr(),
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct FileConfig {
+    #[serde(skip_serializing_if = "is_default_directory")]
     pub directory: PathBuf,
+    #[serde(skip_serializing_if = "utils::is_default")]
     pub prefix: Option<PathBuf>,
+}
+
+fn default_directory() -> PathBuf {
+    "./logs".into()
+}
+
+fn is_default_directory(directory: &PathBuf) -> bool {
+    *directory == default_directory()
 }
 
 impl Default for FileConfig {
     fn default() -> Self {
         Self {
-            directory: "./logs".into(),
+            directory: default_directory(),
             prefix: None,
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LokiConfig {
     pub endpoint: Url,
     pub host_identifier: String,

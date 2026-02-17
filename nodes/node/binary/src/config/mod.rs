@@ -41,6 +41,8 @@ pub mod time;
 pub mod tracing;
 pub mod wallet;
 
+mod utils;
+
 #[cfg(test)]
 mod tests;
 
@@ -300,23 +302,31 @@ impl FromStr for DeploymentType {
     derive(serde::Serialize)
 )]
 pub struct UserConfig {
-    #[serde(default)]
-    pub network: NetworkConfig,
     pub blend: BlendConfig,
     pub cryptarchia: CryptarchiaConfig,
-    #[serde(default)]
-    pub time: TimeConfig,
     pub sdp: SdpConfig,
+    pub wallet: WalletConfig,
+
     #[serde(default)]
+    #[serde(skip_serializing_if = "utils::is_default")]
+    pub network: NetworkConfig,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "utils::is_default")]
+    pub time: TimeConfig,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "utils::is_default")]
     pub api: ApiConfig,
     #[serde(default)]
+    #[serde(skip_serializing_if = "utils::is_default")]
     pub storage: StorageConfig,
     #[serde(default)]
+    #[serde(skip_serializing_if = "utils::is_default")]
     pub kms: KmsConfig,
-    pub wallet: WalletConfig,
     #[serde(default)]
+    #[serde(skip_serializing_if = "utils::is_default")]
     pub tracing: TracingConfig,
     #[serde(default)]
+    #[serde(skip_serializing_if = "utils::is_default")]
     pub state: StateConfig,
 }
 

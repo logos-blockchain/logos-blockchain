@@ -4,16 +4,25 @@ use serde::{Deserialize, Serialize};
 
 pub const RECOVERY_FOLDER_NAME: &str = "recovery";
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default)]
 pub struct Config {
+    #[serde(skip_serializing_if = "is_default_base_folder")]
     pub base_folder: PathBuf,
+}
+
+fn default_base_folder() -> PathBuf {
+    PathBuf::from("./state")
+}
+
+fn is_default_base_folder(path: &PathBuf) -> bool {
+    path == &default_base_folder()
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            base_folder: "./state".into(),
+            base_folder: default_base_folder(),
         }
     }
 }

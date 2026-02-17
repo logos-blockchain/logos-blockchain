@@ -1,3 +1,8 @@
+#![allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "Serde conditional serialization skip requires a specific function signature."
+)]
+
 use lb_core::{
     mantle::{NoteId, Value},
     sdp::DeclarationId,
@@ -5,29 +10,39 @@ use lb_core::{
 use lb_key_management_system_service::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+use crate::config::utils;
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Config {
-    #[serde(default)]
-    pub declaration: Option<Declaration>,
     pub wallet: WalletConfig,
+
+    #[serde(default)]
+    #[serde(skip_serializing_if = "utils::is_default")]
+    pub declaration: Option<Declaration>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Declaration {
-    pub id: DeclarationId,
-    pub zk_id: ZkPublicKey,
-    pub locked_note_id: NoteId,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct WalletConfig {
-    #[serde(default = "default_max_tx_fee")]
-    pub max_tx_fee: Value,
     pub funding_pk: ZkPublicKey,
+
+    #[serde(default = "default_max_tx_fee")]
+    #[serde(skip_serializing_if = "is_default_max_tx_fee")]
+    pub max_tx_fee: Value,
 }
 
 const fn default_max_tx_fee() -> Value {
     Value::MAX
+}
+
+const fn is_default_max_tx_fee(value: &Value) -> bool {
+    *value == default_max_tx_fee()
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Declaration {
+    pub id: DeclarationId,
+    pub zk_id: ZkPublicKey,
+    pub locked_note_id: NoteId,
 }
 
 pub struct RequiredValues {

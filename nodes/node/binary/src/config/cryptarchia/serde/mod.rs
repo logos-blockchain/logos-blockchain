@@ -1,17 +1,22 @@
 use lb_key_management_system_service::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 
+use crate::config::utils;
+
 pub mod leader;
 pub mod network;
 pub mod service;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Config {
+    pub leader: leader::Config,
+
     #[serde(default)]
+    #[serde(skip_serializing_if = "utils::is_default")]
     pub service: service::Config,
     #[serde(default)]
+    #[serde(skip_serializing_if = "utils::is_default")]
     pub network: network::Config,
-    pub leader: leader::Config,
 }
 
 pub struct RequiredValues {

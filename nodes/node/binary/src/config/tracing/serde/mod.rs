@@ -1,5 +1,12 @@
+#![allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "Serde conditional serialization skip requires a specific function signature."
+)]
+
 pub use ::tracing::Level;
 use serde::{Deserialize, Serialize};
+
+use crate::config::utils;
 
 pub mod console;
 pub mod filter;
@@ -7,19 +14,29 @@ pub mod logger;
 pub mod metrics;
 pub mod tracing;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(default)]
 pub struct Config {
+    #[serde(skip_serializing_if = "utils::is_default")]
     pub logger: logger::Layer,
+    #[serde(skip_serializing_if = "utils::is_default")]
     pub tracing: tracing::Layer,
+    #[serde(skip_serializing_if = "utils::is_default")]
     pub filter: filter::Layer,
+    #[serde(skip_serializing_if = "utils::is_default")]
     pub metrics: metrics::Layer,
+    #[serde(skip_serializing_if = "utils::is_default")]
     pub console: console::Layer,
     #[serde(with = "serde_level")]
+    #[serde(skip_serializing_if = "is_default_log_level")]
     pub level: Level,
 }
 
 const DEFAULT_LOG_LEVEL: Level = Level::DEBUG;
+
+fn is_default_log_level(level: &Level) -> bool {
+    *level == DEFAULT_LOG_LEVEL
+}
 
 impl Default for Config {
     fn default() -> Self {

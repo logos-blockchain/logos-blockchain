@@ -6,10 +6,10 @@ use lb_key_management_system_service::keys::ZkPublicKey;
 use crate::{
     UserConfig,
     config::{
-        CliArgs, DeploymentSettings, RequiredValues as ConfigRequiredValues, WellKnownDeployment,
+        BlendConfig, CliArgs, DeploymentSettings, RequiredValues as ConfigRequiredValues,
+        WellKnownDeployment,
         blend::{
-            ServiceConfig as BlendServiceConfig,
-            serde::{Config as BlendConfig, RequiredValues as BlendRequiredValues},
+            ServiceConfig as BlendServiceConfig, serde::RequiredValues as BlendRequiredValues,
         },
         cryptarchia::{
             ServiceConfig as CryptarchiaServiceConfig,

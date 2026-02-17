@@ -3,23 +3,27 @@ use std::collections::HashMap;
 use lb_key_management_system_service::{backend::preload::KeyId, keys::Key};
 use serde::Deserialize;
 
-#[derive(Clone, Debug, Deserialize, Default)]
+use crate::config::utils;
+
+#[derive(Clone, Debug, Deserialize, Default, PartialEq, Eq)]
 #[cfg_attr(
     any(test, feature = "testing", feature = "config-gen"),
     derive(serde::Serialize)
 )]
 #[serde(default)]
 pub struct Config {
+    #[serde(skip_serializing_if = "utils::is_default")]
     pub backend: PreloadKmsBackendSettings,
 }
 
-#[derive(Clone, Debug, Deserialize, Default)]
+#[derive(Clone, Debug, Deserialize, Default, PartialEq, Eq)]
 #[cfg_attr(
     any(test, feature = "testing", feature = "config-gen"),
     derive(serde::Serialize)
 )]
 #[serde(default)]
 pub struct PreloadKmsBackendSettings {
+    #[serde(skip_serializing_if = "utils::is_default")]
     pub keys: HashMap<KeyId, Key>,
 }
 

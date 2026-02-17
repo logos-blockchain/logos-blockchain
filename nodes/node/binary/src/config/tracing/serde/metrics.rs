@@ -3,7 +3,7 @@ use lb_tracing_service::MetricsLayer;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub enum Layer {
     Otlp(OtlpConfig),
     #[default]
@@ -22,7 +22,7 @@ impl From<Layer> for MetricsLayer {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OtlpConfig {
     pub endpoint: Url,
     pub host_identifier: String,

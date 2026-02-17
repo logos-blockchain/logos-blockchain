@@ -4,7 +4,9 @@ use lb_tracing::filter::envfilter::EnvFilterConfig;
 use lb_tracing_service::FilterLayer;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+use crate::config::utils;
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub enum Layer {
     Env(EnvConfig),
     #[default]
@@ -22,10 +24,11 @@ impl From<Layer> for FilterLayer {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct EnvConfig {
     /// `HashMap` where the key is the crate/module name, and the value is the
     /// desired log level. More: <https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives>
+    #[serde(skip_serializing_if = "utils::is_default")]
     pub filters: HashMap<String, String>,
 }
