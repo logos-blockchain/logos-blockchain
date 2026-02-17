@@ -99,12 +99,12 @@ pub struct InitArgs {
     pub output: PathBuf,
 
     /// Network listen port
-    #[clap(long = "net-port", default_value = "3000")]
-    pub net_port: u16,
+    #[clap(long = "net-port")]
+    pub net_port: Option<u16>,
 
     /// Blend listen port
-    #[clap(long = "blend-port", default_value = "3400")]
-    pub blend_port: u16,
+    #[clap(long = "blend-port")]
+    pub blend_port: Option<u16>,
 
     /// HTTP API listen address
     #[clap(long = "http-addr", default_value = "0.0.0.0:8080")]

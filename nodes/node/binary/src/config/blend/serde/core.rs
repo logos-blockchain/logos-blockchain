@@ -14,11 +14,11 @@ use crate::config::utils;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Config {
+    pub zk: ZkSettings,
+
     #[serde(default)]
     #[serde(skip_serializing_if = "utils::is_default")]
     pub backend: BackendConfig,
-
-    pub zk: ZkSettings,
 }
 
 #[serde_as]

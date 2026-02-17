@@ -193,29 +193,29 @@ pub async fn run(args: &InitArgs) -> Result<()> {
     let network_key = lb_libp2p::ed25519::SecretKey::generate();
     let keys = generate_keys();
 
-    let blend_listening_address =
-        Multiaddr::from_str(&format!("/ip4/0.0.0.0/udp/{}/quic-v1", args.blend_port))
-            .map_err(|e| eyre!("Invalid blend listening address: {e}"))?;
+    let blend_listening_address = args
+        .blend_port
+        .map(|port| Multiaddr::from_str(&format!("/ip4/0.0.0.0/udp/{port}/quic-v1")).unwrap());
 
     let detected_address = if args.external_address.is_some() || args.no_public_ip_check {
         None
     } else if !args.initial_peers.is_empty() {
         let identify_protocol_name = deployment.network.identify_protocol_name.to_string();
-        if let Some(ip) =
-            detect_and_verify_public_ip(&args.initial_peers, &identify_protocol_name).await?
-        {
-            let addr_str = format!("/ip4/{ip}/udp/{}/quic-v1", args.net_port);
-            let addr = Multiaddr::from_str(&addr_str)
-                .map_err(|e| eyre!("Failed to construct external address: {e}"))?;
-            println!("Detected external address via AutoNAT: {addr}");
-            Some(addr)
-        } else {
-            eprintln!(
-                "Warning: Could not detect external address via AutoNAT, \
+        detect_and_verify_public_ip(&args.initial_peers, &identify_protocol_name)
+            .await?
+            .map_or_else(
+                || {
+                    eprintln!(
+                        "Warning: Could not detect external address via AutoNAT, \
                  falling back to NAT traversal."
-            );
-            None
-        }
+                    );
+                    None
+                },
+                |ip| {
+                    println!("Detected externally reachable IP address via AutoNAT: {ip}");
+                    Some(ip)
+                },
+            )
     } else {
         None
     };
@@ -235,12 +235,13 @@ pub async fn run(args: &InitArgs) -> Result<()> {
     Ok(())
 }
 
+#[expect(clippy::too_many_lines, reason = "TODO: Refactor at some point.")]
 fn build_user_config(
     args: &InitArgs,
     network_key: lb_libp2p::ed25519::SecretKey,
     keys: GeneratedKeys,
-    blend_listening_address: Multiaddr,
-    detected_address: Option<Multiaddr>,
+    blend_listening_address: Option<Multiaddr>,
+    detected_address: Option<Ipv4Addr>,
 ) -> UserConfig {
     let GeneratedKeys {
         blend_signing_key,
@@ -264,13 +265,23 @@ fn build_user_config(
 
     let network_config = {
         let mut base_config = NetworkConfig::default();
-        base_config.backend.swarm.port = args.net_port;
+        if let Some(net_port) = args.net_port {
+            base_config.backend.swarm.port = net_port;
+        }
         base_config.backend.swarm.node_key = network_key;
         base_config
             .backend
             .initial_peers
             .clone_from(&args.initial_peers);
-        let static_addr = args.external_address.clone().or(detected_address);
+        let static_addr = args.external_address.clone().or_else(|| {
+            detected_address.map(|ip| {
+                Multiaddr::from_str(&format!(
+                    "/ip4/{ip}/udp/{}/quic-v1",
+                    base_config.backend.swarm.port
+                ))
+                .unwrap()
+            })
+        });
         base_config.backend.swarm.nat =
             static_addr.map_or_else(nat::Config::default, |addr| nat::Config::Static {
                 external_address: addr,
@@ -283,7 +294,9 @@ fn build_user_config(
             non_ephemeral_signing_key_id: blend_signing_key_id.clone(),
             secret_key_kms_id: blend_zk_key_id.clone(),
         });
-        base_config.set_listening_address(blend_listening_address);
+        if let Some(blend_listening_address) = blend_listening_address {
+            base_config.set_listening_address(blend_listening_address);
+        }
         base_config
     };
 
@@ -361,8 +374,8 @@ mod tests {
         let args = InitArgs {
             initial_peers,
             output: "test_output.yaml".into(),
-            net_port: 3000,
-            blend_port: 3400,
+            net_port: Some(3000),
+            blend_port: Some(3400),
             http_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
             external_address: None,
             no_public_ip_check: false,
@@ -372,7 +385,7 @@ mod tests {
         let network_key = lb_libp2p::ed25519::SecretKey::generate();
         let keys = generate_keys();
         let blend_addr = Multiaddr::from_str("/ip4/0.0.0.0/udp/3400/quic-v1").unwrap();
-        build_user_config(&args, network_key, keys, blend_addr, None)
+        build_user_config(&args, network_key, keys, Some(blend_addr), None)
     }
 
     #[test]
