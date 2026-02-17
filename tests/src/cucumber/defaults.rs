@@ -13,8 +13,8 @@ const CONTAINER_NODE_LOG_DIR: &str = "/tmp/node_logs";
 
 const TARGET: &str = "cucumber_defaults";
 
-const LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS: &str = "LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS";
 const LOGOS_BLOCKCHAIN_TESTS_TRACING: &str = "LOGOS_BLOCKCHAIN_TESTS_TRACING";
+const TF_KEEP_LOGS: &str = "TF_KEEP_LOGS";
 const CUCUMBER_LOG_LEVEL: &str = "CUCUMBER_LOG_LEVEL";
 const LOGOS_BLOCKCHAIN_LOG_LEVEL: &str = "LOGOS_BLOCKCHAIN_LOG_LEVEL";
 const RUST_LOG: &str = "RUST_LOG";
@@ -34,8 +34,8 @@ pub fn set_default_env(key: &str, value: &str) {
 }
 
 pub fn init_logging_defaults() {
-    set_default_env(LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS, "true");
-    set_default_env(LOGOS_BLOCKCHAIN_TESTS_TRACING, "true");
+    set_default_env(LOGOS_BLOCKCHAIN_TESTS_TRACING, "false");
+    set_default_env(TF_KEEP_LOGS, "true");
     // Always keep RUST_LOG at info for console output
     set_default_env(RUST_LOG, "info");
 
