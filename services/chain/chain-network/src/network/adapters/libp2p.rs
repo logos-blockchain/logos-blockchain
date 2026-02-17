@@ -147,7 +147,7 @@ where
                 },
                 |msg| match msg {
                     NetworkMessage::Proposal(proposal) => {
-                        debug!("received proposal {:?}", proposal.header().id());
+                        debug!("Received proposal with ID: {:?}", proposal.header().id());
                         Some(proposal)
                     }
                 },

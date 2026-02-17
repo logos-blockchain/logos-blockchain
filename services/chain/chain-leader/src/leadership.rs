@@ -279,9 +279,13 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
                     }
                 };
 
-                if let Err(err) = self.sender.send(Some((leader_private, epoch_state.epoch))) {
-                    tracing::error!(
-                        "Failed to send pre-calculated PoL winning slots to receivers. Error: {err:?}"
+                if self
+                    .sender
+                    .send(Some((leader_private, epoch_state.epoch)))
+                    .is_err()
+                {
+                    tracing::trace!(
+                        "No active listeners for pre-calculated PoL winning slots. Not broadcasting."
                     );
                 } else {
                     // We stop the iteration as soon as the first winning slot for this epoch is
@@ -316,9 +320,9 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
             return;
         }
 
-        if let Err(err) = self.sender.send(Some((private_inputs, epoch))) {
-            tracing::error!(
-                "Failed to send pre-calculated PoL winning slots to receivers. Error: {err:?}"
+        if self.sender.send(Some((private_inputs, epoch))).is_err() {
+            tracing::trace!(
+                "No active listeners for pre-calculated PoL winning slots. Not broadcasting."
             );
         }
     }

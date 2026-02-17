@@ -611,7 +611,7 @@ where
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
-    debug!("received proposal {:?}", block);
+    debug!("Received proposal with ID: {:?}", block.header().id());
 
     let (tip, reorged_txs) = cryptarchia.apply_block(block.clone()).await?;
 

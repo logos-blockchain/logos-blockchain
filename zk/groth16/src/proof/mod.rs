@@ -1,6 +1,8 @@
 #[cfg(feature = "deser")]
 pub mod deserialize;
 
+use core::fmt::{self, Debug, Formatter};
+
 use ark_bn254::Bn254;
 use ark_ec::pairing::Pairing;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize as _, SerializationError};
@@ -27,11 +29,24 @@ pub trait CompressSize: Pairing {
     type G2CompressedSize: ArrayLength;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CompressedProof<E: CompressSize> {
     pub pi_a: GenericArray<u8, E::G1CompressedSize>,
     pub pi_b: GenericArray<u8, E::G2CompressedSize>,
     pub pi_c: GenericArray<u8, E::G1CompressedSize>,
+}
+
+impl<E> Debug for CompressedProof<E>
+where
+    E: CompressSize,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompressedProof")
+            .field("pi_a", &hex::encode(&self.pi_a))
+            .field("pi_b", &hex::encode(&self.pi_b))
+            .field("pi_c", &hex::encode(&self.pi_c))
+            .finish()
+    }
 }
 
 impl<E> Copy for CompressedProof<E>
