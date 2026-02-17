@@ -112,6 +112,14 @@ impl LocalDeployerEnv for LbcEnv {
             .collect::<Result<Vec<_>, _>>()
     }
 
+    fn initial_persist_dir(
+        topology: &Self::Deployment,
+        node_name: &str,
+        _index: usize,
+    ) -> Option<PathBuf> {
+        Some(topology.config().scenario_base_dir.join(node_name))
+    }
+
     fn build_launch_spec(
         config: &<Self as Application>::NodeConfig,
         dir: &Path,

@@ -7618,7 +7618,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=603437e0dd363367d486d54172b0a54116f057ac#603437e0dd363367d486d54172b0a54116f057ac"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=514cae9e89c7d8364269add5620234c793e7c90b#514cae9e89c7d8364269add5620234c793e7c90b"
 dependencies = [
  "async-trait",
  "futures",
@@ -7634,12 +7634,12 @@ dependencies = [
 [[package]]
 name = "testing-framework-env"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=603437e0dd363367d486d54172b0a54116f057ac#603437e0dd363367d486d54172b0a54116f057ac"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=514cae9e89c7d8364269add5620234c793e7c90b#514cae9e89c7d8364269add5620234c793e7c90b"
 
 [[package]]
 name = "testing-framework-runner-local"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=603437e0dd363367d486d54172b0a54116f057ac#603437e0dd363367d486d54172b0a54116f057ac"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=514cae9e89c7d8364269add5620234c793e7c90b#514cae9e89c7d8364269add5620234c793e7c90b"
 dependencies = [
  "async-trait",
  "tempfile",

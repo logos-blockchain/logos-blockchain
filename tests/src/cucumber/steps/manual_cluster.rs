@@ -5,12 +5,13 @@ use futures::future::try_join_all;
 use hex::ToHex as _;
 use lb_framework::{DeploymentBuilder, LbcLocalDeployer, TopologyConfig};
 use testing_framework_core::scenario::{PeerSelection, StartNodeOptions};
-use tokio::time::sleep;
+use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
 use crate::cucumber::{
     error::{StepError, StepResult},
     steps::TARGET,
+    utils::track_progress,
     world::{ChainInfoMap, CucumberWorld, NodeInfo},
 };
 
@@ -119,6 +120,9 @@ async fn start_node(world: &mut CucumberWorld, node_name: String, peers: &[Strin
             "Step `I start node/peer node {node_name} (connected to {peers:?})` error: {e}"
         );
     })?;
+
+    let started_node_name = started_node.name.clone();
+
     world.nodes_info.insert(
         node_name.clone(),
         NodeInfo {
@@ -129,12 +133,18 @@ async fn start_node(world: &mut CucumberWorld, node_name: String, peers: &[Strin
         },
     );
 
-    cluster
-        .wait_network_ready()
-        .await
-        .map_err(|source| StepError::StepFail {
-            message: format!("network did not become ready after starting '{node_name}': {source}"),
-        })?;
+    let operation = format!("node '{started_node_name}' readiness");
+    track_progress(&operation, Duration::from_secs(5), async {
+        cluster
+            .wait_node_ready(&started_node_name)
+            .await
+            .map_err(|source| StepError::StepFail {
+                message: format!(
+                    "node '{started_node_name}' did not become ready after start: {source}"
+                ),
+            })
+    })
+    .await?;
 
     Ok(())
 }
@@ -147,7 +157,7 @@ async fn node_is_at_height(
     height: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    let start = tokio::time::Instant::now();
+    let start = Instant::now();
     let time_out = Duration::from_secs(time_out_seconds);
 
     let mut count = 0usize;
@@ -300,7 +310,7 @@ fn log_waiting_status(
     peer_heights: &[u64],
     peer_min: u64,
     anchor_hashes: &[MaybeSnapshot],
-    start: tokio::time::Instant,
+    start: Instant,
 ) {
     match status {
         AlignmentStatus::Aligned => {
@@ -345,7 +355,7 @@ async fn nodes_converged(
     time_out_seconds: u64,
 ) -> StepResult {
     let nodes_info = &world.nodes_info.values().collect::<Vec<&NodeInfo>>();
-    let start = tokio::time::Instant::now();
+    let start = Instant::now();
     let time_out = Duration::from_secs(time_out_seconds);
 
     // node_name -> (height -> header_id)  (overwrites on reorg)
