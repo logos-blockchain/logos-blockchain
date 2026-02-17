@@ -4,6 +4,9 @@ blend:
     zk:
       secret_key_kms_id: 64249c75c2cb813578b75d05b215fc95f67cea5862fff047228183f22e63460e
 cryptarchia:
+  service:
+    bootstrap:
+      prolonged_bootstrap_period: '1.000000000'
   leader:
     wallet:
       funding_pk: "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26"

@@ -242,8 +242,14 @@ cargo build --all-features --all-targets
 target/debug/logos-blockchain-node nodes/node/standalone-node-config.yaml
 ```
 
-Node stores its state inside the `db` directory. If there are any issues when restarting the node, please try removing 
-`db` directory.
+Node stores its state inside the `store` directory. If there are any issues when restarting the node, please try removing 
+`store` directory.
+
+If you would like to test a node with a more frequent blocks per slot, please usea `--features high-active-slot-coefficient` feature flag when building:
+```bash
+cargo build --all-features --all-targets --features high-active-slot-coefficient
+```
+
 
 #### Running Logos Blockchain Node with integration test
 
