@@ -6,7 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use config::{api, sdp, storage, wallet};
+use config::{api, sdp, state, storage, wallet};
 use lb_core::mantle::{self, genesis_tx::GenesisTx};
 use lb_key_management_system_service::keys::{Key, secured_key::SecuredKey as _};
 use lb_libp2p::Multiaddr;
@@ -125,7 +125,8 @@ impl LocalDeployerEnv for LbcEnv {
             config.user.tracing.logger = configure_logging(dir, &log_prefix);
         }
 
-        config.user.storage.backend.path = dir.join("db");
+        config.user.state.base_folder = dir.to_path_buf();
+        "db".clone_into(&mut config.user.storage.backend.folder_name);
 
         let config_path = dir.join("node.yaml");
         let deployment_path = dir.join("deployment.yaml");
@@ -405,9 +406,6 @@ fn build_run_config(config: Config, genesis_tx: GenesisTx) -> RunConfig {
         blend: config.blend_config.0,
         time: config.time_config,
         cryptarchia: build_cryptarchia_user_config(&config.consensus_config),
-        mempool: config::mempool::serde::Config {
-            recovery_path: "./recovery/mempool.json".into(),
-        },
         tracing: config.tracing_config.tracing_settings,
         api: api::serde::Config {
             backend: api::serde::AxumBackendSettings {
@@ -421,13 +419,7 @@ fn build_run_config(config: Config, genesis_tx: GenesisTx) -> RunConfig {
                 ..Default::default()
             },
         },
-        storage: storage::serde::Config {
-            backend: storage::serde::RocksDbSettings {
-                path: "./db".into(),
-                read_only: false,
-                column_family: Some("blocks".into()),
-            },
-        },
+        storage: storage::serde::Config::default(),
         sdp: sdp::serde::Config {
             declaration: None,
             wallet: sdp::serde::WalletConfig {
@@ -451,13 +443,13 @@ fn build_run_config(config: Config, genesis_tx: GenesisTx) -> RunConfig {
             voucher_master_key_id: key_id_for_preload_backend(&Key::Zk(
                 config.consensus_config.known_key.clone(),
             )),
-            recovery_path: "./recovery/wallet.json".into(),
         },
         kms: config::kms::serde::Config {
             backend: config::kms::serde::PreloadKmsBackendSettings {
                 keys: config.kms_config.backend.keys,
             },
         },
+        state: state::Config::default(),
     };
 
     RunConfig {
@@ -500,7 +492,6 @@ fn build_cryptarchia_user_config(
                 },
                 prolonged_bootstrap_period: consensus.prolonged_bootstrap_period,
             },
-            recovery_file: "./recovery/cryptarchia.json".into(),
         },
         leader: LeaderConfig {
             wallet: leader::WalletConfig {

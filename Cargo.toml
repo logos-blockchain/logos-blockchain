@@ -144,9 +144,9 @@ lb-witness-generator               = { default-features = false, package = "logo
 lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
 lb-zone-sdk                        = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
 lb_network                         = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
-testing-framework-core             = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "e9b41263041897b4983b7ee8b4ea495d18a64641" }
-testing-framework-env              = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "e9b41263041897b4983b7ee8b4ea495d18a64641" }
-testing-framework-runner-local     = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "e9b41263041897b4983b7ee8b4ea495d18a64641" }
+testing-framework-core             = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "603437e0dd363367d486d54172b0a54116f057ac" }
+testing-framework-env              = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "603437e0dd363367d486d54172b0a54116f057ac" }
+testing-framework-runner-local     = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "603437e0dd363367d486d54172b0a54116f057ac" }
 
 # External
 async-trait       = { default-features = false, version = "0.1" }
