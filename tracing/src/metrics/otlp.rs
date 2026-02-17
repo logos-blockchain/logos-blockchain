@@ -1,9 +1,8 @@
 use std::error::Error;
 
 use opentelemetry::{KeyValue, global};
-use opentelemetry_otlp::{ExportConfig, Protocol, WithExportConfig as _};
-use opentelemetry_sdk::{Resource, runtime};
-use reqwest::Client;
+use opentelemetry_otlp::{Protocol, WithExportConfig as _};
+use opentelemetry_sdk::Resource;
 use serde::{Deserialize, Serialize};
 use tracing::Subscriber;
 use tracing_opentelemetry::MetricsLayer;
@@ -18,32 +17,30 @@ pub struct OtlpMetricsConfig {
 
 pub fn create_otlp_metrics_layer<S>(
     config: OtlpMetricsConfig,
-) -> Result<MetricsLayer<S>, Box<dyn Error + Send + Sync>>
+) -> Result<
+    MetricsLayer<S, opentelemetry_sdk::metrics::SdkMeterProvider>,
+    Box<dyn Error + Send + Sync>,
+>
 where
     S: Subscriber + for<'span> LookupSpan<'span>,
 {
-    let resource = Resource::new(vec![KeyValue::new(
-        opentelemetry_semantic_conventions::resource::SERVICE_NAME,
-        config.host_identifier,
-    )]);
+    let resource = Resource::builder_empty()
+        .with_attributes(vec![KeyValue::new(
+            opentelemetry_semantic_conventions::resource::SERVICE_NAME,
+            config.host_identifier,
+        )])
+        .build();
 
-    let export_config = ExportConfig {
-        endpoint: config.endpoint.into(),
-        protocol: Protocol::HttpBinary,
-        ..ExportConfig::default()
-    };
-
-    let client = Client::new();
-    let meter_provider = opentelemetry_otlp::new_pipeline()
-        .metrics(runtime::Tokio)
-        .with_exporter(
-            opentelemetry_otlp::new_exporter()
-                .http()
-                .with_http_client(client)
-                .with_export_config(export_config),
-        )
-        .with_resource(resource)
+    let exporter = opentelemetry_otlp::MetricExporter::builder()
+        .with_http()
+        .with_protocol(Protocol::HttpBinary)
+        .with_endpoint(config.endpoint.to_string())
         .build()?;
+
+    let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+        .with_periodic_exporter(exporter)
+        .with_resource(resource)
+        .build();
 
     global::set_meter_provider(meter_provider.clone());
     Ok(MetricsLayer::new(meter_provider))
