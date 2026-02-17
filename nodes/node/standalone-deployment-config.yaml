@@ -30,8 +30,8 @@ cryptarchia:
     epoch_stake_distribution_stabilization: 3
     epoch_period_nonce_buffer: 3
     epoch_period_nonce_stabilization: 4
-  security_param: 10
-  learning_rate: 1.0
+  security_param: 20
+  learning_rate: 0.1
   sdp_config:
     service_params:
       BN:
@@ -78,7 +78,7 @@ cryptarchia:
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
       ]
 time:
-  slot_duration: '5.0'
-  chain_start_time: 2026-01-10 07:47:56.891858 +00:00:00
+  slot_duration: '1.0'
+  chain_start_time: 2026-02-17 07:47:56.891858 +00:00:00
 mempool:
   pubsub_topic: mantle_e2e_tests
