@@ -388,8 +388,6 @@ mod cfgsync_tests {
             for faucet_sk in &config.consensus_config.other_keys {
                 let faucet_key_id = key_id_for_preload_backend(&faucet_sk.clone().into());
 
-                println!(">>> sk test {:?}", faucet_sk);
-
                 assert!(
                     kms_keys.contains_key(&faucet_key_id),
                     "Faucet key found in consensus.other_keys but missing from KMS for host {}",
