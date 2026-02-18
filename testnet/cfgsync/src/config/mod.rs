@@ -1,3 +1,4 @@
+mod blend;
 mod consensus;
 mod kms;
 
@@ -13,7 +14,7 @@ use lb_node::config::{TracingConfig, network::serde as network, tracing::serde a
 use lb_tests::topology::configs::{
     GeneralConfig,
     api::GeneralApiConfig,
-    blend::{GeneralBlendConfig, create_blend_configs},
+    blend::GeneralBlendConfig,
     consensus::{
         GeneralConsensusConfig, ProviderInfo, SHORT_PROLONGED_BOOTSTRAP_PERIOD,
         create_genesis_tx_with_declarations,
@@ -26,7 +27,9 @@ use rand::{Rng as _, thread_rng};
 
 use crate::{
     FaucetSettings, Host,
-    config::{consensus::create_consensus_configs, kms::create_kms_configs},
+    config::{
+        blend::create_blend_configs, consensus::create_consensus_configs, kms::create_kms_configs,
+    },
 };
 
 type FaucetNotes = Vec<ZkKey>;
