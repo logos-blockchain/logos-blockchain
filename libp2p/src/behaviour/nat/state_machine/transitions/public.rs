@@ -1,3 +1,5 @@
+use tracing::warn;
+
 use crate::behaviour::nat::state_machine::{
     Command, CommandTx, OnEvent, State, event::Event, states::Public,
 };
@@ -8,10 +10,8 @@ use crate::behaviour::nat::state_machine::{
 /// the address is found to be unreachable, the state machine transitions to the
 /// `TestIfPublic` state to re-evaluate the address.
 ///
-/// ### Panics
-///
-/// This state will panic if it receives an event that does not match the
-/// expected address to test.
+/// This state only accepts events for the tracked address. Mismatched addresses
+/// are logged and ignored.
 impl OnEvent for State<Public> {
     fn on_event(self: Box<Self>, event: Event, command_tx: &CommandTx) -> Box<dyn OnEvent> {
         match event {
@@ -36,18 +36,18 @@ impl OnEvent for State<Public> {
                 }
             }
             Event::ExternalAddressConfirmed(addr) => {
-                panic!(
-                    "State<Public>: Swarm confirmed external address {}, but {} was expected",
-                    addr,
-                    self.state.address(),
+                warn!(
+                    "State<Public>: Swarm confirmed external address {addr}, but {expected} is tracked - ignoring.",
+                    expected = self.state.address(),
                 );
+                self
             }
             Event::AutonatClientTestOk(addr) | Event::AutonatClientTestFailed(addr) => {
-                panic!(
-                    "State<Public>: Autonat client reported address {}, but {} was expected",
-                    addr,
-                    self.state.address(),
+                warn!(
+                    "State<Public>: Autonat reported for {addr}, but {expected} is tracked - ignoring.",
+                    expected = self.state.address(),
                 );
+                self
             }
             _ => self,
         }
@@ -131,34 +131,46 @@ mod tests {
         assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
     }
 
-    #[should_panic = "State<Public>: Swarm confirmed external address /memory/1, but /memory/0 was expected"]
     #[test]
-    fn address_mismatch_in_external_address_confirmed_event_causes_panic() {
-        let (tx, _) = unbounded_channel();
+    fn external_address_confirmed_mismatch_is_ignored() {
+        let (tx, mut rx) = unbounded_channel();
         let mut state_machine = StateMachine::new(tx);
         state_machine.inner = Some(Public::for_test(ADDR.clone()));
         let event = external_address_confirmed_address_mismatch();
         state_machine.on_test_event(event);
+        assert_eq!(
+            state_machine.inner.as_ref().unwrap(),
+            &Public::for_test(ADDR.clone())
+        );
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
     }
 
-    #[should_panic = "State<Public>: Autonat client reported address /memory/1, but /memory/0 was expected"]
     #[test]
-    fn address_mismatch_in_autonat_ok_event_causes_panic() {
-        let (tx, _) = unbounded_channel();
+    fn autonat_ok_address_mismatch_is_ignored() {
+        let (tx, mut rx) = unbounded_channel();
         let mut state_machine = StateMachine::new(tx);
         state_machine.inner = Some(Public::for_test(ADDR.clone()));
         let event = autonat_ok_address_mismatch();
         state_machine.on_test_event(event);
+        assert_eq!(
+            state_machine.inner.as_ref().unwrap(),
+            &Public::for_test(ADDR.clone())
+        );
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
     }
 
-    #[should_panic = "State<Public>: Autonat client reported address /memory/1, but /memory/0 was expected"]
     #[test]
-    fn address_mismatch_in_autonat_failed_event_causes_panic() {
-        let (tx, _) = unbounded_channel();
+    fn autonat_failed_address_mismatch_is_ignored() {
+        let (tx, mut rx) = unbounded_channel();
         let mut state_machine = StateMachine::new(tx);
         state_machine.inner = Some(Public::for_test(ADDR.clone()));
         let event = autonat_failed_address_mismatch();
         state_machine.on_test_event(event);
+        assert_eq!(
+            state_machine.inner.as_ref().unwrap(),
+            &Public::for_test(ADDR.clone())
+        );
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
     }
 
     #[test]
@@ -182,8 +194,11 @@ mod tests {
 
         let mut other_events = all_events();
         other_events.remove(&external_address_confirmed());
+        other_events.remove(&external_address_confirmed_address_mismatch());
         other_events.remove(&autonat_ok());
+        other_events.remove(&autonat_ok_address_mismatch());
         other_events.remove(&autonat_failed());
+        other_events.remove(&autonat_failed_address_mismatch());
         other_events.remove(&mapping_failed());
         other_events.remove(&default_gateway_changed());
         other_events.remove(&default_gateway_changed_no_local_address());

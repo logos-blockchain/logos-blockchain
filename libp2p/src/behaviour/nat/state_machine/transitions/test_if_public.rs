@@ -1,3 +1,5 @@
+use tracing::info;
+
 use crate::behaviour::nat::state_machine::{
     Command, CommandTx, OnEvent, State, event::Event, states::TestIfPublic,
 };
@@ -8,10 +10,10 @@ use crate::behaviour::nat::state_machine::{
 /// `TryMapAddress` state to attempt mapping the address to some public-facing
 /// address on the NAT-box.
 ///
-/// ### Panics
-///
-/// This state will panic if it receives an event that does not match the
-/// expected address to test.
+/// This is one of two states that accept a different address than expected. If
+/// the swarm confirms a different external address (e.g. the public IP
+/// discovered by identify/Kademlia differs from the local listen address), the
+/// state machine stays in `TestIfPublic` with the new address.
 impl OnEvent for State<TestIfPublic> {
     fn on_event(self: Box<Self>, event: Event, command_tx: &CommandTx) -> Box<dyn OnEvent> {
         match event {
@@ -31,12 +33,14 @@ impl OnEvent for State<TestIfPublic> {
                     self
                 }
             }
-            Event::ExternalAddressConfirmed(addr) | Event::AutonatClientTestFailed(addr) => {
-                panic!(
-                    "State<TestIfPublic>: Autonat client reported address {}, but {} was expected",
-                    addr,
+            // A different address was confirmed externally. Stay in TestIfPublic
+            // and re-target to test the new address before promoting to Public.
+            Event::ExternalAddressConfirmed(addr) => {
+                info!(
+                    "State<TestIfPublic>: External address {addr} confirmed (was testing {}), re-targeting.",
                     self.state.addr_to_test(),
                 );
+                self.boxed(|state| state.into_retarget(addr))
             }
             _ => self,
         }
@@ -52,7 +56,7 @@ mod tests {
         StateMachine,
         states::{Public, TestIfPublic, TryMapAddress},
         transitions::fixtures::{
-            ADDR, all_events, autonat_failed, autonat_failed_address_mismatch,
+            ADDR, ADDR_1, all_events, autonat_failed, autonat_failed_address_mismatch,
             default_gateway_changed, default_gateway_changed_no_local_address,
             external_address_confirmed, external_address_confirmed_address_mismatch,
         },
@@ -76,6 +80,21 @@ mod tests {
     }
 
     #[test]
+    fn external_address_confirmed_mismatch_stays_in_test_if_public_with_new_addr() {
+        let (tx, mut rx) = unbounded_channel();
+        let mut state_machine = StateMachine::new(tx);
+        state_machine.inner = Some(TestIfPublic::for_test(ADDR.clone()));
+        let event = external_address_confirmed_address_mismatch();
+        state_machine.on_test_event(event);
+        // Stays in TestIfPublic but now tracking ADDR_1
+        assert_eq!(
+            state_machine.inner.as_ref().unwrap(),
+            &TestIfPublic::for_test(ADDR_1.clone())
+        );
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
+    }
+
+    #[test]
     fn autonat_client_failed_causes_transition_to_try_map_address() {
         let (tx, mut rx) = unbounded_channel();
         let mut state_machine = StateMachine::new(tx);
@@ -89,24 +108,18 @@ mod tests {
         assert_eq!(rx.try_recv(), Ok(Command::MapAddress(ADDR.clone())));
     }
 
-    #[should_panic = "State<TestIfPublic>: Autonat client reported address /memory/1, but /memory/0 was expected"]
     #[test]
-    fn address_mismatch_in_external_address_confirmed_event_causes_panic() {
-        let (tx, _) = unbounded_channel();
-        let mut state_machine = StateMachine::new(tx);
-        state_machine.inner = Some(TestIfPublic::for_test(ADDR.clone()));
-        let event = external_address_confirmed_address_mismatch();
-        state_machine.on_test_event(event);
-    }
-
-    #[should_panic = "State<TestIfPublic>: Autonat client reported address /memory/1, but /memory/0 was expected"]
-    #[test]
-    fn address_mismatch_in_autonat_failed_event_causes_panic() {
-        let (tx, _) = unbounded_channel();
+    fn autonat_failed_address_mismatch_is_ignored() {
+        let (tx, mut rx) = unbounded_channel();
         let mut state_machine = StateMachine::new(tx);
         state_machine.inner = Some(TestIfPublic::for_test(ADDR.clone()));
         let event = autonat_failed_address_mismatch();
         state_machine.on_test_event(event);
+        assert_eq!(
+            state_machine.inner.as_ref().unwrap(),
+            &TestIfPublic::for_test(ADDR.clone())
+        );
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
     }
 
     #[test]
@@ -130,7 +143,9 @@ mod tests {
 
         let mut other_events = all_events();
         other_events.remove(&external_address_confirmed());
+        other_events.remove(&external_address_confirmed_address_mismatch());
         other_events.remove(&autonat_failed());
+        other_events.remove(&autonat_failed_address_mismatch());
         other_events.remove(&default_gateway_changed());
         other_events.remove(&default_gateway_changed_no_local_address());
 
