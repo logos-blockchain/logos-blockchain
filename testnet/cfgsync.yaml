@@ -13,13 +13,18 @@ mode: Run
 
 # Tracing
 tracing_settings:
-  logger: !Otlp
-    endpoint: http://otel:4317
-    service_name: init_node
+  logger:
+    otlp:
+      endpoint: "http://devnet.blockchain.logos.co:3100"
+      service_name: "init_node"
+    stdout: true
+    stderr: false
+    file:
+      directory: "./state/logs"
+    loki: null
+    gelf: null
   tracing: None
   filter: None
-  metrics: !Otlp
-    endpoint: http://prometheus:9090/api/v1/otlp/v1/metrics
-    host_identifier: node
+  metrics: None
   console: None
-  level: DEBUG
+  level: "DEBUG"

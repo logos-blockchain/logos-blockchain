@@ -25,3 +25,18 @@ wallet:
     2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26: "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26"
     ed266e6e887b9b97059dc1aa1b7b2e19b934291753c6336a163fe4ebaa28e717: "ed266e6e887b9b97059dc1aa1b7b2e19b934291753c6336a163fe4ebaa28e717"
   voucher_master_key_id: 2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26
+
+tracing:
+  logger:
+    stdout: true
+    stderr: false
+    file:
+      directory: "./state/logs"
+    otlp: null
+    loki: null
+    gelf: null
+  tracing: None
+  filter: None
+  metrics: None
+  console: None
+  level: "DEBUG"
