@@ -112,8 +112,7 @@ pub fn create_node_configs(
         };
 
         // Tracing config.
-        let tracing_config =
-            update_tracing_identifier(tracing_settings.clone(), host.identifier.clone());
+        let tracing_config = update_tracing_identifier(tracing_settings.clone(), &host.identifier);
 
         // Time config
         let time_config = default_time_config();
@@ -180,10 +179,7 @@ pub fn create_node_config_from_template(
             address: format!("0.0.0.0:{}", new_host.api_port).parse().unwrap(),
             testing_http_address: format!("0.0.0.0:{}", new_host.api_port).parse().unwrap(),
         },
-        tracing_config: update_tracing_identifier(
-            tracing_settings.clone(),
-            new_host.identifier.clone(),
-        ),
+        tracing_config: update_tracing_identifier(tracing_settings.clone(), &new_host.identifier),
         time_config: template.time_config.clone(),
         kms_config: kms_configs[0].clone(),
     }
@@ -222,19 +218,19 @@ fn update_network_init_peers(hosts: &[Host]) -> Vec<Multiaddr> {
 
 fn update_tracing_identifier(
     mut settings: TracingConfig,
-    identifier: String,
+    identifier: &String,
 ) -> GeneralTracingConfig {
     if let Some(ref mut loki) = settings.logger.loki {
-        loki.host_identifier.clone_from(&identifier);
+        loki.host_identifier.clone_from(identifier);
     }
 
     if let Some(ref mut otlp) = settings.logger.otlp {
-        otlp.service_name.clone_from(&identifier);
+        otlp.service_name.clone_from(identifier);
     }
 
     let tracing = match settings.tracing {
         tracing::tracing::Layer::Otlp(mut config) => {
-            config.service_name.clone_from(&identifier);
+            config.service_name.clone_from(identifier);
             tracing::tracing::Layer::Otlp(config)
         }
         other @ tracing::tracing::Layer::None => other,
@@ -242,7 +238,7 @@ fn update_tracing_identifier(
 
     let metrics = match settings.metrics {
         tracing::metrics::Layer::Otlp(mut config) => {
-            config.host_identifier.clone_from(&identifier);
+            config.host_identifier.clone_from(identifier);
             tracing::metrics::Layer::Otlp(config)
         }
         other @ tracing::metrics::Layer::None => other,
