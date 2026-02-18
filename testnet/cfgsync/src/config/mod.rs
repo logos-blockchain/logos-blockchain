@@ -30,6 +30,17 @@ use crate::{
 };
 
 type FaucetNotes = Vec<ZkKey>;
+type HostId = [u8; 32];
+
+#[must_use]
+pub fn host_to_id(identifier: &str) -> HostId {
+    let mut id_bytes = [0u8; 32];
+    let identifier = identifier.as_bytes();
+    let len = std::cmp::min(identifier.len(), 32);
+
+    id_bytes[..len].copy_from_slice(&identifier[..len]);
+    id_bytes
+}
 
 #[must_use]
 pub fn create_node_configs(
@@ -40,12 +51,7 @@ pub fn create_node_configs(
     let mut ids = Vec::with_capacity(hosts.len());
 
     for host in &hosts {
-        let mut id_bytes = [0u8; 32];
-        let identifier = host.identifier.as_bytes();
-        let len = std::cmp::min(identifier.len(), 32);
-
-        id_bytes[..len].copy_from_slice(&identifier[..len]);
-        ids.push(id_bytes);
+        ids.push(host_to_id(&host.identifier));
     }
 
     // Clippy in 1.93.0:
@@ -252,6 +258,7 @@ mod cfgsync_tests {
     use ::tracing::Level;
     use lb_libp2p::{Multiaddr, Protocol};
     use lb_node::config::{TracingConfig, tracing::serde as tracing};
+    use lb_tests::common::kms::key_id_for_preload_backend;
 
     use super::{Host, create_node_configs};
     use crate::{FaucetSettings, config::create_node_config_from_template};
@@ -331,5 +338,64 @@ mod cfgsync_tests {
 
         assert_eq!(appended_config.network_config.backend.swarm.port, 4000);
         assert_eq!(appended_config.api_config.address.port(), 9000);
+    }
+
+    #[test]
+    fn test_faucet_keys_distribution() {
+        let faucet_settings = FaucetSettings {
+            note_count: 5,
+            note_value: 10,
+        };
+
+        let hosts = vec![
+            Host {
+                ip: Ipv4Addr::LOCALHOST,
+                identifier: "node_1".into(),
+                ..Default::default()
+            },
+            Host {
+                ip: Ipv4Addr::LOCALHOST,
+                identifier: "node_2".into(),
+                ..Default::default()
+            },
+        ];
+
+        let (configs, _) =
+            create_node_configs(&faucet_settings, &TracingConfig::none(), hosts.clone());
+
+        let expected_total_keys = 5;
+
+        for host in &hosts {
+            let config = configs.get(host).expect("Config missing for host");
+            let kms_keys = &config.kms_config.backend.keys;
+
+            assert_eq!(kms_keys.len(), expected_total_keys);
+
+            let known_key_id =
+                key_id_for_preload_backend(&config.consensus_config.known_key.clone().into());
+            assert!(
+                kms_keys.contains_key(&known_key_id),
+                "KMS must contain the consensus known_key"
+            );
+
+            let funding_key_id =
+                key_id_for_preload_backend(&config.consensus_config.funding_sk.clone().into());
+            assert!(
+                kms_keys.contains_key(&funding_key_id),
+                "KMS must contain the SDP funding_sk"
+            );
+
+            for faucet_sk in &config.consensus_config.other_keys {
+                let faucet_key_id = key_id_for_preload_backend(&faucet_sk.clone().into());
+
+                println!(">>> sk test {:?}", faucet_sk);
+
+                assert!(
+                    kms_keys.contains_key(&faucet_key_id),
+                    "Faucet key found in consensus.other_keys but missing from KMS for host {}",
+                    host.identifier
+                );
+            }
+        }
     }
 }

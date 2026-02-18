@@ -41,11 +41,11 @@ pub fn create_kms_configs(
         })
         .collect();
 
-    for config in &mut kms_configs {
+    for (config, host_faucet_keys) in kms_configs.iter_mut().zip(faucet_note_keys.iter()) {
         config
             .backend
             .keys
-            .extend(faucet_note_keys.iter().flatten().map(|sk| {
+            .extend(host_faucet_keys.iter().map(|sk| {
                 let key = sk.clone().into();
                 (key_id_for_preload_backend(&key), key)
             }));

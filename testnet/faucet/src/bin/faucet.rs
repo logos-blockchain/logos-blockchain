@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use clap::Parser;
+use lb_cfgsync::config::host_to_id;
 use lb_key_management_system_keys::keys::ZkKey;
 use logos_blockchain_faucet::{faucet::Faucet, server::faucet_app};
 use num_bigint::BigUint;
@@ -29,12 +30,10 @@ async fn main() {
         node_base_url,
     } = Args::parse();
 
-    let mut id_bytes = [0u8; 32];
-    let identifier = host_identifier.as_bytes();
-    let len = std::cmp::min(identifier.len(), 32);
-    id_bytes[..len].copy_from_slice(&identifier[..len]);
+    let host_id = host_to_id(&host_identifier);
+    println!("Faucet for {host_identifier} ({host_id:?})");
 
-    let sk_faucet_data = derive_key_material(b"fc", &id_bytes);
+    let sk_faucet_data = derive_key_material(b"fc", &host_id);
     let sk_faucet = ZkKey::from(BigUint::from_bytes_le(&sk_faucet_data));
 
     let faucet = Arc::new(
