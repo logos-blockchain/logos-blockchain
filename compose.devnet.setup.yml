@@ -76,6 +76,18 @@ services:
       - CFG_API_PORT=${NODE3_API_PORT}
     entrypoint: /etc/logos-blockchain/scripts/setup_cfgsync_client.sh
 
+  nginx:
+    container_name: nginx
+    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    ports:
+      - "18080:18080"
+    depends_on:
+      - cfgsync
+    volumes:
+      - ./testnet/nginx-setup.conf:/etc/nginx/nginx.conf:ro
+      - ./testnet/static:/usr/share/nginx/html:ro
+    entrypoint: [ "nginx", "-g", "daemon off;" ]
+
 volumes:
   node-data:
     name: logos-node-data
