@@ -28,13 +28,13 @@ services:
     volumes:
       - ./testnet/tracing/otel.yaml:/etc/otel-collector-config.yaml
     ports:
-      - "14317:4317"
+      - "0.0.0.0:3100:4317"
       - "14318:4318"
 
   loki:
     image: grafana/loki:latest
     ports:
-      - "3100:3100"
+      - "23100:3100"
       - "24317:4317"
       - "24318:4318"
     volumes:
@@ -51,7 +51,7 @@ services:
       - --storage.tsdb.retention.time=7d
       - --web.enable-otlp-receiver
     ports:
-      - 0.0.0.0:9090:9090
+      - "0.0.0.0:9090:9090"
     restart: on-failure
 
   tempo:
