@@ -1,5 +1,5 @@
 use lb_tracing::tracing::otlp::OtlpTracingConfig;
-use lb_tracing_service::TracingLayer;
+use lb_tracing_service::TracingLayerSettings;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -10,7 +10,7 @@ pub enum Layer {
     None,
 }
 
-impl From<Layer> for TracingLayer {
+impl From<Layer> for TracingLayerSettings {
     fn from(value: Layer) -> Self {
         match value {
             Layer::Otlp(config) => Self::Otlp(OtlpTracingConfig {

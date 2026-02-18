@@ -259,16 +259,23 @@ const fn node_binary_config() -> BinaryConfig {
     }
 }
 
-fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layer {
+fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layers {
     debug!(prefix, base_dir = %base_dir.display(), "configuring node logging");
 
     if let Some(log_dir) = tf_env::nomos_log_dir() {
         match fs::create_dir_all(&log_dir) {
             Ok(()) => {
-                return logger::Layer::File(logger::FileConfig {
-                    directory: log_dir,
-                    prefix: Some(prefix.into()),
-                });
+                return logger::Layers {
+                    file: Some(logger::FileConfig {
+                        directory: log_dir,
+                        prefix: Some(prefix.into()),
+                    }),
+                    loki: None,
+                    gelf: None,
+                    otlp: None,
+                    stdout: false,
+                    stderr: false,
+                };
             }
 
             Err(error) => {
@@ -280,10 +287,17 @@ fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layer {
         }
     }
 
-    logger::Layer::File(logger::FileConfig {
-        directory: base_dir.to_owned(),
-        prefix: Some(prefix.into()),
-    })
+    logger::Layers {
+        file: Some(logger::FileConfig {
+            directory: base_dir.to_owned(),
+            prefix: Some(prefix.into()),
+        }),
+        loki: None,
+        gelf: None,
+        otlp: None,
+        stdout: false,
+        stderr: false,
+    }
 }
 
 fn build_node_config_for(

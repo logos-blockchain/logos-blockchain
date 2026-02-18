@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use lb_tracing::filter::envfilter::EnvFilterConfig;
-use lb_tracing_service::FilterLayer;
+use lb_tracing_service::FilterLayerSettings;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -11,7 +11,7 @@ pub enum Layer {
     None,
 }
 
-impl From<Layer> for FilterLayer {
+impl From<Layer> for FilterLayerSettings {
     fn from(value: Layer) -> Self {
         match value {
             Layer::Env(config) => Self::EnvFilter(EnvFilterConfig {

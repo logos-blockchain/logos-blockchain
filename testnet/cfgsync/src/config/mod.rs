@@ -220,31 +220,40 @@ fn update_network_init_peers(hosts: &[Host]) -> Vec<Multiaddr> {
         .collect()
 }
 
-fn update_tracing_identifier(settings: TracingConfig, identifier: String) -> GeneralTracingConfig {
+fn update_tracing_identifier(
+    mut settings: TracingConfig,
+    identifier: String,
+) -> GeneralTracingConfig {
+    if let Some(ref mut loki) = settings.logger.loki {
+        loki.host_identifier.clone_from(&identifier);
+    }
+
+    if let Some(ref mut otlp) = settings.logger.otlp {
+        otlp.service_name.clone_from(&identifier);
+    }
+
+    let tracing = match settings.tracing {
+        tracing::tracing::Layer::Otlp(mut config) => {
+            config.service_name.clone_from(&identifier);
+            tracing::tracing::Layer::Otlp(config)
+        }
+        other @ tracing::tracing::Layer::None => other,
+    };
+
+    let metrics = match settings.metrics {
+        tracing::metrics::Layer::Otlp(mut config) => {
+            config.host_identifier.clone_from(&identifier);
+            tracing::metrics::Layer::Otlp(config)
+        }
+        other @ tracing::metrics::Layer::None => other,
+    };
+
     GeneralTracingConfig {
         tracing_settings: TracingConfig {
-            logger: match settings.logger {
-                tracing::logger::Layer::Loki(mut config) => {
-                    config.host_identifier.clone_from(&identifier);
-                    tracing::logger::Layer::Loki(config)
-                }
-                other => other,
-            },
-            tracing: match settings.tracing {
-                tracing::tracing::Layer::Otlp(mut config) => {
-                    config.service_name.clone_from(&identifier);
-                    tracing::tracing::Layer::Otlp(config)
-                }
-                other @ tracing::tracing::Layer::None => other,
-            },
+            logger: settings.logger,
+            tracing,
+            metrics,
             filter: settings.filter,
-            metrics: match settings.metrics {
-                tracing::metrics::Layer::Otlp(mut config) => {
-                    config.host_identifier = identifier;
-                    tracing::metrics::Layer::Otlp(config)
-                }
-                other @ tracing::metrics::Layer::None => other,
-            },
             console: settings.console,
             level: settings.level,
         },
@@ -262,6 +271,24 @@ mod cfgsync_tests {
 
     use super::{Host, create_node_configs};
     use crate::{FaucetSettings, config::create_node_config_from_template};
+
+    fn tracing_none() -> TracingConfig {
+        TracingConfig {
+            logger: tracing::logger::Layers {
+                file: None,
+                loki: None,
+                gelf: None,
+                otlp: None,
+                stdout: false,
+                stderr: false,
+            },
+            tracing: tracing::tracing::Layer::None,
+            filter: tracing::filter::Layer::None,
+            metrics: tracing::metrics::Layer::None,
+            console: tracing::console::Layer::None,
+            level: Level::DEBUG,
+        }
+    }
 
     fn extract_port(multiaddr: &Multiaddr) -> u16 {
         multiaddr
@@ -299,15 +326,6 @@ mod cfgsync_tests {
 
     #[test]
     fn append_node() {
-        let tracing = TracingConfig {
-            logger: tracing::logger::Layer::None,
-            tracing: tracing::tracing::Layer::None,
-            filter: tracing::filter::Layer::None,
-            metrics: tracing::metrics::Layer::None,
-            console: tracing::console::Layer::None,
-            level: Level::DEBUG,
-        };
-
         let init_host = Host {
             ip: Ipv4Addr::LOCALHOST,
             identifier: "init".into(),
@@ -315,7 +333,7 @@ mod cfgsync_tests {
         };
         let (init_configs, _) = create_node_configs(
             &FaucetSettings::default(),
-            &tracing,
+            &tracing_none(),
             vec![init_host.clone()],
         );
         let template = init_configs.get(&init_host).unwrap();
@@ -328,7 +346,8 @@ mod cfgsync_tests {
             api_port: 9000,
         };
 
-        let appended_config = create_node_config_from_template(&tracing, &new_host, template);
+        let appended_config =
+            create_node_config_from_template(&tracing_none(), &new_host, template);
 
         assert_eq!(
             appended_config.network_config.backend.initial_peers,

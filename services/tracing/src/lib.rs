@@ -3,6 +3,7 @@ use std::{
     io::Write,
     marker::PhantomData,
     panic,
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
@@ -36,7 +37,7 @@ mod console;
 
 pub struct Tracing<RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    logger_guard: Option<WorkerGuard>,
+    logger_guards: Vec<WorkerGuard>,
     _runtime_service_id: PhantomData<RuntimeServiceId>,
 }
 
@@ -107,19 +108,29 @@ pub enum LoggerLayer {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum TracingLayer {
+pub struct LoggerLayerSettings {
+    pub file: Option<FileConfig>,
+    pub loki: Option<LokiConfig>,
+    pub gelf: Option<GelfConfig>,
+    pub otlp: Option<OtlpConfig>,
+    pub stdout: bool,
+    pub stderr: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TracingLayerSettings {
     Otlp(OtlpTracingConfig),
     None,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum FilterLayer {
+pub enum FilterLayerSettings {
     EnvFilter(EnvFilterConfig),
     None,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum MetricsLayer {
+pub enum MetricsLayerSettings {
     Otlp(OtlpMetricsConfig),
     None,
 }
@@ -131,30 +142,43 @@ pub struct TokioConsoleConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ConsoleLayer {
+pub enum ConsoleLayerSettings {
     Console(TokioConsoleConfig),
     None,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TracingSettings {
-    pub logger: LoggerLayer,
-    pub tracing: TracingLayer,
-    pub filter: FilterLayer,
-    pub metrics: MetricsLayer,
-    pub console: ConsoleLayer,
+    pub logger: LoggerLayerSettings,
+    pub tracing: TracingLayerSettings,
+    pub filter: FilterLayerSettings,
+    pub metrics: MetricsLayerSettings,
+    pub console: ConsoleLayerSettings,
     #[serde(with = "serde_level")]
     pub level: Level,
 }
 
 impl Default for TracingSettings {
     fn default() -> Self {
+        let now = time::OffsetDateTime::now_utc();
+        let date_prefix = now.unix_timestamp().to_string();
+
         Self {
-            logger: LoggerLayer::Stdout,
-            tracing: TracingLayer::None,
-            filter: FilterLayer::None,
-            metrics: MetricsLayer::None,
-            console: ConsoleLayer::None,
+            logger: LoggerLayerSettings {
+                file: Some(FileConfig {
+                    directory: PathBuf::from("."),
+                    prefix: Some(date_prefix.into()),
+                }),
+                stdout: true,
+                stderr: false,
+                loki: None,
+                gelf: None,
+                otlp: None,
+            },
+            tracing: TracingLayerSettings::None,
+            filter: FilterLayerSettings::None,
+            metrics: MetricsLayerSettings::None,
+            console: ConsoleLayerSettings::None,
             level: Level::DEBUG,
         }
     }
@@ -164,11 +188,11 @@ impl TracingSettings {
     #[inline]
     #[must_use]
     pub const fn new(
-        logger: LoggerLayer,
-        tracing: TracingLayer,
-        filter: FilterLayer,
-        metrics: MetricsLayer,
-        console: ConsoleLayer,
+        logger: LoggerLayerSettings,
+        tracing: TracingLayerSettings,
+        filter: FilterLayerSettings,
+        metrics: MetricsLayerSettings,
+        console: ConsoleLayerSettings,
         level: Level,
     ) -> Self {
         Self {
@@ -207,58 +231,61 @@ where
             .notifier()
             .get_updated_settings();
 
-        let (logger_layer, logger_guard): (
-            Box<dyn tracing_subscriber::Layer<_> + Send + Sync>,
-            Option<WorkerGuard>,
-        ) = match config.logger {
-            LoggerLayer::Gelf(config) => {
-                let gelf_layer = create_gelf_layer(
-                    &config,
-                    service_resources_handle.overwatch_handle.runtime(),
-                )?;
-                (Box::new(gelf_layer), None)
-            }
-            LoggerLayer::File(config) => {
-                let (layer, guard) = create_file_layer(config);
-                (Box::new(layer), Some(guard))
-            }
-            LoggerLayer::Loki(config) => {
-                let loki_layer =
-                    create_loki_layer(config, service_resources_handle.overwatch_handle.runtime())?;
-                (Box::new(loki_layer), None)
-            }
-            LoggerLayer::Stdout => {
-                let (layer, guard) = create_writer_layer(std::io::stdout());
-                (Box::new(layer), Some(guard))
-            }
-            LoggerLayer::Stderr => {
-                let (layer, guard) = create_writer_layer(std::io::stderr());
-                (Box::new(layer), Some(guard))
-            }
-            LoggerLayer::Writer(writer) => {
-                let (layer, guard) = create_writer_layer(writer);
-                (Box::new(layer), Some(guard))
-            }
-            LoggerLayer::Otlp(config) => {
-                let otlp_logging_layer = create_otlp_layer(config)?;
-                (Box::new(otlp_logging_layer), None)
-            }
-            LoggerLayer::None => (Box::new(tracing_subscriber::fmt::Layer::new()), None),
-        };
+        let mut logger_layers: Vec<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>> = vec![];
+        let mut logger_guards: Vec<WorkerGuard> = vec![];
+
+        if let Some(file_config) = config.logger.file {
+            let (layer, guard) = create_file_layer(file_config);
+            logger_layers.push(Box::new(layer));
+            logger_guards.push(guard);
+        }
+
+        if config.logger.stdout {
+            let (layer, guard) = create_writer_layer(std::io::stdout());
+            logger_layers.push(Box::new(layer));
+            logger_guards.push(guard);
+        }
+
+        if config.logger.stderr {
+            let (layer, guard) = create_writer_layer(std::io::stderr());
+            logger_layers.push(Box::new(layer));
+            logger_guards.push(guard);
+        }
+
+        if let Some(loki_config) = config.logger.loki {
+            let loki_layer = create_loki_layer(
+                loki_config,
+                service_resources_handle.overwatch_handle.runtime(),
+            )?;
+            logger_layers.push(Box::new(loki_layer));
+        }
+
+        if let Some(gelf_config) = config.logger.gelf {
+            let gelf_layer = create_gelf_layer(
+                &gelf_config,
+                service_resources_handle.overwatch_handle.runtime(),
+            )?;
+            logger_layers.push(Box::new(gelf_layer));
+        }
+
+        if let Some(otlp_config) = config.logger.otlp {
+            let otlp_logging_layer = create_otlp_layer(otlp_config)?;
+            logger_layers.push(Box::new(otlp_logging_layer));
+        }
 
         let mut other_layers: Vec<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>> = vec![];
 
-        if let TracingLayer::Otlp(config) = config.tracing {
+        if let TracingLayerSettings::Otlp(config) = config.tracing {
             let tracing_layer = create_otlp_tracing_layer(config)?;
             other_layers.push(Box::new(tracing_layer));
         }
 
-        if let FilterLayer::EnvFilter(config) = config.filter {
+        if let FilterLayerSettings::EnvFilter(config) = config.filter {
             let filter_layer = create_envfilter_layer(config)?;
             other_layers.push(Box::new(filter_layer));
         }
 
-        if let MetricsLayer::Otlp(config) = config.metrics {
+        if let MetricsLayerSettings::Otlp(config) = config.metrics {
             let metrics_layer = create_otlp_metrics_layer(config)?;
             other_layers.push(Box::new(metrics_layer));
         }
@@ -268,7 +295,7 @@ where
 
             let level_filter = {
                 #[cfg(feature = "profiling")]
-                if let ConsoleLayer::Console(console_config) = &config.console
+                if let ConsoleLayerSettings::Console(console_config) = &config.console
                     && let Some(console_layer) = console::create_console_layer(console_config)
                 {
                     layers.push(console_layer);
@@ -280,7 +307,7 @@ where
                 LevelFilter::from(config.level)
             };
 
-            layers.push(logger_layer);
+            layers.extend(logger_layers);
             layers.extend(other_layers);
 
             tracing_subscriber::registry()
@@ -293,14 +320,14 @@ where
 
         Ok(Self {
             service_resources_handle,
-            logger_guard,
+            logger_guards,
             _runtime_service_id: PhantomData,
         })
     }
 
     async fn run(self) -> Result<(), overwatch::DynError> {
         let Self {
-            logger_guard: _logger_guard,
+            logger_guards: _logger_guard,
             service_resources_handle,
             ..
         } = self;

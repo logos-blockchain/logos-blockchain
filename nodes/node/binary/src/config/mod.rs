@@ -11,7 +11,7 @@ use color_eyre::eyre::{Result, eyre};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use serde::Deserialize;
 
-use crate::config::tracing::serde::logger::{FileConfig, GelfConfig, Layer};
+use crate::config::tracing::serde::logger::{FileConfig, GelfConfig};
 pub use crate::config::{
     api::serde::Config as ApiConfig,
     blend::serde::Config as BlendConfig,
@@ -388,32 +388,41 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
         level,
     } = tracing_args;
 
-    // Override the file config with the one from env variables.
-    if let Some(backend) = backend {
-        tracing.logger = match backend {
-            LoggerLayerType::Gelf => Layer::Gelf(GelfConfig {
-                addr: addr
-                    .ok_or_else(|| eyre!("Gelf backend requires an address."))?
-                    .to_socket_addrs()?
-                    .next()
-                    .ok_or_else(|| eyre!("Invalid gelf address"))?,
-            }),
-            LoggerLayerType::File => Layer::File(FileConfig {
-                directory: directory.ok_or_else(|| eyre!("File backend requires a directory."))?,
-                prefix,
-            }),
-            LoggerLayerType::Stdout => Layer::Stdout,
-            LoggerLayerType::Stderr => Layer::Stderr,
-        };
+    if let Some(backend_type) = backend {
+        match backend_type {
+            LoggerLayerType::Gelf => {
+                tracing.logger.gelf = Some(GelfConfig {
+                    addr: addr
+                        .ok_or_else(|| eyre!("Gelf backend requires an address."))?
+                        .to_socket_addrs()?
+                        .next()
+                        .ok_or_else(|| eyre!("Invalid gelf address"))?,
+                });
+            }
+            LoggerLayerType::File => {
+                tracing.logger.file = Some(FileConfig {
+                    directory: directory
+                        .ok_or_else(|| eyre!("File backend requires a directory."))?,
+                    prefix,
+                });
+            }
+            LoggerLayerType::Stdout => {
+                tracing.logger.stdout = true;
+            }
+            LoggerLayerType::Stderr => {
+                tracing.logger.stderr = true;
+            }
+        }
     }
 
     if let Some(level_str) = level {
-        tracing.level = match level_str.as_str() {
+        tracing.level = match level_str.to_uppercase().as_str() {
+            "TRACE" => Level::TRACE,
             "DEBUG" => Level::DEBUG,
             "INFO" => Level::INFO,
             "ERROR" => Level::ERROR,
             "WARN" => Level::WARN,
-            _ => return Err(eyre!("Invalid log level provided.")),
+            _ => return Err(eyre!("Invalid log level provided: {}", level_str)),
         };
     }
     Ok(())

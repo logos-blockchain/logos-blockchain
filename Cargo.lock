@@ -4829,6 +4829,7 @@ dependencies = [
  "logos-blockchain-tracing",
  "overwatch",
  "serde",
+ "time",
  "tracing",
  "tracing-appender",
  "tracing-subscriber 0.3.22",

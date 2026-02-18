@@ -20,6 +20,7 @@ async-trait        = "0.1"
 lb-tracing         = { workspace = true }
 overwatch          = { workspace = true }
 serde              = { workspace = true }
+time               = { workspace = true }
 tracing            = { workspace = true }
 tracing-appender   = "0.2"
 tracing-subscriber = { default-features = false, version = "0.3" }

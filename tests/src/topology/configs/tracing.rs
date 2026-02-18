@@ -12,10 +12,17 @@ impl GeneralTracingConfig {
         let host_identifier = format!("node-{id}");
         Self {
             tracing_settings: tracing::Config {
-                logger: tracing::logger::Layer::Loki(tracing::logger::LokiConfig {
-                    endpoint: "http://localhost:3100".try_into().unwrap(),
-                    host_identifier: host_identifier.clone(),
-                }),
+                logger: tracing::logger::Layers {
+                    otlp: Some(tracing::logger::OtlpConfig {
+                        endpoint: "http://localhost:3100".try_into().unwrap(),
+                        service_name: host_identifier.clone(),
+                    }),
+                    stdout: true,
+                    file: None,
+                    gelf: None,
+                    loki: None,
+                    stderr: false,
+                },
                 tracing: tracing::tracing::Layer::Otlp(tracing::tracing::OtlpConfig {
                     endpoint: "http://localhost:4317".try_into().unwrap(),
                     sample_ratio: 0.5,

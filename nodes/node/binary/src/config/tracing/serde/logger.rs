@@ -1,44 +1,59 @@
 use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 
-use lb_tracing_service::LoggerLayer;
+use lb_tracing_service::LoggerLayerSettings;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub enum Layer {
-    Gelf(GelfConfig),
-    File(FileConfig),
-    Loki(LokiConfig),
-    Otlp(OtlpConfig),
-    #[default]
-    Stdout,
-    Stderr,
-    // do not collect logs
-    None,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Layers {
+    pub file: Option<FileConfig>,
+    pub loki: Option<LokiConfig>,
+    pub gelf: Option<GelfConfig>,
+    pub otlp: Option<OtlpConfig>,
+    pub stdout: bool,
+    pub stderr: bool,
 }
 
-impl From<Layer> for LoggerLayer {
-    fn from(value: Layer) -> Self {
-        match value {
-            Layer::Gelf(config) => {
-                Self::Gelf(lb_tracing::logging::gelf::GelfConfig { addr: config.addr })
-            }
-            Layer::File(config) => Self::File(lb_tracing::logging::local::FileConfig {
-                directory: config.directory,
-                prefix: config.prefix,
+impl Default for Layers {
+    fn default() -> Self {
+        let now = time::OffsetDateTime::now_utc();
+        let date_prefix = now.unix_timestamp().to_string();
+
+        Self {
+            file: Some(FileConfig {
+                directory: PathBuf::from("."),
+                prefix: Some(date_prefix.into()),
             }),
-            Layer::Loki(config) => Self::Loki(lb_tracing::logging::loki::LokiConfig {
-                endpoint: config.endpoint,
-                host_identifier: config.host_identifier,
+            stdout: true,
+            stderr: false,
+            loki: None,
+            gelf: None,
+            otlp: None,
+        }
+    }
+}
+
+impl From<Layers> for LoggerLayerSettings {
+    fn from(value: Layers) -> Self {
+        Self {
+            file: value.file.map(|f| lb_tracing::logging::local::FileConfig {
+                directory: f.directory,
+                prefix: f.prefix,
             }),
-            Layer::Otlp(config) => Self::Otlp(lb_tracing::logging::otlp::OtlpConfig {
-                endpoint: config.endpoint,
-                service_name: config.service_name,
+            loki: value.loki.map(|l| lb_tracing::logging::loki::LokiConfig {
+                endpoint: l.endpoint,
+                host_identifier: l.host_identifier,
             }),
-            Layer::Stdout => Self::Stdout,
-            Layer::Stderr => Self::Stderr,
-            Layer::None => Self::None,
+            gelf: value
+                .gelf
+                .map(|g| lb_tracing::logging::gelf::GelfConfig { addr: g.addr }),
+            otlp: value.otlp.map(|o| lb_tracing::logging::otlp::OtlpConfig {
+                endpoint: o.endpoint,
+                service_name: o.service_name,
+            }),
+            stdout: value.stdout,
+            stderr: value.stderr,
         }
     }
 }

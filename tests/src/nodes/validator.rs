@@ -100,11 +100,17 @@ impl Validator {
 
         if !*IS_DEBUG_TRACING {
             // setup logging so that we can intercept it later in testing
-            config.user.tracing.logger =
-                tracing::logger::Layer::File(tracing::logger::FileConfig {
+            config.user.tracing.logger = tracing::logger::Layers {
+                file: Some(tracing::logger::FileConfig {
                     directory: dir.path().to_owned(),
                     prefix: Some(LOGS_PREFIX.into()),
-                });
+                }),
+                loki: None,
+                gelf: None,
+                otlp: None,
+                stdout: false,
+                stderr: false,
+            };
         }
 
         config.user.state.base_folder = dir.path().to_path_buf();
