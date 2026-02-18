@@ -1,106 +1,69 @@
+use tracing::info;
+
+use crate::behaviour::nat::state_machine::{
+    Command, CommandTx, OnEvent, State, event::Event, states::TestIfPublic,
+};
+
+/// The `TestIfPublic` state is responsible for testing if the provided address
+/// is public. If the address is confirmed as public, it transitions to the
+/// `Public` state. If the address is not public, it transitions to the
+/// `TryMapAddress` state to attempt mapping the address to some public-facing
+/// address on the NAT-box.
+///
+/// Any `ExternalAddressConfirmed` event — regardless of whether it matches the
+/// current `addr_to_test` — causes a direct transition to `Public`. The swarm
+/// confirms an external address only once, so there is no second confirmation
+/// to wait for. The `Public` state will verify reachability via periodic
+/// autonat probes and demote back if the address turns out to be unreachable.
+impl OnEvent for State<TestIfPublic> {
+    fn on_event(self: Box<Self>, event: Event, command_tx: &CommandTx) -> Box<dyn OnEvent> {
+        match event {
+            Event::ExternalAddressConfirmed(addr) => {
+                info!(
+                    "State<TestIfPublic>: External address {addr} confirmed (was testing {}), promoting to Public.",
+                    self.state.addr_to_test(),
+                );
+                command_tx.force_send(Command::ScheduleAutonatClientTest(addr.clone()));
+                self.boxed(|state| state.retarget(addr).into_public())
+            }
+            Event::AutonatClientTestFailed(addr) if self.state.addr_to_test() == &addr => {
+                command_tx.force_send(Command::MapAddress(addr));
+                self.boxed(TestIfPublic::into_try_map_address)
+            }
+            Event::DefaultGatewayChanged { local_address, .. } => {
+                if let Some(addr) = local_address {
+                    command_tx.force_send(Command::MapAddress(addr));
+                    self.boxed(TestIfPublic::into_try_map_address)
+                } else {
+                    self
+                }
+            }
+            _ => self,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tokio::sync::mpsc::{error::TryRecvError, unbounded_channel};
 
+    use super::Command;
     use crate::behaviour::nat::state_machine::{
-        Command, StateMachine,
+        StateMachine,
         states::{Public, TestIfPublic, TryMapAddress},
         transitions::fixtures::{
-            ADDR, ADDR_1, all_events, autonat_failed, autonat_failed_address_mismatch, autonat_ok,
-            autonat_ok_address_mismatch, default_gateway_changed,
-            default_gateway_changed_no_local_address, external_address_confirmed,
-            external_address_confirmed_address_mismatch,
+            ADDR, ADDR_1, all_events, autonat_failed, autonat_failed_address_mismatch,
+            default_gateway_changed, default_gateway_changed_no_local_address,
+            external_address_confirmed, external_address_confirmed_address_mismatch,
         },
     };
 
     #[test]
-    fn external_address_confirmed_retargets_and_schedules_probe() {
+    fn external_address_confirmed_transitions_to_public() {
         let (tx, mut rx) = unbounded_channel();
         let mut state_machine = StateMachine::new(tx);
         state_machine.inner = Some(TestIfPublic::for_test(ADDR.clone()));
         state_machine.on_test_event(external_address_confirmed());
-        // Stays in TestIfPublic, re-targeted to ADDR
-        assert_eq!(
-            state_machine.inner.as_ref().unwrap(),
-            &TestIfPublic::for_test(ADDR.clone())
-        );
-        assert_eq!(
-            rx.try_recv(),
-            Ok(Command::ScheduleAutonatClientTest(ADDR.clone()))
-        );
-    }
-
-    #[test]
-    fn external_address_confirmed_mismatch_retargets_and_schedules_probe() {
-        let (tx, mut rx) = unbounded_channel();
-        let mut state_machine = StateMachine::new(tx);
-        state_machine.inner = Some(TestIfPublic::for_test(ADDR.clone()));
-        state_machine.on_test_event(external_address_confirmed_address_mismatch());
-        // Stays in TestIfPublic, re-targeted to ADDR_1
-        assert_eq!(
-            state_machine.inner.as_ref().unwrap(),
-            &TestIfPublic::for_test(ADDR_1.clone())
-        );
-        assert_eq!(
-            rx.try_recv(),
-            Ok(Command::ScheduleAutonatClientTest(ADDR_1.clone()))
-        );
-    }
-
-    #[test]
-    fn autonat_ok_after_retarget_transitions_to_public() {
-        let (tx, mut rx) = unbounded_channel();
-        let mut state_machine = StateMachine::new(tx);
-        state_machine.inner = Some(TestIfPublic::for_test(ADDR.clone()));
-
-        // Step 1: ExternalAddressConfirmed retargets to ADDR_1 and schedules probe
-        state_machine.on_test_event(external_address_confirmed_address_mismatch());
-        assert_eq!(
-            state_machine.inner.as_ref().unwrap(),
-            &TestIfPublic::for_test(ADDR_1.clone())
-        );
-        assert_eq!(
-            rx.try_recv(),
-            Ok(Command::ScheduleAutonatClientTest(ADDR_1.clone()))
-        );
-
-        // Step 2: Autonat probe succeeds — transitions to Public
-        state_machine.on_test_event(autonat_ok_address_mismatch());
-        assert_eq!(
-            state_machine.inner.as_ref().unwrap(),
-            &Public::for_test(ADDR_1.clone())
-        );
-        assert_eq!(
-            rx.try_recv(),
-            Ok(Command::ScheduleAutonatClientTest(ADDR_1.clone()))
-        );
-    }
-
-    #[test]
-    fn autonat_failed_after_retarget_transitions_to_try_map_address() {
-        let (tx, mut rx) = unbounded_channel();
-        let mut state_machine = StateMachine::new(tx);
-        state_machine.inner = Some(TestIfPublic::for_test(ADDR.clone()));
-
-        // Step 1: ExternalAddressConfirmed retargets to ADDR_1
-        state_machine.on_test_event(external_address_confirmed_address_mismatch());
-        let _ = rx.try_recv(); // consume ScheduleAutonatClientTest
-
-        // Step 2: Autonat probe fails — transitions to TryMapAddress
-        state_machine.on_test_event(autonat_failed_address_mismatch());
-        assert_eq!(
-            state_machine.inner.as_ref().unwrap(),
-            &TryMapAddress::for_test(ADDR_1.clone())
-        );
-        assert_eq!(rx.try_recv(), Ok(Command::MapAddress(ADDR_1.clone())));
-    }
-
-    #[test]
-    fn autonat_ok_causes_transition_to_public() {
-        let (tx, mut rx) = unbounded_channel();
-        let mut state_machine = StateMachine::new(tx);
-        state_machine.inner = Some(TestIfPublic::for_test(ADDR.clone()));
-        state_machine.on_test_event(autonat_ok());
         assert_eq!(
             state_machine.inner.as_ref().unwrap(),
             &Public::for_test(ADDR.clone())
@@ -112,16 +75,20 @@ mod tests {
     }
 
     #[test]
-    fn autonat_ok_address_mismatch_is_ignored() {
+    fn external_address_confirmed_mismatch_transitions_to_public_with_new_addr() {
         let (tx, mut rx) = unbounded_channel();
         let mut state_machine = StateMachine::new(tx);
         state_machine.inner = Some(TestIfPublic::for_test(ADDR.clone()));
-        state_machine.on_test_event(autonat_ok_address_mismatch());
+        state_machine.on_test_event(external_address_confirmed_address_mismatch());
+        // Transitions to Public with the confirmed address (ADDR_1)
         assert_eq!(
             state_machine.inner.as_ref().unwrap(),
-            &TestIfPublic::for_test(ADDR.clone())
+            &Public::for_test(ADDR_1.clone())
         );
-        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
+        assert_eq!(
+            rx.try_recv(),
+            Ok(Command::ScheduleAutonatClientTest(ADDR_1.clone()))
+        );
     }
 
     #[test]
@@ -129,8 +96,7 @@ mod tests {
         let (tx, mut rx) = unbounded_channel();
         let mut state_machine = StateMachine::new(tx);
         state_machine.inner = Some(TestIfPublic::for_test(ADDR.clone()));
-        let event = autonat_failed();
-        state_machine.on_test_event(event);
+        state_machine.on_test_event(autonat_failed());
         assert_eq!(
             state_machine.inner.as_ref().unwrap(),
             &TryMapAddress::for_test(ADDR.clone())
@@ -143,8 +109,7 @@ mod tests {
         let (tx, mut rx) = unbounded_channel();
         let mut state_machine = StateMachine::new(tx);
         state_machine.inner = Some(TestIfPublic::for_test(ADDR.clone()));
-        let event = autonat_failed_address_mismatch();
-        state_machine.on_test_event(event);
+        state_machine.on_test_event(autonat_failed_address_mismatch());
         assert_eq!(
             state_machine.inner.as_ref().unwrap(),
             &TestIfPublic::for_test(ADDR.clone())
@@ -174,8 +139,6 @@ mod tests {
         let mut other_events = all_events();
         other_events.remove(&external_address_confirmed());
         other_events.remove(&external_address_confirmed_address_mismatch());
-        other_events.remove(&autonat_ok());
-        other_events.remove(&autonat_ok_address_mismatch());
         other_events.remove(&autonat_failed());
         other_events.remove(&autonat_failed_address_mismatch());
         other_events.remove(&default_gateway_changed());

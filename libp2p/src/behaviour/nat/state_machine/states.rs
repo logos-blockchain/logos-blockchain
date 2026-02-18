@@ -54,7 +54,7 @@ impl TestIfPublic {
         clippy::unused_self,
         reason = "The aim of the pattern is to consume self."
     )]
-    pub fn into_retarget(self, addr_to_test: Multiaddr) -> Self {
+    pub fn retarget(self, addr_to_test: Multiaddr) -> Self {
         Self { addr_to_test }
     }
 
@@ -126,7 +126,7 @@ impl TestIfMappedPublic {
         }
     }
 
-    pub fn into_retarget(self, addr_to_test: Multiaddr) -> Self {
+    pub fn retarget(self, addr_to_test: Multiaddr) -> Self {
         let Self { local_address, .. } = self;
 
         Self {
@@ -300,6 +300,18 @@ pub mod test_utils {
                 state: Self {
                     local_address: addr.clone(),
                     external_address: addr,
+                },
+            })
+        }
+
+        pub(crate) fn for_test_with_addrs(
+            local_address: Multiaddr,
+            external_address: Multiaddr,
+        ) -> Box<dyn OnEvent> {
+            Box::new(State::<Self> {
+                state: Self {
+                    local_address,
+                    external_address,
                 },
             })
         }
