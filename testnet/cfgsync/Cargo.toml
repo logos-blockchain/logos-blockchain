@@ -33,7 +33,7 @@ tokio                            = { default-features = false, features = ["macr
 tracing                          = { workspace = true }
 
 [dev-dependencies]
-hex       = { default-features = false, features = ["alloc"], workspace = true }
+hex        = { default-features = false, features = ["alloc"], workspace = true }
 lb-groth16 = { workspace = true }
 
 [[bin]]
