@@ -8,7 +8,7 @@ use lb_key_management_system_service::{
     backend::preload::KeyId,
     keys::{Ed25519Key, Key, ZkKey, ZkPublicKey, secured_key::SecuredKey as _},
 };
-use libp2p::{Multiaddr, PeerId, autonat, identify, swarm::SwarmEvent};
+use libp2p::{Multiaddr, PeerId, identify, swarm::SwarmEvent};
 use num_bigint::BigUint;
 use rand::rngs::OsRng;
 
@@ -95,33 +95,22 @@ fn load_deployment(deployment_type: &DeploymentType) -> Result<DeploymentSetting
     }
 }
 
-/// Detect and verify this node's public IPv4 address by connecting to an
-/// initial peer. Uses Identify to discover the observed address, then `AutoNAT`
-/// v2 to verify the address is actually reachable from the outside.
-#[derive(libp2p::swarm::NetworkBehaviour)]
-struct InitBehaviour {
-    identify: identify::Behaviour,
-    autonat: autonat::v2::client::Behaviour<OsRng>,
-}
-
-async fn detect_and_verify_public_ip(
+/// Detect this node's public IPv4 address by connecting to an initial peer.
+/// Uses the Identify protocol to discover the observed address.
+async fn detect_public_ip(
     initial_peers: &[Multiaddr],
     identify_protocol_name: &str,
 ) -> Result<Option<Ipv4Addr>> {
     let keypair = libp2p::identity::Keypair::generate_ed25519();
 
-    let autonat_config =
-        autonat::v2::client::Config::default().with_probe_interval(Duration::from_millis(100));
-
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
         .with_quic()
-        .with_behaviour(|keypair| InitBehaviour {
-            identify: identify::Behaviour::new(identify::Config::new(
+        .with_behaviour(|keypair| {
+            identify::Behaviour::new(identify::Config::new(
                 identify_protocol_name.to_owned(),
                 keypair.public(),
-            )),
-            autonat: autonat::v2::client::Behaviour::new(OsRng, autonat_config),
+            ))
         })
         .expect("infallible behaviour construction")
         .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(30)))
@@ -137,43 +126,20 @@ async fn detect_and_verify_public_ip(
             .map_err(|e| eyre!("Failed to dial peer {peer}: {e}"))?;
     }
 
-    let mut observed_ip: Option<Ipv4Addr> = None;
     let timeout = tokio::time::sleep(Duration::from_secs(30));
     tokio::pin!(timeout);
 
     loop {
         tokio::select! {
             event = swarm.select_next_some() => {
-                match event {
-                    SwarmEvent::Behaviour(InitBehaviourEvent::Identify(
-                        identify::Event::Received { info, .. },
-                    )) => {
-                        if observed_ip.is_none() {
-                            for protocol in &info.observed_addr {
-                                if let libp2p::multiaddr::Protocol::Ip4(ip) = protocol
-                                    && !ip.is_loopback() && !ip.is_private() && !ip.is_unspecified() && !ip.is_link_local()
-                                {
-                                    observed_ip = Some(ip);
-                                    break;
-                                }
-                            }
+                if let SwarmEvent::Behaviour(identify::Event::Received { info, .. }) = event {
+                    for protocol in &info.observed_addr {
+                        if let libp2p::multiaddr::Protocol::Ip4(ip) = protocol
+                            && !ip.is_loopback() && !ip.is_private() && !ip.is_unspecified() && !ip.is_link_local()
+                        {
+                            return Ok(Some(ip));
                         }
                     }
-                    SwarmEvent::Behaviour(InitBehaviourEvent::Autonat(
-                        autonat::v2::client::Event {
-                            tested_addr,
-                            result,
-                            ..
-                        },
-                    )) => {
-                        if let Some(ip) = observed_ip {
-                            let expected_prefix = format!("/ip4/{ip}");
-                            if tested_addr.to_string().starts_with(&expected_prefix) {
-                                return Ok(result.is_ok().then_some(ip));
-                            }
-                        }
-                    }
-                    _ => {}
                 }
             }
             () = &mut timeout => {
@@ -201,17 +167,15 @@ pub async fn run(args: &InitArgs) -> Result<()> {
         None
     } else if !args.initial_peers.is_empty() {
         let identify_protocol_name = deployment.network.identify_protocol_name.to_string();
-        if let Some(ip) =
-            detect_and_verify_public_ip(&args.initial_peers, &identify_protocol_name).await?
-        {
+        if let Some(ip) = detect_public_ip(&args.initial_peers, &identify_protocol_name).await? {
             let addr_str = format!("/ip4/{ip}/udp/{}/quic-v1", args.net_port);
             let addr = Multiaddr::from_str(&addr_str)
                 .map_err(|e| eyre!("Failed to construct external address: {e}"))?;
-            println!("Detected external address via AutoNAT: {addr}");
+            println!("Detected external address via Identify: {addr}");
             Some(addr)
         } else {
             eprintln!(
-                "Warning: Could not detect external address via AutoNAT, \
+                "Warning: Could not detect external address via Identify, \
                  falling back to NAT traversal."
             );
             None
