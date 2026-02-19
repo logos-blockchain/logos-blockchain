@@ -22,16 +22,7 @@ pub struct NetworkParams {
 pub type GeneralNetworkConfig = network::Config;
 
 fn default_swarm_config() -> network::SwarmConfig {
-    network::SwarmConfig {
-        host: std::net::Ipv4Addr::UNSPECIFIED,
-        port: 60000,
-        node_key: ed25519::SecretKey::generate(),
-        chain_sync: network::chainsync::Config::default(),
-        gossipsub: network::gossipsub::Config::default(),
-        identify: network::identify::Config::default(),
-        kademlia: network::kademlia::Config::default(),
-        nat: network::nat::Config::default(),
-    }
+    network::SwarmConfig::default()
 }
 
 #[must_use]

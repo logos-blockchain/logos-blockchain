@@ -1,8 +1,4 @@
-use core::time::Duration;
-use std::{num::NonZeroU64, str::FromStr as _};
-
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
-use lb_libp2p::Multiaddr;
 use lb_node::config::blend::serde as blend;
 use num_bigint::BigUint;
 
@@ -21,39 +17,20 @@ pub fn create_blend_configs(ids: &[[u8; 32]], ports: &[u16]) -> Vec<GeneralBlend
             // they are in turned derived from node ID.
             let secret_zk_key =
                 ZkKey::from(BigUint::from_bytes_le(private_key.public_key().as_bytes()));
-            (
-                blend::Config {
+            let blend_config = {
+                let mut base_config = blend::Config::with_required_values(blend::RequiredValues {
                     non_ephemeral_signing_key_id: key_id_for_preload_backend(
                         &private_key.clone().into(),
                     ),
-                    core: blend::core::Config {
-                        backend: blend::core::BackendConfig {
-                            core_peering_degree: 1..=3,
-                            edge_node_connection_timeout: Duration::from_secs(1),
-                            listening_address: Multiaddr::from_str(&format!(
-                                "/ip4/127.0.0.1/udp/{port}/quic-v1",
-                            ))
-                            .unwrap(),
-                            max_dial_attempts_per_peer: NonZeroU64::try_from(3)
-                                .expect("Max dial attempts per peer cannot be zero."),
-                            max_edge_node_incoming_connections: 300,
-                        },
-                        zk: blend::core::ZkSettings {
-                            secret_key_kms_id: key_id_for_preload_backend(
-                                &secret_zk_key.clone().into(),
-                            ),
-                        },
-                    },
-                    edge: blend::edge::Config {
-                        backend: blend::edge::BackendConfig {
-                            max_dial_attempts_per_peer_per_message: 1.try_into().unwrap(),
-                            replication_factor: 1.try_into().unwrap(),
-                        },
-                    },
-                },
-                private_key,
-                secret_zk_key,
-            )
+                    secret_key_kms_id: key_id_for_preload_backend(&secret_zk_key.clone().into()),
+                });
+                base_config.core.backend.listening_address =
+                    format!("/ip4/127.0.0.1/udp/{port}/quic-v1")
+                        .parse()
+                        .unwrap();
+                base_config
+            };
+            (blend_config, private_key, secret_zk_key)
         })
         .collect()
 }

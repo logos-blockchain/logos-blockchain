@@ -9,6 +9,7 @@ use lb_blend_proofs::{
     quota::inputs::prove::{PublicInputs, public::LeaderInputs},
     selection::VerifiedProofOfSelection,
 };
+use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use tokio_util::sync::CancellationToken;
 
@@ -89,7 +90,7 @@ where
     async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
         self.remaining_quota = self.remaining_quota.checked_sub(1)?;
         let proof = self.proof_stream.next().await?;
-        tracing::trace!(target: LOG_TARGET, "Generated core Blend layer proof with key nullifier {:?} addressed to node at index {:?}", proof.proof_of_quota.key_nullifier(), proof.proof_of_selection.expected_index(self.settings.membership_size));
+        tracing::trace!(target: LOG_TARGET, "Generated core Blend layer proof with key nullifier {:?} addressed to node at index {:?}", hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), proof.proof_of_selection.expected_index(self.settings.membership_size));
         Some(proof)
     }
 }

@@ -815,7 +815,7 @@ where
                     }
                 }
                 Err(e) => {
-                    tracing::error!(target: LOG_TARGET, "Failed to handle message from the old session: {e:?}");
+                    tracing::trace!(target: LOG_TARGET, "Failed to handle message from the old session: {e:?}");
                     return;
                 }
             }

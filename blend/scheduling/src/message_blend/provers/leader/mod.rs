@@ -15,6 +15,7 @@ use lb_blend_proofs::{
     },
     selection::VerifiedProofOfSelection,
 };
+use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
@@ -92,7 +93,7 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
             .next()
             .await
             .expect("Underlying proof generation stream should always yield items.");
-        tracing::trace!(target: LOG_TARGET, "Generated leadership Blend layer proof with key nullifier {:?} addressed to node at index {:?}", proof.proof_of_quota.key_nullifier(), proof.proof_of_selection.expected_index(self.settings.membership_size));
+        tracing::trace!(target: LOG_TARGET, "Generated leadership Blend layer proof with key nullifier {:?} addressed to node at index {:?}", hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), proof.proof_of_selection.expected_index(self.settings.membership_size));
         proof
     }
 }

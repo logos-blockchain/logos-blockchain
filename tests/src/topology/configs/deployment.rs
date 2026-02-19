@@ -46,16 +46,15 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
                     .expect("Number of blend layers cannot be zero."),
                 timing: TimingSettings {
                     round_duration: Duration::from_secs(1),
-                    rounds_per_interval: NonZeroU64::try_from(30u64)
+                    rounds_per_interval: NonZeroU64::try_from(10u64)
                         .expect("Rounds per interval cannot be zero."),
-                    // (21,600 blocks * 30s per block) / 1s per round = 648,000 rounds
-                    rounds_per_session: NonZeroU64::try_from(648_000u64)
+                    rounds_per_session: NonZeroU64::try_from(2_000)
                         .expect("Rounds per session cannot be zero."),
-                    rounds_per_observation_window: NonZeroU64::try_from(30u64)
+                    rounds_per_observation_window: NonZeroU64::try_from(20u64)
                         .expect("Rounds per observation window cannot be zero."),
-                    rounds_per_session_transition_period: NonZeroU64::try_from(30u64)
+                    rounds_per_session_transition_period: NonZeroU64::try_from(20u64)
                         .expect("Rounds per session transition period cannot be zero."),
-                    epoch_transition_period_in_slots: NonZeroU64::try_from(2_600)
+                    epoch_transition_period_in_slots: NonZeroU64::try_from(20)
                         .expect("Epoch transition period in slots cannot be zero."),
                 },
                 protocol_name: StreamProtocol::new("/blend/integration-tests"),
@@ -74,7 +73,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
                             .expect("Message frequency per round cannot be negative."),
                     },
                     delayer: MessageDelayerSettings {
-                        maximum_release_delay_in_rounds: NonZeroU64::try_from(1u64)
+                        maximum_release_delay_in_rounds: NonZeroU64::try_from(3u64)
                             .expect("Maximum release delay between rounds cannot be zero."),
                     },
                 },
@@ -97,7 +96,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
             // Setting the security parameter to some value > 1 ensures
             // nodes have some time to sync before deciding on the
             // longest chain.
-            security_param: NonZero::new(10).unwrap(),
+            security_param: NonZero::new(20).unwrap(),
             slot_activation_coeff: NonNegativeRatio::new(1, 10.try_into().unwrap()),
             epoch_config: EpochConfig {
                 epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
@@ -121,7 +120,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
                 },
             },
             genesis_state: genesis_tx,
-            learning_rate: 1f64.try_into().expect("1 > 0"),
+            learning_rate: 0.1f64.try_into().expect("1 > 0"),
             faucet_pk: None,
         },
         time: TimeDeploymentSettings {

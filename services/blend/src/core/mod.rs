@@ -15,7 +15,7 @@ use futures::{
 use lb_blend::{
     crypto::random_sized_bytes,
     message::{
-        PayloadType,
+        Error as MessageError, PayloadType,
         encap::{
             ProofsVerifier as ProofsVerifierTrait, encapsulated::EncapsulatedMessage,
             validated::EncapsulatedMessageWithVerifiedPublicHeader,
@@ -1406,7 +1406,10 @@ where
             current_recovery_checkpoint,
         ),
         Err(e) => {
-            tracing::debug!(target: LOG_TARGET, "Failed to decapsulate received message with the current session crypto processor: {e:?}");
+            if matches!(e, MessageError::MessageDeserializationFailed) {
+                tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message because deserialization failed, probably because the message is not intended for this node. Ignoring...");
+                return current_recovery_checkpoint;
+            }
             let (Some(old_crypto_processor), Some(old_session_scheduler)) =
                 (old_session_cryptographic_processor, old_session_scheduler)
             else {
@@ -1541,7 +1544,7 @@ where
 {
     let (blending_tokens, decapsulated_message_type) =
         multi_layer_decapsulation_output.into_components();
-    tracing::trace!(target: LOG_TARGET, "Batch-decapsulated {} layers from the received message.", blending_tokens.len());
+    tracing::debug!(target: LOG_TARGET, "Batch-decapsulated {} layers from the received message.", blending_tokens.len());
 
     match decapsulated_message_type {
         DecapsulatedMessageType::Completed(fully_decapsulated_message) => {
@@ -1554,14 +1557,14 @@ where
                     tracing::trace!(target: LOG_TARGET, "Processing a fully decapsulated data message.");
                     match NetworkMessage::from_bytes(&serialized_data_message) {
                         Ok(deserialized_network_message) => {
-                            tracing::trace!(target: LOG_TARGET, "Fully decapsulated and deserialized processed data message: {deserialized_network_message:?}");
+                            tracing::debug!(target: LOG_TARGET, "Fully decapsulated and deserialized processed data message: {deserialized_network_message:?}");
                             let processed_message =
                                 ProcessedMessage::from(deserialized_network_message);
                             scheduler.schedule_processed_message(processed_message.clone());
                             (Some(processed_message), blending_tokens.into_iter())
                         }
                         Err(e) => {
-                            tracing::trace!(target: LOG_TARGET, "Unrecognized data message from blend backend. Dropping: {e:?}");
+                            tracing::warn!(target: LOG_TARGET, "Unrecognized data message from blend backend. Dropping: {e:?}");
                             (None, blending_tokens.into_iter())
                         }
                     }

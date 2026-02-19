@@ -3942,6 +3942,7 @@ dependencies = [
  "derivative",
  "fork_stream",
  "futures",
+ "hex",
  "libp2p",
  "logos-blockchain-blend-message",
  "logos-blockchain-blend-proofs",
