@@ -1143,7 +1143,7 @@ where
             HandleSessionEventOutput::Retiring {
                 old_crypto_processor: current_cryptographic_processor,
                 old_scheduler: current_scheduler.consume(),
-                old_token_collector: current_session_blending_token_collector.consume(),
+                old_token_collector: current_session_blending_token_collector.rotate_session(SessoionInf),
                 old_public_info: current_public_info,
             }
         }

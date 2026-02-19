@@ -391,7 +391,7 @@ where
     }
     .await;
 
-    info!(target: LOG_TARGET, "Current epoch info: {:?}", current_epoch_info);
+    debug!(target: LOG_TARGET, "Current epoch info: {:?}", current_epoch_info);
 
     notify_ready();
 
@@ -419,7 +419,7 @@ where
     }
     .await;
 
-    info!(target: LOG_TARGET, "Current secret leader info: {:?}", current_private_leader_info);
+    debug!(target: LOG_TARGET, "Current secret leader info: {:?}", current_private_leader_info);
 
     let mut current_public_inputs = PoQVerificationInputsMinusSigningKey {
         core: CoreInputs {

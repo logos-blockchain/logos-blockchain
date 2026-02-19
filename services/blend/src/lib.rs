@@ -19,7 +19,7 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::{
     core::{
@@ -211,7 +211,7 @@ where
         loop {
             tokio::select! {
                 Some(session_event) = remaining_session_stream.next() => {
-                    debug!(target: LOG_TARGET, "Received a new session event: {session_event:?}");
+                    info!(target: LOG_TARGET, "Received a new session event: {session_event:?}");
                     instance = instance.handle_session_event(session_event, overwatch_handle, minimal_network_size).await?;
                 },
                 Some(message) = inbound_relay.next() => {

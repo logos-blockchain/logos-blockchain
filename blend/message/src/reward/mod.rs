@@ -44,17 +44,9 @@ impl SessionBlendingTokenCollector {
         let new_collector = Self::new(new_session_info);
         let old_collector = OldSessionBlendingTokenCollector {
             collector: self,
-            next_session_randomness: Some(new_session_info.session_randomness()),
+            next_session_randomness: new_session_info.session_randomness(),
         };
         (new_collector, old_collector)
-    }
-
-    #[must_use]
-    pub const fn consume(self) -> OldSessionBlendingTokenCollector {
-        OldSessionBlendingTokenCollector {
-            collector: self,
-            next_session_randomness: None,
-        }
     }
 
     #[must_use]
@@ -73,7 +65,7 @@ impl SessionBlendingTokenCollector {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OldSessionBlendingTokenCollector {
     collector: SessionBlendingTokenCollector,
-    next_session_randomness: Option<SessionRandomness>,
+    next_session_randomness: SessionRandomness,
 }
 
 impl OldSessionBlendingTokenCollector {
@@ -87,14 +79,6 @@ impl OldSessionBlendingTokenCollector {
     /// activity threshold calculated.
     #[must_use]
     pub fn compute_activity_proof(self) -> Option<ActivityProof> {
-        let Some(next_session_randomness) = self.next_session_randomness else {
-            tracing::warn!(
-                target: LOG_TARGET,
-                "Next session randomness is not available. Cannot compute activity proof for session {}.",
-                self.collector.session_number(),
-            );
-            return None;
-        };
         // Find the blending token with the smallest Hamming distance,
         // which is <= activity threshold.
         self.collector
@@ -103,7 +87,7 @@ impl OldSessionBlendingTokenCollector {
             .filter_map(|token| {
                 self.collector
                     .token_evaluation
-                    .evaluate(&token, next_session_randomness)
+                    .evaluate(&token, self.next_session_randomness)
                     .map(|distance| (token, distance))
             })
             .min_by_key(|(_, distance)| *distance)

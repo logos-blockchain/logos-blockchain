@@ -9,7 +9,7 @@ use lb_blend::scheduling::membership::Membership;
 use lb_core::crypto::ZkHash;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
-use lb_poq::{CORE_MERKLE_TREE_HEIGHT, CorePathAndSelectors};
+use lb_poq::CorePathAndSelectors;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 
 #[derive(Clone, Debug)]
