@@ -25,10 +25,7 @@ use lb_blend::{
             SessionBlendingTokenCollector,
         },
     },
-    proofs::quota::inputs::prove::{
-        private::ProofOfLeadershipQuotaInputs,
-        public::{CoreInputs, LeaderInputs},
-    },
+    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
     scheduling::{
         SessionMessageScheduler,
         message_blend::{
