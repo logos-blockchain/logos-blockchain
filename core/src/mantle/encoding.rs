@@ -40,9 +40,11 @@ const MAX_INSCRIPTION_SIZE: u32 = 1 << 16; // 64 KiB
 /// Protects against unbounded allocation in decode_sdp_active
 const MAX_METADATA_SIZE: u32 = 1 << 16; // 64 KiB
 
-/// Maximum number of operations in a single transaction (255)
+/// Maximum number of operations in a single transaction (32)
 /// Protects against excessive allocations in decode_ops
-const MAX_OP_COUNT: u8 = 255;
+/// This limit is chosen to be generous for normal use while preventing
+/// excessive memory allocation from malicious inputs
+const MAX_OP_COUNT: u8 = 32;
 
 // ==============================================================================
 // Top-Level Transaction Decoders
@@ -1495,19 +1497,42 @@ mod tests {
 
     #[test]
     fn test_reject_excessive_op_count() {
-        // Create input with op_count > MAX_OP_COUNT
-        // Since MAX_OP_COUNT is 255 and op_count is u8, we can't exceed it
-        // But we test at the boundary
+        // Test that op_count > MAX_OP_COUNT is rejected
         let mut malicious_input = Vec::new();
         
-        // OpCount = 255 (MAX_OP_COUNT)
-        malicious_input.push(MAX_OP_COUNT);
+        // OpCount = MAX_OP_COUNT + 1 (should be rejected)
+        malicious_input.push(MAX_OP_COUNT + 1);
         
-        // This should succeed at exactly MAX_OP_COUNT
-        // (though it will fail later due to missing op data, which is fine)
+        // Should fail with TooLarge error
         let result = decode_ops(&malicious_input);
-        // Will fail due to incomplete data, not due to count limit
-        assert!(result.is_err());
+        assert!(result.is_err(), "Should reject excessive op count");
+        
+        // Verify it fails with the right error kind
+        match result {
+            Err(nom::Err::Error(e)) => {
+                assert_eq!(e.code, ErrorKind::TooLarge);
+            }
+            _ => panic!("Expected TooLarge error"),
+        }
+    }
+
+    #[test]
+    fn test_accept_max_op_count() {
+        // Test that op_count = MAX_OP_COUNT is accepted
+        // (though it will fail later due to missing op data, which is fine for this test)
+        let mut valid_input = Vec::new();
+        
+        // OpCount = MAX_OP_COUNT (should be accepted)
+        valid_input.push(MAX_OP_COUNT);
+        
+        // Should not fail with TooLarge error (will fail with incomplete data)
+        let result = decode_ops(&valid_input);
+        match result {
+            Err(nom::Err::Error(e)) => {
+                assert_ne!(e.code, ErrorKind::TooLarge, "Should not reject at MAX_OP_COUNT");
+            }
+            _ => {} // Other errors are fine
+        }
     }
 
     #[test]
