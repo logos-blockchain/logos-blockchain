@@ -23,10 +23,14 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                     .iter()
                     .any(|p| kad_protocol_names.contains(&p))
                 {
+                    tracing::debug!(
+                        "Adding discovered node to Kademlia, seen addresses: {:?}",
+                        info.listen_addrs
+                    );
                     // we need to add the peer to the kademlia routing table
                     // in order to enable peer discovery
                     for addr in &info.listen_addrs {
-                        self.swarm.kademlia_add_address(peer_id, addr.clone());
+                        self.swarm.kademlia_add_address(peer_id, addr);
                     }
                 }
             }

@@ -181,8 +181,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
 
     fn handle_external_addr_confirmed(&mut self, address: &Multiaddr) {
         let local_peer_id = *self.swarm.swarm().local_peer_id();
-        self.swarm
-            .kademlia_add_address(local_peer_id, address.clone());
+        self.swarm.kademlia_add_address(local_peer_id, address);
         info!("Added confirmed external address to Kademlia: {address}");
     }
 
