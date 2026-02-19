@@ -15,7 +15,7 @@ mode: Run
 tracing_settings:
   logger:
     otlp:
-      endpoint: "http://devnet.blockchain.logos.co:3100"
+      endpoint: "http://otel:4317"
       service_name: "init_node"
     stdout: true
     stderr: false

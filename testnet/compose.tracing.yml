@@ -9,12 +9,12 @@ services:
       - GF_AUTH_DISABLE_LOGIN_FORM=true
       - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor traceQLStreaming metricsSummary
     env_file:
-      - ./testnet/tracing/grafana/plugins.env
+      - ./tracing/grafana/plugins.env
     volumes:
-      - ./testnet/tracing/grafana/grafana.ini:/etc/grafana/grafana.ini:z
-      - ./testnet/tracing/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:z
-      - ./testnet/tracing/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:z
-      - ./testnet/tracing/grafana/dashboards:/var/lib/grafana/dashboards/:z
+      - ./tracing/grafana/grafana.ini:/etc/grafana/grafana.ini:z
+      - ./tracing/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:z
+      - ./tracing/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:z
+      - ./tracing/grafana/dashboards:/var/lib/grafana/dashboards/:z
     ports:
       - 9091:3000
     restart: on-failure
@@ -26,7 +26,7 @@ services:
     image: otel/opentelemetry-collector-contrib:latest
     command: ["--config=/etc/otel-collector-config.yaml"]
     volumes:
-      - ./testnet/tracing/otel.yaml:/etc/otel-collector-config.yaml
+      - ./tracing/otel.yaml:/etc/otel-collector-config.yaml
     ports:
       - "0.0.0.0:3100:4317"
       - "14318:4318"
@@ -38,14 +38,14 @@ services:
       - "24317:4317"
       - "24318:4318"
     volumes:
-      - ./testnet/tracing/loki.yaml:/etc/loki/local-config.yaml
+      - ./tracing/loki.yaml:/etc/loki/local-config.yaml
     command: -config.file=/etc/loki/local-config.yaml
 
   prometheus:
     container_name: prometheus
     image: docker.io/prom/prometheus:v3.0.1
     volumes:
-      - ./testnet/tracing/prometheus.yaml:/etc/prometheus/prometheus.yml:z
+      - ./tracing/prometheus.yaml:/etc/prometheus/prometheus.yml:z
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=7d
@@ -53,15 +53,3 @@ services:
     ports:
       - "0.0.0.0:9090:9090"
     restart: on-failure
-
-  tempo:
-    image: grafana/tempo:latest
-    container_name: tempo
-    command: [ "-config.file=/etc/tempo.yaml" ]
-    volumes:
-      - ./testnet/tracing/tempo.yaml:/etc/tempo.yaml:z
-      - ./tempo-data:/var/tempo
-    ports:
-      - "34317:4317"
-    depends_on:
-      - tempo-init
