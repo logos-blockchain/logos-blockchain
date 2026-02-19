@@ -1595,13 +1595,15 @@ mod tests {
         valid_input.extend_from_slice(&[0x43; 32]);
 
         // Signer Ed25519PublicKey (32 bytes)
-        valid_input.extend_from_slice(&[0x44; 32]);
+        let sk = Ed25519Key::from_bytes(&[0x44; 32]);
+        let pk = sk.public_key();
+        valid_input.extend_from_slice(&pk.to_bytes());
 
         // Should succeed (though signature validation might fail later)
         let result = decode_channel_inscribe(&valid_input);
         assert!(
             result.is_ok(),
-            "Should accept inscription at MAX_INSCRIPTION_SIZE"
+            "Should accept inscription at MAX_INSCRIPTION_SIZE: {result:?}",
         );
 
         let (_, inscription_op) = result.unwrap();
@@ -1677,12 +1679,14 @@ mod tests {
         valid_input.push(MAX_KEY_COUNT);
 
         // Add MAX_KEY_COUNT Ed25519 public keys (each 32 bytes)
-        for _ in 0..MAX_KEY_COUNT {
-            valid_input.extend_from_slice(&[0x44; 32]);
+        for i in 0..MAX_KEY_COUNT {
+            let sk = Ed25519Key::from_bytes(&[i; 32]);
+            let pk = sk.public_key();
+            valid_input.extend_from_slice(&pk.to_bytes());
         }
 
         let result = decode_channel_set_keys(&valid_input);
-        assert!(result.is_ok(), "Should accept max key count");
+        assert!(result.is_ok(), "Should accept max key count: {result:?}");
 
         let (_, set_keys_op) = result.unwrap();
         assert_eq!(set_keys_op.keys.len(), MAX_KEY_COUNT as usize);
