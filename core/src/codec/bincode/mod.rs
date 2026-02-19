@@ -38,6 +38,14 @@ pub fn serialize<T: Serialize>(item: &T) -> Result<Bytes> {
         .serialized_size(item)
         .map_err(|e| WireError::Serialize(Box::new(e)))?;
 
+    // Additional safety check: ensure size doesn't exceed DATA_LIMIT
+    // This provides defense-in-depth against potential bincode bugs
+    if size > DATA_LIMIT {
+        return Err(WireError::Serialize(
+            format!("Serialized size {size} exceeds DATA_LIMIT {DATA_LIMIT}").into(),
+        ));
+    }
+
     let buf = BytesMut::with_capacity(size as usize);
 
     let mut writer = buf.writer();
