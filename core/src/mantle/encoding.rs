@@ -47,23 +47,23 @@ const MAX_METADATA_SIZE: u32 = 1 << 16; // 64 KiB
 const MAX_OP_COUNT: u8 = 32;
 
 /// Maximum number of Ed25519 public keys in a SetKeysOp (16)
-/// Protects against unbounded iterative allocation in decode_channel_set_keys
+/// Protects against unbounded iterative allocation in `decode_channel_set_keys()`
 /// Each key is 32 bytes, so max allocation is 512 bytes
 const MAX_KEY_COUNT: u8 = 16;
 
 /// Maximum number of locators in an SDP declaration (8)
-/// Protects against unbounded iterative allocation in decode_sdp_declare
+/// Protects against unbounded iterative allocation in `decode_sdp_declare()`
 /// Each locator is already bounded by LOCATOR_BYTES_SIZE_LIMIT (329 bytes)
 /// so max allocation is ~2.6 KiB
 const MAX_LOCATOR_COUNT: u8 = 8;
 
 /// Maximum number of inputs in a ledger transaction (64)
-/// Protects against unbounded iterative allocation in decode_inputs
+/// Protects against unbounded iterative allocation in `decode_inputs()`
 /// Each input is a field element (32 bytes), so max allocation is 2 KiB
 const MAX_INPUT_COUNT: u8 = 64;
 
 /// Maximum number of outputs in a ledger transaction (64)
-/// Protects against unbounded iterative allocation in decode_outputs
+/// Protects against unbounded iterative allocation in `decode_outputs()`
 /// Each output is ~40 bytes (value + public key), so max allocation is ~2.6 KiB
 const MAX_OUTPUT_COUNT: u8 = 64;
 
