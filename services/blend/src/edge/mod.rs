@@ -452,9 +452,20 @@ where
     loop {
         tokio::select! {
             Some(SessionEvent::NewSession(new_session_info)) = remaining_session_stream.next() => {
-              let (new_message_handler, new_public_inputs) = handle_new_session(new_session_info, settings.clone(), current_private_leader_info.poq_private_inputs.clone(), overwatch_handle.clone(), current_public_inputs, message_handler)?;
-              message_handler = new_message_handler;
-              current_public_inputs = new_public_inputs;
+                match handle_new_session(new_session_info, settings.clone(), current_private_leader_info.poq_private_inputs.clone(), overwatch_handle.clone(), current_public_inputs, message_handler) {
+                    Ok((new_message_handler, new_public_inputs)) => {
+                        message_handler = new_message_handler;
+                        current_public_inputs = new_public_inputs;
+                    },
+                    Err(Error::NetworkIsTooSmall(0)) => {
+                        info!(target: LOG_TARGET, "New membership does not have ZK info (empty membership), edge service shutting down.");
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        error!(target: LOG_TARGET, "New membership does not satisfy edge node condition: {e:?}, edge service shutting down.");
+                        return Err(e);
+                    }
+                }
             }
             Some(message) = incoming_message_stream.next() => {
                 let message_copies = settings.data_replication_factor.checked_add(1).unwrap();
@@ -510,11 +521,10 @@ where
     ProofsGenerator: LeaderProofsGenerator,
     RuntimeServiceId: Clone,
 {
-    debug!(target: LOG_TARGET, "Trying to create a new message handler");
     let Some(zk_info) = zk else {
-        debug!(target: LOG_TARGET, "New membership does not have ZK info, cannot create new message handler for the new session.");
         return Err(Error::NetworkIsTooSmall(0));
     };
+    debug!(target: LOG_TARGET, "Trying to create a new message handler");
     // Update current public inputs with new session info.
     let new_public_inputs = PoQVerificationInputsMinusSigningKey {
         session: new_session_number,
