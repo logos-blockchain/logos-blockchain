@@ -268,9 +268,15 @@ impl LedgerState {
     /// Computes the epoch state for a given slot.
     ///
     /// This handles the case where epochs have been skipped (no blocks
-    /// produced). Returns `None` if the requested epoch is in the past.
-    #[must_use]
-    pub fn epoch_state_for_slot(&self, slot: Slot, config: &Config) -> Option<EpochState> {
+    /// produced).
+    ///
+    /// Returns [`LedgerError::InvalidSlot`] if the slot is in the past before
+    /// the current ledger state.
+    pub fn epoch_state_for_slot<Id>(
+        &self,
+        slot: Slot,
+        config: &Config,
+    ) -> Result<EpochState, LedgerError<Id>> {
         self.cryptarchia_ledger.epoch_state_for_slot(slot, config)
     }
 

@@ -412,13 +412,13 @@ where
                         let latest_tree = tip_state.latest_utxos();
 
                         let epoch_state = match cryptarchia_api.get_epoch_state(slot).await {
-                            Ok(Some(state)) => state,
-                            Ok(None) => {
-                                error!("trying to propose a block for slot {} but epoch state is not available", u64::from(slot));
+                            Ok(Ok(state)) => state,
+                            Ok(Err(e)) => {
+                                error!("trying to propose a block for slot {} but epoch state is not available: {e}", u64::from(slot));
                                 continue;
                             }
                             Err(e) => {
-                                error!("Failed to get epoch state: {:?}", e);
+                                error!("Failed to get epoch state: {e}");
                                 continue;
                             }
                         };
