@@ -441,7 +441,7 @@ impl LedgerState {
         let stake_inference = Arc::new(StakeInference::new(
             config.consensus_config.stake_inference_learning_rate(),
             config.consensus_config.slot_activation_coeff().as_f64(),
-            config.consensus_config.security_param().get().into(),
+            config.total_stake_inference_period(),
         ));
         let block_density = BlockDensity::new(stake_inference.period(), slot);
         Self {
@@ -683,7 +683,7 @@ pub mod tests {
         let stake_inference = Arc::new(StakeInference::new(
             config.consensus_config.stake_inference_learning_rate(),
             config.consensus_config.slot_activation_coeff().as_f64(),
-            config.consensus_config.security_param().get().into(),
+            config.total_stake_inference_period(),
         ));
         let block_density_inference = BlockDensity::new(stake_inference.period(), 0.into());
         LedgerState {

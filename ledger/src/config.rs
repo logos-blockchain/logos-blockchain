@@ -33,17 +33,32 @@ impl Config {
 
     #[must_use]
     pub fn nonce_snapshot(&self, epoch: Epoch) -> Slot {
-        let offset = self.base_period_length().get().saturating_mul(
+        let offset = self.nonce_contribution_period();
+        let base =
+            u64::from(u32::from(epoch).saturating_sub(1)).saturating_mul(self.epoch_length());
+        base.saturating_add(offset).into()
+    }
+
+    #[must_use]
+    pub fn nonce_contribution_period(&self) -> u64 {
+        self.base_period_length().get().saturating_mul(
             u64::from(NonZeroU64::from(
                 self.epoch_config.epoch_period_nonce_buffer,
             ))
             .saturating_add(u64::from(NonZeroU64::from(
                 self.epoch_config.epoch_stake_distribution_stabilization,
             ))),
-        );
-        let base =
-            u64::from(u32::from(epoch).saturating_sub(1)).saturating_mul(self.epoch_length());
-        base.saturating_add(offset).into()
+        )
+    }
+
+    #[must_use]
+    pub fn total_stake_snapshot(&self, epoch: Epoch) -> Slot {
+        self.nonce_snapshot(epoch)
+    }
+
+    #[must_use]
+    pub fn total_stake_inference_period(&self) -> u64 {
+        self.nonce_contribution_period()
     }
 
     #[must_use]
