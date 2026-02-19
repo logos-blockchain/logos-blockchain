@@ -31,7 +31,7 @@ impl Debug for PolEpochInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PolEpochInfo")
             .field("nonce", &hex::encode(fr_to_bytes(&self.nonce)))
-            .field("poq_private_inputs", &self.poq_private_inputs)
+            .field("poq_private_inputs", &"<redacted>")
             .finish()
     }
 }

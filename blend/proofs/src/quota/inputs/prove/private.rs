@@ -91,25 +91,6 @@ pub struct ProofOfLeadershipQuotaInputs {
     pub secret_key: ZkHash,
 }
 
-impl Debug for ProofOfLeadershipQuotaInputs {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ProofOfLeadershipQuotaInputs")
-            .field("slot", &self.slot)
-            .field("note_value", &self.note_value)
-            .field(
-                "transaction_hash",
-                &hex::encode(fr_to_bytes(&self.transaction_hash)),
-            )
-            .field("output_number", &self.output_number)
-            .field(
-                "aged_path_and_selectors",
-                &format!("<{CORE_MERKLE_TREE_HEIGHT}-node> Merkle path"),
-            )
-            .field("secret_key", &"<redacted>")
-            .finish()
-    }
-}
-
 impl From<ProofOfLeadershipQuotaInputs> for ProofType {
     fn from(value: ProofOfLeadershipQuotaInputs) -> Self {
         Self::LeadershipQuota(Box::new(value))

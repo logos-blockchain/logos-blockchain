@@ -1,7 +1,7 @@
 pub mod node_id;
 pub mod service;
 
-use core::fmt::Debug;
+use core::fmt::{self, Debug, Formatter};
 use std::pin::Pin;
 
 use futures::Stream;
@@ -47,13 +47,10 @@ pub struct ZkInfo {
 }
 
 impl Debug for ZkInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("ZkInfo")
             .field("root", &hex::encode(fr_to_bytes(&self.root)))
-            .field(
-                "core_and_path_selectors",
-                &format!("<{CORE_MERKLE_TREE_HEIGHT}-node> Merkle path"),
-            )
+            .field("core_and_path_selectors", &"<redacted>")
             .finish()
     }
 }

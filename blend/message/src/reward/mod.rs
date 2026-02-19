@@ -88,7 +88,7 @@ impl OldSessionBlendingTokenCollector {
     #[must_use]
     pub fn compute_activity_proof(self) -> Option<ActivityProof> {
         let Some(next_session_randomness) = self.next_session_randomness else {
-            tracing::debug!(
+            tracing::warn!(
                 target: LOG_TARGET,
                 "Next session randomness is not available. Cannot compute activity proof for session {}.",
                 self.collector.session_number(),

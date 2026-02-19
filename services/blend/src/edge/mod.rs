@@ -354,6 +354,12 @@ where
         .await
         .expect("The current session info must be available.");
 
+    info!(
+        target: LOG_TARGET,
+        "The current membership is ready: {:?}",
+        current_membership_info
+    );
+
     let (current_epoch_info, mut remaining_clock_stream) = async {
         let (slot_tick, remaining_clock_stream) = clock_stream
             .first()
@@ -385,13 +391,7 @@ where
     }
     .await;
 
-    info!(
-        target: LOG_TARGET,
-        "The current membership is ready: {:?}",
-        current_membership_info
-    );
-
-    debug!(target: LOG_TARGET, "Current epoch info: {:?}", current_epoch_info);
+    info!(target: LOG_TARGET, "Current epoch info: {:?}", current_epoch_info);
 
     notify_ready();
 
@@ -419,7 +419,7 @@ where
     }
     .await;
 
-    debug!(target: LOG_TARGET, "Current secret leader info: {:?}", current_private_leader_info);
+    info!(target: LOG_TARGET, "Current secret leader info: {:?}", current_private_leader_info);
 
     let mut current_public_inputs = PoQVerificationInputsMinusSigningKey {
         core: CoreInputs {
@@ -457,12 +457,12 @@ where
                         message_handler = new_message_handler;
                         current_public_inputs = new_public_inputs;
                     },
-                    Err(Error::NetworkIsTooSmall(0)) => {
-                        info!(target: LOG_TARGET, "New membership does not have ZK info (empty membership), edge service shutting down.");
+                    Err(Error::NetworkIsTooSmall(_)) => {
+                        info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
                         return Ok(());
                     }
                     Err(e) => {
-                        error!(target: LOG_TARGET, "New membership does not satisfy edge node condition: {e:?}, edge service shutting down.");
+                        error!(target: LOG_TARGET, "Error when handling new session: {e:?}, edge service shutting down.");
                         return Err(e);
                     }
                 }

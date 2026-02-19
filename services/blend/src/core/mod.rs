@@ -602,7 +602,11 @@ where
     )
     .await
     .map(|(membership_info, remaining_session_stream)| {
-        (membership_info.unwrap(), remaining_session_stream.fork())
+        (
+            membership_info
+                .expect("First retrieved session for Blend core startup must be available."),
+            remaining_session_stream.fork(),
+        )
     })
     .expect("The current session info must be available.");
 
@@ -1133,7 +1137,7 @@ where
             }
         }
         SessionEvent::NewSession(None) => {
-            tracing::info!(target: LOG_TARGET, "New session event received, but no session info is available. This can happen if the node is not a core node in the new session. Staying idle until the next session event.");
+            tracing::info!(target: LOG_TARGET, "New session event received, but no session info is available due to empty membership set.");
             let (_, _, _, _, current_session_blending_token_collector, _, _) =
                 current_recovery_checkpoint.into_components();
             HandleSessionEventOutput::Retiring {
