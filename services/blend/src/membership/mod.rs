@@ -27,10 +27,15 @@ impl<NodeId> MembershipInfo<NodeId> {
         membership: Membership<NodeId>,
         session_number: u64,
     ) -> Self {
+        let zk = if membership.is_empty() {
+            None
+        } else {
+            Some(ZkInfo::default())
+        };
         Self {
             membership,
             session_number,
-            zk: Some(ZkInfo::default()),
+            zk,
         }
     }
 }
