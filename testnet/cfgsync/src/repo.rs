@@ -133,11 +133,12 @@ impl ConfigRepo {
             let mut waiting_hosts = self.waiting_hosts.lock().unwrap();
             let hosts = waiting_hosts.keys().cloned().collect();
 
-            let (configs, genesis_tx) =
+            let (configs, genesis_tx, faucet_pk) =
                 create_node_configs(&self.faucet_settings, &self.tracing_settings, hosts);
             let devnet_settings = {
                 let mut default_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
                 default_settings.cryptarchia.genesis_state = genesis_tx;
+                default_settings.cryptarchia.faucet_pk = faucet_pk;
                 default_settings.time.chain_start_time = self.chain_start_time;
                 default_settings
             };

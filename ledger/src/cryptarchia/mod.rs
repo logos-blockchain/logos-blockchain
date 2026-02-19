@@ -430,6 +430,7 @@ impl LedgerState {
         let total_stake = utxos
             .utxos()
             .iter()
+            .filter(|(_, (utxo, _))| config.faucet_pk.is_none_or(|fpk| utxo.note.pk != fpk))
             .map(|(_, (utxo, _))| utxo.note.value)
             .sum::<Value>()
             .max(1); // TODO: Change total_stake to NonZeroU64: https://github.com/logos-blockchain/logos-blockchain/issues/2166
@@ -664,6 +665,7 @@ pub mod tests {
                     timestamp: 0,
                 },
             },
+            faucet_pk: None,
         }
     }
 

@@ -1,5 +1,6 @@
 use std::{fs, time::Duration};
 
+use lb_groth16::fr_to_bytes;
 use lb_node::{
     UserConfig,
     config::{RunConfig, deployment::DeploymentSettings},
@@ -82,6 +83,13 @@ async fn test_spawn_nodes_and_faucet() {
         nodes.push(node);
     }
 
+    // All nodes have the faucet SK, so route to any node.
+    let faucet_pk = deployment
+        .cryptarchia
+        .faucet_pk
+        .expect("faucet PK should be set");
+    let faucet_pk_hex = hex::encode(fr_to_bytes(faucet_pk.as_fr()));
+
     let mut faucet_proc = Command::new(FAUCET_BIN)
         .arg("--port")
         .arg("3000")
@@ -92,8 +100,8 @@ async fn test_spawn_nodes_and_faucet() {
         ))
         .arg("--drip-amount")
         .arg("1000")
-        .arg("--host-identifier")
-        .arg("node-0")
+        .arg("--faucet-pk")
+        .arg(&faucet_pk_hex)
         .spawn()
         .expect("faucet failed to start");
 

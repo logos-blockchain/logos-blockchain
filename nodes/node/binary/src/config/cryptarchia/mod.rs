@@ -65,6 +65,7 @@ impl ServiceConfig {
                     .epoch_config
                     .epoch_stake_distribution_stabilization,
             },
+            faucet_pk: self.deployment.faucet_pk,
             sdp_config: lb_ledger::mantle::sdp::Config {
                 min_stake: self.deployment.sdp_config.min_stake,
                 service_params: Arc::new(

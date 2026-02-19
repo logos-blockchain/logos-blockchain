@@ -4061,7 +4061,9 @@ version = "0.1.0"
 dependencies = [
  "axum 0.7.9",
  "clap",
+ "hex",
  "logos-blockchain-core",
+ "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-libp2p",
  "logos-blockchain-node",
@@ -4355,12 +4357,10 @@ dependencies = [
  "axum 0.7.9",
  "clap",
  "hex",
- "logos-blockchain-cfgsync",
  "logos-blockchain-common-http-client",
  "logos-blockchain-groth16",
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
- "num-bigint",
  "reqwest",
  "tokio",
 ]

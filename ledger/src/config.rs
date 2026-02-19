@@ -1,6 +1,7 @@
 use std::num::{NonZero, NonZeroU64};
 
 use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_pol::LotteryConstants;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -9,6 +10,8 @@ pub struct Config {
     pub epoch_config: lb_cryptarchia_engine::EpochConfig,
     pub consensus_config: lb_cryptarchia_engine::Config,
     pub sdp_config: crate::mantle::sdp::Config,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub faucet_pk: Option<ZkPublicKey>,
 }
 
 impl Config {
@@ -110,6 +113,7 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            faucet_pk: None,
         };
         assert_eq!(config.epoch_length(), 100);
         assert_eq!(config.nonce_snapshot(1.into()), 60.into());
@@ -160,6 +164,7 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            faucet_pk: None,
         };
         assert_eq!(config.epoch(1.into()), 0.into());
         assert_eq!(config.epoch(100.into()), 1.into());
