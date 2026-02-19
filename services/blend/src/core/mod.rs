@@ -1405,14 +1405,11 @@ where
             scheduler,
             current_recovery_checkpoint,
         ),
-        Err(e) => {
-            if matches!(e, MessageError::MessageDeserializationFailed) {
-                tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message because deserialization failed, probably because the message is not intended for this node. Ignoring...");
-                return current_recovery_checkpoint;
-            }
+        Err(current_session_error) => {
             let (Some(old_crypto_processor), Some(old_session_scheduler)) =
                 (old_session_cryptographic_processor, old_session_scheduler)
             else {
+                tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message with current session crypto processor due to deserialization error. This can happen when the message was intended for another node or when the message is malformed. Ignoring...");
                 return current_recovery_checkpoint;
             };
             match old_crypto_processor.decapsulate_message_recursive(validated_encapsulated_message)
@@ -1422,8 +1419,18 @@ where
                     old_session_scheduler,
                     current_recovery_checkpoint,
                 ),
-                Err(e) => {
-                    tracing::debug!(target: LOG_TARGET, "Failed to decapsulate received message with the old session crypto processor: {e:?}");
+                Err(old_session_error) => {
+                    if matches!(
+                        current_session_error,
+                        MessageError::MessageDeserializationFailed
+                    ) && matches!(
+                        old_session_error,
+                        MessageError::MessageDeserializationFailed
+                    ) {
+                        tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message with current and old session crypto processors due to deserialization error. This can happen when the message was intended for another node or when the message is malformed. Ignoring...");
+                    } else {
+                        tracing::debug!(target: LOG_TARGET, "Failed to decapsulate received message with current and old session crypto processors: current session error = {current_session_error:?}, old session error = {old_session_error:?}");
+                    }
                     current_recovery_checkpoint
                 }
             }
@@ -1463,7 +1470,11 @@ fn handle_incoming_blend_message_from_old_session<
             }
         }
         Err(e) => {
-            tracing::debug!(target: LOG_TARGET, "Failed to decapsulate received message from old session: {e:?}");
+            if matches!(e, MessageError::MessageDeserializationFailed) {
+                tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message from old session due to deserialization error. This can happen when the message was intended for another node or when the message is malformed. Ignoring...");
+            } else {
+                tracing::debug!(target: LOG_TARGET, "Failed to decapsulate received message from old session: {e:?}");
+            }
         }
     }
 }
@@ -1572,7 +1583,7 @@ where
             }
         }
         DecapsulatedMessageType::Incompleted(remaining_encapsulated_message) => {
-            tracing::debug!(target: LOG_TARGET, "Processed encapsulated data message: {remaining_encapsulated_message:?}");
+            tracing::debug!(target: LOG_TARGET, "Processed encapsulated message: {remaining_encapsulated_message:?}");
             let processed_message = ProcessedMessage::from(*remaining_encapsulated_message);
             scheduler.schedule_processed_message(processed_message.clone());
             (Some(processed_message), blending_tokens.into_iter())

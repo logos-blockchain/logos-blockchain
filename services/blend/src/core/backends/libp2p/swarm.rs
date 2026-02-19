@@ -366,7 +366,7 @@ where
             // called on FORWARDED messages, not on PUBLISHED ones, for which we want to
             // know if that is the issue.
             if !matches!(e, Error::NoPeers) {
-                tracing::trace!(target: LOG_TARGET, "Failed to forward message to blend network: {e:?}");
+                tracing::error!(target: LOG_TARGET, "Failed to forward message to blend network: {e:?}");
                 tracing::trace!(counter.failed_outbound_messages = 1);
             }
         } else {
