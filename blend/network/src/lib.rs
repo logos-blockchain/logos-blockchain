@@ -35,8 +35,9 @@ pub(crate) async fn recv_msg(mut stream: Stream) -> io::Result<(Stream, Vec<u8>)
 
     // Defense-in-depth: validate message length
     // This check is currently redundant since msg_len is derived from u16,
-    // but provides protection if the length type is changed to u32/u64 in the future.
-    // The compiler will optimize this away since it's always false with current types.
+    // but provides protection if the length type is changed to u32/u64 in the
+    // future. The compiler will optimize this away since it's always false with
+    // current types.
     if msg_len > MAX_MESSAGE_SIZE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
