@@ -46,6 +46,27 @@ const MAX_METADATA_SIZE: u32 = 1 << 16; // 64 KiB
 /// excessive memory allocation from malicious inputs
 const MAX_OP_COUNT: u8 = 32;
 
+/// Maximum number of Ed25519 public keys in a SetKeysOp (16)
+/// Protects against unbounded iterative allocation in decode_channel_set_keys
+/// Each key is 32 bytes, so max allocation is 512 bytes
+const MAX_KEY_COUNT: u8 = 16;
+
+/// Maximum number of locators in an SDP declaration (8)
+/// Protects against unbounded iterative allocation in decode_sdp_declare
+/// Each locator is already bounded by LOCATOR_BYTES_SIZE_LIMIT (329 bytes)
+/// so max allocation is ~2.6 KiB
+const MAX_LOCATOR_COUNT: u8 = 8;
+
+/// Maximum number of inputs in a ledger transaction (64)
+/// Protects against unbounded iterative allocation in decode_inputs
+/// Each input is a field element (32 bytes), so max allocation is 2 KiB
+const MAX_INPUT_COUNT: u8 = 64;
+
+/// Maximum number of outputs in a ledger transaction (64)
+/// Protects against unbounded iterative allocation in decode_outputs
+/// Each output is ~40 bytes (value + public key), so max allocation is ~2.6 KiB
+const MAX_OUTPUT_COUNT: u8 = 64;
+
 // ==============================================================================
 // Top-Level Transaction Decoders
 // ==============================================================================
@@ -147,6 +168,12 @@ fn decode_channel_set_keys(input: &[u8]) -> IResult<&[u8], SetKeysOp> {
     // ChannelSetKeys = ChannelId KeyCount *Ed25519PublicKey
     let (input, channel) = map(decode_hash32, ChannelId::from).parse(input)?;
     let (input, key_count) = decode_byte(input)?;
+    
+    // Validate key count to prevent unbounded iterative allocation
+    if key_count > MAX_KEY_COUNT {
+        return Err(nom::Err::Error(Error::new(input, ErrorKind::TooLarge)));
+    }
+    
     let (input, keys) = count(decode_ed25519_public_key, key_count as usize).parse(input)?;
 
     Ok((input, SetKeysOp { channel, keys }))
@@ -164,6 +191,12 @@ fn decode_sdp_declare(input: &[u8]) -> IResult<&[u8], SDPDeclareOp> {
         _ => return Err(nom::Err::Error(Error::new(input, ErrorKind::Fail))),
     };
     let (input, locator_count) = decode_byte(input)?;
+    
+    // Validate locator count to prevent unbounded iterative allocation
+    if locator_count > MAX_LOCATOR_COUNT {
+        return Err(nom::Err::Error(Error::new(input, ErrorKind::TooLarge)));
+    }
+    
     let (input, multiaddrs) = count(decode_locator, locator_count as usize).parse(input)?;
     let locators = multiaddrs.into_iter().map(Locator::new).collect();
     let (input, provider_key) = decode_ed25519_public_key(input)?;
@@ -280,12 +313,24 @@ fn decode_note(input: &[u8]) -> IResult<&[u8], Note> {
 fn decode_inputs(input: &[u8]) -> IResult<&[u8], Vec<NoteId>> {
     // Inputs = InputCount *NoteId
     let (input, input_count) = decode_byte(input)?;
+    
+    // Validate input count to prevent unbounded iterative allocation
+    if input_count > MAX_INPUT_COUNT {
+        return Err(nom::Err::Error(Error::new(input, ErrorKind::TooLarge)));
+    }
+    
     count(map(decode_field_element, NoteId), input_count as usize).parse(input)
 }
 
 fn decode_outputs(input: &[u8]) -> IResult<&[u8], Vec<Note>> {
     // Outputs = OutputCount *Note
     let (input, output_count) = decode_byte(input)?;
+    
+    // Validate output count to prevent unbounded iterative allocation
+    if output_count > MAX_OUTPUT_COUNT {
+        return Err(nom::Err::Error(Error::new(input, ErrorKind::TooLarge)));
+    }
+    
     count(decode_note, output_count as usize).parse(input)
 }
 
@@ -1592,4 +1637,172 @@ mod tests {
         let result2 = decode_sdp_active(&malicious_input2);
         assert!(result2.is_err(), "Should reject huge metadata length");
     }
+
+    // ==============================================================================
+    // Security Tests - Iterative Memory Over-Allocation Protection
+    // ==============================================================================
+
+    #[test]
+    fn test_reject_excessive_key_count() {
+        // Test that key_count > MAX_KEY_COUNT is rejected
+        let mut malicious_input = Vec::new();
+        
+        // ChannelId (32 bytes)
+        malicious_input.extend_from_slice(&[0x42; 32]);
+        
+        // KeyCount = MAX_KEY_COUNT + 1 (should be rejected)
+        malicious_input.push(MAX_KEY_COUNT + 1);
+        
+        // Should fail with TooLarge error
+        let result = decode_channel_set_keys(&malicious_input);
+        assert!(result.is_err(), "Should reject excessive key count");
+        
+        match result {
+            Err(nom::Err::Error(e)) => {
+                assert_eq!(e.code, ErrorKind::TooLarge);
+            }
+            _ => panic!("Expected TooLarge error"),
+        }
+    }
+
+    #[test]
+    fn test_accept_max_key_count() {
+        // Test that key_count = MAX_KEY_COUNT is accepted
+        let mut valid_input = Vec::new();
+        
+        // ChannelId (32 bytes)
+        valid_input.extend_from_slice(&[0x42; 32]);
+        
+        // KeyCount = MAX_KEY_COUNT
+        valid_input.push(MAX_KEY_COUNT);
+        
+        // Add MAX_KEY_COUNT Ed25519 public keys (each 32 bytes)
+        for _ in 0..MAX_KEY_COUNT {
+            valid_input.extend_from_slice(&[0x44; 32]);
+        }
+        
+        let result = decode_channel_set_keys(&valid_input);
+        assert!(result.is_ok(), "Should accept max key count");
+        
+        let (_, set_keys_op) = result.unwrap();
+        assert_eq!(set_keys_op.keys.len(), MAX_KEY_COUNT as usize);
+    }
+
+    #[test]
+    fn test_reject_excessive_locator_count() {
+        // Test that locator_count > MAX_LOCATOR_COUNT is rejected
+        let mut malicious_input = Vec::new();
+        
+        // ServiceType (1 byte)
+        malicious_input.push(0x00); // BlendNetwork
+        
+        // LocatorCount = MAX_LOCATOR_COUNT + 1 (should be rejected)
+        malicious_input.push(MAX_LOCATOR_COUNT + 1);
+        
+        // Should fail with TooLarge error
+        let result = decode_sdp_declare(&malicious_input);
+        assert!(result.is_err(), "Should reject excessive locator count");
+        
+        match result {
+            Err(nom::Err::Error(e)) => {
+                assert_eq!(e.code, ErrorKind::TooLarge);
+            }
+            _ => panic!("Expected TooLarge error"),
+        }
+    }
+
+    #[test]
+    fn test_reject_excessive_input_count() {
+        // Test that input_count > MAX_INPUT_COUNT is rejected
+        let mut malicious_input = Vec::new();
+        
+        // InputCount = MAX_INPUT_COUNT + 1 (should be rejected)
+        malicious_input.push(MAX_INPUT_COUNT + 1);
+        
+        // Should fail with TooLarge error
+        let result = decode_inputs(&malicious_input);
+        assert!(result.is_err(), "Should reject excessive input count");
+        
+        match result {
+            Err(nom::Err::Error(e)) => {
+                assert_eq!(e.code, ErrorKind::TooLarge);
+            }
+            _ => panic!("Expected TooLarge error"),
+        }
+    }
+
+    #[test]
+    fn test_reject_excessive_output_count() {
+        // Test that output_count > MAX_OUTPUT_COUNT is rejected
+        let mut malicious_input = Vec::new();
+        
+        // OutputCount = MAX_OUTPUT_COUNT + 1 (should be rejected)
+        malicious_input.push(MAX_OUTPUT_COUNT + 1);
+        
+        // Should fail with TooLarge error
+        let result = decode_outputs(&malicious_input);
+        assert!(result.is_err(), "Should reject excessive output count");
+        
+        match result {
+            Err(nom::Err::Error(e)) => {
+                assert_eq!(e.code, ErrorKind::TooLarge);
+            }
+            _ => panic!("Expected TooLarge error"),
+        }
+    }
+
+    #[test]
+    fn test_accept_max_input_output_counts() {
+        // Test that input_count = MAX_INPUT_COUNT works
+        let mut valid_input = Vec::new();
+        valid_input.push(MAX_INPUT_COUNT);
+        
+        // Add MAX_INPUT_COUNT field elements (each 32 bytes)
+        for _ in 0..MAX_INPUT_COUNT {
+            valid_input.extend_from_slice(&[0x01; 32]);
+        }
+        
+        let result = decode_inputs(&valid_input);
+        assert!(result.is_ok(), "Should accept max input count");
+        let (_, inputs) = result.unwrap();
+        assert_eq!(inputs.len(), MAX_INPUT_COUNT as usize);
+        
+        // Test that output_count = MAX_OUTPUT_COUNT works
+        let mut valid_output = Vec::new();
+        valid_output.push(MAX_OUTPUT_COUNT);
+        
+        // Add MAX_OUTPUT_COUNT notes (each: 8 bytes value + 32 bytes key)
+        for _ in 0..MAX_OUTPUT_COUNT {
+            valid_output.extend_from_slice(&42u64.to_le_bytes()); // value
+            valid_output.extend_from_slice(&[0x02; 32]); // public key
+        }
+        
+        let result = decode_outputs(&valid_output);
+        assert!(result.is_ok(), "Should accept max output count");
+        let (_, outputs) = result.unwrap();
+        assert_eq!(outputs.len(), MAX_OUTPUT_COUNT as usize);
+    }
+
+    #[test]
+    fn test_iterative_allocation_bounds() {
+        // Verify that all iterative allocations are bounded to prevent
+        // cumulative memory exhaustion attacks
+        
+        // Max keys: 16 × 32 bytes = 512 bytes
+        assert!(MAX_KEY_COUNT as usize * 32 <= 1024);
+        
+        // Max locators: 8 × 329 bytes = 2632 bytes (~2.6 KiB)
+        assert!(MAX_LOCATOR_COUNT as usize * 329 <= 4096);
+        
+        // Max inputs: 64 × 32 bytes = 2048 bytes (2 KiB)
+        assert!(MAX_INPUT_COUNT as usize * 32 <= 4096);
+        
+        // Max outputs: 64 × 40 bytes = 2560 bytes (~2.6 KiB)
+        assert!(MAX_OUTPUT_COUNT as usize * 40 <= 4096);
+        
+        // Total worst case for a single transaction:
+        // 32 ops × (512 + 2632 + 2048 + 2560) = ~240 KiB
+        // This is well within reasonable bounds
+    }
 }
+
