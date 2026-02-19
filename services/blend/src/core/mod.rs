@@ -96,7 +96,7 @@ use crate::{
     kms::PreloadKmsService,
     membership::{self, MembershipInfo, ZkInfo},
     message::{NetworkMessage, ProcessedMessage, ServiceMessage},
-    session::{CoreSessionInfo, CoreSessionPublicInfo},
+    session::{CoreSessionInfo, CoreSessionPublicInfo, MaybeEmptyCoreSessionInfo},
     settings::FIRST_STREAM_ITEM_READY_TIMEOUT,
 };
 
@@ -521,7 +521,7 @@ async fn initialize<
         Option<RecoveryServiceState<Backend::Settings, NetAdapter::BroadcastSettings>>,
     >,
 ) -> (
-    impl Stream<Item = SessionEvent<Option<CoreSessionInfo<NodeId, KmsAdapter::CorePoQGenerator>>>>
+    impl Stream<Item = SessionEvent<MaybeEmptyCoreSessionInfo<NodeId, KmsAdapter::CorePoQGenerator>>>
     + Unpin
     + Send
     + 'static,
@@ -567,11 +567,16 @@ where
                       zk,
                   }| {
                 // This can be empty in case of an empty membership set.
-                let ZkInfo {
+                let Some(ZkInfo {
                     root,
                     core_and_path_selectors,
-                } = zk?;
-                Some(CoreSessionInfo {
+                }) = zk
+                else {
+                    return MaybeEmptyCoreSessionInfo::Empty {
+                        session: session_number,
+                    };
+                };
+                CoreSessionInfo {
                     public: CoreSessionPublicInfo {
                         poq_core_public_inputs: CoreInputs {
                             quota: config.session_core_quota(membership.size()),
@@ -587,7 +592,8 @@ where
                                 .expect("Core merkle path should be present for a core node."),
                         ),
                     ),
-                })
+                }
+                .into()
             },
         )
     }
@@ -602,11 +608,10 @@ where
     )
     .await
     .map(|(membership_info, remaining_session_stream)| {
-        (
-            membership_info
-                .expect("First retrieved session for Blend core startup must be available."),
-            remaining_session_stream.fork(),
-        )
+        let MaybeEmptyCoreSessionInfo::NonEmpty(core_session_info) = membership_info else {
+            panic!("First retrieved session for Blend core startup must be available.");
+        };
+        (core_session_info, remaining_session_stream.fork())
     })
     .expect("The current session info must be available.");
 
@@ -791,7 +796,8 @@ async fn run_event_loop<
     remaining_clock_stream: &mut (impl Stream<Item = SlotTick> + Send + Sync + Unpin + 'static),
     mut secret_pol_info_stream: impl Stream<Item = PolEpochInfo> + Unpin,
     remaining_session_stream: &mut (
-             impl Stream<Item = SessionEvent<Option<CoreSessionInfo<NodeId, CorePoQGenerator>>>> + Unpin
+             impl Stream<Item = SessionEvent<MaybeEmptyCoreSessionInfo<NodeId, CorePoQGenerator>>>
+             + Unpin
          ),
 
     blend_config: &RunningBlendConfig<Backend::Settings>,
@@ -935,7 +941,7 @@ async fn retire<
     + 'static,
     mut remaining_clock_stream: impl Stream<Item = SlotTick> + Send + Sync + Unpin + 'static,
     mut remaining_session_stream: impl Stream<
-        Item = SessionEvent<Option<CoreSessionInfo<NodeId, CorePoQGenerator>>>,
+        Item = SessionEvent<MaybeEmptyCoreSessionInfo<NodeId, CorePoQGenerator>>,
     > + Unpin,
     blend_config: &RunningBlendConfig<Backend::Settings>,
     mut backend: Backend,
@@ -1016,7 +1022,7 @@ async fn handle_session_event<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    event: SessionEvent<Option<CoreSessionInfo<NodeId, CorePoQGenerator>>>,
+    event: SessionEvent<MaybeEmptyCoreSessionInfo<NodeId, CorePoQGenerator>>,
     settings: &RunningBlendConfig<Backend::Settings>,
     current_cryptographic_processor: CoreCryptographicProcessor<
         NodeId,
@@ -1051,7 +1057,7 @@ where
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
 {
     match event {
-        SessionEvent::NewSession(Some(CoreSessionInfo {
+        SessionEvent::NewSession(MaybeEmptyCoreSessionInfo::NonEmpty(CoreSessionInfo {
             core_poq_generator,
             public:
                 CoreSessionPublicInfo {
@@ -1136,14 +1142,24 @@ where
                 .expect("service state should be created successfully"),
             }
         }
-        SessionEvent::NewSession(None) => {
+        SessionEvent::NewSession(MaybeEmptyCoreSessionInfo::Empty { session }) => {
             tracing::info!(target: LOG_TARGET, "New session event received, but no session info is available due to empty membership set.");
             let (_, _, _, _, current_session_blending_token_collector, _, _) =
                 current_recovery_checkpoint.into_components();
+            let new_reward_session_info = reward::SessionInfo::new(
+                session,
+                &current_public_info.epoch.pol_epoch_nonce,
+                0,
+                0,
+                settings.activity_threshold_sensitivity,
+            )
+            .expect("Reward session info must be created successfully. Panicking since the service cannot continue with this session");
+            let (_, old_session_blending_token_collector) =
+                current_session_blending_token_collector.rotate_session(&new_reward_session_info);
             HandleSessionEventOutput::Retiring {
                 old_crypto_processor: current_cryptographic_processor,
                 old_scheduler: current_scheduler.consume(),
-                old_token_collector: current_session_blending_token_collector.rotate_session(SessoionInf),
+                old_token_collector: old_session_blending_token_collector,
                 old_public_info: current_public_info,
             }
         }

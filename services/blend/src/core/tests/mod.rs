@@ -374,14 +374,17 @@ async fn test_handle_session_event() {
 
     // Handle a NewSession event, expecting Transitioning output.
     let output = handle_session_event(
-        SessionEvent::NewSession(Some(CoreSessionInfo {
-            public: CoreSessionPublicInfo {
-                membership: membership.clone(),
-                session: session + 1,
-                poq_core_public_inputs: public_info.session.core_public_inputs,
-            },
-            core_poq_generator: (),
-        })),
+        SessionEvent::NewSession(
+            CoreSessionInfo {
+                public: CoreSessionPublicInfo {
+                    membership: membership.clone(),
+                    session: session + 1,
+                    poq_core_public_inputs: public_info.session.core_public_inputs,
+                },
+                core_poq_generator: (),
+            }
+            .into(),
+        ),
         &settings,
         crypto_processor,
         scheduler,
@@ -466,14 +469,17 @@ async fn test_handle_session_event() {
     // Handle a NewSession event with a new too small membership,
     // expecting Retiring output.
     let output = handle_session_event(
-        SessionEvent::NewSession(Some(CoreSessionInfo {
-            public: CoreSessionPublicInfo {
-                membership: new_membership(minimal_network_size - 1).0,
-                session: session + 2,
-                poq_core_public_inputs: current_public_info.session.core_public_inputs,
-            },
-            core_poq_generator: (),
-        })),
+        SessionEvent::NewSession(
+            CoreSessionInfo {
+                public: CoreSessionPublicInfo {
+                    membership: new_membership(minimal_network_size - 1).0,
+                    session: session + 2,
+                    poq_core_public_inputs: current_public_info.session.core_public_inputs,
+                },
+                core_poq_generator: (),
+            }
+            .into(),
+        ),
         &settings,
         current_crypto_processor,
         current_scheduler,
