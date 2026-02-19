@@ -2,7 +2,7 @@ use lb_blend::{
     proofs::quota::inputs::prove::public::CoreInputs, scheduling::membership::Membership,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// All info that Blend services need to be available on new sessions.
 pub struct CoreSessionInfo<NodeId, CorePoQGenerator> {
     /// The session info available to all nodes.
@@ -11,7 +11,7 @@ pub struct CoreSessionInfo<NodeId, CorePoQGenerator> {
     pub core_poq_generator: CorePoQGenerator,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// All public info that Blend services need to be available on new sessions.
 pub struct CoreSessionPublicInfo<NodeId> {
     /// The list of core Blend nodes for the new session.

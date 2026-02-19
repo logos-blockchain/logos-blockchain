@@ -1,13 +1,15 @@
 pub mod node_id;
 pub mod service;
 
+use core::fmt::Debug;
 use std::pin::Pin;
 
 use futures::Stream;
 use lb_blend::scheduling::membership::Membership;
 use lb_core::crypto::ZkHash;
+use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
-use lb_poq::CorePathAndSelectors;
+use lb_poq::{CORE_MERKLE_TREE_HEIGHT, CorePathAndSelectors};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 
 #[derive(Clone, Debug)]
@@ -33,7 +35,7 @@ impl<NodeId> MembershipInfo<NodeId> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 #[cfg_attr(test, derive(Default))]
 /// ZK info for a new session.
 pub struct ZkInfo {
@@ -42,6 +44,18 @@ pub struct ZkInfo {
     /// The merkle path (and selectors) proving the node's ZK public key is part
     /// of the session merkle tree. This is `None` for edge nodes.
     pub core_and_path_selectors: Option<CorePathAndSelectors>,
+}
+
+impl Debug for ZkInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ZkInfo")
+            .field("root", &hex::encode(fr_to_bytes(&self.root)))
+            .field(
+                "core_and_path_selectors",
+                &format!("<{CORE_MERKLE_TREE_HEIGHT}-node> Merkle path"),
+            )
+            .finish()
+    }
 }
 
 pub type MembershipStream<NodeId> =

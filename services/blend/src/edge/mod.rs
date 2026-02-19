@@ -152,7 +152,7 @@ impl<
     >
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Send + Sync,
-    NodeId: Clone + Eq + Hash + Send + Sync + 'static,
+    NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
     BroadcastSettings: Serialize + DeserializeOwned + Send,
     MembershipAdapter: membership::Adapter<NodeId = NodeId, Error: Send + Sync + 'static> + Send,
     membership::ServiceMessage<MembershipAdapter>: Send + Sync + 'static,
@@ -343,7 +343,7 @@ async fn run<Backend, NodeId, ProofsGenerator, ChainService, PolInfoProvider, Ru
 ) -> Result<(), Error>
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Sync + Send,
-    NodeId: Clone + Eq + Hash + Send + Sync + 'static,
+    NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
     ProofsGenerator: LeaderProofsGenerator + Send,
     ChainService: ChainApi<RuntimeServiceId> + Send + Sync,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Unpin>,
@@ -387,9 +387,11 @@ where
 
     info!(
         target: LOG_TARGET,
-        "The current membership is ready: {} nodes.",
-        current_membership_info.membership.size()
+        "The current membership is ready: {:?}",
+        current_membership_info
     );
+
+    debug!(target: LOG_TARGET, "Current epoch info: {:?}", current_epoch_info);
 
     notify_ready();
 
@@ -417,6 +419,8 @@ where
     }
     .await;
 
+    debug!(target: LOG_TARGET, "Current secret leader info: {:?}", current_private_leader_info);
+
     let mut current_public_inputs = PoQVerificationInputsMinusSigningKey {
         core: CoreInputs {
             zk_root: current_membership_info
@@ -432,6 +436,8 @@ where
         leader: current_epoch_info,
         session: current_membership_info.session_number,
     };
+
+    debug!(target: LOG_TARGET, "Current public info: {current_public_inputs:?}");
 
     let mut message_handler =
         MessageHandler::<Backend, _, ProofsGenerator, _>::try_new_with_edge_condition_check(
@@ -505,6 +511,10 @@ where
     RuntimeServiceId: Clone,
 {
     debug!(target: LOG_TARGET, "Trying to create a new message handler");
+    let Some(zk_info) = zk else {
+        debug!(target: LOG_TARGET, "New membership does not have ZK info, cannot create new message handler for the new session.");
+        return Err(Error::NetworkIsTooSmall(0));
+    };
     // Update current public inputs with new session info.
     let new_public_inputs = PoQVerificationInputsMinusSigningKey {
         session: new_session_number,
@@ -514,7 +524,7 @@ where
                 &settings.time,
                 new_membership.size(),
             ),
-            zk_root: zk.expect("Membership should have ZK info").root,
+            zk_root: zk_info.root,
         },
         ..current_public_inputs
     };

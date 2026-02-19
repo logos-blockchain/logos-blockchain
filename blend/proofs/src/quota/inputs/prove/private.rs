@@ -1,4 +1,7 @@
-use lb_poq::NotePathAndSelectors;
+use core::fmt::{self, Debug, Formatter};
+
+use lb_groth16::fr_to_bytes;
+use lb_poq::{CORE_MERKLE_TREE_HEIGHT, NotePathAndSelectors};
 
 use crate::{CorePathAndSelectors, ZkHash};
 
@@ -78,7 +81,7 @@ impl From<ProofOfCoreQuotaInputs> for ProofType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ProofOfLeadershipQuotaInputs {
     pub slot: u64,
     pub note_value: u64,
@@ -86,6 +89,25 @@ pub struct ProofOfLeadershipQuotaInputs {
     pub output_number: u64,
     pub aged_path_and_selectors: NotePathAndSelectors,
     pub secret_key: ZkHash,
+}
+
+impl Debug for ProofOfLeadershipQuotaInputs {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProofOfLeadershipQuotaInputs")
+            .field("slot", &self.slot)
+            .field("note_value", &self.note_value)
+            .field(
+                "transaction_hash",
+                &hex::encode(fr_to_bytes(&self.transaction_hash)),
+            )
+            .field("output_number", &self.output_number)
+            .field(
+                "aged_path_and_selectors",
+                &format!("<{CORE_MERKLE_TREE_HEIGHT}-node> Merkle path"),
+            )
+            .field("secret_key", &"<redacted>")
+            .finish()
+    }
 }
 
 impl From<ProofOfLeadershipQuotaInputs> for ProofType {
