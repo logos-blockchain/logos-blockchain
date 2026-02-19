@@ -34,8 +34,8 @@ impl<NodeId> MembershipInfo<NodeId> {
         };
         Self {
             membership,
-            session_number,
             zk,
+            session_number,
         }
     }
 }
