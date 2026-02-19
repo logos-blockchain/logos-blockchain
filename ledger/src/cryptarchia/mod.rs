@@ -176,7 +176,7 @@ impl LedgerState {
                 slot = ?slot,
                 "epoch transition"
             );
-            let block_density = BlockDensity::new(self.stake_inference.period(), slot);
+            let block_density = BlockDensity::new(new_epoch, config);
             let epoch_state = self.next_epoch_state.clone();
             let next_epoch_state = EpochState {
                 epoch: new_epoch + 1,
@@ -203,7 +203,7 @@ impl LedgerState {
                 slot = ?slot,
                 "skipped epochs"
             );
-            let block_density = BlockDensity::new(self.stake_inference.period(), slot);
+            let block_density = BlockDensity::new(new_epoch, config);
             let epoch_state = EpochState {
                 epoch: new_epoch,
                 nonce: self.nonce,
@@ -443,7 +443,7 @@ impl LedgerState {
             config.consensus_config.slot_activation_coeff().as_f64(),
             config.total_stake_inference_period(),
         ));
-        let block_density = BlockDensity::new(stake_inference.period(), slot);
+        let block_density = BlockDensity::new(config.epoch(slot), config);
         Self {
             utxos: utxos.clone(),
             nonce,
@@ -639,9 +639,9 @@ pub mod tests {
 
         Config {
             epoch_config: EpochConfig {
-                epoch_stake_distribution_stabilization: NonZero::new(4).unwrap(),
+                epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
-                epoch_period_nonce_stabilization: NonZero::new(3).unwrap(),
+                epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
             },
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(1).unwrap(),
@@ -680,16 +680,17 @@ pub mod tests {
             .iter()
             .map(|utxo| (utxo.id(), *utxo))
             .collect::<UtxoTree>();
+        let slot = 0.into();
         let stake_inference = Arc::new(StakeInference::new(
             config.consensus_config.stake_inference_learning_rate(),
             config.consensus_config.slot_activation_coeff().as_f64(),
             config.total_stake_inference_period(),
         ));
-        let block_density_inference = BlockDensity::new(stake_inference.period(), 0.into());
+        let block_density = BlockDensity::new(config.epoch(slot), &config);
         LedgerState {
             utxos: utxos.clone(),
             nonce: Fr::ZERO,
-            slot: 0.into(),
+            slot,
             next_epoch_state: EpochState {
                 epoch: 1.into(),
                 nonce: Fr::ZERO,
@@ -707,7 +708,7 @@ pub mod tests {
                 lottery_1,
             },
             stake_inference,
-            block_density: block_density_inference,
+            block_density,
         }
     }
 
@@ -778,6 +779,14 @@ pub mod tests {
         let config = config();
         assert_eq!(config.epoch_length(), 100);
         let (mut ledger, genesis) = ledger(&utxos, config);
+        // block density slot range should be [0, 59]
+        assert_eq!(
+            ledger.states[&genesis]
+                .cryptarchia_ledger
+                .block_density
+                .period_range(),
+            &(0.into()..=59.into())
+        );
 
         let h_1 = update_ledger(&mut ledger, genesis, 10, utxos[0]).unwrap();
         assert_eq!(
@@ -789,8 +798,9 @@ pub mod tests {
 
         let h_3 = apply_and_add_utxo(&mut ledger, h_2, 90, utxos[2], utxo_4);
 
-        // test epoch jump
-        let h_4 = update_ledger(&mut ledger, h_3, 200, utxos[3]).unwrap();
+        // test epoch jump: epoch 0 -> 2
+        // Jump to the slot that is not the 1st slot of epoch 2
+        let h_4 = update_ledger(&mut ledger, h_3, 222, utxos[3]).unwrap();
         // nonce for epoch 2 should be taken at the end of slot 160, but in our case the
         // last block is at slot 90
         assert_eq!(
@@ -802,13 +812,29 @@ pub mod tests {
             ledger.states[&h_4].cryptarchia_ledger.epoch_state.utxos,
             ledger.states[&h_3].cryptarchia_ledger.utxos,
         );
+        // block density slot range should be [200, 259]
+        assert_eq!(
+            ledger.states[&h_4]
+                .cryptarchia_ledger
+                .block_density
+                .period_range(),
+            &(200.into()..=259.into())
+        );
 
-        // nonce for epoch 1 should be taken at the end of slot 60
+        // nonce for epoch 1 should be taken at the end of slot 10
         update_ledger(&mut ledger, h_3, 100, utxos[3]).unwrap();
         let h_5 = apply_and_add_utxo(&mut ledger, h_3, 100, utxos[3], utxo_5);
         assert_eq!(
             ledger.states[&h_5].cryptarchia_ledger.epoch_state.nonce,
-            ledger.states[&h_2].cryptarchia_ledger.nonce,
+            ledger.states[&h_1].cryptarchia_ledger.nonce,
+        );
+        // block density slot range should be [100, 159]
+        assert_eq!(
+            ledger.states[&h_5]
+                .cryptarchia_ledger
+                .block_density
+                .period_range(),
+            &(100.into()..=159.into())
         );
 
         let h_6 = update_ledger(&mut ledger, h_5, 200, utxos[3]).unwrap();
@@ -817,6 +843,14 @@ pub mod tests {
         assert_eq!(
             ledger.states[&h_6].cryptarchia_ledger.epoch_state.utxos,
             ledger.states[&h_3].cryptarchia_ledger.utxos,
+        );
+        // block density slot range should be [200, 259]
+        assert_eq!(
+            ledger.states[&h_6]
+                .cryptarchia_ledger
+                .block_density
+                .period_range(),
+            &(200.into()..=259.into())
         );
     }
 

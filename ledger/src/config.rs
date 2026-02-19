@@ -31,6 +31,11 @@ impl Config {
             .epoch_length(self.consensus_config.base_period_length())
     }
 
+    /// The slot at which the nonce for a given epoch is snapshotted
+    ///
+    /// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
+    /// the nonce for epoch 1 will be snapshotted at slot 60, which is the 1st
+    /// slot of the last phase of epoch 0.
     #[must_use]
     pub fn nonce_snapshot(&self, epoch: Epoch) -> Slot {
         let offset = self.nonce_contribution_period();
@@ -39,6 +44,7 @@ impl Config {
         base.saturating_add(offset).into()
     }
 
+    /// The number of slots in Stake Distribution Snapshot + Buffer phases
     #[must_use]
     pub fn nonce_contribution_period(&self) -> u64 {
         self.base_period_length().get().saturating_mul(
@@ -51,16 +57,25 @@ impl Config {
         )
     }
 
+    /// The slot at which the total stake for a given epoch is snapshotted
+    ///
+    /// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
+    /// the total stake for epoch 1 will be snapshotted at slot 60, which is the
+    /// 1st slot of the last phase of epoch 0.
     #[must_use]
     pub fn total_stake_snapshot(&self, epoch: Epoch) -> Slot {
         self.nonce_snapshot(epoch)
     }
 
+    /// The number of slots in Stake Distribution Snapshot + Buffer phases
     #[must_use]
     pub fn total_stake_inference_period(&self) -> u64 {
         self.nonce_contribution_period()
     }
 
+    /// The slot at which the stake distribution for a given epoch is snapshotted
+    ///
+    /// It is the 1st slot of the previous epoch.
     #[must_use]
     pub fn stake_distribution_snapshot(&self, epoch: Epoch) -> Slot {
         (u64::from(u32::from(epoch) - 1) * self.epoch_length()).into()
@@ -133,6 +148,8 @@ mod tests {
         assert_eq!(config.epoch_length(), 100);
         assert_eq!(config.nonce_snapshot(1.into()), 60.into());
         assert_eq!(config.nonce_snapshot(2.into()), 160.into());
+        assert_eq!(config.total_stake_snapshot(1.into()), 60.into());
+        assert_eq!(config.total_stake_snapshot(2.into()), 160.into());
         assert_eq!(config.stake_distribution_snapshot(1.into()), 0.into());
         assert_eq!(config.stake_distribution_snapshot(2.into()), 100.into());
     }
