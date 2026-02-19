@@ -7,6 +7,8 @@ use thiserror::Error;
 
 type Result<T> = std::result::Result<T, PackingError>;
 
+/// Length prefix type for network messages
+/// Currently u16, providing a maximum message size of 65535 bytes
 type LenType = u16;
 const MAX_MSG_LEN_BYTES: usize = size_of::<LenType>();
 const MAX_MSG_LEN: usize = LenType::MAX as usize;
@@ -63,8 +65,10 @@ where
 {
     let data_length = read_data_length(reader).await?;
     
-    // Defense-in-depth: validate length even though LenType::MAX bounds it
-    // This protects against potential future changes to LenType
+    // Defense-in-depth: validate length before allocation
+    // This check is currently redundant since data_length is bounded by LenType (u16),
+    // but provides protection if LenType is changed to u32/u64 in the future.
+    // The compiler will optimize this away since it's always false with current types.
     if data_length > MAX_MSG_LEN {
         return Err(PackingError::MessageTooLarge {
             max: MAX_MSG_LEN,
