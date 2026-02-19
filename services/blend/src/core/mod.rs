@@ -886,7 +886,7 @@ where
                 public_info = handle_clock_event(clock_tick, blend_config, epoch_handler, &mut crypto_processor, backend, public_info).await;
             }
             Some(pol_info) = secret_pol_info_stream.next() => {
-                handle_new_secret_epoch_info(pol_info.poq_private_inputs, &mut crypto_processor);
+                handle_new_secret_epoch_info(pol_info, &mut crypto_processor);
             }
             Some(session_event) = remaining_session_stream.next() => {
                 match handle_session_event(session_event, blend_config, crypto_processor, message_scheduler, public_info, recovery_checkpoint, backend, sdp_relay).await {
@@ -1868,6 +1868,7 @@ where
             lottery_0,
             lottery_1,
         }) => {
+            tracing::debug!(target: LOG_TARGET, "New epoch with nonce {pol_epoch_nonce:?} started");
             let new_leader_inputs = LeaderInputs {
                 message_quota: settings.session_leadership_quota(),
                 pol_epoch_nonce,
@@ -1886,6 +1887,7 @@ where
             new_public_info
         }
         EpochEvent::OldEpochTransitionPeriodExpired => {
+            tracing::debug!(target: LOG_TARGET, "Old epoch transition period expired.");
             cryptographic_processor.complete_epoch_transition();
             backend.complete_epoch_transition().await;
 
@@ -1897,6 +1899,7 @@ where
             lottery_0,
             lottery_1,
         }) => {
+            tracing::debug!(target: LOG_TARGET, "New epoch with nonce {pol_epoch_nonce:?} started and old epoch transition period expired.");
             let new_leader_inputs = LeaderInputs {
                 message_quota: settings.session_leadership_quota(),
                 pol_epoch_nonce,
@@ -1924,7 +1927,7 @@ where
 /// Handle the availability of new secret `PoL` info by passing it to the
 /// underlying cryptographic processor.
 fn handle_new_secret_epoch_info<NodeId, ProofsGenerator, ProofsVerifier, CorePoQGenerator>(
-    new_pol_info: ProofOfLeadershipQuotaInputs,
+    new_pol_info: PolEpochInfo,
     cryptographic_processor: &mut CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1934,7 +1937,8 @@ fn handle_new_secret_epoch_info<NodeId, ProofsGenerator, ProofsVerifier, CorePoQ
 ) where
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
 {
-    cryptographic_processor.set_epoch_private(new_pol_info);
+    tracing::debug!(target: LOG_TARGET, "Received new secret PoL info for the epoch: {new_pol_info:?}. Updating the cryptographic processor...");
+    cryptographic_processor.set_epoch_private(new_pol_info.poq_private_inputs);
 }
 
 /// Submits an activity proof to the SDP service.

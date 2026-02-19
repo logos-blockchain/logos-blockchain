@@ -92,13 +92,14 @@ where
     fn set_epoch_private(&mut self, new_epoch_private: ProofOfLeadershipQuotaInputs) {
         tracing::info!(target: LOG_TARGET, "Setting epoch secret PoL info...");
         if let Some(leader_proofs_generator) = &mut self.leader_proofs_generator {
-            leader_proofs_generator.rotate_epoch(
-                self.core_proofs_generator.settings.public_inputs.leader,
-                new_epoch_private,
-            );
+            let existing_public_info = self.core_proofs_generator.settings.public_inputs.leader;
+            tracing::debug!(target: LOG_TARGET, "Setting new secret PoL info for existing public epoch info {existing_public_info:?}...");
+            leader_proofs_generator.rotate_epoch(existing_public_info, new_epoch_private);
         } else {
+            let existing_public_info = self.core_proofs_generator.settings;
+            tracing::debug!(target: LOG_TARGET, "Creating new leadership proofs generator using core proof generator public inputs {existing_public_info:?}...");
             self.leader_proofs_generator = Some(RealLeaderProofsGenerator::new(
-                self.core_proofs_generator.settings,
+                existing_public_info,
                 new_epoch_private,
             ));
         }

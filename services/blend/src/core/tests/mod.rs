@@ -20,8 +20,8 @@ use crate::{
     core::{
         HandleSessionEventOutput,
         backends::BlendBackend,
-        handle_incoming_blend_message_form_current_session, handle_session_event,
-        handle_session_transition_expired, initialize, post_initialize, retire, run_event_loop,
+        handle_incoming_blend_message, handle_session_event, handle_session_transition_expired,
+        initialize, post_initialize, retire, run_event_loop,
         state::ServiceState,
         tests::utils::{
             MockKmsAdapter, MockProofsVerifier, NodeId, TestBlendBackend, TestBlendBackendEvent,
@@ -93,7 +93,7 @@ async fn test_handle_incoming_blend_message() {
         state_updater,
     )
     .unwrap();
-    let recovery_checkpoint = handle_incoming_blend_message_form_current_session(
+    let recovery_checkpoint = handle_incoming_blend_message(
         msg.clone(),
         &mut scheduler,
         None,
@@ -139,7 +139,7 @@ async fn test_handle_incoming_blend_message() {
         state_updater,
     )
     .unwrap();
-    let recovery_checkpoint = handle_incoming_blend_message_form_current_session(
+    let recovery_checkpoint = handle_incoming_blend_message(
         msg,
         &mut new_scheduler,
         Some(&mut scheduler),
@@ -177,7 +177,7 @@ async fn test_handle_incoming_blend_message() {
         .encapsulate_data_payload(&payload)
         .await
         .expect("encapsulation must succeed");
-    let recovery_checkpoint = handle_incoming_blend_message_form_current_session(
+    let recovery_checkpoint = handle_incoming_blend_message(
         msg,
         &mut new_scheduler,
         Some(&mut scheduler),
@@ -223,7 +223,7 @@ async fn test_handle_incoming_blend_message() {
         .encapsulate_data_payload(&payload)
         .await
         .expect("encapsulation must succeed");
-    let recovery_checkpoint = handle_incoming_blend_message_form_current_session(
+    let recovery_checkpoint = handle_incoming_blend_message(
         msg,
         &mut new_scheduler,
         Some(&mut scheduler),

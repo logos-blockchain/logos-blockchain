@@ -275,11 +275,12 @@ where
             return None;
         }
 
-        tracing::debug!(target: LOG_TARGET, "Found epoch unseen before. Retrieving for its state...");
+        tracing::debug!(target: LOG_TARGET, "Found epoch unseen before. Retrieving its state...");
         let epoch_state = self
             .chain_service
             .get_epoch_state_for_slot(new_tick.slot)
             .await;
+        tracing::debug!(target: LOG_TARGET, "Retrieved epoch state for unseen epoch: {:?}.", epoch_state);
 
         // This is true if epochs are shorter than transition periods. It's not likely
         // to happen in production, but we must still account for this
