@@ -73,9 +73,8 @@ impl Config {
         self.nonce_contribution_period()
     }
 
-    /// The slot at which the stake distribution for a given epoch is snapshotted
-    ///
-    /// It is the 1st slot of the previous epoch.
+    /// The slot at which the stake distribution for a given epoch is
+    /// snapshotted, i.e., the first slot of the previous epoch.
     #[must_use]
     pub fn stake_distribution_snapshot(&self, epoch: Epoch) -> Slot {
         (u64::from(u32::from(epoch) - 1) * self.epoch_length()).into()

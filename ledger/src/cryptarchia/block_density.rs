@@ -56,9 +56,8 @@ mod tests {
     use lb_core::sdp::MinStake;
     use lb_utils::math::NonNegativeRatio;
 
-    use crate::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
-
     use super::*;
+    use crate::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
 
     #[test]
     fn test_initial_block_density_is_zero() {
