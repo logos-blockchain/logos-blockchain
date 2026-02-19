@@ -33,20 +33,20 @@ use crate::{
 // operations while preventing excessive memory usage (e.g., 68GB allocation).
 
 /// Maximum size for channel inscription data (64 KiB)
-/// Protects against unbounded allocation in decode_channel_inscribe
+/// Protects against unbounded allocation in `decode_channel_inscribe`
 const MAX_INSCRIPTION_SIZE: u32 = 1 << 16; // 64 KiB
 
 /// Maximum size for SDP activity metadata (64 KiB)
-/// Protects against unbounded allocation in decode_sdp_active
+/// Protects against unbounded allocation in `decode_sdp_active`
 const MAX_METADATA_SIZE: u32 = 1 << 16; // 64 KiB
 
 /// Maximum number of operations in a single transaction (32)
-/// Protects against excessive allocations in decode_ops
+/// Protects against excessive allocations in `decode_ops`
 /// This limit is chosen to be generous for normal use while preventing
 /// excessive memory allocation from malicious inputs
 const MAX_OP_COUNT: u8 = 32;
 
-/// Maximum number of Ed25519 public keys in a SetKeysOp (16)
+/// Maximum number of Ed25519 public keys in a `SetKeysOp` (16)
 /// Protects against unbounded iterative allocation in
 /// `decode_channel_set_keys()` Each key is 32 bytes, so max allocation is 512
 /// bytes
@@ -54,7 +54,7 @@ const MAX_KEY_COUNT: u8 = 16;
 
 /// Maximum number of locators in an SDP declaration (8)
 /// Protects against unbounded iterative allocation in `decode_sdp_declare()`
-/// Each locator is already bounded by LOCATOR_BYTES_SIZE_LIMIT (329 bytes)
+/// Each locator is already bounded by `LOCATOR_BYTES_SIZE_LIMIT` (329 bytes)
 /// so max allocation is ~2.6 KiB
 const MAX_LOCATOR_COUNT: u8 = 8;
 
@@ -1544,10 +1544,7 @@ mod tests {
     #[test]
     fn test_reject_excessive_op_count() {
         // Test that op_count > MAX_OP_COUNT is rejected
-        let mut malicious_input = Vec::new();
-
-        // OpCount = MAX_OP_COUNT + 1 (should be rejected)
-        malicious_input.push(MAX_OP_COUNT + 1);
+        let malicious_input = vec![MAX_OP_COUNT + 1];
 
         // Should fail with TooLarge error
         let result = decode_ops(&malicious_input);
@@ -1567,22 +1564,16 @@ mod tests {
         // Test that op_count = MAX_OP_COUNT is accepted
         // (though it will fail later due to missing op data, which is fine for this
         // test)
-        let mut valid_input = Vec::new();
-
-        // OpCount = MAX_OP_COUNT (should be accepted)
-        valid_input.push(MAX_OP_COUNT);
+        let valid_input = vec![MAX_OP_COUNT];
 
         // Should not fail with TooLarge error (will fail with incomplete data)
         let result = decode_ops(&valid_input);
-        match result {
-            Err(nom::Err::Error(e)) => {
-                assert_ne!(
-                    e.code,
-                    ErrorKind::TooLarge,
-                    "Should not reject at MAX_OP_COUNT"
-                );
-            }
-            _ => {} // Other errors are fine
+        if let Err(nom::Err::Error(e)) = result {
+            assert_ne!(
+                e.code,
+                ErrorKind::TooLarge,
+                "Should not reject at MAX_OP_COUNT"
+            );
         }
     }
 
@@ -1700,13 +1691,10 @@ mod tests {
     #[test]
     fn test_reject_excessive_locator_count() {
         // Test that locator_count > MAX_LOCATOR_COUNT is rejected
-        let mut malicious_input = Vec::new();
-
-        // ServiceType (1 byte)
-        malicious_input.push(0x00); // BlendNetwork
-
-        // LocatorCount = MAX_LOCATOR_COUNT + 1 (should be rejected)
-        malicious_input.push(MAX_LOCATOR_COUNT + 1);
+        let malicious_input = vec![
+            0x00,                  // ServiceType (1 byte)
+            MAX_LOCATOR_COUNT + 1, // LocatorCount = MAX_LOCATOR_COUNT + 1 (should be rejected)
+        ];
 
         // Should fail with TooLarge error
         let result = decode_sdp_declare(&malicious_input);
@@ -1723,10 +1711,7 @@ mod tests {
     #[test]
     fn test_reject_excessive_input_count() {
         // Test that input_count > MAX_INPUT_COUNT is rejected
-        let mut malicious_input = Vec::new();
-
-        // InputCount = MAX_INPUT_COUNT + 1 (should be rejected)
-        malicious_input.push(MAX_INPUT_COUNT + 1);
+        let malicious_input = vec![MAX_INPUT_COUNT + 1];
 
         // Should fail with TooLarge error
         let result = decode_inputs(&malicious_input);
@@ -1743,10 +1728,7 @@ mod tests {
     #[test]
     fn test_reject_excessive_output_count() {
         // Test that output_count > MAX_OUTPUT_COUNT is rejected
-        let mut malicious_input = Vec::new();
-
-        // OutputCount = MAX_OUTPUT_COUNT + 1 (should be rejected)
-        malicious_input.push(MAX_OUTPUT_COUNT + 1);
+        let malicious_input = vec![MAX_OUTPUT_COUNT + 1];
 
         // Should fail with TooLarge error
         let result = decode_outputs(&malicious_input);
