@@ -1,8 +1,14 @@
-use std::ffi::c_char;
+use std::{
+    ffi::{CStr, c_char},
+    slice,
+    str::FromStr as _,
+};
 
 use lb_node::config::InitArgs;
+use multiaddr::Multiaddr;
+use tokio::runtime::Runtime;
 
-use crate::{LogosBlockchainNode, OperationStatus};
+use crate::OperationStatus;
 
 #[repr(C)]
 pub enum DeploymentType {
@@ -39,10 +45,6 @@ pub struct GenerateConfigArgs {
     pub deployment: *const Deployment,
     pub state_path: *const c_char,
 }
-
-use std::{ffi::CStr, slice, str::FromStr as _};
-
-use multiaddr::Multiaddr;
 
 impl From<GenerateConfigArgs> for InitArgs {
     fn from(value: GenerateConfigArgs) -> Self {
@@ -142,9 +144,9 @@ impl From<GenerateConfigArgs> for InitArgs {
 }
 
 #[must_use]
-pub fn generate_config_sync(node: &LogosBlockchainNode, args: InitArgs) -> OperationStatus {
-    let runtime_handler = node.get_runtime_handle();
-    let run_result = runtime_handler.block_on(async move { lb_node::init::run(&args).await });
+pub fn generate_config_sync(args: InitArgs) -> OperationStatus {
+    let runtime = Runtime::new().expect("Failed to create Tokio runtime.");
+    let run_result = runtime.block_on(async move { lb_node::init::run(&args).await });
     match run_result {
         Ok(()) => OperationStatus::Ok,
         Err(error) => {
@@ -158,7 +160,6 @@ pub fn generate_config_sync(node: &LogosBlockchainNode, args: InitArgs) -> Opera
 ///
 /// # Arguments
 ///
-/// * `node` - A non-null pointer to a [`LogosBlockchainNode`] instance.
 /// * `args` - A [`GenerateConfigArgs`] struct containing the arguments to be
 ///   used for generating the config file.
 ///
@@ -172,15 +173,7 @@ pub fn generate_config_sync(node: &LogosBlockchainNode, args: InitArgs) -> Opera
 /// must ensure that all pointers are valid.
 #[must_use]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn generate_user_config(
-    node: *const LogosBlockchainNode,
-    args: GenerateConfigArgs,
-) -> OperationStatus {
-    if node.is_null() {
-        eprintln!("Received a null `node` pointer. Exiting.");
-        return OperationStatus::NullPointer;
-    }
-    let node = unsafe { &*node };
-    let args = InitArgs::from(args);
-    generate_config_sync(node, args)
+pub unsafe extern "C" fn generate_user_config(args: GenerateConfigArgs) -> OperationStatus {
+    let init_args = InitArgs::from(args);
+    generate_config_sync(init_args)
 }
