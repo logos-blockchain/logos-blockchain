@@ -30,10 +30,6 @@ pub struct Config {
     /// If enabled the periodic bootstrap will run every x seconds in addition
     /// to the automatic bootstrap that is triggered when a new peer is added
     pub periodic_bootstrap_interval_secs: Option<u64>,
-
-    /// The Kademlia node is in client mode if it does not
-    /// expose its own Kademlia ID and only connects to other nodes
-    pub client_mode: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
