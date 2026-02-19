@@ -57,6 +57,10 @@ cucumber_stand_alone = []
 testing_framework    = []
 
 [[test]]
+name = "test_blend_local_setup"
+path = "src/tests/blend/local.rs"
+
+[[test]]
 name = "test_cryptarchia_happy_path"
 path = "src/tests/cryptarchia/happy.rs"
 
