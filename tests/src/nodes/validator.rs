@@ -57,15 +57,7 @@ pub struct Validator {
 
 impl Drop for Validator {
     fn drop(&mut self) {
-        if std::thread::panicking()
-            && let Err(e) = persist_tempdir(&mut self.tempdir, "logos-blockchain-node")
-        {
-            println!("failed to persist tempdir: {e}");
-        }
-
-        if let Err(e) = self.child.kill() {
-            println!("failed to kill the child process: {e}");
-        }
+        drop(persist_tempdir(&mut self.tempdir, "logos-blockchain-node"));
     }
 }
 

@@ -122,48 +122,56 @@ where
             .ok()?;
         let pol_winning_slot_receiver = receiver.await.ok()?;
         // Return a `WatchStream` that filters out `None`s (i.e., at the very beginning
-        // of chain leader start).
+        // of chain leader start), and any leader info that belongs to an already
+        // processed epoch.
         Some(Box::new(
             WatchStream::new(pol_winning_slot_receiver)
                 .filter_map(ready)
-                .map(|(leader_private, _)| {
+                .scan(None, |processed_epoch, (leader_private, epoch)| {
+                    let should_yield_new_epoch = processed_epoch.is_none_or(|prev_epoch| epoch > prev_epoch);
+                    if !should_yield_new_epoch {
+                        return ready(Some(None));
+                    }
+
+                    *processed_epoch = Some(epoch);
                     let PolWitnessInputsData {
                         wallet:
                             PolWalletInputsData {
-                                aged_path,
-                                aged_selector,
-                                note_value,
-                                output_number,
-                                secret_key,
-                                transaction_hash,
-                                ..
-                            },
+                            aged_path,
+                            aged_selector,
+                            note_value,
+                            output_number,
+                            secret_key,
+                            transaction_hash,
+                            ..
+                        },
                         chain: PolChainInputsData { slot_number, epoch_nonce, .. },
                     } = leader_private.input();
 
-                // TODO: Remove this if `PoL` stuff also migrates to using fixed-size arrays or starts using vecs of the expected length instead of empty ones when generating `LeaderPrivate` values.
-                let aged_path_and_selectors = {
-                    let mut vec_from_inputs: Vec<_> = aged_path.iter().copied().zip(aged_selector.iter().copied()).collect();
-                    let input_len = vec_from_inputs.len();
-                    if input_len != AGED_NOTE_MERKLE_TREE_HEIGHT {
-                        tracing::warn!("Provided merkle path for aged notes does not match the expected size for PoQ inputs.");
-                    }
-                    vec_from_inputs.resize(AGED_NOTE_MERKLE_TREE_HEIGHT, (ZkHash::ZERO, false));
-                    vec_from_inputs
-                };
+                    // TODO: Remove this if `PoL` stuff also migrates to using fixed-size arrays or starts using vecs of the expected length instead of empty ones when generating `LeaderPrivate` values.
+                    let aged_path_and_selectors = {
+                        let mut vec_from_inputs: Vec<_> = aged_path.iter().copied().zip(aged_selector.iter().copied()).collect();
+                        let input_len = vec_from_inputs.len();
+                        if input_len != AGED_NOTE_MERKLE_TREE_HEIGHT {
+                            tracing::warn!("Provided merkle path for aged notes does not match the expected size for PoQ inputs.");
+                        }
+                        vec_from_inputs.resize(AGED_NOTE_MERKLE_TREE_HEIGHT, (ZkHash::ZERO, false));
+                        vec_from_inputs
+                    };
 
-                PolEpochInfo {
-                    nonce: *epoch_nonce,
-                    poq_private_inputs: ProofOfLeadershipQuotaInputs {
-                        aged_path_and_selectors: aged_path_and_selectors.try_into().expect("List of aged note paths and selectors does not match the expected size for PoQ inputs, although it has already been pre-processed."),
-                        note_value: *note_value,
-                        output_number: *output_number,
-                        secret_key: *secret_key,
-                        slot: *slot_number,
-                        transaction_hash: *transaction_hash,
-                    },
-                }
-            }),
+                    ready(Some(Some(PolEpochInfo {
+                        nonce: *epoch_nonce,
+                        poq_private_inputs: ProofOfLeadershipQuotaInputs {
+                            aged_path_and_selectors: aged_path_and_selectors.try_into().expect("List of aged note paths and selectors does not match the expected size for PoQ inputs, although it has already been pre-processed."),
+                            note_value: *note_value,
+                            output_number: *output_number,
+                            secret_key: *secret_key,
+                            slot: *slot_number,
+                            transaction_hash: *transaction_hash,
+                        },
+                    })))
+                })
+                .filter_map(ready)
         ))
     }
 }
