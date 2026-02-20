@@ -54,7 +54,7 @@ pub struct OrphanConfig {
 impl Default for OrphanConfig {
     fn default() -> Self {
         Self {
-            max_orphan_cache_size: NonZeroUsize::new(5).unwrap(),
+            max_orphan_cache_size: NonZeroUsize::new(1000).unwrap(),
         }
     }
 }
