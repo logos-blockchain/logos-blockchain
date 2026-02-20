@@ -19,6 +19,7 @@ use crate::node::NodeHttpClient;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const CATCH_UP_WARN_AFTER: usize = 5;
+const MAX_CATCH_UP_BLOCKS_PER_POLL: usize = 64;
 
 /// Broadcasts observed blocks to subscribers while tracking simple stats.
 #[derive(Clone)]
@@ -141,9 +142,13 @@ impl BlockScanner {
 
         let mut stack = Vec::new();
         let mut cursor = tip;
+        let mut scanned = 0usize;
 
         loop {
             if self.seen.contains(&cursor) {
+                break;
+            }
+            if scanned >= MAX_CATCH_UP_BLOCKS_PER_POLL {
                 break;
             }
 
@@ -167,6 +172,7 @@ impl BlockScanner {
 
             cursor = parent;
             remaining_height = remaining_height.saturating_sub(1);
+            scanned += 1;
         }
 
         let mut processed = 0usize;

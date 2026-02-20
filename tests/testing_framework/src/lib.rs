@@ -32,7 +32,7 @@ pub use framework::{
 // Required by reused node-test config modules importing from crate root.
 pub use node::configs::deployment::{DeploymentBuilder, TopologyConfig};
 pub use node::{NodeHttpClient, configs};
-pub use workloads::{ConsensusLiveness, transaction};
+pub use workloads::{ConsensusLiveness, inscription, transaction};
 
 /// Internal helpers for sibling workspace crates.
 #[doc(hidden)]

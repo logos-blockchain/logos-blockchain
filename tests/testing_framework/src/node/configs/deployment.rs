@@ -23,9 +23,6 @@ const DEFAULT_SECURITY_PARAM: u32 = 10;
 
 #[derive(Debug, Error)]
 pub enum TopologyBuildError {
-    #[error("topology must include at least one node")]
-    EmptyParticipants,
-
     #[error("internal config vector mismatch for {label} (expected {expected}, got {actual})")]
     VectorLenMismatch {
         label: &'static str,
@@ -151,7 +148,11 @@ impl DeploymentBuilder {
     pub fn build(mut self) -> Result<DeploymentPlan, TopologyBuildError> {
         self.config.wallet_config.validate()?;
 
-        let node_count = validated_node_count(self.config.n_nodes)?;
+        let node_count = self.config.n_nodes;
+        if node_count == 0 {
+            return Ok(DeploymentPlan::new(self.config, Vec::new()));
+        }
+
         let ids = generate_node_ids(node_count, self.seed.as_ref());
 
         let blend_ports = allocate_blend_ports(node_count)?;
@@ -195,14 +196,6 @@ fn allocate_blend_ports(node_count: usize) -> Result<Vec<u16>, TopologyBuildErro
     }
 
     Ok(ports)
-}
-
-const fn validated_node_count(node_count: usize) -> Result<usize, TopologyBuildError> {
-    if node_count == 0 {
-        return Err(TopologyBuildError::EmptyParticipants);
-    }
-
-    Ok(node_count)
 }
 
 fn generate_node_ids(node_count: usize, seed: Option<&DeploymentSeed>) -> Vec<[u8; 32]> {

@@ -94,6 +94,11 @@ path              = "src/tests/testing_framework/smoke_local.rs"
 required-features = ["testing_framework"]
 
 [[test]]
+name              = "test_testing_framework_external_urls_inscription"
+path              = "src/tests/testing_framework/external_urls_inscription.rs"
+required-features = ["testing_framework"]
+
+[[test]]
 name              = "test_testing_framework_cucumber_smoke_local"
 path              = "cucumber_tests/stand_alone_tests/cucumber_smoke_local.rs"
 required-features = ["cucumber_stand_alone"]
