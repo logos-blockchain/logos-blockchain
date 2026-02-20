@@ -63,6 +63,17 @@ pub fn serialized_size<T: Serialize>(item: &T) -> Result<u64> {
 
 /// Deserialize an object directly from bytes
 pub fn deserialize<T: DeserializeOwned>(data: &[u8]) -> Result<T> {
+    // Additional safety check: ensure size doesn't exceed DATA_LIMIT
+    // This provides defense-in-depth against potential bincode bugs
+    if data.len() as u64 > DATA_LIMIT {
+        return Err(WireError::Deserialize(
+            format!(
+                "Serialized size {} input exceeds DATA_LIMIT {DATA_LIMIT}",
+                data.len()
+            )
+            .into(),
+        ));
+    }
     OPTIONS
         .deserialize(data)
         .map_err(|e| WireError::Deserialize(Box::new(e)))

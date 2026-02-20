@@ -64,19 +64,6 @@ where
     R: AsyncReadExt + Unpin,
 {
     let data_length = read_data_length(reader).await?;
-
-    // Defense-in-depth: validate length before allocation
-    // This check is currently redundant since data_length is bounded by LenType
-    // (u16), but provides protection if LenType is changed to u32/u64 in the
-    // future. The compiler will optimize this away since it's always false with
-    // current types.
-    if data_length > MAX_MSG_LEN {
-        return Err(PackingError::MessageTooLarge {
-            max: MAX_MSG_LEN,
-            actual: data_length,
-        });
-    }
-
     let mut data = vec![0u8; data_length];
     reader.read_exact(&mut data).await?;
     Ok(Message::from_bytes(&data)?)

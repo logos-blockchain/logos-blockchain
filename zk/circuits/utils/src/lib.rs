@@ -53,11 +53,7 @@ pub fn circuits_dir() -> PathBuf {
 #[must_use]
 pub fn witness_generator_path(circuit_name: &str) -> PathBuf {
     let base_dir = circuits_dir();
-    let mut binary_name = "witness_generator".to_owned();
-    if cfg!(windows) {
-        binary_name = format!("{binary_name}{}", std::env::consts::EXE_SUFFIX);
-    }
-    let witness_gen_path = base_dir.join(circuit_name).join(binary_name);
+    let witness_gen_path = base_dir.join(circuit_name).join("witness_generator");
 
     if witness_gen_path.is_file() {
         witness_gen_path

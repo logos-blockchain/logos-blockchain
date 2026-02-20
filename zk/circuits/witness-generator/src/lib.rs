@@ -29,9 +29,6 @@ fn generate_witness_from_paths(
         .output()?;
 
     if !output.status.success() {
-        println!("inputs_file:  {}", inputs_file.display());
-        println!("witness_file: {}", witness_file.display());
-        println!("binary_path:  {}", binary_path.display());
         let error_message = String::from_utf8_lossy(&output.stderr);
         return Err(Error::other(format!(
             "witness-generator command failed: {error_message}"
