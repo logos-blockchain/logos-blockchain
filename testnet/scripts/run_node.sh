@@ -7,6 +7,7 @@ export CFG_FILE_PATH="/node-data/${LB_HOST_IDX}/config.yaml" \
        CFG_HOST_IDENTIFIER="i-${LB_HOST_IDX}" \
        CFG_DEPLOYMENT_PATH="/node-data/cfgsync/deployment-settings.yaml" \
        LOG_LEVEL="DEBUG" \
+       LOG_BACKEND="file" \
        LOG_DIR="/node-data/${LB_HOST_IDX}/"
 
 echo "Starting Faucet..."

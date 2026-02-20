@@ -122,6 +122,7 @@ services:
       - cfgsync
       - explorer
     volumes:
+      - node-data:/node-data
       - ./testnet/nginx-run.conf:/etc/nginx/nginx.conf:ro
       - ./testnet/static:/usr/share/nginx/html:ro
     entrypoint: [ "nginx", "-g", "daemon off;" ]
