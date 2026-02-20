@@ -125,6 +125,13 @@ pub struct InitArgs {
     pub state_path: Option<PathBuf>,
 }
 
+#[cfg(feature = "config-gen")]
+impl Default for InitArgs {
+    fn default() -> Self {
+        Self::parse_from::<Vec<String>, String>(vec![])
+    }
+}
+
 impl CliArgs {
     #[must_use]
     pub fn config_path(&self) -> &Path {

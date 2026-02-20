@@ -75,7 +75,7 @@ use overwatch::{
 use rand::{RngCore, SeedableRng as _, seq::SliceRandom as _};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::{
     core::{
@@ -96,7 +96,7 @@ use crate::{
     kms::PreloadKmsService,
     membership::{self, MembershipInfo, ZkInfo},
     message::{NetworkMessage, ProcessedMessage, ServiceMessage},
-    session::{CoreSessionInfo, CoreSessionPublicInfo},
+    session::{CoreSessionInfo, CoreSessionPublicInfo, MaybeEmptyCoreSessionInfo},
     settings::FIRST_STREAM_ITEM_READY_TIMEOUT,
 };
 
@@ -222,7 +222,7 @@ impl<
     >
 where
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
-    NodeId: Clone + Send + Eq + Hash + Sync + 'static,
+    NodeId: Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Network: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash + Unpin> + Send + Sync,
     MembershipAdapter: membership::Adapter<NodeId = NodeId, Error: Send + Sync + 'static> + Send,
     membership::ServiceMessage<MembershipAdapter>: Send + Sync + 'static,
@@ -521,7 +521,7 @@ async fn initialize<
         Option<RecoveryServiceState<Backend::Settings, NetAdapter::BroadcastSettings>>,
     >,
 ) -> (
-    impl Stream<Item = SessionEvent<CoreSessionInfo<NodeId, KmsAdapter::CorePoQGenerator>>>
+    impl Stream<Item = SessionEvent<MaybeEmptyCoreSessionInfo<NodeId, KmsAdapter::CorePoQGenerator>>>
     + Unpin
     + Send
     + 'static,
@@ -543,7 +543,7 @@ async fn initialize<
     BlakeRng,
 )
 where
-    NodeId: Clone + Eq + Hash + Send + 'static,
+    NodeId: Clone + Debug + Eq + Hash + Send + 'static,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash + Unpin>,
     ChainService: ChainApi<RuntimeServiceId> + Sync,
@@ -566,10 +566,16 @@ where
                       session_number,
                       zk,
                   }| {
-                let ZkInfo {
+                // This can be empty in case of an empty membership set.
+                let Some(ZkInfo {
                     root,
                     core_and_path_selectors,
-                } = zk.expect("ZK info should be present for the membership set.");
+                }) = zk
+                else {
+                    return MaybeEmptyCoreSessionInfo::Empty {
+                        session: session_number,
+                    };
+                };
                 CoreSessionInfo {
                     public: CoreSessionPublicInfo {
                         poq_core_public_inputs: CoreInputs {
@@ -587,6 +593,7 @@ where
                         ),
                     ),
                 }
+                .into()
             },
         )
     }
@@ -601,7 +608,10 @@ where
     )
     .await
     .map(|(membership_info, remaining_session_stream)| {
-        (membership_info, remaining_session_stream.fork())
+        let MaybeEmptyCoreSessionInfo::NonEmpty(core_session_info) = membership_info else {
+            panic!("First retrieved session for Blend core startup must be available.");
+        };
+        (core_session_info, remaining_session_stream.fork())
     })
     .expect("The current session info must be available.");
 
@@ -629,8 +639,8 @@ where
 
     info!(
         target: LOG_TARGET,
-        "The current membership is ready: {} nodes.",
-        current_membership_info.public.membership.size()
+        "The current membership is ready: {:?}",
+        current_membership_info.public
     );
 
     let current_public_info = PublicInfo {
@@ -647,6 +657,8 @@ where
             core_public_inputs: current_membership_info.public.poq_core_public_inputs,
         },
     };
+
+    debug!(target: LOG_TARGET, "Current public info: {:?}", current_public_info);
 
     let crypto_processor = CoreCryptographicProcessor::<
         _,
@@ -784,7 +796,8 @@ async fn run_event_loop<
     remaining_clock_stream: &mut (impl Stream<Item = SlotTick> + Send + Sync + Unpin + 'static),
     mut secret_pol_info_stream: impl Stream<Item = PolEpochInfo> + Unpin,
     remaining_session_stream: &mut (
-             impl Stream<Item = SessionEvent<CoreSessionInfo<NodeId, CorePoQGenerator>>> + Unpin
+             impl Stream<Item = SessionEvent<MaybeEmptyCoreSessionInfo<NodeId, CorePoQGenerator>>>
+             + Unpin
          ),
 
     blend_config: &RunningBlendConfig<Backend::Settings>,
@@ -928,7 +941,7 @@ async fn retire<
     + 'static,
     mut remaining_clock_stream: impl Stream<Item = SlotTick> + Send + Sync + Unpin + 'static,
     mut remaining_session_stream: impl Stream<
-        Item = SessionEvent<CoreSessionInfo<NodeId, CorePoQGenerator>>,
+        Item = SessionEvent<MaybeEmptyCoreSessionInfo<NodeId, CorePoQGenerator>>,
     > + Unpin,
     blend_config: &RunningBlendConfig<Backend::Settings>,
     mut backend: Backend,
@@ -998,6 +1011,7 @@ async fn retire<
 /// for `PoQ` verification in this new session. It ignores the transition period
 /// expiration event and returns the previous cryptographic processor as is.
 #[expect(clippy::too_many_arguments, reason = "necessary for session handling")]
+#[expect(clippy::too_many_lines, reason = "necessary for session handling")]
 async fn handle_session_event<
     NodeId,
     ProofsGenerator,
@@ -1008,7 +1022,7 @@ async fn handle_session_event<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    event: SessionEvent<CoreSessionInfo<NodeId, CorePoQGenerator>>,
+    event: SessionEvent<MaybeEmptyCoreSessionInfo<NodeId, CorePoQGenerator>>,
     settings: &RunningBlendConfig<Backend::Settings>,
     current_cryptographic_processor: CoreCryptographicProcessor<
         NodeId,
@@ -1043,7 +1057,7 @@ where
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
 {
     match event {
-        SessionEvent::NewSession(CoreSessionInfo {
+        SessionEvent::NewSession(MaybeEmptyCoreSessionInfo::NonEmpty(CoreSessionInfo {
             core_poq_generator,
             public:
                 CoreSessionPublicInfo {
@@ -1051,7 +1065,7 @@ where
                     session: new_session,
                     membership: new_membership,
                 },
-        }) => {
+        })) => {
             let (_, _, _, _, current_session_blending_token_collector, _, state_updater) =
                 current_recovery_checkpoint.into_components();
 
@@ -1126,6 +1140,27 @@ where
                     state_updater,
                 )
                 .expect("service state should be created successfully"),
+            }
+        }
+        SessionEvent::NewSession(MaybeEmptyCoreSessionInfo::Empty { session }) => {
+            tracing::info!(target: LOG_TARGET, "New session event received, but no session info is available due to empty membership set.");
+            let (_, _, _, _, current_session_blending_token_collector, _, _) =
+                current_recovery_checkpoint.into_components();
+            let new_reward_session_info = reward::SessionInfo::new(
+                session,
+                &current_public_info.epoch.pol_epoch_nonce,
+                0,
+                0,
+                settings.activity_threshold_sensitivity,
+            )
+            .expect("Reward session info must be created successfully. Panicking since the service cannot continue with this session");
+            let (_, old_session_blending_token_collector) =
+                current_session_blending_token_collector.rotate_session(&new_reward_session_info);
+            HandleSessionEventOutput::Retiring {
+                old_crypto_processor: current_cryptographic_processor,
+                old_scheduler: current_scheduler.consume(),
+                old_token_collector: old_session_blending_token_collector,
+                old_public_info: current_public_info,
             }
         }
         SessionEvent::TransitionPeriodExpired => {

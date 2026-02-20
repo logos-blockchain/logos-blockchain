@@ -95,6 +95,10 @@ where
         }
     }
 
+    pub fn consume(self) -> OldSessionMessageScheduler<Rng, ProcessedMessage> {
+        OldSessionMessageScheduler(self.release_delayer)
+    }
+
     pub fn rotate_session(
         self,
         new_session_info: SessionInfo,

@@ -164,6 +164,7 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            faucet_pk: None,
         };
 
         let (cryptarchia_engine, pruned_blocks) = {
@@ -298,6 +299,7 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            faucet_pk: None,
         };
 
         // Build a chain: b0 (genesis) - b1 - b2 - b3 - b4 - b5

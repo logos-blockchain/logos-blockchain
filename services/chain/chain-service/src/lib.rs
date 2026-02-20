@@ -124,7 +124,7 @@ pub enum ConsensusMsg<Tx> {
     },
     GetEpochState {
         slot: Slot,
-        tx: oneshot::Sender<Option<EpochState>>,
+        tx: oneshot::Sender<Result<EpochState, Error>>,
     },
     /// Apply a block to the chain,
     /// and return the tip and reorged txs if successful.
@@ -326,10 +326,10 @@ impl Cryptarchia {
         Ok((cryptarchia, pruned_blocks, reorged_blocks))
     }
 
-    fn epoch_state_for_slot(&self, slot: Slot) -> Option<EpochState> {
+    fn epoch_state_for_slot(&self, slot: Slot) -> Result<EpochState, Error> {
         let tip = self.tip();
         let state = self.ledger.state(&tip).expect("no state for tip");
-        state.epoch_state_for_slot(slot, self.ledger.config())
+        Ok(state.epoch_state_for_slot(slot, self.ledger.config())?)
     }
 
     /// Remove the ledger states associated with blocks that have been pruned by
@@ -804,8 +804,8 @@ where
                 });
             }
             ConsensusMsg::GetEpochState { slot, tx } => {
-                let epoch_state = cryptarchia.epoch_state_for_slot(slot);
-                tx.send(epoch_state).unwrap_or_else(|_| {
+                let result = cryptarchia.epoch_state_for_slot(slot);
+                tx.send(result).unwrap_or_else(|_| {
                     error!("Could not send epoch state through channel");
                 });
             }

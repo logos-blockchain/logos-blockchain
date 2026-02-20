@@ -1,4 +1,9 @@
-use core::{fmt::Debug, marker::PhantomData, num::NonZeroU64, ops::Deref};
+use core::{
+    fmt::{self, Debug, Formatter},
+    marker::PhantomData,
+    num::NonZeroU64,
+    ops::Deref,
+};
 
 use async_trait::async_trait;
 use futures::Stream;
@@ -6,20 +11,29 @@ use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInput
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::crypto::ZkHash;
 use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_groth16::Fr;
+use lb_groth16::{Fr, fr_to_bytes};
 use lb_ledger::EpochState;
 use lb_time_service::SlotTick;
 use overwatch::overwatch::OverwatchHandle;
 
 /// Secret `PoL` info associated to an epoch, as returned by the `PoL` info
 /// provider.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PolEpochInfo {
     /// Epoch nonce.
     pub nonce: ZkHash,
     /// The `PoL` secret inputs that are found to be winning at least one slot
     /// in the current epoch.
     pub poq_private_inputs: ProofOfLeadershipQuotaInputs,
+}
+
+impl Debug for PolEpochInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PolEpochInfo")
+            .field("nonce", &hex::encode(fr_to_bytes(&self.nonce)))
+            .field("poq_private_inputs", &"<redacted>")
+            .finish()
+    }
 }
 
 #[async_trait]

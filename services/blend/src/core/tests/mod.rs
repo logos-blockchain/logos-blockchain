@@ -374,14 +374,17 @@ async fn test_handle_session_event() {
 
     // Handle a NewSession event, expecting Transitioning output.
     let output = handle_session_event(
-        SessionEvent::NewSession(CoreSessionInfo {
-            public: CoreSessionPublicInfo {
-                membership: membership.clone(),
-                session: session + 1,
-                poq_core_public_inputs: public_info.session.core_public_inputs,
-            },
-            core_poq_generator: (),
-        }),
+        SessionEvent::NewSession(
+            CoreSessionInfo {
+                public: CoreSessionPublicInfo {
+                    membership: membership.clone(),
+                    session: session + 1,
+                    poq_core_public_inputs: public_info.session.core_public_inputs,
+                },
+                core_poq_generator: (),
+            }
+            .into(),
+        ),
         &settings,
         crypto_processor,
         scheduler,
@@ -466,14 +469,17 @@ async fn test_handle_session_event() {
     // Handle a NewSession event with a new too small membership,
     // expecting Retiring output.
     let output = handle_session_event(
-        SessionEvent::NewSession(CoreSessionInfo {
-            public: CoreSessionPublicInfo {
-                membership: new_membership(minimal_network_size - 1).0,
-                session: session + 2,
-                poq_core_public_inputs: current_public_info.session.core_public_inputs,
-            },
-            core_poq_generator: (),
-        }),
+        SessionEvent::NewSession(
+            CoreSessionInfo {
+                public: CoreSessionPublicInfo {
+                    membership: new_membership(minimal_network_size - 1).0,
+                    session: session + 2,
+                    poq_core_public_inputs: current_public_info.session.core_public_inputs,
+                },
+                core_poq_generator: (),
+            }
+            .into(),
+        ),
         &settings,
         current_crypto_processor,
         current_scheduler,
@@ -672,4 +678,167 @@ async fn complete_old_session_after_main_loop_done() {
     join_handle
         .await
         .expect("the service should stop without error");
+}
+
+/// Check that the service handles a new session with empty providers (zk: None)
+/// without panicking. It should retire gracefully.
+#[test_log::test(tokio::test)]
+async fn stop_on_empty_session() {
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+
+    // Create settings.
+    let (settings, _recovery_file) = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+
+    // Prepare streams.
+    let (inbound_relay, _inbound_message_sender) = new_stream();
+    let (mut blend_message_stream, _blend_message_sender) = new_stream();
+    let (membership_stream, membership_sender) = new_stream();
+    let (clock_stream, clock_sender) = new_stream();
+
+    // Send the initial membership info that the service will expect to receive
+    // immediately.
+    let initial_session = 0;
+    let membership_info = MembershipInfo {
+        membership: membership.clone(),
+        zk: Some(ZkInfo {
+            root: ZkHash::ZERO,
+            core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+        }),
+        session_number: initial_session,
+    };
+    membership_sender
+        .send(membership_info.clone())
+        .await
+        .unwrap();
+
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+
+    // Send the initial slot tick that the service will expect to receive
+    // immediately.
+    clock_sender
+        .send(SlotTick {
+            epoch: 0.into(),
+            slot: 0.into(),
+        })
+        .await
+        .unwrap();
+
+    // Prepare an epoch handler with the mock chain service that always returns the
+    // same epoch state.
+    let mut epoch_handler = EpochHandler::new(
+        TestChainService,
+        settings.time.epoch_transition_period_in_slots,
+    );
+
+    // Prepare dummy Overwatch resources.
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources();
+
+    // Initialize the service.
+    let (
+        mut remaining_session_stream,
+        mut remaining_clock_stream,
+        current_public_info,
+        crypto_processor,
+        current_recovery_checkpoint,
+        message_scheduler,
+        mut backend,
+        mut rng,
+    ) = initialize::<
+        NodeId,
+        TestBlendBackend,
+        TestNetworkAdapter,
+        TestChainService,
+        MockCoreAndLeaderProofsGenerator,
+        MockProofsVerifier,
+        MockKmsAdapter,
+        RuntimeServiceId,
+    >(
+        settings.clone(),
+        membership_stream,
+        clock_stream,
+        &mut epoch_handler,
+        overwatch_handle.clone(),
+        MockKmsAdapter,
+        &sdp_relay,
+        None,
+        state_updater,
+    )
+    .await;
+
+    let mut backend_event_receiver = backend.subscribe_to_events();
+    // Run the event loop of the service in a separate task.
+    let settings_cloned = settings.clone();
+    let join_handle = tokio::spawn(async move {
+        let secret_pol_info_stream =
+            post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+
+        let (
+            old_session_crypto_processor,
+            old_session_message_scheduler,
+            old_session_blending_token_collector,
+            old_session_public_info,
+        ) = run_event_loop(
+            inbound_relay,
+            &mut blend_message_stream,
+            &mut remaining_clock_stream,
+            secret_pol_info_stream,
+            &mut remaining_session_stream,
+            &settings_cloned,
+            &mut backend,
+            &TestNetworkAdapter,
+            &sdp_relay,
+            &mut epoch_handler,
+            message_scheduler.into(),
+            &mut rng,
+            crypto_processor,
+            current_public_info,
+            current_recovery_checkpoint,
+        )
+        .await;
+
+        retire(
+            blend_message_stream,
+            remaining_clock_stream,
+            remaining_session_stream,
+            &settings_cloned,
+            backend,
+            TestNetworkAdapter,
+            sdp_relay,
+            epoch_handler,
+            old_session_message_scheduler,
+            rng,
+            old_session_blending_token_collector,
+            old_session_crypto_processor,
+            old_session_public_info,
+        )
+        .await;
+    });
+
+    // Send a new session with empty providers (zk: None).
+    // This simulates a session where no providers are available.
+    membership_sender
+        .send(MembershipInfo {
+            membership: membership.clone(),
+            zk: None,
+            session_number: initial_session + 1,
+        })
+        .await
+        .unwrap();
+
+    wait_for_blend_backend_event(
+        &mut backend_event_receiver,
+        TestBlendBackendEvent::SessionTransitionCompleted,
+    )
+    .await;
+    // The service should stop without panicking.
+    join_handle
+        .await
+        .expect("the service should stop without panic on empty session");
 }

@@ -1,6 +1,8 @@
 use std::ops::RangeInclusive;
 
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Epoch, Slot};
+
+use crate::Config;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone)]
@@ -10,11 +12,25 @@ pub struct BlockDensity {
 }
 
 impl BlockDensity {
-    pub fn new(period: u64, starting_slot: Slot) -> Self {
+    pub fn new(epoch: Epoch, config: &Config) -> Self {
         Self {
-            period_range: starting_slot..=starting_slot + period,
+            period_range: Self::compute_period_range(epoch, config),
             density: 0,
         }
+    }
+
+    /// The range of slots used to compute the block density for a given epoch
+    ///
+    /// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
+    /// the block density for epoch 2 will be computed during [200, 259],
+    /// which is the Stake Distribution Snapshot + Buffer phases of epoch 2.
+    fn compute_period_range(epoch: Epoch, config: &Config) -> RangeInclusive<Slot> {
+        let snapshot_slot_for_next_epoch =
+            config.total_stake_snapshot(epoch.saturating_add(1.into()));
+        let start = snapshot_slot_for_next_epoch
+            .saturating_sub(config.total_stake_inference_period().into());
+        let end = snapshot_slot_for_next_epoch.saturating_sub(1.into());
+        start..=end
     }
 
     pub fn increment_block_density(&mut self, new_slot: Slot) {
@@ -26,92 +42,77 @@ impl BlockDensity {
     pub const fn current_block_density(&self) -> u64 {
         self.density
     }
+
+    #[cfg(test)]
+    pub const fn period_range(&self) -> &RangeInclusive<Slot> {
+        &self.period_range
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{collections::HashMap, sync::Arc};
 
-    // Helper method to create a BlockDensityInference with a given period
-    fn create_inference(period: u64, current_slot: u64) -> BlockDensity {
-        BlockDensity::new(period, Slot::from(current_slot))
-    }
+    use lb_core::sdp::MinStake;
+    use lb_utils::math::NonNegativeRatio;
+
+    use super::*;
+    use crate::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
 
     #[test]
     fn test_initial_block_density_is_zero() {
-        let inference = create_inference(10, 0);
-        assert_eq!(inference.current_block_density(), 0);
+        let density = BlockDensity::new(0.into(), &config());
+        assert_eq!(density.period_range(), &(0.into()..=59.into()));
+        assert_eq!(density.current_block_density(), 0);
     }
 
     #[test]
-    fn test_increment_by_one_slot_with_block() {
-        let mut inference = create_inference(10, 0);
-        inference.increment_block_density(Slot::from(1));
-        assert_eq!(inference.current_block_density(), 1);
+    fn test_increment_block_density() {
+        let mut density = BlockDensity::new(1.into(), &config());
+        assert_eq!(density.period_range(), &(100.into()..=159.into()));
+        density.increment_block_density(Slot::from(100));
+        assert_eq!(density.current_block_density(), 1);
+        density.increment_block_density(Slot::from(159));
+        assert_eq!(density.current_block_density(), 2);
+        density.increment_block_density(Slot::from(140)); // slot order doesn't matter
+        assert_eq!(density.current_block_density(), 3);
+        density.increment_block_density(Slot::from(95)); // ignored
+        assert_eq!(density.current_block_density(), 3); // not changed
+        density.increment_block_density(Slot::from(160)); // ignored
+        assert_eq!(density.current_block_density(), 3); // not changed
     }
 
-    #[test]
-    fn test_increment_by_multiple_empty_slots() {
-        let mut inference = create_inference(10, 0);
-        inference.increment_block_density(Slot::from(5));
-        // 5 empty slots (0-4) + 1 filled slot (5) = 1 block in window
-        assert_eq!(inference.current_block_density(), 1);
-    }
-
-    #[test]
-    fn test_increment_with_gaps_between_blocks() {
-        let mut inference = create_inference(10, 0);
-        inference.increment_block_density(Slot::from(2));
-        assert_eq!(inference.current_block_density(), 1);
-        inference.increment_block_density(Slot::from(5));
-        assert_eq!(inference.current_block_density(), 2);
-    }
-
-    #[test]
-    fn test_fill_entire_window_with_blocks() {
-        let mut inference = create_inference(5, 0);
-        inference.increment_block_density(Slot::from(1));
-        inference.increment_block_density(Slot::from(2));
-        inference.increment_block_density(Slot::from(3));
-        inference.increment_block_density(Slot::from(4));
-        inference.increment_block_density(Slot::from(5));
-        assert_eq!(inference.current_block_density(), 5);
-    }
-
-    #[test]
-    fn test_window_overflow_pushes_old_slots_out() {
-        let mut inference = create_inference(3, 0);
-        inference.increment_block_density(Slot::from(1)); // window: [false, true]
-        inference.increment_block_density(Slot::from(2)); // window: [false, true, true]
-        assert_eq!(inference.current_block_density(), 2);
-        inference.increment_block_density(Slot::from(3)); // window: [true, true, true]
-        assert_eq!(inference.current_block_density(), 3);
-        inference.increment_block_density(Slot::from(4)); // window: [true, true, true], oldest pushed out
-        assert_eq!(inference.current_block_density(), 3);
-    }
-
-    #[test]
-    fn test_consecutive_block_increments() {
-        let mut inference = create_inference(5, 0);
-        for i in 1..=3 {
-            inference.increment_block_density(Slot::from(i));
+    fn config() -> Config {
+        Config {
+            epoch_config: lb_cryptarchia_engine::EpochConfig {
+                epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
+                epoch_period_nonce_buffer: 3.try_into().unwrap(),
+                epoch_period_nonce_stabilization: 4.try_into().unwrap(),
+            },
+            consensus_config: lb_cryptarchia_engine::Config::new(
+                5.try_into().unwrap(),
+                NonNegativeRatio::new(1, 2.try_into().unwrap()),
+                1f64.try_into().unwrap(),
+            ),
+            // not used in the tests
+            sdp_config: crate::mantle::sdp::Config {
+                service_params: Arc::new(HashMap::new()),
+                service_rewards_params: ServiceRewardsParameters {
+                    blend: RewardsParameters {
+                        rounds_per_session: 10.try_into().unwrap(),
+                        message_frequency_per_round: 1.0.try_into().unwrap(),
+                        num_blend_layers: 3.try_into().unwrap(),
+                        minimum_network_size: 1.try_into().unwrap(),
+                        data_replication_factor: 0,
+                        activity_threshold_sensitivity: 1,
+                    },
+                },
+                min_stake: MinStake {
+                    threshold: 1,
+                    timestamp: 0,
+                },
+            },
+            faucet_pk: None,
         }
-        assert_eq!(inference.current_block_density(), 3);
-    }
-
-    #[test]
-    fn test_large_slot_jump() {
-        let mut inference = create_inference(5, 0);
-        inference.increment_block_density(Slot::from(100));
-        // 100 empty slots pushed, more than period, so block density is 0
-        assert_eq!(inference.current_block_density(), 0);
-    }
-
-    #[test]
-    fn test_slot_saturation_same_slot() {
-        let mut inference = create_inference(5, 10);
-        inference.increment_block_density(Slot::from(10));
-        // saturating_sub(10, 10) = 0, so only 1 block is added
-        assert_eq!(inference.current_block_density(), 1);
     }
 }

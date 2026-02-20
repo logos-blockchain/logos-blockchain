@@ -213,6 +213,6 @@ mod test {
             processor.proofs_generator.0.public_inputs.leader,
             new_leader_inputs
         );
-        assert_eq!(processor.proofs_generator.1, new_private_inputs);
+        assert!(processor.proofs_generator.1 == new_private_inputs);
     }
 }

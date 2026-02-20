@@ -19,7 +19,7 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
         self.swarm.behaviour().get_kademlia_protocol_names()
     }
 
-    pub fn kademlia_add_address(&mut self, peer_id: PeerId, addr: Multiaddr) {
+    pub fn kademlia_add_address(&mut self, peer_id: PeerId, addr: &Multiaddr) {
         self.swarm
             .behaviour_mut()
             .kademlia_add_address(peer_id, addr);

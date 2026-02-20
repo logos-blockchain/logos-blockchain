@@ -1,3 +1,5 @@
+use core::fmt::{self, Debug, Formatter};
+
 use lb_poq::NotePathAndSelectors;
 
 use crate::{CorePathAndSelectors, ZkHash};
@@ -50,10 +52,19 @@ impl Inputs {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum ProofType {
     CoreQuota(Box<ProofOfCoreQuotaInputs>),
     LeadershipQuota(Box<ProofOfLeadershipQuotaInputs>),
+}
+
+impl Debug for ProofType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CoreQuota(_) => f.write_str("ProofType::CoreQuota"),
+            Self::LeadershipQuota(_) => f.write_str("ProofType::LeadershipQuota"),
+        }
+    }
 }
 
 impl ProofType {
@@ -66,7 +77,7 @@ impl ProofType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ProofOfCoreQuotaInputs {
     pub core_sk: ZkHash,
     pub core_path_and_selectors: CorePathAndSelectors,
@@ -78,7 +89,7 @@ impl From<ProofOfCoreQuotaInputs> for ProofType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ProofOfLeadershipQuotaInputs {
     pub slot: u64,
     pub note_value: u64,

@@ -13,12 +13,10 @@ version.workspace     = true
 axum                          = { default-features = false, features = ["http1", "http2", "json", "tokio"], version = "0.7.5" }
 clap                          = { default-features = false, features = ["derive", "env", "std"], version = "4" }
 hex                           = { default-features = false, features = ["alloc"], workspace = true }
-lb-cfgsync                    = { workspace = true }
 lb-common-http-client         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-num-bigint                    = { default-features = false, version = "0.4" }
 reqwest                       = { workspace = true }
 tokio                         = { default-features = false, features = ["macros", "net", "rt-multi-thread"], version = "1" }
 

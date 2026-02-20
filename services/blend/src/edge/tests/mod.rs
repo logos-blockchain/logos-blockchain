@@ -86,10 +86,10 @@ async fn run_panics_with_local_is_core_in_initial_membership() {
     resume_panic_from(join_handle).await;
 }
 
-/// [`run`] fails if a new membership is smaller than the minimum network
-/// size.
+/// [`run`] shuts down gracefully if a new membership is smaller than the
+/// minimum network size.
 #[test_log::test(tokio::test)]
-async fn run_fails_if_new_membership_is_small() {
+async fn run_shuts_down_if_new_membership_is_small() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let minimal_network_size = 1;
@@ -105,10 +105,7 @@ async fn run_fails_if_new_membership_is_small() {
         .send(membership(&[], local_node))
         .await
         .expect("channel opened");
-    assert!(matches!(
-        join_handle.await.unwrap(),
-        Err(Error::NetworkIsTooSmall(0))
-    ));
+    assert!(matches!(join_handle.await.unwrap(), Ok(())));
 }
 
 /// [`run`] fails if the local node is not edge in a new membership.
