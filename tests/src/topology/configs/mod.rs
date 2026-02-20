@@ -21,7 +21,9 @@ use tracing::GeneralTracingConfig;
 use crate::{
     common::kms::key_id_for_preload_backend,
     topology::configs::{
-        api::GeneralApiConfig, consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD, network::NetworkParams,
+        api::GeneralApiConfig,
+        consensus::{BIG_MAX_ORPHAN_CACHE_SIZE, SHORT_PROLONGED_BOOTSTRAP_PERIOD},
+        network::NetworkParams,
         time::GeneralTimeConfig,
     },
 };
@@ -73,8 +75,11 @@ pub fn create_general_configs_with_blend_core_subset(
         blend_ports.push(get_available_udp_port().unwrap());
     }
 
-    let (consensus_configs, genesis_tx) =
-        consensus::create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+    let (consensus_configs, genesis_tx) = consensus::create_consensus_configs(
+        &ids,
+        SHORT_PROLONGED_BOOTSTRAP_PERIOD,
+        BIG_MAX_ORPHAN_CACHE_SIZE,
+    );
     let network_configs = network::create_network_configs(&ids, network_params);
     let api_configs = api::create_api_configs(&ids);
     let blend_configs = blend::create_blend_configs(&ids, &blend_ports);

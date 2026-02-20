@@ -24,7 +24,9 @@ use crate::{
     topology::configs::{
         api::create_api_configs,
         blend::{GeneralBlendConfig, create_blend_configs},
-        consensus::{SHORT_PROLONGED_BOOTSTRAP_PERIOD, create_consensus_configs},
+        consensus::{
+            BIG_MAX_ORPHAN_CACHE_SIZE, SHORT_PROLONGED_BOOTSTRAP_PERIOD, create_consensus_configs,
+        },
         deployment::e2e_deployment_settings_with_genesis_tx,
         time::default_time_config,
     },
@@ -94,8 +96,11 @@ impl Topology {
             blend_ports.push(get_available_udp_port().unwrap());
         }
 
-        let (consensus_configs, genesis_tx) =
-            create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+        let (consensus_configs, genesis_tx) = create_consensus_configs(
+            &ids,
+            SHORT_PROLONGED_BOOTSTRAP_PERIOD,
+            BIG_MAX_ORPHAN_CACHE_SIZE,
+        );
         let network_configs = create_network_configs(&ids, &config.network_params);
         let blend_configs = create_blend_configs(&ids, &blend_ports);
         let api_configs = create_api_configs(&ids);

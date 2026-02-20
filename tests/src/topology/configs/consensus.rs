@@ -1,4 +1,5 @@
 use core::time::Duration;
+use std::num::NonZeroUsize;
 
 use lb_core::{
     mantle::{
@@ -18,6 +19,7 @@ use lb_node::{SignedMantleTx, Transaction as _};
 use num_bigint::BigUint;
 
 pub const SHORT_PROLONGED_BOOTSTRAP_PERIOD: Duration = Duration::from_secs(1);
+pub const BIG_MAX_ORPHAN_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
 
 #[derive(Clone)]
 pub struct ProviderInfo {
@@ -50,6 +52,7 @@ pub struct GeneralConsensusConfig {
     pub funding_pk: ZkPublicKey,
     pub other_keys: Vec<ZkKey>,
     pub prolonged_bootstrap_period: Duration,
+    pub max_orphan_cache_size: NonZeroUsize,
 }
 
 #[derive(Clone, Debug)]
@@ -95,6 +98,7 @@ pub fn create_genesis_tx(utxos: &[Utxo]) -> GenesisTx {
 pub fn create_consensus_configs(
     ids: &[[u8; 32]],
     prolonged_bootstrap_period: Duration,
+    max_orphan_cache_size: NonZeroUsize,
 ) -> (Vec<GeneralConsensusConfig>, GenesisTx) {
     let mut regular_note_keys = Vec::new();
     let mut blend_notes = Vec::new();
@@ -123,6 +127,7 @@ pub fn create_consensus_configs(
                     funding_pk,
                     other_keys: Vec::new(),
                     prolonged_bootstrap_period,
+                    max_orphan_cache_size,
                 }
             })
             .collect(),

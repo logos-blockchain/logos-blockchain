@@ -16,8 +16,8 @@ use lb_tests::topology::configs::{
     api::GeneralApiConfig,
     blend::GeneralBlendConfig,
     consensus::{
-        GeneralConsensusConfig, ProviderInfo, SHORT_PROLONGED_BOOTSTRAP_PERIOD,
-        create_genesis_tx_with_declarations,
+        BIG_MAX_ORPHAN_CACHE_SIZE, GeneralConsensusConfig, ProviderInfo,
+        SHORT_PROLONGED_BOOTSTRAP_PERIOD, create_genesis_tx_with_declarations,
     },
     network::{NetworkParams, create_network_configs},
     time::default_time_config,
@@ -61,8 +61,12 @@ pub fn create_node_configs(
     // > observable difference for this data type. [stable_sort_primitive]
     ids.sort_unstable();
 
-    let (consensus_configs, faucet_info, genesis_tx) =
-        create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD, faucet_settings);
+    let (consensus_configs, faucet_info, genesis_tx) = create_consensus_configs(
+        &ids,
+        SHORT_PROLONGED_BOOTSTRAP_PERIOD,
+        BIG_MAX_ORPHAN_CACHE_SIZE,
+        faucet_settings,
+    );
     let faucet_pk = faucet_info.as_ref().map(|f| f.pk);
     let network_configs = create_network_configs(&ids, &NetworkParams::default());
     let blend_configs = create_blend_configs(
@@ -160,6 +164,7 @@ pub fn create_node_config_from_template(
     let (consensus_configs, _, _) = create_consensus_configs(
         &ids,
         SHORT_PROLONGED_BOOTSTRAP_PERIOD,
+        BIG_MAX_ORPHAN_CACHE_SIZE,
         &FaucetSettings::default(),
     );
     let network_configs = create_network_configs(&ids, &NetworkParams::default());

@@ -343,6 +343,8 @@ pub fn create_validator_config(
             });
         base_config.service.bootstrap.prolonged_bootstrap_period =
             config.consensus_config.prolonged_bootstrap_period;
+        base_config.network.sync.orphan.max_orphan_cache_size =
+            config.consensus_config.max_orphan_cache_size;
         base_config
     };
 

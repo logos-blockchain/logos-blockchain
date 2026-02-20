@@ -6,7 +6,9 @@ use thiserror::Error;
 use super::node_configs::{
     self, GeneralConfig as Config,
     blend::GeneralBlendConfig,
-    consensus::{GeneralConsensusConfig, SHORT_PROLONGED_BOOTSTRAP_PERIOD},
+    consensus::{
+        BIG_MAX_ORPHAN_CACHE_SIZE, GeneralConsensusConfig, SHORT_PROLONGED_BOOTSTRAP_PERIOD,
+    },
     network::NetworkParams,
     time::GeneralTimeConfig,
 };
@@ -75,8 +77,11 @@ fn build_consensus_config_for_node(
     id: [u8; 32],
     base: &GeneralConsensusConfig,
 ) -> Result<GeneralConsensusConfig, DynamicConfigBuildError> {
-    let (mut configs, _) =
-        node_configs::consensus::create_consensus_configs(&[id], SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+    let (mut configs, _) = node_configs::consensus::create_consensus_configs(
+        &[id],
+        SHORT_PROLONGED_BOOTSTRAP_PERIOD,
+        BIG_MAX_ORPHAN_CACHE_SIZE,
+    );
     let mut config = configs.pop().ok_or(DynamicConfigBuildError::Consensus)?;
     config.blend_notes.clone_from(&base.blend_notes);
 

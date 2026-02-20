@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{num::NonZeroUsize, time::Duration};
 
 use lb_core::mantle::{Note, Utxo, genesis_tx::GenesisTx};
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
@@ -19,6 +19,7 @@ pub struct FaucetInfo {
 pub fn create_consensus_configs(
     ids: &[[u8; 32]],
     prolonged_bootstrap_period: Duration,
+    max_orphan_cache_size: NonZeroUsize,
     faucet_settings: &FaucetSettings,
 ) -> (Vec<GeneralConsensusConfig>, Option<FaucetInfo>, GenesisTx) {
     let mut regular_note_keys = Vec::new();
@@ -47,6 +48,7 @@ pub fn create_consensus_configs(
                 funding_pk,
                 other_keys: Vec::new(),
                 prolonged_bootstrap_period,
+                max_orphan_cache_size,
             }
         })
         .collect();

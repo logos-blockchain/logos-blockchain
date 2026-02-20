@@ -29,7 +29,9 @@ use network::GeneralNetworkConfig;
 use tracing::GeneralTracingConfig;
 
 use self::{
-    api::GeneralApiConfig, consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD, network::NetworkParams,
+    api::GeneralApiConfig,
+    consensus::{BIG_MAX_ORPHAN_CACHE_SIZE, SHORT_PROLONGED_BOOTSTRAP_PERIOD},
+    network::NetworkParams,
     time::GeneralTimeConfig,
 };
 use crate::common::kms::key_id_for_preload_backend;
@@ -67,8 +69,11 @@ pub fn create_general_configs_from_ids(
         ids.len()
     );
 
-    let (consensus_configs, genesis_tx) =
-        consensus::create_consensus_configs(ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+    let (consensus_configs, genesis_tx) = consensus::create_consensus_configs(
+        ids,
+        SHORT_PROLONGED_BOOTSTRAP_PERIOD,
+        BIG_MAX_ORPHAN_CACHE_SIZE,
+    );
     let network_configs = network::create_network_configs(ids, network_params);
     let api_configs = api::create_api_configs(ids);
     let blend_configs = blend::create_blend_configs(ids, blend_ports);
