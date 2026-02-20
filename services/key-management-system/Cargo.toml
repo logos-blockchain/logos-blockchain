@@ -16,7 +16,7 @@ workspace = true
 async-trait                        = "0.1"
 lb-key-management-system-keys      = { workspace = true }
 lb-key-management-system-operators = { workspace = true }
-log                                = "0.4.22"
+log                                = { workspace = true }
 overwatch                          = { workspace = true }
 serde                              = { features = ["derive"], workspace = true }
 thiserror                          = { default-features = false, version = "2" }

@@ -37,11 +37,11 @@ pub fn subscribe_to_new_blocks_sync(
             .relay::<CryptarchiaService<RuntimeServiceId>>()
             .await
         else {
-            tracing::error!("Failed to get relay to CryptarchiaService");
+            log::error!("Failed to get relay to CryptarchiaService");
             return;
         };
         let Ok(storage_relay) = overwatch.relay::<StorageService>().await else {
-            tracing::error!("Failed to get relay to StorageService");
+            log::error!("Failed to get relay to StorageService");
             return;
         };
         let api =
@@ -63,7 +63,7 @@ pub fn subscribe_to_new_blocks_sync(
                             if let Ok(Some(block)) = res {
                                 callback_per_block(Block::from(block).0.as_ptr());
                             } else {
-                                tracing::error!(
+                                log::error!(
                                     "Failed to get block {:?} from storage",
                                     event.block_id
                                 );
@@ -73,7 +73,7 @@ pub fn subscribe_to_new_blocks_sync(
                 });
             }
             Err(e) => {
-                tracing::error!("Failed to subscribe to blocks: {e}");
+                log::error!("Failed to subscribe to blocks: {e}");
             }
         }
     });
@@ -95,7 +95,7 @@ pub unsafe extern "C" fn subscribe_to_new_blocks(
     callback_per_block: CCallback<*const c_char>,
 ) {
     if node.is_null() {
-        tracing::error!("Received a null `node` pointer. Exiting.");
+        log::error!("Received a null `node` pointer. Exiting.");
         return;
     }
     let node = unsafe { &*node };

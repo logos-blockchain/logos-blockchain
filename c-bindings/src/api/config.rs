@@ -150,7 +150,7 @@ pub fn generate_config_sync(args: InitArgs) -> OperationStatus {
     match run_result {
         Ok(()) => OperationStatus::Ok,
         Err(error) => {
-            tracing::error!("Error generating config: {error:?}");
+            log::error!("Error generating config: {error:?}");
             OperationStatus::ConfigurationError
         }
     }
