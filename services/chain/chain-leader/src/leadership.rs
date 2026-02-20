@@ -78,7 +78,7 @@ where
 
             winning_pol_info_notifier.notify_about_winning_slot(
                 private_inputs.clone(),
-                epoch_state.epoch,
+                public_inputs,
                 slot,
             );
 
@@ -281,7 +281,7 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
 
                 if self
                     .sender
-                    .send(Some((leader_private, epoch_state.epoch)))
+                    .send(Some((leader_private, public_inputs)))
                     .is_err()
                 {
                     tracing::debug!(
@@ -305,7 +305,7 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
     pub(super) fn notify_about_winning_slot(
         &self,
         private_inputs: LeaderPrivate,
-        epoch: Epoch,
+        public_inputs: LeaderPublic,
         slot: Slot,
     ) {
         // If we are trying to notify about the first winning slot that we already
@@ -320,7 +320,11 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
             return;
         }
 
-        if self.sender.send(Some((private_inputs, epoch))).is_err() {
+        if self
+            .sender
+            .send(Some((private_inputs, public_inputs)))
+            .is_err()
+        {
             tracing::debug!(
                 "No active listeners for pre-calculated PoL winning slots. Not broadcasting."
             );

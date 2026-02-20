@@ -366,12 +366,15 @@ where
             .await
             .expect("The clock system must be available.");
 
-        let EpochEvent::NewEpoch(LeaderInputsMinusQuota {
-            pol_epoch_nonce,
-            pol_ledger_aged,
-            lottery_0,
-            lottery_1,
-        }) = epoch_handler
+        let EpochEvent::NewEpoch((
+            LeaderInputsMinusQuota {
+                pol_epoch_nonce,
+                pol_ledger_aged,
+                lottery_0,
+                lottery_1,
+            },
+            _,
+        )) = epoch_handler
             .tick(slot_tick)
             .await
             .expect("There should be new epoch state associated with the latest epoch state.")
@@ -592,18 +595,24 @@ where
     };
 
     let new_leader_inputs = match epoch_event {
-        EpochEvent::NewEpoch(LeaderInputsMinusQuota {
-            pol_epoch_nonce,
-            pol_ledger_aged,
-            lottery_0,
-            lottery_1,
-        })
-        | EpochEvent::NewEpochAndOldEpochTransitionExpired(LeaderInputsMinusQuota {
-            pol_epoch_nonce,
-            pol_ledger_aged,
-            lottery_0,
-            lottery_1,
-        }) => LeaderInputs {
+        EpochEvent::NewEpoch((
+            LeaderInputsMinusQuota {
+                pol_epoch_nonce,
+                pol_ledger_aged,
+                lottery_0,
+                lottery_1,
+            },
+            _,
+        ))
+        | EpochEvent::NewEpochAndOldEpochTransitionExpired((
+            LeaderInputsMinusQuota {
+                pol_epoch_nonce,
+                pol_ledger_aged,
+                lottery_0,
+                lottery_1,
+            },
+            _,
+        )) => LeaderInputs {
             message_quota: settings.session_leadership_quota(),
             pol_epoch_nonce,
             pol_ledger_aged,

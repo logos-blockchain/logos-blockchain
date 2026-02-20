@@ -19,9 +19,9 @@ use lb_core::{
         AuthenticatedMantleTx, SignedMantleTx, Transaction, TxHash, TxSelect,
         gas::MainnetGasConstants, ops::leader_claim::LeaderClaimOp,
     },
-    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
+    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
 };
-use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
 use lb_ledger::LedgerState;
 use lb_services_utils::wait_until_services_are_ready;
@@ -53,7 +53,7 @@ use crate::{
     wallet::{LeaderWalletError, fund_and_sign_leader_claim_tx},
 };
 
-pub(crate) type WinningPolInfo = (LeaderPrivate, Epoch);
+pub(crate) type WinningPolInfo = (LeaderPrivate, LeaderPublic);
 
 const SERVICE_ID: &str = "ChainLeader";
 

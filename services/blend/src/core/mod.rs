@@ -613,12 +613,15 @@ where
     .expect("The current session info must be available.");
 
     let (
-        LeaderInputsMinusQuota {
-            pol_epoch_nonce,
-            pol_ledger_aged,
-            lottery_0,
-            lottery_1,
-        },
+        (
+            LeaderInputsMinusQuota {
+                pol_epoch_nonce,
+                pol_ledger_aged,
+                lottery_0,
+                lottery_1,
+            },
+            _,
+        ),
         remaining_clock_stream,
     ) = async {
         let (clock_tick, remaining_clock_stream) =
@@ -1859,12 +1862,15 @@ where
     };
 
     match epoch_event {
-        EpochEvent::NewEpoch(LeaderInputsMinusQuota {
-            pol_epoch_nonce,
-            pol_ledger_aged,
-            lottery_0,
-            lottery_1,
-        }) => {
+        EpochEvent::NewEpoch((
+            LeaderInputsMinusQuota {
+                pol_epoch_nonce,
+                pol_ledger_aged,
+                lottery_0,
+                lottery_1,
+            },
+            _,
+        )) => {
             tracing::debug!(target: LOG_TARGET, "New epoch with nonce {pol_epoch_nonce:?} started");
             let new_leader_inputs = LeaderInputs {
                 message_quota: settings.session_leadership_quota(),
@@ -1890,12 +1896,15 @@ where
 
             current_public_info
         }
-        EpochEvent::NewEpochAndOldEpochTransitionExpired(LeaderInputsMinusQuota {
-            pol_epoch_nonce,
-            pol_ledger_aged,
-            lottery_0,
-            lottery_1,
-        }) => {
+        EpochEvent::NewEpochAndOldEpochTransitionExpired((
+            LeaderInputsMinusQuota {
+                pol_epoch_nonce,
+                pol_ledger_aged,
+                lottery_0,
+                lottery_1,
+            },
+            _,
+        )) => {
             tracing::debug!(target: LOG_TARGET, "New epoch with nonce {pol_epoch_nonce:?} started and old epoch transition period expired.");
             let new_leader_inputs = LeaderInputs {
                 message_quota: settings.session_leadership_quota(),
