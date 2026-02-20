@@ -11,6 +11,7 @@ Progress on the checklist must be provided as comments to the issue.
 
 ## Ceremony (optional, only whenever a ceremony is required)
 
+- [ ] <span style="color:red">**!! IMPORTANT: Make sure that *ALL* the deployment settings are committed to `master` before starting the ceremony. The only value that is *expected* to be out-of-sync is the cryptarchia genesis state, which will be a result of running the ceremony**</span>.
 - [ ] Checkout `master` and tag commit with `pre-X.Y.Z` and push the tag
 - [ ] Manually trigger the [testnet Docker workflow][testnet-docker-workflow] using the `pre-X.Y.Z` tag and using the `devnet` image tag
 - [ ] Wait for the workflow run to complete
