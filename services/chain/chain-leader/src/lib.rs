@@ -11,7 +11,10 @@ use std::{fmt::Display, iter, pin::Pin, time::Duration};
 
 use futures::{StreamExt as _, stream};
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use lb_chain_service::{
+    Epoch,
+    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
+};
 use lb_core::{
     block::{Block, Error as BlockError, MAX_TRANSACTIONS},
     header::HeaderId,
@@ -53,7 +56,7 @@ use crate::{
     wallet::{LeaderWalletError, fund_and_sign_leader_claim_tx},
 };
 
-pub(crate) type WinningPolInfo = (LeaderPrivate, LeaderPublic);
+pub(crate) type WinningPolInfo = (LeaderPrivate, LeaderPublic, Epoch);
 
 const SERVICE_ID: &str = "ChainLeader";
 
