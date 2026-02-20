@@ -11,6 +11,7 @@ use lb_blend::{
         },
     },
 };
+use lb_chain_service::Epoch;
 use lb_utils::blake_rng::BlakeRng;
 use overwatch::overwatch::OverwatchHandle;
 use rand::SeedableRng as _;
@@ -42,6 +43,7 @@ where
         public_info: PoQVerificationInputsMinusSigningKey,
         private_info: ProofOfLeadershipQuotaInputs,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
+        epoch: Epoch,
     ) -> Result<Self, Error>
     where
         NodeId: Eq + Hash,
@@ -58,6 +60,7 @@ where
                 public_info,
                 private_info,
                 overwatch_handle,
+                epoch,
             ))
         }
     }
@@ -68,12 +71,14 @@ where
         public_info: PoQVerificationInputsMinusSigningKey,
         private_info: ProofOfLeadershipQuotaInputs,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
+        epoch: Epoch,
     ) -> Self {
         let cryptographic_processor = SessionCryptographicProcessor::new(
             settings.num_blend_layers,
             membership.clone(),
             public_info,
             private_info,
+            epoch,
         );
         let backend = Backend::new(
             settings.backend,

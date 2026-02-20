@@ -27,7 +27,10 @@ use lb_blend::{
         stream::UninitializedFirstReadyStream,
     },
 };
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use lb_chain_service::{
+    Epoch,
+    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
+};
 use lb_core::codec::SerializeOp as _;
 use lb_key_management_system_service::{
     api::KmsServiceApi, keys::KeyOperators,
@@ -373,7 +376,7 @@ where
                 lottery_0,
                 lottery_1,
             },
-            _,
+            epoch,
         )) = epoch_handler
             .tick(slot_tick)
             .await
@@ -449,13 +452,14 @@ where
             current_public_inputs,
             current_private_leader_info.poq_private_inputs.clone(),
             overwatch_handle.clone(),
+            epoch,
         )
         .expect("The initial membership should satisfy the edge node condition");
 
     loop {
         tokio::select! {
             Some(SessionEvent::NewSession(new_session_info)) = remaining_session_stream.next() => {
-                match handle_new_session(new_session_info, settings.clone(), current_private_leader_info.poq_private_inputs.clone(), overwatch_handle.clone(), current_public_inputs, message_handler) {
+                match handle_new_session(new_session_info, settings.clone(), current_private_leader_info.poq_private_inputs.clone(), overwatch_handle.clone(), current_public_inputs, epoch, message_handler) {
                     Ok((new_message_handler, new_public_inputs)) => {
                         message_handler = new_message_handler;
                         current_public_inputs = new_public_inputs;
@@ -509,6 +513,7 @@ fn handle_new_session<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
     current_epoch_private_info: ProofOfLeadershipQuotaInputs,
     overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     current_public_inputs: PoQVerificationInputsMinusSigningKey,
+    epoch: Epoch,
     // Unused, but we want to consume it.
     _current_message_handler: MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
 ) -> Result<
@@ -548,6 +553,7 @@ where
         new_public_inputs,
         current_epoch_private_info,
         overwatch_handle,
+        epoch,
     )?;
 
     Ok((new_handler, new_public_inputs))
@@ -571,14 +577,14 @@ async fn handle_clock_event<Backend, NodeId, ProofsGenerator, ChainService, Runt
     slot_tick: SlotTick,
     settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
     PolEpochInfo {
-        nonce: current_secret_inputs_nonce,
+        epoch: current_epoch,
+        poq_public_inputs: current_public_inputs,
         poq_private_inputs: current_secret_inputs,
     }: &PolEpochInfo,
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     current_membership: &Membership<NodeId>,
     epoch_handler: &mut EpochHandler<ChainService, RuntimeServiceId>,
     current_message_handler: MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
-    current_public_inputs: PoQVerificationInputsMinusSigningKey,
 ) -> (
     MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
     PoQVerificationInputsMinusSigningKey,

@@ -18,6 +18,7 @@ use lb_blend::{
         stream::UninitializedFirstReadyStream,
     },
 };
+use lb_chain_service::Epoch;
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_time_service::SlotTick;
 use overwatch::overwatch::{OverwatchHandle, commands::OverwatchCommand};
@@ -55,6 +56,7 @@ impl LeaderProofsGenerator for MockLeaderProofsGenerator {
         &mut self,
         _new_epoch_public: LeaderInputs,
         _new_private_inputs: ProofOfLeadershipQuotaInputs,
+        _new_epoch: Epoch,
     ) {
     }
 

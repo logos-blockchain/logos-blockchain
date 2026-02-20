@@ -17,6 +17,7 @@ use lb_blend::{
         BlendLayerProof, ProofsGeneratorSettings, core_and_leader::CoreAndLeaderProofsGenerator,
     },
 };
+use lb_chain_service::Epoch;
 use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 
 pub struct MockCoreAndLeaderProofsGenerator;
@@ -32,9 +33,15 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
         Self
     }
 
-    fn rotate_epoch(&mut self, _new_epoch_public: LeaderInputs) {}
+    fn rotate_epoch(&mut self, _new_epoch_public: LeaderInputs, _new_epoch: Epoch) {}
 
-    fn set_epoch_private(&mut self, _new_epoch_private: ProofOfLeadershipQuotaInputs) {}
+    fn set_epoch_private(
+        &mut self,
+        _new_epoch_private: ProofOfLeadershipQuotaInputs,
+        _new_epoch_public: LeaderInputs,
+        _new_epoch: Epoch,
+    ) {
+    }
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
         Some(mock_blend_proof())
