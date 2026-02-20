@@ -55,9 +55,9 @@ use crate::{
 
 pub(crate) type WinningPolInfo = (LeaderPrivate, Epoch);
 
-const LEADER_ID: &str = "Leader";
+const SERVICE_ID: &str = "ChainLeader";
 
-pub(crate) const LOG_TARGET: &str = "cryptarchia::leader";
+pub(crate) const LOG_TARGET: &str = "chain-leader::service";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -471,14 +471,14 @@ where
             }
         };
 
-        // It sucks to use `LEADER_ID` when we have `<RuntimeServiceId as
+        // It sucks to use `SERVICE_ID` when we have `<RuntimeServiceId as
         // AsServiceId<Self>>::SERVICE_ID`.
         // Somehow it just does not let us use it.
         //
         // Hypothesis:
         // 1. Probably related to too many generics.
         // 2. It seems `span` requires a `const` string literal.
-        async_loop.instrument(span!(Level::TRACE, LEADER_ID)).await;
+        async_loop.instrument(span!(Level::TRACE, SERVICE_ID)).await;
 
         Ok(())
     }

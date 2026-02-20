@@ -52,9 +52,9 @@ use crate::{
     sync::orphan_handler::OrphanBlocksDownloader,
 };
 
-const CRYPTARCHIA_ID: &str = "Cryptarchia";
+const SERVICE_ID: &str = "ChainNetwork";
 
-pub(crate) const LOG_TARGET: &str = "cryptarchia::service";
+pub(crate) const LOG_TARGET: &str = "chain-network::service";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -359,16 +359,14 @@ where
             }
         };
 
-        // It sucks to use `CRYPTARCHIA_ID` when we have `<RuntimeServiceId as
+        // It sucks to use `SERVICE_ID` when we have `<RuntimeServiceId as
         // AsServiceId<Self>>::SERVICE_ID`.
         // Somehow it just does not let us use it.
         //
         // Hypothesis:
         // 1. Probably related to too many generics.
         // 2. It seems `span` requires a `const` string literal.
-        async_loop
-            .instrument(span!(Level::TRACE, CRYPTARCHIA_ID))
-            .await;
+        async_loop.instrument(span!(Level::TRACE, SERVICE_ID)).await;
 
         Ok(())
     }
@@ -468,16 +466,14 @@ where
                 orphan_downloader.enqueue_orphan(block_id, info.tip, info.lib);
 
                 error!(
-                    target: LOG_TARGET,
-                    "Received block with parent {:?} that is not in the ledger state. Ignoring block.",
-                    parent
+                    target: LOG_TARGET, ?block_id, ?parent,
+                    "Parent block missing, enqueued block for orphan processing",
                 );
             }
-            other => {
+            err => {
                 error!(
-                    target: LOG_TARGET,
-                    "Error processing reconstructed block: {:?}",
-                    other
+                    target: LOG_TARGET, %err, ?block_id,
+                    "Error processing reconstructed block",
                 );
             }
         }
