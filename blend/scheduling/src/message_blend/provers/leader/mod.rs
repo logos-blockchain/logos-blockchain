@@ -15,6 +15,7 @@ use lb_blend_proofs::{
     },
     selection::VerifiedProofOfSelection,
 };
+use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use tokio::task::spawn_blocking;
@@ -42,6 +43,7 @@ pub trait LeaderProofsGenerator: Sized {
         &mut self,
         new_epoch_public: LeaderInputs,
         new_private_inputs: ProofOfLeadershipQuotaInputs,
+        new_epoch: Epoch,
     );
     /// Get the next leadership proof.
     async fn get_next_proof(&mut self) -> BlendLayerProof;
@@ -76,12 +78,14 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
         &mut self,
         new_epoch_public: LeaderInputs,
         new_private: ProofOfLeadershipQuotaInputs,
+        new_epoch: Epoch,
     ) {
         tracing::info!(target: LOG_TARGET, "Rotating epoch...");
 
         // On epoch rotation, we maintain the current session info and only change the
         // PoL relevant parts.
         self.settings.public_inputs.leader = new_epoch_public;
+        self.settings.epoch = new_epoch;
 
         // Compute new proofs with the updated settings.
         self.generate_new_proofs_stream(new_private);
@@ -110,6 +114,10 @@ impl RealLeaderProofsGenerator {
             private_inputs,
             new_cancellation_token,
         ));
+    }
+
+    pub(super) const fn current_epoch(&self) -> Epoch {
+        self.settings.epoch
     }
 }
 

@@ -3947,6 +3947,7 @@ dependencies = [
  "logos-blockchain-blend-message",
  "logos-blockchain-blend-proofs",
  "logos-blockchain-core",
+ "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-utils",

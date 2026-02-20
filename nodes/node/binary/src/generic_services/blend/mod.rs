@@ -127,7 +127,7 @@ where
         Some(Box::new(
             WatchStream::new(pol_winning_slot_receiver)
                 .filter_map(ready)
-                .scan(None, |processed_epoch, (leader_private, epoch)| {
+                .scan(None, |processed_epoch, (leader_private, leader_public, epoch)| {
                     let should_yield_new_epoch = processed_epoch.is_none_or(|prev_epoch| epoch > prev_epoch);
                     if !should_yield_new_epoch {
                         return ready(Some(None));
@@ -160,7 +160,8 @@ where
                     };
 
                     ready(Some(Some(PolEpochInfo {
-                        nonce: *epoch_nonce,
+                        epoch,
+                        poq_public_inputs: leader_public,
                         poq_private_inputs: ProofOfLeadershipQuotaInputs {
                             aged_path_and_selectors: aged_path_and_selectors.try_into().expect("List of aged note paths and selectors does not match the expected size for PoQ inputs, although it has already been pre-processed."),
                             note_value: *note_value,
