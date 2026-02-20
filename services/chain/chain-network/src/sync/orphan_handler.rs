@@ -8,9 +8,12 @@ use std::{
 use futures::{Stream, StreamExt as _};
 use lb_core::header::HeaderId;
 use overwatch::DynError;
-use tracing::error;
+use tracing::{debug, error, info, warn};
 
-use crate::network::{BoxedStream, NetworkAdapter};
+use crate::{
+    network::{BoxedStream, NetworkAdapter},
+    sync::LOG_TARGET,
+};
 
 type PendingNetworkRequest<Block> =
     Pin<Box<dyn Future<Output = Result<ActiveDownload<Block>, DynError>> + Send>>;
@@ -113,21 +116,31 @@ where
 
     pub fn enqueue_orphan(&mut self, block_id: HeaderId, current_tip: HeaderId, lib: HeaderId) {
         if self.pending_orphans_queue.len() >= self.max_pending_orphans.get() {
+            warn!(
+                target: LOG_TARGET,
+                queue_size_limit = self.max_pending_orphans.get(),
+                cur_queue_size = self.pending_orphans_queue.len(),
+                ?block_id,
+                "Orphan block ignored due to queue size limit"
+            );
             return;
         }
 
         if let DownloaderState::Downloading(download) = &self.state
             && download.orphan_block_id() == block_id
         {
+            debug!(target: LOG_TARGET, ?block_id, "Orphan block is already being downloaded, skipping enqueue");
             return;
         }
 
         if self.pending_orphans_queue.contains_key(&block_id) {
+            debug!(target: LOG_TARGET, ?block_id, "Orphan block is already in the queue, skipping enqueue");
             return;
         }
 
         self.pending_orphans_queue
             .insert(block_id, OrphanInfo::new(block_id, current_tip, lib));
+        info!(target: LOG_TARGET, ?block_id, ?current_tip, ?lib, "Orphan block enqueued for sync");
 
         if let Some(waker) = &self.waker {
             waker.wake_by_ref();
@@ -136,7 +149,9 @@ where
 
     fn dequeue_next_orphan(&mut self) -> Option<OrphanInfo> {
         let key = self.pending_orphans_queue.keys().next().copied()?;
-        self.pending_orphans_queue.remove(&key)
+        let orphan_info = self.pending_orphans_queue.remove(&key);
+        debug!(target: LOG_TARGET, ?orphan_info, "Orphan block dequeued");
+        orphan_info
     }
 
     async fn request_blocks_stream(
@@ -156,7 +171,9 @@ where
     }
 
     pub fn remove_orphan(&mut self, block_id: &HeaderId) {
-        self.pending_orphans_queue.remove(block_id);
+        if let Some(orphan_info) = self.pending_orphans_queue.remove(block_id) {
+            debug!(target: LOG_TARGET, ?orphan_info, "Orphan block removed from queue");
+        }
     }
 
     pub fn cancel_active_download(&mut self) {
@@ -209,6 +226,7 @@ where
                     return Poll::Pending;
                 };
 
+                debug!(target: LOG_TARGET, ?orphan_info, ?known_blocks, "Starting new orphan block download");
                 let request_blocks_stream_fut = Self::request_blocks_stream(
                     self.network_adapter.clone(),
                     orphan_info,
@@ -228,7 +246,7 @@ where
                     Poll::Pending
                 }
                 Poll::Ready(Err(e)) => {
-                    error!("Error while starting download: {e}");
+                    error!(target: LOG_TARGET, "Error while starting download: {e}");
                     self.state = DownloaderState::Idle;
 
                     cx.waker().wake_by_ref();
@@ -251,6 +269,12 @@ where
                             .expect("Block count overflow");
 
                         if download.orphan_info.orphan_id == block_id {
+                            info!(
+                                target: LOG_TARGET,
+                                ?block_id,
+                                total_blocks_received = download.total_blocks_received,
+                                "Sync for orphan block completed"
+                            );
                             self.state = DownloaderState::Idle;
                         }
 
@@ -260,7 +284,7 @@ where
                         Poll::Ready(Some(block))
                     }
                     Poll::Ready(Some(Err(e))) => {
-                        error!("Error while fetching blocks: {e}");
+                        error!(target: LOG_TARGET, "Error while fetching blocks: {e}");
 
                         self.state = DownloaderState::Idle;
 
@@ -274,6 +298,11 @@ where
                             let orphan_info = download.orphan_info.clone();
                             let known_blocks = HashSet::from([last_block_id]);
 
+                            debug!(
+                                target: LOG_TARGET, ?orphan_info, ?known_blocks,
+                                "Previous stream ended, requesting next stream for remaining blocks"
+                            );
+
                             let request_blocks_stream_fut = Self::request_blocks_stream(
                                 self.network_adapter.clone(),
                                 orphan_info,
@@ -285,6 +314,11 @@ where
 
                             cx.waker().wake_by_ref();
                         } else {
+                            debug!(
+                                target: LOG_TARGET,
+                                orphan_info = ?download.orphan_info,
+                                "No blocks received for this orphan, ending sync"
+                            );
                             let orphan_id = download.orphan_block_id();
                             self.pending_orphans_queue.remove(&orphan_id);
 

@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use serde::{Deserialize, Serialize};
 
 const MAX_ORPHAN_CACHE_SIZE: NonZeroUsize =
-    NonZeroUsize::new(5).expect("MAX_ORPHAN_CACHE_SIZE must be non-zero");
+    NonZeroUsize::new(1000).expect("MAX_ORPHAN_CACHE_SIZE must be non-zero");
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SyncConfig {
