@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use lb_core::{block::Block, mantle::SignedMantleTx};
 use lb_node::HeaderId;
 use testing_framework_core::scenario::{DynError, Feed, FeedRuntime};
@@ -157,11 +157,15 @@ impl BlockScanner {
                 break;
             }
 
-            let block = self
-                .client
-                .storage_block(&cursor)
-                .await?
-                .context("missing block while catching up")?;
+            let Some(block) = self.client.storage_block(&cursor).await? else {
+                debug!(
+                    tip = ?tip,
+                    missing = ?cursor,
+                    scanned,
+                    "block feed catch up stopped early: missing historical block"
+                );
+                break;
+            };
 
             let parent = block.header().parent();
             stack.push((cursor, block));

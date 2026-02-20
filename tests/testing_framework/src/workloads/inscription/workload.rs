@@ -3,7 +3,7 @@ use std::{
     marker::PhantomData,
     num::NonZeroUsize,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -22,7 +22,10 @@ use testing_framework_core::scenario::{
     DynError, RunContext, RunMetrics, Workload as ScenarioWorkload,
 };
 use thiserror::Error;
-use tokio::time::{Instant as TokioInstant, timeout};
+use tokio::{
+    sync::broadcast::error::RecvError,
+    time::{Instant as TokioInstant, timeout},
+};
 use tracing::{debug, info, warn};
 
 use crate::{
@@ -35,6 +38,7 @@ const BLOCK_POLL_TIMEOUT: Duration = Duration::from_secs(1);
 const SUBMIT_RETRIES: usize = 5;
 const SUBMIT_RETRY_DELAY: Duration = Duration::from_millis(500);
 const DEFAULT_PAYLOAD_BYTES: usize = 128;
+const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Error)]
 enum InscriptionWorkloadError {
@@ -171,6 +175,8 @@ impl<'a, E: LbcScenarioEnv + LbcBlockFeedEnv> InscriptionRunner<'a, E> {
     }
 
     async fn run(&mut self) -> Result<(), DynError> {
+        let mut next_progress_log = TokioInstant::now() + PROGRESS_LOG_INTERVAL;
+
         info!(
             channels = self.channels.len(),
             payload_bytes = self.payload_bytes,
@@ -185,9 +191,15 @@ impl<'a, E: LbcScenarioEnv + LbcBlockFeedEnv> InscriptionRunner<'a, E> {
 
             self.submit_ready_channels().await?;
             self.wait_for_block_or_timeout().await?;
+
+            if TokioInstant::now() >= next_progress_log {
+                self.log_progress();
+                next_progress_log += PROGRESS_LOG_INTERVAL;
+            }
         }
 
         let (submitted, confirmed, pending) = self.stats();
+
         info!(
             submitted,
             confirmed, pending, "inscription workload finished"
@@ -202,6 +214,14 @@ impl<'a, E: LbcScenarioEnv + LbcBlockFeedEnv> InscriptionRunner<'a, E> {
         }
 
         Ok(())
+    }
+
+    fn log_progress(&self) {
+        let (submitted, confirmed, pending) = self.stats();
+        info!(
+            submitted,
+            confirmed, pending, "inscription workload progress"
+        );
     }
 
     async fn submit_ready_channels(&mut self) -> Result<(), DynError> {
@@ -254,10 +274,10 @@ impl<'a, E: LbcScenarioEnv + LbcBlockFeedEnv> InscriptionRunner<'a, E> {
         let wait_for = remaining.min(BLOCK_POLL_TIMEOUT);
         match timeout(wait_for, self.feed.recv()).await {
             Ok(Ok(block)) => self.process_block(block.as_ref()),
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped))) => {
+            Ok(Err(RecvError::Lagged(skipped))) => {
                 warn!(skipped, "inscription workload block feed lagged");
             }
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+            Ok(Err(RecvError::Closed)) => {
                 return Err(InscriptionWorkloadError::FeedClosed.into());
             }
             Err(_) => {}
@@ -341,8 +361,8 @@ fn resolve_run_salt() -> [u8; 32] {
     // not keep reusing the same channel IDs.
     let run_id = format!(
         "auto-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map_or(0u128, |duration| duration.as_nanos())
     );
 
