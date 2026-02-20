@@ -53,7 +53,6 @@ impl From<ServiceConfig> for NetworkConfig<Libp2pConfig> {
                             .swarm
                             .kademlia
                             .periodic_bootstrap_interval_secs,
-                        client_mode: value.user.backend.swarm.kademlia.client_mode,
                         query_timeout_secs: value.user.backend.swarm.kademlia.query_timeout_secs,
                     },
                     identify_config: IdentifySettings {

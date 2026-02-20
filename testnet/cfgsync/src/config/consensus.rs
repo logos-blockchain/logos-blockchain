@@ -1,31 +1,35 @@
 use std::time::Duration;
 
 use lb_core::mantle::{Note, Utxo, genesis_tx::GenesisTx};
-use lb_key_management_system_service::keys::ZkKey;
+use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use lb_tests::topology::configs::consensus::{
     GeneralConsensusConfig, ServiceNote, create_genesis_tx,
 };
 use num_bigint::BigUint;
+use rand::rngs::OsRng;
 
-use crate::{FaucetSettings, config::FaucetNotes};
+use crate::FaucetSettings;
+
+pub struct FaucetInfo {
+    pub sk: ZkKey,
+    pub pk: ZkPublicKey,
+}
 
 #[must_use]
 pub fn create_consensus_configs(
     ids: &[[u8; 32]],
     prolonged_bootstrap_period: Duration,
     faucet_settings: &FaucetSettings,
-) -> (Vec<GeneralConsensusConfig>, Vec<FaucetNotes>, GenesisTx) {
+) -> (Vec<GeneralConsensusConfig>, Option<FaucetInfo>, GenesisTx) {
     let mut regular_note_keys = Vec::new();
     let mut blend_notes = Vec::new();
     let mut sdp_notes = Vec::new();
-    let mut faucet_note_keys = Vec::new();
 
-    let utxos = create_utxos(
+    let (utxos, faucet_info) = create_utxos(
         ids,
         &mut regular_note_keys,
         &mut blend_notes,
         &mut sdp_notes,
-        &mut faucet_note_keys,
         faucet_settings,
     );
     let genesis_tx = create_genesis_tx(&utxos);
@@ -41,13 +45,19 @@ pub fn create_consensus_configs(
                 known_key: sk,
                 funding_sk,
                 funding_pk,
-                other_keys: faucet_note_keys[i].clone(),
+                other_keys: Vec::new(),
                 prolonged_bootstrap_period,
             }
         })
         .collect();
 
-    (consensus_configs, faucet_note_keys, genesis_tx)
+    (consensus_configs, faucet_info, genesis_tx)
+}
+
+fn generate_zk_key_from_random_bytes() -> ZkKey {
+    let mut bytes = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut OsRng, &mut bytes);
+    ZkKey::from(BigUint::from_bytes_le(&bytes))
 }
 
 fn create_utxos(
@@ -55,9 +65,8 @@ fn create_utxos(
     regular_note_keys: &mut Vec<ZkKey>,
     blend_notes: &mut Vec<ServiceNote>,
     sdp_notes: &mut Vec<ServiceNote>,
-    faucet_note_keys: &mut Vec<FaucetNotes>,
     faucet_settings: &FaucetSettings,
-) -> Vec<Utxo> {
+) -> (Vec<Utxo>, Option<FaucetInfo>) {
     let derive_key_material = |prefix: &[u8], id_bytes: &[u8]| -> [u8; 16] {
         let mut sk_data = [0; 16];
         let prefix_len = prefix.len();
@@ -74,10 +83,8 @@ fn create_utxos(
     // Assume output index which will be set by the ledger tx.
     let mut output_index = 0;
 
-    faucet_note_keys.resize(ids.len(), Vec::new());
-
     // Create notes for leader and Blend declarations.
-    for (config_idx, &id) in ids.iter().enumerate() {
+    for &id in ids {
         let sk_data = derive_key_material(b"ld", &id);
         let sk = ZkKey::from(BigUint::from_bytes_le(&sk_data));
         let pk = sk.to_public_key();
@@ -122,23 +129,24 @@ fn create_utxos(
             output_index,
         });
         output_index += 1;
-
-        let sk_faucet_data = derive_key_material(b"fc", &id);
-        let sk_faucet = ZkKey::from(BigUint::from_bytes_le(&sk_faucet_data));
-        let pk_faucet = sk_faucet.to_public_key();
-
-        // Create notes for faucet.
-        for _ in 0..faucet_settings.note_count {
-            utxos.push(Utxo {
-                note: Note::new(faucet_settings.note_value, pk_faucet),
-                tx_hash: BigUint::from(0u8).into(),
-                output_index,
-            });
-            output_index += 1;
-        }
-
-        faucet_note_keys[config_idx].push(sk_faucet.clone());
     }
 
-    utxos
+    // Create a single faucet UTXO with value = u64::MAX - sum(other UTXOs)
+    let faucet_info = faucet_settings.enabled.then(|| {
+        let other_sum: u64 = utxos.iter().map(|u| u.note.value).sum();
+        let faucet_value = u64::MAX - other_sum;
+        let faucet_sk = generate_zk_key_from_random_bytes();
+        let faucet_pk = faucet_sk.to_public_key();
+        utxos.push(Utxo {
+            note: Note::new(faucet_value, faucet_pk),
+            tx_hash: BigUint::from(0u8).into(),
+            output_index,
+        });
+        FaucetInfo {
+            sk: faucet_sk,
+            pk: faucet_pk,
+        }
+    });
+
+    (utxos, faucet_info)
 }

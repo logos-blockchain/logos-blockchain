@@ -8,7 +8,7 @@ use lb_core::{
     mantle::{GenesisTx as _, genesis_tx::GenesisTx},
     sdp::{Locator, ServiceType},
 };
-use lb_key_management_system_service::keys::ZkKey;
+use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, multiaddr};
 use lb_node::config::{TracingConfig, network::serde as network, tracing::serde as tracing};
 use lb_tests::topology::configs::{
@@ -32,7 +32,6 @@ use crate::{
     },
 };
 
-type FaucetNotes = Vec<ZkKey>;
 type HostId = [u8; 32];
 
 #[must_use]
@@ -50,7 +49,7 @@ pub fn create_node_configs(
     faucet_settings: &FaucetSettings,
     tracing_settings: &TracingConfig,
     hosts: Vec<Host>,
-) -> (HashMap<Host, GeneralConfig>, GenesisTx) {
+) -> (HashMap<Host, GeneralConfig>, GenesisTx, Option<ZkPublicKey>) {
     let mut ids = Vec::with_capacity(hosts.len());
 
     for host in &hosts {
@@ -62,8 +61,9 @@ pub fn create_node_configs(
     // > observable difference for this data type. [stable_sort_primitive]
     ids.sort_unstable();
 
-    let (consensus_configs, faucet_note_keys, genesis_tx) =
+    let (consensus_configs, faucet_info, genesis_tx) =
         create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD, faucet_settings);
+    let faucet_pk = faucet_info.as_ref().map(|f| f.pk);
     let network_configs = create_network_configs(&ids, &NetworkParams::default());
     let blend_configs = create_blend_configs(
         &ids,
@@ -92,7 +92,17 @@ pub fn create_node_configs(
     let genesis_tx_with_declarations = create_genesis_tx_with_declarations(ledger_tx, providers);
 
     // Set Blend keys in KMS of each node config.
-    let kms_configs = create_kms_configs(&blend_configs, &consensus_configs, &faucet_note_keys);
+    // Give faucet SK to all nodes so the faucet service can route to any node.
+    let kms_configs = create_kms_configs(&blend_configs, &consensus_configs, faucet_info.as_ref());
+
+    // Add faucet SK to all nodes' other_keys so it appears in the wallet
+    // known_keys.
+    let mut consensus_configs = consensus_configs;
+    if let Some(ref faucet) = faucet_info {
+        for config in &mut consensus_configs {
+            config.other_keys.push(faucet.sk.clone());
+        }
+    }
 
     for (i, host) in hosts.into_iter().enumerate() {
         let consensus_config = consensus_configs[i].clone();
@@ -134,7 +144,7 @@ pub fn create_node_configs(
         );
     }
 
-    (configured_hosts, genesis_tx_with_declarations)
+    (configured_hosts, genesis_tx_with_declarations, faucet_pk)
 }
 
 #[must_use]
@@ -155,7 +165,7 @@ pub fn create_node_config_from_template(
     let network_configs = create_network_configs(&ids, &NetworkParams::default());
     let blend_configs = create_blend_configs(&ids, &[new_host.blend_port]);
 
-    let kms_configs = create_kms_configs(&blend_configs, &consensus_configs, &[]);
+    let kms_configs = create_kms_configs(&blend_configs, &consensus_configs, None);
 
     let mut network_config = network_configs[0].clone();
     network_config.backend.swarm.host = Ipv4Addr::from_str("0.0.0.0").unwrap();
@@ -311,7 +321,7 @@ mod cfgsync_tests {
             })
             .collect();
 
-        let (configs, _) =
+        let (configs, _, _) =
             create_node_configs(&FaucetSettings::default(), &TracingConfig::none(), hosts);
 
         for (host, config) in &configs {
@@ -330,7 +340,7 @@ mod cfgsync_tests {
             identifier: "init".into(),
             ..Default::default()
         };
-        let (init_configs, _) = create_node_configs(
+        let (init_configs, _, _) = create_node_configs(
             &FaucetSettings::default(),
             &tracing_none(),
             vec![init_host.clone()],
@@ -360,10 +370,7 @@ mod cfgsync_tests {
 
     #[test]
     fn test_faucet_keys_distribution() {
-        let faucet_settings = FaucetSettings {
-            note_count: 5,
-            note_value: 10,
-        };
+        let faucet_settings = FaucetSettings { enabled: true };
 
         let hosts = vec![
             Host {
@@ -378,40 +385,30 @@ mod cfgsync_tests {
             },
         ];
 
-        let (configs, _) =
+        let (configs, _, faucet_pk) =
             create_node_configs(&faucet_settings, &TracingConfig::none(), hosts.clone());
 
-        let expected_total_keys = 5;
+        assert!(faucet_pk.is_some(), "Faucet PK should be set");
 
+        // All nodes should have 5 keys (blend_signing, blend_zk, known, funding,
+        // faucet) and the faucet key in other_keys, so the faucet service can
+        // route to any node.
         for host in &hosts {
             let config = configs.get(host).expect("Config missing for host");
             let kms_keys = &config.kms_config.backend.keys;
+            assert_eq!(kms_keys.len(), 5, "Node should have faucet key in KMS");
 
-            assert_eq!(kms_keys.len(), expected_total_keys);
-
-            let known_key_id =
-                key_id_for_preload_backend(&config.consensus_config.known_key.clone().into());
-            assert!(
-                kms_keys.contains_key(&known_key_id),
-                "KMS must contain the consensus known_key"
+            assert_eq!(
+                config.consensus_config.other_keys.len(),
+                1,
+                "Node should have faucet key in other_keys"
             );
-
-            let funding_key_id =
-                key_id_for_preload_backend(&config.consensus_config.funding_sk.clone().into());
+            let faucet_key_id =
+                key_id_for_preload_backend(&config.consensus_config.other_keys[0].clone().into());
             assert!(
-                kms_keys.contains_key(&funding_key_id),
-                "KMS must contain the SDP funding_sk"
+                kms_keys.contains_key(&faucet_key_id),
+                "Faucet key should be in node's KMS"
             );
-
-            for faucet_sk in &config.consensus_config.other_keys {
-                let faucet_key_id = key_id_for_preload_backend(&faucet_sk.clone().into());
-
-                assert!(
-                    kms_keys.contains_key(&faucet_key_id),
-                    "Faucet key found in consensus.other_keys but missing from KMS for host {}",
-                    host.identifier
-                );
-            }
         }
     }
 }

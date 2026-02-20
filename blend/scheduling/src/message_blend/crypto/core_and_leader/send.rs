@@ -302,6 +302,6 @@ mod test {
 
         processor.set_epoch_private(new_private_inputs.clone());
 
-        assert_eq!(processor.proofs_generator.1, Some(new_private_inputs));
+        assert!(processor.proofs_generator.1 == Some(new_private_inputs));
     }
 }

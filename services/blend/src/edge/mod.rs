@@ -152,7 +152,7 @@ impl<
     >
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Send + Sync,
-    NodeId: Clone + Eq + Hash + Send + Sync + 'static,
+    NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
     BroadcastSettings: Serialize + DeserializeOwned + Send,
     MembershipAdapter: membership::Adapter<NodeId = NodeId, Error: Send + Sync + 'static> + Send,
     membership::ServiceMessage<MembershipAdapter>: Send + Sync + 'static,
@@ -343,7 +343,7 @@ async fn run<Backend, NodeId, ProofsGenerator, ChainService, PolInfoProvider, Ru
 ) -> Result<(), Error>
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Sync + Send,
-    NodeId: Clone + Eq + Hash + Send + Sync + 'static,
+    NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
     ProofsGenerator: LeaderProofsGenerator + Send,
     ChainService: ChainApi<RuntimeServiceId> + Send + Sync,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Unpin>,
@@ -353,6 +353,12 @@ where
         .await_first_ready()
         .await
         .expect("The current session info must be available.");
+
+    info!(
+        target: LOG_TARGET,
+        "The current membership is ready: {:?}",
+        current_membership_info
+    );
 
     let (current_epoch_info, mut remaining_clock_stream) = async {
         let (slot_tick, remaining_clock_stream) = clock_stream
@@ -385,11 +391,7 @@ where
     }
     .await;
 
-    info!(
-        target: LOG_TARGET,
-        "The current membership is ready: {} nodes.",
-        current_membership_info.membership.size()
-    );
+    debug!(target: LOG_TARGET, "Current epoch info: {:?}", current_epoch_info);
 
     notify_ready();
 
@@ -417,6 +419,8 @@ where
     }
     .await;
 
+    debug!(target: LOG_TARGET, "Current secret leader info: {:?}", current_private_leader_info);
+
     let mut current_public_inputs = PoQVerificationInputsMinusSigningKey {
         core: CoreInputs {
             zk_root: current_membership_info
@@ -433,6 +437,8 @@ where
         session: current_membership_info.session_number,
     };
 
+    debug!(target: LOG_TARGET, "Current public info: {current_public_inputs:?}");
+
     let mut message_handler =
         MessageHandler::<Backend, _, ProofsGenerator, _>::try_new_with_edge_condition_check(
             settings.clone(),
@@ -446,9 +452,20 @@ where
     loop {
         tokio::select! {
             Some(SessionEvent::NewSession(new_session_info)) = remaining_session_stream.next() => {
-              let (new_message_handler, new_public_inputs) = handle_new_session(new_session_info, settings.clone(), current_private_leader_info.poq_private_inputs.clone(), overwatch_handle.clone(), current_public_inputs, message_handler)?;
-              message_handler = new_message_handler;
-              current_public_inputs = new_public_inputs;
+                match handle_new_session(new_session_info, settings.clone(), current_private_leader_info.poq_private_inputs.clone(), overwatch_handle.clone(), current_public_inputs, message_handler) {
+                    Ok((new_message_handler, new_public_inputs)) => {
+                        message_handler = new_message_handler;
+                        current_public_inputs = new_public_inputs;
+                    },
+                    Err(Error::NetworkIsTooSmall(_)) => {
+                        info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        error!(target: LOG_TARGET, "Error when handling new session: {e:?}, edge service shutting down.");
+                        return Err(e);
+                    }
+                }
             }
             Some(message) = incoming_message_stream.next() => {
                 let message_copies = settings.data_replication_factor.checked_add(1).unwrap();
@@ -504,6 +521,9 @@ where
     ProofsGenerator: LeaderProofsGenerator,
     RuntimeServiceId: Clone,
 {
+    let Some(zk_info) = zk else {
+        return Err(Error::NetworkIsTooSmall(0));
+    };
     debug!(target: LOG_TARGET, "Trying to create a new message handler");
     // Update current public inputs with new session info.
     let new_public_inputs = PoQVerificationInputsMinusSigningKey {
@@ -514,7 +534,7 @@ where
                 &settings.time,
                 new_membership.size(),
             ),
-            zk_root: zk.expect("Membership should have ZK info").root,
+            zk_root: zk_info.root,
         },
         ..current_public_inputs
     };

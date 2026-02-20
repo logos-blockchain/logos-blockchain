@@ -16,6 +16,7 @@ workspace = true
 async-trait                      = "0.1"
 fork_stream                      = { workspace = true }
 futures                          = { default-features = false, version = "0.3" }
+hex                              = { workspace = true }
 lb-blend                         = { workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
 lb-chain-service                 = { workspace = true }

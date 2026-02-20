@@ -498,6 +498,7 @@ mod pol_tests {
                     timestamp: 0,
                 },
             },
+            faucet_pk: None,
         }
     }
 

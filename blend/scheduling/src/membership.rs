@@ -136,6 +136,11 @@ impl<NodeId> Membership<NodeId> {
     pub fn size(&self) -> usize {
         self.core_nodes.len()
     }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.core_nodes.is_empty()
+    }
 }
 
 #[cfg(test)]

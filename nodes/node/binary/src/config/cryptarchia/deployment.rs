@@ -7,6 +7,7 @@ use lb_core::{
     sdp::{MinStake, ServiceType},
 };
 use lb_cryptarchia_engine::Config as ConsensusConfig;
+use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +20,8 @@ pub struct Settings {
     pub sdp_config: SdpConfig,
     pub gossipsub_protocol: String,
     pub genesis_state: GenesisTx,
+    #[serde(default)]
+    pub faucet_pk: Option<ZkPublicKey>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -66,8 +66,7 @@ pub struct RegistrationInfo {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FaucetSettings {
-    pub note_count: usize,
-    pub note_value: u64,
+    pub enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, ValueEnum)]

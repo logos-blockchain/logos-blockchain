@@ -32,6 +32,10 @@ time                             = { default-features = false, version = "0.3" }
 tokio                            = { default-features = false, features = ["macros", "net", "rt-multi-thread"], version = "1" }
 tracing                          = { workspace = true }
 
+[dev-dependencies]
+hex        = { default-features = false, features = ["alloc"], workspace = true }
+lb-groth16 = { workspace = true }
+
 [[bin]]
 name = "logos-blockchain-cfgsync-client"
 path = "src/bin/cfgsync-client.rs"

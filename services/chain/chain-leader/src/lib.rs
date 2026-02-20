@@ -431,10 +431,16 @@ where
                             }
                         };
 
-                        // If it's a new epoch or the service just started, pre-compute the first winning slot and notify consumers.
-                        winning_pol_slot_notifier.process_epoch(&eligible_utxos.response, latest_tree, &epoch_state, &kms_api).await;
+                        let eligible: Vec<_> = match &ledger_config.faucet_pk {
+                            Some(fpk) => eligible_utxos.response.into_iter()
+                                .filter(|u| u.utxo.note.pk != *fpk).collect(),
+                            None => eligible_utxos.response,
+                        };
 
-                       if let Some((proof, signing_key)) = build_proof_for(&eligible_utxos.response, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier, &wallet_api, &kms_api).await {
+                        // If it's a new epoch or the service just started, pre-compute the first winning slot and notify consumers.
+                        winning_pol_slot_notifier.process_epoch(&eligible, latest_tree, &epoch_state, &kms_api).await;
+
+                       if let Some((proof, signing_key)) = build_proof_for(&eligible, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier, &wallet_api, &kms_api).await {
                             // TODO: spawn as a separate task?
                             match Self::propose_block(
                                 parent,
