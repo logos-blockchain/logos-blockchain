@@ -362,6 +362,9 @@ where
 
     notify_ready();
 
+    // No need to wait for the PoL stream to return an element. We just move on and
+    // will have a `None` handler until secret info for an epoch is passed to this
+    // service.
     let mut secret_pol_info_stream = PolInfoProvider::subscribe(overwatch_handle)
         .await
         .expect("Should not fail to subscribe to secret PoL info stream.");
@@ -384,6 +387,7 @@ where
                         return Err(e);
                     }
                     Ok(()) => {
+                        // We need to keep track of this for now because message handlers are initialized with a membership info. Exposing a simple `rotate_epoch` will allow us to avoid tracking this value here.
                         current_membership_info = new_session_info;
                     }
                 }
