@@ -91,6 +91,9 @@ where
         }
     }
 
+    // Changes epoch-related info for the core generator, and stops the old leader
+    // generator if it's still on the previous epoch. If not, `rotate_epoch` is
+    // effectively a no-op.
     fn rotate_epoch(&mut self, new_epoch_public: LeaderInputs, new_epoch: Epoch) {
         tracing::info!(target: LOG_TARGET, "Rotating epoch...");
         self.core_proofs_generator.rotate_epoch(new_epoch_public);
@@ -109,12 +112,14 @@ where
             }
             Ordering::Greater => {
                 panic!(
-                    "Secret PoL info for new epoch should never provide an epoch greater than what the public epoch info returns."
+                    "Secret PoL info for new epoch should never provide an epoch greater than what the public epoch info returns, as the two should always be yielded together, or at most the secret PoL info would lag behind if the node has no or close to no stake."
                 );
             }
         }
     }
 
+    // Creates a new leader proofs generator with the provided public+private
+    // secret.
     fn set_epoch_private(
         &mut self,
         new_epoch_private: ProofOfLeadershipQuotaInputs,

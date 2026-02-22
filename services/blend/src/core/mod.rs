@@ -1889,7 +1889,7 @@ where
             },
             new_epoch,
         )) => {
-            tracing::debug!(target: LOG_TARGET, "New epoch with nonce {pol_epoch_nonce:?} started");
+            tracing::debug!(target: LOG_TARGET, "New epoch {new_epoch:?} with nonce {pol_epoch_nonce:?} started");
             let new_leader_inputs = LeaderInputs {
                 message_quota: settings.session_leadership_quota(),
                 pol_epoch_nonce,
@@ -1923,7 +1923,7 @@ where
             },
             new_epoch,
         )) => {
-            tracing::debug!(target: LOG_TARGET, "New epoch with nonce {pol_epoch_nonce:?} started and old epoch transition period expired.");
+            tracing::debug!(target: LOG_TARGET, "New epoch {new_epoch:?} with nonce {pol_epoch_nonce:?} started and old epoch transition period expired.");
             let new_leader_inputs = LeaderInputs {
                 message_quota: settings.session_leadership_quota(),
                 pol_epoch_nonce,
