@@ -51,6 +51,10 @@ where
         let check = Self::collect_results_with_progress(ctx).await;
         self.report(target_hint, check)
     }
+
+    async fn check_during_capture(&mut self, ctx: &RunContext<E>) -> Result<(), DynError> {
+        Self::ensure_participants(ctx)
+    }
 }
 
 fn consensus_target_blocks<E: LbcScenarioEnv>(ctx: &RunContext<E>) -> u64 {

@@ -7,8 +7,8 @@ use std::{
 };
 
 use async_trait::async_trait;
-pub use block_feed::BlockRecord;
 use common_http_client::BasicAuthCredentials;
+pub use block_feed::{BlockFeed, BlockFeedSnapshot, BlockRecord, NodeHeadSnapshot};
 use lb_node::config::RunConfig;
 use reqwest::Url;
 use testing_framework_core::{
@@ -30,7 +30,7 @@ use crate::{
             wallet::WalletConfig,
         },
     },
-    workloads::{ConsensusLiveness, inscription, transaction},
+    workloads::{ClusterForkMonitor, ConsensusLiveness, inscription, transaction},
 };
 
 pub type ScenarioBuilder = CoreScenarioBuilder<LbcEnv>;
@@ -64,12 +64,7 @@ impl Application for LbcEnv {
     async fn prepare_feed(
         node_clients: NodeClients<Self>,
     ) -> Result<(<Self::FeedRuntime as FeedRuntime>::Feed, Self::FeedRuntime), DynError> {
-        let client = node_clients
-            .snapshot()
-            .into_iter()
-            .next()
-            .ok_or_else(|| "prepare_feed called with no node clients".to_owned())?;
-        prepare_block_feed(client).await
+        prepare_block_feed(node_clients).await
     }
 }
 
@@ -179,6 +174,13 @@ pub trait ScenarioBuilderExt: Sized {
     #[must_use]
     fn expect_consensus_liveness(self) -> Self;
 
+    /// Adds a fail-fast fork monitor expectation.
+    ///
+    /// The scenario fails as soon as the monitor observes a LIB mismatch
+    /// between nodes.
+    #[must_use]
+    fn expect_cluster_fork_monitor(self) -> Self;
+
     #[must_use]
     fn initialize_wallet(self, total_funds: u64, users: usize) -> Self;
 }
@@ -216,6 +218,10 @@ impl ScenarioBuilderExt for ScenarioBuilderWith {
 
     fn expect_consensus_liveness(self) -> Self {
         self.with_expectation(ConsensusLiveness::default())
+    }
+
+    fn expect_cluster_fork_monitor(self) -> Self {
+        self.with_expectation(ClusterForkMonitor::<LbcEnv>::default())
     }
 
     fn initialize_wallet(self, total_funds: u64, users: usize) -> Self {

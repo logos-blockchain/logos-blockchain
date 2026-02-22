@@ -287,29 +287,31 @@ impl<'a, E: LbcScenarioEnv + LbcBlockFeedEnv> InscriptionRunner<'a, E> {
     }
 
     fn process_block(&mut self, block: &BlockRecord) {
-        for tx in block.block.transactions() {
-            let tx_hash = tx.hash();
-            let Some(channel_idx) = self.pending_by_hash.remove(&tx_hash) else {
-                continue;
-            };
+        for observed in &block.new_blocks {
+            for tx in observed.block.transactions() {
+                let tx_hash = tx.hash();
+                let Some(channel_idx) = self.pending_by_hash.remove(&tx_hash) else {
+                    continue;
+                };
 
-            let Some(channel) = self.channels.get_mut(channel_idx) else {
-                continue;
-            };
+                let Some(channel) = self.channels.get_mut(channel_idx) else {
+                    continue;
+                };
 
-            let Some(pending) = channel.pending.take() else {
-                continue;
-            };
+                let Some(pending) = channel.pending.take() else {
+                    continue;
+                };
 
-            channel.parent = pending.msg_id;
-            channel.confirmed += 1;
+                channel.parent = pending.msg_id;
+                channel.confirmed += 1;
 
-            debug!(
-                channel = ?channel.channel_id,
-                tx_hash = ?pending.tx_hash,
-                confirmation_ms = pending.submitted_at.elapsed().as_millis(),
-                "inscription transaction confirmed"
-            );
+                debug!(
+                    channel = ?channel.channel_id,
+                    tx_hash = ?pending.tx_hash,
+                    confirmation_ms = pending.submitted_at.elapsed().as_millis(),
+                    "inscription transaction confirmed"
+                );
+            }
         }
     }
 
