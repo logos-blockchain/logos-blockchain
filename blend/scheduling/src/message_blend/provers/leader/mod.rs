@@ -111,7 +111,7 @@ impl RealLeaderProofsGenerator {
 
         self.proof_stream = Box::pin(create_leadership_proof_stream(
             self.settings.public_inputs,
-            private_inputs.clone(),
+            *private_inputs,
             new_cancellation_token,
         ));
     }
@@ -121,6 +121,10 @@ impl RealLeaderProofsGenerator {
     }
 }
 
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "Spawning an async task. Issues with lifetimes."
+)]
 fn create_leadership_proof_stream(
     public_inputs: PoQVerificationInputsMinusSigningKey,
     private_inputs: ProofOfLeadershipQuotaInputs,
@@ -150,7 +154,6 @@ fn create_leadership_proof_stream(
             // layer is out of scope for this component, and will be up to the
             // message scheduler.
             let message_release_index = current_index % message_quota;
-            let private_inputs = private_inputs.clone();
             let token = cancellation_token.clone();
 
             async move {

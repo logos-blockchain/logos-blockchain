@@ -41,7 +41,7 @@ where
         num_blend_layers: NonZeroU64,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
-        private_info: ProofOfLeadershipQuotaInputs,
+        private_info: &ProofOfLeadershipQuotaInputs,
         epoch: Epoch,
     ) -> Self {
         let generator_settings = ProofsGeneratorSettings {
@@ -53,7 +53,7 @@ where
         Self {
             num_blend_layers,
             membership,
-            proofs_generator: ProofsGenerator::new(generator_settings, private_info),
+            proofs_generator: ProofsGenerator::new(generator_settings, *private_info),
         }
     }
 
@@ -186,7 +186,7 @@ mod test {
                         lottery_1: Fr::ZERO,
                     },
                 },
-                ProofOfLeadershipQuotaInputs {
+                &ProofOfLeadershipQuotaInputs {
                     aged_path_and_selectors: [(ZkHash::ZERO, false); _],
                     note_value: 1,
                     output_number: 1,
@@ -213,7 +213,7 @@ mod test {
             transaction_hash: ZkHash::ONE,
         };
 
-        processor.rotate_epoch(new_leader_inputs, new_private_inputs.clone(), Epoch::new(1));
+        processor.rotate_epoch(new_leader_inputs, new_private_inputs, Epoch::new(1));
 
         assert_eq!(
             processor.proofs_generator.0.public_inputs.leader,

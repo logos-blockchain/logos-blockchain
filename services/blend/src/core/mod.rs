@@ -1970,7 +1970,7 @@ fn handle_new_secret_epoch_info<
 {
     tracing::debug!(target: LOG_TARGET, "Received new secret PoL info for the epoch: {new_pol_info:?}. Updating the cryptographic processor...");
     cryptographic_processor.set_epoch_private(
-        new_pol_info.poq_private_inputs.clone(),
+        new_pol_info.poq_private_inputs,
         LeaderInputs {
             pol_ledger_aged: new_pol_info.poq_public_inputs.aged_root,
             pol_epoch_nonce: new_pol_info.poq_public_inputs.aged_root,

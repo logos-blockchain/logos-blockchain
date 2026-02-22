@@ -18,7 +18,7 @@ use overwatch::overwatch::OverwatchHandle;
 
 /// Secret `PoL` info associated to an epoch, as returned by the `PoL` info
 /// provider.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct PolEpochInfo {
     pub epoch: Epoch,
     pub poq_public_inputs: LeaderPublic,

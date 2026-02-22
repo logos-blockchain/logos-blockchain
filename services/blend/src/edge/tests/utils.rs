@@ -15,7 +15,6 @@ use lb_blend::{
             BlendLayerProof, ProofsGeneratorSettings, leader::LeaderProofsGenerator,
         },
         session::UninitializedSessionEventStream,
-        stream::UninitializedFirstReadyStream,
     },
 };
 use lb_chain_service::Epoch;
@@ -104,13 +103,10 @@ pub async fn spawn_run(
                 FIRST_STREAM_ITEM_READY_TIMEOUT,
                 Duration::ZERO,
             ),
-            UninitializedFirstReadyStream::new(
-                once(ready(SlotTick {
-                    epoch: 1.into(),
-                    slot: 1.into(),
-                })),
-                Duration::from_secs(1),
-            ),
+            once(ready(SlotTick {
+                epoch: 1.into(),
+                slot: 1.into(),
+            })),
             ReceiverStream::new(msg_receiver),
             EpochHandler::new(TestChainService, 1.try_into().unwrap()),
             settings,
