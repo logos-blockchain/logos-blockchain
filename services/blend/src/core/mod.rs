@@ -898,7 +898,7 @@ where
                 (public_info, epoch) = handle_clock_event(clock_tick, blend_config, epoch_handler, &mut crypto_processor, backend, public_info, epoch).await;
             }
             Some(pol_info) = secret_pol_info_stream.next() => {
-                handle_new_secret_epoch_info(pol_info, &mut crypto_processor);
+                handle_new_secret_epoch_info(blend_config, &pol_info, &mut crypto_processor);
                 epoch = pol_info.epoch;
             }
             Some(session_event) = remaining_session_stream.next() => {
@@ -1950,8 +1950,15 @@ where
 
 /// Handle the availability of new secret `PoL` info by passing it to the
 /// underlying cryptographic processor.
-fn handle_new_secret_epoch_info<NodeId, ProofsGenerator, ProofsVerifier, CorePoQGenerator>(
-    new_pol_info: PolEpochInfo,
+fn handle_new_secret_epoch_info<
+    NodeId,
+    ProofsGenerator,
+    BackendSettings,
+    ProofsVerifier,
+    CorePoQGenerator,
+>(
+    settings: &RunningBlendConfig<BackendSettings>,
+    new_pol_info: &PolEpochInfo,
     cryptographic_processor: &mut CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1963,8 +1970,14 @@ fn handle_new_secret_epoch_info<NodeId, ProofsGenerator, ProofsVerifier, CorePoQ
 {
     tracing::debug!(target: LOG_TARGET, "Received new secret PoL info for the epoch: {new_pol_info:?}. Updating the cryptographic processor...");
     cryptographic_processor.set_epoch_private(
-        new_pol_info.poq_private_inputs,
-        new_pol_info.poq_public_inputs,
+        new_pol_info.poq_private_inputs.clone(),
+        LeaderInputs {
+            pol_ledger_aged: new_pol_info.poq_public_inputs.aged_root,
+            pol_epoch_nonce: new_pol_info.poq_public_inputs.aged_root,
+            message_quota: settings.session_leadership_quota(),
+            lottery_0: new_pol_info.poq_public_inputs.lottery_0,
+            lottery_1: new_pol_info.poq_public_inputs.lottery_1,
+        },
         new_pol_info.epoch,
     );
 }

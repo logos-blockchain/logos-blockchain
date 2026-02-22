@@ -88,7 +88,7 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
         self.settings.epoch = new_epoch;
 
         // Compute new proofs with the updated settings.
-        self.generate_new_proofs_stream(new_private);
+        self.generate_new_proofs_stream(&new_private);
     }
 
     async fn get_next_proof(&mut self) -> BlendLayerProof {
@@ -103,7 +103,7 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
 }
 
 impl RealLeaderProofsGenerator {
-    fn generate_new_proofs_stream(&mut self, private_inputs: ProofOfLeadershipQuotaInputs) {
+    fn generate_new_proofs_stream(&mut self, private_inputs: &ProofOfLeadershipQuotaInputs) {
         self.cancellation_token.cancel();
 
         let new_cancellation_token = CancellationToken::new();
@@ -111,7 +111,7 @@ impl RealLeaderProofsGenerator {
 
         self.proof_stream = Box::pin(create_leadership_proof_stream(
             self.settings.public_inputs,
-            private_inputs,
+            private_inputs.clone(),
             new_cancellation_token,
         ));
     }

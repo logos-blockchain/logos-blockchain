@@ -8,6 +8,7 @@ use lb_blend::{
         session::SessionEvent,
     },
 };
+use lb_chain_service::Epoch;
 use lb_core::{codec::SerializeOp as _, crypto::ZkHash, sdp::ActivityMetadata};
 use lb_groth16::Field as _;
 use lb_key_management_system_service::keys::Ed25519Key;
@@ -335,6 +336,8 @@ async fn test_handle_session_transition_expired() {
 #[test_log::test(tokio::test)]
 #[cfg(test)]
 async fn test_handle_session_event() {
+    use lb_chain_service::Epoch;
+
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
 
@@ -392,6 +395,7 @@ async fn test_handle_session_event() {
         ServiceState::with_session(session, token_collector, None, state_updater.clone()).unwrap(),
         &mut backend,
         &sdp_relay,
+        Epoch::new(0),
     )
     .await;
     let HandleSessionEventOutput::Transitioning {
@@ -437,6 +441,7 @@ async fn test_handle_session_event() {
         new_recovery_checkpoint,
         &mut backend,
         &sdp_relay,
+        Epoch::new(0),
     )
     .await;
     let HandleSessionEventOutput::TransitionCompleted {
@@ -487,6 +492,7 @@ async fn test_handle_session_event() {
         new_recovery_checkpoint,
         &mut backend,
         &sdp_relay,
+        Epoch::new(0),
     )
     .await;
     let HandleSessionEventOutput::Retiring {
@@ -571,6 +577,7 @@ async fn complete_old_session_after_main_loop_done() {
         mut remaining_session_stream,
         mut remaining_clock_stream,
         current_public_info,
+        _,
         crypto_processor,
         current_recovery_checkpoint,
         message_scheduler,
@@ -610,6 +617,7 @@ async fn complete_old_session_after_main_loop_done() {
             old_session_message_scheduler,
             old_session_blending_token_collector,
             old_session_public_info,
+            _,
         ) = run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
@@ -625,6 +633,7 @@ async fn complete_old_session_after_main_loop_done() {
             &mut rng,
             crypto_processor,
             current_public_info,
+            Epoch::new(0),
             current_recovery_checkpoint,
         )
         .await;
@@ -643,6 +652,7 @@ async fn complete_old_session_after_main_loop_done() {
             old_session_blending_token_collector,
             old_session_crypto_processor,
             old_session_public_info,
+            Epoch::new(0),
         )
         .await;
     });
@@ -745,6 +755,7 @@ async fn stop_on_empty_session() {
         mut remaining_session_stream,
         mut remaining_clock_stream,
         current_public_info,
+        _,
         crypto_processor,
         current_recovery_checkpoint,
         message_scheduler,
@@ -784,6 +795,7 @@ async fn stop_on_empty_session() {
             old_session_message_scheduler,
             old_session_blending_token_collector,
             old_session_public_info,
+            _,
         ) = run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
@@ -799,6 +811,7 @@ async fn stop_on_empty_session() {
             &mut rng,
             crypto_processor,
             current_public_info,
+            Epoch::new(0),
             current_recovery_checkpoint,
         )
         .await;
@@ -817,6 +830,7 @@ async fn stop_on_empty_session() {
             old_session_blending_token_collector,
             old_session_crypto_processor,
             old_session_public_info,
+            Epoch::new(0),
         )
         .await;
     });

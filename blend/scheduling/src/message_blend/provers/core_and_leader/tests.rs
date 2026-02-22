@@ -215,7 +215,7 @@ async fn epoch_private_info() {
     );
 
     core_and_leader_proofs_generator.set_epoch_private(
-        leadership_private_inputs.clone(),
+        leadership_private_inputs,
         leadership_public_inputs.leader,
         Epoch::new(1),
     );

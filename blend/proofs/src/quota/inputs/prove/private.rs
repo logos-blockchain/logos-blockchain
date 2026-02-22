@@ -89,7 +89,7 @@ impl From<ProofOfCoreQuotaInputs> for ProofType {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Copy)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ProofOfLeadershipQuotaInputs {
     pub slot: u64,
     pub note_value: u64,

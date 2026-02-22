@@ -1,10 +1,20 @@
-use core::fmt::{Debug, Display};
+use core::{
+    fmt::{Debug, Display},
+    future::ready,
+};
 
+use async_trait::async_trait;
+use futures::{Stream, StreamExt as _};
+use lb_blend::{
+    crypto::ZkHash, proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs,
+};
 use lb_blend_service::epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait};
 use lb_chain_leader_service::LeaderMsg;
-use lb_pol::PolWitnessInputsData;
+use lb_pol::{PolChainInputsData, PolWalletInputsData, PolWitnessInputsData};
+use lb_poq::AGED_NOTE_MERKLE_TREE_HEIGHT;
 use lb_services_utils::wait_until_services_are_ready;
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
+use tokio::sync::oneshot::channel;
 use tokio_stream::wrappers::WatchStream;
 
 use crate::CryptarchiaLeaderService;
@@ -69,7 +79,7 @@ where
                             transaction_hash,
                             ..
                         },
-                        chain: PolChainInputsData { slot_number, epoch_nonce, .. },
+                        chain: PolChainInputsData { slot_number, .. },
                     } = leader_private.input();
 
                     // TODO: Remove this if `PoL` stuff also migrates to using fixed-size arrays or starts using vecs of the expected length instead of empty ones when generating `LeaderPrivate` values.

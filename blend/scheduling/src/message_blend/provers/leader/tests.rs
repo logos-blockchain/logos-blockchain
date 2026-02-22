@@ -74,7 +74,7 @@ async fn epoch_rotation() {
             public_inputs,
             epoch: Epoch::new(0),
         },
-        private_inputs.clone(),
+        private_inputs,
     );
 
     let proof = leader_proofs_generator.get_next_proof().await;

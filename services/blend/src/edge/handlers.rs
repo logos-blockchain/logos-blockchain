@@ -21,7 +21,16 @@ use crate::edge::{LOG_TARGET, RunningSettings as Settings, backends::BlendBacken
 pub struct MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId> {
     cryptographic_processor: SessionCryptographicProcessor<NodeId, ProofsGenerator>,
     backend: Backend,
+    epoch: Epoch,
     _phantom: PhantomData<RuntimeServiceId>,
+}
+
+impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
+    MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
+{
+    pub const fn epoch(&self) -> Epoch {
+        self.epoch
+    }
 }
 
 impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
@@ -90,6 +99,7 @@ where
         Self {
             cryptographic_processor,
             backend,
+            epoch,
             _phantom: PhantomData,
         }
     }

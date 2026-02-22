@@ -7,11 +7,9 @@ use core::{
 
 use async_trait::async_trait;
 use futures::Stream;
-use lb_blend::proofs::quota::inputs::prove::{
-    private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
-};
+use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
-use lb_core::crypto::ZkHash;
+use lb_core::{crypto::ZkHash, proofs::leader_proof::LeaderPublic};
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::Fr;
 use lb_ledger::EpochState;
@@ -20,10 +18,10 @@ use overwatch::overwatch::OverwatchHandle;
 
 /// Secret `PoL` info associated to an epoch, as returned by the `PoL` info
 /// provider.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct PolEpochInfo {
     pub epoch: Epoch,
-    pub poq_public_inputs: LeaderInputs,
+    pub poq_public_inputs: LeaderPublic,
     /// The `PoL` secret inputs that are found to be winning at least one slot
     /// in the current epoch.
     pub poq_private_inputs: ProofOfLeadershipQuotaInputs,

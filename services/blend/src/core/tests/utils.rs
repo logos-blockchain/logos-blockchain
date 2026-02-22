@@ -317,6 +317,7 @@ pub fn new_crypto_processor<CorePoQGenerator>(
             leader: public_info.epoch,
         },
         core_poq_generator,
+        Epoch::new(0),
     )
     .expect("crypto processor must be created successfully")
 }
