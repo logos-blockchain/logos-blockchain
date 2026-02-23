@@ -1873,7 +1873,7 @@ where
 ///
 /// On a new epoch, it updates the public info and conditionally rotates both
 /// the cryptographic processor and the backend verifier. Both rotations are
-/// guarded by `new_epoch > current_epoch` to avoid duplicates when the PoL
+/// guarded by `new_epoch > current_epoch` to avoid duplicates when the `PoL`
 /// info handler in the event loop has already advanced to this epoch (and
 /// already called `backend.rotate_epoch`). At the end of an epoch transition
 /// period, it notifies the Blend components that the old epoch transition is
