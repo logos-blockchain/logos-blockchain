@@ -4231,6 +4231,7 @@ dependencies = [
  "serde_json",
  "strum",
  "thiserror 1.0.69",
+ "tokio",
  "tracing",
 ]
 
@@ -6573,6 +6574,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
+ "h2",
  "http 1.4.0",
  "http-body",
  "http-body-util",

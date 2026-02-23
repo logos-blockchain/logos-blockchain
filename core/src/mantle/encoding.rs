@@ -916,6 +916,76 @@ mod tests {
         assert_eq!(decoded_tx, signed_tx);
     }
 
+    #[tokio::test]
+    async fn test_large_payload_encoding_decoding() {
+        // Test payload sizes from 512kB up to 2MiB in 512kB increments
+        const CHUNK_SIZE: usize = 512 * 1024;
+        const MAX_SIZE: usize = 2 * 1024 * 1024;
+
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+
+        let mut tasks = Vec::new();
+
+        for payload_size in (CHUNK_SIZE..=MAX_SIZE).step_by(CHUNK_SIZE) {
+            let signing_key = signing_key.clone();
+
+            let task = tokio::task::spawn(async move {
+                let large_inscription = vec![0xAB; payload_size];
+
+                let inscribe_op = InscriptionOp {
+                    channel_id: ChannelId::from([0xAA; 32]),
+                    inscription: large_inscription,
+                    parent: MsgId::from([0xBB; 32]),
+                    signer: signing_key.public_key(),
+                };
+
+                let mantle_tx = MantleTx {
+                    ops: vec![Op::ChannelInscribe(inscribe_op)],
+                    ledger_tx: LedgerTx::new(vec![], vec![]),
+                    execution_gas_price: 100,
+                    storage_gas_price: 50,
+                };
+
+                let txhash = mantle_tx.hash();
+                let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
+                let signed_tx = SignedMantleTx::new(
+                    mantle_tx,
+                    vec![OpProof::Ed25519Sig(op_sig)],
+                    ZkKey::multi_sign(&[], &txhash.0).unwrap(),
+                )
+                .unwrap();
+
+                let encoded = encode_signed_mantle_tx(&signed_tx);
+
+                let predicted_size = predict_signed_mantle_tx_size(&signed_tx.mantle_tx);
+                assert_eq!(
+                    predicted_size,
+                    encoded.len(),
+                    "Size mismatch at payload size {payload_size}",
+                );
+
+                let (remaining, decoded_tx) = decode_signed_mantle_tx(&encoded)
+                    .unwrap_or_else(|_| panic!("Failed to decode at payload size {payload_size}"));
+
+                assert!(
+                    remaining.is_empty(),
+                    "Unexpected remaining bytes at payload size {payload_size}",
+                );
+                assert_eq!(
+                    decoded_tx, signed_tx,
+                    "Roundtrip mismatch at payload size {payload_size}",
+                );
+            });
+
+            tasks.push(task);
+        }
+
+        // Wait for all tasks to complete
+        for task in tasks {
+            task.await.unwrap();
+        }
+    }
+
     #[test]
     fn test_encode_decode_roundtrip_empty_tx() {
         // Create an empty MantleTx
