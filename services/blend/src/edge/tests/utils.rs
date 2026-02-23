@@ -1,8 +1,5 @@
 use core::{num::NonZeroU64, time::Duration};
-use std::{
-    fmt::{Debug, Display},
-    panic,
-};
+use std::fmt::{Debug, Display};
 
 use async_trait::async_trait;
 use futures::{StreamExt as _, future::ready, stream::once};
