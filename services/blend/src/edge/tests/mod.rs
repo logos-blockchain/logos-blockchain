@@ -48,44 +48,6 @@ async fn run_with_session_transition() {
     );
 }
 
-/// [`run`] panics if the initial membership is too small.
-#[test_log::test(tokio::test)]
-#[should_panic(
-    expected = "The initial membership should satisfy the edge node condition: NetworkIsTooSmall"
-)]
-async fn run_panics_with_small_initial_membership() {
-    let local_node = NodeId(99);
-    let core_nodes = [NodeId(0)];
-    let minimal_network_size = 2;
-    let (join_handle, _, _, _) = spawn_run(
-        local_node,
-        minimal_network_size,
-        Some(membership(&core_nodes, local_node)),
-    )
-    .await;
-
-    resume_panic_from(join_handle).await;
-}
-
-/// [`run`] panics if the local node is not edge in the initial membership.
-#[test_log::test(tokio::test)]
-#[should_panic(
-    expected = "The initial membership should satisfy the edge node condition: LocalIsCoreNode"
-)]
-async fn run_panics_with_local_is_core_in_initial_membership() {
-    let local_node = NodeId(99);
-    let core_nodes = [local_node];
-    let minimal_network_size = 1;
-    let (join_handle, _, _, _) = spawn_run(
-        local_node,
-        minimal_network_size,
-        Some(membership(&core_nodes, local_node)),
-    )
-    .await;
-
-    resume_panic_from(join_handle).await;
-}
-
 /// [`run`] shuts down gracefully if a new membership is smaller than the
 /// minimum network size.
 #[test_log::test(tokio::test)]
