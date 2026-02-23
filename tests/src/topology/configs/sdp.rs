@@ -8,6 +8,7 @@ pub struct GeneralSdpConfig {
     pub declaration_id: Option<DeclarationId>,
 }
 
+#[must_use]
 pub fn create_sdp_configs(genesis_tx: &GenesisTx) -> Vec<GeneralSdpConfig> {
     genesis_tx
         .mantle_tx()

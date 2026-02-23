@@ -25,9 +25,13 @@ use lb_node::{
         ApiConfig, CryptarchiaConfig, RunConfig, SdpConfig, StorageConfig, WalletConfig,
         api::serde::AxumBackendSettings,
         cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
-        deployment::DeploymentSettings, sdp::serde::Declaration as SdpDeclarationConfig,
-        sdp::serde::RequiredValues as SdpConfigRequiredValues, state::Config as StateConfig,
-        tracing::serde as tracing, wallet::serde::RequiredValues as WalletConfigRequiredValues,
+        deployment::DeploymentSettings,
+        sdp::serde::{
+            Declaration as SdpDeclarationConfig, RequiredValues as SdpConfigRequiredValues,
+        },
+        state::Config as StateConfig,
+        tracing::serde as tracing,
+        wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
 };
 use lb_tx_service::MempoolMetrics;
