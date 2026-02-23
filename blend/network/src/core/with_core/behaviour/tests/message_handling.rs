@@ -249,7 +249,6 @@ async fn duplicate_message_within_sensitivity_interval_is_not_spam() {
         .force_send_message_to_peer(&test_message, *dialing_swarm.local_peer_id())
         .unwrap();
 
-    // Peers disconnect from each other without being marked as spammy.
     loop {
         select! {
             () = sleep(Duration::from_secs(1)) => {
