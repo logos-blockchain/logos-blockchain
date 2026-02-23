@@ -6,7 +6,10 @@ use lb_blend_message::encap::encapsulated::EncapsulatedMessage;
 use lb_libp2p::SwarmEvent;
 use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
-use tokio::{select, time::sleep};
+use tokio::{
+    select,
+    time::{sleep, timeout},
+};
 
 use crate::core::{
     tests::utils::{AlwaysTrueVerifier, TestEncapsulatedMessage, TestSwarm},
@@ -182,36 +185,33 @@ async fn duplicate_message_received() {
     // Wait enough time to not considered spammy by the listener.
     sleep(Duration::from_secs(3)).await;
 
-    // This is a duplicate message, so the listener will mark the dialer as spammy.
+    // This is a duplicate message and should be ignored.
     dialing_swarm
         .behaviour_mut()
         .force_send_message_to_peer(&test_message, *listening_swarm.local_peer_id())
         .unwrap();
 
-    let mut events_to_match = 2u8;
-    loop {
-        select! {
-            _ = dialing_swarm.select_next_some() => {}
-            listening_swarm_event = listening_swarm.select_next_some() => {
-                match listening_swarm_event {
-                    SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, peer_state)) => {
-                        assert_eq!(peer_id, *dialing_swarm.local_peer_id());
-                        assert_eq!(peer_state, NegotiatedPeerState::Spammy(SpamReason::DuplicateMessage));
-                        events_to_match -= 1;
+    // For a short window, assert that duplicate does not cause disconnect.
+    assert!(timeout(Duration::from_secs(1), async {
+        loop {
+            select! {
+                _ = dialing_swarm.select_next_some() => {}
+                listening_swarm_event = listening_swarm.select_next_some() => {
+                    match listening_swarm_event {
+                        SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, peer_state)) => {
+                            panic!("unexpected disconnect from {peer_id:?}, state={peer_state:?}");
+                        }
+                        SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } => {
+                            panic!("unexpected connection close from {peer_id:?}, endpoint={endpoint:?}");
+                        }
+                        _ => {}
                     }
-                    SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } => {
-                        assert_eq!(peer_id, *dialing_swarm.local_peer_id());
-                        assert!(endpoint.is_listener());
-                        events_to_match -= 1;
-                    }
-                    _ => {}
                 }
             }
         }
-        if events_to_match == 0 {
-            break;
-        }
-    }
+    })
+    .await
+    .is_err());
 }
 
 #[test(tokio::test)]

@@ -90,8 +90,6 @@ fn apply_overrides(run_config: &mut RunConfig, node_count: usize) {
     run_config.user.network.backend.swarm.nat = NatConfig::Static {
         external_address: external_addr,
     };
-
-    "pool.ntp.org:123".clone_into(&mut run_config.user.time.backend.server);
 }
 
 /// Long-running cluster monitor that records LIB and tip divergence across all
