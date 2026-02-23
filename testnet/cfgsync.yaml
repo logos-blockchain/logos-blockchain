@@ -16,7 +16,7 @@ tracing_settings:
     otlp:
       endpoint: "http://otel:4317"
       service_name: "init_node"
-    stdout: true
+    stdout: false
     stderr: false
     file:
       directory: "./state/logs"
