@@ -1,7 +1,8 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
+    collections::{HashMap, VecDeque, hash_map::Entry},
     convert::Infallible,
     task::{Context, Poll, Waker},
+    time::Instant,
 };
 
 use either::Either;
@@ -20,7 +21,7 @@ use libp2p::{
 };
 
 use crate::core::with_core::{
-    behaviour::{Event, handler::FromBehaviour},
+    behaviour::{Event, SENSITIVITY_INTERVAL_FOR_DUPLICATES, handler::FromBehaviour},
     error::Error,
 };
 
@@ -28,7 +29,7 @@ use crate::core::with_core::{
 /// until the session transition period has passed.
 pub struct OldSession<ProofsVerifier> {
     negotiated_peers: HashMap<PeerId, ConnectionId>,
-    exchanged_message_identifiers: HashMap<PeerId, HashSet<MessageIdentifier>>,
+    exchanged_message_identifiers: HashMap<PeerId, HashMap<MessageIdentifier, Instant>>,
     events: VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     waker: Option<Waker>,
     poq_verifier: ProofsVerifier,
@@ -70,7 +71,7 @@ impl<ProofsVerifier> OldSession<ProofsVerifier> {
     #[must_use]
     pub const fn new(
         negotiated_peers: HashMap<PeerId, ConnectionId>,
-        exchanged_message_identifiers: HashMap<PeerId, HashSet<MessageIdentifier>>,
+        exchanged_message_identifiers: HashMap<PeerId, HashMap<MessageIdentifier, Instant>>,
         poq_verifier: ProofsVerifier,
     ) -> Self {
         Self {
@@ -184,18 +185,27 @@ impl<ProofsVerifier> OldSession<ProofsVerifier> {
 }
 
 fn check_and_update_message_cache(
-    exchanged_message_identifiers: &mut HashMap<PeerId, HashSet<MessageIdentifier>>,
+    exchanged_message_identifiers: &mut HashMap<PeerId, HashMap<MessageIdentifier, Instant>>,
     message_id: &MessageIdentifier,
     peer_id: PeerId,
 ) -> Result<(), Error> {
-    if exchanged_message_identifiers
+    match exchanged_message_identifiers
         .entry(peer_id)
         .or_default()
-        .insert(*message_id)
+        .entry(*message_id)
     {
-        Ok(())
-    } else {
-        Err(Error::MessageAlreadyExchanged)
+        Entry::Vacant(vacant_message_entry) => {
+            vacant_message_entry.insert(Instant::now());
+            Ok(())
+        }
+        Entry::Occupied(occupied_message_entry) => {
+            let time_sent = occupied_message_entry.get();
+            if Instant::now().duration_since(*time_sent) <= SENSITIVITY_INTERVAL_FOR_DUPLICATES {
+                Ok(())
+            } else {
+                Err(Error::MessageAlreadyExchanged)
+            }
+        }
     }
 }
 
