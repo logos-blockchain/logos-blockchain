@@ -905,27 +905,10 @@ where
                 (public_info, epoch) = handle_clock_event(clock_tick, blend_config, epoch_handler, &mut crypto_processor, backend, public_info, epoch).await;
             }
             Some(pol_info) = secret_pol_info_stream.next() => {
-                // Update the crypto processor first (which conditionally rotates
-                // the epoch if the PoL info is ahead of the tracked epoch), then
-                // synchronize the backend verifier, tracked epoch, and public info.
-                handle_new_secret_epoch_info(blend_config, &pol_info, &mut crypto_processor, epoch);
-                let new_leader_inputs = LeaderInputs {
-                    pol_ledger_aged: pol_info.poq_public_inputs.aged_root,
-                    pol_epoch_nonce: pol_info.poq_public_inputs.epoch_nonce,
-                    message_quota: blend_config.session_leadership_quota(),
-                    lottery_0: pol_info.poq_public_inputs.lottery_0,
-                    lottery_1: pol_info.poq_public_inputs.lottery_1,
-                };
-                // Keep the backend verifier in sync so it can verify messages
-                // with new-epoch proofs. Without this, the verifier would be
-                // stuck on the old epoch if the PoL info arrives before the
-                // clock tick (since handle_clock_event guards both the crypto
-                // processor and the backend behind `new_epoch > current_epoch`).
-                if pol_info.epoch > epoch {
-                    backend.rotate_epoch(new_leader_inputs).await;
+                if let Some(new_leader_inputs) = handle_new_secret_epoch_info(blend_config, &pol_info, &mut crypto_processor, backend, epoch).await {
+                    epoch = pol_info.epoch;
+                    public_info.epoch = new_leader_inputs;
                 }
-                epoch = pol_info.epoch;
-                public_info.epoch = new_leader_inputs;
             }
             Some(session_event) = remaining_session_stream.next() => {
                 match handle_session_event(session_event, blend_config, crypto_processor, message_scheduler, public_info, recovery_checkpoint, backend, sdp_relay, epoch).await {
@@ -1925,6 +1908,12 @@ where
             new_epoch,
         )) => {
             tracing::debug!(target: LOG_TARGET, "New epoch {new_epoch:?} with nonce {pol_epoch_nonce:?} started");
+            if new_epoch <= current_epoch {
+                return (current_public_info, current_epoch);
+            }
+
+            // Only rotate if the PoL info handler hasn't already advanced
+            // the crypto processor and backend verifier to this epoch.
             let new_leader_inputs = LeaderInputs {
                 message_quota: settings.session_leadership_quota(),
                 pol_epoch_nonce,
@@ -1939,10 +1928,8 @@ where
 
             // Only rotate if the PoL info handler hasn't already advanced
             // the crypto processor and backend verifier to this epoch.
-            if new_epoch > current_epoch {
-                cryptographic_processor.rotate_epoch(new_leader_inputs, new_epoch);
-                backend.rotate_epoch(new_leader_inputs).await;
-            }
+            cryptographic_processor.rotate_epoch(new_leader_inputs, new_epoch);
+            backend.rotate_epoch(new_leader_inputs).await;
 
             (new_public_info, new_epoch)
         }
@@ -1963,6 +1950,10 @@ where
             new_epoch,
         )) => {
             tracing::debug!(target: LOG_TARGET, "New epoch {new_epoch:?} with nonce {pol_epoch_nonce:?} started and old epoch transition period expired.");
+            if new_epoch <= current_epoch {
+                return (current_public_info, current_epoch);
+            }
+
             let new_leader_inputs = LeaderInputs {
                 message_quota: settings.session_leadership_quota(),
                 pol_epoch_nonce,
@@ -1980,10 +1971,8 @@ where
             // advanced the crypto processor and backend verifier to this epoch).
             cryptographic_processor.complete_epoch_transition();
             backend.complete_epoch_transition().await;
-            if new_epoch > current_epoch {
-                cryptographic_processor.rotate_epoch(new_leader_inputs, new_epoch);
-                backend.rotate_epoch(new_leader_inputs).await;
-            }
+            cryptographic_processor.rotate_epoch(new_leader_inputs, new_epoch);
+            backend.rotate_epoch(new_leader_inputs).await;
 
             (new_public_inputs, new_epoch)
         }
@@ -1997,14 +1986,15 @@ where
 /// processed yet, the core proof generator and verifier are updated first
 /// via [`CoreCryptographicProcessor::rotate_epoch`]. Then the leadership
 /// proof generator is set with the received private inputs.
-fn handle_new_secret_epoch_info<
+async fn handle_new_secret_epoch_info<
     NodeId,
     ProofsGenerator,
-    BackendSettings,
+    Backend,
     ProofsVerifier,
     CorePoQGenerator,
+    RuntimeServiceId,
 >(
-    settings: &RunningBlendConfig<BackendSettings>,
+    settings: &RunningBlendConfig<Backend::Settings>,
     new_pol_info: &PolEpochInfo,
     cryptographic_processor: &mut CoreCryptographicProcessor<
         NodeId,
@@ -2012,8 +2002,11 @@ fn handle_new_secret_epoch_info<
         ProofsGenerator,
         ProofsVerifier,
     >,
+    backend: &mut Backend,
     current_epoch: Epoch,
-) where
+) -> Option<LeaderInputs>
+where
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
@@ -2026,17 +2019,28 @@ fn handle_new_secret_epoch_info<
         lottery_1: new_pol_info.poq_public_inputs.lottery_1,
     };
 
-    // If the secret info is for a new epoch not yet seen via the clock
-    // handler, update the core proof generator and proof verifier first.
-    if new_pol_info.epoch > current_epoch {
-        cryptographic_processor.rotate_epoch(new_leader_inputs, new_pol_info.epoch);
-    }
-
     cryptographic_processor.set_epoch_private(
         new_pol_info.poq_private_inputs,
         new_leader_inputs,
         new_pol_info.epoch,
     );
+
+    // If we've already processed the public epoch inputs, do not return anything.
+    if new_pol_info.epoch <= current_epoch {
+        return None;
+    }
+
+    // If the secret info is for a new epoch not yet seen via the clock
+    // handler, update the core proof generator and proof verifier first.
+    cryptographic_processor.rotate_epoch(new_leader_inputs, new_pol_info.epoch);
+    // Keep the backend verifier in sync so it can verify messages
+    // with new-epoch proofs. Without this, the verifier would be
+    // stuck on the old epoch if the PoL info arrives before the
+    // clock tick (since handle_clock_event guards both the crypto
+    // processor and the backend behind `new_epoch > current_epoch`).
+    backend.rotate_epoch(new_leader_inputs).await;
+
+    Some(new_leader_inputs)
 }
 
 /// Submits an activity proof to the SDP service.
