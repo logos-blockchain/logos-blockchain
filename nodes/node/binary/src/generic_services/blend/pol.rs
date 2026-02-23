@@ -31,6 +31,8 @@ where
 {
     type Stream = Box<dyn Stream<Item = PolEpochInfo> + Send + Unpin>;
 
+    /// Subscribes to a stream of potential winning `PoL` epoch slots, and
+    /// filters out `None` values (initial state) and already processed epochs.
     async fn subscribe(
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     ) -> Option<Self::Stream> {
