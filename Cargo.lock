@@ -4063,6 +4063,7 @@ name = "logos-blockchain-cfgsync"
 version = "0.1.0"
 dependencies = [
  "axum 0.7.9",
+ "blake2",
  "clap",
  "hex",
  "logos-blockchain-core",

@@ -8,6 +8,8 @@ faucet_settings:
 deployment_settings_storage_path:
   deployment-settings.yaml
 
+entropy_file: entropy
+
 mode: Run
 
 # Tracing

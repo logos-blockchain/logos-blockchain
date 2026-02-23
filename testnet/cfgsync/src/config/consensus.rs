@@ -1,14 +1,14 @@
 use std::time::Duration;
 
+use blake2::{Blake2b, Digest as _, digest::consts::U32};
 use lb_core::mantle::{Note, Utxo, genesis_tx::GenesisTx};
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use lb_tests::topology::configs::consensus::{
     GeneralConsensusConfig, ServiceNote, create_genesis_tx,
 };
 use num_bigint::BigUint;
-use rand::rngs::OsRng;
 
-use crate::FaucetSettings;
+use crate::{Entropy, FaucetSettings};
 
 pub struct FaucetInfo {
     pub sk: ZkKey,
@@ -17,6 +17,7 @@ pub struct FaucetInfo {
 
 #[must_use]
 pub fn create_consensus_configs(
+    entropy: &Entropy,
     ids: &[[u8; 32]],
     prolonged_bootstrap_period: Duration,
     faucet_settings: &FaucetSettings,
@@ -26,6 +27,7 @@ pub fn create_consensus_configs(
     let mut sdp_notes = Vec::new();
 
     let (utxos, faucet_info) = create_utxos(
+        entropy,
         ids,
         &mut regular_note_keys,
         &mut blend_notes,
@@ -54,13 +56,16 @@ pub fn create_consensus_configs(
     (consensus_configs, faucet_info, genesis_tx)
 }
 
-fn generate_zk_key_from_random_bytes() -> ZkKey {
-    let mut bytes = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut OsRng, &mut bytes);
+fn generate_faucet_key(entropy: &Entropy) -> ZkKey {
+    let mut hasher = Blake2b::<U32>::new();
+    hasher.update(entropy);
+    hasher.update(b"faucet");
+    let bytes: [u8; 32] = hasher.finalize().into();
     ZkKey::from(BigUint::from_bytes_le(&bytes))
 }
 
 fn create_utxos(
+    entropy: &Entropy,
     ids: &[[u8; 32]],
     regular_note_keys: &mut Vec<ZkKey>,
     blend_notes: &mut Vec<ServiceNote>,
@@ -135,7 +140,7 @@ fn create_utxos(
     let faucet_info = faucet_settings.enabled.then(|| {
         let other_sum: u64 = utxos.iter().map(|u| u.note.value).sum();
         let faucet_value = u64::MAX - other_sum;
-        let faucet_sk = generate_zk_key_from_random_bytes();
+        let faucet_sk = generate_faucet_key(entropy);
         let faucet_pk = faucet_sk.to_public_key();
         utxos.push(Utxo {
             note: Note::new(faucet_value, faucet_pk),

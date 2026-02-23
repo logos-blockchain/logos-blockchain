@@ -4,6 +4,7 @@ mod kms;
 
 use std::{collections::HashMap, net::Ipv4Addr, str::FromStr as _};
 
+use blake2::{Blake2b, Digest as _, digest::consts::U32};
 use lb_core::{
     mantle::{GenesisTx as _, genesis_tx::GenesisTx},
     sdp::{Locator, ServiceType},
@@ -26,7 +27,7 @@ use lb_tests::topology::configs::{
 use rand::{Rng as _, thread_rng};
 
 use crate::{
-    FaucetSettings, Host,
+    Entropy, FaucetSettings, Host,
     config::{
         blend::create_blend_configs, consensus::create_consensus_configs, kms::create_kms_configs,
     },
@@ -35,17 +36,16 @@ use crate::{
 type HostId = [u8; 32];
 
 #[must_use]
-pub fn host_to_id(identifier: &str) -> HostId {
-    let mut id_bytes = [0u8; 32];
-    let identifier = identifier.as_bytes();
-    let len = std::cmp::min(identifier.len(), 32);
-
-    id_bytes[..len].copy_from_slice(&identifier[..len]);
-    id_bytes
+pub fn host_to_id(entropy: &Entropy, identifier: &str) -> HostId {
+    let mut hasher = Blake2b::<U32>::new();
+    hasher.update(entropy);
+    hasher.update(identifier.as_bytes());
+    hasher.finalize().into()
 }
 
 #[must_use]
 pub fn create_node_configs(
+    entropy: &Entropy,
     faucet_settings: &FaucetSettings,
     tracing_settings: &TracingConfig,
     mut hosts: Vec<Host>,
@@ -54,11 +54,15 @@ pub fn create_node_configs(
     let mut ids = Vec::with_capacity(hosts.len());
 
     for host in &hosts {
-        ids.push(host_to_id(&host.identifier));
+        ids.push(host_to_id(entropy, &host.identifier));
     }
 
-    let (consensus_configs, faucet_info, genesis_tx) =
-        create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD, faucet_settings);
+    let (consensus_configs, faucet_info, genesis_tx) = create_consensus_configs(
+        entropy,
+        &ids,
+        SHORT_PROLONGED_BOOTSTRAP_PERIOD,
+        faucet_settings,
+    );
     let faucet_pk = faucet_info.as_ref().map(|f| f.pk);
     let network_configs = create_network_configs(&ids, &NetworkParams::default());
     let blend_configs = create_blend_configs(
@@ -153,7 +157,9 @@ pub fn create_node_config_from_template(
     thread_rng().fill(&mut id);
     let ids = vec![id];
 
+    // Entropy is unused here: the id is random and faucet is disabled.
     let (consensus_configs, _, _) = create_consensus_configs(
+        &[0u8; 32],
         &ids,
         SHORT_PROLONGED_BOOTSTRAP_PERIOD,
         &FaucetSettings::default(),
@@ -270,15 +276,18 @@ mod cfgsync_tests {
     use std::{net::Ipv4Addr, str::FromStr as _};
 
     use ::tracing::Level;
+    use lb_core::mantle::GenesisTx as _;
     use lb_libp2p::{Multiaddr, Protocol, ed25519};
     use lb_node::config::{TracingConfig, tracing::serde as tracing};
     use lb_tests::common::kms::key_id_for_preload_backend;
 
     use super::{Host, create_node_configs};
     use crate::{
-        FaucetSettings,
+        Entropy, FaucetSettings,
         config::{create_node_config_from_template, host_to_id},
     };
+
+    const TEST_ENTROPY: Entropy = [42u8; 32];
 
     fn tracing_none() -> TracingConfig {
         TracingConfig {
@@ -320,8 +329,12 @@ mod cfgsync_tests {
             })
             .collect();
 
-        let (configs, _, _) =
-            create_node_configs(&FaucetSettings::default(), &TracingConfig::none(), hosts);
+        let (configs, _, _) = create_node_configs(
+            &TEST_ENTROPY,
+            &FaucetSettings::default(),
+            &TracingConfig::none(),
+            hosts,
+        );
 
         for (host, config) in &configs {
             let network_port = config.network_config.backend.swarm.port;
@@ -340,6 +353,7 @@ mod cfgsync_tests {
             ..Default::default()
         };
         let (init_configs, _, _) = create_node_configs(
+            &TEST_ENTROPY,
             &FaucetSettings::default(),
             &tracing_none(),
             vec![init_host.clone()],
@@ -394,8 +408,12 @@ mod cfgsync_tests {
             },
         ];
 
-        let (configs, _, faucet_pk) =
-            create_node_configs(&faucet_settings, &TracingConfig::none(), hosts.clone());
+        let (configs, _, faucet_pk) = create_node_configs(
+            &TEST_ENTROPY,
+            &faucet_settings,
+            &TracingConfig::none(),
+            hosts.clone(),
+        );
 
         assert!(faucet_pk.is_some(), "Faucet PK should be set");
 
@@ -420,11 +438,81 @@ mod cfgsync_tests {
             );
 
             // Node network key should be generated from host identifier.
-            let expected_network_key =
-                ed25519::SecretKey::try_from_bytes(&mut host_to_id(&host.identifier))
-                    .expect("Failed to generate secret key from bytes");
+            let expected_network_key = ed25519::SecretKey::try_from_bytes(&mut host_to_id(
+                &TEST_ENTROPY,
+                &host.identifier,
+            ))
+            .expect("Failed to generate secret key from bytes");
             let assigned_network_key = config.network_config.backend.swarm.node_key.clone();
             assert_eq!(assigned_network_key.as_ref(), expected_network_key.as_ref());
         }
+    }
+
+    #[test]
+    fn deterministic_configs_from_same_entropy() {
+        let entropy: Entropy = [7u8; 32];
+        let faucet_settings = FaucetSettings { enabled: true };
+
+        let hosts = vec![
+            Host {
+                ip: Ipv4Addr::LOCALHOST,
+                identifier: "node_a".into(),
+                ..Default::default()
+            },
+            Host {
+                ip: Ipv4Addr::LOCALHOST,
+                identifier: "node_b".into(),
+                ..Default::default()
+            },
+        ];
+
+        let (configs1, genesis1, faucet_pk1) = create_node_configs(
+            &entropy,
+            &faucet_settings,
+            &TracingConfig::none(),
+            hosts.clone(),
+        );
+        let (configs2, genesis2, faucet_pk2) = create_node_configs(
+            &entropy,
+            &faucet_settings,
+            &TracingConfig::none(),
+            hosts.clone(),
+        );
+
+        // Same entropy + same hosts → identical faucet public keys.
+        assert_eq!(faucet_pk1, faucet_pk2);
+
+        // Same entropy + same hosts → identical genesis ledger transactions
+        // (ZK proofs use internal randomness, so compare the ledger_tx only).
+        assert_eq!(
+            serde_json::to_string(&genesis1.mantle_tx().ledger_tx).unwrap(),
+            serde_json::to_string(&genesis2.mantle_tx().ledger_tx).unwrap(),
+        );
+
+        // Same entropy + same hosts → identical node network keys.
+        for host in &hosts {
+            let c1 = configs1.get(host).unwrap();
+            let c2 = configs2.get(host).unwrap();
+            assert_eq!(
+                c1.network_config.backend.swarm.node_key.as_ref(),
+                c2.network_config.backend.swarm.node_key.as_ref(),
+            );
+        }
+
+        // Different entropy → different keys.
+        let other_entropy: Entropy = [99u8; 32];
+        let (configs3, _, faucet_pk3) = create_node_configs(
+            &other_entropy,
+            &faucet_settings,
+            &TracingConfig::none(),
+            hosts.clone(),
+        );
+        assert_ne!(faucet_pk1, faucet_pk3);
+        let c1 = configs1.get(&hosts[0]).unwrap();
+        let c3 = configs3.get(&hosts[0]).unwrap();
+        assert_ne!(
+            c1.network_config.backend.swarm.node_key.as_ref(),
+            c3.network_config.backend.swarm.node_key.as_ref(),
+        );
     }
 }

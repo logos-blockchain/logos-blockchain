@@ -8,11 +8,15 @@ faucet_settings:
 deployment_settings_storage_path:
   deployment-settings.yaml
 
+entropy_file: tests/test_entropy
+
 mode: Run
 
 # Tracing
 tracing_settings:
-  logger: !Stdout
+  logger:
+    stdout: true
+    stderr: false
   tracing: None
   filter: None
   metrics: None
