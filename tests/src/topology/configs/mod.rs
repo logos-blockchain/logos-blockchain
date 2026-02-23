@@ -91,7 +91,7 @@ pub fn create_general_configs_with_blend_core_subset(
                 provider_sk: private_key.clone(),
                 zk_sk: secret_zk_key.clone(),
                 locator: Locator(blend_conf.core.backend.listening_address.clone()),
-                note: consensus_configs[0].blend_notes[i].clone(),
+                note: consensus_configs[i].blend_note.clone(),
             },
         )
         .collect();

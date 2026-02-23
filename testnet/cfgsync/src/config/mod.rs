@@ -219,7 +219,7 @@ fn create_providers(
                 ))
                 .unwrap(),
             ),
-            note: consensus_configs[0].blend_notes[i].clone(),
+            note: consensus_configs[i].blend_note.clone(),
         })
         .collect()
 }

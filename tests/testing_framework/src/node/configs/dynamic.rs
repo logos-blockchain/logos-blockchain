@@ -78,7 +78,7 @@ fn build_consensus_config_for_node(
     let (mut configs, _) =
         node_configs::consensus::create_consensus_configs(&[id], SHORT_PROLONGED_BOOTSTRAP_PERIOD);
     let mut config = configs.pop().ok_or(DynamicConfigBuildError::Consensus)?;
-    config.blend_notes.clone_from(&base.blend_notes);
+    config.blend_note.clone_from(&base.blend_note);
 
     Ok(config)
 }

@@ -51,7 +51,6 @@ pub fn apply_wallet_genesis_overrides(
         .map(|general| general.consensus_config.known_key.to_public_key())
         .collect::<HashSet<_>>();
 
-    let first_consensus = &general_configs[0].consensus_config;
     let blend_configs = general_configs
         .iter()
         .map(|general| general.blend_config.clone())
@@ -64,7 +63,7 @@ pub fn apply_wallet_genesis_overrides(
             provider_sk: private_key.clone(),
             zk_sk: secret_zk_key.clone(),
             locator: Locator(blend_conf.core.backend.listening_address.clone()),
-            note: first_consensus.blend_notes[idx].clone(),
+            note: general_configs[idx].consensus_config.blend_note.clone(),
         });
     }
 
