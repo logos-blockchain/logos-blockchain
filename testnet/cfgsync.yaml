@@ -8,7 +8,7 @@ faucet_settings:
 deployment_settings_storage_path:
   deployment-settings.yaml
 
-entropy_file: entropy
+entropy_file: /etc/logos-blockchain/entropy
 
 mode: Run
 

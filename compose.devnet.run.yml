@@ -25,6 +25,8 @@ services:
       - ./testnet:/etc/logos-blockchain
     depends_on:
       - grafana
+    environment:
+      - ENTROPY_FILE=${ENTROPY_FILE:-/etc/logos-blockchain/entropy}
     ports:
       - "4400:4400/tcp"
     entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_server.sh
