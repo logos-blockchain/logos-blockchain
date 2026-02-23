@@ -95,8 +95,20 @@ where
     // generator if it's still on the previous epoch. If not, `rotate_epoch` is
     // effectively a no-op.
     fn rotate_epoch(&mut self, new_epoch_public: LeaderInputs, new_epoch: Epoch) {
-        tracing::info!(target: LOG_TARGET, "Rotating epoch...");
-        self.core_proofs_generator.rotate_epoch(new_epoch_public);
+        match self.core_proofs_generator.current_epoch().cmp(&new_epoch) {
+            Ordering::Less => {
+                tracing::info!(target: LOG_TARGET, "Rotating epoch...");
+                self.core_proofs_generator.rotate_epoch(new_epoch_public);
+            }
+            Ordering::Equal => {
+                tracing::debug!(target: LOG_TARGET, "Core proofs generator already on the new epoch, ignoring the new public epoch info received.");
+            }
+            Ordering::Greater => {
+                panic!(
+                    "Public epoch info should never provide an epoch smaller than what the core proofs generator returns as current, as the public epoch info should never lag behind."
+                );
+            }
+        }
 
         let Some(leader_proofs_generator) = self.leader_proofs_generator.take() else {
             return;
@@ -126,7 +138,10 @@ where
         new_epoch_public: LeaderInputs,
         new_epoch: Epoch,
     ) {
-        tracing::info!(target: LOG_TARGET, "Setting epoch secret PoL info...");
+        // Update core proof generation and optionally deactivates leadership proof
+        // generation, which is then re-created below.
+        self.rotate_epoch(new_epoch_public, new_epoch);
+
         let current_session_local_node_index = self.core_proofs_generator.settings.local_node_index;
         let current_session_membership_size = self.core_proofs_generator.settings.membership_size;
         let current_session_core_public_inputs =

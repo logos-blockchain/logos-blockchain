@@ -9,6 +9,7 @@ use lb_blend_proofs::{
     quota::inputs::prove::{PublicInputs, public::LeaderInputs},
     selection::VerifiedProofOfSelection,
 };
+use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use tokio_util::sync::CancellationToken;
@@ -44,6 +45,12 @@ pub struct RealCoreProofsGenerator<PoQGenerator> {
     pub(super) proof_of_quota_generator: PoQGenerator,
     proof_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send + Sync>>,
     cancellation_token: CancellationToken,
+}
+
+impl<PoQGenerator> RealCoreProofsGenerator<PoQGenerator> {
+    pub(super) const fn current_epoch(&self) -> Epoch {
+        self.settings.epoch
+    }
 }
 
 #[async_trait]

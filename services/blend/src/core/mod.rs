@@ -898,8 +898,15 @@ where
                 (public_info, epoch) = handle_clock_event(clock_tick, blend_config, epoch_handler, &mut crypto_processor, backend, public_info, epoch).await;
             }
             Some(pol_info) = secret_pol_info_stream.next() => {
-                handle_new_secret_epoch_info(blend_config, &pol_info, &mut crypto_processor);
+                handle_new_secret_epoch_info(blend_config, &pol_info, &mut crypto_processor, epoch);
                 epoch = pol_info.epoch;
+                public_info.epoch = LeaderInputs {
+                    pol_ledger_aged: pol_info.poq_public_inputs.aged_root,
+                    pol_epoch_nonce: pol_info.poq_public_inputs.epoch_nonce,
+                    message_quota: blend_config.session_leadership_quota(),
+                    lottery_0: pol_info.poq_public_inputs.lottery_0,
+                    lottery_1: pol_info.poq_public_inputs.lottery_1,
+                };
             }
             Some(session_event) = remaining_session_stream.next() => {
                 match handle_session_event(session_event, blend_config, crypto_processor, message_scheduler, public_info, recovery_checkpoint, backend, sdp_relay, epoch).await {
@@ -1902,7 +1909,9 @@ where
                 ..current_public_info
             };
 
-            cryptographic_processor.rotate_epoch(new_leader_inputs, new_epoch);
+            if new_epoch > current_epoch {
+                cryptographic_processor.rotate_epoch(new_leader_inputs, new_epoch);
+            }
             backend.rotate_epoch(new_leader_inputs).await;
 
             (new_public_info, new_epoch)
@@ -1940,7 +1949,9 @@ where
             // one and move to the new one.
             cryptographic_processor.complete_epoch_transition();
             backend.complete_epoch_transition().await;
-            cryptographic_processor.rotate_epoch(new_leader_inputs, new_epoch);
+            if new_epoch > current_epoch {
+                cryptographic_processor.rotate_epoch(new_leader_inputs, new_epoch);
+            }
             backend.rotate_epoch(new_leader_inputs).await;
 
             (new_public_inputs, new_epoch)
@@ -1948,8 +1959,13 @@ where
     }
 }
 
-/// Handle the availability of new secret `PoL` info by passing it to the
-/// underlying cryptographic processor.
+/// Handle the availability of new secret `PoL` info by updating the
+/// cryptographic processor.
+///
+/// If the secret info is for a new epoch that the clock handler hasn't
+/// processed yet, the core proof generator and verifier are updated first
+/// via [`CoreCryptographicProcessor::rotate_epoch`]. Then the leadership
+/// proof generator is set with the received private inputs.
 fn handle_new_secret_epoch_info<
     NodeId,
     ProofsGenerator,
@@ -1965,19 +1981,29 @@ fn handle_new_secret_epoch_info<
         ProofsGenerator,
         ProofsVerifier,
     >,
+    current_epoch: Epoch,
 ) where
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsVerifier: ProofsVerifierTrait,
 {
     tracing::debug!(target: LOG_TARGET, "Received new secret PoL info for the epoch: {new_pol_info:?}. Updating the cryptographic processor...");
+    let new_leader_inputs = LeaderInputs {
+        pol_ledger_aged: new_pol_info.poq_public_inputs.aged_root,
+        pol_epoch_nonce: new_pol_info.poq_public_inputs.epoch_nonce,
+        message_quota: settings.session_leadership_quota(),
+        lottery_0: new_pol_info.poq_public_inputs.lottery_0,
+        lottery_1: new_pol_info.poq_public_inputs.lottery_1,
+    };
+
+    // If the secret info is for a new epoch not yet seen via the clock
+    // handler, update the core proof generator and proof verifier first.
+    if new_pol_info.epoch > current_epoch {
+        cryptographic_processor.rotate_epoch(new_leader_inputs, new_pol_info.epoch);
+    }
+
     cryptographic_processor.set_epoch_private(
         new_pol_info.poq_private_inputs,
-        LeaderInputs {
-            pol_ledger_aged: new_pol_info.poq_public_inputs.aged_root,
-            pol_epoch_nonce: new_pol_info.poq_public_inputs.aged_root,
-            message_quota: settings.session_leadership_quota(),
-            lottery_0: new_pol_info.poq_public_inputs.lottery_0,
-            lottery_1: new_pol_info.poq_public_inputs.lottery_1,
-        },
+        new_leader_inputs,
         new_pol_info.epoch,
     );
 }
