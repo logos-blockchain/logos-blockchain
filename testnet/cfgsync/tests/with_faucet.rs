@@ -126,6 +126,10 @@ async fn test_spawn_nodes_and_faucet() {
 
 #[ignore = "End-to-end deterministic faucet verification"]
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "e2e test with ceremony, node, and faucet phases"
+)]
 async fn test_deterministic_faucet_e2e() {
     // --- Phase 1: Ceremony ---
     let mut server = std::process::Command::new(SERVER_BIN)
@@ -214,23 +218,22 @@ async fn test_deterministic_faucet_e2e() {
     };
     println!(">>>> Spawning Node 0 {api_base}/cryptarchia/info");
     let node = Validator::spawn(run_config).await.expect("spawn failed");
-    println!("Waiting for nodes to start producing blocks...");
+    println!("Waiting for node to start producing blocks...");
     for attempt in 0..60 {
         sleep(Duration::from_secs(2)).await;
         let url = format!("{api_base}/cryptarchia/info");
-        if let Ok(resp) = reqwest::get(&url).await {
-            if let Ok(body) = resp.text().await {
-                if attempt % 5 == 0 {
-                    println!("  attempt {attempt}: {body}");
-                }
-                if let Ok(info) = serde_json::from_str::<serde_json::Value>(&body) {
-                    if let Some(height) = info["height"].as_u64() {
-                        if height > 0 {
-                            println!("Node is producing blocks (height={height})");
-                            break;
-                        }
-                    }
-                }
+        if let Ok(resp) = reqwest::get(&url).await
+            && let Ok(body) = resp.text().await
+        {
+            if attempt % 5 == 0 {
+                println!("  attempt {attempt}: {body}");
+            }
+            if let Ok(info) = serde_json::from_str::<serde_json::Value>(&body)
+                && let Some(height) = info["height"].as_u64()
+                && height > 0
+            {
+                println!("Node is producing blocks (height={height})");
+                break;
             }
         }
     }
@@ -292,18 +295,18 @@ async fn test_deterministic_faucet_e2e() {
     println!("Final balance response: {final_balance}");
 
     // Parse and verify balance increased
-    if let Ok(balance_json) = serde_json::from_str::<serde_json::Value>(&final_balance) {
-        if let Some(balance) = balance_json["balance"].as_u64() {
-            println!("Balance after drip: {balance}");
-            // The recipient already had 100000 from genesis (leader note), plus 1000 from
-            // drip
-            assert!(balance > 0, "Balance should be > 0 after drip");
-        }
+    if let Ok(balance_json) = serde_json::from_str::<serde_json::Value>(&final_balance)
+        && let Some(balance) = balance_json["balance"].as_u64()
+    {
+        println!("Balance after drip: {balance}");
+        // The recipient already had 100000 from genesis (leader note), plus 1000 from
+        // drip
+        assert!(balance > 0, "Balance should be > 0 after drip");
     }
 
     // Cleanup
-    faucet_proc.kill().ok();
-    faucet_proc.wait().ok();
+    drop(faucet_proc.kill());
+    drop(faucet_proc.wait());
     drop(node);
     server.kill().unwrap();
     server.wait().unwrap();
