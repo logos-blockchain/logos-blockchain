@@ -5,7 +5,7 @@ use tokio::time::sleep;
 use crate::{
     edge::{
         handlers::Error,
-        tests::utils::{NodeId, resume_panic_from, spawn_run},
+        tests::utils::{NodeId, spawn_run},
     },
     test_utils::membership::membership,
 };

@@ -444,7 +444,8 @@ where
 
         // Run the main event loop while the node is a core node across multiple
         // sessions. When the node becomes a non-core node in a new session, the
-        // components for the last session transition period are returned.
+        // old session's components (crypto processor, scheduler, blending token
+        // collector, public info, and epoch) are returned for the retirement phase.
         let (
             old_session_crypto_processor,
             old_session_message_scheduler,
@@ -787,6 +788,12 @@ where
 
 // Run the main event loop that persists while the node is a core node.
 // This can span across multiple sessions.
+//
+// The tracked `epoch` is updated by both clock events and secret PoL info
+// events (whichever arrives first), and guards against duplicate epoch
+// rotations in the cryptographic processor.
+//
+// Returns the old session components when the node is no longer a core node.
 #[expect(clippy::too_many_arguments, reason = "categorize args")]
 async fn run_event_loop<
     NodeId,
@@ -898,15 +905,27 @@ where
                 (public_info, epoch) = handle_clock_event(clock_tick, blend_config, epoch_handler, &mut crypto_processor, backend, public_info, epoch).await;
             }
             Some(pol_info) = secret_pol_info_stream.next() => {
+                // Update the crypto processor first (which conditionally rotates
+                // the epoch if the PoL info is ahead of the tracked epoch), then
+                // synchronize the backend verifier, tracked epoch, and public info.
                 handle_new_secret_epoch_info(blend_config, &pol_info, &mut crypto_processor, epoch);
-                epoch = pol_info.epoch;
-                public_info.epoch = LeaderInputs {
+                let new_leader_inputs = LeaderInputs {
                     pol_ledger_aged: pol_info.poq_public_inputs.aged_root,
                     pol_epoch_nonce: pol_info.poq_public_inputs.epoch_nonce,
                     message_quota: blend_config.session_leadership_quota(),
                     lottery_0: pol_info.poq_public_inputs.lottery_0,
                     lottery_1: pol_info.poq_public_inputs.lottery_1,
                 };
+                // Keep the backend verifier in sync so it can verify messages
+                // with new-epoch proofs. Without this, the verifier would be
+                // stuck on the old epoch if the PoL info arrives before the
+                // clock tick (since handle_clock_event guards both the crypto
+                // processor and the backend behind `new_epoch > current_epoch`).
+                if pol_info.epoch > epoch {
+                    backend.rotate_epoch(new_leader_inputs).await;
+                }
+                epoch = pol_info.epoch;
+                public_info.epoch = new_leader_inputs;
             }
             Some(session_event) = remaining_session_stream.next() => {
                 match handle_session_event(session_event, blend_config, crypto_processor, message_scheduler, public_info, recovery_checkpoint, backend, sdp_relay, epoch).await {
@@ -1274,12 +1293,12 @@ enum HandleSessionEventOutput<
     },
 }
 
-/// Blend a new message received from another service.
+/// Processes an already-serialized local data message from another service.
 ///
-/// When a new local data message is received, an attempt to serialize and
-/// encapsulate its payload is performed. If encapsulation is successful, the
-/// message is queued with the Blend scheduler and blended during the next
-/// round.
+/// The serialized payload is encapsulated with blend layers. Before scheduling,
+/// the outermost layers addressed to this node are self-decapsulated so that
+/// blending tokens are collected immediately and only the remaining layers (or
+/// the fully unwrapped message) are scheduled for the next release round.
 async fn handle_serialized_local_data_message<
     NodeId,
     Rng,
@@ -1381,8 +1400,12 @@ where
     state_updater.commit_changes()
 }
 
-/// Processes an already unwrapped and validated Blend message received from
-/// a core or edge peer.
+/// Processes an incoming Blend message (with verified public header) received
+/// from a core or edge peer.
+///
+/// Decapsulation is first attempted with the current session's cryptographic
+/// processor. If that fails and an old session processor is available (during
+/// a session transition), the old session processor is tried as a fallback.
 fn handle_incoming_blend_message<
     NodeId,
     Rng,
@@ -1848,10 +1871,15 @@ where
 /// Handle a clock event by calling into the epoch handler and process the
 /// resulting epoch event, if any.
 ///
-/// On a new epoch, it will update the cryptographic processor and the current
-/// `PoQ` public inputs. At the end of an epoch transition period, it will
-/// interact with the Blend components to communicate the end of such transition
-/// period.
+/// On a new epoch, it updates the public info and conditionally rotates both
+/// the cryptographic processor and the backend verifier. Both rotations are
+/// guarded by `new_epoch > current_epoch` to avoid duplicates when the PoL
+/// info handler in the event loop has already advanced to this epoch (and
+/// already called `backend.rotate_epoch`). At the end of an epoch transition
+/// period, it notifies the Blend components that the old epoch transition is
+/// complete.
+///
+/// Returns the updated public info and the new tracked epoch.
 async fn handle_clock_event<
     NodeId,
     ProofsGenerator,
@@ -1909,10 +1937,12 @@ where
                 ..current_public_info
             };
 
+            // Only rotate if the PoL info handler hasn't already advanced
+            // the crypto processor and backend verifier to this epoch.
             if new_epoch > current_epoch {
                 cryptographic_processor.rotate_epoch(new_leader_inputs, new_epoch);
+                backend.rotate_epoch(new_leader_inputs).await;
             }
-            backend.rotate_epoch(new_leader_inputs).await;
 
             (new_public_info, new_epoch)
         }
@@ -1945,14 +1975,15 @@ where
                 ..current_public_info
             };
 
-            // Complete transition of previous epoch, then set the current epoch as the old
-            // one and move to the new one.
+            // Complete the previous epoch's transition first, then rotate to
+            // the new epoch (only if the PoL info handler hasn't already
+            // advanced the crypto processor and backend verifier to this epoch).
             cryptographic_processor.complete_epoch_transition();
             backend.complete_epoch_transition().await;
             if new_epoch > current_epoch {
                 cryptographic_processor.rotate_epoch(new_leader_inputs, new_epoch);
+                backend.rotate_epoch(new_leader_inputs).await;
             }
-            backend.rotate_epoch(new_leader_inputs).await;
 
             (new_public_inputs, new_epoch)
         }

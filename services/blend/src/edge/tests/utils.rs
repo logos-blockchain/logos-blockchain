@@ -119,12 +119,6 @@ pub async fn spawn_run(
     (join_handle, session_sender, msg_sender, node_id_receiver)
 }
 
-/// Expect the panic from the given async task,
-/// and resume the panic, so the async test can check the panic message.
-pub async fn resume_panic_from(join_handle: JoinHandle<Result<(), Error>>) {
-    panic::resume_unwind(join_handle.await.unwrap_err().into_panic());
-}
-
 pub fn settings(
     local_id: NodeId,
     minimum_network_size: u64,
