@@ -142,9 +142,9 @@ lb-witness-generator               = { default-features = false, package = "logo
 lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
 lb-zone-sdk                        = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
 lb_network                         = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
-testing-framework-core             = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "tagged_ref_04" }
-testing-framework-env              = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "tagged_ref_04" }
-testing-framework-runner-local     = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "tagged_ref_04" }
+testing-framework-core             = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "tagged_ref_05" }
+testing-framework-env              = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "tagged_ref_05" }
+testing-framework-runner-local     = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "tagged_ref_05" }
 
 # External
 async-trait       = { default-features = false, version = "0.1" }
