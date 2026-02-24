@@ -119,7 +119,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
         with:
-          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}  # ✅ Unique per OS
+          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-smoke  # ✅ Unique per OS
           include-hidden-files: true
           path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Smoke/**
 
@@ -143,7 +143,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
         with:
-          name: cucumber-artifacts-${{ runner.os }}  # ✅ Unique per OS
+          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-cryptarchia  # ✅ Unique per OS
           include-hidden-files: true
           path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Cryptarchia/**
 
@@ -167,7 +167,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
         with:
-          name: cucumber-artifacts-${{ runner.os }}  # ✅ Unique per OS
+          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-transactions  # ✅ Unique per OS
           include-hidden-files: true
           path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Transactions/**
 

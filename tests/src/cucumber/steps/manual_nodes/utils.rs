@@ -462,7 +462,6 @@ async fn ensure_node_mode_online(
                         start.elapsed()
                     );
                 }
-                sleep(Duration::from_millis(100)).await;
             }
             Err(e) => {
                 return Err(StepError::StepFail {
@@ -473,6 +472,7 @@ async fn ensure_node_mode_online(
                 });
             }
         }
+        sleep(Duration::from_millis(100)).await;
         count += 1;
     }
 }

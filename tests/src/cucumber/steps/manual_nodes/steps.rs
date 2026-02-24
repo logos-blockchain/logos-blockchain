@@ -69,8 +69,8 @@ const fn step_we_use_ibd_peers(world: &mut CucumberWorld) {
     world.populate_ibd_peers = Some(true);
 }
 
-#[given(expr = "all peers muse be mode online after startup")]
-#[when(expr = "all peers muse be mode online after startup")]
+#[given(expr = "all peers must be mode online after startup")]
+#[when(expr = "all peers must be mode online after startup")]
 const fn step_all_nodes_to_br_mode_online(world: &mut CucumberWorld) {
     world.require_all_peers_mode_online_at_startup = Some(true);
 }

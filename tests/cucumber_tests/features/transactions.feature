@@ -8,7 +8,7 @@ Feature: Transactions
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
     And we use IBD peers
-    And all peers muse be mode online after startup
+    And all peers must be mode online after startup
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
@@ -28,7 +28,7 @@ Feature: Transactions
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
     And we use IBD peers
-    And all peers muse be mode online after startup
+    And all peers must be mode online after startup
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
@@ -48,7 +48,7 @@ Feature: Transactions
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
     And we use IBD peers
-    And all peers muse be mode online after startup
+    And all peers must be mode online after startup
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
@@ -61,6 +61,44 @@ Feature: Transactions
     When wallet "WALLET_2A" has 7 or more outputs and 14000 or more LGO in 60 seconds
     Then I stop all nodes
 
+  @transactions_ci
+  Scenario: Coin split with many transfers to other and coin join to self
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 4           | 26000        |
+      | 2             | 0           | 0            |
+    And I have a cluster with capacity of 2 nodes
+#    And we use IBD peers
+#    And all peers must be mode online after startup
+    And I start nodes with wallet resources:
+      | node_name | account_index | wallet_name | connected_to |
+      | NODE_1    | 1             | WALLET_1A   |              |
+      | NODE_2    | 2             | WALLET_2A   | NODE_1       |
+    When node "NODE_1" is at height 2 in 180 seconds
+    # Coin split
+    And I do a coin split for "WALLET_1A" of 25 UTXOs valued at 1000 LGO tokens each
+    And I do a coin split for "WALLET_1A" of 25 UTXOs valued at 1000 LGO tokens each
+    And I do a coin split for "WALLET_1A" of 25 UTXOs valued at 1000 LGO tokens each
+    And I do a coin split for "WALLET_1A" of 25 UTXOs valued at 1000 LGO tokens each
+    # Many small transfers to other wallet
+    When wallet "WALLET_1A" has 100 or more outputs in 180 seconds
+    And I send 50 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
+    When wallet "WALLET_2A" has 50 or more outputs in 180 seconds
+    # Coin join
+    When wallet "WALLET_1A" has 56000 or less LGO in 180 seconds
+    And I send 1 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_1A"
+    When wallet "WALLET_1A" has 0 or less encumbered outputs in 60 seconds
+    And I send 1 transactions of 2000 LGO each from wallet "WALLET_1A" to wallet "WALLET_1A"
+    When wallet "WALLET_1A" has 0 or less encumbered outputs in 60 seconds
+    And I send 1 transactions of 3000 LGO each from wallet "WALLET_1A" to wallet "WALLET_1A"
+    When wallet "WALLET_1A" has 0 or less encumbered outputs in 60 seconds
+    And I send 1 transactions of 4000 LGO each from wallet "WALLET_1A" to wallet "WALLET_1A"
+    When wallet "WALLET_1A" has 0 or less encumbered outputs in 60 seconds
+    And I send 1 transactions of 5000 LGO each from wallet "WALLET_1A" to wallet "WALLET_1A"
+    When wallet "WALLET_1A" has 0 or less encumbered outputs in 60 seconds
+    When wallet "WALLET_1A" has 13 or less outputs in 60 seconds
+    Then I stop all nodes
+
   @local_host @undefined_behaviour
   Scenario: Coin split transaction not mined
     Given the genesis block has the following wallet resources:
@@ -69,7 +107,7 @@ Feature: Transactions
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
 #    And we use IBD peers
-#    And all peers muse be mode online after startup
+#    And all peers must be mode online after startup
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
@@ -100,7 +138,7 @@ Feature: Transactions
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
 #    And we use IBD peers
-#    And all peers muse be mode online after startup
+#    And all peers must be mode online after startup
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |

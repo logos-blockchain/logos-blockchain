@@ -253,10 +253,13 @@ impl Debug for CucumberWorld {
             .field("run", &format!("{:?}", self.run))
             .field("membership_check", &self.membership_check)
             .field("readiness_checks", &self.readiness_checks)
-            .field("populate_ibd_peers", &self.populate_ibd_peers)
+            .field(
+                "populate_ibd_peers",
+                &format!("{:?}", self.populate_ibd_peers),
+            )
             .field(
                 "require_all_peers_mode_online_at_startup",
-                &self.require_all_peers_mode_online_at_startup,
+                &format!("{:?}", self.require_all_peers_mode_online_at_startup),
             )
             .field(
                 "genesis_block_utxos",
