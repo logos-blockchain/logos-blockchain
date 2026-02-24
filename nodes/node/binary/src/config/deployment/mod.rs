@@ -13,7 +13,7 @@ use crate::config::{
     time::deployment::Settings as TimeDeploymentSettings,
 };
 
-mod devnet;
+pub mod devnet;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
 pub enum WellKnownDeployment {
