@@ -7,7 +7,9 @@ use async_trait::async_trait;
 pub use block_feed::BlockRecord;
 use lb_node::config::RunConfig;
 use testing_framework_core::{
-    scenario::{Application, DynError, FeedRuntime, ScenarioBuilder as CoreScenarioBuilder},
+    scenario::{
+        Application, DynError, FeedRuntime, NodeClients, ScenarioBuilder as CoreScenarioBuilder,
+    },
     topology::{DeploymentProvider, DeploymentSeed, DynTopologyError},
 };
 use testing_framework_runner_local::{ManualCluster, ProcessDeployer};
@@ -45,8 +47,13 @@ impl Application for LbcEnv {
     type FeedRuntime = BlockFeedRuntime;
 
     async fn prepare_feed(
-        client: Self::NodeClient,
+        node_clients: NodeClients<Self>,
     ) -> Result<(<Self::FeedRuntime as FeedRuntime>::Feed, Self::FeedRuntime), DynError> {
+        let client = node_clients
+            .snapshot()
+            .into_iter()
+            .next()
+            .ok_or_else(|| "prepare_feed called with no node clients".to_string())?;
         prepare_block_feed(client).await
     }
 }
