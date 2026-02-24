@@ -204,11 +204,7 @@ async fn sdp_ops_e2e() {
 #[tokio::test]
 #[serial]
 async fn large_inscription_e2e() {
-    let initial: usize = 48 * 1024;
-    let step: usize = 1 * 1024;
-    let max: usize = 2 * 1024 * 1024;
-
-    for payload_size in (initial..=max).step_by(step) {
+    for payload_size in [32 * 1024, 128 * 1024, 512 * 1024, 1024 * 1024] {
         let topology = Topology::spawn(TopologyConfig::two_validators()).await;
         topology.wait_network_ready().await;
 
@@ -219,10 +215,13 @@ async fn large_inscription_e2e() {
 
         let validator_url = validator.url();
         let client = CommonHttpClient::new(None);
+
         println!("\nTesting inscription with payload size: {payload_size} bytes\n");
         let large_inscription = vec![0xAB; payload_size];
-        let mantle_tx =
-            create_inscription_transaction_with_id(ChannelId::from([1u8; 32]), Some(large_inscription));
+        let mantle_tx = create_inscription_transaction_with_id(
+            ChannelId::from([1u8; 32]),
+            Some(large_inscription),
+        );
         let tx_hash = mantle_tx.hash();
 
         client

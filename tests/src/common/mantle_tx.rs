@@ -204,7 +204,8 @@ pub fn create_inscription_transaction_with_id(
 
     let inscription_op = InscriptionOp {
         channel_id: id,
-        inscription: inscription.unwrap_or(format!("Test channel inscription {id:?}").into_bytes()),
+        inscription: inscription
+            .unwrap_or_else(|| format!("Test channel inscription {id:?}").into_bytes()),
         parent: MsgId::root(),
         signer,
     };
