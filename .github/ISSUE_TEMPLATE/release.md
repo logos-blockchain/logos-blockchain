@@ -17,9 +17,11 @@ Progress on the checklist must be provided as comments to the issue.
 - [ ] Wait for the workflow run to complete
 - [ ] Checkout and force reset the `testnet` branch to point to the tagged commit
 - [ ] Create a new symlink `compose.static.yml` -> `compose.devnet.setup.yml`
+- [ ] Add a file called `entropy` in the `testnet` folder with any content. Using the same entropy content as a previous deployment will result in the same faucet keys.
 - [ ] Push to `testnet` branch to trigger a new deployment
 - [ ] Wait around 1 minute for deployment to be updated with the new changes and for the ceremony to happen
-- [ ] Download the new deployment configuration from `https://devnet.blockchain.logos.co/node/0/cfgsync/deployment-settings`
+- [ ] Download the new deployment configuration from [https://devnet.blockchain.logos.co/node/0/cfgsync/deployment-settings](https://devnet.blockchain.logos.co/node/0/cfgsync/deployment-settings)
+- [ ] Copy-paste or attach the content of the deployment file to this issue for easier review
 
 ## Deployment Settings Update
 
@@ -30,15 +32,17 @@ Progress on the checklist must be provided as comments to the issue.
 ## GitHub Release
 
 - [ ] Manually trigger the [bundling workflow][bundling-workflow] from the `X.Y.Z` tag on GitHub
-- [ ] Wait for the bundling workflow to complete and generate a draft GitHub pre-release
+- [ ] Wait for the bundling workflow to complete and generate a draft GitHub pre-release. While the release is in progress, follow the steps in the [Devnet deployment][devnet-deployment-section] section below.
 - [ ] Address checklist of the generated GitHub release
 - [ ] Publish release
 
 ## Devnet deployment
 
-- [ ] Wait for the [Docker image workflow][docker-build-workflow] to complete
-- [ ] Checkout `testnet` branch and change the `compose.static.yml` symlink to now point to `compose.devnet.run.yml`
+- [ ] Checkout `testnet` branch again and change the `compose.static.yml` symlink to now point to `compose.devnet.run.yml`
 - [ ] Commit and push the changes to trigger environment re-deployment. Environment is now live.
+- [ ] Wait around 1 minute for deployment to be updated
+- [ ] Visit [https://devnet.blockchain.logos.co/node/{1,2,3}/network/info](https://devnet.blockchain.logos.co/node/{1,2,3}/network/info) and copy-paste each node's address and peer ID into the [Installation section of the devnet release Notion page][devnet-release-notion-page-installation]. If needed, at any time you can download fleet nodes' configs and logs from [https://devnet.blockchain.logos.co/node/{0,1,2,3}/node-data/](https://devnet.blockchain.logos.co/node/{0,1,2,3}/node-data/)
+- [ ] Go back to the [GitHub Release][github-release-section] section and finalize the release
 
 ## Post-Release
 
@@ -49,3 +53,6 @@ Progress on the checklist must be provided as comments to the issue.
 [testnet-docker-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/publish-testnet-image.yml 
 [bundling-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/prepare-release.yml
 [docker-build-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/publish-node-image.yml
+[devnet-deployment-section]: #devnet-deployment
+[github-release-section]: #github-release
+[devnet-release-notion-page-installation]: https://www.notion.so/nomos-tech/Internal-Devnet-Launch-February-2026-2fe261aa09df8025ad94e380933b4cf9?source=copy_link#2ff261aa09df8044b27dcaaf222baacc
