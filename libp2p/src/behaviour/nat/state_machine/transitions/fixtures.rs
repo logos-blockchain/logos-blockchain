@@ -32,13 +32,18 @@ impl PartialEq<&Self> for Box<dyn OnEvent> {
 pub fn all_events<'a>() -> HashSet<TestEvent<'a>> {
     [
         autonat_failed(),
+        autonat_failed_address_mismatch(),
         autonat_ok(),
+        autonat_ok_address_mismatch(),
         mapping_failed(),
+        mapping_failed_address_mismatch(),
         mapping_ok(),
         mapping_ok_address_mismatch(),
         new_listen_address(),
         external_address_confirmed(),
+        external_address_confirmed_address_mismatch(),
         default_gateway_changed(),
+        default_gateway_changed_no_local_address(),
         local_address_changed(),
         other_from_swarm_event(),
     ]

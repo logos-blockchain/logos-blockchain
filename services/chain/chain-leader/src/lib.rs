@@ -11,7 +11,10 @@ use std::{fmt::Display, iter, pin::Pin, time::Duration};
 
 use futures::{StreamExt as _, stream};
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use lb_chain_service::{
+    Epoch,
+    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
+};
 use lb_core::{
     block::{Block, Error as BlockError, MAX_TRANSACTIONS},
     header::HeaderId,
@@ -19,9 +22,9 @@ use lb_core::{
         AuthenticatedMantleTx, SignedMantleTx, Transaction, TxHash, TxSelect,
         gas::MainnetGasConstants, ops::leader_claim::LeaderClaimOp,
     },
-    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
+    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
 };
-use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
 use lb_ledger::LedgerState;
 use lb_services_utils::wait_until_services_are_ready;
@@ -53,7 +56,7 @@ use crate::{
     wallet::{LeaderWalletError, fund_and_sign_leader_claim_tx},
 };
 
-pub(crate) type WinningPolInfo = (LeaderPrivate, Epoch);
+pub(crate) type WinningPolInfo = (LeaderPrivate, LeaderPublic, Epoch);
 
 const SERVICE_ID: &str = "ChainLeader";
 

@@ -3,7 +3,7 @@ use std::{collections::HashSet, time::Duration};
 use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 use lb_common_http_client::CommonHttpClient;
 use lb_core::{
-    mantle::{Note, NoteId, Transaction as _},
+    mantle::{Note, NoteId, Transaction as _, ops::channel::ChannelId},
     sdp::{
         ActiveMessage, ActivityMetadata, Declaration, Locator, ServiceType, WithdrawMessage,
         blend::ActivityProof as BlendActivityProof,
@@ -11,7 +11,10 @@ use lb_core::{
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
 use logos_blockchain_tests::{
-    common::mantle_tx::{create_sdp_active_tx, create_sdp_declare_tx, create_sdp_withdraw_tx},
+    common::mantle_tx::{
+        create_inscription_transaction_with_id, create_sdp_active_tx, create_sdp_declare_tx,
+        create_sdp_withdraw_tx,
+    },
     nodes::validator::Validator,
     topology::{GenesisNoteSpec, Topology, TopologyConfig},
 };
@@ -196,6 +199,46 @@ async fn sdp_ops_e2e() {
 
     let removed = wait_for_declaration_absence(validator, locked_note_id, state_timeout).await;
     assert!(removed, "withdraw should remove the declaration");
+}
+
+#[tokio::test]
+#[serial]
+async fn large_inscription_e2e() {
+    for payload_size in [32 * 1024, 128 * 1024, 512 * 1024, 1024 * 1024] {
+        let topology = Topology::spawn(TopologyConfig::two_validators()).await;
+        topology.wait_network_ready().await;
+
+        let validator = &topology.validators()[0];
+        wait_for_height(validator, 1, Duration::from_secs(30))
+            .await
+            .expect("validator should produce the first block");
+
+        let validator_url = validator.url();
+        let client = CommonHttpClient::new(None);
+
+        println!("\nTesting inscription with payload size: {payload_size} bytes\n");
+        let large_inscription = vec![0xAB; payload_size];
+        let mantle_tx = create_inscription_transaction_with_id(
+            ChannelId::from([1u8; 32]),
+            Some(large_inscription),
+        );
+        let tx_hash = mantle_tx.hash();
+
+        client
+            .post_transaction(validator_url.clone(), mantle_tx)
+            .await
+            .expect("submit mantle transaction");
+
+        let inclusion_timeout = Duration::from_secs(60);
+        let results = validator
+            .wait_for_transactions_inclusion(vec![tx_hash], inclusion_timeout)
+            .await;
+
+        assert!(
+            results.first().is_some_and(Option::is_some),
+            "large inscription transaction should be included"
+        );
+    }
 }
 
 async fn wait_for_declaration<F>(

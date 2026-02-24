@@ -1,4 +1,5 @@
 use lb_blend_proofs::selection::inputs::VerifyInputs;
+use lb_cryptarchia_engine::Epoch;
 use test_log::test;
 
 use crate::message_blend::provers::{
@@ -21,6 +22,7 @@ async fn proof_generation() {
             local_node_index: None,
             membership_size: 1,
             public_inputs: core_public_inputs,
+            epoch: Epoch::new(0),
         },
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs),
     );
@@ -70,8 +72,13 @@ async fn proof_generation() {
         local_node_index: None,
         membership_size: 1,
         public_inputs: leadership_public_inputs,
+        epoch: Epoch::new(0),
     });
-    core_and_leader_proofs_generator.set_epoch_private(leadership_private_inputs);
+    core_and_leader_proofs_generator.set_epoch_private(
+        leadership_private_inputs,
+        leadership_public_inputs.leader,
+        Epoch::new(1),
+    );
 
     for _ in 0..leadership_quota {
         let proof = core_and_leader_proofs_generator
@@ -110,6 +117,7 @@ async fn epoch_rotation() {
             local_node_index: None,
             membership_size: 1,
             public_inputs,
+            epoch: Epoch::new(1),
         },
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(private_inputs),
     );
@@ -201,11 +209,16 @@ async fn epoch_private_info() {
             local_node_index: None,
             membership_size: 1,
             public_inputs: leadership_public_inputs,
+            epoch: Epoch::new(0),
         },
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs.clone()),
     );
 
-    core_and_leader_proofs_generator.set_epoch_private(leadership_private_inputs.clone());
+    core_and_leader_proofs_generator.set_epoch_private(
+        leadership_private_inputs,
+        leadership_public_inputs.leader,
+        Epoch::new(1),
+    );
 
     // Leadership proof should be generated and verified correctly.
     let proof = core_and_leader_proofs_generator
@@ -264,8 +277,9 @@ async fn epoch_private_info() {
         local_node_index: None,
         membership_size: 1,
         public_inputs: core_public_inputs,
+        epoch: Epoch::new(0),
     });
-    core_and_leader_proofs_generator.rotate_epoch(core_public_inputs.leader);
+    core_and_leader_proofs_generator.rotate_epoch(core_public_inputs.leader, Epoch::new(1));
 
     // We test that core proof generation still works fine
     let proof = core_and_leader_proofs_generator

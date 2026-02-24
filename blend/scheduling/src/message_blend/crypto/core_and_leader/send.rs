@@ -8,6 +8,7 @@ use lb_blend_message::{
 use lb_blend_proofs::quota::inputs::prove::{
     private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
 };
+use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::X25519PrivateKey;
 
 use crate::{
@@ -61,11 +62,13 @@ where
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
         core_proof_of_quota_generator: CorePoQGenerator,
+        epoch: Epoch,
     ) -> Self {
         let generator_settings = ProofsGeneratorSettings {
             local_node_index: membership.local_index(),
             membership_size: membership.size(),
             public_inputs: public_info,
+            epoch,
         };
         Self {
             num_blend_layers: settings.num_blend_layers,
@@ -79,12 +82,22 @@ where
         }
     }
 
-    pub fn rotate_epoch(&mut self, new_epoch_public_info: LeaderInputs) {
-        self.proofs_generator.rotate_epoch(new_epoch_public_info);
+    pub fn rotate_epoch(&mut self, new_epoch_public_info: LeaderInputs, new_epoch: Epoch) {
+        self.proofs_generator
+            .rotate_epoch(new_epoch_public_info, new_epoch);
     }
 
-    pub fn set_epoch_private(&mut self, new_epoch_private: ProofOfLeadershipQuotaInputs) {
-        self.proofs_generator.set_epoch_private(new_epoch_private);
+    pub fn set_epoch_private(
+        &mut self,
+        new_epoch_private: ProofOfLeadershipQuotaInputs,
+        new_epoch_public_info: LeaderInputs,
+        new_epoch: Epoch,
+    ) {
+        self.proofs_generator.set_epoch_private(
+            new_epoch_private,
+            new_epoch_public_info,
+            new_epoch,
+        );
     }
 }
 
@@ -196,6 +209,7 @@ mod test {
         public::{CoreInputs, LeaderInputs},
     };
     use lb_core::crypto::ZkHash;
+    use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
     use multiaddr::{Multiaddr, PeerId};
@@ -240,6 +254,7 @@ mod test {
                 },
             },
             MockCorePoQGenerator,
+            Epoch::new(0),
         );
 
         let new_leader_inputs = LeaderInputs {
@@ -250,7 +265,7 @@ mod test {
             lottery_1: Fr::ONE,
         };
 
-        processor.rotate_epoch(new_leader_inputs);
+        processor.rotate_epoch(new_leader_inputs, Epoch::new(1));
 
         assert_eq!(
             processor.proofs_generator.0.public_inputs.leader,
@@ -260,6 +275,13 @@ mod test {
 
     #[test]
     fn set_epoch_private() {
+        let leader_inputs = LeaderInputs {
+            message_quota: 1,
+            pol_epoch_nonce: ZkHash::ZERO,
+            pol_ledger_aged: ZkHash::ZERO,
+            lottery_0: Fr::ZERO,
+            lottery_1: Fr::ZERO,
+        };
         let mut processor = SessionCryptographicProcessor::<
             _,
             _,
@@ -280,15 +302,10 @@ mod test {
                     quota: 1,
                     zk_root: ZkHash::ZERO,
                 },
-                leader: LeaderInputs {
-                    message_quota: 1,
-                    pol_epoch_nonce: ZkHash::ZERO,
-                    pol_ledger_aged: ZkHash::ZERO,
-                    lottery_0: Fr::ZERO,
-                    lottery_1: Fr::ZERO,
-                },
+                leader: leader_inputs,
             },
             MockCorePoQGenerator,
+            Epoch::new(0),
         );
 
         let new_private_inputs = ProofOfLeadershipQuotaInputs {
@@ -300,7 +317,7 @@ mod test {
             transaction_hash: ZkHash::ONE,
         };
 
-        processor.set_epoch_private(new_private_inputs.clone());
+        processor.set_epoch_private(new_private_inputs, leader_inputs, Epoch::new(1));
 
         assert!(processor.proofs_generator.1 == Some(new_private_inputs));
     }

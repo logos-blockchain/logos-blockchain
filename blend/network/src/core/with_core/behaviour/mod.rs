@@ -1,12 +1,14 @@
 use core::{
     mem::{self, swap},
     num::NonZeroUsize,
+    time::Duration,
 };
 use std::{
-    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
+    collections::{HashMap, VecDeque, hash_map::Entry},
     convert::Infallible,
     ops::RangeInclusive,
     task::{Context, Poll, Waker},
+    time::Instant,
 };
 
 use either::Either;
@@ -49,6 +51,7 @@ mod old_session;
 mod tests;
 
 const LOG_TARGET: &str = "blend::network::core::core::behaviour";
+const SENSITIVITY_INTERVAL_FOR_DUPLICATES: Duration = Duration::from_millis(100);
 
 #[derive(Debug)]
 pub struct Config {
@@ -113,7 +116,7 @@ pub struct Behaviour<ProofsVerifier, ObservationWindowClockProvider> {
     /// identifiers have been exchanged between them.
     /// Sending a message with the same identifier more than once results in
     /// the peer being flagged as malicious, and the connection dropped.
-    exchanged_message_identifiers: HashMap<PeerId, HashSet<MessageIdentifier>>,
+    exchanged_message_identifiers: HashMap<PeerId, HashMap<MessageIdentifier, Instant>>,
     observation_window_clock_provider: ObservationWindowClockProvider,
     current_membership: Membership<PeerId>,
     /// The [minimum, maximum] peering degree of this node.
@@ -322,7 +325,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
     #[cfg(test)]
     pub const fn exchanged_message_identifiers(
         &self,
-    ) -> &HashMap<PeerId, HashSet<MessageIdentifier>> {
+    ) -> &HashMap<PeerId, HashMap<MessageIdentifier, Instant>> {
         &self.exchanged_message_identifiers
     }
 
@@ -349,6 +352,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
 
         let serialized_message = serialize_encapsulated_message(message);
         let mut at_least_one_receiver = false;
+        tracing::debug!(target: LOG_TARGET, "Forwarding message with id {:?}. Negotiated peers: {:?}. Excluded peer: {excluded_peer:?}", hex::encode(message_id), self.negotiated_peers());
         self.negotiated_peers
             .iter()
             // Exclude the peer the message was received from.
@@ -356,13 +360,14 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             // Exclude from the list of candidate peers any peer that is not in a healthy state.
             .filter(|(_, peer_state)| peer_state.negotiated_state.is_healthy())
             .for_each(|(peer_id, RemotePeerConnectionDetails { connection_id, .. })| {
-                if self
+                if let Entry::Vacant(message_peer_entry) = self
                     .exchanged_message_identifiers
                     .entry(*peer_id)
                     .or_default()
-                    .insert(message_id)
+                    .entry(message_id)
                 {
                     tracing::debug!(target: LOG_TARGET, "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message.");
+                    message_peer_entry.insert(Instant::now());
                     self.events.push_back(ToSwarm::NotifyHandler {
                         peer_id: *peer_id,
                         handler: NotifyHandler::One(*connection_id),
@@ -668,6 +673,9 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         }
     }
 
+    /// Check if a message with a given ID has been exchanged with a peer
+    /// before. If not, the cache entry is updated. Otherwise an `Error` is
+    /// returned.
     fn check_and_update_message_cache(
         &mut self,
         message_id: &MessageIdentifier,
@@ -677,12 +685,38 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             .exchanged_message_identifiers
             .entry(peer_id)
             .or_default();
-        if !exchanged_message_identifiers.insert(*message_id) {
-            tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged. Marking it as spammy.");
-            self.close_spammy_connection((peer_id, connection_id), SpamReason::DuplicateMessage);
-            return Err(());
+
+        match exchanged_message_identifiers.entry(*message_id) {
+            Entry::Vacant(vacant_message_entry) => {
+                vacant_message_entry.insert(Instant::now());
+                Ok(())
+            }
+            Entry::Occupied(occupied_message_entry) => {
+                let time_sent = occupied_message_entry.get();
+                // If the duplicate arrived within the sensitivity interval, it is
+                // likely due to a race condition (both peers forwarding the same
+                // message to each other). Simply ignore it.
+                if Instant::now().duration_since(*time_sent) <= SENSITIVITY_INTERVAL_FOR_DUPLICATES
+                {
+                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged but within the sensitivity window. Simply ignoring the message.");
+                    Ok(())
+                } else {
+                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged. Marking it as spammy.");
+                    self.close_spammy_connection(
+                        (peer_id, connection_id),
+                        SpamReason::DuplicateMessage,
+                    );
+                    Err(())
+                }
+            }
         }
-        Ok(())
+    }
+
+    /// Return `True` if this peer has an established (negotiated or not)
+    /// incoming connection with the specified peer, `False` otherwise.
+    fn has_incoming_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
+        self.has_negotiated_incoming_connection_with_peer(remote_peer)
+            || self.has_pending_incoming_connection_with_peer(remote_peer)
     }
 
     /// Return `True` if this peer has an established (negotiated or not)
@@ -690,6 +724,14 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
     fn has_outgoing_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
         self.has_negotiated_outgoing_connection_with_peer(remote_peer)
             || self.has_pending_outgoing_connection_with_peer(remote_peer)
+    }
+
+    /// Return `True` if there is a negotiated inbound connection with the
+    /// provided peer.
+    fn has_negotiated_incoming_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
+        self.negotiated_peers
+            .get(remote_peer)
+            .is_some_and(|remote| remote.role.is_dialer())
     }
 
     /// Return `true` if there is a negotiated outbound connection with the
@@ -700,7 +742,19 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             .is_some_and(|remote| remote.role.is_listener())
     }
 
-    /// Return `true` if there is at least one outbound connection pending
+    /// Return `True` if there is at least one inbound connection pending
+    /// upgrade with the provided peer.
+    // TODO: Find a different data structure to be able to perform this check in
+    // O(1).
+    fn has_pending_incoming_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
+        self.connections_waiting_upgrade
+            .iter()
+            .any(|((peer_id, _), remote_endpoint)| {
+                peer_id == remote_peer && remote_endpoint.is_dialer()
+            })
+    }
+
+    /// Return `True` if there is at least one outbound connection pending
     /// upgrade with the provided peer.
     // TODO: Find a different data structure to be able to perform this check in
     // O(1).
@@ -815,7 +869,7 @@ where
                     }
                 }
                 Err(e) => {
-                    tracing::error!(target: LOG_TARGET, "Failed to handle message from the old session: {e:?}");
+                    tracing::trace!(target: LOG_TARGET, "Failed to handle message from the old session: {e:?}");
                     return;
                 }
             }
@@ -911,16 +965,13 @@ where
             return Ok(Either::Right(DummyConnectionHandler));
         }
 
-        // If there is already an established inbound connection with the given peer,
-        // do not try to upgrade the new one as we already have an inbound connection.
-        // Otherwise, we let the connection upgrade, and we will close one of the two
-        // connections depending on the comparison result of local and remote peer IDs.
-        if let Some(RemotePeerConnectionDetails {
-            role: Endpoint::Dialer,
-            ..
-        }) = self.negotiated_peers.get(&peer_id)
-        {
-            tracing::trace!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} will not be upgraded since there is already an inbound connection established.");
+        // If there is already an established or pending inbound connection with
+        // the given peer, do not try to upgrade the new one as we already have an
+        // inbound connection. Otherwise, we let the connection upgrade, and we will
+        // close one of the two connections depending on the comparison result of
+        // local and remote peer IDs.
+        if self.has_incoming_connection_with_peer(&peer_id) {
+            tracing::trace!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} will not be upgraded since there is already an inbound connection established or pending.");
             return Ok(Either::Right(DummyConnectionHandler));
         }
 

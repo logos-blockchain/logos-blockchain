@@ -15,6 +15,8 @@ use lb_blend_proofs::{
     },
     selection::VerifiedProofOfSelection,
 };
+use lb_cryptarchia_engine::Epoch;
+use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
@@ -41,6 +43,7 @@ pub trait LeaderProofsGenerator: Sized {
         &mut self,
         new_epoch_public: LeaderInputs,
         new_private_inputs: ProofOfLeadershipQuotaInputs,
+        new_epoch: Epoch,
     );
     /// Get the next leadership proof.
     async fn get_next_proof(&mut self) -> BlendLayerProof;
@@ -75,15 +78,17 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
         &mut self,
         new_epoch_public: LeaderInputs,
         new_private: ProofOfLeadershipQuotaInputs,
+        new_epoch: Epoch,
     ) {
         tracing::info!(target: LOG_TARGET, "Rotating epoch...");
 
         // On epoch rotation, we maintain the current session info and only change the
         // PoL relevant parts.
         self.settings.public_inputs.leader = new_epoch_public;
+        self.settings.epoch = new_epoch;
 
         // Compute new proofs with the updated settings.
-        self.generate_new_proofs_stream(new_private);
+        self.generate_new_proofs_stream(&new_private);
     }
 
     async fn get_next_proof(&mut self) -> BlendLayerProof {
@@ -92,13 +97,13 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
             .next()
             .await
             .expect("Underlying proof generation stream should always yield items.");
-        tracing::trace!(target: LOG_TARGET, "Generated leadership Blend layer proof with key nullifier {:?} addressed to node at index {:?}", proof.proof_of_quota.key_nullifier(), proof.proof_of_selection.expected_index(self.settings.membership_size));
+        tracing::trace!(target: LOG_TARGET, "Generated leadership Blend layer proof with key nullifier {:?} addressed to node at index {:?}", hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), proof.proof_of_selection.expected_index(self.settings.membership_size));
         proof
     }
 }
 
 impl RealLeaderProofsGenerator {
-    fn generate_new_proofs_stream(&mut self, private_inputs: ProofOfLeadershipQuotaInputs) {
+    fn generate_new_proofs_stream(&mut self, private_inputs: &ProofOfLeadershipQuotaInputs) {
         self.cancellation_token.cancel();
 
         let new_cancellation_token = CancellationToken::new();
@@ -106,12 +111,20 @@ impl RealLeaderProofsGenerator {
 
         self.proof_stream = Box::pin(create_leadership_proof_stream(
             self.settings.public_inputs,
-            private_inputs,
+            *private_inputs,
             new_cancellation_token,
         ));
     }
+
+    pub(super) const fn current_epoch(&self) -> Epoch {
+        self.settings.epoch
+    }
 }
 
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "Spawning an async task. Issues with lifetimes."
+)]
 fn create_leadership_proof_stream(
     public_inputs: PoQVerificationInputsMinusSigningKey,
     private_inputs: ProofOfLeadershipQuotaInputs,
@@ -141,7 +154,6 @@ fn create_leadership_proof_stream(
             // layer is out of scope for this component, and will be up to the
             // message scheduler.
             let message_release_index = current_index % message_quota;
-            let private_inputs = private_inputs.clone();
             let token = cancellation_token.clone();
 
             async move {

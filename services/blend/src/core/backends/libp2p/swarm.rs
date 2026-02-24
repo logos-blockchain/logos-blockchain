@@ -15,8 +15,9 @@ use lb_blend::{
     },
     network::core::{
         NetworkBehaviourEvent,
-        with_core::behaviour::{
-            Event as CoreToCoreEvent, IntervalStreamProvider, NegotiatedPeerState,
+        with_core::{
+            behaviour::{Event as CoreToCoreEvent, IntervalStreamProvider, NegotiatedPeerState},
+            error::Error,
         },
         with_edge::behaviour::Event as CoreToEdgeEvent,
     },
@@ -360,8 +361,14 @@ where
             .with_core_mut()
             .validate_and_forward_message(msg, except)
         {
-            tracing::error!(target: LOG_TARGET, "Failed to forward message to blend network: {e:?}");
-            tracing::trace!(counter.failed_outbound_messages = 1);
+            // If we have a single connection, then we will always hit the `NoPeers` error.
+            // In this case it's ok not to log such error, since this function is only
+            // called on FORWARDED messages, not on PUBLISHED ones, for which we want to
+            // know if that is the issue.
+            if !matches!(e, Error::NoPeers) {
+                tracing::error!(target: LOG_TARGET, "Failed to forward message to blend network: {e:?}");
+                tracing::trace!(counter.failed_outbound_messages = 1);
+            }
         } else {
             tracing::trace!(counter.successful_outbound_messages = 1);
         }

@@ -12,11 +12,8 @@ exporters:
     tls:
       insecure: true
 
-  debug:
-    verbosity: detailed
-
 service:
   pipelines:
     logs:
       receivers: [otlp]
-      exporters: [otlp_http/loki, debug]
+      exporters: [otlp_http/loki]

@@ -19,7 +19,7 @@ Progress on the checklist must be provided as comments to the issue.
 - [ ] Create a new symlink `compose.static.yml` -> `compose.devnet.setup.yml`
 - [ ] Push to `testnet` branch to trigger a new deployment
 - [ ] Wait around 1 minute for deployment to be updated with the new changes and for the ceremony to happen
-- [ ] Download the new deployment configuration from `https://devnet.blockchain.logos.co/node/0/cfgsync/deployment-config`
+- [ ] Download the new deployment configuration from `https://devnet.blockchain.logos.co/node/0/cfgsync/deployment-settings`
 
 ## Deployment Settings Update
 

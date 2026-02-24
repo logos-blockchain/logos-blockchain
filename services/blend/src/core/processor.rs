@@ -27,6 +27,7 @@ use lb_blend::{
         },
     },
 };
+use lb_chain_service::Epoch;
 
 pub struct CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>(
     SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
@@ -44,6 +45,7 @@ where
         settings: SessionCryptographicProcessorSettings,
         public_info: PoQVerificationInputsMinusSigningKey,
         core_proof_of_quota_generator: CorePoQGenerator,
+        epoch: Epoch,
     ) -> Result<Self, Error>
     where
         NodeId: Eq + Hash,
@@ -58,6 +60,7 @@ where
                 settings,
                 public_info,
                 core_proof_of_quota_generator,
+                epoch,
             ))
         }
     }
@@ -67,12 +70,14 @@ where
         settings: SessionCryptographicProcessorSettings,
         public_info: PoQVerificationInputsMinusSigningKey,
         core_proof_of_quota_generator: CorePoQGenerator,
+        epoch: Epoch,
     ) -> Self {
         Self(SessionCryptographicProcessor::new(
             settings,
             membership,
             public_info,
             core_proof_of_quota_generator,
+            epoch,
         ))
     }
 }
@@ -240,6 +245,7 @@ mod tests {
         },
         scheduling::message_blend::crypto::SessionCryptographicProcessorSettings,
     };
+    use lb_chain_service::Epoch;
     use lb_core::crypto::ZkHash;
     use lb_groth16::Fr;
     use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
@@ -280,7 +286,8 @@ mod tests {
             NonZeroU64::new(1).unwrap(),
             settings(local_id),
             mock_verification_inputs(),
-            ()
+            (),
+            Epoch::new(0)
         )
         .unwrap();
     }
@@ -300,6 +307,7 @@ mod tests {
             settings(local_id),
             mock_verification_inputs(),
             (),
+            Epoch::new(0),
         );
         assert!(matches!(result, Err(Error::NetworkIsTooSmall(1))));
     }
@@ -319,6 +327,7 @@ mod tests {
             settings(local_id),
             mock_verification_inputs(),
             (),
+            Epoch::new(0),
         );
         assert!(matches!(result, Err(Error::LocalIsNotCoreNode)));
     }
@@ -344,6 +353,7 @@ mod tests {
             settings(local_id),
             mock_verification_inputs(),
             (),
+            Epoch::new(0),
         );
         assert!(matches!(
             processor.decapsulate_message_recursive(mock_message),
@@ -374,6 +384,7 @@ mod tests {
             settings(local_id),
             mock_verification_inputs(),
             (),
+            Epoch::new(0),
         );
         StaticFetchVerifier::set_remaining_valid_poq_proofs(1);
         let decapsulation_output = processor
@@ -408,6 +419,7 @@ mod tests {
             settings(local_id),
             mock_verification_inputs(),
             (),
+            Epoch::new(0),
         );
         StaticFetchVerifier::set_remaining_valid_poq_proofs(2);
         let decapsulation_output = processor
@@ -442,6 +454,7 @@ mod tests {
             settings(local_id),
             mock_verification_inputs(),
             (),
+            Epoch::new(0),
         );
         StaticFetchVerifier::set_remaining_valid_poq_proofs(3);
         let decapsulation_output = processor

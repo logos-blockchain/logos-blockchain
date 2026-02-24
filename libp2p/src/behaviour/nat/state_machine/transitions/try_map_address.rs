@@ -73,7 +73,7 @@ mod tests {
         state_machine.on_test_event(event);
         assert_eq!(
             state_machine.inner.as_ref().unwrap(),
-            &TestIfMappedPublic::for_test(ADDR.clone())
+            &TestIfMappedPublic::for_test(ADDR.clone(), ADDR.clone())
         );
         assert_eq!(
             rx.try_recv(),

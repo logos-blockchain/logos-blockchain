@@ -8,6 +8,8 @@ faucet_settings:
 deployment_settings_storage_path:
   deployment-settings.yaml
 
+entropy_file: /etc/logos-blockchain/entropy
+
 mode: Run
 
 # Tracing
@@ -16,7 +18,7 @@ tracing_settings:
     otlp:
       endpoint: "http://otel:4317"
       service_name: "init_node"
-    stdout: true
+    stdout: false
     stderr: false
     file:
       directory: "./state/logs"

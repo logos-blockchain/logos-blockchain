@@ -36,9 +36,14 @@ pub struct SystemGatewayDetector;
 
 impl GatewayDetector for SystemGatewayDetector {
     fn detect() -> Result<IpAddr, String> {
-        default_net::get_default_gateway()
-            .map(|gateway| gateway.ip_addr)
-            .map_err(|e| format!("Failed to get default gateway: {e}"))
+        let gateway = netdev::get_default_gateway()
+            .map_err(|e| format!("Failed to get default gateway: {e}"))?;
+        gateway
+            .ipv4
+            .first()
+            .map(|addr| IpAddr::V4(*addr))
+            .or_else(|| gateway.ipv6.first().map(|addr| IpAddr::V6(*addr)))
+            .ok_or_else(|| "Gateway has no IP address".to_owned())
     }
 }
 

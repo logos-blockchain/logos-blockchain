@@ -25,8 +25,12 @@ use lb_node::{
         ApiConfig, CryptarchiaConfig, RunConfig, SdpConfig, StorageConfig, WalletConfig,
         api::serde::AxumBackendSettings,
         cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
-        deployment::DeploymentSettings, sdp::serde::RequiredValues as SdpConfigRequiredValues,
-        state::Config as StateConfig, tracing::serde as tracing,
+        deployment::DeploymentSettings,
+        sdp::serde::{
+            Declaration as SdpDeclarationConfig, RequiredValues as SdpConfigRequiredValues,
+        },
+        state::Config as StateConfig,
+        tracing::serde as tracing,
         wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
 };
@@ -365,9 +369,17 @@ pub fn create_validator_config(
 
     let storage_config = StorageConfig::default();
 
-    let sdp_config = SdpConfig::with_required_values(SdpConfigRequiredValues {
+    let mut sdp_config = SdpConfig::with_required_values(SdpConfigRequiredValues {
         funding_pk: config.consensus_config.funding_sk.as_public_key(),
     });
+
+    if let Some(declaration_id) = config.sdp_config.declaration_id {
+        sdp_config.declaration = Some(SdpDeclarationConfig {
+            id: declaration_id,
+            zk_id: config.consensus_config.blend_note.pk,
+            locked_note_id: config.consensus_config.blend_note.note_id,
+        });
+    }
 
     let wallet_config = {
         let mut base_config = WalletConfig::with_required_values(WalletConfigRequiredValues {

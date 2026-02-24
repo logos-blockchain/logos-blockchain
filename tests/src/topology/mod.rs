@@ -26,6 +26,7 @@ use crate::{
         blend::{GeneralBlendConfig, create_blend_configs},
         consensus::{SHORT_PROLONGED_BOOTSTRAP_PERIOD, create_consensus_configs},
         deployment::e2e_deployment_settings_with_genesis_tx,
+        sdp::create_sdp_configs,
         time::default_time_config,
     },
 };
@@ -118,7 +119,7 @@ impl Topology {
                     provider_sk: private_key.clone(),
                     zk_sk: zk_secret_key.clone(),
                     locator: Locator(blend_conf.core.backend.listening_address.clone()),
-                    note: consensus_configs[0].blend_notes[i].clone(),
+                    note: consensus_configs[i].blend_note.clone(),
                 },
             )
             .collect();
@@ -140,6 +141,8 @@ impl Topology {
         // Set Blend keys in KMS of each node config.
         let kms_configs = create_kms_configs(&blend_configs, &consensus_configs);
 
+        let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations);
+
         let mut node_configs = vec![];
 
         for i in 0..n_participants {
@@ -151,6 +154,7 @@ impl Topology {
                 tracing_config: tracing_configs[i].clone(),
                 time_config: time_config.clone(),
                 kms_config: kms_configs[i].clone(),
+                sdp_config: sdp_configs[i].clone(),
             });
         }
 

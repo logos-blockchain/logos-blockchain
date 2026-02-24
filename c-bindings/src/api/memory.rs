@@ -20,7 +20,7 @@ pub fn free<Type>(pointer: *mut Type) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_cstring(block: *mut c_char) {
     if block.is_null() {
-        eprintln!("Trying to free a null 'Block' pointer. Exiting");
+        log::error!("Trying to free a null 'Block' pointer. Exiting");
         return;
     }
     drop(unsafe { CString::from_raw(block) });

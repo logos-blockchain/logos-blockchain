@@ -90,7 +90,7 @@ impl CommonHttpClient {
     #[must_use]
     pub fn new(basic_auth: Option<BasicAuthCredentials>) -> Self {
         let initial_stream_window_size: u32 =
-            u32::try_from(10 * default_max_body_size() / 6).unwrap_or(4 * 1025);
+            u32::try_from(6 * default_max_body_size() / 10).unwrap_or(4 * 1025);
         let client = ClientBuilder::new()
             .http2_initial_stream_window_size(initial_stream_window_size)
             .build()
