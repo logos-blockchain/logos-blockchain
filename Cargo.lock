@@ -4330,7 +4330,9 @@ dependencies = [
  "logos-blockchain-groth16",
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
+ "logos-blockchain-node",
  "reqwest",
+ "serde_yaml",
  "tokio",
 ]
 

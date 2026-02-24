@@ -34,6 +34,13 @@ where
         let maximum_core_peering_degree = *config.backend.core_peering_degree.end() as usize;
         let maximum_edge_incoming_connections =
             config.backend.max_edge_node_incoming_connections as usize;
+
+        // We double max core peering degree for session transition period
+        let maximum_established_outgoing_connections =
+            maximum_core_peering_degree.saturating_mul(2);
+        let maximum_established_connections = maximum_established_outgoing_connections
+            .saturating_add(maximum_edge_incoming_connections);
+
         Self {
             blend: lb_blend::network::core::NetworkBehaviour::new(
                 &lb_blend::network::core::Config {
@@ -56,20 +63,12 @@ where
             ),
             limits: libp2p::connection_limits::Behaviour::new(
                 ConnectionLimits::default()
-                    // Max established = max core peering degree + max edge incoming connections.
-                    .with_max_established(Some(
-                        maximum_core_peering_degree
-                            .saturating_add(maximum_edge_incoming_connections)
-                            as u32,
-                    ))
+                    .with_max_established(Some(maximum_established_connections as u32))
                     // Max established incoming = max established.
-                    .with_max_established_incoming(Some(
-                        maximum_core_peering_degree
-                            .saturating_add(maximum_edge_incoming_connections)
-                            as u32,
-                    ))
-                    // Max established outgoing = max core peering degree.
-                    .with_max_established_outgoing(Some(maximum_core_peering_degree as u32)),
+                    .with_max_established_incoming(Some(maximum_established_connections as u32))
+                    .with_max_established_outgoing(Some(
+                        maximum_established_outgoing_connections as u32,
+                    )),
             ),
             blocked_peers: libp2p::allow_block_list::Behaviour::default(),
         }
