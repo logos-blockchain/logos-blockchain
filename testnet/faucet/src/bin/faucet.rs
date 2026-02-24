@@ -19,7 +19,7 @@ struct Args {
     #[arg(short, long, conflicts_with = "faucet_pk")]
     deployment_file: Option<PathBuf>,
     /// Hex-encoded faucet public key.
-    #[arg(long, conflicts_with = "config")]
+    #[arg(long, conflicts_with = "deployment_file")]
     faucet_pk: Option<String>,
     #[arg(short, long)]
     drip_amount: u64,
