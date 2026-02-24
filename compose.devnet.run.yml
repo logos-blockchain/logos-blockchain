@@ -31,6 +31,17 @@ services:
       - "4400:4400/tcp"
     entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_server.sh
 
+  faucet:
+    container_name: faucet
+    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    volumes:
+      - node-data:/node-data
+      - ./testnet:/etc/logos-blockchain
+    environment:
+      - FAUCET_PORT=18090
+      - NODE_API_ADDR=http://logos_blockchain_node_0:${NODE0_API_PORT}
+    entrypoint: /etc/logos-blockchain/scripts/run_faucet.sh
+
   logos-blockchain-node-0:
     container_name: logos_blockchain_node_0
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
@@ -45,7 +56,6 @@ services:
       - CFG_NETWORK_PORT=${NODE0_NET_PORT}
       - CFG_BLEND_PORT=${NODE0_BLEND_PORT}
       - CFG_API_PORT=${NODE0_API_PORT}
-      - FAUCET_PORT=${NODE0_FAUCET_PORT}
     ports:
       - "3000:3000/udp"
       - "3400:3400/udp"
@@ -66,7 +76,6 @@ services:
       - CFG_NETWORK_PORT=${NODE1_NET_PORT}
       - CFG_BLEND_PORT=${NODE1_BLEND_PORT}
       - CFG_API_PORT=${NODE1_API_PORT}
-      - FAUCET_PORT=${NODE1_FAUCET_PORT}
     ports:
       - "3001:3001/udp"
       - "3401:3401/udp"
@@ -87,7 +96,6 @@ services:
       - CFG_NETWORK_PORT=${NODE2_NET_PORT}
       - CFG_BLEND_PORT=${NODE2_BLEND_PORT}
       - CFG_API_PORT=${NODE2_API_PORT}
-      - FAUCET_PORT=${NODE2_FAUCET_PORT}
     ports:
       - "3002:3002/udp"
       - "3402:3402/udp"
@@ -108,7 +116,6 @@ services:
       - CFG_NETWORK_PORT=${NODE3_NET_PORT}
       - CFG_BLEND_PORT=${NODE3_BLEND_PORT}
       - CFG_API_PORT=${NODE3_API_PORT}
-      - FAUCET_PORT=${NODE3_FAUCET_PORT}
     ports:
       - "3003:3003/udp"
       - "3403:3403/udp"
