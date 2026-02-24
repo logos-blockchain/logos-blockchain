@@ -18,16 +18,6 @@
 </head>
 <body>
     <h2>Logos Faucet</h2>
-    
-    <div class="field">
-        <label for="node">Select Node</label>
-        <select id="node">
-            <option value="0">Node 0</option>
-            <option value="1">Node 1</option>
-            <option value="2">Node 2</option>
-            <option value="3">Node 3</option>
-        </select>
-    </div>
 
     <div class="field">
         <label for="pk">Destination Public Key (Hex)</label>
@@ -43,7 +33,6 @@
         const respDiv = document.getElementById('response');
 
         btn.onclick = async () => {
-            const nodeId = document.getElementById('node').value;
             const pk = document.getElementById('pk').value.trim();
 
             if (!pk) return alert("Please enter a Public Key");
@@ -53,7 +42,7 @@
             respDiv.className = '';
 
             try {
-                const response = await fetch(`./faucet/${nodeId}/${pk}`, {
+                const response = await fetch(`./faucet/${pk}`, {
                     method: 'POST'
                 });
 
