@@ -68,6 +68,7 @@ impl ProofsVerifier for RealProofsVerifier {
     type Error = Error;
 
     fn new(public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
+        tracing::debug!("Generating new proof verifier with public inputs: {public_inputs:?}");
         Self {
             current_inputs: public_inputs,
             previous_epoch_inputs: None,
@@ -80,6 +81,9 @@ impl ProofsVerifier for RealProofsVerifier {
             swap(&mut self.current_inputs.leader, &mut new_pol_inputs);
             new_pol_inputs
         };
+        tracing::debug!(
+            "Transitioning epochs for proof verifier from: {old_epoch_inputs:?} to: {new_pol_inputs:?}"
+        );
         self.previous_epoch_inputs = Some(old_epoch_inputs);
     }
 
@@ -109,6 +113,7 @@ impl ProofsVerifier for RealProofsVerifier {
             })
             .or_else(|_| {
                 let Some(previous_epoch_inputs) = self.previous_epoch_inputs else {
+                    tracing::debug!("Input proof invalid and no previous epoch to try with.");
                     return Err(Error::ProofOfQuota(quota::Error::InvalidProof));
                 };
                 proof
@@ -118,7 +123,9 @@ impl ProofsVerifier for RealProofsVerifier {
                         session,
                         signing_key: *signing_key.as_inner(),
                     })
-                    .map_err(Error::ProofOfQuota)
+                    .map_err(Error::ProofOfQuota).inspect_err(|_| {
+                        tracing::debug!("Input proof invalid with both current and previous epoch public inputs.");
+                    })
             })
     }
 

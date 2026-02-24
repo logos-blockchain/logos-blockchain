@@ -142,7 +142,7 @@ where
         .quota
         .checked_sub(starting_key_index)
         .expect("Starting key index should never be larger than core quota.");
-    tracing::trace!(target: LOG_TARGET, "Generating {proofs_to_generate} core quota proofs starting from index: {starting_key_index}.");
+    tracing::debug!(target: LOG_TARGET, "Generating {proofs_to_generate} core quota proofs starting from index: {starting_key_index} with public inputs: {public_inputs:?}.");
 
     let quota = public_inputs.core.quota;
     stream::iter(starting_key_index..quota)
