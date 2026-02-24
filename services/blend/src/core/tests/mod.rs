@@ -396,6 +396,7 @@ async fn test_handle_session_event() {
         &mut backend,
         &sdp_relay,
         Epoch::new(0),
+        None,
     )
     .await;
     let HandleSessionEventOutput::Transitioning {
@@ -442,6 +443,7 @@ async fn test_handle_session_event() {
         &mut backend,
         &sdp_relay,
         Epoch::new(0),
+        None,
     )
     .await;
     let HandleSessionEventOutput::TransitionCompleted {
@@ -493,6 +495,7 @@ async fn test_handle_session_event() {
         &mut backend,
         &sdp_relay,
         Epoch::new(0),
+        None,
     )
     .await;
     let HandleSessionEventOutput::Retiring {

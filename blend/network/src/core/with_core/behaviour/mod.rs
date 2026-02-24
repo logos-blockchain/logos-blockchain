@@ -712,7 +712,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
     }
 
     /// Return `True` if this peer has an established (negotiated or not)
-    /// incoming connection with the specified peer, `false` otherwise.
+    /// incoming connection with the specified peer, `False` otherwise.
     fn has_incoming_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
         self.has_negotiated_incoming_connection_with_peer(remote_peer)
             || self.has_pending_incoming_connection_with_peer(remote_peer)

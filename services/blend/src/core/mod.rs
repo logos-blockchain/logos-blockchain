@@ -25,7 +25,10 @@ use lb_blend::{
             SessionBlendingTokenCollector,
         },
     },
-    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
+    proofs::quota::inputs::prove::{
+        private::ProofOfLeadershipQuotaInputs,
+        public::{CoreInputs, LeaderInputs},
+    },
     scheduling::{
         SessionMessageScheduler,
         message_blend::{
@@ -874,6 +877,7 @@ where
     let mut old_session_message_scheduler: Option<
         OldSessionMessageScheduler<Rng, ProcessedMessage<NetAdapter::BroadcastSettings>>,
     > = None;
+    let mut current_secret_pol_info: Option<ProofOfLeadershipQuotaInputs> = None;
 
     loop {
         tokio::select! {
@@ -909,9 +913,10 @@ where
                     epoch = pol_info.epoch;
                     public_info.epoch = new_leader_inputs;
                 }
+                current_secret_pol_info = Some(pol_info.poq_private_inputs);
             }
             Some(session_event) = remaining_session_stream.next() => {
-                match handle_session_event(session_event, blend_config, crypto_processor, message_scheduler, public_info, recovery_checkpoint, backend, sdp_relay, epoch).await {
+                match handle_session_event(session_event, blend_config, crypto_processor, message_scheduler, public_info, recovery_checkpoint, backend, sdp_relay, epoch, current_secret_pol_info.as_ref()).await {
                     HandleSessionEventOutput::Transitioning { new_crypto_processor, old_crypto_processor, new_scheduler, old_scheduler, new_public_info, new_recovery_checkpoint } => {
                         crypto_processor = new_crypto_processor;
                         old_session_crypto_processor = Some(old_crypto_processor);
@@ -1064,6 +1069,7 @@ async fn handle_session_event<
     backend: &mut Backend,
     sdp_relay: &OutboundRelay<SdpMessage>,
     current_epoch: Epoch,
+    current_secret_info: Option<&ProofOfLeadershipQuotaInputs>,
 ) -> HandleSessionEventOutput<
     NodeId,
     Rng,
@@ -1134,7 +1140,16 @@ where
                 core_poq_generator,
                 current_epoch,
             ) {
-                Ok(new_processor) => new_processor,
+                Ok(mut new_processor) => {
+                    if let Some(current_secret_info) = current_secret_info {
+                        new_processor.set_epoch_private(
+                            *current_secret_info,
+                            current_public_info.epoch,
+                            current_epoch,
+                        );
+                    }
+                    new_processor
+                }
                 Err(e @ (Error::LocalIsNotCoreNode | Error::NetworkIsTooSmall(_))) => {
                     tracing::info!(target: LOG_TARGET, "New membership does not satisfy the core node condition: {e:?}");
                     return HandleSessionEventOutput::Retiring {
