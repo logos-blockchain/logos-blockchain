@@ -35,6 +35,7 @@ where
         let maximum_edge_incoming_connections =
             config.backend.max_edge_node_incoming_connections as usize;
 
+        // We double max core peering degree for session transition period
         let maximum_established_outgoing_connections =
             maximum_core_peering_degree.saturating_mul(2);
         let maximum_established_connections = maximum_established_outgoing_connections
