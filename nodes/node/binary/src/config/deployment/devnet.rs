@@ -3,7 +3,7 @@ pub const NAME: &str = "devnet";
 pub const SERIALIZED_DEPLOYMENT: &str = "
 blend:
   common:
-    num_blend_layers: 3
+    num_blend_layers: 1
     timing:
       rounds_per_session: 2000
       rounds_per_interval: 10
@@ -11,7 +11,7 @@ blend:
       rounds_per_observation_window: 20
       rounds_per_session_transition_period: 20
       epoch_transition_period_in_slots: 20
-    minimum_network_size: 32
+    minimum_network_size: 1
     protocol_name: /logos-blockchain-devnet/blend/1.0.0
     data_replication_factor: 0
   core:
@@ -20,7 +20,7 @@ blend:
         message_frequency_per_round: 1.0
         intervals_for_safety_buffer: 100
       delayer:
-        maximum_release_delay_in_rounds: 3
+        maximum_release_delay_in_rounds: 1
     minimum_messages_coefficient: 1
     normalization_constant: 1.03
     activity_threshold_sensitivity: 1
