@@ -3898,6 +3898,7 @@ dependencies = [
  "either",
  "futures",
  "futures-timer",
+ "hex",
  "libp2p",
  "libp2p-stream",
  "libp2p-swarm-test",

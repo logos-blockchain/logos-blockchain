@@ -16,6 +16,7 @@ workspace = true
 either                        = { default-features = false, version = "1.15.0" }
 futures                       = { default-features = false, version = "0.3.30" }
 futures-timer                 = { version = "3.0.3" }
+hex                           = { workspace = true }
 lb-blend-message              = { workspace = true }
 lb-blend-proofs               = { workspace = true }
 lb-blend-scheduling           = { workspace = true }

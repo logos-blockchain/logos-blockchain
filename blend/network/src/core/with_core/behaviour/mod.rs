@@ -352,6 +352,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
 
         let serialized_message = serialize_encapsulated_message(message);
         let mut at_least_one_receiver = false;
+        tracing::debug!(target: LOG_TARGET, "Forwarding message with id {:?}. Negotiated peers: {:?}. Excluded peer: {excluded_peer:?}", hex::encode(message_id), self.negotiated_peers());
         self.negotiated_peers
             .iter()
             // Exclude the peer the message was received from.
