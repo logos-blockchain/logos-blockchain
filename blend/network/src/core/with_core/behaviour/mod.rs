@@ -250,6 +250,8 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             mem::take(&mut self.exchanged_message_identifiers),
             old_verifier,
         ));
+
+        tracing::info!(target: LOG_TARGET, "Started a new session by passing negotiated peers and exchanged message IDs to the old session. Now, no negotiated peers in the current session.");
     }
 
     pub(crate) fn finish_session_transition(&mut self) {
