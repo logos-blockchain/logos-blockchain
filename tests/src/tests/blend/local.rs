@@ -25,15 +25,15 @@ async fn blend_devnet_setup() {
         devnet_settings.time.chain_start_time = OffsetDateTime::now_utc();
 
         devnet_settings.blend.common.protocol_name =
-            StreamProtocol::new("/blend_devnet_setup/blend");
+            StreamProtocol::new("/blend-devnet-setup/blend");
         devnet_settings.network.chain_sync_protocol_name =
-            StreamProtocol::new("/blend_devnet_setup/chain_sync");
+            StreamProtocol::new("/blend-devnet-setup/chain_sync");
         devnet_settings.network.kademlia_protocol_name =
-            StreamProtocol::new("/blend_devnet_setup/kademlia");
+            StreamProtocol::new("/blend-devnet-setup/kademlia");
         devnet_settings.network.identify_protocol_name =
-            StreamProtocol::new("/blend_devnet_setup/identify");
-        devnet_settings.cryptarchia.gossipsub_protocol = "blend_devnet_setup/gossipsub".to_owned();
-        devnet_settings.mempool.pubsub_topic = "blend_devnet_setup/mempool".to_owned();
+            StreamProtocol::new("/blend-devnet-setup/identify");
+        devnet_settings.cryptarchia.gossipsub_protocol = "blend-devnet-setup/gossipsub".to_owned();
+        devnet_settings.mempool.pubsub_topic = "blend-devnet-setup/mempool".to_owned();
 
         devnet_settings
     };
