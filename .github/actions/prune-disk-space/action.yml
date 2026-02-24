@@ -1,0 +1,68 @@
+name: Prune disk space (cache-aware, self-hosted)
+description: Frees disk space from previous run leftovers on self-hosted runners
+
+runs:
+  using: composite
+  steps:
+    - name: Prune disk space
+      if: always()
+      shell: bash
+      run: |
+        set -uxo pipefail
+
+        echo "Disk before:"
+        df -h || true
+
+        avail_kb() { df -Pk . | awk 'NR==2 {print $4}'; }
+
+        if [ "${RUNNER_OS}" = "macOS" ]; then
+          rm -rf ~/Library/Developer/Xcode/DerivedData 2>/dev/null || true
+          rm -rf ~/Library/Caches/* 2>/dev/null || true
+        fi
+
+        find . -type d -name node_modules -prune -exec rm -rf {} + 2>/dev/null || true
+        find . -type d -name dist         -prune -exec rm -rf {} + 2>/dev/null || true
+        find . -type d -name build        -prune -exec rm -rf {} + 2>/dev/null || true
+        find . -type d -name .cache       -prune -exec rm -rf {} + 2>/dev/null || true
+
+        if [ -d "target" ]; then
+          echo "Target before:"
+          du -sh target 2>/dev/null || true
+          find target -type d -name incremental  -prune -exec rm -rf {} + 2>/dev/null || true
+          find target -type d -name .fingerprint -prune -exec rm -rf {} + 2>/dev/null || true
+          find target -type d -name build        -prune -exec rm -rf {} + 2>/dev/null || true
+          echo "Target after:"
+          du -sh target 2>/dev/null || true
+        fi
+
+        echo "Top workspace dirs:"
+        du -xh -d 2 . 2>/dev/null | sort -h | tail -n 30 || true
+        if [ -d target ]; then
+          echo "Top target dirs:"
+          du -xh -d 2 target 2>/dev/null | sort -h | tail -n 30 || true
+        fi
+
+        for d in /github-runner/*/_diag; do
+          if [ -d "$d" ]; then
+            echo "Diag before ($d):"
+            du -sh "$d" 2>/dev/null || true
+            find "$d" -type f -mtime +3 -delete 2>/dev/null || true
+            echo "Diag after ($d):"
+            du -sh "$d" 2>/dev/null || true
+          fi
+        done
+
+        free_now=$(avail_kb 2>/dev/null || echo 999999999)
+        if [ "$free_now" -lt $((15*1024*1024)) ]; then
+          echo "Low disk (<15GB). Applying emergency pruning..."
+          for profile in debug release; do
+            if [ -d "target/$profile" ]; then
+              find "target/$profile" -maxdepth 1 -type d \
+                \( -name deps -o -name build -o -name .fingerprint \) \
+                -exec rm -rf {} + 2>/dev/null || true
+            fi
+          done
+        fi
+
+        echo "Disk after:"
+        df -h || true
