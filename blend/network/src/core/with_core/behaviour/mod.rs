@@ -610,9 +610,12 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         (peer_id, connection_id): (PeerId, ConnectionId),
         reason: SpamReason,
     ) {
-        tracing::debug!(target: LOG_TARGET, "Closing connection {connection_id:?} with spammy peer {peer_id:?}.");
-        self.set_connection_to_spammy((peer_id, connection_id), reason);
-        self.close_connection((peer_id, connection_id));
+        tracing::debug!(target: LOG_TARGET, ?peer_id, ?connection_id, ?reason, "Peer has been marked as spammy, but not closing the connection just for debugging");
+        // TODO: Enable this logic after investigating session/epoch transition
+        // issues tracing::debug!(target: LOG_TARGET, "Closing
+        // connection {connection_id:?} with spammy peer {peer_id:?}.");
+        // self.set_connection_to_spammy((peer_id, connection_id), reason);
+        // self.close_connection((peer_id, connection_id));
     }
 
     fn set_connection_to_spammy(
