@@ -50,6 +50,14 @@ impl TestIfPublic {
         }
     }
 
+    #[expect(
+        clippy::unused_self,
+        reason = "The aim of the pattern is to consume self."
+    )]
+    pub fn retarget(self, addr_to_test: Multiaddr) -> Self {
+        Self { addr_to_test }
+    }
+
     pub const fn addr_to_test(&self) -> &Multiaddr {
         &self.addr_to_test
     }
@@ -115,6 +123,15 @@ impl TestIfMappedPublic {
         let Self { local_address, .. } = self;
         TryMapAddress {
             addr_to_map: local_address,
+        }
+    }
+
+    pub fn retarget(self, addr_to_test: Multiaddr) -> Self {
+        let Self { local_address, .. } = self;
+
+        Self {
+            local_address,
+            addr_to_test,
         }
     }
 
@@ -256,11 +273,14 @@ pub mod test_utils {
     }
 
     impl TestIfMappedPublic {
-        pub(crate) fn for_test(addr: Multiaddr) -> Box<dyn OnEvent> {
+        pub(crate) fn for_test(
+            local_address: Multiaddr,
+            addr_to_test: Multiaddr,
+        ) -> Box<dyn OnEvent> {
             Box::new(State::<Self> {
                 state: Self {
-                    local_address: addr.clone(),
-                    addr_to_test: addr,
+                    local_address,
+                    addr_to_test,
                 },
             })
         }
@@ -280,6 +300,18 @@ pub mod test_utils {
                 state: Self {
                     local_address: addr.clone(),
                     external_address: addr,
+                },
+            })
+        }
+
+        pub(crate) fn for_test_with_addrs(
+            local_address: Multiaddr,
+            external_address: Multiaddr,
+        ) -> Box<dyn OnEvent> {
+            Box::new(State::<Self> {
+                state: Self {
+                    local_address,
+                    external_address,
                 },
             })
         }

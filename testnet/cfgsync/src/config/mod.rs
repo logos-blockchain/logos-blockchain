@@ -21,6 +21,7 @@ use lb_tests::topology::configs::{
         create_genesis_tx_with_declarations,
     },
     network::{NetworkParams, create_network_configs},
+    sdp::{GeneralSdpConfig, create_sdp_configs},
     time::default_time_config,
     tracing::GeneralTracingConfig,
 };
@@ -95,6 +96,8 @@ pub fn create_node_configs(
     // Give faucet SK to all nodes so the faucet service can route to any node.
     let kms_configs = create_kms_configs(&blend_configs, &consensus_configs, faucet_info.as_ref());
 
+    let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations);
+
     // Add faucet SK to all nodes' other_keys so it appears in the wallet
     // known_keys.
     let mut consensus_configs = consensus_configs;
@@ -140,6 +143,7 @@ pub fn create_node_configs(
                 tracing_config,
                 time_config,
                 kms_config: kms_configs[i].clone(),
+                sdp_config: sdp_configs[i].clone(),
             },
         );
     }
@@ -197,6 +201,9 @@ pub fn create_node_config_from_template(
         tracing_config: update_tracing_identifier(tracing_settings.clone(), &new_host.identifier),
         time_config: template.time_config.clone(),
         kms_config: kms_configs[0].clone(),
+        sdp_config: GeneralSdpConfig {
+            declaration_id: None,
+        },
     }
 }
 
@@ -219,7 +226,7 @@ fn create_providers(
                 ))
                 .unwrap(),
             ),
-            note: consensus_configs[0].blend_notes[i].clone(),
+            note: consensus_configs[i].blend_note.clone(),
         })
         .collect()
 }

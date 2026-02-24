@@ -1,12 +1,14 @@
 use core::{
     mem::{self, swap},
     num::NonZeroUsize,
+    time::Duration,
 };
 use std::{
-    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
+    collections::{HashMap, VecDeque, hash_map::Entry},
     convert::Infallible,
     ops::RangeInclusive,
     task::{Context, Poll, Waker},
+    time::Instant,
 };
 
 use either::Either;
@@ -49,6 +51,7 @@ mod old_session;
 mod tests;
 
 const LOG_TARGET: &str = "blend::network::core::core::behaviour";
+const SENSITIVITY_INTERVAL_FOR_DUPLICATES: Duration = Duration::from_millis(100);
 
 #[derive(Debug)]
 pub struct Config {
@@ -113,7 +116,7 @@ pub struct Behaviour<ProofsVerifier, ObservationWindowClockProvider> {
     /// identifiers have been exchanged between them.
     /// Sending a message with the same identifier more than once results in
     /// the peer being flagged as malicious, and the connection dropped.
-    exchanged_message_identifiers: HashMap<PeerId, HashSet<MessageIdentifier>>,
+    exchanged_message_identifiers: HashMap<PeerId, HashMap<MessageIdentifier, Instant>>,
     observation_window_clock_provider: ObservationWindowClockProvider,
     current_membership: Membership<PeerId>,
     /// The [minimum, maximum] peering degree of this node.
@@ -322,7 +325,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
     #[cfg(test)]
     pub const fn exchanged_message_identifiers(
         &self,
-    ) -> &HashMap<PeerId, HashSet<MessageIdentifier>> {
+    ) -> &HashMap<PeerId, HashMap<MessageIdentifier, Instant>> {
         &self.exchanged_message_identifiers
     }
 
@@ -356,13 +359,14 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             // Exclude from the list of candidate peers any peer that is not in a healthy state.
             .filter(|(_, peer_state)| peer_state.negotiated_state.is_healthy())
             .for_each(|(peer_id, RemotePeerConnectionDetails { connection_id, .. })| {
-                if self
+                if let Entry::Vacant(message_peer_entry) = self
                     .exchanged_message_identifiers
                     .entry(*peer_id)
                     .or_default()
-                    .insert(message_id)
+                    .entry(message_id)
                 {
                     tracing::debug!(target: LOG_TARGET, "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message.");
+                    message_peer_entry.insert(Instant::now());
                     self.events.push_back(ToSwarm::NotifyHandler {
                         peer_id: *peer_id,
                         handler: NotifyHandler::One(*connection_id),
@@ -668,6 +672,9 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         }
     }
 
+    /// Check if a message with a given ID has been exchanged with a peer
+    /// before. If not, the cache entry is updated. Otherwise an `Error` is
+    /// returned.
     fn check_and_update_message_cache(
         &mut self,
         message_id: &MessageIdentifier,
@@ -677,12 +684,31 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             .exchanged_message_identifiers
             .entry(peer_id)
             .or_default();
-        if !exchanged_message_identifiers.insert(*message_id) {
-            tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged. Marking it as spammy.");
-            self.close_spammy_connection((peer_id, connection_id), SpamReason::DuplicateMessage);
-            return Err(());
+
+        match exchanged_message_identifiers.entry(*message_id) {
+            Entry::Vacant(vacant_message_entry) => {
+                vacant_message_entry.insert(Instant::now());
+                Ok(())
+            }
+            Entry::Occupied(occupied_message_entry) => {
+                let time_sent = occupied_message_entry.get();
+                // If the duplicate arrived within the sensitivity interval, it is
+                // likely due to a race condition (both peers forwarding the same
+                // message to each other). Simply ignore it.
+                if Instant::now().duration_since(*time_sent) <= SENSITIVITY_INTERVAL_FOR_DUPLICATES
+                {
+                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged but within the sensitivity window. Simply ignoring the message.");
+                    Ok(())
+                } else {
+                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged. Marking it as spammy.");
+                    self.close_spammy_connection(
+                        (peer_id, connection_id),
+                        SpamReason::DuplicateMessage,
+                    );
+                    Err(())
+                }
+            }
         }
-        Ok(())
     }
 
     /// Return `True` if this peer has an established (negotiated or not)

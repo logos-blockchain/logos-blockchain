@@ -182,8 +182,11 @@ mod tests {
 
         let mut other_events = all_events();
         other_events.remove(&external_address_confirmed());
+        other_events.remove(&external_address_confirmed_address_mismatch());
         other_events.remove(&autonat_ok());
+        other_events.remove(&autonat_ok_address_mismatch());
         other_events.remove(&autonat_failed());
+        other_events.remove(&autonat_failed_address_mismatch());
         other_events.remove(&mapping_failed());
         other_events.remove(&default_gateway_changed());
         other_events.remove(&default_gateway_changed_no_local_address());
