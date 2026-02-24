@@ -712,10 +712,25 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
     }
 
     /// Return `True` if this peer has an established (negotiated or not)
+    /// incoming connection with the specified peer, `false` otherwise.
+    fn has_incoming_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
+        self.has_negotiated_incoming_connection_with_peer(remote_peer)
+            || self.has_pending_incoming_connection_with_peer(remote_peer)
+    }
+
+    /// Return `True` if this peer has an established (negotiated or not)
     /// outgoing connection with the specified peer, `False` otherwise.
     fn has_outgoing_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
         self.has_negotiated_outgoing_connection_with_peer(remote_peer)
             || self.has_pending_outgoing_connection_with_peer(remote_peer)
+    }
+
+    /// Return `True` if there is a negotiated inbound connection with the
+    /// provided peer.
+    fn has_negotiated_incoming_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
+        self.negotiated_peers
+            .get(remote_peer)
+            .is_some_and(|remote| remote.role.is_dialer())
     }
 
     /// Return `true` if there is a negotiated outbound connection with the
@@ -726,7 +741,19 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             .is_some_and(|remote| remote.role.is_listener())
     }
 
-    /// Return `true` if there is at least one outbound connection pending
+    /// Return `True` if there is at least one inbound connection pending
+    /// upgrade with the provided peer.
+    // TODO: Find a different data structure to be able to perform this check in
+    // O(1).
+    fn has_pending_incoming_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
+        self.connections_waiting_upgrade
+            .iter()
+            .any(|((peer_id, _), remote_endpoint)| {
+                peer_id == remote_peer && remote_endpoint.is_dialer()
+            })
+    }
+
+    /// Return `True` if there is at least one outbound connection pending
     /// upgrade with the provided peer.
     // TODO: Find a different data structure to be able to perform this check in
     // O(1).
@@ -937,16 +964,13 @@ where
             return Ok(Either::Right(DummyConnectionHandler));
         }
 
-        // If there is already an established inbound connection with the given peer,
-        // do not try to upgrade the new one as we already have an inbound connection.
-        // Otherwise, we let the connection upgrade, and we will close one of the two
-        // connections depending on the comparison result of local and remote peer IDs.
-        if let Some(RemotePeerConnectionDetails {
-            role: Endpoint::Dialer,
-            ..
-        }) = self.negotiated_peers.get(&peer_id)
-        {
-            tracing::trace!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} will not be upgraded since there is already an inbound connection established.");
+        // If there is already an established or pending inbound connection with
+        // the given peer, do not try to upgrade the new one as we already have an
+        // inbound connection. Otherwise, we let the connection upgrade, and we will
+        // close one of the two connections depending on the comparison result of
+        // local and remote peer IDs.
+        if self.has_incoming_connection_with_peer(&peer_id) {
+            tracing::trace!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} will not be upgraded since there is already an inbound connection established or pending.");
             return Ok(Either::Right(DummyConnectionHandler));
         }
 
