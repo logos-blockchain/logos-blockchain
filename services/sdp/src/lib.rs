@@ -128,7 +128,7 @@ where
         Ok(Self {
             current_declaration: settings.declaration,
             service_resources_handle,
-            nonce: 0,
+            nonce: 0, // TODO: can we get this from declaration?
             wallet_config: settings.wallet_config,
         })
     }
@@ -240,12 +240,9 @@ where
             return;
         };
 
-        let nonce = self.nonce;
-        self.nonce += 1;
-
         let active_message = ActiveMessage {
             declaration_id: declaration.id,
-            nonce,
+            nonce: self.bump_nonce(),
             metadata,
         };
 
@@ -278,14 +275,11 @@ where
             return;
         }
 
-        let nonce = self.nonce;
-        self.nonce += 1;
-
         let declaration = self.current_declaration.as_ref().unwrap(); //unwrap is ok as it is validated above
         let withdraw_message = WithdrawMessage {
             declaration_id,
-            nonce,
             locked_note_id: declaration.locked_note_id,
+            nonce: self.bump_nonce(),
         };
 
         let tx_builder = MantleTxBuilder::new();
@@ -307,6 +301,8 @@ where
         }
 
         self.current_declaration = None;
+        // TODO: how should we reset the nonce? shouldn't it be always with
+        // current_delcaration?
     }
 
     fn validate_withdrawal(&self, declaration_id: &DeclarationId) -> Result<(), &'static str> {
@@ -322,5 +318,16 @@ where
         }
 
         Ok(())
+    }
+
+    /// Increments the nonce of the current declaration, and returns the
+    /// incremented nonce.
+    ///
+    /// Nonce must be incremented first because it is initialized to 0 with the
+    /// declaration, and each SDP message (activity or withdrawal) must have
+    /// nonce larger than the previous one.
+    const fn bump_nonce(&mut self) -> u64 {
+        self.nonce += 1;
+        self.nonce
     }
 }
