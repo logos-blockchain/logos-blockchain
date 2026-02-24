@@ -144,6 +144,7 @@ pub enum NegotiatedPeerState {
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum SpamReason {
     UndeserializableMessage,
+    DuplicateMessage,
     InvalidPublicHeader,
     TooManyMessages,
 }

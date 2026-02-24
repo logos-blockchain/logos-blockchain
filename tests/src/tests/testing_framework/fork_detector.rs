@@ -15,16 +15,20 @@ use testing_framework_core::scenario::Deployer as _;
 const RUN_DURATION_SECS: u64 = 60 * 60;
 const NODE_COUNT: usize = 3;
 
+// Devnet-aligned values from
+// `nodes/node/binary/src/config/deployment/devnet.rs`.
 const BLEND_SLOT_SECS: u64 = 1;
-const BLEND_ROUNDS_PER_SESSION: u64 = 120;
-const BLEND_ROUNDS_PER_INTERVAL: u64 = 30;
-const BLEND_ROUNDS_PER_OBSERVATION_WINDOW: u64 = 300;
-const BLEND_ROUNDS_PER_SESSION_TRANSITION_PERIOD: u64 = 10;
-const BLEND_EPOCH_TRANSITION_PERIOD_IN_SLOTS: u64 = 60;
-const BLEND_MAX_RELEASE_DELAY_ROUNDS: u64 = 1;
+const BLEND_ROUNDS_PER_SESSION: u64 = 2_000;
+const BLEND_ROUNDS_PER_INTERVAL: u64 = 10;
+const BLEND_ROUNDS_PER_OBSERVATION_WINDOW: u64 = 20;
+const BLEND_ROUNDS_PER_SESSION_TRANSITION_PERIOD: u64 = 20;
+const BLEND_EPOCH_TRANSITION_PERIOD_IN_SLOTS: u64 = 20;
+const BLEND_MAX_RELEASE_DELAY_ROUNDS: u64 = 3;
 const BLEND_NUM_LAYERS: u64 = 3;
-const BLEND_MAX_DIAL_ATTEMPTS_PER_PEER: u64 = 10;
-const SECURITY_PARAM: u32 = 10;
+const BLEND_MAX_DIAL_ATTEMPTS_PER_PEER: u64 = 3;
+const SECURITY_PARAM: u32 = 20;
+const BLEND_MINIMUM_NETWORK_SIZE: u64 = 1;
+const BLEND_DEVNET_MAX_CORE_PEERING_DEGREE: u64 = 3;
 
 fn nz_u64(value: u64, field: &str) -> NonZeroU64 {
     NonZeroU64::new(value).unwrap_or_else(|| panic!("{field} must be > 0"))
@@ -33,6 +37,8 @@ fn nz_u64(value: u64, field: &str) -> NonZeroU64 {
 /// Applies blend- and consensus-related overrides tuned for fork monitoring.
 fn apply_overrides(run_config: &mut RunConfig, node_count: usize) {
     run_config.deployment.time.slot_duration = Duration::from_secs(BLEND_SLOT_SECS);
+    run_config.deployment.blend.common.minimum_network_size =
+        nz_u64(BLEND_MINIMUM_NETWORK_SIZE, "minimum_network_size");
 
     let timing = &mut run_config.deployment.blend.common.timing;
     timing.rounds_per_interval = nz_u64(BLEND_ROUNDS_PER_INTERVAL, "rounds_per_interval");
@@ -73,8 +79,9 @@ fn apply_overrides(run_config: &mut RunConfig, node_count: usize) {
         .ok()
         .filter(|value| *value > 0)
         .unwrap_or(1);
+    let peering_degree_end = max_peers.min(BLEND_DEVNET_MAX_CORE_PEERING_DEGREE);
 
-    run_config.user.blend.core.backend.core_peering_degree = 1..=max_peers;
+    run_config.user.blend.core.backend.core_peering_degree = 1..=peering_degree_end;
     run_config
         .user
         .blend
