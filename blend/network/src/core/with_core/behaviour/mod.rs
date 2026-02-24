@@ -605,6 +605,14 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
 
     /// Mark the connection with the sender of a malformed message as malicious
     /// and instruct its connection handler to drop the substream.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "TODO: enable this logic after investigating session/epoch transition issues"
+    )]
+    #[expect(
+        clippy::unused_self,
+        reason = "TODO: enable this logic after investigating session/epoch transition issues"
+    )]
     fn close_spammy_connection(
         &mut self,
         (peer_id, connection_id): (PeerId, ConnectionId),
