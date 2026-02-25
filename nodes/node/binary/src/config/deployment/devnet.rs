@@ -37,7 +37,7 @@ cryptarchia:
   slot_activation_coeff:
     numerator: 1
     denominator: 20
-  learning_rate: 0.1
+  learning_rate: 0.5
   sdp_config:
     service_params:
       BN:
