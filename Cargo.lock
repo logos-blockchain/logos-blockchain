@@ -4330,7 +4330,9 @@ dependencies = [
  "logos-blockchain-groth16",
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
+ "logos-blockchain-node",
  "reqwest",
+ "serde_yaml",
  "tokio",
 ]
 
@@ -7542,7 +7544,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=tagged_ref_04#870885b4ebf9f07da804868dbc52afabbe364165"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=tagged_ref_05#a099392fddcd6d66991a252b0d44d44384fb1b37"
 dependencies = [
  "async-trait",
  "futures",
@@ -7558,12 +7560,12 @@ dependencies = [
 [[package]]
 name = "testing-framework-env"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=tagged_ref_04#870885b4ebf9f07da804868dbc52afabbe364165"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=tagged_ref_05#a099392fddcd6d66991a252b0d44d44384fb1b37"
 
 [[package]]
 name = "testing-framework-runner-local"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=tagged_ref_04#870885b4ebf9f07da804868dbc52afabbe364165"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=tagged_ref_05#a099392fddcd6d66991a252b0d44d44384fb1b37"
 dependencies = [
  "async-trait",
  "tempfile",

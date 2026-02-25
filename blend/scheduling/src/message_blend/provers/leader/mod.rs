@@ -131,6 +131,7 @@ fn create_leadership_proof_stream(
     cancellation_token: CancellationToken,
 ) -> impl Stream<Item = BlendLayerProof> {
     let message_quota = public_inputs.leader.message_quota;
+    tracing::debug!(target: LOG_TARGET, "Generating leadership quota proofs starting with public inputs: {public_inputs:?}.");
 
     stream::iter(0u64..)
         // Stop producing new items once cancelled

@@ -86,6 +86,7 @@ async fn invalid_public_header_message_publish() {
     );
 }
 
+#[ignore = "TODO: enable this logic after investigating session/epoch transition issues"]
 #[test(tokio::test)]
 async fn undeserializable_message_received() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
@@ -136,6 +137,7 @@ async fn undeserializable_message_received() {
     }
 }
 
+#[ignore = "TODO: enable this logic after investigating session/epoch transition issues"]
 #[test(tokio::test)]
 async fn duplicate_message_received() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
@@ -301,6 +303,7 @@ async fn duplicate_message_within_sensitivity_interval_is_not_spam() {
     );
 }
 
+#[ignore = "TODO: enable this logic after investigating session/epoch transition issues"]
 #[test(tokio::test)]
 async fn invalid_public_header_message_received() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);

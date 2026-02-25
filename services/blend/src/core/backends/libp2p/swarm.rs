@@ -171,6 +171,8 @@ where
     /// excluding the currently connected peers, the peers that we are already
     /// trying to dial, and the blocked peers.
     fn dial_random_peers_except(&mut self, amount: usize, except: Option<PeerId>) {
+        tracing::debug!(target: LOG_TARGET, amount, ?except, "Dialing random peers");
+
         let exclude_peers: HashSet<PeerId> = self
             .swarm
             .connected_peers()
@@ -194,6 +196,8 @@ where
     /// Dial new peers, if necessary, to maintain the peering degree.
     /// We aim to have at least the peering degree number of "healthy" peers.
     fn check_and_dial_new_peers_except(&mut self, except: Option<PeerId>) {
+        tracing::debug!(target: LOG_TARGET, ?except, "Checking if we need to dial new peers");
+
         let membership_size = self.public_info.session.membership.size();
         if membership_size < self.minimum_network_size.get() {
             tracing::warn!(target: LOG_TARGET, "Not dialing any peers because set of core nodes is smaller than the minimum network size. {membership_size} < {}", self.minimum_network_size.get());
@@ -439,6 +443,7 @@ where
 impl<Rng, ProofsVerifier, ObservationWindowProvider>
     BlendSwarm<Rng, ProofsVerifier, ObservationWindowProvider>
 where
+    Rng: RngCore,
     ProofsVerifier: ProofsVerifierTrait + Clone,
     ObservationWindowProvider:
         IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
@@ -454,6 +459,7 @@ where
                     self.public_info.session.membership.clone(),
                     ProofsVerifier::new(self.public_info.clone().into()),
                 );
+                self.check_and_dial_new_peers_except(None);
             }
             BlendSwarmMessage::CompleteSessionTransition => {
                 self.swarm.behaviour_mut().blend.finish_session_transition();

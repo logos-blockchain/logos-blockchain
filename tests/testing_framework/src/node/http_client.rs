@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use common_http_client::{CommonHttpClient, Error};
+use common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
 use lb_chain_service::CryptarchiaInfo;
 use lb_core::{block::Block, header::HeaderId, mantle::SignedMantleTx};
 use lb_http_api_common::paths::NETWORK_INFO;
@@ -29,10 +29,19 @@ impl NodeHttpClient {
 
     #[must_use]
     pub fn from_urls(base_url: Url, testing_url: Option<Url>) -> Self {
+        Self::from_urls_with_basic_auth(base_url, testing_url, None)
+    }
+
+    #[must_use]
+    pub fn from_urls_with_basic_auth(
+        base_url: Url,
+        testing_url: Option<Url>,
+        basic_auth: Option<BasicAuthCredentials>,
+    ) -> Self {
         Self {
             base_url,
             testing_url,
-            http_client: CommonHttpClient::new(None),
+            http_client: CommonHttpClient::new(basic_auth),
         }
     }
 

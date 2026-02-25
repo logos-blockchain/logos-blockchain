@@ -64,6 +64,10 @@ where
         core_proof_of_quota_generator: CorePoQGenerator,
         epoch: Epoch,
     ) -> Self {
+        tracing::debug!(
+            "Creating session cryptographic processor with public info {public_info:?} and epoch {epoch:?}"
+        );
+
         let generator_settings = ProofsGeneratorSettings {
             local_node_index: membership.local_index(),
             membership_size: membership.size(),
@@ -83,6 +87,9 @@ where
     }
 
     pub fn rotate_epoch(&mut self, new_epoch_public_info: LeaderInputs, new_epoch: Epoch) {
+        tracing::debug!(
+            "Rotating epoch with new public info {new_epoch_public_info:?} and new epoch {new_epoch:?}"
+        );
         self.proofs_generator
             .rotate_epoch(new_epoch_public_info, new_epoch);
     }
