@@ -35,7 +35,7 @@ pub struct TopologyConfig {
     pub n_validators: usize,
     pub network_params: NetworkParams,
     pub extra_genesis_notes: Vec<GenesisNoteSpec>,
-    /// Override the SDP lock_period for this test topology.
+    /// Override the SDP `lock_period` for this test topology.
     /// If None, uses the default from deployment settings (10).
     pub lock_period_override: Option<u64>,
 }
@@ -68,7 +68,7 @@ impl TopologyConfig {
     }
 
     #[must_use]
-    pub fn with_lock_period(mut self, lock_period: u64) -> Self {
+    pub const fn with_lock_period(mut self, lock_period: u64) -> Self {
         self.lock_period_override = Some(lock_period);
         self
     }
