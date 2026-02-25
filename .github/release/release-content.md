@@ -25,7 +25,9 @@ To untar the binary, run:
 
 The operation will give you the `logos-blockchain-node` binary, which you can now run. See the repo's `README.md` for more info.
 
-To verify that your node is running correctly and connected, visit http://localhost:{api_port_in_user_config}/cryptarchia/info. The slot and height should both be constantly increasing.
+To verify that your node is running correctly and connected, visit `http://localhost:{api_port_in_user_config}/cryptarchia/info`. The slot and height should both be constantly increasing.
+
+You can compare your consensus state with any nodes of the Logos Blockchain fleet reachable at `https://devnet.blockchain.logos.co/node/{1,2,3}/cryptarchia/info`.
 
 ## Checklist
 

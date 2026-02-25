@@ -77,7 +77,7 @@ pub(crate) fn get_known_addresses_sync(
         )
         .await;
         api.get_known_addresses().await.map_err(|e| {
-            eprintln!("{e:?}");
+            log::error!("{e:?}");
             OperationStatus::NotFound
         })
     })
@@ -171,7 +171,7 @@ pub unsafe extern "C" fn get_known_addresses(
     node: *const LogosBlockchainNode,
 ) -> KnownAddressesResult {
     if node.is_null() {
-        eprintln!("[get_known_addresses] Received a null `node` pointer. Exiting.");
+        log::error!("[get_known_addresses] Received a null `node` pointer. Exiting.");
         return KnownAddressesResult::from_error(OperationStatus::NullPointer);
     }
 
@@ -286,7 +286,7 @@ pub(crate) fn get_balance_sync(
     wallet_address: ZkPublicKey,
 ) -> Result<Option<Value>, OperationStatus> {
     let Ok(runtime) = tokio::runtime::Runtime::new() else {
-        eprintln!("[Failed]to create tokio runtime. Aborting.");
+        log::error!("[Failed]to create tokio runtime. Aborting.");
         return Err(OperationStatus::RuntimeError);
     };
 
@@ -331,11 +331,11 @@ pub unsafe extern "C" fn get_balance(
     optional_tip: *const HeaderId,
 ) -> BalanceResult {
     if node.is_null() {
-        eprintln!("[get_balance] Received a null `node` pointer. Exiting.");
+        log::error!("[get_balance] Received a null `node` pointer. Exiting.");
         return BalanceResult::from_error(OperationStatus::NullPointer);
     }
     if wallet_address.is_null() {
-        eprintln!("[get_balance] Received a null `wallet_address` pointer. Exiting.");
+        log::error!("[get_balance] Received a null `wallet_address` pointer. Exiting.");
         return BalanceResult::from_error(OperationStatus::NullPointer);
     }
 
@@ -352,7 +352,7 @@ pub unsafe extern "C" fn get_balance(
     let wallet_address = match fr_from_bytes(wallet_address_bytes) {
         Ok(bytes) => ZkPublicKey::new(bytes),
         Err(e) => {
-            eprintln!("{e:?}");
+            log::error!("{e:?}");
             return BalanceResult::from_error(OperationStatus::DynError);
         }
     };
@@ -449,7 +449,7 @@ pub(crate) fn transfer_funds_sync(
     amount: u64,
 ) -> Result<SignedMantleTx, OperationStatus> {
     let Ok(runtime) = tokio::runtime::Runtime::new() else {
-        eprintln!("[transfer_funds_sync] Failed to create tokio runtime. Aborting.");
+        log::error!("[transfer_funds_sync] Failed to create tokio runtime. Aborting.");
         return Err(OperationStatus::RuntimeError);
     };
 
@@ -504,16 +504,16 @@ pub unsafe extern "C" fn transfer_funds(
     arguments: *const TransferFundsArguments,
 ) -> TransferFundsResult {
     if node.is_null() {
-        eprintln!("[transfer_funds] Received a null `node` pointer. Exiting.");
+        log::error!("[transfer_funds] Received a null `node` pointer. Exiting.");
         return TransferFundsResult::from_error(OperationStatus::NullPointer);
     }
     if arguments.is_null() {
-        eprintln!("[transfer_funds] Received a null `arguments` pointer. Exiting.");
+        log::error!("[transfer_funds] Received a null `arguments` pointer. Exiting.");
         return TransferFundsResult::from_error(OperationStatus::NullPointer);
     }
     let arguments = unsafe { &*arguments };
     if let Err((error_message, status)) = unsafe { arguments.validate() } {
-        eprintln!("[transfer_funds] {error_message} Exiting.");
+        log::error!("[transfer_funds] {error_message} Exiting.");
         return TransferFundsResult::from_error(status);
     }
 
@@ -522,7 +522,7 @@ pub unsafe extern "C" fn transfer_funds(
         match get_cryptarchia_info_sync(node) {
             Ok(cryptarchia_info) => cryptarchia_info.tip,
             Err(status) => {
-                eprintln!("[transfer_funds] Failed to get cryptarchia info. Aborting.");
+                log::error!("[transfer_funds] Failed to get cryptarchia info. Aborting.");
                 return TransferFundsResult::from_error(status);
             }
         }
@@ -568,7 +568,9 @@ pub unsafe extern "C" fn transfer_funds(
         Ok(transaction) => {
             let transaction_hash = transaction.hash().as_signing_bytes();
             let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
-                eprintln!("[transfer_funds] Failed to convert transaction hash to array. Exiting.");
+                log::error!(
+                    "[transfer_funds] Failed to convert transaction hash to array. Exiting."
+                );
                 return TransferFundsResult::from_error(OperationStatus::RuntimeError);
             };
             TransferFundsResult::from_value(transaction_hash_array)

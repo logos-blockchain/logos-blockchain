@@ -1,13 +1,21 @@
 mod block_feed;
 pub mod local;
 
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::{
+    env,
+    num::{NonZeroU64, NonZeroUsize},
+};
 
 use async_trait::async_trait;
 pub use block_feed::BlockRecord;
+use common_http_client::BasicAuthCredentials;
 use lb_node::config::RunConfig;
+use reqwest::Url;
 use testing_framework_core::{
-    scenario::{Application, DynError, FeedRuntime, ScenarioBuilder as CoreScenarioBuilder},
+    scenario::{
+        Application, DynError, ExternalNodeSource, FeedRuntime, NodeClients,
+        ScenarioBuilder as CoreScenarioBuilder,
+    },
     topology::{DeploymentProvider, DeploymentSeed, DynTopologyError},
 };
 use testing_framework_runner_local::{ManualCluster, ProcessDeployer};
@@ -22,7 +30,7 @@ use crate::{
             wallet::WalletConfig,
         },
     },
-    workloads::{ConsensusLiveness, transaction},
+    workloads::{ConsensusLiveness, inscription, transaction},
 };
 
 pub type ScenarioBuilder = CoreScenarioBuilder<LbcEnv>;
@@ -44,11 +52,39 @@ impl Application for LbcEnv {
 
     type FeedRuntime = BlockFeedRuntime;
 
+    fn external_node_client(source: &ExternalNodeSource) -> Result<Self::NodeClient, DynError> {
+        let endpoint = Url::parse(&source.endpoint)?;
+        let basic_auth = external_basic_auth(&endpoint);
+
+        Ok(NodeHttpClient::from_urls_with_basic_auth(
+            endpoint, None, basic_auth,
+        ))
+    }
+
     async fn prepare_feed(
-        client: Self::NodeClient,
+        node_clients: NodeClients<Self>,
     ) -> Result<(<Self::FeedRuntime as FeedRuntime>::Feed, Self::FeedRuntime), DynError> {
+        let client = node_clients
+            .snapshot()
+            .into_iter()
+            .next()
+            .ok_or_else(|| "prepare_feed called with no node clients".to_owned())?;
         prepare_block_feed(client).await
     }
+}
+
+fn external_basic_auth(endpoint: &Url) -> Option<BasicAuthCredentials> {
+    if !endpoint.username().is_empty() {
+        return Some(BasicAuthCredentials::new(
+            endpoint.username().to_owned(),
+            Some(endpoint.password().unwrap_or_default().to_owned()),
+        ));
+    }
+
+    let username = env::var("LOGOS_EXTERNAL_BASIC_AUTH_USER").ok()?;
+    let password = env::var("LOGOS_EXTERNAL_BASIC_AUTH_PASS").ok()?;
+
+    Some(BasicAuthCredentials::new(username, Some(password)))
 }
 
 pub trait CoreBuilderExt: Sized {
@@ -132,6 +168,15 @@ pub trait ScenarioBuilderExt: Sized {
     ) -> ScenarioBuilderWith;
 
     #[must_use]
+    fn inscriptions(self) -> InscriptionFlowBuilder;
+
+    #[must_use]
+    fn inscriptions_with(
+        self,
+        f: impl FnOnce(InscriptionFlowBuilder) -> InscriptionFlowBuilder,
+    ) -> ScenarioBuilderWith;
+
+    #[must_use]
     fn expect_consensus_liveness(self) -> Self;
 
     #[must_use]
@@ -152,6 +197,21 @@ impl ScenarioBuilderExt for ScenarioBuilderWith {
         f: impl FnOnce(TransactionFlowBuilder) -> TransactionFlowBuilder,
     ) -> ScenarioBuilderWith {
         f(self.transactions()).apply()
+    }
+
+    fn inscriptions(self) -> InscriptionFlowBuilder {
+        InscriptionFlowBuilder {
+            builder: self,
+            channels: NonZeroUsize::MIN,
+            payload_bytes: NonZeroUsize::new(128).expect("constant is non-zero"),
+        }
+    }
+
+    fn inscriptions_with(
+        self,
+        f: impl FnOnce(InscriptionFlowBuilder) -> InscriptionFlowBuilder,
+    ) -> ScenarioBuilderWith {
+        f(self.inscriptions()).apply()
     }
 
     fn expect_consensus_liveness(self) -> Self {
@@ -217,6 +277,47 @@ impl TransactionFlowBuilder {
 
     pub fn apply(self) -> ScenarioBuilderWith {
         let workload = transaction::Workload::new(self.rate).with_user_limit(self.users);
+        self.builder.with_workload(workload)
+    }
+}
+
+pub struct InscriptionFlowBuilder {
+    builder: ScenarioBuilderWith,
+    channels: NonZeroUsize,
+    payload_bytes: NonZeroUsize,
+}
+
+impl InscriptionFlowBuilder {
+    pub fn channels(mut self, channels: usize) -> Self {
+        if let Some(value) = nonzero_users(channels) {
+            self.channels = value;
+        } else {
+            tracing::warn!(
+                channels,
+                "inscription channel count must be non-zero; keeping previous setting"
+            );
+        }
+
+        self
+    }
+
+    pub fn payload_bytes(mut self, payload_bytes: usize) -> Self {
+        if let Some(value) = nonzero_users(payload_bytes) {
+            self.payload_bytes = value;
+        } else {
+            tracing::warn!(
+                payload_bytes,
+                "inscription payload bytes must be non-zero; keeping previous setting"
+            );
+        }
+
+        self
+    }
+
+    pub fn apply(self) -> ScenarioBuilderWith {
+        let workload = inscription::Workload::default()
+            .with_channel_count(self.channels)
+            .with_payload_bytes(self.payload_bytes);
         self.builder.with_workload(workload)
     }
 }

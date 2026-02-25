@@ -61,13 +61,13 @@ pub(crate) fn get_cryptarchia_info_sync(
     node: &LogosBlockchainNode,
 ) -> Result<lb_chain_service::CryptarchiaInfo, OperationStatus> {
     let Ok(runtime) = tokio::runtime::Runtime::new() else {
-        eprintln!("[get_cryptarchia_info_sync] Failed to create tokio runtime. Aborting.");
+        log::error!("[get_cryptarchia_info_sync] Failed to create tokio runtime. Aborting.");
         return Err(OperationStatus::RuntimeError);
     };
     let Ok(cryptarchia_info) = runtime.block_on(lb_api_service::http::consensus::cryptarchia_info(
         node.get_overwatch_handle(),
     )) else {
-        eprintln!("[get_cryptarchia_info_sync] Failed to get cryptarchia info. Aborting.");
+        log::error!("[get_cryptarchia_info_sync] Failed to get cryptarchia info. Aborting.");
         return Err(OperationStatus::RelayError);
     };
     Ok(cryptarchia_info)
@@ -103,7 +103,7 @@ pub unsafe extern "C" fn get_cryptarchia_info(
     node: *const LogosBlockchainNode,
 ) -> CryptarchiaInfoResult {
     if node.is_null() {
-        eprintln!("[get_cryptarchia_info] Received a null `node` pointer. Exiting.");
+        log::error!("[get_cryptarchia_info] Received a null `node` pointer. Exiting.");
         return CryptarchiaInfoResult::from_error(OperationStatus::NullPointer);
     }
 

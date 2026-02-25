@@ -1,8 +1,5 @@
 use core::{num::NonZeroU64, time::Duration};
-use std::{
-    fmt::{Debug, Display},
-    panic,
-};
+use std::fmt::{Debug, Display};
 
 use async_trait::async_trait;
 use futures::{StreamExt as _, future::ready, stream::once};
@@ -15,9 +12,9 @@ use lb_blend::{
             BlendLayerProof, ProofsGeneratorSettings, leader::LeaderProofsGenerator,
         },
         session::UninitializedSessionEventStream,
-        stream::UninitializedFirstReadyStream,
     },
 };
+use lb_chain_service::Epoch;
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_time_service::SlotTick;
 use overwatch::overwatch::{OverwatchHandle, commands::OverwatchCommand};
@@ -55,6 +52,7 @@ impl LeaderProofsGenerator for MockLeaderProofsGenerator {
         &mut self,
         _new_epoch_public: LeaderInputs,
         _new_private_inputs: ProofOfLeadershipQuotaInputs,
+        _new_epoch: Epoch,
     ) {
     }
 
@@ -102,13 +100,10 @@ pub async fn spawn_run(
                 FIRST_STREAM_ITEM_READY_TIMEOUT,
                 Duration::ZERO,
             ),
-            UninitializedFirstReadyStream::new(
-                once(ready(SlotTick {
-                    epoch: 1.into(),
-                    slot: 1.into(),
-                })),
-                Duration::from_secs(1),
-            ),
+            once(ready(SlotTick {
+                epoch: 1.into(),
+                slot: 1.into(),
+            })),
             ReceiverStream::new(msg_receiver),
             EpochHandler::new(TestChainService, 1.try_into().unwrap()),
             settings,
@@ -119,12 +114,6 @@ pub async fn spawn_run(
     });
 
     (join_handle, session_sender, msg_sender, node_id_receiver)
-}
-
-/// Expect the panic from the given async task,
-/// and resume the panic, so the async test can check the panic message.
-pub async fn resume_panic_from(join_handle: JoinHandle<Result<(), Error>>) {
-    panic::resume_unwind(join_handle.await.unwrap_err().into_panic());
 }
 
 pub fn settings(

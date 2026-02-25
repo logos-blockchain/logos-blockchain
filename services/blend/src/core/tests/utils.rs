@@ -33,6 +33,7 @@ use lb_blend::{
         message_scheduler::{self, session_info::SessionInfo as SchedulerSessionInfo},
     },
 };
+use lb_chain_service::Epoch;
 use lb_core::{crypto::ZkHash, sdp::SessionNumber};
 use lb_groth16::{Field as _, Fr};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
@@ -316,6 +317,7 @@ pub fn new_crypto_processor<CorePoQGenerator>(
             leader: public_info.epoch,
         },
         core_poq_generator,
+        Epoch::new(0),
     )
     .expect("crypto processor must be created successfully")
 }
@@ -381,8 +383,8 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
         Self(settings.public_inputs.session)
     }
 
-    fn rotate_epoch(&mut self, _: LeaderInputs) {}
-    fn set_epoch_private(&mut self, _: ProofOfLeadershipQuotaInputs) {}
+    fn rotate_epoch(&mut self, _: LeaderInputs, _: Epoch) {}
+    fn set_epoch_private(&mut self, _: ProofOfLeadershipQuotaInputs, _: LeaderInputs, _: Epoch) {}
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
         Some(session_based_dummy_proofs(self.0))

@@ -10,12 +10,4 @@ export CFG_FILE_PATH="/node-data/${LB_HOST_IDX}/config.yaml" \
        LOG_BACKEND="file" \
        LOG_DIR="/node-data/${LB_HOST_IDX}/"
 
-echo "Starting Faucet..."
-/usr/bin/logos-blockchain-faucet \
-    --port $FAUCET_PORT \
-    --node-base-url "http://localhost:$CFG_API_PORT"\
-    --host-identifier $CFG_HOST_IDENTIFIER \
-    --drip-amount 1000 &
-
-echo "Starting Node..."
 exec /usr/bin/logos-blockchain-node --deployment $CFG_DEPLOYMENT_PATH $CFG_FILE_PATH

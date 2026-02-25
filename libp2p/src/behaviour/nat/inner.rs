@@ -205,10 +205,10 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
         if let Poll::Ready(to_swarm) = self.autonat_client_behaviour.poll(cx) {
-            if let ToSwarm::GenerateEvent(event) = &to_swarm
-                && let Some(ref local_addr) = self.local_address
-                && &event.tested_addr == local_addr
-            {
+            // Forward all autonat results to the state machine unconditionally.
+            // The state machine's own guard clauses filter by the address it is
+            // currently tracking.
+            if let ToSwarm::GenerateEvent(event) = &to_swarm {
                 self.state_machine.on_event(event);
             }
 
