@@ -5,7 +5,7 @@ blend:
   common:
     num_blend_layers: 1
     timing:
-      rounds_per_session: 120000
+      rounds_per_session: 6000
       rounds_per_interval: 20
       round_duration: '1.000000000'
       rounds_per_observation_window: 10
