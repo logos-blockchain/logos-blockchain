@@ -4716,7 +4716,6 @@ dependencies = [
  "futures",
  "futures-util",
  "hex",
- "logos-blockchain-blend-proofs",
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-common-http-client",

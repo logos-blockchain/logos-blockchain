@@ -20,7 +20,6 @@ derivative                       = "2.2.0"
 futures                          = { default-features = false, version = "0.3" }
 futures-util                     = { default-features = false, version = "0.3.31" }
 hex                              = { default-features = false, version = "0.4.3" }
-lb-blend-proofs                  = { workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-common-http-client            = { workspace = true }
