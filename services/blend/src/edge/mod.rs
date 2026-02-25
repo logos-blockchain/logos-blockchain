@@ -393,6 +393,7 @@ where
                 }
             }
             Some(message) = incoming_message_stream.next() => {
+                // TODO: Investigate why secret PoL info at times arrives after the block proposal.
                 let Some(handler) = current_pol_info_and_message_handler.as_mut().map(|(_, handler)| handler) else {
                     tracing::warn!(target: LOG_TARGET, "Received a message to blend, but no active message handler is available to process it because the secret PoL info for the current epoch is not yet available. Ignoring the message.");
                     continue;

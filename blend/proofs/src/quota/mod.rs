@@ -1,3 +1,4 @@
+use core::fmt::{self, Debug, Formatter};
 use std::sync::LazyLock;
 
 use ::serde::{Deserialize, Serialize};
@@ -43,12 +44,24 @@ pub enum Error {
 }
 
 /// A Proof of Quota as described in the Blend v1 spec: <https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#26a261aa09df80f4b119f900fbb36f3f>.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProofOfQuota {
     #[serde(with = "lb_groth16::serde::serde_fr")]
     key_nullifier: ZkHash,
     #[serde(with = "self::serde::proof::SerializablePoQProof")]
     proof: PoQProof,
+}
+
+impl Debug for ProofOfQuota {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProofOfQuota")
+            .field(
+                "key_nullifier",
+                &hex::encode(fr_to_bytes(&self.key_nullifier)),
+            )
+            .field("proof", &hex::encode(self.proof.to_bytes()))
+            .finish()
+    }
 }
 
 impl ProofOfQuota {
