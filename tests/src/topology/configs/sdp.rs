@@ -1,4 +1,4 @@
-use std::iter::repeat;
+use std::iter::repeat_n;
 
 use lb_core::{
     mantle::{GenesisTx as _, Op, genesis_tx::GenesisTx},
@@ -12,23 +12,30 @@ pub struct GeneralSdpConfig {
 
 #[must_use]
 pub fn create_sdp_configs(genesis_tx: &GenesisTx, count: usize) -> Vec<GeneralSdpConfig> {
-    let ops = &genesis_tx.mantle_tx().ops;
-    assert!(
-        ops.len() <= count,
-        "genesis_tx contains {} declarations more than the requested number of configs: {count}",
-        ops.len()
-    );
-
-    ops.iter()
+    let mut configs = genesis_tx
+        .mantle_tx()
+        .ops
+        .iter()
         .filter_map(|op| match op {
             Op::SDPDeclare(decl) => Some(GeneralSdpConfig {
                 declaration_id: Some(decl.id()),
             }),
             _ => None,
         })
-        .chain(repeat(GeneralSdpConfig {
+        .collect::<Vec<_>>();
+
+    assert!(
+        configs.len() <= count,
+        "genesis_tx contains {} declarations more than the requested number of configs: {count}",
+        configs.len()
+    );
+
+    configs.extend(repeat_n(
+        GeneralSdpConfig {
             declaration_id: None,
-        }))
-        .take(count)
-        .collect()
+        },
+        count - configs.len(),
+    ));
+    assert_eq!(configs.len(), count);
+    configs
 }
