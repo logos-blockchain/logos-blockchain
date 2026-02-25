@@ -40,6 +40,10 @@ pub fn create_network_configs(
             network::SwarmConfig {
                 node_key,
                 port: get_available_udp_port().unwrap(),
+                identify: network::identify::Config {
+                    hide_listen_addrs: Some(true),
+                    ..Default::default()
+                },
                 chain_sync: network::chainsync::Config {
                     peer_response_timeout: Duration::from_secs(60),
                 },
