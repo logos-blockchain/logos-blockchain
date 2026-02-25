@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="./../style/base.css">
+    <title>Logos Testnet Faucet</title>
+</head>
+<body>
+    <h2>Logos Faucet</h2>
+
+    <div class="field">
+        <label for="pk">Destination Public Key (Hex)</label>
+        <input type="text" id="pk" placeholder="e.g. 7d069d39...">
+    </div>
+
+    <button id="sendBtn">Request Funds</button>
+
+    <div id="response"></div>
+
+    <script>
+        const btn = document.getElementById('sendBtn');
+        const respDiv = document.getElementById('response');
+
+        btn.onclick = async () => {
+            const pk = document.getElementById('pk').value.trim();
+
+            if (!pk) return alert("Please enter a Public Key");
+
+            btn.disabled = true;
+            respDiv.style.display = 'none';
+            respDiv.className = '';
+
+            try {
+                const response = await fetch(`./../faucet-backend/${pk}`, {
+                    method: 'POST'
+                });
+
+                const text = await response.text();
+                respDiv.style.display = 'block';
+                
+                if (response.ok) {
+                    respDiv.className = 'success';
+                    respDiv.innerHTML = `<strong>Success!</strong><br>${text}`;
+                } else {
+                    respDiv.className = 'error';
+                    respDiv.innerHTML = `<strong>Error:</strong><br>${text}`;
+                }
+            } catch (err) {
+                respDiv.style.display = 'block';
+                respDiv.className = 'error';
+                respDiv.innerText = "Network error: " + err.message;
+            } finally {
+                btn.disabled = false;
+            }
+        };
+    </script>
+</body>
+</html>

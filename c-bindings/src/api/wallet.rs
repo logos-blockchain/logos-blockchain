@@ -18,7 +18,8 @@
 //!
 //! - Returns [`OperationStatus::NotFound`] if the wallet addresses cannot be retrieved.
 //! pub
-use lb_core::mantle::{SignedMantleTx, Transaction as _};
+use lb_api_service::http::mempool;
+use lb_core::mantle::{SignedMantleTx, Transaction};
 use lb_groth16::{fr_from_bytes, fr_to_bytes};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_wallet_service::{WalletService, api::WalletApi};
@@ -453,13 +454,14 @@ pub(crate) fn transfer_funds_sync(
         return Err(OperationStatus::RuntimeError);
     };
 
-    runtime
-        .block_on(async {
-            let api = WalletApi::<WalletService<_, _, _, _, _>, _>::from_overwatch_handle(
-                node.get_overwatch_handle(),
-            )
-            .await;
-            api.transfer_funds(
+    runtime.block_on(async {
+        let handle = node.get_overwatch_handle();
+        let api = WalletApi::<WalletService<_, _, _, _, _>, _>::from_overwatch_handle(handle).await;
+
+        // The following calls are a rough copy-pate of
+        // `post_transactions_transfer_funds`. TODO: Abstract into a common API
+        let signed_tx = api
+            .transfer_funds(
                 Some(tip),
                 change_public_key,
                 funding_public_keys,
@@ -467,9 +469,18 @@ pub(crate) fn transfer_funds_sync(
                 amount,
             )
             .await
+            .inspect_err(|error| {
+                log::error!("[transfer_funds_sync] Failed to transfer funds: {error}");
+            })
             .map(|tip_response| tip_response.response)
-        })
-        .map_err(|_| OperationStatus::DynError)
+            .map_err(|_| OperationStatus::DynError)?;
+
+        if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Transaction::hash).await {
+            log::error!("[transfer_funds_sync] Failed to add transaction to mempool: {error}");
+            return Err(OperationStatus::DynError);
+        }
+        Ok(signed_tx)
+    })
 }
 
 pub type TransferFundsResult = ValueResult<Hash, OperationStatus>;

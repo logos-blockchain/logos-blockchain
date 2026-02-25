@@ -393,7 +393,11 @@ where
                 }
             }
             Some(message) = incoming_message_stream.next() => {
-                let handler = current_pol_info_and_message_handler.as_mut().map(|(_, handler)| handler).expect("Message handler should be available at the time a new message is propagated.");
+                // TODO: Investigate why secret PoL info at times arrives after the block proposal.
+                let Some(handler) = current_pol_info_and_message_handler.as_mut().map(|(_, handler)| handler) else {
+                    tracing::warn!(target: LOG_TARGET, "Received a message to blend, but no active message handler is available to process it because the secret PoL info for the current epoch is not yet available. Ignoring the message.");
+                    continue;
+                };
                 let message_copies = settings.data_replication_factor.checked_add(1).unwrap();
                 for _ in 0..message_copies {
                     handler.handle_message_to_blend(message.clone()).await;
