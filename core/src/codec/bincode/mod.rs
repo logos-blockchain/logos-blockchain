@@ -34,26 +34,31 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use crate::codec::{Error as WireError, Result};
 
+const ONE_GB_MEMORY_WARNING_THRESHOLD: usize = 1024 * 1024 * 1024; // 1 GB
+const DEFAULT_SERIALIZATION_CAPACITY: usize = 16 * 1024; // 16 KB
+
 /// Serialize an object directly into bytes
 pub fn serialize<T: Serialize>(item: &T) -> Result<Bytes> {
-    let size = OPTIONS
-        .serialized_size(item)
-        .map_err(|e| WireError::Serialize(Box::new(e)))?;
-
-    // Additional safety check: ensure size doesn't exceed DATA_LIMIT
-    // This provides defense-in-depth against potential bincode bugs
-    if size > DATA_LIMIT {
-        return Err(WireError::Serialize(
-            format!("Serialized size {size} exceeds DATA_LIMIT {DATA_LIMIT}").into(),
-        ));
-    }
-
-    let buf = BytesMut::with_capacity(size as usize);
+    // Start with a reasonable default capacity to avoid multiple reallocations.
+    // This will be automatically resized if the serialized data exceeds this
+    // capacity, but it helps optimize for small to medium-sized objects. The
+    // alternative would be to compute the serialized size first and allocate
+    // exactly that much memory, but that would require serializing the object
+    // twice (once to compute size and once to serialize), which is inefficient
+    // for larger objects.
+    let buf = BytesMut::with_capacity(DEFAULT_SERIALIZATION_CAPACITY);
 
     let mut writer = buf.writer();
     bincode::serialize_into(&mut writer, item).map_err(|e| WireError::Serialize(Box::new(e)))?;
 
-    Ok(writer.into_inner().freeze())
+    let buf = writer.into_inner();
+    let size = buf.len();
+
+    if size > ONE_GB_MEMORY_WARNING_THRESHOLD {
+        tracing::warn!("Large serialization detected: {size} bytes. This may impact memory usage.");
+    }
+
+    Ok(buf.freeze())
 }
 
 /// Get the serialized size of an object without actually serializing it
@@ -65,16 +70,11 @@ pub fn serialized_size<T: Serialize>(item: &T) -> Result<u64> {
 
 /// Deserialize an object directly from bytes
 pub fn deserialize<T: DeserializeOwned>(data: &[u8]) -> Result<T> {
-    // Additional safety check: ensure size doesn't exceed DATA_LIMIT
-    // This provides defense-in-depth against potential bincode bugs
-    if data.len() as u64 > DATA_LIMIT {
-        return Err(WireError::Deserialize(
-            format!(
-                "Serialized size {} input exceeds DATA_LIMIT {DATA_LIMIT}",
-                data.len()
-            )
-            .into(),
-        ));
+    if data.len() > ONE_GB_MEMORY_WARNING_THRESHOLD {
+        tracing::warn!(
+            "Large deserialization detected: {} bytes. This may impact memory usage.",
+            data.len()
+        );
     }
     OPTIONS
         .deserialize(data)
