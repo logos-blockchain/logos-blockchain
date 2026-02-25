@@ -18,8 +18,11 @@ use lb_core::{
 };
 use lb_utxotree::MerklePath;
 use sdp::{Error as SdpLedgerError, locked_notes::LockedNotes};
+use tracing::error;
 
 use crate::{Balance, Config, EpochState, UtxoTree};
+
+const LOG_TARGET: &str = "ledger::mantle";
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -168,10 +171,12 @@ impl LedgerState {
                 (Op::ChannelInscribe(op), _) => {
                     self.channels =
                         self.channels
-                            .apply_msg(op.channel_id, &op.parent, op.id(), &op.signer)?;
+                            .apply_msg(op.channel_id, &op.parent, op.id(), &op.signer)
+                            .inspect_err(|err| error!(target: LOG_TARGET, %err, "failed to apply channel inscribe message"))?;
                 }
                 (Op::ChannelSetKeys(op), Some(OpProof::Ed25519Sig(sig))) => {
-                    self.channels = self.channels.set_keys(op.channel, op, sig, &tx_hash)?;
+                    self.channels = self.channels.set_keys(op.channel, op, sig, &tx_hash)
+                        .inspect_err(|err| error!(target: LOG_TARGET, %err, "failed to apply channel set-keys message"))?;
                 }
                 (
                     Op::SDPDeclare(op),
@@ -190,17 +195,19 @@ impl LedgerState {
                         ed25519_sig,
                         tx_hash,
                         &config.sdp_config,
-                    )?;
+                    ).inspect_err(|err| error!(target: LOG_TARGET, %err, "failed to apply SDP declare message"))?;
                 }
                 (Op::SDPActive(op), Some(OpProof::ZkSig(sig))) => {
                     self.sdp = self
                         .sdp
-                        .apply_active_msg(op, sig, tx_hash, &config.sdp_config)?;
+                        .apply_active_msg(op, sig, tx_hash, &config.sdp_config)
+                        .inspect_err(|err| error!(target: LOG_TARGET, %err, "failed to apply SDP active message"))?;
                 }
                 (Op::SDPWithdraw(op), Some(OpProof::ZkSig(sig))) => {
                     self.sdp =
                         self.sdp
-                            .apply_withdrawn_msg(op, sig, tx_hash, &config.sdp_config)?;
+                            .apply_withdrawn_msg(op, sig, tx_hash, &config.sdp_config)
+                            .inspect_err(|err| error!(target: LOG_TARGET, %err, "failed to apply SDP withdraw message"))?;
                 }
                 (Op::LeaderClaim(op), None) => {
                     // Correct derivation of the voucher nullifier and membership in the merkle tree
@@ -208,7 +215,7 @@ impl LedgerState {
                     // available. Callers are expected to validate the proof
                     // before calling this function.
                     let leader_balance;
-                    (self.leaders, leader_balance) = self.leaders.claim(op)?;
+                    (self.leaders, leader_balance) = self.leaders.claim(op).inspect_err(|err| error!(target: LOG_TARGET, %err, "failed to apply leader claim message"))?;
                     balance += leader_balance;
                 }
                 _ => {

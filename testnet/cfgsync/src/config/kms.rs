@@ -27,6 +27,12 @@ pub fn create_kms_configs(
                         zk_secret_key.clone().into(),
                     ),
                     (
+                        key_id_for_preload_backend(
+                            &consensus_configs[i].blend_note.sk.clone().into(),
+                        ),
+                        consensus_configs[i].blend_note.sk.clone().into(),
+                    ),
+                    (
                         key_id_for_preload_backend(&consensus_configs[i].known_key.clone().into()),
                         consensus_configs[i].known_key.clone().into(),
                     ),
