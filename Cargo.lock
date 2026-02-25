@@ -4652,6 +4652,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures",
+ "logos-blockchain-chain-service",
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-keys",
  "overwatch",

@@ -443,7 +443,7 @@ fn build_run_config(config: Config, genesis_tx: GenesisTx) -> RunConfig {
         },
         storage: storage::serde::Config::default(),
         sdp: sdp::serde::Config {
-            declaration: None,
+            declaration_id: None,
             wallet: sdp::serde::WalletConfig {
                 max_tx_fee: mantle::Value::MAX,
                 funding_pk: config.consensus_config.funding_sk.as_public_key(),

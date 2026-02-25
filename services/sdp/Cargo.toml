@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 async-trait                   = "0.1"
 futures                       = { default-features = false, version = "0.3" }
+lb-chain-service              = { workspace = true }
 lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 overwatch                     = { workspace = true }

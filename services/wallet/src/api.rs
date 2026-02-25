@@ -3,6 +3,7 @@ use lb_core::{
     mantle::{
         Note, SignedMantleTx, Value, ops::leader_claim::VoucherCm, tx_builder::MantleTxBuilder,
     },
+    sdp::DeclarationId,
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use overwatch::{
@@ -15,8 +16,8 @@ use overwatch::{
 use tokio::sync::oneshot::{self, error::RecvError};
 
 use crate::{
-    TipResponse, UtxoWithKeyId, VoucherCommitmentAndNullifier, WalletMsg, WalletServiceError,
-    WalletServiceSettings,
+    DeclarationInfoResponse, TipResponse, UtxoWithKeyId, VoucherCommitmentAndNullifier, WalletMsg,
+    WalletServiceError, WalletServiceSettings,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -189,6 +190,21 @@ where
         let (resp_tx, rx) = oneshot::channel();
         self.relay
             .send(WalletMsg::GetClaimableVoucher { tip, resp_tx })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    /// Get declaration info from ledger by ID.
+    pub async fn get_declaration(
+        &self,
+        declaration_id: DeclarationId,
+    ) -> Result<Option<DeclarationInfoResponse>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::GetDeclaration {
+                declaration_id,
+                resp_tx,
+            })
             .await?;
         Ok(rx.await??)
     }

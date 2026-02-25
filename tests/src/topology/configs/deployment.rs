@@ -48,7 +48,8 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
                     round_duration: Duration::from_secs(1),
                     rounds_per_interval: NonZeroU64::try_from(10u64)
                         .expect("Rounds per interval cannot be zero."),
-                    rounds_per_session: NonZeroU64::try_from(2_000)
+                    // Short sessions for faster tests (50 rounds = ~50 seconds per session)
+                    rounds_per_session: NonZeroU64::try_from(50)
                         .expect("Rounds per session cannot be zero."),
                     rounds_per_observation_window: NonZeroU64::try_from(20u64)
                         .expect("Rounds per observation window cannot be zero."),

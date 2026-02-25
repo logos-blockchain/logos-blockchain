@@ -109,5 +109,6 @@ pub type SdpWalletAdapter<RuntimeServiceId> = sdp::wallet::SdpWalletAdapter<
 pub type SdpService<RuntimeServiceId> = lb_sdp_service::SdpService<
     SdpMempoolAdapter<RuntimeServiceId>,
     SdpWalletAdapter<RuntimeServiceId>,
+    CryptarchiaService<RuntimeServiceId>,
     RuntimeServiceId,
 >;

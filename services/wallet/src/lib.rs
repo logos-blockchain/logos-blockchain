@@ -15,7 +15,8 @@ use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo, Value,
+        AuthenticatedMantleTx, NoteId, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
+        Value,
         gas::MainnetGasConstants,
         ops::{
             channel::ChannelId,
@@ -26,6 +27,7 @@ use lb_core::{
         tx_builder::MantleTxBuilder,
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
+    sdp::{DeclarationId, Nonce},
 };
 use lb_groth16::Fr;
 use lb_key_management_system_service::{
@@ -88,10 +90,10 @@ pub enum WalletServiceError {
     MissingChannelState(ChannelId),
 
     #[error("Declaration {0:?} is missing in ledger")]
-    MissingDeclaration(lb_core::sdp::DeclarationId),
+    MissingDeclaration(DeclarationId),
 
     #[error("Locked note {0:?} is missing in ledger")]
-    MissingLockedNote(lb_core::mantle::NoteId),
+    MissingLockedNote(NoteId),
 
     #[error("PoC generation failed: {0:?}")]
     PoCGenerationFailed(#[from] lb_core::proofs::leader_claim_proof::Error),
@@ -140,6 +142,18 @@ pub enum WalletMsg {
     GetKnownAddresses {
         resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
     },
+    GetDeclaration {
+        declaration_id: DeclarationId,
+        resp_tx: Sender<Result<Option<DeclarationInfoResponse>, WalletServiceError>>,
+    },
+}
+
+/// Declaration info response from ledger query.
+#[derive(Debug, Clone)]
+pub struct DeclarationInfoResponse {
+    pub zk_id: ZkPublicKey,
+    pub locked_note_id: NoteId,
+    pub nonce: Nonce,
 }
 
 #[derive(Debug)]
@@ -171,7 +185,9 @@ impl WalletMsg {
             | Self::SignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. }
             | Self::GetClaimableVoucher { tip, .. } => *tip,
-            Self::GenerateNewVoucherSecret { .. } | Self::GetKnownAddresses { .. } => None,
+            Self::GenerateNewVoucherSecret { .. }
+            | Self::GetKnownAddresses { .. }
+            | Self::GetDeclaration { .. } => None,
         }
     }
 }
@@ -476,6 +492,12 @@ where
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
             }
+            WalletMsg::GetDeclaration {
+                declaration_id,
+                resp_tx,
+            } => {
+                Self::get_declaration(declaration_id, resp_tx, cryptarchia).await;
+            }
         }
     }
 
@@ -504,6 +526,48 @@ where
 
         if resp_tx.send(resp).is_err() {
             error!("Failed to respond to GetBalance");
+        }
+    }
+
+    async fn get_declaration(
+        declaration_id: DeclarationId,
+        resp_tx: Sender<Result<Option<DeclarationInfoResponse>, WalletServiceError>>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    ) {
+        // Get current tip's ledger state
+        let tip = match cryptarchia.info().await {
+            Ok(info) => info.tip,
+            Err(err) => {
+                Self::send_err(resp_tx, WalletServiceError::from(err));
+                return;
+            }
+        };
+
+        let ledger = match cryptarchia.get_ledger_state(tip).await {
+            Ok(Some(ledger)) => ledger,
+            Ok(None) => {
+                Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(tip));
+                return;
+            }
+            Err(err) => {
+                Self::send_err(resp_tx, WalletServiceError::from(err));
+                return;
+            }
+        };
+
+        // Query declaration from SDP ledger
+        let result = ledger
+            .mantle_ledger()
+            .sdp_ledger()
+            .get_declaration(&declaration_id)
+            .map(|decl| DeclarationInfoResponse {
+                zk_id: decl.zk_id,
+                locked_note_id: decl.locked_note_id,
+                nonce: decl.nonce,
+            });
+
+        if resp_tx.send(Ok(result)).is_err() {
+            error!("Failed to respond to GetDeclaration");
         }
     }
 

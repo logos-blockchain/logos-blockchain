@@ -187,6 +187,11 @@ impl Topology {
     }
 
     #[must_use]
+    pub fn validators_mut(&mut self) -> &mut [Validator] {
+        &mut self.validators
+    }
+
+    #[must_use]
     pub fn general_config(&self, index: usize) -> Option<&GeneralConfig> {
         self.general_configs.get(index)
     }
