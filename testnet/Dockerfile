@@ -49,16 +49,6 @@ RUN apt-get update && apt-get install -yq \
     python3 python3-pip curl git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Block Explorer
-ENV UV_INSTALL_DIR=/usr/local/bin
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-RUN git clone https://github.com/logos-blockchain/logos-blockchain-block-explorer-template.git /opt/explorer \
-    && cd /opt/explorer \
-    && git checkout 46fa934148829a7f880de81b3ec6b76a277ddc14 \
-    && uv venv /opt/explorer/.venv \
-    && uv pip compile pyproject.toml -o requirements.txt \
-    && uv pip install --python /opt/explorer/.venv/bin/python -r requirements.txt
-
 # Copy Circuits
 COPY --from=builder /opt/circuits /opt/circuits
 ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits

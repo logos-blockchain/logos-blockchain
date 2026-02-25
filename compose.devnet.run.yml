@@ -7,15 +7,15 @@ services:
 
   explorer:
     container_name: explorer
-    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    image: ghcr.io/logos-blockchain/logos-blockchain-explorer:latest
     depends_on:
       - logos-blockchain-node-0
     environment:
       - NBE_NODE_API_HOST=logos-blockchain-node-0
       - NBE_NODE_API_PORT=${NODE0_API_PORT}
+      - NBE_BASE_PATH=/node/0/explorer
     ports:
       - "8000:8000/tcp"
-    entrypoint: /opt/scripts/run_explorer.sh
 
   cfgsync:
     container_name: cfgsync
