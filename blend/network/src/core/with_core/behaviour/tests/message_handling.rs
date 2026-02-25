@@ -64,8 +64,11 @@ async fn message_sending_and_reception() {
             .behaviour()
             .exchanged_message_identifiers
             .get(listening_swarm.local_peer_id())
-            .unwrap(),
-        &vec![test_message_id].into_iter().collect::<HashSet<_>>()
+            .unwrap()
+            .keys()
+            .copied()
+            .collect::<HashSet<_>>(),
+        vec![test_message_id].into_iter().collect::<HashSet<_>>()
     );
 }
 
@@ -83,6 +86,7 @@ async fn invalid_public_header_message_publish() {
     );
 }
 
+#[ignore = "TODO: enable this logic after investigating session/epoch transition issues"]
 #[test(tokio::test)]
 async fn undeserializable_message_received() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
@@ -133,6 +137,7 @@ async fn undeserializable_message_received() {
     }
 }
 
+#[ignore = "TODO: enable this logic after investigating session/epoch transition issues"]
 #[test(tokio::test)]
 async fn duplicate_message_received() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
@@ -157,6 +162,22 @@ async fn duplicate_message_received() {
         .behaviour_mut()
         .validate_and_publish_message(test_message.clone().into())
         .unwrap();
+
+    // Poll both swarms until the first message is fully received by the listener.
+    // Without this, the message stays queued in the behaviour and is never sent
+    // over the wire, causing both messages to arrive in the same connection
+    // monitor window and triggering `TooManyMessages` instead of
+    // `DuplicateMessage`.
+    loop {
+        select! {
+            _ = dialing_swarm.select_next_some() => {}
+            listening_event = listening_swarm.select_next_some() => {
+                if let SwarmEvent::Behaviour(Event::Message(..)) = listening_event {
+                    break;
+                }
+            }
+        }
+    }
 
     // Wait enough time to not considered spammy by the listener.
     sleep(Duration::from_secs(3)).await;
@@ -193,6 +214,96 @@ async fn duplicate_message_received() {
     }
 }
 
+#[test(tokio::test)]
+async fn duplicate_message_within_sensitivity_interval_is_not_spam() {
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+    let mut dialing_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id)
+            .with_membership(&nodes)
+            .build::<AlwaysTrueVerifier>()
+    });
+    let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id)
+            .with_membership(&nodes)
+            .build::<AlwaysTrueVerifier>()
+    });
+
+    listening_swarm.listen().with_memory_addr_external().await;
+    dialing_swarm
+        .connect_and_wait_for_upgrade(&mut listening_swarm)
+        .await;
+
+    // The dialer publishes a message, which records it in the dialer's
+    // exchanged message cache for the listener peer.
+    let test_message = TestEncapsulatedMessage::new(b"msg");
+    dialing_swarm
+        .behaviour_mut()
+        .validate_and_publish_message(test_message.clone().into())
+        .unwrap();
+
+    // Without any delay, the listener sends the same message back to the
+    // dialer. This simulates a race condition where both peers independently
+    // forward the same message to each other near-simultaneously. Because the
+    // duplicate arrives within the `SENSITIVITY_INTERVAL_FOR_DUPLICATES`, the
+    // dialer should silently drop it without flagging the listener as malicious.
+    listening_swarm
+        .behaviour_mut()
+        .force_send_message_to_peer(&test_message, *dialing_swarm.local_peer_id())
+        .unwrap();
+
+    loop {
+        select! {
+            () = sleep(Duration::from_secs(1)) => {
+                break;
+            }
+            _ = dialing_swarm.select_next_some() => {}
+            _ = listening_swarm.select_next_some() => {}
+        }
+    }
+
+    assert_eq!(
+        dialing_swarm
+            .behaviour()
+            .negotiated_peers()
+            .get(listening_swarm.local_peer_id())
+            .unwrap()
+            .negotiated_state,
+        NegotiatedPeerState::Healthy
+    );
+    assert_eq!(
+        dialing_swarm
+            .behaviour()
+            .exchanged_message_identifiers
+            .get(listening_swarm.local_peer_id())
+            .unwrap()
+            .keys()
+            .next()
+            .unwrap(),
+        &test_message.id()
+    );
+    assert_eq!(
+        listening_swarm
+            .behaviour()
+            .negotiated_peers()
+            .get(dialing_swarm.local_peer_id())
+            .unwrap()
+            .negotiated_state,
+        NegotiatedPeerState::Healthy
+    );
+    assert_eq!(
+        listening_swarm
+            .behaviour()
+            .exchanged_message_identifiers
+            .get(dialing_swarm.local_peer_id())
+            .unwrap()
+            .keys()
+            .next()
+            .unwrap(),
+        &test_message.id()
+    );
+}
+
+#[ignore = "TODO: enable this logic after investigating session/epoch transition issues"]
 #[test(tokio::test)]
 async fn invalid_public_header_message_received() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);

@@ -16,15 +16,10 @@ use backends::BlendBackend;
 use futures::{Stream, StreamExt as _};
 use lb_blend::{
     message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
-    proofs::quota::inputs::prove::{
-        private::ProofOfLeadershipQuotaInputs,
-        public::{CoreInputs, LeaderInputs},
-    },
+    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
     scheduling::{
-        membership::Membership,
         message_blend::provers::leader::LeaderProofsGenerator,
         session::{SessionEvent, UninitializedSessionEventStream},
-        stream::UninitializedFirstReadyStream,
     },
 };
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
@@ -56,8 +51,7 @@ use crate::{
         settings::RunningBlendConfig,
     },
     epoch_info::{
-        ChainApi, EpochEvent, EpochHandler, LeaderInputsMinusQuota, PolEpochInfo,
-        PolInfoProvider as PolInfoProviderTrait,
+        ChainApi, EpochEvent, EpochHandler, PolEpochInfo, PolInfoProvider as PolInfoProviderTrait,
     },
     kms::PreloadKmsService,
     membership::{self, MembershipInfo},
@@ -69,6 +63,11 @@ const LOG_TARGET: &str = "blend::service::edge";
 
 type RunningSettings<Backend, NodeId, RuntimeServiceId> =
     RunningBlendConfig<<Backend as BlendBackend<NodeId, RuntimeServiceId>>::Settings>;
+
+type EpochInfoAndHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId> = (
+    PolEpochInfo,
+    MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
+);
 
 pub struct BlendService<
     Backend,
@@ -240,7 +239,7 @@ where
         .await
         .expect("Failed to get membership stream from membership service.");
 
-        // Initialize clock stream for epoch-related public PoQ inputs.
+        // Initialize clock stream for detecting epoch transitions.
         let clock_stream = async {
             let time_relay = overwatch_handle
                 .relay::<TimeService<_, _>>()
@@ -283,7 +282,7 @@ where
                 FIRST_STREAM_ITEM_READY_TIMEOUT,
                 settings.time.session_transition_period(),
             ),
-            UninitializedFirstReadyStream::new(clock_stream, FIRST_STREAM_ITEM_READY_TIMEOUT),
+            clock_stream,
             messages_to_blend_stream,
             epoch_handler,
             RunningSettings::<Backend, _, _> {
@@ -315,26 +314,27 @@ where
 
 /// Run the event loop of the service.
 ///
-/// It listens for new sessions and messages to blend.
-/// It recreates the [`MessageHandler`] on each new session to handle messages
-/// with the new membership.
-/// It returns an [`Error`] if the new membership does not satisfy the edge node
+/// The event loop handles three types of events:
+/// - **Session changes**: resets the message handler with the new session but
+///   the current epoch info. If the handler was shut down (waiting for secret
+///   epoch info), it stays shut down.
+/// - **Clock ticks (epoch transitions)**: on a new epoch, shuts down the
+///   message handler until secret `PoL` info for that epoch is received. If
+///   secret info was already provided for the new epoch, the handler is kept.
+/// - **Secret `PoL` info**: always (re)creates the message handler with the new
+///   epoch's public and private inputs, preserving the current session.
+///
+/// Returns an [`Error`] if a new membership does not satisfy the edge node
 /// condition.
 ///
 /// # Panics
 /// - If the initial membership is not yielded immediately from the session
 ///   stream.
-/// - If the initial membership does not satisfy the edge node condition.
-/// - If the initial epoch public info is not yielded immediately by the epoch
-///   handler.
-/// - If the initial secret `PoL` info is not yielded immediately by the `PoL`
-///   info provider.
-#[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
 async fn run<Backend, NodeId, ProofsGenerator, ChainService, PolInfoProvider, RuntimeServiceId>(
     session_stream: UninitializedSessionEventStream<
         impl Stream<Item = MembershipInfo<NodeId>> + Unpin,
     >,
-    clock_stream: UninitializedFirstReadyStream<impl Stream<Item = SlotTick> + Unpin>,
+    mut clock_stream: impl Stream<Item = SlotTick> + Unpin,
     mut incoming_message_stream: impl Stream<Item = Vec<u8>> + Send + Unpin,
     mut epoch_handler: EpochHandler<ChainService, RuntimeServiceId>,
     settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
@@ -349,7 +349,7 @@ where
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Unpin>,
     RuntimeServiceId: Clone + Send + Sync,
 {
-    let (current_membership_info, mut remaining_session_stream) = session_stream
+    let (mut current_membership_info, mut remaining_session_stream) = session_stream
         .await_first_ready()
         .await
         .expect("The current session info must be available.");
@@ -360,103 +360,24 @@ where
         current_membership_info
     );
 
-    let (current_epoch_info, mut remaining_clock_stream) = async {
-        let (slot_tick, remaining_clock_stream) = clock_stream
-            .first()
-            .await
-            .expect("The clock system must be available.");
-
-        let EpochEvent::NewEpoch(LeaderInputsMinusQuota {
-            pol_epoch_nonce,
-            pol_ledger_aged,
-            lottery_0,
-            lottery_1,
-        }) = epoch_handler
-            .tick(slot_tick)
-            .await
-            .expect("There should be new epoch state associated with the latest epoch state.")
-        else {
-            panic!("The first event expected by the epoch handler is a `NewEpoch` event.");
-        };
-        (
-            LeaderInputs {
-                message_quota: settings.session_leadership_quota(),
-                pol_epoch_nonce,
-                pol_ledger_aged,
-                lottery_0,
-                lottery_1,
-            },
-            remaining_clock_stream,
-        )
-    }
-    .await;
-
-    debug!(target: LOG_TARGET, "Current epoch info: {:?}", current_epoch_info);
-
     notify_ready();
 
-    // A Blend edge service without the required secret `PoL` to generate proofs for
-    // block proposals info is useless, hence we wait until the first secret PoL
-    // info is made available. If an edge node has very little to no stake, this
-    // `await` might hang for a long time, but that is fine, since that means there
-    // will be no blocks to blend anyway.
-    let (mut current_private_leader_info, mut remaining_secret_pol_info_stream) = async {
-        // There might be services that depend on Blend to be ready before starting, so
-        // we cannot wait for the stream to be sent before we signal we are
-        // ready, hence this should always be called after `notify_ready();`.
-        // Also, Blend services start even if such a stream is not immediately
-        // available, since they will simply keep blending cover messages.
-        let mut secret_pol_info_stream = PolInfoProvider::subscribe(overwatch_handle)
-            .await
-            .expect("Should not fail to subscribe to secret PoL info stream.");
-        (
-            secret_pol_info_stream
-                .next()
-                .await
-                .expect("Secret PoL info stream should always return `Some` value."),
-            secret_pol_info_stream,
-        )
-    }
-    .await;
+    // No need to wait for the PoL stream to return an element. We just move on and
+    // will have a `None` handler until secret info for an epoch is passed to this
+    // service.
+    let mut secret_pol_info_stream = PolInfoProvider::subscribe(overwatch_handle)
+        .await
+        .expect("Should not fail to subscribe to secret PoL info stream.");
 
-    debug!(target: LOG_TARGET, "Current secret leader info: {:?}", current_private_leader_info);
-
-    let mut current_public_inputs = PoQVerificationInputsMinusSigningKey {
-        core: CoreInputs {
-            zk_root: current_membership_info
-                .zk
-                .expect("Membership should have ZK info")
-                .root,
-            quota: settings.cover.session_core_quota(
-                settings.num_blend_layers,
-                &settings.time,
-                current_membership_info.membership.size(),
-            ),
-        },
-        leader: current_epoch_info,
-        session: current_membership_info.session_number,
-    };
-
-    debug!(target: LOG_TARGET, "Current public info: {current_public_inputs:?}");
-
-    let mut message_handler =
-        MessageHandler::<Backend, _, ProofsGenerator, _>::try_new_with_edge_condition_check(
-            settings.clone(),
-            current_membership_info.membership.clone(),
-            current_public_inputs,
-            current_private_leader_info.poq_private_inputs.clone(),
-            overwatch_handle.clone(),
-        )
-        .expect("The initial membership should satisfy the edge node condition");
+    let mut current_pol_info_and_message_handler: Option<(
+        PolEpochInfo,
+        MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
+    )> = None;
 
     loop {
         tokio::select! {
             Some(SessionEvent::NewSession(new_session_info)) = remaining_session_stream.next() => {
-                match handle_new_session(new_session_info, settings.clone(), current_private_leader_info.poq_private_inputs.clone(), overwatch_handle.clone(), current_public_inputs, message_handler) {
-                    Ok((new_message_handler, new_public_inputs)) => {
-                        message_handler = new_message_handler;
-                        current_public_inputs = new_public_inputs;
-                    },
+                match handle_new_session(&new_session_info, settings.clone(), &mut current_pol_info_and_message_handler, overwatch_handle.clone()) {
                     Err(Error::NetworkIsTooSmall(_)) => {
                         info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
                         return Ok(());
@@ -465,23 +386,24 @@ where
                         error!(target: LOG_TARGET, "Error when handling new session: {e:?}, edge service shutting down.");
                         return Err(e);
                     }
+                    Ok(()) => {
+                        // We need to keep track of this for now because message handlers are initialized with a membership info. Exposing a simple `rotate_epoch` will allow us to avoid tracking this value here.
+                        current_membership_info = new_session_info;
+                    }
                 }
             }
             Some(message) = incoming_message_stream.next() => {
+                let handler = current_pol_info_and_message_handler.as_mut().map(|(_, handler)| handler).expect("Message handler should be available at the time a new message is propagated.");
                 let message_copies = settings.data_replication_factor.checked_add(1).unwrap();
                 for _ in 0..message_copies {
-                    message_handler.handle_message_to_blend(message.clone()).await;
+                    handler.handle_message_to_blend(message.clone()).await;
                 }
             }
-            Some(clock_tick) = remaining_clock_stream.next() => {
-                let (new_message_handler, new_public_inputs) = handle_clock_event(clock_tick, settings.clone(), &current_private_leader_info, overwatch_handle, &current_membership_info.membership, &mut epoch_handler, message_handler, current_public_inputs).await;
-                message_handler = new_message_handler;
-                current_public_inputs = new_public_inputs;
+            Some(clock_tick) = clock_stream.next() => {
+                handle_clock_event(clock_tick, &mut epoch_handler, &mut current_pol_info_and_message_handler).await;
             }
-            Some(new_secret_pol_info) = remaining_secret_pol_info_stream.next() => {
-                let (new_message_handler, new_private_leader_info) = handle_new_secret_epoch_info(new_secret_pol_info, settings.clone(), &current_public_inputs, overwatch_handle, &current_membership_info.membership, message_handler);
-                message_handler = new_message_handler;
-                current_private_leader_info = new_private_leader_info;
+            Some(new_secret_pol_info) = secret_pol_info_stream.next() => {
+                handle_new_secret_epoch_info(&new_secret_pol_info, settings.clone(), overwatch_handle, &current_membership_info, &mut current_pol_info_and_message_handler);
             }
         }
     }
@@ -489,192 +411,174 @@ where
 
 /// Handle a new session.
 ///
-/// It creates a new [`MessageHandler`] and new `PoQ` public inputs if the
-/// membership satisfies all the edge node condition. Otherwise, it returns
-/// [`Error`].
+/// If the message handler was active, it is recreated with the new session's
+/// membership and core info, preserving the current epoch's leader inputs and
+/// private inputs. If it was `None` (no secret epoch info yet, or shut down
+/// after an epoch transition), it stays `None` — only the membership info
+/// tracked by the caller is updated for when the handler is later recreated
+/// by [`handle_new_secret_epoch_info`].
+///
+/// Returns [`Error`] if the new membership does not satisfy the edge node
+/// condition.
 #[expect(
     clippy::type_complexity,
     reason = "There are too many generics. Any type alias would be as complicated."
 )]
 fn handle_new_session<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
-    MembershipInfo {
-        membership: new_membership,
-        session_number: new_session_number,
-        zk,
-    }: MembershipInfo<NodeId>,
+    new_membership_info: &MembershipInfo<NodeId>,
     settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
-    current_epoch_private_info: ProofOfLeadershipQuotaInputs,
-    overwatch_handle: OverwatchHandle<RuntimeServiceId>,
-    current_public_inputs: PoQVerificationInputsMinusSigningKey,
-    // Unused, but we want to consume it.
-    _current_message_handler: MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
-) -> Result<
-    (
+    current_epoch_info_and_message_handler: &mut Option<(
+        PolEpochInfo,
         MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
-        PoQVerificationInputsMinusSigningKey,
-    ),
-    Error,
->
+    )>,
+    overwatch_handle: OverwatchHandle<RuntimeServiceId>,
+) -> Result<(), Error>
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId>,
     NodeId: Clone + Eq + Hash + Send + 'static,
     ProofsGenerator: LeaderProofsGenerator,
     RuntimeServiceId: Clone,
 {
-    let Some(zk_info) = zk else {
+    let Some(zk_info) = &new_membership_info.zk else {
         return Err(Error::NetworkIsTooSmall(0));
     };
-    debug!(target: LOG_TARGET, "Trying to create a new message handler");
-    // Update current public inputs with new session info.
+    debug!(target: LOG_TARGET, "New session received, trying to create a new message handler");
+
+    // Update session and core public inputs, preserving the current epoch's
+    // leader inputs.
+    let Some((current_epoch_private_info, _)) = current_epoch_info_and_message_handler.take()
+    else {
+        debug!(target: LOG_TARGET, "No current epoch private info available. Ignoring new session event to create a new message handler.");
+        return Ok(());
+    };
+
     let new_public_inputs = PoQVerificationInputsMinusSigningKey {
-        session: new_session_number,
+        session: new_membership_info.session_number,
         core: CoreInputs {
             quota: settings.cover.session_core_quota(
                 settings.num_blend_layers,
                 &settings.time,
-                new_membership.size(),
+                new_membership_info.membership.size(),
             ),
             zk_root: zk_info.root,
         },
-        ..current_public_inputs
+        leader: LeaderInputs {
+            lottery_0: current_epoch_private_info.poq_public_inputs.lottery_0,
+            lottery_1: current_epoch_private_info.poq_public_inputs.lottery_1,
+            pol_epoch_nonce: current_epoch_private_info.poq_public_inputs.epoch_nonce,
+            pol_ledger_aged: current_epoch_private_info.poq_public_inputs.aged_root,
+            message_quota: settings.session_leadership_quota(),
+        },
     };
 
     let new_handler = MessageHandler::try_new_with_edge_condition_check(
         settings,
-        new_membership,
+        new_membership_info.membership.clone(),
         new_public_inputs,
-        current_epoch_private_info,
+        &current_epoch_private_info.poq_private_inputs,
         overwatch_handle,
+        current_epoch_private_info.epoch,
     )?;
 
-    Ok((new_handler, new_public_inputs))
+    *current_epoch_info_and_message_handler = Some((current_epoch_private_info, new_handler));
+
+    Ok(())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "TODO: Address this at some point."
-)]
-/// It fetches the new epoch state if a new epoch tick is provided, which will
-/// result in new `PoQ` public inputs. A new handler is also created if the
-/// secret `PoL` info for the same epoch has already been provided by the
-/// `PoLInfoProvider`.
+/// Handles a clock tick by forwarding it to the epoch handler.
 ///
-/// If the slot tick does not belong to a new, unprocessed epoch, the old
-/// handler and inputs are returned instead.
-/// In case this is called before the secret info is obtained, only the public
-/// inputs are updated, and the message handler will be updated once the secret
-/// info is received.
+/// If the tick reveals a new epoch that is ahead of the last received secret
+/// `PoL` info (`current_epoch`), the message handler is shut down until
+/// [`handle_new_secret_epoch_info`] provides the secret info for the new epoch.
+/// If secret info was already received for the new epoch, or if the handler was
+/// already `None`, it is left unchanged.
 async fn handle_clock_event<Backend, NodeId, ProofsGenerator, ChainService, RuntimeServiceId>(
     slot_tick: SlotTick,
-    settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
-    PolEpochInfo {
-        nonce: current_secret_inputs_nonce,
-        poq_private_inputs: current_secret_inputs,
-    }: &PolEpochInfo,
-    overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
-    current_membership: &Membership<NodeId>,
     epoch_handler: &mut EpochHandler<ChainService, RuntimeServiceId>,
-    current_message_handler: MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
-    current_public_inputs: PoQVerificationInputsMinusSigningKey,
-) -> (
-    MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
-    PoQVerificationInputsMinusSigningKey,
-)
-where
-    Backend: BlendBackend<NodeId, RuntimeServiceId> + Send,
-    NodeId: Clone + Eq + Hash + Send + Sync + 'static,
-    ProofsGenerator: LeaderProofsGenerator + Send,
+    current_epoch_info_and_message_handler: &mut Option<
+        EpochInfoAndHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
+    >,
+) where
     ChainService: ChainApi<RuntimeServiceId> + Send + Sync,
     RuntimeServiceId: Clone + Send + Sync,
 {
     let Some(epoch_event) = epoch_handler.tick(slot_tick).await else {
-        return (current_message_handler, current_public_inputs);
+        return;
     };
 
-    let new_leader_inputs = match epoch_event {
-        EpochEvent::NewEpoch(LeaderInputsMinusQuota {
-            pol_epoch_nonce,
-            pol_ledger_aged,
-            lottery_0,
-            lottery_1,
-        })
-        | EpochEvent::NewEpochAndOldEpochTransitionExpired(LeaderInputsMinusQuota {
-            pol_epoch_nonce,
-            pol_ledger_aged,
-            lottery_0,
-            lottery_1,
-        }) => LeaderInputs {
-            message_quota: settings.session_leadership_quota(),
-            pol_epoch_nonce,
-            pol_ledger_aged,
-            lottery_0,
-            lottery_1,
-        },
-        // We don't handle the epoch transitions in edge node.
-        EpochEvent::OldEpochTransitionPeriodExpired => current_public_inputs.leader,
+    let Some(current_epoch) = current_epoch_info_and_message_handler
+        .as_ref()
+        .map(|(epoch_info, _)| epoch_info.epoch)
+    else {
+        return;
     };
 
-    let new_public_inputs = PoQVerificationInputsMinusSigningKey {
-        leader: new_leader_inputs,
-        ..current_public_inputs
-    };
-
-    // If the private info for the new epoch came in before, create a new message
-    // handler with the new info.
-    let new_message_handler = if new_public_inputs.leader.pol_epoch_nonce
-        == *current_secret_inputs_nonce
-    {
-        MessageHandler::try_new_with_edge_condition_check(
-            settings,
-            current_membership.clone(),
-            new_public_inputs,
-            current_secret_inputs.clone(),
-            overwatch_handle.clone(),
-        )
-        .expect("Should not fail to re-create message handler on epoch rotation after public inputs are set.")
-    } else {
-        current_message_handler
-    };
-
-    (new_message_handler, new_public_inputs)
+    // Shut down the message handler if a new epoch is detected for which we
+    // have not yet received secret `PoL` info.
+    match epoch_event {
+        EpochEvent::NewEpoch((_, new_epoch))
+        | EpochEvent::NewEpochAndOldEpochTransitionExpired((_, new_epoch))
+            if new_epoch > current_epoch =>
+        {
+            debug!(target: LOG_TARGET, "New epoch detected: {epoch_event:?}, shutting down message handler until new secret PoL info is available.");
+            *current_epoch_info_and_message_handler = None;
+        }
+        // If it's not a new epoch event, or if the new epoch has already been processed when the
+        // secret info was received, keep the current message handler.
+        _ => {}
+    }
 }
 
 /// Processes new secret `PoL` info.
 ///
-/// In case the secret info is received before the public inputs, the message
-/// handler is left unchanged. Else, a new message handler is created and
-/// returned, that builds on the new epoch's public and private inputs.
+/// Always creates a new message handler using the new epoch's public and
+/// private inputs from the `PoL` info, while preserving the current session.
 fn handle_new_secret_epoch_info<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
-    new_pol_info: PolEpochInfo,
+    new_pol_epoch_info: &PolEpochInfo,
     settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
-    current_public_inputs: &PoQVerificationInputsMinusSigningKey,
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
-    current_membership: &Membership<NodeId>,
-    current_message_handler: MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
-) -> (
-    MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
-    PolEpochInfo,
-)
-where
+    current_membership_info: &MembershipInfo<NodeId>,
+    current_epoch_info_and_message_handler: &mut Option<
+        EpochInfoAndHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
+    >,
+) where
     Backend: BlendBackend<NodeId, RuntimeServiceId>,
     NodeId: Clone + Eq + Hash + Send + 'static,
     ProofsGenerator: LeaderProofsGenerator,
     RuntimeServiceId: Clone,
 {
-    // If the public info for the new epoch came in before, create a new message
-    // handler with the new info.
-    let new_handler = if current_public_inputs.leader.pol_epoch_nonce == new_pol_info.nonce {
-        MessageHandler::try_new_with_edge_condition_check(
-            settings,
-            current_membership.clone(),
-            *current_public_inputs,
-            new_pol_info.poq_private_inputs.clone(),
-            overwatch_handle.clone(),
-        )
-        .expect("Should not fail to re-create message handler on epoch rotation after private inputs are set.")
-    } else {
-        current_message_handler
+    let Some(zk_root) = current_membership_info.zk.as_ref().map(|zk| zk.root) else {
+        *current_epoch_info_and_message_handler = None;
+        return;
     };
 
-    (new_handler, new_pol_info)
+    let current_membership = current_membership_info.membership.clone();
+    let new_public_inputs = PoQVerificationInputsMinusSigningKey {
+        leader: LeaderInputs {
+            lottery_0: new_pol_epoch_info.poq_public_inputs.lottery_0,
+            lottery_1: new_pol_epoch_info.poq_public_inputs.lottery_1,
+            pol_epoch_nonce: new_pol_epoch_info.poq_public_inputs.epoch_nonce,
+            pol_ledger_aged: new_pol_epoch_info.poq_public_inputs.aged_root,
+            message_quota: settings.session_leadership_quota(),
+        },
+        core: CoreInputs {
+            quota: settings.cover.session_core_quota(
+                settings.num_blend_layers,
+                &settings.time,
+                current_membership.size(),
+            ),
+            zk_root,
+        },
+        session: current_membership_info.session_number,
+    };
+    let new_handler = MessageHandler::try_new_with_edge_condition_check(
+        settings,
+        current_membership,
+        new_public_inputs,
+        &new_pol_epoch_info.poq_private_inputs,
+        overwatch_handle.clone(),
+        new_pol_epoch_info.epoch,
+    ).expect("Should not fail to re-create message handler on epoch rotation after private inputs are set.");
+
+    *current_epoch_info_and_message_handler = Some((*new_pol_epoch_info, new_handler));
 }

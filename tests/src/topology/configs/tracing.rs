@@ -32,7 +32,8 @@ impl GeneralTracingConfig {
                     // Allow events only from modules that matches the regex, if it matches -
                     // use provided tracing level. Libp2p related crates
                     // are very log intensive in debug mode.
-                    filters: std::iter::once(&("logos-blockchain", "debug"))
+                    filters: [("logos-blockchain", "debug"), ("libp2p", "debug")]
+                        .into_iter()
                         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                         .collect(),
                 }),

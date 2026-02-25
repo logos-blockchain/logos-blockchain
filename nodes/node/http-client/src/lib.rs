@@ -21,6 +21,7 @@ use lb_http_api_common::{
         STORAGE_BLOCK,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
+    settings::default_max_body_size,
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
@@ -88,7 +89,10 @@ pub struct CommonHttpClient {
 impl CommonHttpClient {
     #[must_use]
     pub fn new(basic_auth: Option<BasicAuthCredentials>) -> Self {
+        let initial_stream_window_size: u32 =
+            u32::try_from(6 * default_max_body_size() / 10).unwrap_or(4 * 1025);
         let client = ClientBuilder::new()
+            .http2_initial_stream_window_size(initial_stream_window_size)
             .build()
             .expect("Client from default settings should be able to build");
         Self {

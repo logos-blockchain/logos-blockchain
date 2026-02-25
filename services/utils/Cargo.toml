@@ -22,7 +22,7 @@ workspace = true
 [dependencies]
 async-trait = "0.1.83"
 futures     = { default-features = false, version = "0.3" }
-log         = "0.4.22"
+log         = { workspace = true }
 overwatch   = { features = ["derive"], workspace = true }
 serde       = { workspace = true }
 serde_json  = { default-features = false, features = ["alloc"], version = "1.0.133" }

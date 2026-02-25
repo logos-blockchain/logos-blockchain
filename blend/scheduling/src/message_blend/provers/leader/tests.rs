@@ -1,6 +1,7 @@
 use core::time::Duration;
 
 use lb_blend_proofs::selection::inputs::VerifyInputs;
+use lb_cryptarchia_engine::Epoch;
 use test_log::test;
 use tokio::time::timeout;
 
@@ -22,6 +23,7 @@ async fn proof_generation() {
             local_node_index: None,
             membership_size: 1,
             public_inputs,
+            epoch: Epoch::new(0),
         },
         private_inputs,
     );
@@ -70,8 +72,9 @@ async fn epoch_rotation() {
             local_node_index: None,
             membership_size: 1,
             public_inputs,
+            epoch: Epoch::new(0),
         },
-        private_inputs.clone(),
+        private_inputs,
     );
 
     let proof = leader_proofs_generator.get_next_proof().await;

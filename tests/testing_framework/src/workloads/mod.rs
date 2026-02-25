@@ -1,4 +1,5 @@
 pub mod consensus_liveness;
+pub mod inscription;
 pub mod transaction;
 
 use std::sync::Arc;

@@ -62,6 +62,10 @@ cucumber_stand_alone = []
 testing_framework    = []
 
 [[test]]
+name = "test_blend_local_setup"
+path = "src/tests/blend/local.rs"
+
+[[test]]
 name = "test_cryptarchia_happy_path"
 path = "src/tests/cryptarchia/happy.rs"
 
@@ -92,6 +96,11 @@ path = "src/tests/mantle/sdp_ops.rs"
 [[test]]
 name              = "test_testing_framework_smoke_local"
 path              = "src/tests/testing_framework/smoke_local.rs"
+required-features = ["testing_framework"]
+
+[[test]]
+name              = "test_testing_framework_external_urls_inscription"
+path              = "src/tests/testing_framework/external_urls_inscription.rs"
 required-features = ["testing_framework"]
 
 [[test]]

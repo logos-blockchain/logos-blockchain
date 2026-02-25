@@ -3,6 +3,7 @@ pub mod blend;
 pub mod consensus;
 pub mod deployment;
 pub mod network;
+pub mod sdp;
 pub mod time;
 pub mod tracing;
 
@@ -21,7 +22,10 @@ use tracing::GeneralTracingConfig;
 use crate::{
     common::kms::key_id_for_preload_backend,
     topology::configs::{
-        api::GeneralApiConfig, consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD, network::NetworkParams,
+        api::GeneralApiConfig,
+        consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD,
+        network::NetworkParams,
+        sdp::{GeneralSdpConfig, create_sdp_configs},
         time::GeneralTimeConfig,
     },
 };
@@ -35,6 +39,7 @@ pub struct GeneralConfig {
     pub tracing_config: GeneralTracingConfig,
     pub time_config: GeneralTimeConfig,
     pub kms_config: KmsConfig,
+    pub sdp_config: GeneralSdpConfig,
 }
 
 #[must_use]
@@ -91,12 +96,13 @@ pub fn create_general_configs_with_blend_core_subset(
                 provider_sk: private_key.clone(),
                 zk_sk: secret_zk_key.clone(),
                 locator: Locator(blend_conf.core.backend.listening_address.clone()),
-                note: consensus_configs[0].blend_notes[i].clone(),
+                note: consensus_configs[i].blend_note.clone(),
             },
         )
         .collect();
     let ledger_tx = genesis_tx.mantle_tx().ledger_tx.clone();
     let genesis_tx_with_declarations = create_genesis_tx_with_declarations(ledger_tx, providers);
+    let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations);
 
     // Set note keys and Blend keys in KMS of each node config.
     let kms_configs: Vec<_> = blend_configs
@@ -139,6 +145,7 @@ pub fn create_general_configs_with_blend_core_subset(
             tracing_config: tracing_configs[i].clone(),
             time_config: time_config.clone(),
             kms_config: kms_configs[i].clone(),
+            sdp_config: sdp_configs[i].clone(),
         });
     }
 

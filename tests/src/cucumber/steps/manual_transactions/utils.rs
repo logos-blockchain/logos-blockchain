@@ -1,6 +1,5 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, fmt::Display, time::Duration};
 
-use cucumber::{gherkin::Step, when};
 use hex::ToHex as _;
 use lb_core::{
     codec::SerializeOp as _,
@@ -16,88 +15,30 @@ use tracing::{info, warn};
 use crate::cucumber::{
     error::{StepError, StepResult},
     steps::TARGET,
-    world::{CucumberWorld, WalletTokenMap},
+    world::{CucumberWorld, WalletInfo, WalletTokenMap},
 };
 
-#[when(
-    expr = "I send {int} transactions of {int} LGO each from wallet {string} to wallet {string}"
-)]
-async fn send_multiple_transactions_to_single_wallet(
-    world: &mut CucumberWorld,
-    step: &Step,
-    number_of_transactions: usize,
-    output_value: u64,
-    sender_wallet_name: String,
-    receiver_wallet_name: String,
-) -> StepResult {
-    let wallets = world
-        .resolve_wallets(&[sender_wallet_name.clone(), receiver_wallet_name.clone()])
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-        })?;
-    let (sender_wallet, receiver_wallet) = (wallets[0].clone(), wallets[1].clone());
-
-    let receiver_wallet_pk = receiver_wallet.wallet_account.public_key();
-
-    for _ in 0..number_of_transactions {
-        let tx_hash_hex = create_and_submit_transaction(
-            world,
-            &step.value,
-            &sender_wallet_name,
-            &[(receiver_wallet_pk, output_value)],
-        )
-        .await
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-        })?;
-
-        info!(
-            target: TARGET,
-            "Sent normal transaction from `{sender_wallet_name}/{}` to {receiver_wallet_name}, \
-            value: {output_value}, tx hash: {tx_hash_hex}",
-            sender_wallet.node_name
-        );
-    }
-
-    Ok(())
+/// Specifies which subset of wallet UTXOs to consider when checking for
+/// expected wallet state.
+#[derive(Clone, Debug)]
+pub enum WalletStateType {
+    /// All UTXOs that are on-chain, regardless of whether they are encumbered
+    /// or not.
+    OnChain,
+    /// UTXOs that are currently encumbered by pending transactions.
+    Encumbered,
+    /// UTXOs that are not encumbered and are available for new transactions.
+    Available,
 }
 
-#[when(
-    expr = "I send one transaction with {int} outputs of {int} LGO each from wallet {string} to wallet {string}"
-)]
-async fn send_single_transaction_multiple_outputs_to_single_wallet(
-    world: &mut CucumberWorld,
-    step: &Step,
-    number_of_outputs: usize,
-    output_value: u64,
-    sender_wallet_name: String,
-    receiver_wallet_name: String,
-) -> StepResult {
-    let wallets = world
-        .resolve_wallets(&[sender_wallet_name.clone(), receiver_wallet_name.clone()])
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-        })?;
-    let (sender_wallet, receiver_wallet) = (wallets[0].clone(), wallets[1].clone());
-
-    let receiver_wallet_pk = receiver_wallet.wallet_account.public_key();
-
-    let receivers = vec![(receiver_wallet_pk, output_value); number_of_outputs];
-    let tx_hash_hex =
-        create_and_submit_transaction(world, &step.value, &sender_wallet_name, &receivers)
-            .await
-            .inspect_err(|e| {
-                warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-            })?;
-
-    info!(
-        target: TARGET,
-        "Sent normal transaction from `{sender_wallet_name}/{}` to {receiver_wallet_name}, \
-        number_of_outputs: {number_of_outputs}, value: {output_value}, tx hash: {tx_hash_hex}",
-        sender_wallet.node_name
-    );
-
-    Ok(())
+impl Display for WalletStateType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OnChain => write!(f, "on-chain"),
+            Self::Encumbered => write!(f, "encumbered"),
+            Self::Available => write!(f, "available"),
+        }
+    }
 }
 
 pub async fn create_and_submit_transaction(
@@ -198,19 +139,98 @@ pub async fn create_and_submit_transaction(
     Ok(tx_hash_hex)
 }
 
-pub async fn wait_for_wallet_state(
+async fn get_output_balances(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet: &WalletInfo,
+    wallet_name: &str,
+    wallet_state_type: WalletStateType,
+) -> Result<(usize, u64), StepError> {
+    let on_chain_utxos = collect_wallet_utxos(
+        world,
+        wallet_name,
+        &wallet.node_name,
+        wallet.wallet_account.public_key(),
+    )
+    .await
+    .inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step);
+    })?;
+
+    match wallet_state_type {
+        WalletStateType::OnChain => Ok((
+            on_chain_utxos.len(),
+            on_chain_utxos.iter().map(|u| u.note.value).sum::<u64>(),
+        )),
+        WalletStateType::Encumbered => {
+            let encumbered_utxos = world
+                .wallet_encumbered_tokens
+                .get(wallet_name)
+                .cloned()
+                .unwrap_or_default();
+            Ok((
+                encumbered_utxos.len(),
+                encumbered_utxos.iter().map(|u| u.note.value).sum::<u64>(),
+            ))
+        }
+        WalletStateType::Available => {
+            let available_utxos: Vec<_> = on_chain_utxos
+                .iter()
+                .filter(|utxo| {
+                    !world
+                        .wallet_encumbered_tokens
+                        .get(wallet_name)
+                        .is_some_and(|enc| enc.contains(utxo))
+                })
+                .collect();
+            Ok((
+                available_utxos.len(),
+                available_utxos.iter().map(|u| u.note.value).sum::<u64>(),
+            ))
+        }
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This function is more readable with explicit arguments rather than packing them into structs or tuples."
+)]
+pub async fn wait_for_wallet_or_encumbered_state(
     world: &mut CucumberWorld,
     step: &str,
     wallet_name: String,
-    min_coin_count: Option<usize>,
-    min_token_value: Option<u64>,
+    min_coin_count: Option<&usize>,
+    max_coin_count: Option<&usize>,
+    min_token_value: Option<&u64>,
+    max_token_value: Option<&u64>,
     time_out_seconds: u64,
+    wallet_state_type: WalletStateType,
 ) -> StepResult {
-    if min_coin_count.is_none() && min_token_value.is_none() {
+    if min_coin_count.is_none()
+        && min_token_value.is_none()
+        && max_coin_count.is_none()
+        && max_token_value.is_none()
+    {
         return Err(StepError::LogicalError {
             message: format!(
-                "Step `{step}` error: at least one of 'min_coin_count' or 'min_token_value' must \
-                be provided"
+                "Step `{step}` error: at least one of 'min_coin_count', 'max_coin_count', \
+                'min_token_value' or 'max_token_value' must be provided"
+            ),
+        });
+    }
+    if min_coin_count.is_some() && max_coin_count.is_some() {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "Step `{step}` error: 'min_coin_count' and 'max_coin_count' cannot be used \
+                together"
+            ),
+        });
+    }
+    if min_token_value.is_some() && max_token_value.is_some() {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "Step `{step}` error: 'min_token_value' and 'max_token_value' cannot be used \
+                together"
             ),
         });
     }
@@ -228,59 +248,34 @@ pub async fn wait_for_wallet_state(
     let mut poll_count = 0usize;
 
     loop {
-        let utxos = collect_wallet_utxos(
+        let (coin_count, value) = get_output_balances(
             world,
+            step,
+            &wallet,
+            &wallet_name,
+            wallet_state_type.clone(),
+        )
+        .await?;
+
+        if conditions_met(
             &wallet_name,
             &wallet.node_name,
-            wallet.wallet_account.public_key(),
-        )
-        .await
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{step}` error: {e}");
-        })?;
-        let coin_count = utxos.len();
-        let value = utxos.iter().map(|u| u.note.value).sum::<u64>();
-        match (min_coin_count, min_token_value) {
-            (Some(min_count), Some(min_value)) => {
-                if coin_count >= min_count && value >= min_value {
-                    info!(
-                        target: TARGET,
-                        "Wallet '{wallet_name}/{}' has required coin count: {coin_count} >= \
-                        {min_count}, token value: {value} >= {min_value}",
-                        wallet.node_name
-                    );
-                    return Ok(());
-                }
-            }
-            (Some(min_count), None) => {
-                if coin_count >= min_count {
-                    info!(
-                        target: TARGET,
-                        "Wallet '{wallet_name}/{}' has required coin count: {coin_count} >= \
-                        {min_count}",
-                        wallet.node_name
-                    );
-                    return Ok(());
-                }
-            }
-            (None, Some(min_value)) => {
-                if value >= min_value {
-                    info!(
-                        target: TARGET,
-                        "Wallet '{wallet_name}/{}' has required token value: {value} >= \
-                        {min_value}",
-                        wallet.node_name
-                    );
-                    return Ok(());
-                }
-            }
-            (None, None) => unreachable!(),
+            coin_count,
+            value,
+            min_coin_count,
+            max_coin_count,
+            min_token_value,
+            max_token_value,
+            &wallet_state_type,
+        ) {
+            return Ok(());
         }
 
         if start.elapsed() >= time_out {
             let msg = format!(
-                "Step `{step}` error: wallet '{wallet_name}/{}' has {coin_count} coins and \
-                    {value} LGO, expected at least {min_coin_count:?} / {min_token_value:?}",
+                "Step `{step}` error: wallet '{wallet_name}/{}' has `outputs/LGO` = `{coin_count}/ \
+                {value}`, expected `outputs/LGO` >= `{min_coin_count:?}/{min_token_value:?}` \
+                or `outputs/LGO` <= `{max_coin_count:?}/{max_token_value:?}`",
                 wallet.node_name,
             );
             warn!(target: TARGET, "{msg}");
@@ -290,16 +285,106 @@ pub async fn wait_for_wallet_state(
         if poll_count.is_multiple_of(25) {
             info!(
                 target: TARGET,
-                wallet_name = wallet_name,
-                node_name = wallet.node_name,
-                coin_count,
-                min_coin_count,
-                "Waiting for wallet coin count"
+                "Waiting for wallet '{wallet_name}/{}' to have required '{wallet_state_type}' coins",
+                wallet.node_name
             );
         }
         poll_count += 1;
         sleep(Duration::from_millis(200)).await;
     }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This function is more readable with explicit arguments rather than packing them into structs or tuples."
+)]
+fn conditions_met(
+    wallet_name: &str,
+    wallet_node_name: &str,
+    coin_count: usize,
+    value: u64,
+    min_coin_count: Option<&usize>,
+    max_coin_count: Option<&usize>,
+    min_token_value: Option<&u64>,
+    max_token_value: Option<&u64>,
+    wallet_state_type: &WalletStateType,
+) -> bool {
+    match (
+        min_coin_count,
+        min_token_value,
+        max_coin_count,
+        max_token_value,
+    ) {
+        (Some(min_count), Some(min_value), _, _) => {
+            if coin_count >= *min_count && value >= *min_value {
+                info!(
+                    target: TARGET,
+                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' coin count: {coin_count} >= \
+                    {min_count}, token value: {value} >= {min_value}",
+                    wallet_node_name
+                );
+                return true;
+            }
+        }
+        (Some(min_count), None, _, _) => {
+            if coin_count >= *min_count {
+                info!(
+                    target: TARGET,
+                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' coin count: {coin_count} >= \
+                    {min_count}",
+                    wallet_node_name
+                );
+                return true;
+            }
+        }
+        (None, Some(min_value), _, _) => {
+            if value >= *min_value {
+                info!(
+                    target: TARGET,
+                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' token value: {value} >= \
+                    {min_value}",
+                    wallet_node_name
+                );
+                return true;
+            }
+        }
+        (_, _, Some(max_count), Some(max_value)) => {
+            if coin_count <= *max_count && value <= *max_value {
+                info!(
+                    target: TARGET,
+                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' coin count: {coin_count} <= \
+                    {max_count}, token value: {value} <= {max_value}",
+                    wallet_node_name
+                );
+                return true;
+            }
+        }
+        (_, _, Some(max_count), None) => {
+            if coin_count <= *max_count {
+                info!(
+                    target: TARGET,
+                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' coin count: {coin_count} <= \
+                    {max_count}",
+                    wallet_node_name
+                );
+                return true;
+            }
+        }
+        (_, _, None, Some(max_value)) => {
+            if value <= *max_value {
+                info!(
+                    target: TARGET,
+                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' token value: {value} <= \
+                    {max_value}",
+                    wallet_node_name
+                );
+                return true;
+            }
+        }
+        (None, None, None, None) => unreachable!(),
+    }
+
+    false
 }
 
 fn record_header_height(

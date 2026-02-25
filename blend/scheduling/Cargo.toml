@@ -17,9 +17,12 @@ async-trait                   = { default-features = false, version = "0.1" }
 derivative                    = "2"
 fork_stream                   = { workspace = true }
 futures                       = { default-features = false, version = "0.3" }
+hex                           = { workspace = true }
 lb-blend-message              = { workspace = true }
 lb-blend-proofs               = { workspace = true }
 lb-core                       = { workspace = true }
+lb-cryptarchia-engine         = { workspace = true }
+lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-utils                      = { features = ["rng"], workspace = true }
 multiaddr                     = { default-features = false, version = "0.18" }

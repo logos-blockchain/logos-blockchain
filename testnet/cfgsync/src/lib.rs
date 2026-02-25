@@ -3,10 +3,22 @@ pub mod config;
 pub mod repo;
 pub mod server;
 
-use std::net::Ipv4Addr;
+use std::{net::Ipv4Addr, path::Path};
 
+use blake2::{Blake2b, Digest as _, digest::consts::U32};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
+
+pub type Entropy = [u8; 32];
+
+/// Load entropy from a file, hashing the contents with blake2b-256 to normalize
+/// to 32 bytes.
+pub fn load_entropy(path: &Path) -> Result<Entropy, String> {
+    let data = std::fs::read(path)
+        .map_err(|e| format!("Failed to read entropy file {}: {e}", path.display()))?;
+    let hash = Blake2b::<U32>::digest(&data);
+    Ok(hash.into())
+}
 
 const DEFAULT_LIBP2P_NETWORK_PORT: u16 = 3000;
 const DEFAULT_BLEND_PORT: u16 = 3400;

@@ -11,6 +11,8 @@ async fn smoke_test_four_clients() {
     let mut server = std::process::Command::new(SERVER_BIN)
         .arg("--mode")
         .arg("setup")
+        .arg("--entropy-file")
+        .arg("tests/test_entropy")
         .arg(SERVER_CFG)
         .spawn()
         .expect("server failed");

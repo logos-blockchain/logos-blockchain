@@ -18,7 +18,7 @@ cfg_eval              = { optional = true, version = "0.1" }
 futures               = { default-features = false, version = "0.3" }
 lb-cryptarchia-engine = { features = ["tokio"], workspace = true }
 lb-utils              = { optional = true, workspace = true }
-log                   = "0.4.22"
+log                   = { workspace = true }
 overwatch             = { workspace = true }
 serde                 = { features = ["derive"], optional = true, workspace = true }
 serde_with            = { optional = true, workspace = true }

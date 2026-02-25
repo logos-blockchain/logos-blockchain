@@ -3,6 +3,7 @@ use lb_blend_proofs::{
     quota::{VerifiedProofOfQuota, inputs::prove::public::CoreInputs},
     selection::VerifiedProofOfSelection,
 };
+use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 
 pub mod core;
@@ -27,6 +28,7 @@ pub struct ProofsGeneratorSettings {
     pub local_node_index: Option<usize>,
     pub membership_size: usize,
     pub public_inputs: PoQVerificationInputsMinusSigningKey,
+    pub epoch: Epoch,
 }
 
 #[derive(Debug, Clone, Copy)]

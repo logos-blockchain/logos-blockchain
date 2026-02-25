@@ -8,6 +8,8 @@ services:
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
+    environment:
+      - ENTROPY_FILE=${ENTROPY_FILE:-/etc/logos-blockchain/entropy}
     ports:
       - "4400:4400/tcp"
     entrypoint: /etc/logos-blockchain/scripts/setup_cfgsync_server.sh

@@ -80,6 +80,7 @@ jobs:
           CARGO_INCREMENTAL: 0  # Disable incremental compilation
 
       - name: End-to-end integration tests
+        timeout-minutes: 60
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: nextest
@@ -119,7 +120,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
         with:
-          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}  # ✅ Unique per OS
+          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-smoke  # ✅ Unique per OS
           include-hidden-files: true
           path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Smoke/**
 
@@ -143,7 +144,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
         with:
-          name: cucumber-artifacts-${{ runner.os }}  # ✅ Unique per OS
+          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-cryptarchia  # ✅ Unique per OS
           include-hidden-files: true
           path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Cryptarchia/**
 
@@ -167,7 +168,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
         with:
-          name: cucumber-artifacts-${{ runner.os }}  # ✅ Unique per OS
+          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-transactions  # ✅ Unique per OS
           include-hidden-files: true
           path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Transactions/**
 

@@ -15,6 +15,7 @@ use lb_blend_proofs::{
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
 use lb_core::crypto::ZkHash;
+use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 
 use crate::message_blend::{
@@ -43,6 +44,7 @@ impl LeaderProofsGenerator for TestEpochChangeLeaderProofsGenerator {
         &mut self,
         new_epoch_public: LeaderInputs,
         new_private_inputs: ProofOfLeadershipQuotaInputs,
+        _new_epoch: Epoch,
     ) {
         self.0.public_inputs.leader = new_epoch_public;
         self.1 = new_private_inputs;
@@ -88,11 +90,16 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
         Self(settings, None)
     }
 
-    fn rotate_epoch(&mut self, new_epoch_public: LeaderInputs) {
+    fn rotate_epoch(&mut self, new_epoch_public: LeaderInputs, _new_epoch: Epoch) {
         self.0.public_inputs.leader = new_epoch_public;
     }
 
-    fn set_epoch_private(&mut self, new_epoch_private: ProofOfLeadershipQuotaInputs) {
+    fn set_epoch_private(
+        &mut self,
+        new_epoch_private: ProofOfLeadershipQuotaInputs,
+        _new_epoch_public: LeaderInputs,
+        _new_epoch: Epoch,
+    ) {
         self.1 = Some(new_epoch_private);
     }
 

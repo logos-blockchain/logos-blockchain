@@ -3,25 +3,27 @@ use std::sync::LazyLock;
 use bincode::{
     Options as _,
     config::{
-        Bounded, FixintEncoding, LittleEndian, RejectTrailing, WithOtherEndian,
-        WithOtherIntEncoding, WithOtherLimit, WithOtherTrailing,
+        FixintEncoding, LittleEndian, RejectTrailing, WithOtherEndian, WithOtherIntEncoding,
+        WithOtherLimit, WithOtherTrailing,
     },
 };
 
 // Type composition is cool but also makes naming types a bit awkward
 pub type BincodeOptions = WithOtherTrailing<
     WithOtherIntEncoding<
-        WithOtherLimit<WithOtherEndian<bincode::DefaultOptions, LittleEndian>, Bounded>,
+        WithOtherLimit<
+            WithOtherEndian<bincode::DefaultOptions, LittleEndian>,
+            bincode::config::Infinite,
+        >,
         FixintEncoding,
     >,
     RejectTrailing,
 >;
 
-pub const DATA_LIMIT: u64 = 1 << 16; // Do not serialize/deserialize more than 64 KiB
 pub static OPTIONS: LazyLock<BincodeOptions> = LazyLock::new(|| {
     bincode::DefaultOptions::new()
         .with_little_endian()
-        .with_limit(DATA_LIMIT)
+        .with_no_limit()
         .with_fixint_encoding()
         .reject_trailing_bytes()
 });
