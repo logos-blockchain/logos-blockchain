@@ -5,10 +5,10 @@ blend:
   common:
     num_blend_layers: 1
     timing:
-      rounds_per_session: 2000
-      rounds_per_interval: 10
+      rounds_per_session: 80000
+      rounds_per_interval: 20
       round_duration: '1.000000000'
-      rounds_per_observation_window: 20
+      rounds_per_observation_window: 10
       rounds_per_session_transition_period: 20
       epoch_transition_period_in_slots: 20
     minimum_network_size: 1
@@ -36,7 +36,7 @@ cryptarchia:
   security_param: 20
   slot_activation_coeff:
     numerator: 1
-    denominator: 10
+    denominator: 20
   learning_rate: 0.1
   sdp_config:
     service_params:
