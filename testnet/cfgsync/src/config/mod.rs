@@ -424,13 +424,13 @@ mod cfgsync_tests {
 
         assert!(faucet_pk.is_some(), "Faucet PK should be set");
 
-        // All nodes should have 5 keys (blend_signing, blend_zk, known, funding,
-        // faucet) and the faucet key in other_keys, so the faucet service can
-        // route to any node.
+        // All nodes should have 6 keys (blend_signing, blend_zk, blend_locked_note,
+        // known, funding, faucet) and the faucet key in other_keys, so the
+        // faucet service can route to any node.
         for host in &hosts {
             let config = configs.get(host).expect("Config missing for host");
             let kms_keys = &config.kms_config.backend.keys;
-            assert_eq!(kms_keys.len(), 5, "Node should have faucet key in KMS");
+            assert_eq!(kms_keys.len(), 6, "Node should have faucet key in KMS");
 
             assert_eq!(
                 config.consensus_config.other_keys.len(),
