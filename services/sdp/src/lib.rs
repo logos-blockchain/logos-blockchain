@@ -168,36 +168,7 @@ where
         let chain_api: CryptarchiaServiceApi<ChainService, RuntimeServiceId> =
             CryptarchiaServiceApi::new(chain_relay);
 
-        // If we have a declaration_id configured, fetch full declaration from ledger
-        if let Some(declaration_id) = self.declaration_id {
-            match self
-                .fetch_declaration_from_ledger(&chain_api, declaration_id)
-                .await
-            {
-                Ok(Some((declaration, nonce))) => {
-                    tracing::info!(
-                        declaration_id = ?declaration_id,
-                        nonce = nonce,
-                        "Loaded declaration from ledger"
-                    );
-                    self.current_declaration = Some(declaration);
-                    self.nonce = nonce;
-                }
-                Ok(None) => {
-                    tracing::warn!(
-                        declaration_id = ?declaration_id,
-                        "Declaration not found in ledger - may have been withdrawn or not yet confirmed"
-                    );
-                }
-                Err(e) => {
-                    tracing::error!(
-                        declaration_id = ?declaration_id,
-                        error = ?e,
-                        "Failed to fetch declaration from ledger"
-                    );
-                }
-            }
-        }
+        self.try_restore_declaration_state(&chain_api).await;
 
         self.service_resources_handle.status_updater.notify_ready();
         tracing::info!(
@@ -250,6 +221,48 @@ where
         + Sync
         + 'static,
 {
+    /// Attempt to restore declaration state from the ledger on startup.
+    ///
+    /// If a `declaration_id` is configured, fetches the full declaration info
+    /// (including current nonce) from the ledger. This ensures the service
+    /// continues with the correct nonce after a restart.
+    async fn try_restore_declaration_state(
+        &mut self,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+    ) {
+        let Some(declaration_id) = self.declaration_id else {
+            return;
+        };
+
+        match self
+            .fetch_declaration_from_ledger(chain_api, declaration_id)
+            .await
+        {
+            Ok(Some((declaration, nonce))) => {
+                tracing::info!(
+                    declaration_id = ?declaration_id,
+                    nonce = nonce,
+                    "Loaded declaration from ledger"
+                );
+                self.current_declaration = Some(declaration);
+                self.nonce = nonce;
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    declaration_id = ?declaration_id,
+                    "Declaration not found in ledger - may have been withdrawn or not yet confirmed"
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    declaration_id = ?declaration_id,
+                    error = ?e,
+                    "Failed to fetch declaration from ledger"
+                );
+            }
+        }
+    }
+
     /// Fetch declaration info from the ledger via chain service.
     async fn fetch_declaration_from_ledger(
         &self,

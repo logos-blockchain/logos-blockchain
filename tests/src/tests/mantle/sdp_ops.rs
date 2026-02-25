@@ -32,15 +32,17 @@ use tokio::time::{sleep, timeout};
 /// proofs.
 #[tokio::test]
 #[serial]
-#[ignore = "Slow due to lock_period wait - needs faster block production config"]
+#[ignore = "Transaction not being included in blocks - needs investigation"]
 async fn sdp_ops_e2e() {
     let note_sk = ZkKey::from(BigUint::from(42u64));
     let spare_note = Note::new(1, note_sk.to_public_key());
-    let topology_config =
-        TopologyConfig::two_validators().with_extra_genesis_note(GenesisNoteSpec {
+    // Use reduced lock_period (3 instead of 10) to speed up the test
+    let topology_config = TopologyConfig::two_validators()
+        .with_extra_genesis_note(GenesisNoteSpec {
             note: spare_note,
             note_sk: note_sk.clone(),
-        });
+        })
+        .with_lock_period(3);
     let topology = Topology::spawn(topology_config).await;
 
     topology.wait_network_ready().await;
