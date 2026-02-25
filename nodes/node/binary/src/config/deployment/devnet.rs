@@ -5,7 +5,7 @@ blend:
   common:
     num_blend_layers: 1
     timing:
-      rounds_per_session: 80000
+      rounds_per_session: 120000
       rounds_per_interval: 20
       round_duration: '1.000000000'
       rounds_per_observation_window: 10
@@ -33,7 +33,7 @@ cryptarchia:
     epoch_stake_distribution_stabilization: 3
     epoch_period_nonce_buffer: 3
     epoch_period_nonce_stabilization: 4
-  security_param: 20
+  security_param: 30
   slot_activation_coeff:
     numerator: 1
     denominator: 20
