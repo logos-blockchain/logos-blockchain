@@ -31,7 +31,7 @@ runs:
         find . -type d -name __pycache__  -prune -exec rm -rf {} + 2>/dev/null || true
         find . -not -path './target/*' -name "*.pyc" -delete 2>/dev/null || true
 
-        # Optional: only meaningful if this workflow actually runs npm/pip
+        # npm/pip cache cleanup — safe to run always; no-ops if not installed/used
         npm cache clean --force 2>/dev/null || true
         pip cache purge 2>/dev/null || true
 
@@ -52,7 +52,7 @@ runs:
           du -sh target 2>/dev/null || true
         fi
 
-        # --- 3.5) Diagnostics: show biggest offenders (cheap, useful)
+        # --- 4) Diagnostics: show biggest offenders (cheap, useful)
         echo "Top workspace dirs (largest 30):"
         (
           du -xh -d 2 . 2>/dev/null | sort -rh 2>/dev/null
@@ -73,7 +73,7 @@ runs:
           ) | head -n 30 || true
         fi
 
-        # --- 4) Runner diag trimming: robust globbing across Linux + macOS runner layouts
+        # --- 5) Runner diag trimming: robust globbing across Linux + macOS runner layouts
         # Use nullglob so non-matching globs expand to nothing (no noisy literal patterns).
         (
           shopt -s nullglob
@@ -88,7 +88,7 @@ runs:
           done
         )
 
-        # --- 5) Emergency mode: if still low disk, apply stronger pruning (rebuildable)
+        # --- 6) Emergency mode: if still low disk, apply stronger pruning (rebuildable)
         # 15 GB threshold
         free_now=$(avail_kb 2>/dev/null || echo 999999999)
         if [ "$free_now" -lt $((15*1024*1024)) ]; then

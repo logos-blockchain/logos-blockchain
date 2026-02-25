@@ -39,7 +39,7 @@ runs:
           target/release/.fingerprint/    \
           target/release/build/           \
           target/release/deps/            \
-          2>/dev/null | tail -1
+          2>/dev/null | tail -1 || true
 
     - name: Update Cargo cache (main)
       id: update-main
