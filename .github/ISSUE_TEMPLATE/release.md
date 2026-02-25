@@ -1,7 +1,7 @@
 ---
 name: Release Checklist
 about: Checklist for releasing a new version
-title: Release Checklist for [X.Y.Z]
+title: Release Checklist for X.Y.Z
 labels: release
 ---
 
@@ -13,7 +13,8 @@ Progress on the checklist must be provided as comments to the issue.
 
 - [ ] <span style="color:red">**!! IMPORTANT: Make sure that *ALL* the deployment settings are committed to `master` before starting the ceremony. The only value that is *expected* to be out-of-sync is the cryptarchia genesis state, which will be a result of running the ceremony**</span>.
 - [ ] Checkout `master` and tag commit with `pre-X.Y.Z` and push the tag
-- [ ] Manually trigger the [testnet Docker workflow][testnet-docker-workflow] using the `pre-X.Y.Z` tag and using the `devnet` image tag
+- [ ] Manually trigger the [testnet Docker workflow][testnet-docker-workflow] using the `pre-X.Y.Z` tag and using the `devnet` image tag.
+- [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the workflow run to complete
 - [ ] Checkout and force reset the `testnet` branch to point to the tagged commit
 - [ ] Create a new symlink `compose.static.yml` -> `compose.devnet.setup.yml`
@@ -32,9 +33,11 @@ Progress on the checklist must be provided as comments to the issue.
 ## GitHub Release
 
 - [ ] Manually trigger the [bundling workflow][bundling-workflow] from the `X.Y.Z` tag on GitHub
+- [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the bundling workflow to complete and generate a draft GitHub pre-release. While the release is in progress, follow the steps in the [Devnet deployment][devnet-deployment-section] section below.
 - [ ] Address checklist of the generated GitHub release
 - [ ] Publish release
+- [ ] Post the link to the published release to this issue for easier review
 
 ## Devnet deployment
 
