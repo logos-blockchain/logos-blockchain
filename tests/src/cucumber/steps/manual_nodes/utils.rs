@@ -23,6 +23,9 @@ use crate::cucumber::{
     world::{ChainInfoMap, CucumberWorld, GenesisTokens, NodeInfo, WalletInfo, WalletInfoMap},
 };
 
+type NodesToStartUnordered = HashMap<String, (Vec<WalletStartInfo>, Vec<String>)>;
+type NodesToStartOrdered = Vec<(String, Vec<WalletStartInfo>, Vec<String>)>;
+
 enum AlignmentStatus {
     MissingChainInfo,
     Fork,
@@ -266,7 +269,7 @@ async fn start_nodes_with_wallet_resources(world: &mut CucumberWorld, step: &Ste
 
     // Map wallet start info and connected peers to node name
     verify_node_wallet_resources_table_indexes(table, &step.value)?;
-    let mut nodes_to_start: HashMap<String, (Vec<WalletStartInfo>, Vec<String>)> = HashMap::new();
+    let mut nodes_to_start: NodesToStartUnordered = HashMap::new();
     for row in table.rows.iter().skip(1) {
         let (node_name, wallet_start_info, connected_to) =
             parse_wallet_resources_table_row(&step.value, row)?;
@@ -278,24 +281,85 @@ async fn start_nodes_with_wallet_resources(world: &mut CucumberWorld, step: &Ste
             entry.1.push(peer);
         }
     }
-    // Sort nodes_to_start with empty peers first to ensure standalone nodes start
-    // before connected nodes
-    let mut nodes_to_start: Vec<(String, Vec<WalletStartInfo>, Vec<String>)> = nodes_to_start
-        .into_iter()
-        .map(|(node_name, (wallet_infos, peers))| (node_name, wallet_infos, peers))
-        .collect();
-    // In this sorting, nodes with empty peers will have `!peers.is_empty()` as
-    // false, which is less than true for nodes with peers, so standalone nodes
-    // come first.
-    nodes_to_start.sort_by_key(|(_, _, peers)| !peers.is_empty());
 
-    for (node_name, wallet_start_info, mut peers) in nodes_to_start {
+    let nodes_to_start_ordered = start_nodes_order_respecting_dependencies(nodes_to_start)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+        })?;
+    for (node_name, wallet_start_info, mut peers) in nodes_to_start_ordered {
         peers.sort();
         peers.dedup();
         start_node(world, &step.value, &node_name, &wallet_start_info, &peers).await?;
     }
 
     Ok(())
+}
+
+// Sort nodes_to_start with empty peers first to ensure standalone nodes start
+// before connected nodes, then by dependency order to ensure all peers of a
+// node are started before the node itself is started. If there is a circular
+// dependency, return an error.
+fn start_nodes_order_respecting_dependencies(
+    nodes_to_start: NodesToStartUnordered,
+) -> Result<NodesToStartOrdered, StepError> {
+    let mut remaining = nodes_to_start;
+    let mut started = HashSet::new();
+    let mut ordered = Vec::new();
+
+    // Step 1: Find all nodes without any peer dependencies
+    let nodes_without_peers: Vec<String> = remaining
+        .iter()
+        .filter(|&(_, (_, peers))| peers.is_empty())
+        .map(|(node_name, (_, _))| node_name.clone())
+        .collect();
+
+    if nodes_without_peers.is_empty() && !remaining.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: "No nodes without peer dependencies found. Possible circular dependency."
+                .to_owned(),
+        });
+    }
+
+    // Update start list with all nodes without peers
+    for node_name in nodes_without_peers {
+        if let Some((wallet_infos, peers)) = remaining.remove(&node_name) {
+            ordered.push((node_name.clone(), wallet_infos, peers));
+            started.insert(node_name);
+        }
+    }
+
+    // Step 2: Iteratively find nodes whose peer dependencies are already included
+    // in the start list
+    while !remaining.is_empty() {
+        let mut made_progress = false;
+
+        let ready_nodes: Vec<String> = remaining
+            .iter()
+            .filter_map(|(node_name, (_, peers))| {
+                let all_peers_started = peers.iter().all(|peer| started.contains(peer));
+                all_peers_started.then(|| node_name.clone())
+            })
+            .collect();
+
+        for node_name in ready_nodes {
+            if let Some((wallet_infos, mut peers)) = remaining.remove(&node_name) {
+                peers.sort();
+                peers.dedup();
+                ordered.push((node_name.clone(), wallet_infos, peers));
+                started.insert(node_name);
+                made_progress = true;
+            }
+        }
+
+        if !made_progress {
+            let remaining_nodes: Vec<String> = remaining.keys().cloned().collect();
+            return Err(StepError::InvalidArgument {
+                message: format!("Circular dependency detected among nodes: {remaining_nodes:?}"),
+            });
+        }
+    }
+
+    Ok(ordered)
 }
 
 pub async fn start_node(

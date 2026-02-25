@@ -8,6 +8,21 @@ Feature: Cryptarchia
     Then all nodes have at least 10 blocks and converged to within 1 blocks in 300 seconds
     Then I stop all nodes
 
+  @cryptarchia_ci
+  Scenario: IBD staggered start
+    Given I have a cluster with capacity of 4 nodes
+    And we use IBD peers
+    And all peers must be mode online after startup
+    And I start node "NODE_1"
+    When node "NODE_1" is at height 2 in 300 seconds
+    And I start peer node "NODE_2" connected to node "NODE_1"
+    When node "NODE_2" is at height 4 in 240 seconds
+    And I start peer node "NODE_3" connected to node "NODE_2"
+    When node "NODE_3" is at height 6 in 180 seconds
+    And I start peer node "NODE_4" connected to node "NODE_3"
+    Then all nodes have at least 8 blocks and converged to within 1 blocks in 180 seconds
+    Then I stop all nodes
+
   @cryptarchia_ci @undefined_behaviour
   Scenario: Orphan staggered start
     Given I have a cluster with capacity of 4 nodes

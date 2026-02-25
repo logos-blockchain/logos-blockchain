@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, fmt::Display, time::Duration};
 
 use hex::ToHex as _;
 use lb_core::{
@@ -29,6 +29,16 @@ pub enum WalletStateType {
     Encumbered,
     /// UTXOs that are not encumbered and are available for new transactions.
     Available,
+}
+
+impl Display for WalletStateType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OnChain => write!(f, "on-chain"),
+            Self::Encumbered => write!(f, "encumbered"),
+            Self::Available => write!(f, "available"),
+        }
+    }
 }
 
 pub async fn create_and_submit_transaction(
@@ -256,6 +266,7 @@ pub async fn wait_for_wallet_or_encumbered_state(
             max_coin_count,
             min_token_value,
             max_token_value,
+            &wallet_state_type,
         ) {
             return Ok(());
         }
@@ -274,11 +285,8 @@ pub async fn wait_for_wallet_or_encumbered_state(
         if poll_count.is_multiple_of(25) {
             info!(
                 target: TARGET,
-                wallet_name = wallet_name,
-                node_name = wallet.node_name,
-                coin_count,
-                min_coin_count,
-                "Waiting for wallet coin count"
+                "Waiting for wallet '{wallet_name}/{}' to have required '{wallet_state_type}' coins",
+                wallet.node_name
             );
         }
         poll_count += 1;
@@ -299,6 +307,7 @@ fn conditions_met(
     max_coin_count: Option<&usize>,
     min_token_value: Option<&u64>,
     max_token_value: Option<&u64>,
+    wallet_state_type: &WalletStateType,
 ) -> bool {
     match (
         min_coin_count,
@@ -310,7 +319,7 @@ fn conditions_met(
             if coin_count >= *min_count && value >= *min_value {
                 info!(
                     target: TARGET,
-                    "Wallet '{wallet_name}/{}' has required coin count: {coin_count} >= \
+                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' coin count: {coin_count} >= \
                     {min_count}, token value: {value} >= {min_value}",
                     wallet_node_name
                 );
@@ -321,7 +330,7 @@ fn conditions_met(
             if coin_count >= *min_count {
                 info!(
                     target: TARGET,
-                    "Wallet '{wallet_name}/{}' has required coin count: {coin_count} >= \
+                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' coin count: {coin_count} >= \
                     {min_count}",
                     wallet_node_name
                 );
@@ -332,7 +341,7 @@ fn conditions_met(
             if value >= *min_value {
                 info!(
                     target: TARGET,
-                    "Wallet '{wallet_name}/{}' has required token value: {value} >= \
+                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' token value: {value} >= \
                     {min_value}",
                     wallet_node_name
                 );
@@ -343,7 +352,7 @@ fn conditions_met(
             if coin_count <= *max_count && value <= *max_value {
                 info!(
                     target: TARGET,
-                    "Wallet '{wallet_name}/{}' has required coin count: {coin_count} <= \
+                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' coin count: {coin_count} <= \
                     {max_count}, token value: {value} <= {max_value}",
                     wallet_node_name
                 );
@@ -354,7 +363,7 @@ fn conditions_met(
             if coin_count <= *max_count {
                 info!(
                     target: TARGET,
-                    "Wallet '{wallet_name}/{}' has required coin count: {coin_count} <= \
+                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' coin count: {coin_count} <= \
                     {max_count}",
                     wallet_node_name
                 );
@@ -365,7 +374,7 @@ fn conditions_met(
             if value <= *max_value {
                 info!(
                     target: TARGET,
-                    "Wallet '{wallet_name}/{}' has required token value: {value} <= \
+                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' token value: {value} <= \
                     {max_value}",
                     wallet_node_name
                 );
