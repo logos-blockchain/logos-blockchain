@@ -8,7 +8,7 @@ runs:
       if: always()
       shell: bash
       run: |
-        set -uxo pipefail
+        set -uo pipefail
 
         echo "Disk before:"
         df -h || true
@@ -74,9 +74,10 @@ runs:
         fi
 
         # --- 4) Runner diag trimming: robust globbing across Linux + macOS runner layouts
-        # Avoid unexpanded globs becoming literal strings by iterating patterns, then expanding.
-        for pattern in /github-runner/*/_diag /Users/*/github-runner-node-*/_diag; do
-          for d in $pattern; do
+        # Use nullglob so non-matching globs expand to nothing (no noisy literal patterns).
+        (
+          shopt -s nullglob
+          for d in /github-runner/*/_diag /Users/*/github-runner-node-*/_diag; do
             [ -d "$d" ] || continue
             echo "Diag before ($d):"
             du -sh "$d" 2>/dev/null || true
@@ -85,7 +86,7 @@ runs:
             echo "Diag after ($d):"
             du -sh "$d" 2>/dev/null || true
           done
-        done
+        )
 
         # --- 5) Emergency mode: if still low disk, apply stronger pruning (rebuildable)
         # 15 GB threshold
