@@ -141,7 +141,7 @@ impl Topology {
         // Set Blend keys in KMS of each node config.
         let kms_configs = create_kms_configs(&blend_configs, &consensus_configs);
 
-        let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations);
+        let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations, n_participants);
 
         let mut node_configs = vec![];
 
