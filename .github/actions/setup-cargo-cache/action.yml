@@ -19,11 +19,18 @@ runs:
       uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # Version 4.2.3
       continue-on-error: true
       with:
+        # This excludes the final linked binaries and test executables (which are large but fast to re-link) while
+        # keeping the compiled dependency objects (which are slow to recompile).
         path: |
           ~/.cargo/registry/index/
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
-          target/
+          target/debug/.fingerprint/
+          target/debug/build/
+          target/debug/deps/
+          target/release/.fingerprint/
+          target/release/build/
+          target/release/deps/
 
         # Must be in sync with the keys used in the `update-cargo-cache` workflow.
         key: ${{ inputs.key-prefix }}/main/${{ github.sha }}
@@ -37,11 +44,18 @@ runs:
       uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # Version 4.2.3
       continue-on-error: true
       with:
+        # This excludes the final linked binaries and test executables (which are large but fast to re-link) while
+        # keeping the compiled dependency objects (which are slow to recompile).
         path: |
           ~/.cargo/registry/index/
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
-          target/
+          target/debug/.fingerprint/
+          target/debug/build/
+          target/debug/deps/
+          target/release/.fingerprint/
+          target/release/build/
+          target/release/deps/
 
         # Must be in sync with the keys used in the `update-cargo-cache` workflow.
         key: ${{ inputs.key-prefix }}/pr#${{ github.event.pull_request.number }}/${{ github.sha }}
@@ -49,3 +63,31 @@ runs:
           ${{ inputs.key-prefix }}/pr#${{ github.event.pull_request.number }}
           ${{ inputs.key-prefix }}/main
           ${{ inputs.key-prefix }}
+
+    - name: Log cache directory sizes
+      shell: bash
+      run: |
+        echo "=== Cargo registry ==="
+        du -sh ~/.cargo/registry/index/  2>/dev/null || echo "  index: not found"
+        du -sh ~/.cargo/registry/cache/  2>/dev/null || echo "  cache: not found"
+        du -sh ~/.cargo/git/db/          2>/dev/null || echo "  git/db: not found"
+        echo "=== target/debug ==="
+        du -sh target/debug/.fingerprint/ 2>/dev/null || echo "  .fingerprint: not found"
+        du -sh target/debug/build/        2>/dev/null || echo "  build: not found"
+        du -sh target/debug/deps/         2>/dev/null || echo "  deps: not found"
+        echo "=== target/release ==="
+        du -sh target/release/.fingerprint/ 2>/dev/null || echo "  .fingerprint: not found"
+        du -sh target/release/build/        2>/dev/null || echo "  build: not found"
+        du -sh target/release/deps/         2>/dev/null || echo "  deps: not found"
+        echo "=== Total estimated cache size ==="
+        du -shc \
+          ~/.cargo/registry/index/        \
+          ~/.cargo/registry/cache/        \
+          ~/.cargo/git/db/                \
+          target/debug/.fingerprint/      \
+          target/debug/build/             \
+          target/debug/deps/              \
+          target/release/.fingerprint/    \
+          target/release/build/           \
+          target/release/deps/            \
+          2>/dev/null | tail -1 || true

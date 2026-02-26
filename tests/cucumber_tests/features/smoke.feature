@@ -5,7 +5,7 @@ Feature: Smoke
   Scenario: Idle smoke
     Given we have a CLI deployer specified
     And topology has 2 validators
-    And run duration is 60 seconds
+    And run duration is 120 seconds
     And expect consensus liveness
     When run scenario
     Then scenario should succeed
@@ -15,7 +15,7 @@ Feature: Smoke
   Scenario: Simple smoke
     Given we have a CLI deployer specified
     And topology has 2 validators
-    And run duration is 60 seconds
+    And run duration is 120 seconds
     And wallets total funds is 1000000000 split across 50 users
     And transactions rate is 1 per block
     And expect consensus liveness

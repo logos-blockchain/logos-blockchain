@@ -16,7 +16,7 @@ macro_rules! log_error {
 use std::{collections::HashMap, time::Duration};
 
 use lb_libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmEvent,
+    Multiaddr, PeerId, Protocol, Swarm, SwarmEvent,
     behaviour::BehaviourEvent,
     libp2p::{kad::QueryId, swarm::ConnectionId},
 };
@@ -170,7 +170,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 tracing::error!(
                     "Failed to connect to peer: {peer_id:?} {connection_id:?} due to: {error}"
                 );
-                self.retry_connect(connection_id);
+                self.retry_connect(connection_id, peer_id);
             }
             SwarmEvent::ExternalAddrConfirmed { address } => {
                 self.handle_external_addr_confirmed(&address);
@@ -183,6 +183,24 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         let local_peer_id = *self.swarm.swarm().local_peer_id();
         self.swarm.kademlia_add_address(local_peer_id, address);
         info!("Added confirmed external address to Kademlia: {address}");
+    }
+
+    fn remove_kademlia_address_for_dial(&mut self, peer_id: Option<PeerId>, dial_addr: &Multiaddr) {
+        let address_peer_id = dial_addr.iter().find_map(|protocol| match protocol {
+            Protocol::P2p(multihash) => PeerId::from_multihash(multihash.into()).ok(),
+            _ => None,
+        });
+
+        let resolved_peer_id = peer_id.or(address_peer_id);
+        let Some(peer_id) = resolved_peer_id else {
+            tracing::debug!(
+                "Skipping Kademlia removal for failed dial; peer id unavailable: {}",
+                dial_addr
+            );
+            return;
+        };
+
+        self.swarm.kademlia_remove_address(peer_id, dial_addr);
     }
 
     fn handle_command(&mut self, command: Command) {
@@ -251,7 +269,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
     }
 
     // TODO: Consider a common retry module for all use cases
-    fn retry_connect(&mut self, connection_id: ConnectionId) {
+    fn retry_connect(&mut self, connection_id: ConnectionId, peer_id: Option<PeerId>) {
         let Some(mut dial) = self.pending_dials.remove(&connection_id) else {
             return;
         };
@@ -261,6 +279,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         };
         if new_retry_count > MAX_RETRY {
             tracing::debug!("Max retry({MAX_RETRY}) has been reached: {dial:?}");
+            self.remove_kademlia_address_for_dial(peer_id, &dial.addr);
             return;
         }
         dial.retry_count = new_retry_count;
@@ -284,7 +303,7 @@ const fn exp_backoff(retry: usize) -> Duration {
 mod tests {
     use std::{net::Ipv4Addr, sync::Once, time::Instant};
 
-    use lb_libp2p::{Protocol, protocol_name::StreamProtocol};
+    use lb_libp2p::{libp2p::swarm::DialError, protocol_name::StreamProtocol};
     use lb_utils::net::get_available_udp_port;
     use rand::rngs::OsRng;
     use tracing_subscriber::EnvFilter;
@@ -503,5 +522,73 @@ mod tests {
         for task in handler_tasks {
             task.abort();
         }
+    }
+
+    #[tokio::test]
+    async fn removes_failed_dial_address_from_kademlia() {
+        init_tracing();
+
+        let (tx, rx) = mpsc::channel(10);
+        let (pubsub_events_tx, _) = broadcast::channel(10);
+        let (chainsync_events_tx, _) = broadcast::channel(10);
+
+        let config = create_libp2p_config(vec![], get_available_udp_port().unwrap());
+
+        let mut handler =
+            SwarmHandler::new(config, tx, rx, pubsub_events_tx, chainsync_events_tx, OsRng);
+
+        let remote_peer = PeerId::random();
+        let remote_addr = format!(
+            "/ip4/127.0.0.1/udp/{}/quic-v1",
+            get_available_udp_port().unwrap()
+        )
+        .parse::<Multiaddr>()
+        .unwrap()
+        .with(Protocol::P2p(remote_peer));
+
+        handler.bootstrap_kad_from_peers(&vec![remote_addr.clone()]);
+
+        let before = handler.swarm.kademlia_discovered_peers();
+        assert!(
+            before
+                .iter()
+                .any(|p| p.peer_id == remote_peer && p.addrs.contains(&remote_addr)),
+            "Expected Kademlia to contain the remote address before failure handling",
+        );
+
+        let (result_sender, _result_rx) = oneshot::channel();
+        handler.connect(Dial {
+            addr: remote_addr.clone(),
+            retry_count: 0,
+            result_sender,
+        });
+
+        let connection_id = *handler
+            .pending_dials
+            .keys()
+            .next()
+            .expect("Expected a pending dial entry");
+
+        handler
+            .pending_dials
+            .get_mut(&connection_id)
+            .expect("pending dial entry should exist")
+            .retry_count = MAX_RETRY;
+
+        let event = SwarmEvent::OutgoingConnectionError {
+            peer_id: Some(remote_peer),
+            connection_id,
+            error: DialError::NoAddresses,
+        };
+
+        handler.handle_swarm_event(event);
+
+        let after = handler.swarm.kademlia_discovered_peers();
+        assert!(
+            !after
+                .iter()
+                .any(|p| p.peer_id == remote_peer && p.addrs.contains(&remote_addr)),
+            "Expected failed dial address to be removed from Kademlia",
+        );
     }
 }

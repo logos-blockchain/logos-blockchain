@@ -164,13 +164,17 @@ where
     }
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
-        self.core_proofs_generator.get_next_proof().await
+        let proof = self.core_proofs_generator.get_next_proof().await?;
+        tracing::debug!(target: LOG_TARGET, "Generated core PoQ {:?} with settings: {:?}, epoch: {:?} and signing key: {:?}", proof.proof_of_quota, self.core_proofs_generator.settings, self.core_proofs_generator.settings.epoch, proof.ephemeral_signing_key.public_key());
+        Some(proof)
     }
 
     async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
         let Some(leader_proofs_generator) = &mut self.leader_proofs_generator else {
             return None;
         };
-        Some(leader_proofs_generator.get_next_proof().await)
+        let proof = leader_proofs_generator.get_next_proof().await;
+        tracing::debug!(target: LOG_TARGET, "Generated leadership PoQ {:?} with settings: {:?}, epoch: {:?} and signing key: {:?}", proof.proof_of_quota, leader_proofs_generator.settings, leader_proofs_generator.settings.epoch, proof.ephemeral_signing_key.public_key());
+        Some(proof)
     }
 }

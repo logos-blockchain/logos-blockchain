@@ -1,7 +1,3 @@
-## What's Changed
-
-TODO: Changelog.
-
 ## Setup
 
 If it's the first time configuring your environment, please do the following:
@@ -27,16 +23,16 @@ The operation will give you the `logos-blockchain-node` binary, which you can no
 
 To verify that your node is running correctly and connected, visit `http://localhost:{api_port_in_user_config}/cryptarchia/info`. The slot and height should both be constantly increasing.
 
-You can compare your consensus state with any nodes of the Logos Blockchain fleet reachable at `https://devnet.blockchain.logos.co/node/{1,2,3}/cryptarchia/info`.
+You can compare your consensus state with any nodes of the Logos Blockchain fleet reachable at [https://devnet.blockchain.logos.co/web/](https://devnet.blockchain.logos.co/web/) by checking their cryptarchia info.
 
 ## Checklist
 
 Before publishing please ensure:
 - [ ] Description is complete
-- [ ] Changelog is correct, compared to last release
-- [ ] Binaries for Mac and Linux platforms are present
-- [ ] Circuits of the expected version for Mac and Linux platforms are present
-- [ ] Pre-release is checked if necessary
-- [ ] Remove this checklist and address all TODOs before publishing the release.
+- [ ] Auto-generate the changelog (GH feature) by selecting the tag corresponding to the previous release. GH will add the changelog to the end of the release notes. Move the whole section at the top of the release notes instead
+- [ ] Verify binaries for Mac and Linux platforms are present
+- [ ] Verify circuits of the expected version for Mac and Linux platforms are present
+- [ ] Check either the pre-release or "latest" checkbox, depending on the type of release
+- [ ] Remove this checklist once fully addressed and publish the release
 
 [release-notion]: https://www.notion.so/nomos-tech/Internal-Devnet-Launch-February-2026-2fe261aa09df8025ad94e380933b4cf9#2ff261aa09df8058935ecb85aa587564

@@ -82,7 +82,7 @@ services:
     container_name: nginx
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     ports:
-      - "18080:18080"
+      - "13000:13000"
     depends_on:
       - cfgsync
     volumes:

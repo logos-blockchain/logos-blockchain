@@ -102,7 +102,7 @@ pub fn create_general_configs_with_blend_core_subset(
         .collect();
     let ledger_tx = genesis_tx.mantle_tx().ledger_tx.clone();
     let genesis_tx_with_declarations = create_genesis_tx_with_declarations(ledger_tx, providers);
-    let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations);
+    let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations, n_nodes);
 
     // Set note keys and Blend keys in KMS of each node config.
     let kms_configs: Vec<_> = blend_configs
@@ -118,6 +118,12 @@ pub fn create_general_configs_with_blend_core_subset(
                     (
                         blend_conf.core.zk.secret_key_kms_id.clone(),
                         zk_secret_key.clone().into(),
+                    ),
+                    (
+                        key_id_for_preload_backend(
+                            &consensus_configs[i].blend_note.sk.clone().into(),
+                        ),
+                        consensus_configs[i].blend_note.sk.clone().into(),
                     ),
                     (
                         key_id_for_preload_backend(&consensus_configs[i].known_key.clone().into()),

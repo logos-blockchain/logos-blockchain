@@ -447,7 +447,7 @@ fn build_run_config(config: Config, genesis_tx: GenesisTx) -> RunConfig {
         },
         storage: storage::serde::Config::default(),
         sdp: sdp::serde::Config {
-            declaration: None,
+            declaration_id: None,
             wallet: sdp::serde::WalletConfig {
                 max_tx_fee: mantle::Value::MAX,
                 funding_pk: config.consensus_config.funding_sk.as_public_key(),
@@ -501,6 +501,10 @@ fn build_cryptarchia_user_config(
                     delay_before_new_download: Duration::from_secs(10),
                     peers: HashSet::new(),
                 },
+            },
+            network: network::NetworkConfig {
+                max_connected_peers_to_try_download: 16,
+                max_discovered_peers_to_try_download: 16,
             },
             sync: network::SyncConfig {
                 orphan: network::OrphanConfig {

@@ -147,8 +147,18 @@ impl ServiceConfig {
                     peers: self.user.network.bootstrap.ibd.peers,
                 },
             },
-            network_adapter_settings: LibP2pAdapterSettings {
+            network: LibP2pAdapterSettings {
                 topic: self.deployment.gossipsub_protocol.clone(),
+                max_connected_peers_to_try_download: self
+                    .user
+                    .network
+                    .network
+                    .max_connected_peers_to_try_download,
+                max_discovered_peers_to_try_download: self
+                    .user
+                    .network
+                    .network
+                    .max_discovered_peers_to_try_download,
             },
             sync: lb_chain_network_service::SyncConfig {
                 orphan: lb_chain_network_service::OrphanConfig {

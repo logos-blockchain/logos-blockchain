@@ -140,7 +140,14 @@ where
                 RuntimeServiceId,
             >,
         >
-        + AsServiceId<lb_sdp_service::SdpService<SdpMempool, SdpWallet, RuntimeServiceId>>
+        + AsServiceId<
+            lb_sdp_service::SdpService<
+                SdpMempool,
+                SdpWallet,
+                Cryptarchia<RuntimeServiceId>,
+                RuntimeServiceId,
+            >,
+        >
         + AsServiceId<WalletService>
         + AsServiceId<ChainLeader>,
 {
@@ -209,15 +216,36 @@ where
             )
             .route(
                 paths::SDP_POST_DECLARATION,
-                routing::post(post_declaration::<SdpMempool, SdpWallet, RuntimeServiceId>),
+                routing::post(
+                    post_declaration::<
+                        SdpMempool,
+                        SdpWallet,
+                        Cryptarchia<RuntimeServiceId>,
+                        RuntimeServiceId,
+                    >,
+                ),
             )
             .route(
                 paths::SDP_POST_ACTIVITY,
-                routing::post(post_activity::<SdpMempool, SdpWallet, RuntimeServiceId>),
+                routing::post(
+                    post_activity::<
+                        SdpMempool,
+                        SdpWallet,
+                        Cryptarchia<RuntimeServiceId>,
+                        RuntimeServiceId,
+                    >,
+                ),
             )
             .route(
                 paths::SDP_POST_WITHDRAWAL,
-                routing::post(post_withdrawal::<SdpMempool, SdpWallet, RuntimeServiceId>),
+                routing::post(
+                    post_withdrawal::<
+                        SdpMempool,
+                        SdpWallet,
+                        Cryptarchia<RuntimeServiceId>,
+                        RuntimeServiceId,
+                    >,
+                ),
             )
             .route(
                 paths::LEADER_CLAIM,

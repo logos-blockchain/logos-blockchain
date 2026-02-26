@@ -7,15 +7,15 @@ services:
 
   explorer:
     container_name: explorer
-    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    image: ghcr.io/logos-blockchain/logos-blockchain-explorer:latest
     depends_on:
       - logos-blockchain-node-0
     environment:
       - NBE_NODE_API_HOST=logos-blockchain-node-0
       - NBE_NODE_API_PORT=${NODE0_API_PORT}
+      - NBE_BASE_PATH=/web/explorer
     ports:
-      - "8000:8000/tcp"
-    entrypoint: /opt/scripts/run_explorer.sh
+      - "13800:8000/tcp"
 
   cfgsync:
     container_name: cfgsync
@@ -59,7 +59,7 @@ services:
     ports:
       - "3000:3000/udp"
       - "3400:3400/udp"
-      - "18085:18085/tcp"
+      - "18080:18080/tcp"
     entrypoint: /etc/logos-blockchain/scripts/run_node.sh
 
   logos-blockchain-node-1:
@@ -126,10 +126,11 @@ services:
     container_name: nginx
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     ports:
-      - "18080:18080"
+      - "13000:13000"
     depends_on:
       - cfgsync
       - explorer
+      - faucet
     volumes:
       - node-data:/node-data
       - ./testnet/nginx-run.conf:/etc/nginx/nginx.conf:ro

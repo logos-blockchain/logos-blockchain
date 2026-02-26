@@ -3,67 +3,79 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Logos Testnet Faucet</title>
-    <style>
-        body { font-family: sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; line-height: 1.6; }
-        .field { margin-bottom: 15px; }
-        label { display: block; font-weight: bold; }
-        input, select { width: 100%; padding: 8px; margin-top: 5px; box-sizing: border-box; }
-        button { background: #007bff; color: white; border: none; padding: 10px 15px; cursor: pointer; border-radius: 4px; }
-        button:disabled { background: #ccc; }
-        #response { margin-top: 20px; padding: 15px; border-radius: 4px; display: none; word-break: break-all; }
-        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./style/base.css">
+    <title>Logos Devnet</title>
 </head>
 <body>
-    <h2>Logos Faucet</h2>
+    <a class="logo" href="./"><img class="icon-svg" src="./assets/logos.svg" /></a>
+    <h1>Logos Blockchain Info Page</h1>
 
-    <div class="field">
-        <label for="pk">Destination Public Key (Hex)</label>
-        <input type="text" id="pk" placeholder="e.g. 7d069d39...">
-    </div>
+    <h2>Nodes</h2>
+    <ul class="node-list">
+        <li>
+            <span class="node-label">Node 0:</span>
+            <div class="node-links">
+                <a href="https://devnet.blockchain.logos.co/node/0/cryptarchia/info" target="_blank">Cryptarchia Info</a>
+                <span class="divider">|</span>
+                <a href="https://devnet.blockchain.logos.co/node/0/network/info" target="_blank">Network Info</a>
+            </div>
+        </li>
 
-    <button id="sendBtn">Request Funds</button>
+        <li>
+            <span class="node-label">Node 1:</span>
+            <div class="node-links">
+                <a href="https://devnet.blockchain.logos.co/node/1/cryptarchia/info" target="_blank">Cryptarchia Info</a>
+                <span class="divider">|</span>
+                <a href="https://devnet.blockchain.logos.co/node/1/network/info" target="_blank">Network Info</a>
+            </div>
+        </li>
 
-    <div id="response"></div>
+        <li>
+            <span class="node-label">Node 2:</span>
+            <div class="node-links">
+                <a href="https://devnet.blockchain.logos.co/node/2/cryptarchia/info" target="_blank">Cryptarchia Info</a>
+                <span class="divider">|</span>
+                <a href="https://devnet.blockchain.logos.co/node/2/network/info" target="_blank">Network Info</a>
+            </div>
+        </li>
 
-    <script>
-        const btn = document.getElementById('sendBtn');
-        const respDiv = document.getElementById('response');
+        <li>
+            <span class="node-label">Node 3:</span>
+            <div class="node-links">
+                <a href="https://devnet.blockchain.logos.co/node/3/cryptarchia/info" target="_blank">Cryptarchia Info</a>
+                <span class="divider">|</span>
+                <a href="https://devnet.blockchain.logos.co/node/3/network/info" target="_blank">Network Info</a>
+            </div>
+        </li>
+    </ul>
 
-        btn.onclick = async () => {
-            const pk = document.getElementById('pk').value.trim();
+    <h2>Tools</h2>
+    <ul>
+        <li>
+            <a href="https://devnet.blockchain.logos.co/web/explorer/" target="_blank">Explorer</a>
+        </li>
+        <li>
+            <a href="https://devnet.blockchain.logos.co/web/cfgsync/deployment-settings" target="_blank">Deployment Settings</a>
+        </li>
+        <li>
+            <a href="https://devnet.blockchain.logos.co/web/faucet/" target="_blank">Faucet</a>
+        </li>
+        <li>
+            <a href="https://devnet.blockchain.logos.co/web/node-data/" target="_blank">Node Data</a>
+        </li>
+    </ul>
 
-            if (!pk) return alert("Please enter a Public Key");
-
-            btn.disabled = true;
-            respDiv.style.display = 'none';
-            respDiv.className = '';
-
-            try {
-                const response = await fetch(`./faucet/${pk}`, {
-                    method: 'POST'
-                });
-
-                const text = await response.text();
-                respDiv.style.display = 'block';
-                
-                if (response.ok) {
-                    respDiv.className = 'success';
-                    respDiv.innerHTML = `<strong>Success!</strong><br>${text}`;
-                } else {
-                    respDiv.className = 'error';
-                    respDiv.innerHTML = `<strong>Error:</strong><br>${text}`;
-                }
-            } catch (err) {
-                respDiv.style.display = 'block';
-                respDiv.className = 'error';
-                respDiv.innerText = "Network error: " + err.message;
-            } finally {
-                btn.disabled = false;
-            }
-        };
-    </script>
+    <h2>External</h2>
+    <ul>
+        <li>
+            <a href="https://www.notion.so/nomos-tech/Joining-the-Devnet-313261aa09df80d2b894d1c32abb6954" target="_blank">Notion</a>
+        </li>
+        <li>
+            <a href="https://github.com/logos-blockchain/logos-blockchain/releases" target="_blank">Releases</a>
+        </li>
+    </ul>
 </body>
 </html>

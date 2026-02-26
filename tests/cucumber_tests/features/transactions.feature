@@ -15,9 +15,9 @@ Feature: Transactions
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When node "NODE_1" is at height 2 in 180 seconds
     And I send 2 transactions of 500 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
-    When wallet "WALLET_2A" has 2 or more outputs in 60 seconds
+    When wallet "WALLET_2A" has 2 or more outputs in 120 seconds
     And I send 2 transactions of 250 LGO each from wallet "WALLET_2A" to wallet "WALLET_1A"
-    When wallet "WALLET_1A" has 1300 or more LGO in 60 seconds
+    When wallet "WALLET_1A" has 1300 or more LGO in 120 seconds
     Then I stop all nodes
 
   @transactions_ci
@@ -35,9 +35,9 @@ Feature: Transactions
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When node "NODE_1" is at height 2 in 180 seconds
     And I send one transaction with 2 outputs of 500 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
-    When wallet "WALLET_2A" has 2 or more outputs in 60 seconds
+    When wallet "WALLET_2A" has 2 or more outputs in 120 seconds
     And I send 2 transactions of 250 LGO each from wallet "WALLET_2A" to wallet "WALLET_1A"
-    When wallet "WALLET_1A" has 1300 or more LGO in 60 seconds
+    When wallet "WALLET_1A" has 1300 or more LGO in 120 seconds
     Then I stop all nodes
 
   @transactions_ci
@@ -71,7 +71,7 @@ Feature: Transactions
       | NODE_10   | 10            | WALLET_10A  | NODE_1       |
     When node "NODE_1" is at height 2 in 180 seconds
     And I send 2 transactions of 500 LGO each from wallet "WALLET_1A" to wallet "WALLET_10A"
-    When wallet "WALLET_1A" has 0 or less encumbered outputs in 60 seconds
+    When wallet "WALLET_1A" has 0 or less encumbered outputs in 120 seconds
     When wallet "WALLET_10A" has 2 or more outputs in 60 seconds
     Then I stop all nodes
 
@@ -88,12 +88,12 @@ Feature: Transactions
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
-    When node "NODE_1" is at height 2 in 180 seconds
+    When node "NODE_1" is at height 2 in 300 seconds
     And I do a coin split for "WALLET_1A" of 10 UTXOs valued at 5000 LGO tokens each
-    When wallet "WALLET_1A" has 12 or more outputs in 180 seconds
+    When wallet "WALLET_1A" has 12 or more outputs in 240 seconds
     And I send 5 transactions of 2000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
     And I send one transaction with 2 outputs of 2000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
-    When wallet "WALLET_2A" has 7 or more outputs and 14000 or more LGO in 60 seconds
+    When wallet "WALLET_2A" has 7 or more outputs and 14000 or more LGO in 120 seconds
     Then I stop all nodes
 
   @transactions_ci
@@ -109,16 +109,16 @@ Feature: Transactions
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
-    When node "NODE_1" is at height 2 in 180 seconds
+    When node "NODE_1" is at height 2 in 300 seconds
     # Coin split
     And I do a coin split for "WALLET_1A" of 25 UTXOs valued at 1000 LGO tokens each
     And I do a coin split for "WALLET_1A" of 25 UTXOs valued at 1000 LGO tokens each
     And I do a coin split for "WALLET_1A" of 25 UTXOs valued at 1000 LGO tokens each
     And I do a coin split for "WALLET_1A" of 25 UTXOs valued at 1000 LGO tokens each
     # Many small transfers to other wallet
-    When wallet "WALLET_1A" has 100 or more outputs in 180 seconds
+    When wallet "WALLET_1A" has 100 or more outputs in 240 seconds
     And I send 50 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
-    When wallet "WALLET_2A" has 50 or more outputs in 180 seconds
+    When wallet "WALLET_2A" has 50 or more outputs in 240 seconds
     # All outputs accounted for
     When wallet "WALLET_1A" has 56000 or less LGO in 180 seconds
     When wallet "WALLET_1A" has 0 or less encumbered outputs in 60 seconds

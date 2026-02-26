@@ -104,6 +104,9 @@ impl ProofsVerifier for RealProofsVerifier {
 
         // Try with current input, and if it fails, try with the previous one, if any
         // (i.e., within the epoch transition period).
+        tracing::debug!(
+            "Verifying proof of quota {proof:?} with session {session:?}, public core inputs: {core:?}, leader inputs: {leader:?} and signing key: {signing_key:?}."
+        );
         proof
             .verify(&PublicInputs {
                 core,
@@ -116,6 +119,9 @@ impl ProofsVerifier for RealProofsVerifier {
                     tracing::debug!("Input proof invalid and no previous epoch to try with.");
                     return Err(Error::ProofOfQuota(quota::Error::InvalidProof));
                 };
+                tracing::debug!(
+                    "Verifying same proof of quota with previous epoch leader inputs: {previous_epoch_inputs:?}."
+                );
                 proof
                     .verify(&PublicInputs {
                         core,

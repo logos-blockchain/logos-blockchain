@@ -9,6 +9,7 @@ use std::{
 
 use async_trait::async_trait;
 use futures::Stream;
+use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     block::BlockNumber,
     mantle::{NoteId, SignedMantleTx, tx_builder::MantleTxBuilder},
@@ -58,14 +59,16 @@ pub type BlockUpdateStream = Pin<Box<dyn Stream<Item = BlockEvent> + Send + Sync
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SdpSettings {
-    /// Declaration info for this node (set after posting declaration and
-    /// restarting).
-    pub declaration: Option<Declaration>,
+    /// Declaration ID for this node (set after posting declaration).
+    /// On startup, the full declaration info (`zk_id`, `locked_note_id`, nonce)
+    /// will be fetched from the ledger.
+    pub declaration_id: Option<DeclarationId>,
     pub wallet_config: SdpWalletConfig,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Declaration {
+/// Runtime declaration info fetched from ledger on startup.
+#[derive(Clone, Debug)]
+pub struct RuntimeDeclaration {
     pub id: DeclarationId,
     pub zk_id: ZkPublicKey,
     pub locked_note_id: NoteId,
@@ -84,15 +87,20 @@ pub enum SdpMessage {
     },
 }
 
-pub struct SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId> {
+pub struct SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    current_declaration: Option<Declaration>,
+    /// Declaration ID from settings - will be resolved to full declaration on
+    /// `run()`.
+    declaration_id: Option<DeclarationId>,
+    /// Runtime declaration info fetched from ledger (populated in `run()`).
+    current_declaration: Option<RuntimeDeclaration>,
     nonce: u64,
     wallet_config: SdpWalletConfig,
+    _chain_service: std::marker::PhantomData<ChainService>,
 }
 
-impl<MempoolAdapter, WalletAdapter, RuntimeServiceId> ServiceData
-    for SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>
+impl<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId> ServiceData
+    for SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>
 {
     type Settings = SdpSettings;
     type State = NoState<Self::Settings>;
@@ -101,15 +109,17 @@ impl<MempoolAdapter, WalletAdapter, RuntimeServiceId> ServiceData
 }
 
 #[async_trait]
-impl<MempoolAdapter, WalletAdapter, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>
+impl<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>
 where
     MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx> + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData<Tx = SignedMantleTx> + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + AsServiceId<Self>
         + AsServiceId<MempoolAdapter::MempoolService>
         + AsServiceId<WalletAdapter::WalletService>
+        + AsServiceId<ChainService>
         + Clone
         + Display
         + Send
@@ -126,20 +136,16 @@ where
             .get_updated_settings();
 
         Ok(Self {
-            current_declaration: settings.declaration,
+            declaration_id: settings.declaration_id,
+            current_declaration: None, // Will be fetched from ledger in run()
             service_resources_handle,
-            nonce: 0,
+            nonce: 0, // Will be fetched from ledger in run()
             wallet_config: settings.wallet_config,
+            _chain_service: std::marker::PhantomData,
         })
     }
 
     async fn run(mut self) -> Result<(), DynError> {
-        self.service_resources_handle.status_updater.notify_ready();
-        tracing::info!(
-            "Service '{}' is ready.",
-            <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
-        );
-
         let mempool_relay = self
             .service_resources_handle
             .overwatch_handle
@@ -153,6 +159,22 @@ where
             .relay::<WalletAdapter::WalletService>()
             .await?;
         let wallet_adapter = WalletAdapter::new(wallet_relay);
+
+        let chain_relay = self
+            .service_resources_handle
+            .overwatch_handle
+            .relay::<ChainService>()
+            .await?;
+        let chain_api: CryptarchiaServiceApi<ChainService, RuntimeServiceId> =
+            CryptarchiaServiceApi::new(chain_relay);
+
+        self.try_restore_declaration_state(&chain_api).await;
+
+        self.service_resources_handle.status_updater.notify_ready();
+        tracing::info!(
+            "Service '{}' is ready.",
+            <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
+        );
 
         while let Some(msg) = self.service_resources_handle.inbound_relay.recv().await {
             match msg {
@@ -183,20 +205,95 @@ where
     }
 }
 
-impl<MempoolAdapter, WalletAdapter, RuntimeServiceId>
-    SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>
+impl<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>
+    SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>
 where
     MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx> + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData<Tx = SignedMantleTx> + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + AsServiceId<Self>
         + AsServiceId<MempoolAdapter::MempoolService>
+        + AsServiceId<ChainService>
         + Clone
         + Display
         + Send
         + Sync
         + 'static,
 {
+    /// Attempt to restore declaration state from the ledger on startup.
+    ///
+    /// If a `declaration_id` is configured, fetches the full declaration info
+    /// (including current nonce) from the ledger. This ensures the service
+    /// continues with the correct nonce after a restart.
+    async fn try_restore_declaration_state(
+        &mut self,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+    ) {
+        let Some(declaration_id) = self.declaration_id else {
+            return;
+        };
+
+        match self
+            .fetch_declaration_from_ledger(chain_api, declaration_id)
+            .await
+        {
+            Ok(Some((declaration, nonce))) => {
+                tracing::info!(
+                    declaration_id = ?declaration_id,
+                    nonce = nonce,
+                    "Loaded declaration from ledger"
+                );
+                self.current_declaration = Some(declaration);
+                self.nonce = nonce;
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    declaration_id = ?declaration_id,
+                    "Declaration not found in ledger - may have been withdrawn or not yet confirmed"
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    declaration_id = ?declaration_id,
+                    error = ?e,
+                    "Failed to fetch declaration from ledger"
+                );
+            }
+        }
+    }
+
+    /// Fetch declaration info from the ledger via chain service.
+    async fn fetch_declaration_from_ledger(
+        &self,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+        declaration_id: DeclarationId,
+    ) -> Result<Option<(RuntimeDeclaration, u64)>, DynError> {
+        // Get current chain info to find the tip
+        let info = chain_api.info().await?;
+        let tip = info.tip;
+
+        // Get ledger state at tip
+        let Some(ledger_state) = chain_api.get_ledger_state(tip).await? else {
+            return Err(format!("Ledger state not found for tip {tip:?}").into());
+        };
+
+        // Look up the declaration in the SDP ledger
+        let sdp_ledger = ledger_state.mantle_ledger().sdp_ledger();
+        let Some(declaration) = sdp_ledger.get_declaration(&declaration_id) else {
+            return Ok(None);
+        };
+
+        Ok(Some((
+            RuntimeDeclaration {
+                id: declaration_id,
+                zk_id: declaration.zk_id,
+                locked_note_id: declaration.locked_note_id,
+            },
+            declaration.nonce,
+        )))
+    }
+
     async fn handle_post_declaration(
         &self,
         declaration: Box<DeclarationMessage>,
@@ -240,12 +337,9 @@ where
             return;
         };
 
-        let nonce = self.nonce;
-        self.nonce += 1;
-
         let active_message = ActiveMessage {
             declaration_id: declaration.id,
-            nonce,
+            nonce: self.bump_nonce(),
             metadata,
         };
 
@@ -278,14 +372,11 @@ where
             return;
         }
 
-        let nonce = self.nonce;
-        self.nonce += 1;
-
         let declaration = self.current_declaration.as_ref().unwrap(); //unwrap is ok as it is validated above
         let withdraw_message = WithdrawMessage {
             declaration_id,
-            nonce,
             locked_note_id: declaration.locked_note_id,
+            nonce: self.bump_nonce(),
         };
 
         let tx_builder = MantleTxBuilder::new();
@@ -307,6 +398,8 @@ where
         }
 
         self.current_declaration = None;
+        // TODO: how should we reset the nonce? shouldn't it be always with
+        // current_delcaration?
     }
 
     fn validate_withdrawal(&self, declaration_id: &DeclarationId) -> Result<(), &'static str> {
@@ -322,5 +415,16 @@ where
         }
 
         Ok(())
+    }
+
+    /// Increments the nonce of the current declaration, and returns the
+    /// incremented nonce.
+    ///
+    /// Nonce must be incremented first because it is initialized to 0 with the
+    /// declaration, and each SDP message (activity or withdrawal) must have
+    /// nonce larger than the previous one.
+    const fn bump_nonce(&mut self) -> u64 {
+        self.nonce += 1;
+        self.nonce
     }
 }
