@@ -7,8 +7,8 @@ use std::{
 };
 
 use async_trait::async_trait;
-use common_http_client::BasicAuthCredentials;
 pub use block_feed::{BlockFeed, BlockFeedSnapshot, BlockRecord, NodeHeadSnapshot};
+use common_http_client::BasicAuthCredentials;
 use lb_node::config::RunConfig;
 use reqwest::Url;
 use testing_framework_core::{

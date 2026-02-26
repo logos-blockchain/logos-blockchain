@@ -1,13 +1,13 @@
 pub mod consensus_liveness;
-pub mod inscription;
 pub mod fork_monitor;
+pub mod inscription;
 pub mod transaction;
 
 use std::sync::Arc;
 
 pub use consensus_liveness::ConsensusLiveness;
-pub use inscription::*;
 pub use fork_monitor::ClusterForkMonitor;
+pub use inscription::*;
 use testing_framework_core::scenario::{Application, RunContext};
 use tokio::sync::broadcast;
 

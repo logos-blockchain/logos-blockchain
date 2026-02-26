@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use lb_core::{block::Block, mantle::SignedMantleTx};
 use lb_node::HeaderId;
 use testing_framework_core::scenario::{DynError, Feed, FeedRuntime, NodeClients};
