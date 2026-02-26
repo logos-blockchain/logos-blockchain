@@ -354,7 +354,7 @@ mod tests {
             choose_peers_to_request_download(&connected, 0, &discovered, 2).collect::<Vec<_>>();
 
         assert_eq!(result.len(), 2);
-        // all discovered peers except `3` must be returned
+        // all selected peers must be from the discovered-but-not-connected set
         assert!(result.contains(&[4; 32]));
         assert!(result.contains(&[5; 32]));
 
@@ -390,7 +390,7 @@ mod tests {
 
         // set max=3 larger than # of `discovered - connected` peers
         let result =
-            choose_peers_to_request_download(&connected, 0, &discovered, 2).collect::<Vec<_>>();
+            choose_peers_to_request_download(&connected, 0, &discovered, 3).collect::<Vec<_>>();
 
         // all discovered peers except `3` must be returned
         assert_eq!(result.len(), 2);
