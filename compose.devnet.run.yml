@@ -17,19 +17,6 @@ services:
     ports:
       - "13800:8000/tcp"
 
-  # TODO: remove after /web/explorer is working
-  explorerold:
-    container_name: explorerold
-    image: ghcr.io/logos-blockchain/logos-blockchain-explorer:latest
-    depends_on:
-      - logos-blockchain-node-0
-    environment:
-      - NBE_NODE_API_HOST=logos-blockchain-node-1
-      - NBE_NODE_API_PORT=${NODE1_API_PORT}
-      - NBE_BASE_PATH=/node/0/explorer
-    ports:
-      - "13801:8000/tcp"
-
   cfgsync:
     container_name: cfgsync
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
@@ -144,7 +131,6 @@ services:
     depends_on:
       - cfgsync
       - explorer
-      - explorerold
       - faucet
     volumes:
       - node-data:/node-data
