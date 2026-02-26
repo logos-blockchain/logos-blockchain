@@ -16,6 +16,7 @@ Progress on the checklist must be provided as comments to the issue.
 - [ ] Manually trigger the [testnet Docker workflow][testnet-docker-workflow] using the `pre-X.Y.Z` tag and using the `devnet` image tag.
 - [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the workflow run to complete
+- [ ] Verify the right image with the right tag was pushed to the [GitHub container registry][devnet-image-container-registry]
 - [ ] Checkout and force reset the `testnet` branch to point to the tagged commit
 - [ ] Create a new symlink `compose.static.yml` -> `compose.devnet.setup.yml`
 - [ ] Add a file called `entropy` in the `testnet` folder with any content. Using the same entropy content as a previous deployment will result in the same faucet keys.
@@ -54,6 +55,7 @@ Progress on the checklist must be provided as comments to the issue.
 
 ---
 
+[devnet-image-container-registry]: https://github.com/logos-blockchain/logos-blockchain/pkgs/container/logos-blockchain
 [testnet-docker-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/publish-testnet-image.yml 
 [bundling-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/prepare-release.yml
 [docker-build-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/publish-node-image.yml
