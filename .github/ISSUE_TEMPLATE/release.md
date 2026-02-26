@@ -19,16 +19,17 @@ Progress on the checklist must be provided as comments to the issue.
 - [ ] Verify the right image with the right tag was pushed to the [GitHub container registry][devnet-image-container-registry]
 - [ ] Checkout and force reset the `testnet` branch to point to the tagged commit
 - [ ] Create a new symlink `compose.static.yml` -> `compose.devnet.setup.yml`
-- [ ] Add a file called `entropy` in the `testnet` folder with any content. Using the same entropy content as a previous deployment will result in the same faucet keys.
+- [ ] Add a file called `entropy` in the `testnet` folder with any content. Using the same entropy content as a previous deployment will result in the same faucet keys. We recommend using the release version as the tag corresponding to the release commit (e.g., `X.Y.Z`)
 - [ ] Push to `testnet` branch to trigger a new deployment
-- [ ] Wait around 1 minute for deployment to be updated with the new changes and for the ceremony to happen
+- [ ] Wait around 1 minute for deployment to be updated with the new changes and for the ceremony to happen. While not ready, you should see a `502` error while the containers restart.
 - [ ] Download the new deployment configuration from [https://devnet.blockchain.logos.co/node/0/cfgsync/deployment-settings](https://devnet.blockchain.logos.co/node/0/cfgsync/deployment-settings)
 - [ ] Verify that the `time.chain_start_time` value in the deployment file indicates the right start time, which should be within the last few minutes
 - [ ] Copy-paste or attach the content of the deployment file to this issue for easier review
 
 ## Deployment Settings Update
 
-- [ ] Checkout `master` and push a new commit on top of `pre-X.Y.Z` with the updated devnet settings
+- [ ] Checkout `master` and push a new commit on top of `pre-X.Y.Z` with the updated devnet settings.
+- [ ] Verify git shows a diff, otherwise it means the downloaded deployment file is the old one and should not be used for the new release
 - [ ] Verify the HEAD of `master` has green CI ✅
 - [ ] Tag the commit with `X.Y.Z` and push the tag
 
