@@ -208,3 +208,70 @@ Feature: Transactions
     And I send one transaction with 300 outputs of 100 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
     When wallet "WALLET_2A" has 100 or more outputs in 60 seconds
     Then I stop all nodes
+
+  @transactions_manual_control
+  Scenario: Transactions manual control
+    # External command controller:
+    #   1) Set CUCUMBER_MANUAL_COMMAND_FILE=/tmp/cucumber-manual-commands.txt
+    #   2) Start the scenario
+    #   3) Prepare the command file before-hand or add commands on-the-fly while the test is running.
+    # Supported commands (one per line):
+    #   COIN_SPLIT, wallet 'WALLET_1A', outputs 10, value 5000
+    #   VERIFY, wallet 'WALLET_1A', outputs 12, time_out 180
+    #   SEND, transactions 5, value 2000, from 'WALLET_1A', to 'WALLET_2A'
+    #   VERIFY_MAX/VERIFY_MIN, wallet 'WALLET_2A', wallet_state_type 'on-chain'/'encumbered'/'available', outputs 7, value 14000, time_out 60
+    #   CONTINUOUS, coin_split_outputs 1000, coin_split_value 1000, transactions 10, value 900, cycles 3
+    #   STOP
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 1000000      |
+      | 2             | 3           | 1000000      |
+    And I have a cluster with capacity of 2 nodes
+    And we use IBD peers
+    And all peers must be mode online after startup
+    And I start nodes with wallet resources:
+      | node_name | account_index | wallet_name | connected_to |
+      | NODE_1    | 1             | WALLET_1A   |              |
+      | NODE_2    | 2             | WALLET_2A   | NODE_1       |
+    When node "NODE_1" is at height 2 in 180 seconds
+    # Example command file content, individual steps:
+    #   COIN_SPLIT, wallet 'WALLET_1A', outputs 10, value 5000
+    #   COIN_SPLIT, wallet 'WALLET_2A', outputs 10, value 5000
+    #   VERIFY_MAX, wallet 'WALLET_1A', wallet_state_type 'encumbered', outputs 0, time_out 60
+    #   VERIFY_MAX, wallet 'WALLET_2A', wallet_state_type 'encumbered', outputs 0, time_out 60
+    #   SEND, transactions 5, value 2000, from 'WALLET_1A', to 'WALLET_2A'
+    #   SEND, transactions 5, value 2000, from 'WALLET_2A', to 'WALLET_1A'
+    #   VERIFY_MAX, wallet 'WALLET_1A', wallet_state_type 'encumbered', outputs 0, time_out 60
+    #   VERIFY_MAX, wallet 'WALLET_2A', wallet_state_type 'encumbered', outputs 0, time_out 60
+    #   STOP
+    # Example command file content, continuous steps:
+    #   CONTINUOUS, coin_split_outputs 20, coin_split_value 1000, transactions 10, value 900, cycles 3
+    #   STOP
+    When I perform manual control of transactions for all wallets
+    Then I stop all nodes
+
+  @transactions_manual_control
+  Scenario: Transactions devnet manual control
+    Given I have a devnet cluster with capacity of 2 nodes
+    And we join an external network
+    And I have initial peers:
+      | initial_peer |
+      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWMwekH9M34FQXX6jPX4XYyNDgaCw68g4y7hqW2bv4UU9h |
+      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWEyJNQzmnfWcaRzCBv1ebqXMAWJecnBWmzp2AF6gk28PQ |
+      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWMrcbQQwT2dpNDiuLUdGESoqR3u2sJ8gAHHo9JPQH7yHb |
+      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWNMixUYkNuvXrNwnsmK2ZFRKNm48kF2qqtd9Du7Ls1yQe |
+    And I have IBD peers:
+      | ibd_peer |
+      | 12D3KooWMwekH9M34FQXX6jPX4XYyNDgaCw68g4y7hqW2bv4UU9h |
+      | 12D3KooWEyJNQzmnfWcaRzCBv1ebqXMAWJecnBWmzp2AF6gk28PQ |
+      | 12D3KooWMrcbQQwT2dpNDiuLUdGESoqR3u2sJ8gAHHo9JPQH7yHb |
+      | 12D3KooWNMixUYkNuvXrNwnsmK2ZFRKNm48kF2qqtd9Du7Ls1yQe |
+    And all peers must be mode online after startup
+    And I start nodes with wallet resources:
+      | node_name | account_index | wallet_name | connected_to |
+      | NODE_1    | 1             | WALLET_1A   |              |
+      | NODE_2    | 2             | WALLET_2A   | NODE_1       |
+    When node "NODE_1" is at height 20 in 180 seconds
+    When node "NODE_2" is at height 20 in 180 seconds
+    When I perform manual control of transactions for all wallets
+    Then I stop all nodes

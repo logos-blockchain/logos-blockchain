@@ -1,14 +1,27 @@
+use std::{env, path::Path, time::Duration};
+
 use cucumber::{gherkin::Step, then, when};
+use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
 use crate::cucumber::{
-    error::StepResult,
+    error::{StepError, StepResult},
     steps::{
         TARGET,
-        manual_transactions::{utils, utils::WalletStateType},
+        manual_transactions::{
+            command_file_utils::take_next_command,
+            utils::{
+                WalletStateType, create_and_submit_transaction, execute_manual_command,
+                wait_for_wallet_or_encumbered_state,
+            },
+        },
     },
     world::CucumberWorld,
 };
+
+const MANUAL_COMMAND_FILE_ENV: &str = "CUCUMBER_MANUAL_COMMAND_FILE";
+const MANUAL_COMMAND_TIMEOUT_ENV: &str = "CUCUMBER_MANUAL_COMMAND_TIMEOUT_SECONDS";
+const MANUAL_COMMAND_POLL_INTERVAL_ENV: &str = "CUCUMBER_MANUAL_COMMAND_POLL_INTERVAL_MS";
 
 #[when(expr = "I do a coin split for {string} of {int} UTXOs valued at {int} LGO tokens each")]
 async fn step_do_coin_split(
@@ -24,12 +37,11 @@ async fn step_do_coin_split(
 
     let self_pk = wallet.wallet_account.public_key();
     let receivers = vec![(self_pk, output_value); number_of_outputs];
-    let tx_hash_hex =
-        utils::create_and_submit_transaction(world, &step.value, &wallet_name, &receivers)
-            .await
-            .inspect_err(|e| {
-                warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-            })?;
+    let tx_hash_hex = create_and_submit_transaction(world, &step.value, &wallet_name, &receivers)
+        .await
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+        })?;
 
     info!(
         target: TARGET,
@@ -50,7 +62,7 @@ async fn step_wallet_has_at_least_coins(
     min_coin_count: usize,
     time_out_seconds: u64,
 ) -> StepResult {
-    utils::wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_or_encumbered_state(
         world,
         &step.value,
         wallet_name,
@@ -73,7 +85,7 @@ async fn step_wallet_has_at_most_coins(
     max_coin_count: usize,
     time_out_seconds: u64,
 ) -> StepResult {
-    utils::wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_or_encumbered_state(
         world,
         &step.value,
         wallet_name,
@@ -96,7 +108,7 @@ async fn step_wallet_has_at_most_encumbered_coins(
     max_coin_count: usize,
     time_out_seconds: u64,
 ) -> StepResult {
-    utils::wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_or_encumbered_state(
         world,
         &step.value,
         wallet_name,
@@ -119,7 +131,7 @@ async fn step_wallet_has_at_least_value(
     min_token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    utils::wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_or_encumbered_state(
         world,
         &step.value,
         wallet_name,
@@ -142,7 +154,7 @@ async fn step_wallet_has_at_most_value(
     max_token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    utils::wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_or_encumbered_state(
         world,
         &step.value,
         wallet_name,
@@ -166,7 +178,7 @@ async fn step_wallet_has_at_least_coins_and_value(
     min_token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    utils::wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_or_encumbered_state(
         world,
         &step.value,
         wallet_name,
@@ -190,7 +202,7 @@ async fn step_wallet_has_at_most_coins_and_value(
     max_token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    utils::wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_or_encumbered_state(
         world,
         &step.value,
         wallet_name,
@@ -225,7 +237,7 @@ async fn step_send_multiple_transactions_to_single_wallet(
     let receiver_wallet_pk = receiver_wallet.wallet_account.public_key();
 
     for _ in 0..number_of_transactions {
-        let tx_hash_hex = utils::create_and_submit_transaction(
+        let tx_hash_hex = create_and_submit_transaction(
             world,
             &step.value,
             &sender_wallet_name,
@@ -269,7 +281,7 @@ async fn step_send_single_transaction_multiple_outputs_to_single_wallet(
 
     let receivers = vec![(receiver_wallet_pk, output_value); number_of_outputs];
     let tx_hash_hex =
-        utils::create_and_submit_transaction(world, &step.value, &sender_wallet_name, &receivers)
+        create_and_submit_transaction(world, &step.value, &sender_wallet_name, &receivers)
             .await
             .inspect_err(|e| {
                 warn!(target: TARGET, "Step `{}` error: {e}", step.value);
@@ -283,4 +295,49 @@ async fn step_send_single_transaction_multiple_outputs_to_single_wallet(
     );
 
     Ok(())
+}
+
+#[when(expr = "I perform manual control of transactions for all wallets")]
+async fn step_manual_control_transactions(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    let command_file =
+        env::var(MANUAL_COMMAND_FILE_ENV).map_err(|_| StepError::InvalidArgument {
+            message: format!(
+                "Step `{}` requires environment variable '{MANUAL_COMMAND_FILE_ENV}' to be set",
+                step.value
+            ),
+        })?;
+
+    let timeout_seconds = env::var(MANUAL_COMMAND_TIMEOUT_ENV)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(3600);
+    let poll_interval_ms = env::var(MANUAL_COMMAND_POLL_INTERVAL_ENV)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(300);
+
+    info!(
+        target: TARGET,
+        "Manual control step started. Monitoring command file: `{command_file}`"
+    );
+
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(timeout_seconds) {
+        if let Some(command) = take_next_command(Path::new(&command_file))? {
+            info!(target: TARGET, "====> manual command: {command:?}");
+            if execute_manual_command(world, &step.value, &command).await? {
+                info!(target: TARGET, "Manual command loop stopped by STOP command");
+                return Ok(());
+            }
+        } else {
+            sleep(Duration::from_millis(poll_interval_ms)).await;
+        }
+    }
+
+    Err(StepError::StepFail {
+        message: format!(
+            "Step `{}` timed out waiting for STOP command after {timeout_seconds} seconds",
+            step.value
+        ),
+    })
 }

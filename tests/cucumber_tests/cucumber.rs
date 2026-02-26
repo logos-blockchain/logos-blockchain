@@ -114,6 +114,7 @@ async fn main() {
                         .join(scenario.name.trim().replace(' ', "_"))
                         .join(run_attempt);
                     world.set_scenario_base_dir(&scenario_dir, &deployer);
+                    world.apply_deployment_config_override_path();
                 }
             })
         });

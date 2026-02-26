@@ -20,7 +20,7 @@ use crate::cucumber::{
 
 /// Specifies which subset of wallet UTXOs to consider when checking for
 /// expected wallet state.
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum WalletStateType {
     /// All UTXOs that are on-chain, regardless of whether they are encumbered
     /// or not.
@@ -37,6 +37,25 @@ impl Display for WalletStateType {
             Self::OnChain => write!(f, "on-chain"),
             Self::Encumbered => write!(f, "encumbered"),
             Self::Available => write!(f, "available"),
+        }
+    }
+}
+
+use std::str::FromStr;
+
+use crate::cucumber::steps::manual_transactions::command_file_utils::ManualCommand;
+
+impl FromStr for WalletStateType {
+    type Err = StepError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "on-chain" => Ok(Self::OnChain),
+            "encumbered" => Ok(Self::Encumbered),
+            "available" => Ok(Self::Available),
+            _ => Err(StepError::InvalidArgument {
+                message: format!("Unknown WalletStateType: '{s}'"),
+            }),
         }
     }
 }
@@ -191,6 +210,19 @@ async fn get_output_balances(
     }
 }
 
+pub async fn get_wallet_balances(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_name: &str,
+    wallet_state_type: WalletStateType,
+) -> Result<(usize, u64), StepError> {
+    let wallet = world.resolve_wallet(wallet_name).inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step);
+    })?;
+
+    get_output_balances(world, step, &wallet, wallet_name, wallet_state_type).await
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "This function is more readable with explicit arguments rather than packing them into structs or tuples."
@@ -248,14 +280,8 @@ pub async fn wait_for_wallet_or_encumbered_state(
     let mut poll_count = 0usize;
 
     loop {
-        let (coin_count, value) = get_output_balances(
-            world,
-            step,
-            &wallet,
-            &wallet_name,
-            wallet_state_type.clone(),
-        )
-        .await?;
+        let (coin_count, value) =
+            get_output_balances(world, step, &wallet, &wallet_name, wallet_state_type).await?;
 
         if conditions_met(
             &wallet_name,
@@ -266,7 +292,7 @@ pub async fn wait_for_wallet_or_encumbered_state(
             max_coin_count,
             min_token_value,
             max_token_value,
-            &wallet_state_type,
+            wallet_state_type,
         ) {
             return Ok(());
         }
@@ -307,7 +333,7 @@ fn conditions_met(
     max_coin_count: Option<&usize>,
     min_token_value: Option<&u64>,
     max_token_value: Option<&u64>,
-    wallet_state_type: &WalletStateType,
+    wallet_state_type: WalletStateType,
 ) -> bool {
     match (
         min_coin_count,
@@ -568,4 +594,254 @@ fn wallet_state_from_utxos(utxos: Vec<Utxo>) -> lb_wallet::WalletState {
         utxos: utxo_map,
         pk_index,
     }
+}
+
+// # External command controller:
+// #   1) Set CUCUMBER_MANUAL_COMMAND_FILE=/tmp/cucumber-manual-commands.txt
+// #   2) Start the scenario
+// #   3) Append commands to the file while the step below is running.
+// # Supported commands (one per line):
+// #   COIN_SPLIT, wallet 'WALLET_1A', outputs 10, value 5000
+// #   VERIFY, wallet 'WALLET_1A', outputs 12, time_out 180
+// #   SEND, transactions 5, value 2000, from 'WALLET_1A', to 'WALLET_2A'
+// #   VERIFY, wallet 'WALLET_2A', outputs 7, value 14000, time_out 60
+// #   CONTINUOUS, coin_split_outputs 1000, coin_split_value 1000, transactions
+// 1000, value 900, cycles 10 #   STOP
+
+pub(crate) async fn execute_manual_command(
+    world: &mut CucumberWorld,
+    step: &str,
+    command: &ManualCommand,
+) -> Result<bool, StepError> {
+    match command {
+        ManualCommand::CoinSplit {
+            wallet,
+            outputs,
+            value,
+        } => {
+            execute_coin_split(world, step, wallet, *outputs, *value).await?;
+            Ok(false)
+        }
+        ManualCommand::Verify {
+            wallet,
+            outputs,
+            value,
+            time_out,
+            wallet_state_type,
+            verify_max,
+        } => {
+            let verify_min = !*verify_max;
+            wait_for_wallet_or_encumbered_state(
+                world,
+                step,
+                wallet.clone(),
+                if verify_min { outputs.as_ref() } else { None },
+                if *verify_max { outputs.as_ref() } else { None },
+                if verify_min { value.as_ref() } else { None },
+                if *verify_max { value.as_ref() } else { None },
+                *time_out,
+                *wallet_state_type,
+            )
+            .await?;
+            Ok(false)
+        }
+        ManualCommand::Send {
+            transactions,
+            value,
+            from,
+            to,
+        } => {
+            execute_send(world, step, *transactions, *value, from, to).await?;
+            Ok(false)
+        }
+        ManualCommand::Continuous {
+            coin_split_outputs,
+            coin_split_value,
+            transactions,
+            value,
+            cycles,
+        } => {
+            execute_continuous(
+                world,
+                step,
+                *coin_split_outputs,
+                *coin_split_value,
+                *transactions,
+                *value,
+                *cycles,
+            )
+            .await?;
+            Ok(false)
+        }
+        ManualCommand::Stop => Ok(true),
+    }
+}
+
+async fn execute_coin_split(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_name: &str,
+    outputs: usize,
+    value: u64,
+) -> Result<(), StepError> {
+    let wallet = world.resolve_wallet(wallet_name)?;
+    let self_pk = wallet.wallet_account.public_key();
+    let receivers = vec![(self_pk, value); outputs];
+    create_and_submit_transaction(world, step, wallet_name, &receivers).await?;
+    Ok(())
+}
+
+async fn execute_send(
+    world: &mut CucumberWorld,
+    step: &str,
+    transactions: usize,
+    value: u64,
+    from: &str,
+    to: &str,
+) -> Result<(), StepError> {
+    let receiver_wallet = world.resolve_wallet(to)?;
+    let receiver_pk = receiver_wallet.wallet_account.public_key();
+    for _ in 0..transactions {
+        create_and_submit_transaction(world, step, from, &[(receiver_pk, value)]).await?;
+    }
+    Ok(())
+}
+
+async fn execute_continuous(
+    world: &mut CucumberWorld,
+    step: &str,
+    coin_split_outputs: usize,
+    coin_split_value: u64,
+    transactions: usize,
+    value: u64,
+    cycles: usize,
+) -> Result<(), StepError> {
+    let mut wallet_names: Vec<String> = world.wallet_info.keys().cloned().collect();
+    wallet_names.sort();
+    if wallet_names.len() < 2 {
+        return Err(StepError::InvalidArgument {
+            message: "CONTINUOUS command requires at least two wallets".to_owned(),
+        });
+    }
+    let required_sum = coin_split_outputs as u64 * coin_split_value;
+
+    for cycle in 0..cycles {
+        info!(
+            target: TARGET,
+            "CONTINUOUS cycle {} A: Wait for available funds all wallets",
+            cycle + 1
+        );
+        for sender in &wallet_names {
+            wait_for_available_value(world, step, sender, required_sum, 300).await?;
+        }
+        info!(target: TARGET, "CONTINUOUS cycle {} B: Perform coin splits all wallets", cycle + 1);
+        for sender in &wallet_names {
+            execute_coin_split(world, step, sender, coin_split_outputs, coin_split_value).await?;
+        }
+        info!(
+            target: TARGET,
+            "CONTINUOUS cycle {} C: Wait for coin splits to be mined all wallets",
+            cycle + 1
+        );
+        for sender in &wallet_names {
+            wait_for_wallet_or_encumbered_state(
+                world,
+                step,
+                sender.clone(),
+                None,
+                Some(&0),
+                None,
+                None,
+                300,
+                WalletStateType::Encumbered,
+            )
+            .await?;
+        }
+        info!(
+            target: TARGET,
+            "CONTINUOUS cycle {} D: Send transactions to peers all wallets",
+            cycle + 1
+        );
+        for sender in &wallet_names {
+            let recipients = recipient_wallets(&wallet_names, sender)?;
+            send_round_robin(world, step, sender, &recipients, transactions, value).await?;
+        }
+        info!(
+            target: TARGET,
+            "CONTINUOUS cycle {} E: Wait for transactions to be mined all wallets",
+            cycle + 1
+        );
+        for sender in &wallet_names {
+            wait_for_wallet_or_encumbered_state(
+                world,
+                step,
+                sender.clone(),
+                None,
+                Some(&0),
+                None,
+                None,
+                300,
+                WalletStateType::Encumbered,
+            )
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+fn recipient_wallets(wallet_names: &[String], sender: &str) -> Result<Vec<String>, StepError> {
+    let recipients: Vec<_> = wallet_names
+        .iter()
+        .filter(|wallet| wallet.as_str() != sender)
+        .cloned()
+        .collect();
+    if recipients.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: format!("No recipient wallets available for sender '{sender}'"),
+        });
+    }
+
+    Ok(recipients)
+}
+
+async fn send_round_robin(
+    world: &mut CucumberWorld,
+    step: &str,
+    sender: &str,
+    recipients: &[String],
+    transactions: usize,
+    value: u64,
+) -> Result<(), StepError> {
+    for i in 0..transactions {
+        let receiver_name = &recipients[i % recipients.len()];
+        let receiver_wallet = world.resolve_wallet(receiver_name)?;
+        let receiver_pk = receiver_wallet.wallet_account.public_key();
+        create_and_submit_transaction(world, step, sender, &[(receiver_pk, value)]).await?;
+    }
+    Ok(())
+}
+
+async fn wait_for_available_value(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_name: &str,
+    required_value: u64,
+    timeout_seconds: u64,
+) -> Result<(), StepError> {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(timeout_seconds) {
+        let (_, value) =
+            get_wallet_balances(world, step, wallet_name, WalletStateType::Available).await?;
+        if value >= required_value {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+
+    Err(StepError::StepFail {
+        message: format!(
+            "Timed out waiting for wallet '{wallet_name}' to have at least {required_value} available LGO"
+        ),
+    })
 }

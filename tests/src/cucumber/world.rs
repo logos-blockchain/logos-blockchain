@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     fmt::Debug,
     num::NonZero,
@@ -10,6 +10,7 @@ use std::{
 use cucumber::World;
 use derivative::Derivative;
 use lb_core::mantle::{SignedMantleTx, Utxo};
+use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
     LbcEnv, LbcManualCluster, ScenarioBuilder, ScenarioBuilderExt as _,
@@ -22,7 +23,10 @@ use crate::{
     BIN_PATH_DEBUG, BIN_PATH_RELEASE,
     cucumber::{
         TARGET,
-        defaults::{LOGOS_BLOCKCHAIN_NODE_BIN, init_node_log_dir_defaults, set_default_env},
+        defaults::{
+            CUCUMBER_NODE_CONFIG_OVERRIDE, LOGOS_BLOCKCHAIN_NODE_BIN, init_node_log_dir_defaults,
+            set_default_env,
+        },
         error::{StepError, StepResult},
         utils::{make_builder, shared_host_bin_path},
     },
@@ -128,12 +132,23 @@ pub struct CucumberWorld {
     pub node_header_heights: HashMap<String, HashMap<String, u64>>,
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
     /// IDs.
-    pub node_peer_ids: HashMap<String, libp2p::PeerId>,
+    pub node_peer_ids: HashMap<String, PeerId>,
     /// Manual: Whether to populate the IBD peers for each node after starting
     /// them,
     pub populate_ibd_peers: Option<bool>,
     /// Manual: Whether to require all peers to be online after starting them.
     pub require_all_peers_mode_online_at_startup: Option<bool>,
+    /// Manual: Initial peers (multiaddrs) injected into node config before
+    /// start.
+    pub initial_peers_override: Option<Vec<Multiaddr>>,
+    /// Manual: IBD peers injected into node config before start.
+    pub ibd_peers_override: Option<HashSet<PeerId>>,
+    /// Manual: If set, nodes use a `DeploymentSettings` loaded from disk
+    /// bypassing generated genesis/test deployment.
+    pub deployment_config_override_path: Option<PathBuf>,
+    /// Manual: Whether to have dynamically started nodes join the external
+    /// network
+    pub join_external_network: Option<bool>,
 }
 
 /// Mapping of block header to the UTXOs and STXOs associated with a wallet in
@@ -236,12 +251,49 @@ fn node_header_heights_display(
     )
 }
 
-fn node_peer_ids_display(node_peer_ids: &HashMap<String, libp2p::PeerId>) -> String {
+fn node_peer_ids_display(node_peer_ids: &HashMap<String, PeerId>) -> String {
     let nodes: Vec<_> = node_peer_ids
         .iter()
         .map(|(k, v)| format!("'{k}: {v}'"))
         .collect();
-    format!("HashMap<String, libp2p::PeerId>({})", nodes.join(", "))
+    format!("HashMap<String, PeerId>({})", nodes.join(", "))
+}
+
+fn initial_peers_override_display(initial_peers_override: Option<&Vec<Multiaddr>>) -> String {
+    initial_peers_override.as_ref().map_or_else(
+        || "None".to_owned(),
+        |peers| {
+            let peers_str = peers
+                .iter()
+                .map(|p| format!("{p}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("Some(Vec<Multiaddr>({peers_str}))")
+        },
+    )
+}
+
+fn ibd_peers_override_display(ibd_peers_override: Option<&HashSet<PeerId>>) -> String {
+    ibd_peers_override.as_ref().map_or_else(
+        || "None".to_owned(),
+        |peers| {
+            let peers_str = peers
+                .iter()
+                .map(|p| format!("{p}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("Some(HashSet<PeerId>({peers_str}))")
+        },
+    )
+}
+
+fn deployment_config_override_path_display(
+    deployment_config_override_path: Option<&PathBuf>,
+) -> String {
+    deployment_config_override_path.as_ref().map_or_else(
+        || "None".to_owned(),
+        |path| format!("Some({})", path.display()),
+    )
 }
 
 impl Debug for CucumberWorld {
@@ -253,6 +305,10 @@ impl Debug for CucumberWorld {
             .field("run", &format!("{:?}", self.run))
             .field("membership_check", &self.membership_check)
             .field("readiness_checks", &self.readiness_checks)
+            .field(
+                "join_external_network",
+                &format!("{:?}", self.join_external_network),
+            )
             .field(
                 "populate_ibd_peers",
                 &format!("{:?}", self.populate_ibd_peers),
@@ -292,6 +348,20 @@ impl Debug for CucumberWorld {
                 &node_header_heights_display(&self.node_header_heights),
             )
             .field("node_peer_ids", &node_peer_ids_display(&self.node_peer_ids))
+            .field(
+                "initial_override_peers_display",
+                &initial_peers_override_display(self.initial_peers_override.as_ref()),
+            )
+            .field(
+                "ibd_peers_override_display",
+                &ibd_peers_override_display(self.ibd_peers_override.as_ref()),
+            )
+            .field(
+                "deployment_config_override_path",
+                &deployment_config_override_path_display(
+                    self.deployment_config_override_path.as_ref(),
+                ),
+            )
             .finish()
     }
 }
@@ -665,5 +735,16 @@ impl CucumberWorld {
         })??;
 
         Ok(())
+    }
+
+    /// Helper to set the `deployment_config_override_path` in the world based
+    /// on the `CUCUMBER_NODE_CONFIG_OVERRIDE` environment variable. This
+    /// allows scenarios to specify a custom deployment config on disk that
+    /// will be used when starting nodes, bypassing the generated
+    /// genesis/test deployment.
+    pub fn apply_deployment_config_override_path(&mut self) {
+        self.deployment_config_override_path = env::var(CUCUMBER_NODE_CONFIG_OVERRIDE)
+            .ok()
+            .map(PathBuf::from);
     }
 }
