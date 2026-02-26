@@ -334,7 +334,7 @@ mod tests {
         // other selected peers must be from the connected set
         result
             .iter()
-            .filter(|&id| ![[4; 32], [5; 32]].contains(id))
+            .filter(|&id| id != &[4; 32] && id != &[5; 32])
             .for_each(|id| {
                 assert!(
                     connected.contains(id),
