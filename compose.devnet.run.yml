@@ -15,7 +15,7 @@ services:
       - NBE_NODE_API_PORT=${NODE0_API_PORT}
       - NBE_BASE_PATH=/web/explorer
     ports:
-      - "8000:8000/tcp"
+      - "13800:8000/tcp"
 
   # TODO: remove after /web/explorer is working
   explorerold:
@@ -28,7 +28,7 @@ services:
       - NBE_NODE_API_PORT=${NODE1_API_PORT}
       - NBE_BASE_PATH=/node/0/explorer
     ports:
-      - "8001:8000/tcp"
+      - "13801:8000/tcp"
 
   cfgsync:
     container_name: cfgsync
