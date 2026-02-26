@@ -498,6 +498,10 @@ fn build_cryptarchia_user_config(
                     peers: HashSet::new(),
                 },
             },
+            network: network::NetworkConfig {
+                max_connected_peers_to_try_download: 16,
+                max_discovered_peers_to_try_download: 16,
+            },
             sync: network::SyncConfig {
                 orphan: network::OrphanConfig {
                     max_orphan_cache_size: NonZeroUsize::new(5)
