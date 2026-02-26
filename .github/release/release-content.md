@@ -23,7 +23,7 @@ The operation will give you the `logos-blockchain-node` binary, which you can no
 
 To verify that your node is running correctly and connected, visit `http://localhost:{api_port_in_user_config}/cryptarchia/info`. The slot and height should both be constantly increasing.
 
-You can compare your consensus state with any nodes of the Logos Blockchain fleet reachable at `https://devnet.blockchain.logos.co/node/{1,2,3}/cryptarchia/info`.
+You can compare your consensus state with any nodes of the Logos Blockchain fleet reachable at [https://devnet.blockchain.logos.co/web/node-data](https://devnet.blockchain.logos.co/web/node-data/).
 
 ## Checklist
 
