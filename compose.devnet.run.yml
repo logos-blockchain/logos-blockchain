@@ -127,7 +127,6 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     ports:
       - "13000:13000"
-      - "18080:18080"
     depends_on:
       - cfgsync
       - explorer
