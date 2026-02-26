@@ -22,6 +22,7 @@ Progress on the checklist must be provided as comments to the issue.
 - [ ] Push to `testnet` branch to trigger a new deployment
 - [ ] Wait around 1 minute for deployment to be updated with the new changes and for the ceremony to happen
 - [ ] Download the new deployment configuration from [https://devnet.blockchain.logos.co/node/0/cfgsync/deployment-settings](https://devnet.blockchain.logos.co/node/0/cfgsync/deployment-settings)
+- [ ] Verify that the `time.chain_start_time` value in the deployment file indicates the right start time, which should be within the last few minutes
 - [ ] Copy-paste or attach the content of the deployment file to this issue for easier review
 
 ## Deployment Settings Update
