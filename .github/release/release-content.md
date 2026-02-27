@@ -27,6 +27,8 @@ Generate a default configuration by connecting to the devnet bootstrap peers:
     -p /ip4/65.109.51.37/udp/3003/quic-v1/p2p/{TODO}
 ```
 
+If you know for sure your node will not have a publicly reachable IP address (e.g., if behind a NAT or CG-NAT), then you can add `--no-public-ip-check` to the end of the previous command to skip checking if your IP is publicly reachable.
+
 This takes a few seconds and produces a `user_config.yaml` file.
 
 ### ▶️ Run Your Node
