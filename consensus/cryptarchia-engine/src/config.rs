@@ -75,11 +75,7 @@ impl Config {
 
     #[must_use]
     pub const fn base_period_length(&self) -> NonZero<u64> {
-        NonZero::new(
-            ((self.security_param.get() as f64) / self.slot_activation_coeff.as_f64()).floor()
-                as u64,
-        )
-        .expect("base_period_length with proper configuration should never be zero")
+        base_period_length(self.security_param, self.slot_activation_coeff)
     }
 
     #[must_use]
@@ -97,6 +93,23 @@ impl Config {
         )
         .expect("s_gen with proper configuration should never be zero")
     }
+}
+
+#[must_use]
+pub const fn base_period_length(
+    security_param: NonZero<u32>,
+    slot_activation_coeff: NonNegativeRatio,
+) -> NonZero<u64> {
+    average_slots_for_blocks(security_param, slot_activation_coeff)
+}
+
+#[must_use]
+pub const fn average_slots_for_blocks(
+    num_blocks: NonZero<u32>,
+    slot_activation_coeff: NonNegativeRatio,
+) -> NonZero<u64> {
+    NonZero::new((num_blocks.get() as f64 / slot_activation_coeff.as_f64()).floor() as u64)
+        .expect("base_period_length with proper configuration should never be zero")
 }
 
 #[cfg(test)]

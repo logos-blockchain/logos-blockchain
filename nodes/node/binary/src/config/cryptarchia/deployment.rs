@@ -6,7 +6,9 @@ use lb_core::{
     mantle::genesis_tx::GenesisTx,
     sdp::{MinStake, ServiceType},
 };
-use lb_cryptarchia_engine::Config as ConsensusConfig;
+use lb_cryptarchia_engine::{
+    Config as ConsensusConfig, average_slots_for_blocks, base_period_length, time::epoch_length,
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use serde::{Deserialize, Serialize};
@@ -26,28 +28,27 @@ pub struct Settings {
 
 impl Settings {
     #[must_use]
-    pub const fn slots_per_epoch(&self) -> u64 {
-        (self.blocks_per_epoch() as f64 / self.slot_activation_coeff.as_f64()).ceil() as u64
+    pub fn slots_per_epoch(&self) -> u64 {
+        epoch_length(
+            self.epoch_config.epoch_stake_distribution_stabilization,
+            self.epoch_config.epoch_period_nonce_buffer,
+            self.epoch_config.epoch_period_nonce_stabilization,
+            base_period_length(self.security_param, self.slot_activation_coeff),
+        )
     }
 
-    // Session duration is given by epoch schedule * `k` (security parameter).
     #[must_use]
-    pub const fn blocks_per_epoch(&self) -> u64 {
-        self.epoch_schedule() * self.security_param.get() as u64
+    pub fn blocks_per_epoch(&self) -> u64 {
+        (self.slots_per_epoch() as f64 / self.average_slots_per_block() as f64).floor() as u64
     }
 
     #[must_use]
     pub const fn average_slots_per_block(&self) -> u64 {
-        (self.slot_activation_coeff.denominator.get() * self.slot_activation_coeff.numerator) as u64
-    }
-
-    const fn epoch_schedule(&self) -> u64 {
-        (self.epoch_config.epoch_period_nonce_buffer.get()
-            + self.epoch_config.epoch_period_nonce_stabilization.get()
-            + self
-                .epoch_config
-                .epoch_stake_distribution_stabilization
-                .get()) as u64
+        average_slots_for_blocks(
+            NonZero::<u32>::new(1).expect("must be non-zero"),
+            self.slot_activation_coeff,
+        )
+        .get()
     }
 
     #[must_use]
