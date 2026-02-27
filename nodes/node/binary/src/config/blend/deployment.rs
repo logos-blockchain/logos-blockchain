@@ -66,8 +66,8 @@ impl Settings {
 
     /// Number of rounds per session transition period.
     ///
-    /// The Blend spec defines this as roughly the same time it takes to propose
-    /// a new block.
+    /// The Blend spec defines this as roughly the same as
+    /// [`rounds_per_interval`].
     #[must_use]
     pub fn rounds_per_session_transition_period(
         &self,
@@ -77,7 +77,7 @@ impl Settings {
         self.rounds_per_interval(slots_per_block, slot_duration)
     }
 
-    /// Number of rounds per session transition period.
+    /// Number of rounds per epoch transition period.
     ///
     /// The Blend spec defines this as roughly the same time it takes to propose
     /// a new block.
@@ -89,8 +89,9 @@ impl Settings {
     ) -> NonZeroU64 {
         let rounds_per_session_transition_period =
             self.rounds_per_session_transition_period(slots_per_block, slot_duration);
-        ((slot_duration.as_secs() * rounds_per_session_transition_period.get())
-            / self.round_duration(slot_duration).as_secs())
+        ((self.round_duration(slot_duration).as_secs()
+            * rounds_per_session_transition_period.get())
+            / slot_duration.as_secs())
         .try_into()
         .expect("There must be at least one slot per epoch transition period.")
     }
