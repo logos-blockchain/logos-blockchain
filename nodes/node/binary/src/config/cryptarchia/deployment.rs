@@ -28,7 +28,7 @@ pub struct Settings {
 
 impl Settings {
     #[must_use]
-    pub fn slots_per_epoch(&self) -> u64 {
+    pub const fn slots_per_epoch(&self) -> u64 {
         epoch_length(
             self.epoch_config.epoch_stake_distribution_stabilization,
             self.epoch_config.epoch_period_nonce_buffer,

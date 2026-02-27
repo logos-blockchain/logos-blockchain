@@ -1,8 +1,4 @@
-use std::{
-    num::{NonZero, NonZeroU64},
-    ops::Add,
-    time::Duration,
-};
+use std::{num::NonZero, ops::Add, time::Duration};
 
 #[cfg(feature = "serde")]
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
