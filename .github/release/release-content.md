@@ -73,6 +73,8 @@ Either key can be used.
 
 Visit the [devnet faucet][devnet-faucet] and enter the credentials provided by the Logos Blockchain team (you can reach out to them on [Discord][devnet-discord-public]), then paste your wallet key.
 
+A word of caution - do not _powerclick_ your way through as only one request can be made per block! So if you want to receive funds more than once, wait until your balance increases before requesting new funds.
+
 **3. 💸 Confirm your balance**
 
 Wait 1-2 minutes for the transaction to land in a block, then:
