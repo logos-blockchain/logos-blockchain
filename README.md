@@ -1,20 +1,37 @@
+<div align="center">
+
 # Logos Blockchain
 
 **A privacy-preserving, censorship-resistant blockchain for decentralized network states.**
 
-Logos Blockchain is a core component of the [Logos][logos-website] technology stack.
-It combines zero-knowledge proofs, a mix network for anonymity, and a modular service architecture to provide a foundation for sovereign digital communities.
+[![MIT License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](https://github.com/logos-co/logos-blockchain/blob/master/LICENSE-MIT)
+[![Apache License](https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge)](https://github.com/logos-co/logos-blockchain/blob/master/LICENSE-APACHE2.0)
+[![Discord](https://img.shields.io/discord/1085215532189261874?style=for-the-badge&logo=discord&label=Discord)][logos-discord]
+
+[Quick Start](#-quick-start) •
+[Architecture](#-architecture) •
+[Development](#-development) •
+[Community](#-community)
+
+</div>
 
 ---
 
-## Highlights
+## What is Logos Blockchain?
 
-- **Privacy by design** — UTXO-based ledger with Groth16 zero-knowledge proofs (BN254 curve) for transaction privacy
-- **Censorship resistance** — Built-in [Blend mix network](blend/) anonymizes block proposal messages before propagation
-- **Cryptarchia consensus** — Ouroboros-family (Private) Proof-of-Stake with ZK-proven leader election
-- **Modular architecture** — Compile-time composable services via the [Overwatch][overwatch-github] framework
-- **L2-ready** — Channel inscriptions enable rollup sequencers to anchor data on-chain
-- **Cross-language support** — C bindings ([`c-bindings/`](c-bindings/)) for embedding the node in non-Rust applications
+Logos Blockchain is a core component of the [Logos][logos-website] technology stack.
+It combines zero-knowledge proofs, a mix network for anonymity, and a modular service architecture to provide a foundation for sovereign digital communities.
+
+### Why Logos Blockchain?
+
+| Challenge | Logos Blockchain's Approach |
+|---|---|
+| Transaction privacy | UTXO-based ledger with Groth16 ZK proofs (BN254) |
+| Censorship resistance | Built-in [Blend mix network](blend/) anonymizes block proposals before propagation |
+| Leader election privacy | Ouroboros-family Private PoS with ZK-proven leader election (**Cryptarchia**) |
+| Rigid monolithic nodes | Compile-time composable services via [Overwatch][overwatch-github] |
+| L2 data availability | Channel inscriptions let rollup sequencers anchor data on-chain |
+| Language lock-in | [C bindings](c-bindings/) for embedding the node in non-Rust applications |
 
 ---
 
@@ -102,6 +119,28 @@ docker run -v "/path/to/node_config.yml:/node_config.yml" -v "/path/to/deploymen
 
 ---
 
+## Architecture
+
+Nodes are composed declaratively using the [Overwatch][overwatch-github] framework.
+Each service has a front layer (Overwatch integration) and a back layer (business logic), making components easy to swap:
+
+```rust
+#[derive_services]
+struct MockPoolNode {
+    logging: Logger,
+    network: NetworkService<Waku>,
+    mockpool: MempoolService<WakuAdapter<Tx>, MockPool<TxId, Tx>>,
+    http: HttpService<AxumBackend>,
+    bridges: HttpBridgeService,
+}
+```
+
+### Static Dispatching
+
+The codebase favors generics and static dispatch over dynamic dispatch. This means you'll see generics throughout — the trade-off is compile-time type safety and highly modular, adaptable applications.
+
+---
+
 ## Project Structure
 
 ```
@@ -134,29 +173,6 @@ logos-blockchain/
 ├── testnet/              Docker Compose testnets, faucet, L2 demo
 └── tests/                Integration & Cucumber BDD tests
 ```
-
----
-
-## Architecture
-
-### Service Composition
-
-Logos Blockchain uses the [Overwatch][overwatch-github] framework to compose nodes from independent services at compile time. Each service has a front layer (Overwatch integration) and a back layer (business logic), making components easy to swap:
-
-```rust
-#[derive_services]
-struct MockPoolNode {
-    logging: Logger,
-    network: NetworkService<Waku>,
-    mockpool: MempoolService<WakuAdapter<Tx>, MockPool<TxId, Tx>>,
-    http: HttpService<AxumBackend>,
-    bridges: HttpBridgeService,
-}
-```
-
-### Static Dispatching
-
-The codebase favors generics and static dispatch over dynamic dispatch. This means you'll see generics throughout — the trade-off is compile-time type safety and highly modular, adaptable applications.
 
 ---
 
@@ -239,7 +255,6 @@ Dual-licensed under your choice of:
 
 [overwatch-github]: https://github.com/logos-co/Overwatch
 [graphviz-online]: https://dreampuf.github.io/GraphvizOnline/
-[logos-website]: https://logos.co/
 [github-releases-page]: https://github.com/logos-blockchain/logos-blockchain/releases
 [logos-discord]: https://discord.gg/ezJefwJY
 [logos-x]: https://x.com/Logos_network
