@@ -1,18 +1,21 @@
-## Quick Start
+## 🚀 Quick Start
 
-### Prerequisites
+### 📦 Prerequisites
 
 1. Download and unzip the **circuits** for your architecture from the release artifacts.
 2. Set the environment variable pointing to the circuits directory:
+
    ```bash
-   export LOGOS_BLOCKCHAIN_CIRCUITS=/path/to/circuits
-   ```
-3. Download and unzip the **node binary** for your architecture:
-   ```bash
-   tar -xzf logos-blockchain-node-<arch>-<version>.tar.gz
+    export LOGOS_BLOCKCHAIN_CIRCUITS=/path/to/circuits
    ```
 
-### Initialize Your Node
+3. Download and unzip the **node binary** for your architecture:
+
+   ```bash
+    tar -xzf logos-blockchain-node-<arch>-<version>.tar.gz
+   ```
+
+### ⚙️ Initialize Your Node
 
 Generate a default configuration by connecting to the devnet bootstrap peers:
 
@@ -26,7 +29,9 @@ Generate a default configuration by connecting to the devnet bootstrap peers:
 
 This takes a few seconds and produces a `user_config.yaml` file.
 
-### Run Your Node
+### ▶️ Run Your Node
+
+Run the node:
 
 ```bash
 ./logos-blockchain-node user_config.yaml
@@ -34,7 +39,7 @@ This takes a few seconds and produces a `user_config.yaml` file.
 
 The node writes rotating log files (one per hour).
 
-### Verify It Works
+### ✅ Verify It Works
 
 Check your local consensus state:
 
@@ -46,9 +51,9 @@ Both `slot` and `height` should be steadily increasing. You can compare against 
 
 ---
 
-## Getting Funds
+## 💰 Getting Funds
 
-**1. Find your wallet key**
+**1. 🔑 Find your wallet key**
 
 ```bash
 grep -A3 known_keys user_config.yaml
@@ -64,11 +69,11 @@ known_keys:
 
 Either key can be used.
 
-**2. Request funds from the faucet**
+**2. 🚰 Request funds from the faucet**
 
-Visit the [devnet faucet][devnet-faucet] and enter the credentials provided by the Logos Blockchain team, then paste your wallet key.
+Visit the [devnet faucet][devnet-faucet] and enter the credentials provided by the Logos Blockchain team (you can reach out to them on [Discord][devnet-discord-public]), then paste your wallet key.
 
-**3. Confirm your balance**
+**3. 💸 Confirm your balance**
 
 Wait 1-2 minutes for the transaction to land in a block, then:
 
@@ -80,19 +85,19 @@ Replace `<my_key>` with the key ID you funded.
 
 ---
 
-## Proposing Blocks
+## 🧱 Proposing Blocks
 
-Once you have funds and the current **and** next epoch have elapsed, your node will automatically start producing blocks.
-
----
-
-## Troubleshooting
-
-Having issues? Reach out to the Logos Blockchain team or check the [devnet Notion page][release-notion] for FAQs and up-to-date instructions.
+Once you have funds and the current **and** next epoch have elapsed, your node will automatically start producing blocks. 🎉
 
 ---
 
-## Release Checklist
+## 🛟 Troubleshooting
+
+Having issues? Reach out to the Logos Blockchain team on [Discord][devnet-discord-public] or check the [devnet Notion page][release-notion] for FAQs and up-to-date instructions.
+
+---
+
+## [REMOVE BEFORE PUBLISHING] Release Checklist
 
 > **Internal — remove this section before publishing.**
 
@@ -106,3 +111,4 @@ Having issues? Reach out to the Logos Blockchain team or check the [devnet Notio
 [release-notion]: https://www.notion.so/nomos-tech/Internal-Devnet-Launch-February-2026-2fe261aa09df8025ad94e380933b4cf9#2ff261aa09df8058935ecb85aa587564
 [devnet-faucet]: https://devnet.blockchain.logos.co/web/faucet/
 [devnet-dashboard]: https://devnet.blockchain.logos.co/web/
+[devnet-discord-public]: https://discord.com/channels/973324189794697286/1468535289604735038
