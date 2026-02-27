@@ -47,7 +47,7 @@ Progress on the checklist must be provided as comments to the issue.
 - [ ] Checkout `testnet` branch again and change the `compose.static.yml` symlink to now point to `compose.devnet.run.yml`
 - [ ] Commit and push the changes to trigger environment re-deployment. Environment is now live.
 - [ ] Wait around 1 minute for deployment to be updated
-- [ ] Visit [https://devnet.blockchain.logos.co/web/](https://devnet.blockchain.logos.co/web/) and copy-paste each node's address and peer ID from their network info into the [Installation section of the devnet release Notion page][devnet-release-notion-page-installation]. If needed, at any time you can download fleet nodes' configs and logs from [https://devnet.blockchain.logos.co/web/node-data/](https://devnet.blockchain.logos.co/web/node-data/)
+- [ ] If needed, at any time you can download fleet nodes' configs and logs from [https://devnet.blockchain.logos.co/web/node-data/](https://devnet.blockchain.logos.co/web/node-data/)
 - [ ] Go back to the [GitHub Release][github-release-section] section and finalize the release
 
 ## Post-Release
