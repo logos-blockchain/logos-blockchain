@@ -517,12 +517,12 @@ where
         let content_size = 0; // TODO: calculate the actual content size
         let transactions = block.transactions().len();
 
-        info!(
+        trace!(
             counter.received_blocks = 1,
             transactions = transactions,
             bytes = content_size
         );
-        info!(
+        trace!(
             histogram.received_blocks_data = content_size,
             transactions = transactions,
         );
