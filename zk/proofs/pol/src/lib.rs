@@ -221,7 +221,7 @@ mod tests {
                 "14787709838677865776105327831675542255717739581860994014618609782788824576885",
             ]
             .map(|value| BigUint::from_str(value).unwrap().into()),
-            aged_selector: [
+            aged_selectors: [
                 false, true, true, false, true, true, false, true, false, false, true, false, true,
                 false, false, true, false, true, true, true, true, false, true, true, true, false,
                 false, false, false, true, true, true,
@@ -261,7 +261,7 @@ mod tests {
                 "15874955117141602197688150287249257989589905293755369275305245316881887378284",
             ]
             .map(|value| BigUint::from_str(value).unwrap().into()),
-            latest_selector: [
+            latest_selectors: [
                 false, true, false, false, true, true, false, false, false, false, true, false,
                 false, true, true, true, true, true, true, false, false, true, false, true, false,
                 false, true, true, true, true, true, false,

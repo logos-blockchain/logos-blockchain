@@ -243,13 +243,13 @@ impl LeaderPrivate {
             aged_path: aged_path
                 .try_into()
                 .expect("Aged path length should match the expected height"),
-            aged_selector: aged_selector
+            aged_selectors: aged_selector
                 .try_into()
                 .expect("Aged selector length should match the expected height"),
             latest_path: latest_path
                 .try_into()
                 .expect("Latest path length should match the expected height"),
-            latest_selector: latest_selector
+            latest_selectors: latest_selector
                 .try_into()
                 .expect("Latest selector length should match the expected height"),
             secret_key,
