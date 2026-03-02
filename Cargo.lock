@@ -4562,7 +4562,6 @@ dependencies = [
  "logos-blockchain-libp2p",
  "logos-blockchain-network-service",
  "logos-blockchain-pol",
- "logos-blockchain-poq",
  "logos-blockchain-sdp-service",
  "logos-blockchain-services-utils",
  "logos-blockchain-storage-service",
