@@ -8,11 +8,6 @@
 [![Apache License](https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge)](https://github.com/logos-co/logos-blockchain/blob/master/LICENSE-APACHE2.0)
 [![Discord](https://img.shields.io/discord/1085215532189261874?style=for-the-badge&logo=discord&label=Discord)][logos-discord]
 
-[Quick Start](#-quick-start) •
-[Architecture](#-architecture) •
-[Development](#-development) •
-[Community](#-community)
-
 </div>
 
 ---
@@ -22,18 +17,7 @@
 Logos Blockchain is a core component of the [Logos][logos-website] technology stack.
 It combines zero-knowledge proofs, a mix network for anonymity, and a modular service architecture to provide a foundation for sovereign digital communities.
 
-### Why Logos Blockchain?
-
-| Challenge | Logos Blockchain's Approach |
-|---|---|
-| Transaction privacy | UTXO-based ledger with Groth16 ZK proofs (BN254) |
-| Censorship resistance | Built-in [Blend mix network](blend/) anonymizes block proposals before propagation |
-| Leader election privacy | Ouroboros-family Private PoS with ZK-proven leader election (**Cryptarchia**) |
-| Rigid monolithic nodes | Compile-time composable services via [Overwatch][overwatch-github] |
-| L2 data availability | Channel inscriptions let rollup sequencers anchor data on-chain |
-| Language lock-in | [C bindings](c-bindings/) for embedding the node in non-Rust applications |
-
----
+This node represents the reference implementation of the Logos Blockchain specifications defined in the [Logos specifications space][notion-specs].
 
 ## Quick Start
 
@@ -253,6 +237,7 @@ Dual-licensed under your choice of:
 - [Twitter / X][logos-x]
 - [logos.co][logos-website]
 
+[notion-specs]: https://www.notion.so/nomos-tech/Research-Specifications-1fd261aa09df814da916ecefa410571f
 [overwatch-github]: https://github.com/logos-co/Overwatch
 [graphviz-online]: https://dreampuf.github.io/GraphvizOnline/
 [github-releases-page]: https://github.com/logos-blockchain/logos-blockchain/releases
