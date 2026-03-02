@@ -21,7 +21,7 @@ pub mod gossipsub;
 pub mod kademlia;
 pub mod nat;
 
-const DATA_LIMIT: usize = usize::MAX; // Effectively unlimited at this layer (gossipsub default is 64 KiB)
+const DATA_LIMIT: usize = 16 * 1024 * 1024; // 16 MiB (gossipsub default is 64 KiB)
 
 pub(crate) struct BehaviourConfig {
     pub gossipsub_config: libp2p::gossipsub::Config,
