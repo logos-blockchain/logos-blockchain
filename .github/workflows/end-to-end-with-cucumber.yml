@@ -40,7 +40,7 @@ jobs:
     steps:
       # Remove any rustup override to ensure default toolchain is used
       - name: Disable rustup override
-        run: rustup override unset
+        run: rustup override unset || true
 
       # Checkout the repository code
       # Notes:
@@ -64,6 +64,10 @@ jobs:
       # shell variables
       - name: Set circuits path environment variable (new)
         run: echo "LOGOS_BLOCKCHAIN_CIRCUITS=$HOME/.logos-blockchain-circuits" >> $GITHUB_ENV
+
+      # Prune before any builds.
+      - name: Prune disk space (cache-aware, self-hosted)
+        uses: ./.github/actions/prune-disk-space
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35

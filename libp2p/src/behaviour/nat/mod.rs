@@ -5,8 +5,8 @@ use libp2p::{
     Multiaddr, PeerId, autonat,
     core::{Endpoint, transport::PortUse},
     swarm::{
-        ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler, THandlerInEvent,
-        THandlerOutEvent, ToSwarm,
+        ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, NewListenAddr, THandler,
+        THandlerInEvent, THandlerOutEvent, ToSwarm,
         behaviour::toggle::{Toggle, ToggleConnectionHandler},
     },
 };
@@ -126,9 +126,9 @@ impl<Rng: RngCore + 'static> NetworkBehaviour for Behaviour<Rng> {
     fn on_swarm_event(&mut self, event: FromSwarm) {
         if let Some(inner_behaviour) = self.inner_behaviour.as_mut() {
             inner_behaviour.on_swarm_event(event);
+        } else if let FromSwarm::NewListenAddr(NewListenAddr { addr, .. }) = event {
+            self.static_listen_addr = Some(addr.clone());
         }
-        // Static mode: don't overwrite configured external_address with listen
-        // addresses.
     }
 
     fn on_connection_handler_event(

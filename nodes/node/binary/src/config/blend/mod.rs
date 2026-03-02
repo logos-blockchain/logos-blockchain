@@ -19,7 +19,9 @@ use lb_blend_service::{
 
 use crate::config::{
     blend::{deployment::Settings as DeploymentSettings, serde::Config},
+    cryptarchia::deployment::Settings as CryptarchiaDeploymentSettings,
     state::Config as StateConfig,
+    time::deployment::Settings as TimeDeploymentSettings,
 };
 
 pub mod deployment;
@@ -40,12 +42,18 @@ impl ServiceConfig {
     pub fn into_blend_services_settings(
         self,
         state_config: &StateConfig,
+        time_deployment: &TimeDeploymentSettings,
+        cryptarchia_deployment: &CryptarchiaDeploymentSettings,
     ) -> (
         BlendSettings<Libp2pCoreBlendBackendSettings, Libp2pEdgeBlendBackendSettings>,
         BlendCoreSettings<Libp2pCoreBlendBackendSettings>,
         BlendEdgeSettings<Libp2pEdgeBlendBackendSettings>,
     ) {
         let recovery_path_prefix = state_config.get_path_for_recovery_state(Path::new("blend"));
+
+        let slots_per_epoch = cryptarchia_deployment.slots_per_epoch();
+        let slots_per_block = cryptarchia_deployment.average_slots_per_block();
+        let slot_duration = time_deployment.slot_duration;
 
         let blend_service_settings = BlendSettings::<
             Libp2pCoreBlendBackendSettings,
@@ -59,22 +67,18 @@ impl ServiceConfig {
                 time: TimingSettings {
                     epoch_transition_period_in_slots: self
                         .deployment
-                        .common
-                        .timing
-                        .epoch_transition_period_in_slots,
-                    round_duration: self.deployment.common.timing.round_duration,
-                    rounds_per_interval: self.deployment.common.timing.rounds_per_interval,
-                    rounds_per_observation_window: self
+                        .slots_per_epoch_transition_period(slots_per_block, &slot_duration),
+                    round_duration: self.deployment.round_duration(&slot_duration),
+                    rounds_per_interval: self
                         .deployment
-                        .common
-                        .timing
-                        .rounds_per_observation_window,
-                    rounds_per_session: self.deployment.common.timing.rounds_per_session,
+                        .rounds_per_interval(slots_per_block, &slot_duration),
+                    rounds_per_observation_window: self.deployment.rounds_per_observation_window(),
+                    rounds_per_session: self
+                        .deployment
+                        .rounds_per_session(slots_per_epoch, &slot_duration),
                     rounds_per_session_transition_period: self
                         .deployment
-                        .common
-                        .timing
-                        .rounds_per_session_transition_period,
+                        .rounds_per_session_transition_period(slots_per_block, &slot_duration),
                 },
                 data_replication_factor: self.deployment.common.data_replication_factor,
             },

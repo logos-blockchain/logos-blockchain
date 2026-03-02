@@ -23,6 +23,18 @@ impl<R: Clone + Send + RngCore + 'static> Behaviour<R> {
         }
     }
 
+    pub(crate) fn kademlia_remove_address(&mut self, peer_id: PeerId, addr: &Multiaddr) {
+        if self.kademlia.remove_address(&peer_id, addr).is_some() {
+            tracing::warn!("Removed address {:?} from peer {:?}", addr, peer_id);
+        } else {
+            tracing::warn!(
+                "Address {:?} for peer {:?} was not present in Kademlia",
+                addr,
+                peer_id
+            );
+        }
+    }
+
     pub(crate) fn kademlia_routing_table_dump(&mut self) -> HashMap<u32, Vec<PeerId>> {
         self.kademlia
             .kbuckets()

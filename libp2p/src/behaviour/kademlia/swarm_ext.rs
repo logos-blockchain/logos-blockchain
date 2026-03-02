@@ -25,6 +25,12 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
             .kademlia_add_address(peer_id, addr);
     }
 
+    pub fn kademlia_remove_address(&mut self, peer_id: PeerId, addr: &Multiaddr) {
+        self.swarm
+            .behaviour_mut()
+            .kademlia_remove_address(peer_id, addr);
+    }
+
     pub fn kademlia_routing_table_dump(&mut self) -> HashMap<u32, Vec<PeerId>> {
         self.swarm.behaviour_mut().kademlia_routing_table_dump()
     }

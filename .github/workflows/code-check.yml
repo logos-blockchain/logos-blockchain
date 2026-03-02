@@ -70,6 +70,12 @@ jobs:
             label: self-hosted-macos
     runs-on: ${{ matrix.platform.os }}
     steps:
+      # Disable rustup override before checkout, so the toolchain state is clean before any workspace files or
+      # .rust-toolchain.toml are present. Prevents a stale override from affecting the toolchain resolution during
+      # checkout or subsequent steps.
+      - name: Disable rustup override
+        run: rustup override unset || true
+
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
       - name: Setup Circuits
@@ -81,6 +87,13 @@ jobs:
         uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25  # Version 2.49.35
         with:
           tool: cargo-hack
+
+      # Prune after Install cargo-hack, before Set up Cargo cache — frees disk space from the previous run's leftover
+      # artifacts (incremental compile dirs, fingerprints, build dirs) before the cache is restored. This means the
+      # restored cache lands onto a disk that has already been cleaned, maximizing the chance the restore succeeds
+      # without hitting disk limits.
+      - name: Prune disk space (cache-aware, self-hosted)
+        uses: ./.github/actions/prune-disk-space
 
       - name: Set up Cargo cache
         uses: ./.github/actions/setup-cargo-cache
@@ -172,7 +185,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Disable rustup override
-        run: rustup override unset
+        run: rustup override unset || true
 
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
@@ -181,6 +194,10 @@ jobs:
         uses: ./.github/actions/setup-circuits
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Prune before any builds.
+      - name: Prune disk space (cache-aware, self-hosted)
+        uses: ./.github/actions/prune-disk-space
 
       - name: Run the node binary with the testing feature to check the one-node config files validity
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
@@ -196,6 +213,7 @@ jobs:
           tool: cargo-nextest
 
       - name: Cargo test all except end-to-end integration tests
+        timeout-minutes: 90
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: nextest
