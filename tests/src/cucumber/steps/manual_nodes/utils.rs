@@ -385,15 +385,13 @@ pub async fn start_node(
     );
 
     // Bootstrap peers must be `Mode::OnLine` for IBD of other peers to succeed.
-    ensure_node_mode_online(
+    ensure_node_ready(
         cluster,
         &client,
         node_name,
         &started_node_name,
         startup_settings.is_bootstrap_node,
-        world
-            .require_all_peers_mode_online_at_startup
-            .unwrap_or_default(),
+        world.require_all_peers_mode_online_at_startup,
     )
     .await
     .inspect_err(|e| {
@@ -498,14 +496,15 @@ fn load_run_config(path: &Path) -> Result<DeploymentSettings, StepError> {
 
 // Ensure this node is ready, and achieved `Mode::OnLine` if it has no IBD peers
 // (i.e. a bootstrap node).
-async fn ensure_node_mode_online(
+async fn ensure_node_ready(
     cluster: &LbcManualCluster,
     client: &NodeHttpClient,
     node_name: &str,
     started_node_name: &str,
     is_bootstrap_node: bool,
-    require_all_peers_mode_online_at_startup: bool,
+    require_all_peers_mode_online_at_startup: Option<Duration>,
 ) -> StepResult {
+    // General readiness check to ensure the node is responsive.
     let operation = format!("node '{started_node_name}' readiness");
     track_progress(&operation, Duration::from_secs(5), async {
         cluster
@@ -519,12 +518,30 @@ async fn ensure_node_mode_online(
     })
     .await?;
 
-    if !is_bootstrap_node && !require_all_peers_mode_online_at_startup {
+    verify_reponsive_and_network_ready(client, node_name, started_node_name).await?;
+
+    if !is_bootstrap_node && require_all_peers_mode_online_at_startup.is_none() {
         return Ok(());
     }
 
+    verify_online(
+        client,
+        node_name,
+        started_node_name,
+        require_all_peers_mode_online_at_startup,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn verify_online(
+    client: &NodeHttpClient,
+    node_name: &str,
+    started_node_name: &str,
+    time_out: Option<Duration>,
+) -> StepResult {
+    let time_out = time_out.unwrap_or_else(|| Duration::from_secs(60));
     let start = Instant::now();
-    let time_out = Duration::from_secs(60);
     let mut count = 0usize;
     loop {
         let mut mode_online = false;
@@ -554,16 +571,67 @@ async fn ensure_node_mode_online(
                 });
             }
         }
-        let mut have_listen_addresses = false;
-        match client.network_info().await {
-            Ok(val) => {
-                have_listen_addresses = !val.listen_addresses.is_empty();
+        if mode_online {
+            info!(
+                target: TARGET,
+                "Node `{node_name}/{started_node_name}` achieved `Mode::OnLine` and listen \
+                addresses in {:.2?}",
+                start.elapsed()
+            );
+            return Ok(());
+        }
+        sleep(Duration::from_millis(100)).await;
+        count += 1;
+    }
+}
+
+async fn verify_reponsive_and_network_ready(
+    client: &NodeHttpClient,
+    node_name: &str,
+    started_node_name: &str,
+) -> StepResult {
+    let start = Instant::now();
+    let time_out = Duration::from_secs(60);
+    let mut count = 0usize;
+    let mut can_provide_consensus_info;
+    let mut is_network_ready;
+
+    loop {
+        can_provide_consensus_info = false;
+        match client.consensus_info().await {
+            Ok(_) => {
+                can_provide_consensus_info = true;
             }
             Err(e) if start.elapsed() < time_out => {
                 if count.is_multiple_of(20) {
                     info!(
                         target: TARGET,
-                        "Waiting for node `{node_name}/{started_node_name}` listen addresses - \
+                        "Waiting for node `{node_name}/{started_node_name}` to be responsive - \
+                         elapsed: {:.2?} ({e})",
+                        start.elapsed()
+                    );
+                }
+            }
+            Err(e) => {
+                return Err(StepError::StepFail {
+                    message: format!(
+                        "Node `{node_name}/{started_node_name}` failed to be responsive - elapsed \
+                        {:.2?}: {e}",
+                        start.elapsed()
+                    ),
+                });
+            }
+        }
+        is_network_ready = false;
+        match client.network_info().await {
+            Ok(val) => {
+                is_network_ready = !val.listen_addresses.is_empty();
+            }
+            Err(e) if start.elapsed() < time_out => {
+                if count.is_multiple_of(20) {
+                    info!(
+                        target: TARGET,
+                        "Waiting for node `{node_name}/{started_node_name}` to be network ready - \
                         elapsed: {:.2?} ({e})",
                         start.elapsed()
                     );
@@ -572,18 +640,17 @@ async fn ensure_node_mode_online(
             Err(e) => {
                 return Err(StepError::StepFail {
                     message: format!(
-                        "Node `{node_name}/{started_node_name}` failed listen addresses - elapsed \
+                        "Node `{node_name}/{started_node_name}` failed to be network ready - elapsed \
                         {:.2?}: {e}",
                         start.elapsed()
                     ),
                 });
             }
         }
-        if mode_online && have_listen_addresses {
+        if can_provide_consensus_info && is_network_ready {
             info!(
                 target: TARGET,
-                "Node `{node_name}/{started_node_name}` achieved `Mode::OnLine` and listen \
-                addresses in {:.2?}",
+                "Node `{node_name}/{started_node_name}` is responsive and network ready in {:.2?}",
                 start.elapsed()
             );
             return Ok(());

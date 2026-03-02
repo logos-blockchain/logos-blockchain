@@ -1,4 +1,5 @@
 use std::{path::PathBuf, sync::LazyLock};
+
 use crate::{PoCWitnessInputs, inputs::PoCInputsJson};
 
 const CIRCUIT_NAME: &str = "poc";

@@ -137,7 +137,7 @@ pub struct CucumberWorld {
     /// them,
     pub populate_ibd_peers: Option<bool>,
     /// Manual: Whether to require all peers to be online after starting them.
-    pub require_all_peers_mode_online_at_startup: Option<bool>,
+    pub require_all_peers_mode_online_at_startup: Option<Duration>,
     /// Manual: Initial peers (multiaddrs) injected into node config before
     /// start.
     pub initial_peers_override: Option<Vec<Multiaddr>>,

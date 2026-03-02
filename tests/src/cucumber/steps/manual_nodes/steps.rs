@@ -66,12 +66,16 @@ fn step_manual_cluster(world: &mut CucumberWorld, step: &Step, nodes_count: usiz
 
 #[given(expr = "I have a devnet cluster with capacity of {int} nodes")]
 #[when(expr = "I have a devnet cluster with capacity of {int} nodes")]
-fn step_manual_devnet_cluster(world: &mut CucumberWorld, step: &Step, nodes_count: usize) -> StepResult {
+fn step_manual_devnet_cluster(
+    world: &mut CucumberWorld,
+    step: &Step,
+    nodes_count: usize,
+) -> StepResult {
     // For devnet runs we do NOT allocate genesis tokens/accounts here.
     // Wallet keys are derived later (compile_wallet_in_map), and the node RunConfig
-    // is switched to Devnet via `join_external_network` inside `prepare_config_patch`.
+    // is switched to Devnet via `join_external_network` inside
+    // `prepare_config_patch`.
 
-    // Safety: ensure no stale local-genesis UTXOs leak into wallet tracking
     world.genesis_block_utxos.clear();
     world.wallet_accounts.clear();
 
@@ -191,10 +195,10 @@ const fn step_we_join_external_network(world: &mut CucumberWorld) {
     world.join_external_network = Some(true);
 }
 
-#[given(expr = "all peers must be mode online after startup")]
-#[when(expr = "all peers must be mode online after startup")]
-const fn step_all_nodes_to_br_mode_online(world: &mut CucumberWorld) {
-    world.require_all_peers_mode_online_at_startup = Some(true);
+#[given(expr = "all peers must be mode online after startup in {int} seconds")]
+#[when(expr = "all peers must be mode online after startup in {int} seconds")]
+const fn step_all_nodes_to_be_mode_online(world: &mut CucumberWorld, on_line_time_out: u64) {
+    world.require_all_peers_mode_online_at_startup = Some(Duration::from_secs(on_line_time_out));
 }
 
 #[given("I have initial peers:")]
