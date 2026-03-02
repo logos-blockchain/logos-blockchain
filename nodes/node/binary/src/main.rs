@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
         match command {
             #[cfg(feature = "config-gen")]
             logos_blockchain_node::config::Command::Init(init_args) => {
-                return logos_blockchain_node::init::run(&init_args).await;
+                return logos_blockchain_node::init::run(&init_args);
             }
             logos_blockchain_node::config::Command::Inscribe(inscribe_args) => {
                 logos_blockchain_tui_zone::run(inscribe_args).await;
