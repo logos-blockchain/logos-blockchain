@@ -76,20 +76,13 @@ cargo build -p logos-blockchain-node --release
 
 ### 3. Run a standalone node
 
-Before launching, update `chain_start_time` to a recent timestamp:
-
-```bash
-# Generate a timestamp
-date -u +"%Y-%m-%d %H:%M:%S.000000 +00:00:00"
-```
-
-Edit [`nodes/node/standalone-deployment-config.yaml`](nodes/node/standalone-deployment-config.yaml) and paste the timestamp into the `time.chain_start_time` field, then run:
+To start a local standalone instance of a Logos Blockchain network, run:
 
 ```bash
 target/release/logos-blockchain-node --deployment standalone-deployment-config.yaml nodes/node/standalone-node-config.yaml
 ```
 
-The node stores state in the `state` directory. If you encounter issues on restart, try removing it.
+The node stores state in the `state` directory. If you encounter issues on restart, try removing it before starting the node again.
 
 ### Docker
 
