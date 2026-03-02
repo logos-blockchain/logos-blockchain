@@ -8,12 +8,13 @@ use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use crate::{
     codec::{DeserializeOp as _, SerializeOp as _},
     header::{ContentId, Header, HeaderId},
-    mantle::{Transaction, TxHash},
+    mantle::{StorageSize, Transaction, TxHash},
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
     utils::merkle,
 };
 
-pub const MAX_TRANSACTIONS: usize = 1024;
+pub const MAX_BLOCK_TRANSACTIONS: usize = 1024;
+pub const MAX_BLOCK_SIZE: usize = 1024 * 1024;
 
 pub type BlockNumber = u64;
 
@@ -25,6 +26,8 @@ pub enum Error {
     Signature,
     #[error("Too many transactions: {count} exceeds maximum of {max}")]
     TooManyTxs { count: usize, max: usize },
+    #[error("Block content too big: {count} exceeds maximum of {max}")]
+    ContentTooBig { count: usize, max: usize },
     #[error("Block root mismatch: calculated content does not match header")]
     BlockRootMismatch,
     #[error("Signing key does not match the leader key in proof of leadership")]
@@ -91,10 +94,10 @@ impl<Tx> Block<Tx> {
             return Err(Error::KeyMismatch);
         }
 
-        if transactions.len() > MAX_TRANSACTIONS {
+        if transactions.len() > MAX_BLOCK_TRANSACTIONS {
             return Err(Error::TooManyTxs {
                 count: transactions.len(),
-                max: MAX_TRANSACTIONS,
+                max: MAX_BLOCK_TRANSACTIONS,
             });
         }
 
@@ -117,12 +120,20 @@ impl<Tx> Block<Tx> {
         signature: Ed25519Signature,
     ) -> Result<Self, Error>
     where
-        Tx: Transaction<Hash = TxHash>,
+        Tx: Transaction<Hash = TxHash> + StorageSize,
     {
-        if transactions.len() > MAX_TRANSACTIONS {
+        if transactions.len() > MAX_BLOCK_TRANSACTIONS {
             return Err(Error::TooManyTxs {
                 count: transactions.len(),
-                max: MAX_TRANSACTIONS,
+                max: MAX_BLOCK_TRANSACTIONS,
+            });
+        }
+
+        let tx_size: usize = transactions.iter().map(StorageSize::storage_size).sum();
+        if tx_size > MAX_BLOCK_SIZE {
+            return Err(Error::ContentTooBig {
+                count: tx_size,
+                max: MAX_BLOCK_SIZE,
             });
         }
 
@@ -360,16 +371,16 @@ mod tests {
             parent_block,
             slot,
             proof_of_leadership,
-            create_transactions(MAX_TRANSACTIONS + 1),
+            create_transactions(MAX_BLOCK_TRANSACTIONS + 1),
             &signing_key,
         );
 
         assert!(invalid_block_result.is_err());
         let error = invalid_block_result.unwrap_err();
 
-        let expected_count = MAX_TRANSACTIONS + 1;
+        let expected_count = MAX_BLOCK_TRANSACTIONS + 1;
         assert!(
-            matches!(error, Error::TooManyTxs { count, max } if count == expected_count && max == MAX_TRANSACTIONS)
+            matches!(error, Error::TooManyTxs { count, max } if count == expected_count && max == MAX_BLOCK_TRANSACTIONS)
         );
     }
 }
