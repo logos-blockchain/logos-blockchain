@@ -33,6 +33,8 @@ use crate::{
     workloads::{ConsensusLiveness, inscription, transaction},
 };
 
+const DEFAULT_PAYLOAD_BYTES: usize = 128;
+
 pub type ScenarioBuilder = CoreScenarioBuilder<LbcEnv>;
 pub type ScenarioBuilderWith = ScenarioBuilder;
 
@@ -203,7 +205,8 @@ impl ScenarioBuilderExt for ScenarioBuilderWith {
         InscriptionFlowBuilder {
             builder: self,
             channels: NonZeroUsize::MIN,
-            inscription_payload_bytes: NonZeroUsize::new(128).expect("constant is non-zero"),
+            inscription_payload_bytes: NonZeroUsize::new(DEFAULT_PAYLOAD_BYTES)
+                .expect("constant is non-zero"),
         }
     }
 
