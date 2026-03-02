@@ -108,8 +108,12 @@ impl LeaderClaimPrivate {
             merkle_path_to_witness(voucher_path);
         let wallet = lb_poc::PoCWalletInputsData {
             secret_voucher: secret_voucher.into(),
-            voucher_merkle_path,
-            voucher_merkle_path_selectors,
+            voucher_merkle_path_and_selectors: voucher_merkle_path
+                .into_iter()
+                .zip(voucher_merkle_path_selectors)
+                .collect::<Vec<_>>()
+                .try_into()
+                .expect("Merkle path length should match the expected height"),
         };
         let input = lb_poc::PoCWitnessInputsData::from_chain_and_wallet_data(chain, wallet);
         Self { input }
