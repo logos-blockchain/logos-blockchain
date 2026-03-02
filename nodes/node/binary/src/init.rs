@@ -86,9 +86,7 @@ fn generate_keys() -> GeneratedKeys {
 
 pub fn run(args: &InitArgs) -> Result<()> {
     if args.initial_peers.is_empty() {
-        return Err(eyre!(
-            "Warning: No initial peers provided. This node will start as a genesis node."
-        ));
+        eprintln!("Warning: No initial peers provided. This node will start as a genesis node.");
     }
 
     let network_key = lb_libp2p::ed25519::SecretKey::generate();
