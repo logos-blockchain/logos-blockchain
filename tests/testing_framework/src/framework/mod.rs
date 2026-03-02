@@ -203,7 +203,7 @@ impl ScenarioBuilderExt for ScenarioBuilderWith {
         InscriptionFlowBuilder {
             builder: self,
             channels: NonZeroUsize::MIN,
-            payload_bytes: NonZeroUsize::new(128).expect("constant is non-zero"),
+            inscription_payload_bytes: NonZeroUsize::new(128).expect("constant is non-zero"),
         }
     }
 
@@ -219,7 +219,7 @@ impl ScenarioBuilderExt for ScenarioBuilderWith {
     }
 
     fn initialize_wallet(self, total_funds: u64, users: usize) -> Self {
-        let Some(user_count) = nonzero_users(users) else {
+        let Some(user_count) = nonzero_usize(users) else {
             tracing::warn!(
                 users,
                 "wallet user count must be non-zero; ignoring initialize_wallet"
@@ -263,7 +263,7 @@ impl TransactionFlowBuilder {
     }
 
     pub fn users(mut self, users: usize) -> Self {
-        if let Some(value) = nonzero_users(users) {
+        if let Some(value) = nonzero_usize(users) {
             self.users = Some(value);
         } else {
             tracing::warn!(
@@ -284,12 +284,12 @@ impl TransactionFlowBuilder {
 pub struct InscriptionFlowBuilder {
     builder: ScenarioBuilderWith,
     channels: NonZeroUsize,
-    payload_bytes: NonZeroUsize,
+    inscription_payload_bytes: NonZeroUsize,
 }
 
 impl InscriptionFlowBuilder {
     pub fn channels(mut self, channels: usize) -> Self {
-        if let Some(value) = nonzero_users(channels) {
+        if let Some(value) = nonzero_usize(channels) {
             self.channels = value;
         } else {
             tracing::warn!(
@@ -301,9 +301,9 @@ impl InscriptionFlowBuilder {
         self
     }
 
-    pub fn payload_bytes(mut self, payload_bytes: usize) -> Self {
-        if let Some(value) = nonzero_users(payload_bytes) {
-            self.payload_bytes = value;
+    pub fn inscription_payload_bytes(mut self, payload_bytes: usize) -> Self {
+        if let Some(value) = nonzero_usize(payload_bytes) {
+            self.inscription_payload_bytes = value;
         } else {
             tracing::warn!(
                 payload_bytes,
@@ -314,14 +314,18 @@ impl InscriptionFlowBuilder {
         self
     }
 
+    pub fn payload_bytes(self, payload_bytes: usize) -> Self {
+        self.inscription_payload_bytes(payload_bytes)
+    }
+
     pub fn apply(self) -> ScenarioBuilderWith {
         let workload = inscription::Workload::default()
             .with_channel_count(self.channels)
-            .with_payload_bytes(self.payload_bytes);
+            .with_payload_bytes(self.inscription_payload_bytes);
         self.builder.with_workload(workload)
     }
 }
 
-const fn nonzero_users(users: usize) -> Option<NonZeroUsize> {
-    NonZeroUsize::new(users)
+const fn nonzero_usize(value: usize) -> Option<NonZeroUsize> {
+    NonZeroUsize::new(value)
 }
