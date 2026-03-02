@@ -43,7 +43,7 @@ use overwatch::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::sync::{oneshot, watch};
-use tracing::{Level, debug, error, info, instrument, span};
+use tracing::{Level, debug, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
 
 pub use crate::wallet::LeaderWalletConfig;
@@ -402,7 +402,7 @@ where
             loop {
                 tokio::select! {
                     Some(SlotTick { slot, epoch }) = slot_timer.next() => {
-                        info!("Received SlotTick for slot {}, ep {}", u64::from(slot), u32::from(epoch));
+                        trace!("Received SlotTick for slot {}, ep {}", u64::from(slot), u32::from(epoch));
                         let (tip, tip_state) = match Self::get_tip_ledger_state(&cryptarchia_api).await {
                             Ok(output) => output,
                             Err(e) => {

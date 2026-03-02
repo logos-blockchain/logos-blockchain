@@ -10,7 +10,7 @@ use lb_node::config::{
     blend::deployment::{
         CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
         CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings,
-        Settings as BlendDeploymentSettings, TimingSettings,
+        Settings as BlendDeploymentSettings,
     },
     cryptarchia::deployment::{
         EpochConfig, ServiceParameters, Settings as CryptarchiaDeploymentSettings,
@@ -44,19 +44,6 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
                     .expect("Minimum network size cannot be zero."),
                 num_blend_layers: NonZeroU64::try_from(3)
                     .expect("Number of blend layers cannot be zero."),
-                timing: TimingSettings {
-                    round_duration: Duration::from_secs(1),
-                    rounds_per_interval: NonZeroU64::try_from(10u64)
-                        .expect("Rounds per interval cannot be zero."),
-                    rounds_per_session: NonZeroU64::try_from(2_000)
-                        .expect("Rounds per session cannot be zero."),
-                    rounds_per_observation_window: NonZeroU64::try_from(20u64)
-                        .expect("Rounds per observation window cannot be zero."),
-                    rounds_per_session_transition_period: NonZeroU64::try_from(20u64)
-                        .expect("Rounds per session transition period cannot be zero."),
-                    epoch_transition_period_in_slots: NonZeroU64::try_from(20)
-                        .expect("Epoch transition period in slots cannot be zero."),
-                },
                 protocol_name: StreamProtocol::new("/blend/integration-tests"),
                 data_replication_factor: 0,
             },

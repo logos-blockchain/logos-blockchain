@@ -133,8 +133,8 @@ services:
       - faucet
     volumes:
       - node-data:/node-data
-      - ./testnet/nginx-run.conf:/etc/nginx/nginx.conf:ro
-      - ./testnet/static:/usr/share/nginx/html:ro
+      - ./testnet/nginx/run.conf:/etc/nginx/nginx.conf:ro
+      - ./testnet/nginx/static/run:/usr/share/nginx/html:ro
     entrypoint: [ "nginx", "-g", "daemon off;" ]
 
   # L2 Sequencer Demo Services

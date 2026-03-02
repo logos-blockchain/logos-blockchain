@@ -4,13 +4,6 @@ pub const SERIALIZED_DEPLOYMENT: &str = "
 blend:
   common:
     num_blend_layers: 1
-    timing:
-      rounds_per_session: 6000
-      rounds_per_interval: 20
-      round_duration: '1.000000000'
-      rounds_per_observation_window: 10
-      rounds_per_session_transition_period: 20
-      epoch_transition_period_in_slots: 20
     minimum_network_size: 32
     protocol_name: /logos-blockchain-devnet/blend/1.0.0
     data_replication_factor: 0

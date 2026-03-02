@@ -8,7 +8,6 @@ use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsPa
 use lb_libp2p::PeerId;
 
 use crate::config::{
-    blend::deployment::Settings as BlendDeploymentSettings,
     cryptarchia::{deployment::Settings as DeploymentSettings, serde::Config},
     state::Config as StateConfig,
 };
@@ -29,29 +28,15 @@ impl ServiceConfig {
     )]
     pub fn into_cryptarchia_services_settings(
         self,
-        blend_deployment: &BlendDeploymentSettings,
+        blend_rewards_params: RewardsParameters,
         state_config: &StateConfig,
     ) -> (
         lb_chain_service::CryptarchiaSettings,
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
         lb_chain_leader_service::LeaderSettings<(), Libp2pBroadcastSettings>,
     ) {
-        let epoch_schedule = u64::from(
-            self.deployment.epoch_config.epoch_period_nonce_buffer.get()
-                + self
-                    .deployment
-                    .epoch_config
-                    .epoch_period_nonce_stabilization
-                    .get()
-                + self
-                    .deployment
-                    .epoch_config
-                    .epoch_stake_distribution_stabilization
-                    .get(),
-        );
-        // Session duration is given by epoch schedule * `k` (security parameter).
-        let session_duration_in_blocks =
-            epoch_schedule * u64::from(self.deployment.security_param.get());
+        let blocks_per_session = self.deployment.blocks_per_epoch();
+
         let ledger_config = lb_ledger::Config {
             consensus_config: self.deployment.consensus_config(),
             epoch_config: EpochConfig {
@@ -77,7 +62,7 @@ impl ServiceConfig {
                             (
                                 service_type,
                                 ServiceParameters {
-                                    session_duration: session_duration_in_blocks,
+                                    session_duration: blocks_per_session,
                                     inactivity_period: service_params.inactivity_period,
                                     lock_period: service_params.lock_period,
                                     retention_period: service_params.retention_period,
@@ -88,20 +73,7 @@ impl ServiceConfig {
                         .collect(),
                 ),
                 service_rewards_params: ServiceRewardsParameters {
-                    blend: RewardsParameters {
-                        message_frequency_per_round: blend_deployment
-                            .core
-                            .scheduler
-                            .cover
-                            .message_frequency_per_round,
-                        minimum_network_size: blend_deployment.common.minimum_network_size,
-                        num_blend_layers: blend_deployment.common.num_blend_layers,
-                        rounds_per_session: blend_deployment.common.timing.rounds_per_session,
-                        data_replication_factor: blend_deployment.common.data_replication_factor,
-                        activity_threshold_sensitivity: blend_deployment
-                            .core
-                            .activity_threshold_sensitivity,
-                    },
+                    blend: blend_rewards_params,
                 },
             },
         };

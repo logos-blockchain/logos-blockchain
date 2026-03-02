@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use lb_node::config::{blend, deployment::DeploymentSettings};
+use lb_node::config::deployment::DeploymentSettings;
 
 /// Calculates the maximum time required for `num_blocks` blocks to be proposed
 /// and fully propagated across the network.
@@ -21,7 +21,7 @@ pub fn max_block_propagation_time(
         .slot_duration
         .div_f64(deployment.cryptarchia.slot_activation_coeff.as_f64());
 
-    let blend_latency = max_blend_latency_per_block(blend_network_size, &deployment.blend);
+    let blend_latency = max_blend_latency_per_block(blend_network_size, deployment);
 
     let broadcast_latency = Duration::from_secs(1);
 
@@ -34,20 +34,16 @@ pub fn max_block_propagation_time(
 
 /// Calculates the maximum time for a block to be fully blended.
 /// This ignores the gossiping latency in the blend network.
-fn max_blend_latency_per_block(
-    network_size: u64,
-    deployment: &blend::deployment::Settings,
-) -> Duration {
-    if network_size < deployment.common.minimum_network_size.get() {
+fn max_blend_latency_per_block(network_size: u64, deployment: &DeploymentSettings) -> Duration {
+    if network_size < deployment.blend.common.minimum_network_size.get() {
         return Duration::ZERO;
     }
 
     deployment
-        .common
-        .timing
-        .round_duration
+        .blend_round_duration()
         .mul(
             deployment
+                .blend
                 .core
                 .scheduler
                 .delayer
@@ -58,6 +54,7 @@ fn max_blend_latency_per_block(
         )
         .mul(
             deployment
+                .blend
                 .common
                 .num_blend_layers
                 .get()

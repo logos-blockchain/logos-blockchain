@@ -26,7 +26,7 @@ impl Config {
     }
 
     #[must_use]
-    pub fn epoch_length(&self) -> u64 {
+    pub const fn epoch_length(&self) -> u64 {
         self.epoch_config
             .epoch_length(self.consensus_config.base_period_length())
     }

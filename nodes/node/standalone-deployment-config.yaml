@@ -1,13 +1,6 @@
 blend:
   common:
     num_blend_layers: 3
-    timing:
-      rounds_per_session: 648000
-      rounds_per_interval: 30
-      round_duration: '1.0'
-      rounds_per_observation_window: 30
-      rounds_per_session_transition_period: 30
-      epoch_transition_period_in_slots: 2600
     minimum_network_size: 30
     protocol_name: /blend/integration-tests
     data_replication_factor: 0
