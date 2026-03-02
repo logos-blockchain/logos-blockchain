@@ -103,11 +103,6 @@ impl From<GenerateConfigArgs> for InitArgs {
             init_args.external_address = external_address.to_string_lossy().parse().ok();
         }
 
-        // ---- no_public_ip_check ----
-        if !value.no_public_ip_check.is_null() {
-            init_args.no_public_ip_check = unsafe { *value.no_public_ip_check };
-        }
-
         // ---- deployment ----
         if !value.deployment.is_null() {
             let deployment = unsafe { &*value.deployment };

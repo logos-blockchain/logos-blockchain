@@ -20,7 +20,7 @@ use crate::{
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaConfigRequiredValues,
         },
-        network::serde::Config as NetworkConfig,
+        network::serde::{Config as NetworkConfig, nat},
         sdp::serde::RequiredValues as SdpRequiredValues,
         time::serde::Config as TimeConfig,
         wallet::serde::RequiredValues as WalletConfigRequiredValues,
@@ -141,6 +141,11 @@ fn build_user_config(
             .backend
             .initial_peers
             .clone_from(&args.initial_peers);
+        if let Some(external_address) = &args.external_address {
+            base_config.backend.swarm.nat = nat::Config::Static {
+                external_address: external_address.clone(),
+            };
+        }
 
         base_config
     };
@@ -233,7 +238,6 @@ mod tests {
             blend_port: 3400,
             http_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
             external_address: None,
-            no_public_ip_check: false,
             deployment: DeploymentType::default(),
             state_path: None,
         };
