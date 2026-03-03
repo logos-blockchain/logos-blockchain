@@ -131,6 +131,10 @@ impl LedgerState {
     /// This function must be called before any other function that updates
     /// [`LedgerState`]. Otherwise, previously accumulated values (e.g. nonce
     /// and block density) will be lost.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "TODO: fix/refactor updating next_epoch_state"
+    )]
     fn update_epoch_state<Id>(self, slot: Slot, config: &Config) -> Result<Self, LedgerError<Id>> {
         if slot <= self.slot {
             return Err(LedgerError::InvalidSlot {
