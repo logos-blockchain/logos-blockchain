@@ -181,7 +181,16 @@ impl LedgerState {
                 "epoch transition"
             );
             let block_density = BlockDensity::new(new_epoch, config);
-            let epoch_state = self.next_epoch_state.clone();
+            // TODO: Refactor: Have the unified update logic for all fields in `EpochState`.
+            // `epoch` and `utxos` are updated by `EpochState::update_from_ledger`,
+            // but `total_stake` and lottery values are updated here.
+            // This can be error-prone.
+            let epoch_state = EpochState {
+                total_stake,
+                lottery_0,
+                lottery_1,
+                ..self.next_epoch_state.clone()
+            };
             let next_epoch_state = EpochState {
                 epoch: new_epoch + 1,
                 nonce: self.nonce,
@@ -887,6 +896,88 @@ pub mod tests {
         update_ledger(&mut ledger, h_0_1, 2 * epoch_length, utxo_1).unwrap();
     }
 
+    /// Verifies that the TSI chain is computed correctly across epoch
+    /// transitions.
+    #[test]
+    fn test_total_stake_inference_chain_across_epoch_transitions() {
+        let utxo = utxo();
+        let config = config();
+        assert_eq!(config.epoch_length(), 100);
+        let (mut ledger, genesis) = ledger(&[utxo], config.clone());
+        let inference = stake_inference_from_config(&config);
+
+        let ts_genesis = ledger.states[&genesis]
+            .cryptarchia_ledger
+            .epoch_state
+            .total_stake;
+        assert_eq!(ts_genesis, 10_000);
+
+        // Epoch 0 ----------------------------------
+        // Produce 3 blocks in the slot window [0, 59]
+        let h1 = update_ledger(&mut ledger, genesis, 1, utxo).unwrap();
+        let h2 = update_ledger(&mut ledger, h1, 2, utxo).unwrap();
+        let h3 = update_ledger(&mut ledger, h2, 3, utxo).unwrap();
+        assert_eq!(
+            ledger.states[&h3]
+                .cryptarchia_ledger
+                .block_density
+                .current_block_density(),
+            3
+        );
+        // A block outside the slot window is not counted
+        let h4 = update_ledger(&mut ledger, h3, 60, utxo).unwrap();
+        assert_eq!(
+            ledger.states[&h3]
+                .cryptarchia_ledger
+                .block_density
+                .current_block_density(),
+            3
+        );
+
+        // Epoch 0 -> 1 transition --------------------
+        // slot 100 triggers the transition and also counts in epoch 1's window [100,
+        // 159]
+        let h5 = update_ledger(&mut ledger, h4, 100, utxo).unwrap();
+        let ts1 = inference.total_stake_inference::<PRECISION>(ts_genesis, 3);
+        assert_eq!(
+            ledger.states[&h5].cryptarchia_ledger.epoch_state.epoch,
+            1.into()
+        );
+        assert_eq!(
+            ledger.states[&h5]
+                .cryptarchia_ledger
+                .epoch_state
+                .total_stake,
+            ts1,
+        );
+
+        // Epoch 1 ----------------------------------
+        // 1 more block in [100, 159] (slot 100 already counted → total 2)
+        let h6 = update_ledger(&mut ledger, h5, 101, utxo).unwrap();
+        assert_eq!(
+            ledger.states[&h6]
+                .cryptarchia_ledger
+                .block_density
+                .current_block_density(),
+            2
+        );
+
+        // Epoch 1 -> 2 transition --------------------
+        let h7 = update_ledger(&mut ledger, h6, 200, utxo).unwrap();
+        let ts2 = inference.total_stake_inference::<PRECISION>(ts1, 2);
+        assert_eq!(
+            ledger.states[&h7].cryptarchia_ledger.epoch_state.epoch,
+            2.into()
+        );
+        assert_eq!(
+            ledger.states[&h7]
+                .cryptarchia_ledger
+                .epoch_state
+                .total_stake,
+            ts2,
+        );
+    }
+
     #[test]
     fn test_update_epoch_state_with_outdated_slot_error() {
         let utxo = utxo();
@@ -1265,5 +1356,13 @@ pub mod tests {
         assert_eq!(ledger_state_2.slot, slot);
         assert_ne!(ledger_state_2.nonce, ledger_state_1.nonce); // advanced
         assert_eq!(ledger_state_2.epoch_state.epoch, 2.into());
+    }
+
+    fn stake_inference_from_config(config: &Config) -> StakeInference {
+        StakeInference::new(
+            config.consensus_config.stake_inference_learning_rate(),
+            config.consensus_config.slot_activation_coeff().as_f64(),
+            config.total_stake_inference_period(),
+        )
     }
 }
