@@ -3,10 +3,10 @@
 ### 📦 Prerequisites
 
 1. Download and unzip the **circuits** for your architecture from the release artifacts.
-2. Set the environment variable pointing to the circuits directory:
+2. Rename the downloaded `logos-blockchain-circuits` to `.logos-blockchain-circuits` and move it to your home directory:
 
    ```bash
-    export LOGOS_BLOCKCHAIN_CIRCUITS=/path/to/circuits
+    mv logos-blockchain-circuits ~/.logos-blockchain-circuits
    ```
 
 3. Download and unzip the **node binary** for your architecture:
@@ -43,13 +43,16 @@ The node writes rotating log files (one per hour).
 
 ### ✅ Verify It Works
 
-Check your local consensus state:
+Check your local consensus state by querying your node's API, by default listening on port `8080`:
 
 ```
-http://localhost:<api_port_in_user_config>/cryptarchia/info
+curl -w "\n" http://localhost:8080/cryptarchia/info
 ```
 
-Both `slot` and `height` should be steadily increasing. You can compare against the fleet nodes at the [Logos devnet dashboard][devnet-dashboard].
+Your node should be in `Bootstrapping` mode for a few minutes, with both `slot` and `height` steadily increasing.
+
+After boostrapping is complete, your node will move to `Online` mode.
+You can compare against the fleet nodes at the [Logos devnet dashboard][devnet-dashboard].
 
 ---
 
@@ -65,7 +68,7 @@ Copy any of the listed key IDs. For example:
 
 ```yaml
 known_keys:
-    29e5f7ca28281eca974146689f8f1c9b712380c07089dabcb60a8cee: ...
+    af391a0d7v29e5f7ca28281eca974146689f8f1c9b712380c07089dabcb60a8c: ...
     de3233cec107e6589f83d4f3094caa65c633b5b33601211353779dc01972ca14: ...
 ```
 
@@ -82,7 +85,7 @@ A word of caution - do not _powerclick_ your way through as only one request can
 Wait 1-2 minutes for the transaction to land in a block, then:
 
 ```bash
-curl http://localhost:8080/wallet/<my_key>/balance
+curl -w "\n" http://localhost:8080/wallet/<my_key>/balance
 ```
 
 Replace `<my_key>` with the key ID you funded.
@@ -91,7 +94,17 @@ Replace `<my_key>` with the key ID you funded.
 
 ## 🧱 Proposing Blocks
 
-Once you have funds and the current **and** next epoch have elapsed, your node will automatically start producing blocks. 🎉
+Approximately 3.5h (two epochs) after you receive funds from the faucet, your node will automatically start producing blocks. 🎉
+
+---
+
+## 📝 Inscribing
+
+Start publishing messages to the blockchain using the built in text sequencer:
+
+```bash
+./logos-blockchain-node inscribe
+```
 
 ---
 
