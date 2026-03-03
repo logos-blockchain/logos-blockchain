@@ -1283,41 +1283,33 @@ pub mod tests {
         assert_eq!(epoch_0_state.epoch, 0.into());
         assert_eq!(epoch_0_state.total_stake, initial_total_stake);
 
-        // Query for epoch 1 (next epoch) - should return next_epoch_state
+        // Query for epoch 1
+        // Since epoch 0 has no block, total stake should be reduced
         let epoch_1_slot: Slot = (epoch_length + 1).into();
         let epoch_1_state = ledger_state
             .epoch_state_for_slot::<HeaderId>(epoch_1_slot, &config)
             .expect("Should return epoch state for next epoch");
         assert_eq!(epoch_1_state.epoch, 1.into());
-        assert_eq!(epoch_1_state.total_stake, initial_total_stake);
+        // With 0 density and LEARNING_RATE=1, total stake drops to minimum (1)
+        assert_eq!(
+            epoch_1_state.total_stake, 1,
+            "Total stake should drop to minimum for empty epochs"
+        );
 
-        // Query for epoch 2 (skipped epoch) - should synthesize with reduced total
-        // stake
+        // Query for epoch 3 (multiple skipped epochs) - stake stays at minimum
         let epoch_2_slot: Slot = (2 * epoch_length + 1).into();
         let epoch_2_state = ledger_state
             .epoch_state_for_slot::<HeaderId>(epoch_2_slot, &config)
             .expect("Should synthesize epoch state for skipped epoch");
         assert_eq!(epoch_2_state.epoch, 2.into());
-        // With 0 density and LEARNING_RATE=1, total stake drops to minimum (1)
         assert_eq!(
             epoch_2_state.total_stake, 1,
-            "Total stake should drop to minimum for empty epochs"
-        );
-
-        // Query for epoch 3 (multiple skipped epochs) - stake stays at minimum
-        let epoch_3_slot: Slot = (3 * epoch_length + 1).into();
-        let epoch_3_state = ledger_state
-            .epoch_state_for_slot::<HeaderId>(epoch_3_slot, &config)
-            .expect("Should synthesize epoch state for multiple skipped epochs");
-        assert_eq!(epoch_3_state.epoch, 3.into());
-        assert_eq!(
-            epoch_3_state.total_stake, 1,
             "Total stake should remain at minimum"
         );
 
         // Verify nonce and utxos are preserved from current state
-        assert_eq!(epoch_3_state.nonce, ledger_state.nonce);
-        assert_eq!(epoch_3_state.utxos, ledger_state.utxos);
+        assert_eq!(epoch_2_state.nonce, ledger_state.nonce);
+        assert_eq!(epoch_2_state.utxos, ledger_state.utxos);
     }
 
     /// Test that a proof built from the jumped (synthesized) epoch state can be
