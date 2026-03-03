@@ -131,7 +131,7 @@ impl LedgerState {
     /// This function must be called before any other function that updates
     /// [`LedgerState`]. Otherwise, previously accumulated values (e.g. nonce
     /// and block density) will be lost.
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "TODO: fix/refactor updating next_epoch_state"
     )]
