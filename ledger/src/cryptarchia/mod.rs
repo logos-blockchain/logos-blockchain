@@ -146,6 +146,15 @@ impl LedgerState {
         let current_epoch = config.epoch(self.slot);
         let new_epoch = config.epoch(slot);
 
+        // First, update the next epoch nonce using the ledger state
+        // that was updated by the previous slot (block).
+        // TODO: Refactor: Guarantee that `next_epoch_state` is always updated
+        // whenever `LedgerState` is updated before Lottery Constants Finalization period
+        let next_epoch_state = self
+            .next_epoch_state
+            .clone()
+            .update_from_ledger(&self, config);
+
         // There are 3 cases to consider:
         // 1. We are in the same epoch as the parent state: Update the next epoch state
         // 2. We are in the next epoch: Use the next epoch state as the current epoch
@@ -155,10 +164,6 @@ impl LedgerState {
         //    block density for skipped epochs.
         if current_epoch == new_epoch {
             // case 1)
-            let next_epoch_state = self
-                .next_epoch_state
-                .clone()
-                .update_from_ledger(&self, config);
             Ok(Self {
                 slot,
                 next_epoch_state,
@@ -193,7 +198,7 @@ impl LedgerState {
                 total_stake,
                 lottery_0,
                 lottery_1,
-                ..self.next_epoch_state.clone()
+                ..next_epoch_state
             };
             let next_epoch_state = EpochState {
                 epoch: new_epoch + 1,
@@ -219,7 +224,7 @@ impl LedgerState {
                 self.block_density.current_block_density(),
             );
             // Adjust total stake with zero block density for skipped epochs
-            for _ in u32::from(self.next_epoch_state.epoch())..u32::from(new_epoch) {
+            for _ in u32::from(next_epoch_state.epoch())..u32::from(new_epoch) {
                 total_stake = self
                     .stake_inference
                     .total_stake_inference::<PRECISION>(total_stake, 0);
@@ -810,11 +815,11 @@ pub mod tests {
 
         let h_3 = apply_and_add_utxo(&mut ledger, h_2, 90, utxos[2], utxo_4);
 
-        // test epoch jump: epoch 0 -> 2
+        // Epoch jump: epoch 0 -> 2
         // Jump to the slot that is not the 1st slot of epoch 2
         let h_4 = update_ledger(&mut ledger, h_3, 222, utxos[3]).unwrap();
         // nonce for epoch 2 should be taken at the end of slot 160, but in our case the
-        // last block is at slot 90
+        // last block is at slot 90 because of epoch jumps
         assert_eq!(
             ledger.states[&h_4].cryptarchia_ledger.epoch_state.nonce,
             ledger.states[&h_3].cryptarchia_ledger.nonce,
@@ -833,12 +838,18 @@ pub mod tests {
             &(200.into()..=259.into())
         );
 
-        // nonce for epoch 1 should be taken at the end of slot 10
-        update_ledger(&mut ledger, h_3, 100, utxos[3]).unwrap();
+        // Epoch transition: 0 -> 1
+        // nonce for epoch 1 should be taken at the end of slot 10,
+        // ignoring updates (`h_2` and `h_3`) after slot 59.
         let h_5 = apply_and_add_utxo(&mut ledger, h_3, 100, utxos[3], utxo_5);
         assert_eq!(
             ledger.states[&h_5].cryptarchia_ledger.epoch_state.nonce,
             ledger.states[&h_1].cryptarchia_ledger.nonce,
+        );
+        // stake distribution snapshot should be the same as the one in genesis
+        assert_eq!(
+            ledger.states[&h_5].cryptarchia_ledger.epoch_state.utxos,
+            ledger.states[&genesis].cryptarchia_ledger.utxos,
         );
         // block density slot range should be [100, 159]
         assert_eq!(
@@ -849,9 +860,15 @@ pub mod tests {
             &(100.into()..=159.into())
         );
 
+        // Epoch transition: 1 -> 2
         let h_6 = update_ledger(&mut ledger, h_5, 200, utxos[3]).unwrap();
-        // stake distribution snapshot should be taken at the end of slot 90, check that
-        // changes in slot 100 are ignored
+        // nonce should be taken at the end of slot 100,
+        // which was the only one update in the previous epoch.
+        assert_eq!(
+            ledger.states[&h_6].cryptarchia_ledger.epoch_state.nonce,
+            ledger.states[&h_5].cryptarchia_ledger.nonce,
+        );
+        // stake distribution snapshot should be taken before the slot 100
         assert_eq!(
             ledger.states[&h_6].cryptarchia_ledger.epoch_state.utxos,
             ledger.states[&h_3].cryptarchia_ledger.utxos,
