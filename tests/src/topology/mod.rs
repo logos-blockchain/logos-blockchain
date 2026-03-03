@@ -62,6 +62,16 @@ impl TopologyConfig {
     }
 
     #[must_use]
+    pub fn n_validators(n_validators: usize) -> Self {
+        Self {
+            n_validators,
+            network_params: NetworkParams::default(),
+            extra_genesis_notes: Vec::new(),
+            lock_period_override: None,
+        }
+    }
+
+    #[must_use]
     pub fn with_extra_genesis_note(mut self, note_spec: GenesisNoteSpec) -> Self {
         self.extra_genesis_notes.push(note_spec);
         self
