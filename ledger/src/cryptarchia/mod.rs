@@ -149,7 +149,8 @@ impl LedgerState {
         // First, update the next epoch nonce using the ledger state
         // that was updated by the previous slot (block).
         // TODO: Refactor: Guarantee that `next_epoch_state` is always updated
-        // whenever `LedgerState` is updated before Lottery Constants Finalization period
+        // whenever `LedgerState` is updated before Lottery Constants Finalization
+        // period starts.
         let next_epoch_state = self
             .next_epoch_state
             .clone()
