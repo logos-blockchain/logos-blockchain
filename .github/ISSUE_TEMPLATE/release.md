@@ -47,7 +47,7 @@ Progress on the checklist must be provided as comments to the issue.
 - [ ] Checkout `testnet` branch again and change the `compose.static.yml` symlink to now point to `compose.devnet.run.yml`
 - [ ] Commit and push the changes to trigger environment re-deployment. Environment is now live.
 - [ ] Wait around 1 minute for deployment to be updated
-- [ ] If needed, at any time you can download fleet nodes' configs and logs from [https://devnet.blockchain.logos.co/web/node-data/](https://devnet.blockchain.logos.co/web/node-data/)
+- [ ] If needed, at any time you can download fleet nodes' configs and logs from [https://devnet.blockchain.logos.co/internal/node-data/](https://devnet.blockchain.logos.co/internal/node-data/)
 - [ ] Go back to the [GitHub Release][github-release-section] section and finalize the release
 
 ## Post-Release
