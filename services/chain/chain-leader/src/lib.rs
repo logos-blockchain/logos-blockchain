@@ -359,7 +359,6 @@ where
             TxMempoolService<_, _, _, _>,
             TimeService<_, _>,
             CryptarchiaService,
-            ChainNetwork,
             Wallet,
             PreloadKmsService<_>
         )

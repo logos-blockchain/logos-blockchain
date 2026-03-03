@@ -464,7 +464,7 @@ where
             Error::Cryptarchia(lb_chain_service::api::ApiError::ParentMissing { parent, info }) => {
                 orphan_downloader.enqueue_orphan(block_id, info.tip, info.lib);
 
-                error!(
+                info!(
                     target: LOG_TARGET, ?block_id, ?parent,
                     "Parent block missing, enqueued block for orphan processing",
                 );
