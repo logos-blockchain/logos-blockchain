@@ -1,5 +1,6 @@
 pub mod api;
 mod bootstrap;
+mod notifier;
 mod relays;
 mod states;
 pub mod storage;
@@ -57,6 +58,7 @@ use tracing_futures::Instrument as _;
 pub use crate::bootstrap::config::{BootstrapConfig, OfflineGracePeriodConfig};
 use crate::{
     bootstrap::state::choose_engine_state,
+    notifier::ChainOnlineNotifier,
     relays::CryptarchiaConsensusRelays,
     states::CryptarchiaConsensusState,
     storage::{StorageAdapter as _, adapters::StorageAdapter},
@@ -449,7 +451,6 @@ where
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     new_block_subscription_sender: broadcast::Sender<ProcessedBlockEvent>,
     lib_subscription_sender: broadcast::Sender<LibUpdate>,
-    chain_online_subscription_channel: watch::Sender<bool>,
     state: <Self as ServiceData>::State,
 }
 
@@ -503,13 +504,11 @@ where
     ) -> Result<Self, DynError> {
         let (new_block_subscription_sender, _) = broadcast::channel(16);
         let (lib_subscription_sender, _) = broadcast::channel(16);
-        let (chain_online_subscription_channel, _) = watch::channel(false);
 
         Ok(Self {
             service_resources_handle,
             new_block_subscription_sender,
             lib_subscription_sender,
-            chain_online_subscription_channel,
             state: initial_state,
         })
     }
@@ -575,6 +574,8 @@ where
                 .state_recording_interval,
         );
 
+        let chain_online_notifier = ChainOnlineNotifier::new(*cryptarchia.state());
+
         // Mark the service as ready. The service is operational and can handle requests
         // even while in bootstrap mode waiting for IBD+PBP to complete.
         self.notify_service_ready();
@@ -588,7 +589,7 @@ where
                             cryptarchia,
                             &storage_blocks_to_remove,
                             relays.storage_adapter(),
-                            &self.chain_online_subscription_channel,
+                            &chain_online_notifier,
                         ).await;
                         Self::update_state(
                             &cryptarchia,
@@ -643,7 +644,7 @@ where
                                 }
                             }
                             msg => {
-                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &self.chain_online_subscription_channel, msg);
+                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg);
                             }
                         }
                     }
@@ -738,7 +739,7 @@ where
         cryptarchia: &Cryptarchia,
         new_block_channel: &broadcast::Sender<ProcessedBlockEvent>,
         lib_channel: &broadcast::Sender<LibUpdate>,
-        chain_online_subscription_channel: &watch::Sender<bool>,
+        chain_online_notifier: &ChainOnlineNotifier,
         msg: ConsensusMsg<Tx>,
     ) {
         match msg {
@@ -827,7 +828,7 @@ where
             }
             ConsensusMsg::SubscribeChainOnline { sender } => {
                 sender
-                    .send(chain_online_subscription_channel.subscribe())
+                    .send(chain_online_notifier.subscribe())
                     .unwrap_or_else(|_| {
                         error!("Could not subscribe to new block channel");
                     });
@@ -1296,12 +1297,12 @@ where
         cryptarchia: Cryptarchia,
         storage_blocks_to_remove: &HashSet<HeaderId>,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
-        chain_online_subscription_channel: &watch::Sender<bool>,
+        chain_online_notifier: &ChainOnlineNotifier,
     ) -> (Cryptarchia, HashSet<HeaderId>) {
         let (cryptarchia, pruned_blocks) = cryptarchia.online();
         info!("Chain switched to Online mode");
 
-        notify_chain_online_subscribers(chain_online_subscription_channel);
+        chain_online_notifier.notify();
 
         if let Err(e) = Self::store_immutable_blocks_index(
             &pruned_blocks,
@@ -1412,49 +1413,4 @@ async fn broadcast_blend_session(
         .send(BlockBroadcastMsg::BroadcastBlendSession(session))
         .await
         .map_err(|(error, _)| Box::new(error) as DynError)
-}
-
-fn notify_chain_online_subscribers(chain_online_subscription_channel: &watch::Sender<bool>) {
-    info!("Notifying chain online subscribers");
-
-    // NOTE: Use `send_replace` to always make a new value available for future
-    // receivers, even if no receiver currently exists
-    let initial_value = chain_online_subscription_channel.send_replace(true);
-    assert!(
-        !initial_value, // must be `false`
-        "Chain online subscribers must be notified only once because chain switches to online only once"
-    );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_notify_chain_online_subscribers() {
-        let (sender, receiver) = watch::channel(false);
-
-        // Initially, the receiver should have 'false'.
-        assert!(!(*receiver.borrow()));
-
-        // Notify subscribers
-        notify_chain_online_subscribers(&sender);
-
-        // New subscribers should be notified immediately
-        assert!(*receiver.borrow());
-    }
-
-    #[test]
-    fn test_notify_chain_online_subscribers_with_no_initial_receiver() {
-        // Drop receiver deliberately to test if a new value is set
-        // even if no receiver exists.
-        let (sender, _) = watch::channel(false);
-
-        // Notify subscribers when no receiver exists
-        notify_chain_online_subscribers(&sender);
-
-        // New subscribers should be notified immediately
-        let receiver = sender.subscribe();
-        assert!(*receiver.borrow());
-    }
 }
