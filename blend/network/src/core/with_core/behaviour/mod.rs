@@ -24,6 +24,7 @@ use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
 use lb_blend_scheduling::{
     deserialize_encapsulated_message, membership::Membership, serialize_encapsulated_message,
 };
+use lb_groth16::fr_to_bytes;
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol,
     core::{Endpoint, transport::PortUse},
@@ -354,7 +355,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
 
         let serialized_message = serialize_encapsulated_message(message);
         let mut at_least_one_receiver = false;
-        tracing::debug!(target: LOG_TARGET, "Forwarding message with id {:?}. Negotiated peers: {:?}. Excluded peer: {excluded_peer:?}", hex::encode(message_id), self.negotiated_peers());
+        tracing::debug!(target: LOG_TARGET, "Forwarding message with id {:?}. Negotiated peers: {:?}. Excluded peer: {excluded_peer:?}", hex::encode(fr_to_bytes(&message_id)), self.negotiated_peers());
         self.negotiated_peers
             .iter()
             // Exclude the peer the message was received from.
