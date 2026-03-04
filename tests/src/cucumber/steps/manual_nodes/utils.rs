@@ -12,18 +12,21 @@ use lb_core::mantle::{GenesisTx as _, Transaction as _, Utxo};
 use lb_libp2p::PeerId;
 use lb_node::config::{DeploymentSettings, RunConfig, WellKnownDeployment};
 use lb_testing_framework::{
-    LbcManualCluster, NodeHttpClient, USER_CONFIG_FILE, configs::wallet::WalletAccount,
+    LbcEnv, LbcManualCluster, NodeHttpClient, USER_CONFIG_FILE, configs::wallet::WalletAccount,
 };
 use libp2p::Multiaddr;
-use testing_framework_core::scenario::{PeerSelection, StartNodeOptions};
+use testing_framework_core::scenario::{PeerSelection, StartNodeOptions, StartedNode};
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
 use crate::cucumber::{
     error::{StepError, StepResult},
     steps::TARGET,
-    utils::{extract_child_dir_name, peer_id_from_node_yaml, track_progress},
-    world::{ChainInfoMap, CucumberWorld, NodeInfo, WalletInfo, WalletInfoMap},
+    utils::{
+        extract_child_dir_name, funding_wallet_pk_from_node_yaml, peer_id_from_node_yaml,
+        track_progress,
+    },
+    world::{ChainInfoMap, CucumberWorld, NodeInfo, WalletInfo, WalletInfoMap, WalletType},
 };
 
 pub(crate) type NodesToStartUnordered = HashMap<String, (Vec<WalletStartInfo>, Vec<String>)>;
@@ -358,21 +361,30 @@ pub async fn start_node(
         peer_id_from_node_yaml(
             &world
                 .scenario_base_dir
-                .join(node_final_dir)
+                .join(node_final_dir.clone())
                 .join(USER_CONFIG_FILE),
         )?,
     );
 
-    let wallet_info = compile_wallet_in_map(wallet_start_info, node_name, world, step)
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{step}` error: {e}");
-        })?;
+    let wallet_info = add_wallets(
+        world,
+        step,
+        node_name,
+        wallet_start_info,
+        &started_node,
+        node_final_dir,
+    )
+    .inspect_err(|e| {
+        warn!(target: TARGET, "Step `{step}` error: {e}");
+    })?;
 
     world
         .wallet_info
         .extend(wallet_info.iter().map(|(k, v)| (k.clone(), v.clone())));
+
     let started_node_name = started_node.name.clone();
     let client = started_node.client.clone();
+    // Move `started_node` into the world's NodeInfo (no clone required)
     world.nodes_info.insert(
         node_name.to_owned(),
         NodeInfo {
@@ -399,6 +411,26 @@ pub async fn start_node(
     })?;
 
     Ok(())
+}
+
+fn add_wallets(
+    world: &CucumberWorld,
+    step: &str,
+    node_name: &str,
+    wallet_start_info: &[WalletStartInfo],
+    started_node: &StartedNode<LbcEnv>,
+    node_final_dir: String,
+) -> Result<WalletInfoMap, StepError> {
+    let wallet_info =
+        compile_wallet_in_map(wallet_start_info, node_name, world, step, node_final_dir)?;
+    for (wallet_name, info) in &wallet_info {
+        info!(target: TARGET, "User wallet `{}/{node_name}` created: {}",
+           wallet_name,
+           format!("{}wallet/{}/balance", started_node.client.base_url(), info.public_key_hex())
+        );
+    }
+
+    Ok(wallet_info)
 }
 
 struct StartupSettings {
@@ -665,6 +697,7 @@ fn compile_wallet_in_map(
     node_name: &str,
     world: &CucumberWorld,
     step: &str,
+    node_final_dir: String,
 ) -> Result<WalletInfoMap, StepError> {
     let mut wallet_info: WalletInfoMap = HashMap::new();
     for wallet in wallet_start_info {
@@ -682,16 +715,37 @@ fn compile_wallet_in_map(
                     ),
         })?,
     };
+
         wallet_info.insert(
             wallet.wallet_name.clone(),
             WalletInfo {
                 wallet_name: wallet.wallet_name.clone(),
                 node_name: node_name.to_owned(),
-                account_index: wallet.account_index,
-                wallet_account,
+                wallet_type: WalletType::User {
+                    account_index: wallet.account_index,
+                    wallet_account,
+                },
             },
         );
     }
+
+    let funding_wallet_name = format!("{node_name}_WALLET");
+    wallet_info.insert(
+        funding_wallet_name.clone(),
+        WalletInfo {
+            wallet_name: funding_wallet_name,
+            node_name: node_name.to_owned(),
+            wallet_type: WalletType::Funding {
+                wallet_pk: funding_wallet_pk_from_node_yaml(
+                    &world
+                        .scenario_base_dir
+                        .join(node_final_dir)
+                        .join(USER_CONFIG_FILE),
+                )?,
+            },
+        },
+    );
+
     Ok(wallet_info)
 }
 

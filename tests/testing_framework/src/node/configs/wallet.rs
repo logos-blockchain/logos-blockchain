@@ -1,5 +1,7 @@
 use std::{collections::HashSet, num::NonZeroUsize};
 
+use hex::ToHex as _;
+use lb_core::codec::SerializeOp as _;
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use num_bigint::BigUint;
 use thiserror::Error;
@@ -161,6 +163,15 @@ impl WalletAccount {
     #[must_use]
     pub fn public_key(&self) -> ZkPublicKey {
         self.secret_key.to_public_key()
+    }
+
+    #[must_use]
+    pub fn public_key_hex(&self) -> String {
+        self.secret_key
+            .to_public_key()
+            .to_bytes()
+            .expect("is valid")
+            .encode_hex()
     }
 }
 

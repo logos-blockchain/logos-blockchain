@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, time::Duration};
+use std::{collections::HashMap, fmt::Display, num::NonZero, time::Duration};
 
 use hex::ToHex as _;
 use lb_core::{
@@ -43,7 +43,13 @@ impl Display for WalletStateType {
 
 use std::str::FromStr;
 
-use crate::cucumber::steps::manual_transactions::command_file_utils::ManualCommand;
+use cucumber::gherkin::Step;
+use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
+
+use crate::cucumber::{
+    defaults::CUCUMBER_VERBOSE_CONSOLE, steps::manual_transactions::faucet::FaucetTask,
+    utils::is_truthy_env, world::WalletType,
+};
 
 impl FromStr for WalletStateType {
     type Err = StepError;
@@ -70,7 +76,141 @@ pub async fn create_and_submit_transaction(
         warn!(target: TARGET, "Step `{}` error: {e}", step);
     })?;
 
-    let sender_pk = wallet.wallet_account.public_key();
+    let available_utxos = update_wallet_balance(world, step, sender_wallet_name).await?;
+
+    let tx_hashes = match wallet.wallet_type {
+        WalletType::User {
+            ref wallet_account, ..
+        } => {
+            let wallet_state = wallet_state_from_utxos(available_utxos);
+            let mut tx_builder = MantleTxBuilder::new();
+            for (receiver_pk, value) in receivers {
+                tx_builder = tx_builder.add_ledger_output(Note::new(*value, *receiver_pk));
+            }
+
+            let sender_pk = wallet_account.public_key();
+            let funded_builder = wallet_state
+                .fund_tx::<MainnetGasConstants>(&tx_builder, sender_pk, [sender_pk])
+                .inspect_err(|e| {
+                    warn!(target: TARGET, "Step `{}` error: {e}", step);
+                })?;
+            // Collect all UTXOs used in this transaction as encumbered tokens to prevent
+            // them from being used in other transactions until this transaction is
+            // finalized.
+            let newly_encumbered: Vec<Utxo> = funded_builder.ledger_inputs().to_vec();
+
+            let mantle_tx = funded_builder.build();
+            let tx_hash = mantle_tx.hash();
+            let ledger_tx_proof = ZkKey::multi_sign(
+                std::slice::from_ref(&wallet_account.secret_key),
+                tx_hash.as_ref(),
+            )
+            .inspect_err(|e| {
+                warn!(target: TARGET, "Step `{}` error: {e}", step);
+            })?;
+
+            let signed_tx =
+                SignedMantleTx::new(mantle_tx, vec![], ledger_tx_proof).inspect_err(|e| {
+                    warn!(target: TARGET, "Step `{}` error: {e}", step);
+                })?;
+
+            world
+                .submit_transaction(&wallet, &signed_tx)
+                .await
+                .inspect_err(|e| {
+                    warn!(target: TARGET, "Step `{}` error: {e}", step);
+                })?;
+            world
+                .wallet_encumbered_tokens
+                .entry(sender_wallet_name.to_owned())
+                .or_default()
+                .extend(newly_encumbered);
+
+            vec![tx_hash]
+        }
+        WalletType::Funding { .. } => {
+            let mut tx_hashes = Vec::with_capacity(receivers.len());
+            for (receiver_pk, value) in receivers {
+                let body = WalletTransferFundsRequestBody {
+                    tip: None,
+                    change_public_key: wallet.public_key()?,
+                    funding_public_keys: vec![wallet.public_key()?],
+                    recipient_public_key: *receiver_pk,
+                    amount: *value,
+                };
+                let tx_hash = world
+                    .submit_funding_wallet_transaction(&wallet, body)
+                    .await
+                    .inspect_err(|e| {
+                        warn!(target: TARGET, "Step `{}` error: {e}", step);
+                    })?;
+                tx_hashes.push(tx_hash);
+            }
+            tx_hashes
+        }
+    };
+
+    let tx_hashes_hex: String = tx_hashes
+        .iter()
+        .map(|h| {
+            h.to_bytes()
+                .unwrap()
+                .to_ascii_lowercase()
+                .encode_hex::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Ok(tx_hashes_hex)
+}
+
+pub async fn update_wallet_balance_all_user_wallets(
+    world: &mut CucumberWorld,
+    step: &str,
+) -> Result<(), StepError> {
+    let wallets = world.all_user_wallets();
+    for wallet in wallets {
+        let _unused = update_wallet_balance(world, step, &wallet.wallet_name).await;
+    }
+
+    Ok(())
+}
+
+pub async fn update_wallet_balance_all_funding_wallets(
+    world: &mut CucumberWorld,
+    step: &str,
+) -> Result<(), StepError> {
+    let wallets = world.all_funding_wallets();
+    for wallet in wallets {
+        let _unused = update_wallet_balance(world, step, &wallet.wallet_name).await;
+    }
+
+    Ok(())
+}
+
+pub async fn update_wallet_balance_all_wallets(
+    world: &mut CucumberWorld,
+    step: &str,
+) -> Result<(), StepError> {
+    let mut all_wallets = world.all_user_wallets();
+    let mut funding_wallets = world.all_funding_wallets();
+    all_wallets.append(&mut funding_wallets);
+    for wallet in &all_wallets {
+        let _unused = update_wallet_balance(world, step, &wallet.wallet_name).await;
+    }
+
+    Ok(())
+}
+pub async fn update_wallet_balance(
+    world: &mut CucumberWorld,
+    step: &str,
+    sender_wallet_name: &str,
+) -> Result<Vec<Utxo>, StepError> {
+    let wallet = world.resolve_wallet(sender_wallet_name).inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step);
+    })?;
+
+    let sender_pk = wallet.public_key()?;
     let on_chain_utxos =
         collect_wallet_utxos(world, sender_wallet_name, &wallet.node_name, sender_pk)
             .await
@@ -107,55 +247,7 @@ pub async fn create_and_submit_transaction(
         encumbered_utxos.iter().map(|u| u.note.value).collect::<Vec<_>>().iter().sum::<u64>(),
     );
 
-    let wallet_state = wallet_state_from_utxos(available_utxos);
-    let mut tx_builder = MantleTxBuilder::new();
-    for (receiver_pk, value) in receivers {
-        tx_builder = tx_builder.add_ledger_output(Note::new(*value, *receiver_pk));
-    }
-
-    let funded_builder = wallet_state
-        .fund_tx::<MainnetGasConstants>(&tx_builder, sender_pk, [sender_pk])
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step);
-        })?;
-    // Collect all UTXOs used in this transaction as encumbered tokens to prevent
-    // them from being used in other transactions until this transaction is
-    // finalized.
-    let newly_encumbered: Vec<Utxo> = funded_builder.ledger_inputs().to_vec();
-
-    let mantle_tx = funded_builder.build();
-    let tx_hash = mantle_tx.hash();
-    let ledger_tx_proof = ZkKey::multi_sign(
-        std::slice::from_ref(&wallet.wallet_account.secret_key),
-        tx_hash.as_ref(),
-    )
-    .inspect_err(|e| {
-        warn!(target: TARGET, "Step `{}` error: {e}", step);
-    })?;
-
-    let signed_tx = SignedMantleTx::new(mantle_tx, vec![], ledger_tx_proof).inspect_err(|e| {
-        warn!(target: TARGET, "Step `{}` error: {e}", step);
-    })?;
-
-    world
-        .submit_transaction(&wallet, &signed_tx)
-        .await
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step);
-        })?;
-    world
-        .wallet_encumbered_tokens
-        .entry(sender_wallet_name.to_owned())
-        .or_default()
-        .extend(newly_encumbered);
-
-    let tx_hash_hex: String = tx_hash
-        .to_bytes()
-        .unwrap()
-        .to_ascii_lowercase()
-        .encode_hex();
-
-    Ok(tx_hash_hex)
+    Ok(available_utxos)
 }
 
 async fn get_output_balances(
@@ -165,16 +257,12 @@ async fn get_output_balances(
     wallet_name: &str,
     wallet_state_type: WalletStateType,
 ) -> Result<(usize, u64), StepError> {
-    let on_chain_utxos = collect_wallet_utxos(
-        world,
-        wallet_name,
-        &wallet.node_name,
-        wallet.wallet_account.public_key(),
-    )
-    .await
-    .inspect_err(|e| {
-        warn!(target: TARGET, "Step `{}` error: {e}", step);
-    })?;
+    let on_chain_utxos =
+        collect_wallet_utxos(world, wallet_name, &wallet.node_name, wallet.public_key()?)
+            .await
+            .inspect_err(|e| {
+                warn!(target: TARGET, "Step `{}` error: {e}", step);
+            })?;
 
     match wallet_state_type {
         WalletStateType::OnChain => Ok((
@@ -221,6 +309,33 @@ pub async fn get_wallet_balances(
     })?;
 
     get_output_balances(world, step, &wallet, wallet_name, wallet_state_type).await
+}
+
+pub fn clear_wallet_encumbrances(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_name: &str,
+) -> StepResult {
+    if world.resolve_wallet(wallet_name).is_err() {
+        warn!(target: TARGET, "Step `{}` error: wallet '{wallet_name}' not found in world state", step);
+        return Err(StepError::LogicalError {
+            message: format!("wallet '{wallet_name}' not found in world state"),
+        });
+    }
+
+    world.wallet_encumbered_tokens.remove(wallet_name);
+    info!(target: TARGET, "Cleared encumbrances for wallet '{wallet_name}'");
+    Ok(())
+}
+
+pub fn clear_all_wallet_encumbrances(world: &mut CucumberWorld, step: &str) -> StepResult {
+    let wallet_names: Vec<String> = world.wallet_info.keys().cloned().collect();
+
+    for wallet_name in wallet_names {
+        clear_wallet_encumbrances(world, step, &wallet_name)?;
+    }
+    info!(target: TARGET, "Cleared encumbrances for all wallets");
+    Ok(())
 }
 
 #[expect(
@@ -445,6 +560,10 @@ fn get_last_known_height<'a>(
     )
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "This function is necessarily complex due to the logic of reconstructing wallet state from blocks and caching it for performance."
+)]
 async fn collect_wallet_utxos(
     world: &mut CucumberWorld,
     wallet_name: &str,
@@ -520,36 +639,42 @@ async fn collect_wallet_utxos(
             height,
         );
 
-        info!(
-            target: TARGET,
-            "Evaluating block {height_prefix}{height} for `{wallet_name}/{wallet_node_name}`: {}, \
-            transactions len: {}",
-            header_id,
-            block.transactions().len(),
-        );
+        if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
+            info!(
+                target: TARGET,
+                "Evaluating block {height_prefix}{height} for `{wallet_name}/{wallet_node_name}`: \
+                {}, transactions len: {}",
+                header_id,
+                block.transactions().len(),
+            );
+        }
 
         for tx in block.transactions() {
             // Unspent outputs
             for utxo in tx.mantle_tx.ledger_tx.utxos() {
                 if utxo.note.pk == wallet_pk {
                     owned.insert(utxo.id(), utxo);
-                    info!(
-                        target: TARGET,
-                        "Found UTXO for `{wallet_name}/{wallet_node_name}`: value: {}, id: {:?}",
-                        utxo.note.value,
-                        utxo.id(),
-                    );
+                    if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
+                        info!(
+                            target: TARGET,
+                            "Found UTXO for `{wallet_name}/{wallet_node_name}`: value: {}, id: {:?}",
+                            utxo.note.value,
+                            utxo.id(),
+                        );
+                    }
                 }
             }
 
             // Spent outputs
             for spent in &tx.mantle_tx.ledger_tx.inputs {
                 if owned.remove(spent).is_some() {
-                    info!(
-                        target: TARGET,
-                        "Found spent UTXO for `{wallet_name}/{wallet_node_name}`: id: {:?}",
-                        spent
-                    );
+                    if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
+                        info!(
+                            target: TARGET,
+                            "Found spent UTXO for `{wallet_name}/{wallet_node_name}`: id: {:?}",
+                            spent
+                        );
+                    }
                     if let Some(encumbered) = world.wallet_encumbered_tokens.get_mut(wallet_name) {
                         encumbered.retain(|u| u.id() != *spent);
                     }
@@ -596,252 +721,49 @@ fn wallet_state_from_utxos(utxos: Vec<Utxo>) -> lb_wallet::WalletState {
     }
 }
 
-// # External command controller:
-// #   1) Set CUCUMBER_MANUAL_COMMAND_FILE=/tmp/cucumber-manual-commands.txt
-// #   2) Start the scenario
-// #   3) Append commands to the file while the step below is running.
-// # Supported commands (one per line):
-// #   COIN_SPLIT, wallet 'WALLET_1A', outputs 10, value 5000
-// #   VERIFY, wallet 'WALLET_1A', outputs 12, time_out 180
-// #   SEND, transactions 5, value 2000, from 'WALLET_1A', to 'WALLET_2A'
-// #   VERIFY, wallet 'WALLET_2A', outputs 7, value 14000, time_out 60
-// #   CONTINUOUS, coin_split_outputs 1000, coin_split_value 1000, transactions
-// 1000, value 900, cycles 10 #   STOP
-
-pub(crate) async fn execute_manual_command(
+pub(crate) fn request_faucet_funds(
     world: &mut CucumberWorld,
-    step: &str,
-    command: &ManualCommand,
-) -> Result<bool, StepError> {
-    match command {
-        ManualCommand::CoinSplit {
-            wallet,
-            outputs,
-            value,
-        } => {
-            execute_coin_split(world, step, wallet, *outputs, *value).await?;
-            Ok(false)
-        }
-        ManualCommand::Verify {
-            wallet,
-            outputs,
-            value,
-            time_out,
-            wallet_state_type,
-            verify_max,
-        } => {
-            let verify_min = !*verify_max;
-            wait_for_wallet_or_encumbered_state(
-                world,
-                step,
-                wallet.clone(),
-                if verify_min { outputs.as_ref() } else { None },
-                if *verify_max { outputs.as_ref() } else { None },
-                if verify_min { value.as_ref() } else { None },
-                if *verify_max { value.as_ref() } else { None },
-                *time_out,
-                *wallet_state_type,
-            )
-            .await?;
-            Ok(false)
-        }
-        ManualCommand::Send {
-            transactions,
-            value,
-            from,
-            to,
-        } => {
-            execute_send(world, step, *transactions, *value, from, to).await?;
-            Ok(false)
-        }
-        ManualCommand::Continuous {
-            coin_split_outputs,
-            coin_split_value,
-            transactions,
-            value,
-            cycles,
-        } => {
-            execute_continuous(
-                world,
-                step,
-                *coin_split_outputs,
-                *coin_split_value,
-                *transactions,
-                *value,
-                *cycles,
-            )
-            .await?;
-            Ok(false)
-        }
-        ManualCommand::Stop => Ok(true),
-    }
-}
-
-async fn execute_coin_split(
-    world: &mut CucumberWorld,
-    step: &str,
-    wallet_name: &str,
-    outputs: usize,
-    value: u64,
-) -> Result<(), StepError> {
-    let wallet = world.resolve_wallet(wallet_name)?;
-    let self_pk = wallet.wallet_account.public_key();
-    let receivers = vec![(self_pk, value); outputs];
-    create_and_submit_transaction(world, step, wallet_name, &receivers).await?;
-    Ok(())
-}
-
-async fn execute_send(
-    world: &mut CucumberWorld,
-    step: &str,
-    transactions: usize,
-    value: u64,
-    from: &str,
-    to: &str,
-) -> Result<(), StepError> {
-    let receiver_wallet = world.resolve_wallet(to)?;
-    let receiver_pk = receiver_wallet.wallet_account.public_key();
-    for _ in 0..transactions {
-        create_and_submit_transaction(world, step, from, &[(receiver_pk, value)]).await?;
-    }
-    Ok(())
-}
-
-async fn execute_continuous(
-    world: &mut CucumberWorld,
-    step: &str,
-    coin_split_outputs: usize,
-    coin_split_value: u64,
-    transactions: usize,
-    value: u64,
-    cycles: usize,
-) -> Result<(), StepError> {
-    let mut wallet_names: Vec<String> = world.wallet_info.keys().cloned().collect();
-    wallet_names.sort();
-    if wallet_names.len() < 2 {
-        return Err(StepError::InvalidArgument {
-            message: "CONTINUOUS command requires at least two wallets".to_owned(),
+    step: &Step,
+    number_of_rounds: NonZero<usize>,
+    wallets: &[String],
+) -> StepResult {
+    if world.faucet_base_url.is_none()
+        || world.faucet_username.is_none()
+        || world.faucet_password.is_none()
+    {
+        warn!(
+            target: TARGET,
+            "Step `{}` error: Faucet details not set.",
+            step.value
+        );
+        return Err(StepError::LogicalError {
+            message: "Faucet details not set".to_owned(),
         });
     }
-    let required_sum = coin_split_outputs as u64 * coin_split_value;
-
-    for cycle in 0..cycles {
-        info!(
-            target: TARGET,
-            "CONTINUOUS cycle {} A: Wait for available funds all wallets",
-            cycle + 1
-        );
-        for sender in &wallet_names {
-            wait_for_available_value(world, step, sender, required_sum, 300).await?;
-        }
-        info!(target: TARGET, "CONTINUOUS cycle {} B: Perform coin splits all wallets", cycle + 1);
-        for sender in &wallet_names {
-            execute_coin_split(world, step, sender, coin_split_outputs, coin_split_value).await?;
-        }
-        info!(
-            target: TARGET,
-            "CONTINUOUS cycle {} C: Wait for coin splits to be mined all wallets",
-            cycle + 1
-        );
-        for sender in &wallet_names {
-            wait_for_wallet_or_encumbered_state(
-                world,
-                step,
-                sender.clone(),
-                None,
-                Some(&0),
-                None,
-                None,
-                300,
-                WalletStateType::Encumbered,
-            )
-            .await?;
-        }
-        info!(
-            target: TARGET,
-            "CONTINUOUS cycle {} D: Send transactions to peers all wallets",
-            cycle + 1
-        );
-        for sender in &wallet_names {
-            let recipients = recipient_wallets(&wallet_names, sender)?;
-            send_round_robin(world, step, sender, &recipients, transactions, value).await?;
-        }
-        info!(
-            target: TARGET,
-            "CONTINUOUS cycle {} E: Wait for transactions to be mined all wallets",
-            cycle + 1
-        );
-        for sender in &wallet_names {
-            wait_for_wallet_or_encumbered_state(
-                world,
-                step,
-                sender.clone(),
-                None,
-                Some(&0),
-                None,
-                None,
-                300,
-                WalletStateType::Encumbered,
-            )
-            .await?;
-        }
+    let faacet_task = FaucetTask::new(
+        world
+            .faucet_base_url
+            .clone()
+            .expect("checked above")
+            .as_ref(),
+        world
+            .faucet_username
+            .clone()
+            .expect("checked above")
+            .as_ref(),
+        world
+            .faucet_password
+            .clone()
+            .expect("checked above")
+            .as_ref(),
+        wallets,
+        number_of_rounds,
+    );
+    if let Some(handles) = &mut world.faucet_task_handles {
+        handles.push(faacet_task.spawn(1000, &step.value));
+    } else {
+        world.faucet_task_handles = Some(vec![faacet_task.spawn(1000, &step.value)]);
     }
 
     Ok(())
-}
-
-fn recipient_wallets(wallet_names: &[String], sender: &str) -> Result<Vec<String>, StepError> {
-    let recipients: Vec<_> = wallet_names
-        .iter()
-        .filter(|wallet| wallet.as_str() != sender)
-        .cloned()
-        .collect();
-    if recipients.is_empty() {
-        return Err(StepError::InvalidArgument {
-            message: format!("No recipient wallets available for sender '{sender}'"),
-        });
-    }
-
-    Ok(recipients)
-}
-
-async fn send_round_robin(
-    world: &mut CucumberWorld,
-    step: &str,
-    sender: &str,
-    recipients: &[String],
-    transactions: usize,
-    value: u64,
-) -> Result<(), StepError> {
-    for i in 0..transactions {
-        let receiver_name = &recipients[i % recipients.len()];
-        let receiver_wallet = world.resolve_wallet(receiver_name)?;
-        let receiver_pk = receiver_wallet.wallet_account.public_key();
-        create_and_submit_transaction(world, step, sender, &[(receiver_pk, value)]).await?;
-    }
-    Ok(())
-}
-
-async fn wait_for_available_value(
-    world: &mut CucumberWorld,
-    step: &str,
-    wallet_name: &str,
-    required_value: u64,
-    timeout_seconds: u64,
-) -> Result<(), StepError> {
-    let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(timeout_seconds) {
-        let (_, value) =
-            get_wallet_balances(world, step, wallet_name, WalletStateType::Available).await?;
-        if value >= required_value {
-            return Ok(());
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
-
-    Err(StepError::StepFail {
-        message: format!(
-            "Timed out waiting for wallet '{wallet_name}' to have at least {required_value} available LGO"
-        ),
-    })
 }

@@ -1,224 +1,402 @@
-use std::{fs, path::Path};
+// External command controller:
+//   1) Set CUCUMBER_MANUAL_COMMAND_FILE=/tmp/cucumber-manual-commands.txt
+//   2) Start the scenario
+//   3) Prepare the command file beforehand or add commands on-the-fly while the
+//      test is running.
+// Supported commands (one per line):
+//   COIN_SPLIT, wallet '<wallet_name>', outputs <count>, value <amount>
+//   VERIFY, wallet '<wallet_name>', outputs <count>, time_out
+//     <duration_seconds>   BALANCE, wallet '<wallet_name>'
+//   BALANCE_ALL_WALLETS
+//   BALANCE_ALL_USER_WALLETS
+//   BALANCE_ALL_FUNDING_WALLETS
+//   CLEAR_ENCUMBRANCES, wallet '<wallet_name>'
+//   CLEAR_ENCUMBRANCES_ALL_WALLETS
+//   SEND, transactions <count>, value <amount>, from '<wallet_name>', to
+//     '<wallet_name>'
+//   VERIFY_MAX, wallet '<wallet_name>', wallet_state_type
+//     'on-chain'/'encumbered'/'available', outputs <count>, value 14000,
+//     time_out <duration_seconds>
+//   VERIFY_MIN, wallet '<wallet_name>', wallet_state_type
+//     'on-chain'/'encumbered'/'available', outputs <count>,
+//     value 14000, time_out <duration_seconds>
+//   CONTINUOUS_USER_WALLETS, coin_split_outputs <count>, coin_split_value
+//     <amount>, transactions <count>, value <amount>, cycles <count>
+//   CONTINUOUS_FUNDING_WALLETS, coin_split_outputs <count>, coin_split_value
+//     <amount>, transactions <count>, value <amount>, cycles <count>
+//   STOP
 
-use crate::cucumber::{error::StepError, steps::manual_transactions::utils::WalletStateType};
+use std::{env, path::Path, time::Duration};
 
-#[derive(Debug, Clone)]
-pub enum ManualCommand {
-    CoinSplit {
-        wallet: String,
-        outputs: usize,
-        value: u64,
+use tokio::time::{Instant, sleep};
+use tracing::{info, warn};
+
+use crate::cucumber::{
+    error::StepError,
+    steps::{
+        TARGET,
+        manual_transactions::{
+            command_file_parsing::{ManualCommand, take_next_command},
+            utils,
+            utils::WalletStateType,
+        },
     },
-    Verify {
-        wallet: String,
-        outputs: Option<usize>,
-        value: Option<u64>,
-        time_out: u64,
-        wallet_state_type: WalletStateType,
-        verify_max: bool,
-    },
-    Send {
-        transactions: usize,
-        value: u64,
-        from: String,
-        to: String,
-    },
-    Continuous {
-        coin_split_outputs: usize,
-        coin_split_value: u64,
-        transactions: usize,
-        value: u64,
-        cycles: usize,
-    },
-    Stop,
-}
+    world::CucumberWorld,
+};
 
-pub(crate) fn take_next_command(path: &Path) -> Result<Option<ManualCommand>, StepError> {
-    if !path.exists() {
-        fs::write(path, "").map_err(|e| StepError::StepFail {
-            message: format!(
-                "Failed to initialize manual command file '{}': {e}",
-                path.display()
-            ),
-        })?;
-        return Ok(None);
-    }
+const MANUAL_COMMAND_FILE_ENV: &str = "CUCUMBER_MANUAL_COMMAND_FILE";
+const MANUAL_COMMAND_POLL_INTERVAL_ENV: &str = "CUCUMBER_MANUAL_COMMAND_POLL_INTERVAL_MS";
 
-    let file_content = fs::read_to_string(path).map_err(|e| StepError::StepFail {
-        message: format!(
-            "Failed to read manual command file '{}': {e}",
-            path.display()
-        ),
-    })?;
-
-    let mut updated_lines = Vec::new();
-    let mut selected = None;
-
-    for line in file_content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("---->") {
-            updated_lines.push(line.to_owned());
-            continue;
-        }
-
-        if selected.is_none() {
-            selected = Some(parse_manual_command(trimmed)?);
-            updated_lines.push(format!("----> {line}"));
-            continue;
-        }
-
-        updated_lines.push(line.to_owned());
-    }
-
-    if selected.is_some() {
-        fs::write(path, updated_lines.join("\n")).map_err(|e| StepError::StepFail {
-            message: format!(
-                "Failed to update manual command file '{}' after processing command: {e}",
-                path.display()
-            ),
-        })?;
-    }
-
-    Ok(selected)
-}
-
-fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
-    let parts: Vec<String> = raw
-        .split(',')
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .map(ToOwned::to_owned)
-        .collect();
-
-    let Some(action) = parts.first() else {
-        return Err(StepError::InvalidArgument {
-            message: "Manual command is empty".to_owned(),
-        });
-    };
-
-    let binding = action.to_ascii_uppercase();
-    let command = binding.as_str();
+pub(crate) async fn execute_manual_command(
+    world: &mut CucumberWorld,
+    step: &str,
+    command: &ManualCommand,
+) -> Result<bool, StepError> {
     match command {
-        "COIN_SPLIT" => Ok(ManualCommand::CoinSplit {
-            wallet: parse_quoted_field(&parts, "wallet")?,
-            outputs: parse_usize_field(&parts, "outputs")?,
-            value: parse_u64_field(&parts, "value")?,
-        }),
-        "VERIFY_MAX" | "VERIFY_MIN" => {
-            let outputs = parse_optional_usize_field(&parts, "outputs")?;
-            let value = parse_optional_u64_field(&parts, "value")?;
-            if outputs.is_none() && value.is_none() {
-                return Err(StepError::InvalidArgument {
-                    message: format!(
-                        "{command} command requires at least one of 'outputs' or 'value'"
-                    ),
-                });
+        ManualCommand::CoinSplit {
+            wallet,
+            outputs,
+            value,
+        } => {
+            execute_coin_split(world, step, wallet, *outputs, *value).await?;
+            Ok(false)
+        }
+        ManualCommand::Verify {
+            wallet,
+            outputs,
+            value,
+            time_out,
+            wallet_state_type,
+            verify_max,
+        } => {
+            let verify_min = !*verify_max;
+            utils::wait_for_wallet_or_encumbered_state(
+                world,
+                step,
+                wallet.clone(),
+                if verify_min { outputs.as_ref() } else { None },
+                if *verify_max { outputs.as_ref() } else { None },
+                if verify_min { value.as_ref() } else { None },
+                if *verify_max { value.as_ref() } else { None },
+                *time_out,
+                *wallet_state_type,
+            )
+            .await?;
+            Ok(false)
+        }
+        ManualCommand::WalletBalance { wallet_name } => {
+            utils::update_wallet_balance(world, step, wallet_name).await?;
+            Ok(false)
+        }
+        ManualCommand::WalletBalanceAllUserWallets => {
+            utils::update_wallet_balance_all_user_wallets(world, step).await?;
+            Ok(false)
+        }
+        ManualCommand::WalletBalanceAllFundingWallets => {
+            utils::update_wallet_balance_all_funding_wallets(world, step).await?;
+            Ok(false)
+        }
+        ManualCommand::WalletBalanceAllWallets => {
+            utils::update_wallet_balance_all_wallets(world, step).await?;
+            Ok(false)
+        }
+        ManualCommand::ClearEncumbrances { wallet_name } => {
+            utils::clear_wallet_encumbrances(world, step, wallet_name)?;
+            Ok(false)
+        }
+        ManualCommand::ClearEncumbrancesAllWallets => {
+            utils::clear_all_wallet_encumbrances(world, step)?;
+            Ok(false)
+        }
+        ManualCommand::Send {
+            transactions,
+            value,
+            from,
+            to,
+        } => {
+            execute_send(world, step, *transactions, *value, from, to).await?;
+            Ok(false)
+        }
+        ManualCommand::ContinuousUserWallets {
+            coin_split_outputs,
+            coin_split_value,
+            transactions,
+            value,
+            cycles,
+        }
+        | ManualCommand::ContinuousFundingWallets {
+            coin_split_outputs,
+            coin_split_value,
+            transactions,
+            value,
+            cycles,
+        } => {
+            execute_continuous(
+                world,
+                step,
+                *coin_split_outputs,
+                *coin_split_value,
+                *transactions,
+                *value,
+                *cycles,
+                command,
+            )
+            .await?;
+            Ok(false)
+        }
+        ManualCommand::Stop => Ok(true),
+    }
+}
+
+async fn execute_coin_split(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_name: &str,
+    outputs: usize,
+    value: u64,
+) -> Result<(), StepError> {
+    let wallet = world.resolve_wallet(wallet_name)?;
+    let self_pk = wallet.public_key()?;
+    let receivers = vec![(self_pk, value); outputs];
+    utils::create_and_submit_transaction(world, step, wallet_name, &receivers).await?;
+    Ok(())
+}
+
+async fn execute_send(
+    world: &mut CucumberWorld,
+    step: &str,
+    transactions: usize,
+    value: u64,
+    from: &str,
+    to: &str,
+) -> Result<(), StepError> {
+    let receiver_wallet = world.resolve_wallet(to)?;
+    let receiver_pk = receiver_wallet.public_key()?;
+    for _ in 0..transactions {
+        utils::create_and_submit_transaction(world, step, from, &[(receiver_pk, value)]).await?;
+    }
+    Ok(())
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "This function is more readable with explicit arguments rather than packing them into structs or tuples."
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "This function has multiple steps that are logically distinct."
+)]
+async fn execute_continuous(
+    world: &mut CucumberWorld,
+    step: &str,
+    coin_split_outputs: usize,
+    coin_split_value: u64,
+    transactions: usize,
+    value: u64,
+    cycles: usize,
+    command: &ManualCommand,
+) -> Result<(), StepError> {
+    let mut wallet_names = match command {
+        ManualCommand::ContinuousUserWallets { .. } => world
+            .all_user_wallets()
+            .iter()
+            .map(|w| w.wallet_name.clone())
+            .collect(),
+        ManualCommand::ContinuousFundingWallets { .. } => world
+            .all_funding_wallets()
+            .iter()
+            .map(|w| w.wallet_name.clone())
+            .collect(),
+        _ => vec![],
+    };
+    if wallet_names.len() < 2 {
+        return Err(StepError::InvalidArgument {
+            message: "CONTINUOUS command requires at least two wallets".to_owned(),
+        });
+    }
+    wallet_names.sort();
+    let required_sum = coin_split_outputs as u64 * coin_split_value;
+
+    for cycle in 0..cycles {
+        info!(
+            target: TARGET,
+            "CONTINUOUS cycle {} A: Wait for available funds all wallets",
+            cycle + 1
+        );
+        for sender in &wallet_names {
+            if let Err(e) = wait_for_available_value(world, step, sender, required_sum, 300).await {
+                warn!(target: TARGET, "Step `{}` error in cycle {}: {e}", step, cycle + 1);
             }
-            let wallet = parse_quoted_field(&parts, "wallet")?;
-            let time_out = parse_u64_field(&parts, "time_out")?;
-            let wallet_state_type =
-                parse_quoted_field(&parts, "wallet_state_type").and_then(|s| {
-                    s.parse::<WalletStateType>()
-                        .map_err(|e| StepError::InvalidArgument {
-                            message: format!("Invalid 'wallet_state_type' value: {e}"),
-                        })
-                })?;
-            Ok(ManualCommand::Verify {
-                wallet,
-                outputs,
-                value,
-                time_out,
-                wallet_state_type,
-                verify_max: command == "VERIFY_MAX",
-            })
         }
-        "SEND" => Ok(ManualCommand::Send {
-            transactions: parse_usize_field(&parts, "transactions")?,
-            value: parse_u64_field(&parts, "value")?,
-            from: parse_quoted_field(&parts, "from")?,
-            to: parse_quoted_field(&parts, "to")?,
-        }),
-        "CONTINUOUS" => Ok(ManualCommand::Continuous {
-            coin_split_outputs: parse_usize_field(&parts, "coin_split_outputs")?,
-            coin_split_value: parse_u64_field(&parts, "coin_split_value")?,
-            transactions: parse_usize_field(&parts, "transactions")?,
-            value: parse_u64_field(&parts, "value")?,
-            cycles: parse_usize_field(&parts, "cycles")?,
-        }),
-        "STOP" => Ok(ManualCommand::Stop),
-        _ => Err(StepError::InvalidArgument {
-            message: format!("Unknown manual command: '{action}'"),
-        }),
+        info!(target: TARGET, "CONTINUOUS cycle {} B: Perform coin splits all wallets", cycle + 1);
+        for sender in &wallet_names {
+            if let Err(e) =
+                execute_coin_split(world, step, sender, coin_split_outputs, coin_split_value).await
+            {
+                warn!(target: TARGET, "Step `{}` error in cycle {}: {e}", step, cycle + 1);
+            }
+        }
+        info!(
+            target: TARGET,
+            "CONTINUOUS cycle {} C: Wait for coin splits to be mined all wallets",
+            cycle + 1
+        );
+        for sender in &wallet_names {
+            if let Err(e) = utils::wait_for_wallet_or_encumbered_state(
+                world,
+                step,
+                sender.clone(),
+                None,
+                Some(&0),
+                None,
+                None,
+                300,
+                WalletStateType::Encumbered,
+            )
+            .await
+            {
+                warn!(target: TARGET, "Step `{}` error in cycle {}: {e}", step, cycle + 1);
+            }
+        }
+        info!(
+            target: TARGET,
+            "CONTINUOUS cycle {} D: Send transactions to peers all wallets",
+            cycle + 1
+        );
+        for sender in &wallet_names {
+            let recipients = recipient_wallets(&wallet_names, sender)?;
+            if let Err(e) =
+                send_round_robin(world, step, sender, &recipients, transactions, value).await
+            {
+                warn!(target: TARGET, "Step `{}` error in cycle {}: {e}", step, cycle + 1);
+            }
+        }
+        info!(
+            target: TARGET,
+            "CONTINUOUS cycle {} E: Wait for transactions to be mined all wallets",
+            cycle + 1
+        );
+        for sender in &wallet_names {
+            if let Err(e) = utils::wait_for_wallet_or_encumbered_state(
+                world,
+                step,
+                sender.clone(),
+                None,
+                Some(&0),
+                None,
+                None,
+                300,
+                WalletStateType::Encumbered,
+            )
+            .await
+            {
+                warn!(target: TARGET, "Step `{}` error in cycle {}: {e}", step, cycle + 1);
+            }
+        }
     }
+
+    Ok(())
 }
 
-fn parse_quoted_field(parts: &[String], key: &str) -> Result<String, StepError> {
-    parts
+fn recipient_wallets(wallet_names: &[String], sender: &str) -> Result<Vec<String>, StepError> {
+    let recipients: Vec<_> = wallet_names
         .iter()
-        .find_map(|part| {
-            let normalized = part.trim();
-            normalized
-                .strip_prefix(&format!("{key} '"))
-                .and_then(|v| v.strip_suffix('\''))
-                .map(ToOwned::to_owned)
-        })
-        .ok_or_else(|| StepError::InvalidArgument {
-            message: format!("Missing required field '{key}'"),
-        })
+        .filter(|wallet| wallet.as_str() != sender)
+        .cloned()
+        .collect();
+    if recipients.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: format!("No recipient wallets available for sender '{sender}'"),
+        });
+    }
+
+    Ok(recipients)
 }
 
-fn parse_u64_field(parts: &[String], key: &str) -> Result<u64, StepError> {
-    let raw = parse_number_field(parts, key)?;
-    raw.parse::<u64>().map_err(|_| StepError::InvalidArgument {
-        message: format!("Invalid value for '{key}': '{raw}'"),
-    })
+async fn send_round_robin(
+    world: &mut CucumberWorld,
+    step: &str,
+    sender: &str,
+    recipients: &[String],
+    transactions: usize,
+    value: u64,
+) -> Result<(), StepError> {
+    for i in 0..transactions {
+        let receiver_name = &recipients[i % recipients.len()];
+        let receiver_wallet = world.resolve_wallet(receiver_name)?;
+        let receiver_pk = receiver_wallet.public_key()?;
+        utils::create_and_submit_transaction(world, step, sender, &[(receiver_pk, value)]).await?;
+    }
+    Ok(())
 }
 
-fn parse_optional_u64_field(parts: &[String], key: &str) -> Result<Option<u64>, StepError> {
-    let raw = parse_optional_number_field(parts, key);
-    raw.map_or(Ok(None), |raw: &str| {
-        raw.parse::<u64>()
-            .map(Some)
-            .map_err(|_| StepError::InvalidArgument {
-                message: format!("Invalid value for '{key}': '{raw}'"),
-            })
-    })
-}
-
-fn parse_usize_field(parts: &[String], key: &str) -> Result<usize, StepError> {
-    let raw = parse_number_field(parts, key)?;
-    raw.parse::<usize>()
-        .map_err(|_| StepError::InvalidArgument {
-            message: format!("Invalid value for '{key}': '{raw}'"),
-        })
-}
-
-fn parse_optional_usize_field(parts: &[String], key: &str) -> Result<Option<usize>, StepError> {
-    let raw = parse_optional_number_field(parts, key);
-    raw.map_or(Ok(None), |raw: &str| {
-        raw.parse::<usize>()
-            .map(Some)
-            .map_err(|_| StepError::InvalidArgument {
-                message: format!("Invalid value for '{key}': '{raw}'"),
-            })
-    })
-}
-
-fn parse_number_field<'a>(parts: &'a [String], key: &str) -> Result<&'a str, StepError> {
-    parse_optional_number_field(parts, key).ok_or_else(|| StepError::InvalidArgument {
-        message: format!("Missing required field '{key}'"),
-    })
-}
-
-fn parse_optional_number_field<'a>(parts: &'a [String], key: &str) -> Option<&'a str> {
-    for part in parts {
-        let normalized = part.trim();
-        if let Some(value) = normalized.strip_prefix(&format!("{key} ")) {
-            return Some(value.trim());
+async fn wait_for_available_value(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_name: &str,
+    required_value: u64,
+    timeout_seconds: u64,
+) -> Result<(), StepError> {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(timeout_seconds) {
+        let (_, value) =
+            utils::get_wallet_balances(world, step, wallet_name, WalletStateType::Available)
+                .await?;
+        if value >= required_value {
+            return Ok(());
         }
-        if let Some(value) = normalized.strip_prefix(&format!("{key}=")) {
-            return Some(value.trim());
+        sleep(Duration::from_millis(200)).await;
+    }
+
+    Err(StepError::StepFail {
+        message: format!(
+            "Timed out waiting for wallet '{wallet_name}' to have at least {required_value} available LGO"
+        ),
+    })
+}
+
+pub async fn perform_manual_step_control(
+    world: &mut CucumberWorld,
+    step: &str,
+    timeout_seconds: u64,
+) -> Result<(), StepError> {
+    let command_file =
+        env::var(MANUAL_COMMAND_FILE_ENV).map_err(|_| StepError::InvalidArgument {
+            message: format!(
+                "Step `{step}` requires environment variable '{MANUAL_COMMAND_FILE_ENV}' to be set",
+            ),
+        })?;
+    let poll_interval_ms = env::var(MANUAL_COMMAND_POLL_INTERVAL_ENV)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(300);
+
+    info!(
+        target: TARGET,
+        "Manual control step started. Monitoring command file: `{command_file}`"
+    );
+
+    let time_out = Duration::from_secs(timeout_seconds);
+    let start = Instant::now();
+    while start.elapsed() < time_out {
+        if let Some(command) = take_next_command(Path::new(&command_file))? {
+            info!(target: TARGET, "====> manual command: {command:?}");
+            if matches!(
+                execute_manual_command(world, step, &command).await,
+                Ok(true)
+            ) {
+                info!(
+                    target: TARGET,
+                   "Manual command loop stopped by STOP command after {:.2?}",
+                   start.elapsed()
+                );
+                return Ok(());
+            }
+        } else {
+            sleep(Duration::from_millis(poll_interval_ms)).await;
         }
     }
-    None
+    info!(target: TARGET, "Manual command loop stopped by tine-out after {:.2?}", start.elapsed());
+
+    Ok(())
 }

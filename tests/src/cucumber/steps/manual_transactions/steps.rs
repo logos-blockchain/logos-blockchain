@@ -1,27 +1,24 @@
-use std::{env, path::Path, time::Duration};
-
-use cucumber::{gherkin::Step, then, when};
-use tokio::time::{Instant, sleep};
+use cucumber::{gherkin::Step, given, then, when};
 use tracing::{info, warn};
 
-use crate::cucumber::{
-    error::{StepError, StepResult},
-    steps::{
-        TARGET,
-        manual_transactions::{
-            command_file_utils::take_next_command,
-            utils::{
-                WalletStateType, create_and_submit_transaction, execute_manual_command,
-                wait_for_wallet_or_encumbered_state,
+use crate::{
+    cucumber::{
+        error::{StepError, StepResult},
+        steps::{
+            TARGET,
+            manual_transactions::{
+                command_file_utils::perform_manual_step_control,
+                utils,
+                utils::{
+                    WalletStateType, create_and_submit_transaction,
+                    wait_for_wallet_or_encumbered_state,
+                },
             },
         },
+        world::{CucumberWorld, WalletInfo},
     },
-    world::CucumberWorld,
+    non_zero,
 };
-
-const MANUAL_COMMAND_FILE_ENV: &str = "CUCUMBER_MANUAL_COMMAND_FILE";
-const MANUAL_COMMAND_TIMEOUT_ENV: &str = "CUCUMBER_MANUAL_COMMAND_TIMEOUT_SECONDS";
-const MANUAL_COMMAND_POLL_INTERVAL_ENV: &str = "CUCUMBER_MANUAL_COMMAND_POLL_INTERVAL_MS";
 
 #[when(expr = "I do a coin split for {string} of {int} UTXOs valued at {int} LGO tokens each")]
 async fn step_do_coin_split(
@@ -35,7 +32,9 @@ async fn step_do_coin_split(
         warn!(target: TARGET, "Step `{}` error: {e}", step.value);
     })?;
 
-    let self_pk = wallet.wallet_account.public_key();
+    let self_pk = wallet.public_key().inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
     let receivers = vec![(self_pk, output_value); number_of_outputs];
     let tx_hash_hex = create_and_submit_transaction(world, &step.value, &wallet_name, &receivers)
         .await
@@ -234,7 +233,7 @@ async fn step_send_multiple_transactions_to_single_wallet(
         })?;
     let (sender_wallet, receiver_wallet) = (wallets[0].clone(), wallets[1].clone());
 
-    let receiver_wallet_pk = receiver_wallet.wallet_account.public_key();
+    let receiver_wallet_pk = receiver_wallet.public_key()?;
 
     for _ in 0..number_of_transactions {
         let tx_hash_hex = create_and_submit_transaction(
@@ -277,7 +276,9 @@ async fn step_send_single_transaction_multiple_outputs_to_single_wallet(
         })?;
     let (sender_wallet, receiver_wallet) = (wallets[0].clone(), wallets[1].clone());
 
-    let receiver_wallet_pk = receiver_wallet.wallet_account.public_key();
+    let receiver_wallet_pk = receiver_wallet.public_key().inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
 
     let receivers = vec![(receiver_wallet_pk, output_value); number_of_outputs];
     let tx_hash_hex =
@@ -297,47 +298,130 @@ async fn step_send_single_transaction_multiple_outputs_to_single_wallet(
     Ok(())
 }
 
-#[when(expr = "I perform manual control of transactions for all wallets")]
-async fn step_manual_control_transactions(world: &mut CucumberWorld, step: &Step) -> StepResult {
-    let command_file =
-        env::var(MANUAL_COMMAND_FILE_ENV).map_err(|_| StepError::InvalidArgument {
-            message: format!(
-                "Step `{}` requires environment variable '{MANUAL_COMMAND_FILE_ENV}' to be set",
-                step.value
-            ),
-        })?;
+#[when(expr = "I perform manual control of transactions for all wallets for {int} seconds")]
+async fn step_manual_control_transactions(
+    world: &mut CucumberWorld,
+    step: &Step,
+    timeout_seconds: u64,
+) -> StepResult {
+    perform_manual_step_control(world, &step.value, timeout_seconds).await
+}
 
-    let timeout_seconds = env::var(MANUAL_COMMAND_TIMEOUT_ENV)
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(3600);
-    let poll_interval_ms = env::var(MANUAL_COMMAND_POLL_INTERVAL_ENV)
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(300);
+#[when(expr = "I perform manual control of transactions for all wallets no time-out")]
+async fn step_manual_control_transactions_no_time_out(
+    world: &mut CucumberWorld,
+    step: &Step,
+) -> StepResult {
+    perform_manual_step_control(world, &step.value, u64::MAX).await
+}
 
-    info!(
-        target: TARGET,
-        "Manual control step started. Monitoring command file: `{command_file}`"
-    );
+#[given(expr = "I have a faucet with URL {string} username {string} and password {string}")]
+#[when(expr = "I have a faucet with URL {string} username {string} and password {string}")]
+fn step_faucet_details(
+    world: &mut CucumberWorld,
+    base_url: String,
+    username: String,
+    password: String,
+) {
+    world.faucet_base_url = Some(base_url);
+    world.faucet_username = Some(username);
+    world.faucet_password = Some(password);
+}
 
-    let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(timeout_seconds) {
-        if let Some(command) = take_next_command(Path::new(&command_file))? {
-            info!(target: TARGET, "====> manual command: {command:?}");
-            if execute_manual_command(world, &step.value, &command).await? {
-                info!(target: TARGET, "Manual command loop stopped by STOP command");
-                return Ok(());
-            }
-        } else {
-            sleep(Duration::from_millis(poll_interval_ms)).await;
-        }
-    }
-
-    Err(StepError::StepFail {
-        message: format!(
-            "Step `{}` timed out waiting for STOP command after {timeout_seconds} seconds",
+#[given(expr = "I request {int} rounds of faucet funds for wallet {string}")]
+#[when(expr = "I request {int} rounds of faucet funds for wallet {string}")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Required by cucumber expression"
+)]
+fn step_request_faucet_funds_for_wallet(
+    world: &mut CucumberWorld,
+    step: &Step,
+    number_of_rounds: usize,
+    wallet_name: String,
+) -> StepResult {
+    let wallet_pk_hex = if let Ok(wallet) = world.resolve_wallet(&wallet_name) {
+        wallet.public_key_hex()
+    } else {
+        warn!(
+            target: TARGET,
+            "Step `{}` error: Wallet `{wallet_name}` not found.",
             step.value
-        ),
-    })
+        );
+        return Err(StepError::LogicalError {
+            message: format!("Wallet `{wallet_name}` not found"),
+        });
+    };
+
+    utils::request_faucet_funds(
+        world,
+        step,
+        non_zero!("number of rounds", number_of_rounds)?,
+        &[wallet_pk_hex],
+    )
+}
+
+#[given(expr = "I request {int} rounds of faucet funds for all wallets")]
+#[when(expr = "I request {int} rounds of faucet funds for all wallets")]
+fn step_request_faucet_funds_for_all_wallets(
+    world: &mut CucumberWorld,
+    step: &Step,
+    number_of_rounds: usize,
+) -> StepResult {
+    let all_wallets_pk_hex = world
+        .wallet_info
+        .values()
+        .map(WalletInfo::public_key_hex)
+        .collect::<Vec<_>>();
+
+    utils::request_faucet_funds(
+        world,
+        step,
+        non_zero!("number of rounds", number_of_rounds)?,
+        &all_wallets_pk_hex,
+    )
+}
+
+#[given(expr = "I request {int} rounds of faucet funds for all user wallets")]
+#[when(expr = "I request {int} rounds of faucet funds for all user wallets")]
+fn step_request_faucet_funds_for_all_user_wallets(
+    world: &mut CucumberWorld,
+    step: &Step,
+    number_of_rounds: usize,
+) -> StepResult {
+    let all_wallets_pk_hex = world
+        .wallet_info
+        .values()
+        .filter(|w| w.is_user_wallet())
+        .map(WalletInfo::public_key_hex)
+        .collect::<Vec<_>>();
+
+    utils::request_faucet_funds(
+        world,
+        step,
+        non_zero!("number of rounds", number_of_rounds)?,
+        &all_wallets_pk_hex,
+    )
+}
+
+#[given(expr = "I request {int} rounds of faucet funds for all funding wallets")]
+#[when(expr = "I request {int} rounds of faucet funds for all funding wallets")]
+fn step_request_faucet_funds_for_all_funding_wallets(
+    world: &mut CucumberWorld,
+    step: &Step,
+    number_of_rounds: usize,
+) -> StepResult {
+    let all_wallets_pk_hex = world
+        .wallet_info
+        .values()
+        .filter(|w| w.is_funding_wallet())
+        .map(WalletInfo::public_key_hex)
+        .collect::<Vec<_>>();
+
+    utils::request_faucet_funds(
+        world,
+        step,
+        non_zero!("number of rounds", number_of_rounds)?,
+        &all_wallets_pk_hex,
+    )
 }

@@ -109,6 +109,16 @@ macro_rules! non_zero {
 /// Reads a node YAML user config file and extracts the `PeerId` from the node
 /// key.
 pub fn peer_id_from_node_yaml(path: &Path) -> Result<PeerId, StepError> {
+    let config = user_config_from_node_yaml(path)?;
+
+    let node_key = config.network.backend.swarm.node_key;
+
+    let keypair = identity::Keypair::from(ed25519::Keypair::from(node_key));
+
+    Ok(PeerId::from(keypair.public()))
+}
+
+fn user_config_from_node_yaml(path: &Path) -> Result<UserConfig, StepError> {
     let config: UserConfig = {
         let text = fs::read_to_string(path).map_err(|e| StepError::LogicalError {
             message: format!("Failed to read '{}': {e}", path.display()),
@@ -119,11 +129,27 @@ pub fn peer_id_from_node_yaml(path: &Path) -> Result<PeerId, StepError> {
         })?
     };
 
-    let node_key = config.network.backend.swarm.node_key;
+    Ok(config)
+}
 
-    let keypair = identity::Keypair::from(ed25519::Keypair::from(node_key));
+/// Reads a node YAML user config file and extracts the funding wallet public
+/// key. Returns the key from `wallet.known_keys` that is not the
+/// `voucher_master_key_id`.
+pub fn funding_wallet_pk_from_node_yaml(path: &Path) -> Result<String, StepError> {
+    let config = user_config_from_node_yaml(path)?;
 
-    Ok(PeerId::from(keypair.public()))
+    config
+        .wallet
+        .known_keys
+        .keys()
+        .find(|&key| key != &config.wallet.voucher_master_key_id)
+        .cloned()
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!(
+                "No wallet public key found in 'wallet.known_keys' (other than voucher_master_key_id) in '{}'",
+                path.display()
+            ),
+        })
 }
 
 /// Extracts the child directory name that starts with a known prefix.

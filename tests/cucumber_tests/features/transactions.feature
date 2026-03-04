@@ -212,13 +212,21 @@ Feature: Transactions
   # External command controller:
   #   1) Set CUCUMBER_MANUAL_COMMAND_FILE=/tmp/cucumber-manual-commands.txt
   #   2) Start the scenario
-  #   3) Prepare the command file before-hand or add commands on-the-fly while the test is running.
+  #   3) Prepare the command file beforehand or add commands on-the-fly while the test is running.
   # Supported commands (one per line):
-  #   COIN_SPLIT, wallet 'WALLET_1A', outputs 10, value 5000
-  #   VERIFY, wallet 'WALLET_1A', outputs 12, time_out 180
-  #   SEND, transactions 5, value 2000, from 'WALLET_1A', to 'WALLET_2A'
-  #   VERIFY_MAX/VERIFY_MIN, wallet 'WALLET_2A', wallet_state_type 'on-chain'/'encumbered'/'available', outputs 7, value 14000, time_out 60
-  #   CONTINUOUS, coin_split_outputs 1000, coin_split_value 1000, transactions 10, value 900, cycles 3
+  #   COIN_SPLIT, wallet '<wallet_name>', outputs <count>, value <amount>
+  #   VERIFY, wallet '<wallet_name>', outputs <count>, time_out <duration_seconds>
+  #   BALANCE, wallet '<wallet_name>'
+  #   BALANCE_ALL_WALLETS
+  #   BALANCE_ALL_USER_WALLETS
+  #   BALANCE_ALL_FUNDING_WALLETS
+  #   CLEAR_ENCUMBRANCES, wallet '<wallet_name>'
+  #   CLEAR_ENCUMBRANCES_ALL_WALLETS
+  #   SEND, transactions <count>, value <amount>, from '<wallet_name>', to '<wallet_name>'
+  #   VERIFY_MAX, wallet '<wallet_name>', wallet_state_type 'on-chain'/'encumbered'/'available', outputs <count>, value 14000, time_out <duration_seconds>
+  #   VERIFY_MIN, wallet '<wallet_name>', wallet_state_type 'on-chain'/'encumbered'/'available', outputs <count>, value 14000, time_out <duration_seconds>
+  #   CONTINUOUS_USER_WALLETS, coin_split_outputs <count>, coin_split_value <amount>, transactions <count>, value <amount>, cycles <count>
+  #   CONTINUOUS_FUNDING_WALLETS, coin_split_outputs <count>, coin_split_value <amount>, transactions <count>, value <amount>, cycles <count>
   #   STOP
   #
   # Example command file content, individual steps:
@@ -227,12 +235,13 @@ Feature: Transactions
   #   VERIFY_MAX, wallet 'WALLET_1A', wallet_state_type 'encumbered', outputs 0, time_out 60
   #   VERIFY_MAX, wallet 'WALLET_2A', wallet_state_type 'encumbered', outputs 0, time_out 60
   #   SEND, transactions 5, value 2000, from 'WALLET_1A', to 'WALLET_2A'
+  #   BALANCE, wallet 'WALLET_1A'
   #   SEND, transactions 5, value 2000, from 'WALLET_2A', to 'WALLET_1A'
   #   VERIFY_MAX, wallet 'WALLET_1A', wallet_state_type 'encumbered', outputs 0, time_out 60
   #   VERIFY_MAX, wallet 'WALLET_2A', wallet_state_type 'encumbered', outputs 0, time_out 60
   #   STOP
   # Example command file content, continuous steps:
-  #   CONTINUOUS, coin_split_outputs 20, coin_split_value 1000, transactions 10, value 900, cycles 3
+  #   CONTINUOUS_USER_WALLETS, coin_split_outputs 20, coin_split_value 1000, transactions 10, value 900, cycles 3
   #   STOP
 
   @transactions_manual_control
@@ -256,21 +265,61 @@ Feature: Transactions
   Scenario: Transactions devnet manual control
     Given I have a devnet cluster with capacity of 2 nodes
     And we join an external network
+    And I have a faucet with URL "https://devnet.blockchain.logos.co" username "strode" and password "SzH3RP7zdVQs8LCb"
     And I have initial peers:
-      | initial_peer |
-      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWMwekH9M34FQXX6jPX4XYyNDgaCw68g4y7hqW2bv4UU9h |
-      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWEyJNQzmnfWcaRzCBv1ebqXMAWJecnBWmzp2AF6gk28PQ |
-      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWMrcbQQwT2dpNDiuLUdGESoqR3u2sJ8gAHHo9JPQH7yHb |
-      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWNMixUYkNuvXrNwnsmK2ZFRKNm48kF2qqtd9Du7Ls1yQe |
+      | initial_peer                                                                                |
+      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
+      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
+      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
+      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
     And I have IBD peers:
-      | ibd_peer |
-      | 12D3KooWMwekH9M34FQXX6jPX4XYyNDgaCw68g4y7hqW2bv4UU9h |
-      | 12D3KooWEyJNQzmnfWcaRzCBv1ebqXMAWJecnBWmzp2AF6gk28PQ |
-      | 12D3KooWMrcbQQwT2dpNDiuLUdGESoqR3u2sJ8gAHHo9JPQH7yHb |
-      | 12D3KooWNMixUYkNuvXrNwnsmK2ZFRKNm48kF2qqtd9Du7Ls1yQe |
+      | ibd_peer                                             |
+      | 12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
+      | 12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
+      | 12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
+      | 12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
-    When I perform manual control of transactions for all wallets
+#    And I request 3 rounds of faucet funds for all wallets
+    When I perform manual control of transactions for all wallets no time-out
+    Then I stop all nodes
+
+  @transactions_manual_control
+  Scenario: Transactions stress devnet manual control
+    Given I have a devnet cluster with capacity of 10 nodes
+    And we join an external network
+    And I have a faucet with URL "https://devnet.blockchain.logos.co" username "strode" and password "SzH3RP7zdVQs8LCb"
+    And I have initial peers:
+      | initial_peer                                                                                |
+      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
+      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
+      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
+      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
+    And I have IBD peers:
+      | ibd_peer                                             |
+      | 12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
+      | 12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
+      | 12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
+      | 12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
+    And I start nodes with wallet resources:
+      | node_name | account_index | wallet_name | connected_to |
+      | NODE_1    | 1             | WALLET_1A   |              |
+      | NODE_2    | 2             | WALLET_2A   | NODE_1       |
+      | NODE_3    | 3             | WALLET_3A   | NODE_2       |
+      | NODE_4    | 4             | WALLET_4A   | NODE_3       |
+      | NODE_5    | 5             | WALLET_5A   | NODE_4       |
+      | NODE_6    | 6             | WALLET_6A   | NODE_5       |
+      | NODE_7    | 7             | WALLET_7A   | NODE_6       |
+      | NODE_8    | 8             | WALLET_8A   | NODE_7       |
+      | NODE_9    | 9             | WALLET_9A   | NODE_8       |
+      | NODE_10   | 10            | WALLET_10A  | NODE_9       |
+#      | NODE_11   | 11            | WALLET_11A  | NODE_10      |
+#      | NODE_12   | 12            | WALLET_12A  | NODE_11      |
+#      | NODE_13   | 13            | WALLET_13A  | NODE_12      |
+#      | NODE_14   | 14            | WALLET_14A  | NODE_13      |
+#      | NODE_15   | 15            | WALLET_15A  | NODE_14      |
+    And I request 3 rounds of faucet funds for all wallets
+    When I perform manual control of transactions for all wallets no time-out
     Then I stop all nodes

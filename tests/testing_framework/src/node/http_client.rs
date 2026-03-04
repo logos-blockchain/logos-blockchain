@@ -4,7 +4,12 @@ use common_http_client::{BasicAuthCredentials, CommonHttpClient, Error, Processe
 use futures::Stream;
 use lb_chain_service::CryptarchiaInfo;
 use lb_core::{block::Block, header::HeaderId, mantle::SignedMantleTx};
-use lb_http_api_common::paths::NETWORK_INFO;
+use lb_http_api_common::{
+    bodies::wallet::transfer_funds::{
+        WalletTransferFundsRequestBody, WalletTransferFundsResponseBody,
+    },
+    paths::NETWORK_INFO,
+};
 use lb_network_service::backends::libp2p::Libp2pInfo;
 use reqwest::Url;
 
@@ -86,6 +91,15 @@ impl NodeHttpClient {
     pub async fn submit_transaction(&self, tx: &SignedMantleTx) -> Result<(), Error> {
         self.http_client
             .post_transaction(self.base_url.clone(), tx.clone())
+            .await
+    }
+
+    pub async fn transfer_funds(
+        &self,
+        body: WalletTransferFundsRequestBody,
+    ) -> Result<WalletTransferFundsResponseBody, Error> {
+        self.http_client
+            .transfer_funds(self.base_url.clone(), body)
             .await
     }
 

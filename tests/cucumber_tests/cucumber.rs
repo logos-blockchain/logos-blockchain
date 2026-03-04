@@ -117,7 +117,27 @@ async fn main() {
                     world.apply_deployment_config_override_path();
                 }
             })
-        });
+        })
+        .after(
+            |feature, _rule, scenario, _scenario_finished, cucumber_world| {
+                Box::pin(async move {
+                    // Runs after the scenario has completed; useful for capturing final state/logs.
+                    println!(
+                        "\nFinished - {}: {} ({}: {})\n",
+                        scenario.keyword, scenario.name, feature.keyword, feature.name,
+                    );
+
+                    if let Some(world) = cucumber_world {
+                        let path = world.scenario_base_dir.join("debug_dump_file.log");
+                        if let Some(parent) = path.parent() {
+                            let _unused = std::fs::create_dir_all(parent);
+                        }
+                        let _unused = std::fs::write(&path, world.full_debug_info_string());
+                    }
+                })
+            },
+        );
+
     if let Some(retries) = get_retries()
         .inspect_err(|e| println!("{e}"))
         .expect("should parse retries")
