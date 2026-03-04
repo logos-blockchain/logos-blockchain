@@ -31,6 +31,17 @@ If you know for sure your node will not have a publicly reachable IP address (e.
 
 This takes a few seconds and produces a `user_config.yaml` file.
 
+---
+
+If you are running through the Blockchain UI, paste the following peers as your initial peers and generate a new config.
+
+```
+/ip4/65.109.51.37/udp/3000/quic-v1/p2p/{TODO}
+/ip4/65.109.51.37/udp/3001/quic-v1/p2p/{TODO}
+/ip4/65.109.51.37/udp/3002/quic-v1/p2p/{TODO}
+/ip4/65.109.51.37/udp/3003/quic-v1/p2p/{TODO}
+```
+
 ### ▶️ Run Your Node
 
 Run the node:
@@ -121,7 +132,7 @@ Having issues? Reach out to the Logos Blockchain team on [Discord][devnet-discor
 - [ ] Auto-generate the changelog (GitHub feature) using the tag of the previous release, then move the changelog section to the **top** of the release notes
 - [ ] Verify binaries are present for **Mac** and **Linux**
 - [ ] Verify circuits of the expected version are present for **Mac** and **Linux**
-- [ ] Replace `{TODO}` peer IDs by visiting the [devnet dashboard][devnet-dashboard] and copying each node's address + peer ID from their network info
+- [ ] Replace all `{TODO}` peer IDs in the `Initialize Your Node` section by visiting the [devnet dashboard][devnet-dashboard] and copying each node's address + peer ID from their network info
 - [ ] Set the release type: check **pre-release** or **latest** as appropriate
 - [ ] Delete this checklist and publish
 
