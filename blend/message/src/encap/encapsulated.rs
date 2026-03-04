@@ -1,6 +1,6 @@
 use derivative::Derivative;
 use itertools::Itertools as _;
-use lb_blend_crypto::cipher::Cipher;
+use lb_blend_crypto::{ZkHash, cipher::Cipher};
 use lb_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},
     selection::{self, VerifiedProofOfSelection, inputs::VerifyInputs},
@@ -28,7 +28,7 @@ use crate::{
     },
 };
 
-pub type MessageIdentifier = Ed25519PublicKey;
+pub type MessageIdentifier = ZkHash;
 
 /// An unverified encapsulated message that is received from a peer.
 #[derive(Derivative, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -104,7 +104,7 @@ impl EncapsulatedMessage {
 
     #[must_use]
     pub const fn id(&self) -> MessageIdentifier {
-        *self.public_header.signing_pubkey()
+        self.public_header.proof_of_quota().key_nullifier()
     }
 
     #[cfg(any(test, feature = "unsafe-test-functions"))]

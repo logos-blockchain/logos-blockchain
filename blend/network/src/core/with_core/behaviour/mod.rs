@@ -16,6 +16,7 @@ use lb_blend_message::encap::validated::{
 };
 use lb_blend_scheduling::membership::Membership;
 use lb_cryptarchia_engine::Epoch;
+use lb_groth16::fr_to_bytes;
 use lb_log_targets::blend;
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol,
@@ -874,7 +875,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     ) -> Result<(), SendError> {
         tracing::trace!(
             "Forwarding message with id {:?} to current epoch peers. Negotiated peers: {:?}. Excluded peer: {excluded_peer:?}",
-            hex::encode(message.id()),
+            hex::encode(fr_to_bytes(&message.id())),
             self.negotiated_peers()
         );
 

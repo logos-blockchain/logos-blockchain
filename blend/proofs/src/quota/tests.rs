@@ -254,7 +254,6 @@ fn same_key_different_indices() {
                 zk_root: merkle_tree.root(),
             },
             leader: LeaderInputs::default(),
-            session: 1,
             signing_key: Ed25519PublicKey::from_bytes(&[10; _]).unwrap(),
         },
         secret_inputs: [ProofOfCoreQuotaInputs {
@@ -307,20 +306,19 @@ fn different_keys_same_index() {
                 zk_root: merkle_tree.root(),
             },
             leader: LeaderInputs::default(),
-            session: 1,
             signing_key: Ed25519PublicKey::from_bytes(&[1; _]).unwrap(),
         },
         secret_inputs: [ProofOfCoreQuotaInputs {
             core_path_and_selectors: merkle_tree
                 .get_proof_for_key(key.to_public_key().as_fr())
                 .unwrap(),
-            core_sk: key.clone().into_inner(),
+            core_sk: key.into_inner(),
         }],
     };
 
     // Use same public inputs, just a different signing key.
     let public_inputs_key_2 = {
-        let mut public_inputs_key_2 = public_inputs_key_1.clone();
+        let mut public_inputs_key_2 = public_inputs_key_1;
         public_inputs_key_2.signing_key = Ed25519PublicKey::from_bytes(&[3; _]).unwrap();
 
         public_inputs_key_2
