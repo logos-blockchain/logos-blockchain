@@ -33,7 +33,7 @@ This takes a few seconds and produces a `user_config.yaml` file.
 
 ---
 
-If you are running through the Blockchain UI, paste the following peers as your initial peers and generate a new config.
+If you are running through the [Logos Blockchain UI][logos-modules-github], paste the following peers as your initial peers and generate a new config.
 
 ```
 /ip4/65.109.51.37/udp/3000/quic-v1/p2p/{TODO}
@@ -140,3 +140,4 @@ Having issues? Reach out to the Logos Blockchain team on [Discord][devnet-discor
 [devnet-faucet]: https://devnet.blockchain.logos.co/web/faucet/
 [devnet-dashboard]: https://devnet.blockchain.logos.co/web/
 [devnet-discord-public]: https://discord.com/channels/973324189794697286/1468535289604735038
+[logos-modules-github]: https://github.com/logos-co/logos-modules
