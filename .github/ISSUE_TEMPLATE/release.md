@@ -28,8 +28,8 @@ Progress on the checklist must be provided as comments to the issue.
 
 ## Deployment Settings Update
 
-- [ ] Checkout `master` and push a new commit on top of `pre-X.Y.Z` with the updated devnet settings
-- [ ] Verify `git` shows a diff, otherwise it means the downloaded deployment file is the old one and something went wrong when downloading the new one from the deployment settings endpoint
+- [ ] Checkout `master` and push a new commit on top of `pre-X.Y.Z` with 1. the updated devnet settings and 2. the bumped up workspace version matching the new release
+- [ ] Verify `git` shows a diff for the deployment file, otherwise it means something went wrong when downloading the new one from the deployment settings endpoint
 - [ ] Verify the HEAD of `master` has green CI ✅
 - [ ] Tag the commit with `X.Y.Z` and push the tag
 
