@@ -38,11 +38,19 @@ runs:
           cargo-hack-check/${{ runner.os }}/main
           cargo-hack-check/${{ runner.os }}
 
-    - name: Run Cache-Aware Cargo Hack Check
+    - name: Run Cache-Aware Cargo Hack Check (Unix)
+      if: runner.os != 'Windows'
       shell: bash
       env:
         RUSTFLAGS: "-D warnings"
       run: python3 ./scripts/cargo-hack-check/script.py
+
+    - name: Run Cache-Aware Cargo Hack Check (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      env:
+        RUSTFLAGS: "-D warnings"
+      run: python3 ./scripts/cargo-hack-check/script.py      
 
     - name: Save Cargo Hack Keys (main)
       if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
