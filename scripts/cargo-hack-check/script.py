@@ -2,9 +2,11 @@
 # Runs a cache-aware Cargo Hack check for all crates in the workspace.
 
 
+import hashlib
 import json
 import dataclasses
 from collections import namedtuple
+import os
 from pathlib import Path
 from sys import stderr
 from typing import List, Dict, Set, Iterable, TypedDict, Any, Optional
@@ -388,13 +390,49 @@ class CargoHackCheckCommand:
 
 
 def compute_crate_hash(crate_directory: Path) -> str:
-    result = subprocess.run(
-        [COMPUTE_CREATE_HASH_SCRIPT, crate_directory, WORKSPACE_CARGO_LOCK],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout.strip()
+    """Cross-platform crate hash computation (replaces compute_crate_hash.sh)."""
+    directory_tree_hash = _compute_directory_tree_hash(crate_directory)
+
+    lock_hash = "NO_LOCK"
+    if WORKSPACE_CARGO_LOCK.is_file():
+        lock_hash = _sha256_file(WORKSPACE_CARGO_LOCK)
+
+    combined = f"{directory_tree_hash}\n{lock_hash}\n"
+    return hashlib.sha256(combined.encode()).hexdigest()
+
+def _sha256_file(filepath: Path) -> str:
+    h = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _compute_directory_tree_hash(directory: Path) -> str:
+    """
+    Hash all files in a directory (excluding target/ and .git/),
+    sorted deterministically by relative POSIX path.
+    """
+    file_hashes = []
+    for root, dirs, files in os.walk(directory):
+        # Prune target/ and .git/ directories
+        dirs[:] = [d for d in dirs if d not in ("target", ".git")]
+        for filename in files:
+            filepath = Path(root) / filename
+            rel_path = filepath.relative_to(directory).as_posix()
+            file_hash = _sha256_file(filepath)
+            file_hashes.append((rel_path, file_hash))
+
+    # Sort by relative path for deterministic ordering (matching LC_ALL=C sort)
+    file_hashes.sort(key=lambda x: x[0])
+
+    # Combine all individual file hashes into one hash
+    h = hashlib.sha256()
+    for rel_path, file_hash in file_hashes:
+        # Match the format of sha256sum output: "<hash>  <filename>\n"
+        h.update(f"{file_hash}  ./{rel_path}\n".encode())
+
+    return h.hexdigest()
 
 
 def list_cargo_hack_check_commands() -> Set[CargoHackCheckEntry]:
