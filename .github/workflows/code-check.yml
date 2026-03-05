@@ -37,9 +37,11 @@ jobs:
       # restored cache lands onto a disk that has already been cleaned, maximizing the chance the restore succeeds
       # without hitting disk limits.
       - name: Prune disk space (cache-aware, self-hosted)
+        if: runner.os != 'Windows'
         uses: ./.github/actions/prune-disk-space
 
       - name: Set up Cargo cache
+        if: runner.os != 'Windows'
         uses: ./.github/actions/setup-cargo-cache
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -49,7 +51,7 @@ jobs:
         uses: ./.github/actions/cargo-hack-check-cached
 
       - name: Update Cargo cache
-        if: success() || failure()
+        if: runner.os != 'Windows' && (success() || failure())
         uses: ./.github/actions/update-cargo-cache
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}

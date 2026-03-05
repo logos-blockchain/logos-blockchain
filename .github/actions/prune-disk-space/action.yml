@@ -6,7 +6,7 @@ runs:
   steps:
     - name: Prune disk space
       if: always()
-      shell: powershell
+      shell: bash
       run: |
         set -uo pipefail
 
