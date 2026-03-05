@@ -26,7 +26,7 @@ runs:
   using: composite
   steps:
     - name: Validate mode
-      shell:
+      shell: bash
       run: |
         case "${{ inputs.mode }}" in
           delete-all|keep-latest)
@@ -41,7 +41,7 @@ runs:
 
     - name: Select all caches
       id: select
-      shell:
+      shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         KEY_PREFIX: ${{ inputs.key-prefix }}
@@ -79,7 +79,7 @@ runs:
     - name: Filter for keep-latest
       id: keep-latest
       if: inputs.mode == 'keep-latest'
-      shell:
+      shell: bash
       run: |
         IDS="${{ steps.select.outputs.ids }}"
 
@@ -95,7 +95,7 @@ runs:
         echo "EOF" >> "$GITHUB_OUTPUT"
 
     - name: Prune selected caches
-      shell:
+      shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
       run: |

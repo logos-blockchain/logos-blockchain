@@ -39,7 +39,7 @@ runs:
           cargo-hack-check/${{ runner.os }}
 
     - name: Run Cache-Aware Cargo Hack Check
-      shell:
+      shell: bash
       env:
         RUSTFLAGS: "-D warnings"
       run: python3 ./scripts/cargo-hack-check/script.py

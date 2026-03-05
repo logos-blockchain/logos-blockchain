@@ -65,7 +65,7 @@ runs:
           ${{ inputs.key-prefix }}
 
     - name: Log cache directory sizes
-      shell:
+      shell: bash
       run: |
         echo "=== Cargo registry ==="
         du -sh ~/.cargo/registry/index/  2>/dev/null || echo "  index: not found"

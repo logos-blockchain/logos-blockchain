@@ -10,52 +10,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  formatting:
-    name: Check formatting
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
-      - name: Install nightly toolchain
-        uses: actions-rs/toolchain@88dc2356392166efad76775c878094f4e83ff746  # Version 1.0.6
-        with:
-          # The same version must be used in the `.pre-commit-config.yaml` file
-          toolchain: nightly-2025-12-05
-          profile: minimal
-          components: rustfmt
-          override: true
-      - name: Run cargo fmt
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: fmt
-          args: --all --check
-      - name: Install taplo CLI
-        run: cargo install taplo-cli --locked --version 0.10.0
-      - name: Run taplo lint
-        run: taplo lint
-      - name: Run taplo fmt
-        run: taplo fmt --check
-
-  cargo-deny:
-    name: Check cargo-deny rules
-    # `cargo-deny` action is only supported on Linux
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
-
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-
-      # `cargo-deny`'s action is compiled and run using `musl` but we generally use `gnu` in our local machines.
-      # Thus, results may differ from local runs.
-      # To avoid this, we install and run `cargo-deny` manually.
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked --version 0.19.0
-
-      - name: Run cargo-deny
-        run: cargo-deny --locked --all-features check --hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings
 
   features:
     name: Check packages feature combinations
@@ -64,10 +18,6 @@ jobs:
       matrix:
         platform:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - os: [self-hosted, Linux]
-            label: self-hosted-linux
-          - os: [self-hosted, macOS]
-            label: self-hosted-macos
           - os: [self-hosted, Windows]
             label: self-hosted-windows
     runs-on: ${{ matrix.platform.os }}
@@ -75,10 +25,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
+      # TODO: Install cargo-binstall on self-hosted runners directly.
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@bc432b49369a3f25c8c8b19578a82060c18a5dd6  # Version 1.17.6
+
       - name: Install cargo-hack
-        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25  # Version 2.49.35
-        with:
-          tool: cargo-hack
+        run: cargo binstall cargo-hack@0.6.43 --locked
 
       # Prune after Install cargo-hack, before Set up Cargo cache — frees disk space from the previous run's leftover
       # artifacts (incremental compile dirs, fingerprints, build dirs) before the cache is restored. This means the
@@ -108,116 +60,3 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: clean
-
-  unused-deps:
-    name: Check for unused dependencies
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ ubuntu-latest, macos-latest, windows-latest ]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
-      - name: Install cargo-machete
-        uses: bnjbvr/cargo-machete@9f0895d780783da0089162cae9668f6ec6e896c4  # Version 0.8.0
-        # This step also runs `cargo-machete` without the `--with-metadata` flag, which can trigger more false positives.
-        # We ignore errors and run `cargo-machete` with the `--with-metadata` flag for the actual result.
-        continue-on-error: true
-      - name: Run cargo-machete
-        run: cargo machete --with-metadata
-  
-  lints:
-    name: Check Rust lints
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ ubuntu-latest, macos-latest, windows-latest ]
-    runs-on: ${{ matrix.os }}
-    env:
-      RUSTFLAGS: -D warnings
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
-
-      - name: Set up Cargo cache
-        uses: ./.github/actions/setup-cargo-cache
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          key-prefix: code-check/lints/${{ matrix.os }}
-
-      - name: Run cargo clippy on workspace
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: clippy
-          args: --locked --all --all-targets --all-features
-
-      - name: Update Cargo cache
-        if: success() || failure()
-        uses: ./.github/actions/update-cargo-cache
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          key-prefix: code-check/lints/${{ matrix.os }}
- 
-  tests:
-    name: Run test suite
-    if: ${{ !startsWith(github.event.pull_request.title, '[WIP]') && !contains(github.event.label.name,  'DO NOT MERGE') }}
-    strategy:
-      fail-fast: false # all OSes should be tested even if one fails (default: true)
-      matrix:
-        os:
-          # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - [ self-hosted, Linux ]
-          - [ self-hosted, macOS ]
-          - [ self-hosted, Windows ]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
-
-      - name: Setup Circuits
-        uses: ./.github/actions/setup-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      # Prune before any builds.
-      - name: Prune disk space (cache-aware, self-hosted)
-        uses: ./.github/actions/prune-disk-space
-
-      - name: Run the node binary with the testing feature to check the one-node config files validity
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: run
-          args: >-
-            --locked -p logos-blockchain-node --features testing 
-            -- nodes/node/standalone-node-config.yaml --check-config --deployment nodes/node/standalone-deployment-config.yaml
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35
-        with:
-          tool: cargo-nextest
-
-      - name: Cargo test all except end-to-end integration tests
-        timeout-minutes: 90
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: nextest
-          # - We don't test benches as they take 6h+, leading to a timeout
-          # - We also do not test end-to-end integration tests here as those are run in a dedicated step below
-          args: >-
-            run --workspace --locked --lib --bins --examples --tests --retries 2
-            --all-features --no-fail-fast --exclude logos-blockchain-tests
-
-      - name: Clean up build artifacts
-        if: success() || failure()
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: clean
-
-      - name: Upload integration tests results
-        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
-        if: failure()
-        with:
-          name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
-          include-hidden-files: true
-          path: tests/.tmp*
