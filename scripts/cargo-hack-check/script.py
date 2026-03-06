@@ -489,14 +489,16 @@ def parse_args() -> argparse.Namespace:
     )
     output_mode = parser.add_mutually_exclusive_group()
     output_mode.add_argument(
-        "--rich",
+        "--interactive",
         action="store_true",
-        help="Force Rich interactive output even if terminal auto-detection would disable it.",
+        dest="interactive",
+        help="Force interactive output even if terminal auto-detection would disable it.",
     )
     output_mode.add_argument(
-        "--no-rich",
+        "--plain",
         action="store_true",
-        help="Force plain line-based output even if terminal auto-detection would enable Rich.",
+        dest="plain",
+        help="Force plain line-based output even if terminal auto-detection would enable interactive output.",
     )
     parser.add_argument(
         "--continue-on-failure",
@@ -515,7 +517,7 @@ def main(args: argparse.Namespace):
     sorted_commands = build_cargo_hack_commands_sorted_topologically()
     ensure_cache_directory_exists()
 
-    rich_enabled = True if args.rich else False if args.no_rich else None
+    rich_enabled = True if args.interactive else False if args.plain else None
     max_crate_name_width = max((len(command.crate_name) for command in sorted_commands), default=0)
     dashboard = CargoHackDashboard(
         len(sorted_commands),
