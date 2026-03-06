@@ -5,6 +5,8 @@ mod relays;
 mod states;
 pub mod storage;
 mod sync;
+#[cfg(test)]
+mod tests;
 
 use core::fmt::Debug;
 use std::{
@@ -357,14 +359,13 @@ impl Cryptarchia {
 
     fn online(self) -> (Self, PrunedBlocks<HeaderId>) {
         let (consensus, pruned_blocks) = self.consensus.online();
-        (
-            Self {
-                ledger: self.ledger,
-                consensus,
-                genesis_id: self.genesis_id,
-            },
-            pruned_blocks,
-        )
+        let mut cryptarchia = Self {
+            ledger: self.ledger,
+            consensus,
+            genesis_id: self.genesis_id,
+        };
+        cryptarchia.prune_ledger_states(pruned_blocks.all());
+        (cryptarchia, pruned_blocks)
     }
 
     const fn is_boostrapping(&self) -> bool {
