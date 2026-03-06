@@ -5,7 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     rust-overlay = {
-      url = "github:oxalica/rust-overlay";
+      url = "github:oxalica/rust-overlay/629bbb7f9d02787a54e28398b411da849246253b";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -53,7 +53,7 @@
           commonArgs = {
             pname = "logos-blockchain-c";
             cargoExtraArgs = "-p logos-blockchain-c";
-            version = "0.1.0";
+            version = "0.2.1";
 
             inherit src;
 
