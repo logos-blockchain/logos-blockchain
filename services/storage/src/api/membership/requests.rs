@@ -8,9 +8,7 @@ use tokio::sync::oneshot::Sender;
 
 use crate::{
     StorageServiceError,
-    api::{
-        StorageBackendApi, StorageOperation, membership::StorageMembershipApi,
-    },
+    api::{StorageBackendApi, StorageOperation, membership::StorageMembershipApi},
     backends::StorageBackend,
 };
 

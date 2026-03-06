@@ -2,13 +2,20 @@ pub mod api;
 pub mod backends;
 
 use std::{
-    collections::{BTreeSet, HashMap}, fmt::{Debug, Display, Formatter}, marker::PhantomData, num::NonZeroUsize
+    collections::{BTreeSet, HashMap},
+    fmt::{Debug, Display, Formatter},
+    marker::PhantomData,
+    num::NonZeroUsize,
 };
 
 use async_trait::async_trait;
 use backends::{StorageBackend, StorageTransaction};
 use bytes::Bytes;
-use lb_core::{block::BlockNumber, codec::{DeserializeOp as _, SerializeOp as _}, sdp::{Locator, ProviderId, ServiceType, SessionNumber}};
+use lb_core::{
+    block::BlockNumber,
+    codec::{DeserializeOp as _, SerializeOp as _},
+    sdp::{Locator, ProviderId, ServiceType, SessionNumber},
+};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -19,7 +26,10 @@ use overwatch::{
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot::Sender;
 
-use crate::api::{StorageApiRequest, StorageOperation, membership::requests::{MembershipApiRequest, SessionSender}};
+use crate::api::{
+    StorageApiRequest, StorageOperation,
+    membership::requests::{MembershipApiRequest, SessionSender},
+};
 
 /// Storage message that maps to [`StorageBackend`] trait
 pub enum StorageMsg<Backend: StorageBackend> {
@@ -44,8 +54,7 @@ pub enum StorageMsg<Backend: StorageBackend> {
     },
     Execute {
         transaction: Backend::Transaction,
-        reply_channel:
-            Sender<<Backend::Transaction as StorageTransaction>::Result>,
+        reply_channel: Sender<<Backend::Transaction as StorageTransaction>::Result>,
     },
     Api {
         request: StorageApiRequest<Backend>,
@@ -364,9 +373,7 @@ where
     async fn handle_execute(
         backend: &mut Backend,
         transaction: Backend::Transaction,
-        reply_channel: Sender<
-            <Backend::Transaction as StorageTransaction>::Result,
-        >,
+        reply_channel: Sender<<Backend::Transaction as StorageTransaction>::Result>,
     ) -> Result<(), StorageServiceError> {
         let result = backend
             .execute(transaction)
