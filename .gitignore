@@ -38,3 +38,7 @@ result
 
 # Docker
 tempo-data/
+
+# Python
+**.pyc
+
