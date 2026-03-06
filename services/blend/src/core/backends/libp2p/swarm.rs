@@ -34,7 +34,7 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::core::{
     backends::{
-        PublicInfo, SessionInfo,
+        PeerEvent, PublicInfo, SessionInfo,
         libp2p::{
             LOG_TARGET, Libp2pBlendBackendSettings,
             behaviour::{BlendBehaviour, BlendBehaviourEvent},
@@ -79,6 +79,7 @@ where
     swarm: Swarm<BlendBehaviour<ProofsVerifier, ObservationWindowProvider>>,
     swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage>,
     incoming_message_sender: broadcast::Sender<EncapsulatedMessageWithVerifiedPublicHeader>,
+    peer_event_sender: broadcast::Sender<PeerEvent<PeerId>>,
     public_info: PublicInfo<PeerId>,
     rng: Rng,
     max_dial_attempts_per_connection: NonZeroU64,
@@ -92,6 +93,7 @@ pub struct SwarmParams<'config, Rng> {
     pub rng: Rng,
     pub swarm_message_receiver: mpsc::Receiver<BlendSwarmMessage>,
     pub incoming_message_sender: broadcast::Sender<EncapsulatedMessageWithVerifiedPublicHeader>,
+    pub peer_event_sender: broadcast::Sender<PeerEvent<PeerId>>,
     pub minimum_network_size: NonZeroUsize,
 }
 
@@ -113,6 +115,7 @@ where
             rng,
             swarm_message_receiver: swarm_messages_receiver,
             incoming_message_sender,
+            peer_event_sender,
             minimum_network_size,
         }: SwarmParams<Rng>,
     ) -> Self {
@@ -144,6 +147,7 @@ where
             swarm,
             swarm_messages_receiver,
             incoming_message_sender,
+            peer_event_sender,
             public_info: current_public_info,
             rng,
             max_dial_attempts_per_connection: config.backend.max_dial_attempts_per_peer,
@@ -216,14 +220,22 @@ where
 
     fn handle_disconnected_peer(&mut self, peer_id: PeerId, peer_state: NegotiatedPeerState) {
         tracing::debug!(target: LOG_TARGET, "Peer {peer_id} disconnected with state {peer_state:?}.");
-        if peer_state.is_spammy() {
+        if let NegotiatedPeerState::Spammy(spam_reason) = peer_state {
             self.swarm.behaviour_mut().blocked_peers.block_peer(peer_id);
+            drop(self.peer_event_sender.send(PeerEvent::Banned {
+                id: peer_id,
+                reason: spam_reason,
+            }));
         }
         self.check_and_dial_new_peers_except(Some(peer_id));
     }
 
     fn handle_unhealthy_peer(&mut self, peer_id: PeerId) {
         tracing::debug!(target: LOG_TARGET, "Peer {peer_id} is unhealthy");
+        drop(
+            self.peer_event_sender
+                .send(PeerEvent::Unhealthy { id: peer_id }),
+        );
         self.check_and_dial_new_peers_except(Some(peer_id));
     }
 
@@ -239,7 +251,7 @@ where
                 self.handle_unhealthy_peer(peer_id);
             }
             lb_blend::network::core::with_core::behaviour::Event::HealthyPeer(peer_id) => {
-                Self::handle_healthy_peer(peer_id);
+                self.handle_healthy_peer(peer_id);
             }
             lb_blend::network::core::with_core::behaviour::Event::PeerDisconnected(
                 peer_id,
@@ -409,8 +421,12 @@ where
             .available_connection_slots()
     }
 
-    fn handle_healthy_peer(peer_id: PeerId) {
+    fn handle_healthy_peer(&self, peer_id: PeerId) {
         tracing::debug!(target: LOG_TARGET, "Peer {peer_id} is healthy again");
+        drop(
+            self.peer_event_sender
+                .send(PeerEvent::Healthy { id: peer_id }),
+        );
     }
 
     fn handle_blend_edge_behaviour_event(&mut self, blend_event: CoreToEdgeEvent) {
@@ -544,6 +560,7 @@ where
         behaviour_constructor: BehaviourConstructor,
         swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage>,
         incoming_message_sender: broadcast::Sender<EncapsulatedMessageWithVerifiedPublicHeader>,
+        peer_event_sender: broadcast::Sender<PeerEvent<PeerId>>,
         current_public_info: PublicInfo<PeerId>,
         rng: Rng,
         max_dial_attempts_per_connection: NonZeroU64,
@@ -561,6 +578,7 @@ where
         let membership = current_public_info.session.membership.clone();
         Self {
             incoming_message_sender,
+            peer_event_sender,
             public_info: current_public_info,
             max_dial_attempts_per_connection,
             ongoing_dials: HashMap::new(),

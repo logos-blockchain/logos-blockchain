@@ -48,7 +48,7 @@ type RuntimeServiceId = ();
 #[test_log::test(tokio::test)]
 async fn test_handle_incoming_blend_message() {
     let (_, _, state_updater, _state_receiver) =
-        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+        dummy_overwatch_resources::<(), (), _, RuntimeServiceId>();
 
     // Prepare a encapsulated message.
     let mut session = 0;
@@ -125,7 +125,7 @@ async fn test_handle_incoming_blend_message() {
     );
     let (mut new_scheduler, mut scheduler) =
         scheduler.rotate_session(scheduler_session_info(&public_info), scheduler_settings);
-    let (_, _, _, _, current_token_collector, _, state_updater) =
+    let (_, _, _, _, current_token_collector, _, _, state_updater) =
         recovery_checkpoint.into_components();
     let (new_token_collector, old_token_collector) =
         current_token_collector.rotate_session(&reward_session_info(&public_info));
@@ -258,7 +258,7 @@ async fn test_handle_incoming_blend_message() {
 
 #[test_log::test(tokio::test)]
 async fn test_handle_session_transition_expired() {
-    let (overwatch_handle, _, _, _) = dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+    let (overwatch_handle, _, _, _) = dummy_overwatch_resources::<(), (), (), RuntimeServiceId>();
 
     // Prepare settings.
     let session = 0;
@@ -339,7 +339,7 @@ async fn test_handle_session_event() {
     use lb_chain_service::Epoch;
 
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
-        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+        dummy_overwatch_resources::<(), (), _, RuntimeServiceId>();
 
     // Prepare components for session event handling.
     let session = 0;
@@ -533,6 +533,7 @@ async fn complete_old_session_after_main_loop_done() {
     // Prepare streams.
     let (inbound_relay, _inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
+    let (blend_peer_event_stream, _) = new_stream();
     let (membership_stream, membership_sender) = new_stream();
     let (clock_stream, clock_sender) = new_stream();
 
@@ -624,6 +625,7 @@ async fn complete_old_session_after_main_loop_done() {
         ) = run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
+            blend_peer_event_stream,
             &mut remaining_clock_stream,
             secret_pol_info_stream,
             &mut remaining_session_stream,
@@ -711,6 +713,7 @@ async fn stop_on_empty_session() {
     // Prepare streams.
     let (inbound_relay, _inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
+    let (blend_peer_event_stream, _) = new_stream();
     let (membership_stream, membership_sender) = new_stream();
     let (clock_stream, clock_sender) = new_stream();
 
@@ -802,6 +805,7 @@ async fn stop_on_empty_session() {
         ) = run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
+            blend_peer_event_stream,
             &mut remaining_clock_stream,
             secret_pol_info_stream,
             &mut remaining_session_stream,

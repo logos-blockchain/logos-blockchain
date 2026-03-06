@@ -125,12 +125,14 @@ impl SwarmBuilder {
     {
         let (swarm_message_sender, swarm_message_receiver) = mpsc::channel(100);
         let (incoming_message_sender, incoming_message_receiver) = broadcast::channel(100);
+        let (incoming_peer_event_sender, _incoming_peer_event_receiver) = broadcast::channel(100);
 
         let swarm = BlendSwarm::new_test(
             &self.identity,
             behaviour_constructor,
             swarm_message_receiver,
             incoming_message_sender,
+            incoming_peer_event_sender,
             self.public_info,
             BlakeRng::from_entropy(),
             3u64.try_into().unwrap(),

@@ -82,7 +82,7 @@ use tracing::{debug, error, info};
 
 use crate::{
     core::{
-        backends::{PublicInfo, SessionInfo},
+        backends::{PeerEvent, PublicInfo, SessionInfo},
         kms::{KmsPoQAdapter, PreloadKMSBackendCorePoQGenerator},
         processor::{
             CoreCryptographicProcessor, DecapsulatedMessageType, Error,
@@ -141,9 +141,10 @@ pub struct BlendService<
 > where
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
     Network: NetworkAdapter<RuntimeServiceId>,
+    NodeId: Eq + Hash,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    last_saved_state: Option<ServiceState<Backend::Settings, Network::BroadcastSettings>>,
+    last_saved_state: Option<ServiceState<Backend::Settings, Network::BroadcastSettings, NodeId>>,
     _phantom: PhantomData<(
         Backend,
         MembershipAdapter,
@@ -184,12 +185,13 @@ impl<
 where
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
     Network: NetworkAdapter<RuntimeServiceId>,
+    NodeId: Eq + Hash,
 {
     type Settings = StartingBlendConfig<Backend::Settings>;
-    type State = RecoveryServiceState<Backend::Settings, Network::BroadcastSettings>;
+    type State = RecoveryServiceState<Backend::Settings, Network::BroadcastSettings, NodeId>;
     type StateOperator = RecoveryOperator<
         JsonFileBackend<
-            RecoveryServiceState<Backend::Settings, Network::BroadcastSettings>,
+            RecoveryServiceState<Backend::Settings, Network::BroadcastSettings, NodeId>,
             StartingBlendConfig<Backend::Settings>,
         >,
     >;
@@ -444,6 +446,7 @@ where
         let secret_pol_info_stream = post_initialize::<PolInfoProvider, _>(overwatch_handle).await;
 
         let mut blend_messages = backend.listen_to_incoming_messages();
+        let peer_events = backend.listen_to_peer_events();
 
         // Run the main event loop while the node is a core node across multiple
         // sessions. When the node becomes a non-core node in a new session, the
@@ -458,6 +461,7 @@ where
         ) = run_event_loop(
             inbound_relay,
             &mut blend_messages,
+            peer_events,
             &mut remaining_clock_stream,
             secret_pol_info_stream,
             &mut remaining_session_stream,
@@ -524,9 +528,11 @@ async fn initialize<
     overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     kms_adapter: KmsAdapter,
     sdp_relay: &OutboundRelay<SdpMessage>,
-    mut last_saved_state: Option<ServiceState<Backend::Settings, NetAdapter::BroadcastSettings>>,
+    mut last_saved_state: Option<
+        ServiceState<Backend::Settings, NetAdapter::BroadcastSettings, NodeId>,
+    >,
     state_updater: StateUpdater<
-        Option<RecoveryServiceState<Backend::Settings, NetAdapter::BroadcastSettings>>,
+        Option<RecoveryServiceState<Backend::Settings, NetAdapter::BroadcastSettings, NodeId>>,
     >,
 ) -> (
     impl Stream<Item = SessionEvent<MaybeEmptyCoreSessionInfo<NodeId, KmsAdapter::CorePoQGenerator>>>
@@ -542,7 +548,7 @@ async fn initialize<
         ProofsGenerator,
         ProofsVerifier,
     >,
-    ServiceState<Backend::Settings, NetAdapter::BroadcastSettings>,
+    ServiceState<Backend::Settings, NetAdapter::BroadcastSettings, NodeId>,
     SchedulerWrapper<
         BlakeRng,
         ProcessedMessage<NetAdapter::BroadcastSettings>,
@@ -813,6 +819,7 @@ async fn run_event_loop<
     blend_messages: &mut (
              impl Stream<Item = EncapsulatedMessageWithVerifiedPublicHeader> + Send + Unpin + 'static
          ),
+    mut peer_events: impl Stream<Item = PeerEvent<NodeId>> + Send + Unpin + 'static,
     remaining_clock_stream: &mut (impl Stream<Item = SlotTick> + Send + Sync + Unpin + 'static),
     mut secret_pol_info_stream: impl Stream<Item = PolEpochInfo> + Unpin,
     remaining_session_stream: &mut (
@@ -840,7 +847,7 @@ async fn run_event_loop<
     >,
     mut public_info: PublicInfo<NodeId>,
     mut epoch: Epoch,
-    mut recovery_checkpoint: ServiceState<Backend::Settings, NetAdapter::BroadcastSettings>,
+    mut recovery_checkpoint: ServiceState<Backend::Settings, NetAdapter::BroadcastSettings, NodeId>,
 ) -> (
     CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
     OldSessionMessageScheduler<Rng, ProcessedMessage<NetAdapter::BroadcastSettings>>,
@@ -892,6 +899,9 @@ where
             }
             Some(incoming_message) = blend_messages.next() => {
                 recovery_checkpoint = handle_incoming_blend_message(incoming_message, &mut message_scheduler, old_session_message_scheduler.as_mut(), &crypto_processor, old_session_crypto_processor.as_ref(),  recovery_checkpoint);
+            }
+            _ = peer_events.next() => {
+                unimplemented!()
             }
             Some(round_info) = message_scheduler.next() => {
                 recovery_checkpoint = handle_release_round(round_info, &mut crypto_processor, rng, backend, network_adapter,  recovery_checkpoint).await;
@@ -1065,7 +1075,7 @@ async fn handle_session_event<
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
     current_public_info: PublicInfo<NodeId>,
-    current_recovery_checkpoint: ServiceState<Backend::Settings, BroadcastSettings>,
+    current_recovery_checkpoint: ServiceState<Backend::Settings, BroadcastSettings, NodeId>,
     backend: &mut Backend,
     sdp_relay: &OutboundRelay<SdpMessage>,
     current_epoch: Epoch,
@@ -1097,7 +1107,7 @@ where
                     membership: new_membership,
                 },
         })) => {
-            let (_, _, _, _, current_session_blending_token_collector, _, state_updater) =
+            let (_, _, _, _, current_session_blending_token_collector, _, _, state_updater) =
                 current_recovery_checkpoint.into_components();
 
             let new_reward_session_info = reward::SessionInfo::new(
@@ -1185,7 +1195,7 @@ where
         }
         SessionEvent::NewSession(MaybeEmptyCoreSessionInfo::Empty { session }) => {
             tracing::info!(target: LOG_TARGET, "New session event received, but no session info is available due to empty membership set.");
-            let (_, _, _, _, current_session_blending_token_collector, _, _) =
+            let (_, _, _, _, current_session_blending_token_collector, _, _, _) =
                 current_recovery_checkpoint.into_components();
             let new_reward_session_info = reward::SessionInfo::new(
                 session,
@@ -1256,7 +1266,9 @@ enum HandleSessionEventOutput<
     BackendSettings,
     BroadcastSettings,
     CorePoQGenerator,
-> {
+> where
+    NodeId: Eq + Hash,
+{
     Transitioning {
         new_crypto_processor:
             CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
@@ -1269,7 +1281,7 @@ enum HandleSessionEventOutput<
         >,
         old_scheduler: OldSessionMessageScheduler<Rng, ProcessedMessage<BroadcastSettings>>,
         new_public_info: PublicInfo<NodeId>,
-        new_recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings>,
+        new_recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings, NodeId>,
     },
     TransitionCompleted {
         current_crypto_processor:
@@ -1280,7 +1292,7 @@ enum HandleSessionEventOutput<
             EncapsulatedMessageWithVerifiedPublicHeader,
         >,
         current_public_info: PublicInfo<NodeId>,
-        new_recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings>,
+        new_recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings, NodeId>,
     },
     Retiring {
         old_crypto_processor:
@@ -1318,10 +1330,10 @@ async fn handle_serialized_local_data_message<
         ProcessedMessage<BroadcastSettings>,
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
-    current_recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings>,
-) -> ServiceState<BackendSettings, BroadcastSettings>
+    current_recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings, NodeId>,
+) -> ServiceState<BackendSettings, BroadcastSettings, NodeId>
 where
-    NodeId: Eq + Hash + Send + 'static,
+    NodeId: Eq + Hash + Clone + Send + 'static,
     Rng: RngCore + Clone + Send + Unpin,
     BackendSettings: Clone + Send + Sync,
     BroadcastSettings:
@@ -1431,10 +1443,10 @@ fn handle_incoming_blend_message<
     old_session_cryptographic_processor: Option<
         &CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
     >,
-    current_recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings>,
-) -> ServiceState<BackendSettings, BroadcastSettings>
+    current_recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings, NodeId>,
+) -> ServiceState<BackendSettings, BroadcastSettings, NodeId>
 where
-    NodeId: 'static,
+    NodeId: Eq + Hash + Clone + 'static,
     Rng: RngCore + Clone + Send + Unpin,
     BroadcastSettings: Serialize + for<'de> Deserialize<'de> + Debug + Eq + Hash + Clone + Send,
     BackendSettings: Clone,
@@ -1533,6 +1545,7 @@ fn handle_decapsulated_incoming_message_from_current_session<
     Rng,
     BroadcastSettings,
     BackendSettings,
+    NodeId,
 >(
     multi_layer_decapsulation_output: MultiLayerDecapsulationOutput,
     scheduler: &mut SessionMessageScheduler<
@@ -1540,11 +1553,12 @@ fn handle_decapsulated_incoming_message_from_current_session<
         ProcessedMessage<BroadcastSettings>,
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
-    current_recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings>,
-) -> ServiceState<BackendSettings, BroadcastSettings>
+    current_recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings, NodeId>,
+) -> ServiceState<BackendSettings, BroadcastSettings, NodeId>
 where
     BroadcastSettings: Serialize + for<'de> Deserialize<'de> + Debug + Eq + Hash + Clone + Send,
     BackendSettings: Clone,
+    NodeId: Eq + Hash + Clone,
 {
     let mut state_updater = current_recovery_checkpoint.start_updating();
 
@@ -1565,14 +1579,20 @@ where
 /// and collects the blending tokens obtained from the decapsulation.
 ///
 /// It updates the recovery checkpoint by storing the collected tokens.
-fn handle_decapsulated_incoming_message_from_old_session<Rng, BroadcastSettings, BackendSettings>(
+fn handle_decapsulated_incoming_message_from_old_session<
+    Rng,
+    BroadcastSettings,
+    BackendSettings,
+    NodeId,
+>(
     multi_layer_decapsulation_output: MultiLayerDecapsulationOutput,
     scheduler: &mut OldSessionMessageScheduler<Rng, ProcessedMessage<BroadcastSettings>>,
-    recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings>,
-) -> ServiceState<BackendSettings, BroadcastSettings>
+    recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings, NodeId>,
+) -> ServiceState<BackendSettings, BroadcastSettings, NodeId>
 where
     BroadcastSettings: Serialize + for<'de> Deserialize<'de> + Debug + Eq + Hash + Clone + Send,
     BackendSettings: Clone,
+    NodeId: Eq + Hash + Clone,
 {
     let (_, blending_tokens) =
         schedule_decapsulated_incoming_message(multi_layer_decapsulation_output, scheduler);
@@ -1670,10 +1690,14 @@ async fn handle_release_round<
     rng: &mut Rng,
     backend: &Backend,
     network_adapter: &NetAdapter,
-    current_recovery_checkpoint: ServiceState<Backend::Settings, NetAdapter::BroadcastSettings>,
-) -> ServiceState<Backend::Settings, NetAdapter::BroadcastSettings>
+    current_recovery_checkpoint: ServiceState<
+        Backend::Settings,
+        NetAdapter::BroadcastSettings,
+        NodeId,
+    >,
+) -> ServiceState<Backend::Settings, NetAdapter::BroadcastSettings, NodeId>
 where
-    NodeId: Eq + Hash + 'static,
+    NodeId: Eq + Hash + Clone + 'static,
     Rng: RngCore + Send,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
@@ -1779,7 +1803,7 @@ fn build_futures_to_release_processed_messages<
     backend: &'fut Backend,
     network_adapter: &'fut NetAdapter,
     mut state_updater: Option<
-        &mut ServiceStateUpdater<Backend::Settings, NetAdapter::BroadcastSettings>,
+        &mut ServiceStateUpdater<Backend::Settings, NetAdapter::BroadcastSettings, NodeId>,
     >,
 ) -> Vec<BoxFuture<'fut, ()>>
 where
@@ -1830,7 +1854,7 @@ async fn generate_and_try_to_decapsulate_cover_message<
         ProofsGenerator,
         ProofsVerifier,
     >,
-    state_updater: &mut state::StateUpdater<BackendSettings, BroadcastSettings>,
+    state_updater: &mut state::StateUpdater<BackendSettings, BroadcastSettings, NodeId>,
 ) -> Option<EncapsulatedMessage>
 where
     NodeId: Eq + Hash + 'static,

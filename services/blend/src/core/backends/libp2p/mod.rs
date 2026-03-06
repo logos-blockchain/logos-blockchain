@@ -20,7 +20,7 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::core::{
     backends::{
-        BlendBackend, PublicInfo, SessionInfo,
+        BlendBackend, PeerEvent, PublicInfo, SessionInfo,
         libp2p::{
             swarm::{BlendSwarm, BlendSwarmMessage, SwarmParams},
             tokio_provider::ObservationWindowTokioIntervalProvider,
@@ -47,6 +47,7 @@ pub struct Libp2pBlendBackend {
     swarm_task_abort_handle: AbortHandle,
     swarm_message_sender: mpsc::Sender<BlendSwarmMessage>,
     incoming_message_sender: broadcast::Sender<EncapsulatedMessageWithVerifiedPublicHeader>,
+    peer_event_sender: broadcast::Sender<PeerEvent<PeerId>>,
 }
 
 const CHANNEL_SIZE: usize = 64;
@@ -68,6 +69,7 @@ where
     ) -> Self {
         let (swarm_message_sender, swarm_message_receiver) = mpsc::channel(CHANNEL_SIZE);
         let (incoming_message_sender, _) = broadcast::channel(CHANNEL_SIZE);
+        let (peer_event_sender, _) = broadcast::channel(CHANNEL_SIZE);
         let minimum_network_size = config.minimum_network_size.try_into().unwrap();
 
         let swarm = BlendSwarm::<_, ProofsVerifier, ObservationWindowTokioIntervalProvider>::new(
@@ -75,6 +77,7 @@ where
                 config: &config,
                 current_public_info,
                 incoming_message_sender: incoming_message_sender.clone(),
+                peer_event_sender: peer_event_sender.clone(),
                 minimum_network_size,
                 rng,
                 swarm_message_receiver,
@@ -90,6 +93,7 @@ where
             swarm_task_abort_handle,
             swarm_message_sender,
             incoming_message_sender,
+            peer_event_sender,
         }
     }
 
@@ -152,6 +156,13 @@ where
     ) -> Pin<Box<dyn Stream<Item = EncapsulatedMessageWithVerifiedPublicHeader> + Send>> {
         Box::pin(
             BroadcastStream::new(self.incoming_message_sender.subscribe())
+                .filter_map(async |event| event.ok()),
+        )
+    }
+
+    fn listen_to_peer_events(&mut self) -> Pin<Box<dyn Stream<Item = PeerEvent<PeerId>> + Send>> {
+        Box::pin(
+            BroadcastStream::new(self.peer_event_sender.subscribe())
                 .filter_map(async |event| event.ok()),
         )
     }

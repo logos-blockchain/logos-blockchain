@@ -9,6 +9,7 @@ use lb_blend::{
             validated::EncapsulatedMessageWithVerifiedPublicHeader,
         },
     },
+    network::core::with_core::behaviour::SpamReason,
     proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
     scheduling::{membership::Membership, session::SessionEvent},
 };
@@ -146,4 +147,16 @@ pub trait BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId> {
     fn listen_to_incoming_messages(
         &mut self,
     ) -> Pin<Box<dyn Stream<Item = EncapsulatedMessageWithVerifiedPublicHeader> + Send>>;
+
+    fn listen_to_peer_events(&mut self) -> Pin<Box<dyn Stream<Item = PeerEvent<NodeId>> + Send>>;
+}
+
+#[derive(Debug, Clone)]
+pub enum PeerEvent<NodeId> {
+    // Node went from healthy to unhealthy.
+    Unhealthy { id: NodeId },
+    // Node went from unhealthy to healthy.
+    Healthy { id: NodeId },
+    // Node was banned for misbehavior (e.g., spamming).
+    Banned { id: NodeId, reason: SpamReason },
 }

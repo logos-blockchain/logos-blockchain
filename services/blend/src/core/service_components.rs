@@ -1,3 +1,5 @@
+use core::hash::Hash;
+
 use lb_utils::blake_rng::BlakeRng;
 
 use crate::{
@@ -45,6 +47,7 @@ impl<
 where
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
     Network: crate::core::network::NetworkAdapter<RuntimeServiceId>,
+    NodeId: Eq + Hash,
 {
     type NetworkAdapter = Network;
     type BackendSettings = Backend::Settings;

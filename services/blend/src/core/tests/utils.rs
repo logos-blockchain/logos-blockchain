@@ -1,3 +1,4 @@
+use core::hash::Hash;
 use std::{num::NonZeroU64, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
@@ -53,7 +54,7 @@ use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 
 use crate::{
     core::{
-        backends::{BlendBackend, EpochInfo, PublicInfo, SessionInfo},
+        backends::{BlendBackend, EpochInfo, PeerEvent, PublicInfo, SessionInfo},
         kms::KmsPoQAdapter,
         network::NetworkAdapter,
         processor::CoreCryptographicProcessor,
@@ -192,6 +193,10 @@ where
     ) -> Pin<Box<dyn Stream<Item = EncapsulatedMessageWithVerifiedPublicHeader> + Send>> {
         unimplemented!()
     }
+
+    fn listen_to_peer_events(&mut self) -> Pin<Box<dyn Stream<Item = PeerEvent<NodeId>> + Send>> {
+        unimplemented!()
+    }
 }
 
 impl TestBlendBackend {
@@ -276,18 +281,21 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for TestNetworkBackend {
 }
 
 #[expect(clippy::type_complexity, reason = "a test utility")]
-pub fn dummy_overwatch_resources<BackendSettings, BroadcastSettings, RuntimeServiceId>() -> (
+pub fn dummy_overwatch_resources<BackendSettings, BroadcastSettings, NodeId, RuntimeServiceId>() -> (
     OverwatchHandle<RuntimeServiceId>,
     mpsc::Receiver<OverwatchCommand<RuntimeServiceId>>,
-    StateUpdater<Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>>,
-    watch::Receiver<Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>>,
-) {
+    StateUpdater<Option<RecoveryServiceState<BackendSettings, BroadcastSettings, NodeId>>>,
+    watch::Receiver<Option<RecoveryServiceState<BackendSettings, BroadcastSettings, NodeId>>>,
+)
+where
+    NodeId: Eq + Hash,
+{
     let (cmd_sender, cmd_receiver) = mpsc::channel(CHANNEL_SIZE);
     let handle =
         OverwatchHandle::<RuntimeServiceId>::new(tokio::runtime::Handle::current(), cmd_sender);
     let (state_sender, state_receiver) = watch::channel(None);
     let state_updater = StateUpdater::<
-        Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
+        Option<RecoveryServiceState<BackendSettings, BroadcastSettings, NodeId>>,
     >::new(Arc::new(state_sender));
 
     (handle, cmd_receiver, state_updater, state_receiver)
