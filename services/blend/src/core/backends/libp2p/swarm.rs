@@ -448,44 +448,6 @@ where
     ObservationWindowProvider:
         IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
 {
-    fn handle_swarm_message(&mut self, msg: BlendSwarmMessage) {
-        match msg {
-            BlendSwarmMessage::Publish(msg) => {
-                self.handle_publish_swarm_message(*msg);
-            }
-            BlendSwarmMessage::StartNewSession(new_session_info) => {
-                self.public_info.session = new_session_info;
-                self.swarm.behaviour_mut().blend.start_new_session(
-                    self.public_info.session.membership.clone(),
-                    ProofsVerifier::new(self.public_info.clone().into()),
-                );
-                self.check_and_dial_new_peers_except(None);
-            }
-            BlendSwarmMessage::CompleteSessionTransition => {
-                self.swarm.behaviour_mut().blend.finish_session_transition();
-            }
-            BlendSwarmMessage::StartNewEpoch(new_epoch_public) => {
-                self.public_info.epoch = new_epoch_public;
-                self.swarm
-                    .behaviour_mut()
-                    .blend
-                    .start_new_epoch(self.public_info.epoch);
-            }
-            BlendSwarmMessage::CompleteEpochTransition => {
-                self.swarm.behaviour_mut().blend.finish_epoch_transition();
-            }
-        }
-    }
-}
-
-impl<Rng, ProofsVerifier, ObservationWindowProvider>
-    BlendSwarm<Rng, ProofsVerifier, ObservationWindowProvider>
-where
-    Rng: RngCore,
-    ProofsVerifier: ProofsVerifierTrait + Clone,
-    ObservationWindowProvider:
-        IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
-{
     fn handle_event(
         &mut self,
         event: SwarmEvent<BlendBehaviourEvent<ProofsVerifier, ObservationWindowProvider>>,
@@ -524,6 +486,35 @@ where
             _ => {
                 tracing::debug!(target: LOG_TARGET, "Received event from blend network that will be ignored.");
                 tracing::trace!(counter.ignored_event = 1);
+            }
+        }
+    }
+
+    fn handle_swarm_message(&mut self, msg: BlendSwarmMessage) {
+        match msg {
+            BlendSwarmMessage::Publish(msg) => {
+                self.handle_publish_swarm_message(*msg);
+            }
+            BlendSwarmMessage::StartNewSession(new_session_info) => {
+                self.public_info.session = new_session_info;
+                self.swarm.behaviour_mut().blend.start_new_session(
+                    self.public_info.session.membership.clone(),
+                    ProofsVerifier::new(self.public_info.clone().into()),
+                );
+                self.check_and_dial_new_peers_except(None);
+            }
+            BlendSwarmMessage::CompleteSessionTransition => {
+                self.swarm.behaviour_mut().blend.finish_session_transition();
+            }
+            BlendSwarmMessage::StartNewEpoch(new_epoch_public) => {
+                self.public_info.epoch = new_epoch_public;
+                self.swarm
+                    .behaviour_mut()
+                    .blend
+                    .start_new_epoch(self.public_info.epoch);
+            }
+            BlendSwarmMessage::CompleteEpochTransition => {
+                self.swarm.behaviour_mut().blend.finish_epoch_transition();
             }
         }
     }

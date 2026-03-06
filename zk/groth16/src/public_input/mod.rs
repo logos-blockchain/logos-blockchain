@@ -19,13 +19,12 @@ impl<E: Pairing> Input<E> {
     pub const fn new(value: E::ScalarField) -> Self {
         Self(value)
     }
-}
 
-impl<E: Pairing> Input<E> {
     pub const fn into_inner(self) -> E::ScalarField {
         self.0
     }
 }
+
 impl<E: Pairing> AsRef<E::ScalarField> for Input<E> {
     fn as_ref(&self) -> &E::ScalarField {
         &self.0

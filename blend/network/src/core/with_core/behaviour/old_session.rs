@@ -65,6 +65,50 @@ where
     pub(super) fn finish_epoch_transition(&mut self) {
         self.poq_verifier.complete_epoch_transition();
     }
+
+    /// Handles a message received from a peer.
+    ///
+    /// # Returns
+    /// - [`Ok(false)`] if the connection is not part of the session.
+    /// - [`Ok(true)`] if the message was successfully processed and forwarded.
+    /// - [`Err(Error)`] if the message is invalid or has already been
+    ///   exchanged.
+    pub fn handle_received_serialized_encapsulated_message(
+        &mut self,
+        serialized_message: &[u8],
+        (from_peer_id, from_connection_id): (PeerId, ConnectionId),
+    ) -> Result<bool, Error> {
+        if !self.is_negotiated(&(from_peer_id, from_connection_id)) {
+            return Ok(false);
+        }
+
+        // Deserialize the message.
+        let deserialized_encapsulated_message =
+            deserialize_encapsulated_message(serialized_message)
+                .map_err(|_| Error::InvalidMessage)?;
+
+        let message_identifier = deserialized_encapsulated_message.id();
+
+        // Add the message to the set of exchanged message identifiers.
+        check_and_update_message_cache(
+            &mut self.exchanged_message_identifiers,
+            &message_identifier,
+            from_peer_id,
+        )?;
+
+        // Verify the message public header
+        let validated_message =
+            self.verify_encapsulated_message_public_header(deserialized_encapsulated_message)?;
+
+        // Notify the swarm about the received message, so that it can be further
+        // processed by the core protocol module.
+        self.events.push_back(ToSwarm::GenerateEvent(Event::Message(
+            Box::new(validated_message),
+            (from_peer_id, from_connection_id),
+        )));
+        self.try_wake();
+        Ok(true)
+    }
 }
 
 impl<ProofsVerifier> OldSession<ProofsVerifier> {
@@ -206,54 +250,5 @@ fn check_and_update_message_cache(
                 Err(Error::MessageAlreadyExchanged)
             }
         }
-    }
-}
-
-impl<ProofsVerifier> OldSession<ProofsVerifier>
-where
-    ProofsVerifier: encap::ProofsVerifier,
-{
-    /// Handles a message received from a peer.
-    ///
-    /// # Returns
-    /// - [`Ok(false)`] if the connection is not part of the session.
-    /// - [`Ok(true)`] if the message was successfully processed and forwarded.
-    /// - [`Err(Error)`] if the message is invalid or has already been
-    ///   exchanged.
-    pub fn handle_received_serialized_encapsulated_message(
-        &mut self,
-        serialized_message: &[u8],
-        (from_peer_id, from_connection_id): (PeerId, ConnectionId),
-    ) -> Result<bool, Error> {
-        if !self.is_negotiated(&(from_peer_id, from_connection_id)) {
-            return Ok(false);
-        }
-
-        // Deserialize the message.
-        let deserialized_encapsulated_message =
-            deserialize_encapsulated_message(serialized_message)
-                .map_err(|_| Error::InvalidMessage)?;
-
-        let message_identifier = deserialized_encapsulated_message.id();
-
-        // Add the message to the set of exchanged message identifiers.
-        check_and_update_message_cache(
-            &mut self.exchanged_message_identifiers,
-            &message_identifier,
-            from_peer_id,
-        )?;
-
-        // Verify the message public header
-        let validated_message =
-            self.verify_encapsulated_message_public_header(deserialized_encapsulated_message)?;
-
-        // Notify the swarm about the received message, so that it can be further
-        // processed by the core protocol module.
-        self.events.push_back(ToSwarm::GenerateEvent(Event::Message(
-            Box::new(validated_message),
-            (from_peer_id, from_connection_id),
-        )));
-        self.try_wake();
-        Ok(true)
     }
 }

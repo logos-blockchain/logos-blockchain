@@ -383,25 +383,7 @@ where
     ) {
         self.dial_and_schedule_message_except(msg, Some(peer_id));
     }
-}
 
-async fn close_stream(mut stream: libp2p::Stream, peer_id: PeerId, connection_id: ConnectionId) {
-    if let Err(e) = stream.close().await {
-        error!(target: LOG_TARGET, "Failed to close stream: {e} with peer {peer_id:?} on connection {connection_id:?}.");
-    }
-}
-
-fn dial_opts(peer_id: PeerId, address: Multiaddr) -> DialOpts {
-    DialOpts::peer_id(peer_id)
-        .addresses(vec![address])
-        .condition(PeerCondition::Always)
-        .build()
-}
-
-impl<Rng> BlendSwarm<Rng>
-where
-    Rng: RngCore + 'static,
-{
     pub(super) async fn run(mut self) {
         loop {
             self.poll_next_internal().await;
@@ -440,4 +422,17 @@ where
             }
         }
     }
+}
+
+async fn close_stream(mut stream: libp2p::Stream, peer_id: PeerId, connection_id: ConnectionId) {
+    if let Err(e) = stream.close().await {
+        error!(target: LOG_TARGET, "Failed to close stream: {e} with peer {peer_id:?} on connection {connection_id:?}.");
+    }
+}
+
+fn dial_opts(peer_id: PeerId, address: Multiaddr) -> DialOpts {
+    DialOpts::peer_id(peer_id)
+        .addresses(vec![address])
+        .condition(PeerCondition::Always)
+        .build()
 }
