@@ -593,7 +593,7 @@ pub mod tests {
             .unwrap();
         let id = make_id(parent, slot, utxo);
         let proof = generate_proof(&ledger_state, &utxo, slot);
-        *ledger = ledger.try_update::<_, MainnetGasConstants>(
+        ledger.try_update::<_, MainnetGasConstants>(
             id,
             parent,
             slot,
