@@ -44,9 +44,14 @@ async fn detect_spammy_peer() {
         .behaviour_mut()
         .validate_and_publish_message(TestEncapsulatedMessage::new(b"msg1").into_inner().into())
         .unwrap();
+    // Using `force_send_message_to_peer` because otherwise we won't send the same
+    // message (that uses the same key nullifier) to the same peer.
     dialing_swarm
         .behaviour_mut()
-        .validate_and_publish_message(TestEncapsulatedMessage::new(b"msg2").into_inner().into())
+        .force_send_message_to_peer(
+            &TestEncapsulatedMessage::new(b"msg2"),
+            *listening_swarm.local_peer_id(),
+        )
         .unwrap();
 
     let mut events_to_match = 2u8;
