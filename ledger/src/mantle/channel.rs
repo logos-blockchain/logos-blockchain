@@ -70,6 +70,7 @@ impl Channels {
             .unwrap_or_else(|| ChannelState {
                 tip: MsgId::root(),
                 keys: vec![*signer].into(),
+                balance: 0,
             });
 
         if *parent != channel.tip {
@@ -92,6 +93,7 @@ impl Channels {
             ChannelState {
                 tip: msg,
                 keys: Arc::clone(&channel.keys),
+                balance: channel.balance,
             },
         );
         Ok(self)
@@ -122,6 +124,7 @@ impl Channels {
                 ChannelState {
                     tip: MsgId::root(),
                     keys: op.keys.clone().into(),
+                    balance: 0,
                 },
             );
         }

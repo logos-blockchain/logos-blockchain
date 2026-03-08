@@ -63,9 +63,10 @@ fn cryptarchia_switch_to_online() {
         assert!(reorged_blocks.is_empty());
 
         block_ids.push(block.header().id());
+
         slot = block.header().slot() + 1;
     }
-    {}
+
     // Now, the chain is [G, B1, B2, B3].
     // We now switch to Online and check that LIB advances to B2.
     let (cryptarchia, pruned_blocks) = cryptarchia.online();
