@@ -9,10 +9,14 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_utxotree::{DynamicMerkleTree, MerklePath};
-use rpds::HashTrieMapSync;
+use rpds::{HashTrieMapSync, VectorSync};
 
 use crate::Balance;
 
+/// A leader state in the mantle ledger.
+///
+/// NOTE: Most collection fields in this struct should use `rpds`
+/// since we keep a copy of this state for each block.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeaderState {
@@ -37,7 +41,7 @@ pub struct LeaderState {
     claimable_voucher_indices: HashTrieMapSync<VoucherCm, usize>,
     // List of vouchers that are waiting to be added at the start of
     // the next epoch
-    pending_vouchers: Vec<VoucherCm>,
+    pending_vouchers: VectorSync<VoucherCm>,
 }
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
@@ -67,7 +71,7 @@ impl LeaderState {
             claimable_rewards: 0,
             claimable_vouchers: DynamicMerkleTree::new(),
             claimable_voucher_indices: HashTrieMapSync::new_sync(),
-            pending_vouchers: Vec::new(),
+            pending_vouchers: VectorSync::new_sync(),
         }
     }
 
@@ -96,7 +100,7 @@ impl LeaderState {
     /// Add a voucher to be included in the Merkle tree at the start of the
     /// next epoch
     fn add_pending_voucher(mut self, voucher_cm: VoucherCm) -> Self {
-        self.pending_vouchers.push(voucher_cm);
+        self.pending_vouchers.push_back_mut(voucher_cm);
         self
     }
 
@@ -109,7 +113,7 @@ impl LeaderState {
             self.claimable_voucher_indices =
                 self.claimable_voucher_indices.insert(voucher_cm, index);
         }
-        self.pending_vouchers = Vec::new();
+        self.pending_vouchers = VectorSync::new_sync();
         self.claimable_vouchers_root = self.claimable_vouchers.root().into();
         self.n_claimable_vouchers = self.claimable_vouchers.size() as u64;
         self

@@ -373,6 +373,10 @@ impl<R: Rewards> ServiceState<R> {
     }
 }
 
+/// A SDP state of the mantle ledger
+///
+/// NOTE: Most collection fields in this struct should use `rpds`
+/// since we keep a copy of this state for each block.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SdpLedger {
