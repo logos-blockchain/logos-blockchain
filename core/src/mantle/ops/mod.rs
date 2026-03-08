@@ -6,7 +6,7 @@ pub mod sdp;
 mod serde_;
 pub mod transfer;
 
-use channel::{inscribe::InscriptionOp, set_keys::SetKeysOp};
+use channel::{deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -26,6 +26,7 @@ use crate::{
         encoding::{decode_op, encode_op},
         ops::{
             internal::{OpDe, OpSer},
+            opcode::CHANNEL_DEPOSIT,
             transfer::TransferOp,
         },
     },
@@ -47,6 +48,7 @@ use crate::{
 pub enum Op {
     ChannelInscribe(InscriptionOp),
     ChannelSetKeys(SetKeysOp),
+    ChannelDeposit(DepositOp),
     SDPDeclare(SDPDeclareOp),
     SDPWithdraw(SDPWithdrawOp),
     SDPActive(SDPActiveOp),
@@ -114,6 +116,7 @@ impl Op {
         match self {
             Self::ChannelInscribe(_) => "ChannelInscribe",
             Self::ChannelSetKeys(_) => "ChannelSetKeys",
+            Self::ChannelDeposit(_) => "ChannelDeposit",
             Self::SDPDeclare(_) => "SDPDeclare",
             Self::SDPWithdraw(_) => "SDPWithdraw",
             Self::SDPActive(_) => "SDPActive",
@@ -126,6 +129,7 @@ impl Op {
         match self {
             Self::ChannelInscribe(_) => INSCRIBE,
             Self::ChannelSetKeys(_) => SET_CHANNEL_KEYS,
+            Self::ChannelDeposit(_) => CHANNEL_DEPOSIT,
             Self::SDPDeclare(_) => SDP_DECLARE,
             Self::SDPWithdraw(_) => SDP_WITHDRAW,
             Self::SDPActive(_) => SDP_ACTIVE,
@@ -139,6 +143,7 @@ impl Op {
         match self {
             Self::ChannelInscribe(_) => Constants::CHANNEL_INSCRIBE,
             Self::ChannelSetKeys(_) => Constants::CHANNEL_SET_KEYS,
+            Self::ChannelDeposit(_) => Constants::CHANNEL_DEPOSIT,
             Self::SDPDeclare(_) => Constants::SDP_DECLARE,
             Self::SDPWithdraw(_) => Constants::SDP_WITHDRAW,
             Self::SDPActive(_) => Constants::SDP_ACTIVE,

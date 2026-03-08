@@ -15,7 +15,8 @@ use crate::{
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp, set_keys::SetKeysOp,
+                ChannelId, Ed25519PublicKey, MsgId, deposit::DepositOp, inscribe::InscriptionOp,
+                set_keys::SetKeysOp,
             },
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
@@ -74,6 +75,7 @@ pub fn decode_op(input: &[u8]) -> IResult<&[u8], Op> {
     match opcode {
         opcode::INSCRIBE => map(decode_channel_inscribe, Op::ChannelInscribe).parse(input),
         opcode::SET_CHANNEL_KEYS => map(decode_channel_set_keys, Op::ChannelSetKeys).parse(input),
+        opcode::CHANNEL_DEPOSIT => map(decode_channel_deposit, Op::ChannelDeposit).parse(input),
         opcode::SDP_DECLARE => map(decode_sdp_declare, Op::SDPDeclare).parse(input),
         opcode::SDP_WITHDRAW => map(decode_sdp_withdraw, Op::SDPWithdraw).parse(input),
         opcode::SDP_ACTIVE => map(decode_sdp_active, Op::SDPActive).parse(input),
@@ -116,6 +118,22 @@ fn decode_channel_set_keys(input: &[u8]) -> IResult<&[u8], SetKeysOp> {
     let (input, keys) = count(decode_ed25519_public_key, key_count as usize).parse(input)?;
 
     Ok((input, SetKeysOp { channel, keys }))
+}
+
+fn decode_channel_deposit(input: &[u8]) -> IResult<&[u8], DepositOp> {
+    // ChannelDeposit = ChannelId Amount Metadata
+    let (input, channel_id) = map(decode_hash32, ChannelId::from).parse(input)?;
+    let (input, amount) = decode_uint64(input)?;
+    let (input, metadata) = map(take(input.len()), |bytes: &[u8]| bytes.to_vec()).parse(input)?;
+
+    Ok((
+        input,
+        DepositOp {
+            channel_id,
+            amount,
+            metadata,
+        },
+    ))
 }
 
 // ==============================================================================
@@ -307,6 +325,9 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
             ))
         })
         .parse(input),
+
+        // None. It's indirectly signed through the Ledger Transaction signature.
+        Op::ChannelDeposit(_) => Ok((input, OpProof::NoProof)),
     }
 }
 
@@ -470,6 +491,14 @@ fn encode_channel_set_keys(op: &SetKeysOp) -> Vec<u8> {
     bytes
 }
 
+fn encode_channel_deposit(op: &DepositOp) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend(encode_hash32(op.channel_id.as_ref()));
+    bytes.extend(encode_uint64(op.amount));
+    bytes.extend(op.metadata.as_slice());
+    bytes
+}
+
 /// Encode SDP operations
 fn encode_locator(locator: &multiaddr::Multiaddr) -> Vec<u8> {
     let locator_bytes = locator.to_vec();
@@ -578,6 +607,10 @@ pub fn encode_op(op: &Op) -> Vec<u8> {
             bytes.extend(encode_byte(opcode::SET_CHANNEL_KEYS));
             bytes.extend(encode_channel_set_keys(op));
         }
+        Op::ChannelDeposit(op) => {
+            bytes.extend(encode_byte(opcode::CHANNEL_DEPOSIT));
+            bytes.extend(encode_channel_deposit(op));
+        }
         Op::SDPDeclare(op) => {
             bytes.extend(encode_byte(opcode::SDP_DECLARE));
             bytes.extend(encode_sdp_declare(op));
@@ -617,6 +650,7 @@ fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
         (OpProof::Ed25519Sig(sig), Op::ChannelInscribe(_) | Op::ChannelSetKeys(_)) => {
             encode_ed25519_signature(sig)
         }
+        (OpProof::NoProof, Op::ChannelDeposit(_)) => Vec::new(),
         (
             OpProof::ZkAndEd25519Sigs {
                 zk_sig,
@@ -681,6 +715,9 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx) -> usize {
             Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::LeaderClaim(_) | Op::Transfer(_) => {
                 GROTH16_BYTES
             }
+
+            // None
+            Op::ChannelDeposit(_) => 0,
         })
         .sum::<usize>();
 
