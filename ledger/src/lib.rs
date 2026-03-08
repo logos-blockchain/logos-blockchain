@@ -481,6 +481,12 @@ impl LedgerState {
                         .mantle_ledger
                         .try_apply_channel_set_keys(op, sig, &tx_hash)?;
                 }
+                (Op::ChannelDeposit(op), Some(OpProof::NoProof)) => {
+                    let deposit_balance;
+                    (self.mantle_ledger, deposit_balance) =
+                        self.mantle_ledger.try_apply_channel_deposit(op)?;
+                    balance += deposit_balance;
+                }
                 (
                     Op::SDPDeclare(op),
                     Some(OpProof::ZkAndEd25519Sigs {

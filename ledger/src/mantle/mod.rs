@@ -177,6 +177,16 @@ impl LedgerState {
         Ok(self)
     }
 
+    pub fn try_apply_channel_deposit(
+        mut self,
+        op: &channel::DepositOp,
+    ) -> Result<(Self, Balance), Error> {
+        self.channels = self.channels.deposit(op).inspect_err(
+            |err| error!(target: LOG_TARGET, %err, "Failed to apply the Channel Deposit message."),
+        )?;
+        Ok((self, Balance::from(op.amount)))
+    }
+
     pub fn try_apply_sdp_declaration(
         mut self,
         sdp_declare_op: &SDPDeclareOp,

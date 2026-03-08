@@ -3,8 +3,8 @@ use std::sync::Arc;
 use lb_core::mantle::{
     TxHash, Value,
     ops::channel::{
-        ChannelId, Ed25519PublicKey as PublicKey, MsgId, inscribe::InscriptionOp,
-        set_keys::SetKeysOp,
+        ChannelId, Ed25519PublicKey as PublicKey, MsgId, deposit::DepositOp,
+        inscribe::InscriptionOp, set_keys::SetKeysOp,
     },
 };
 use lb_key_management_system_keys::keys::Ed25519Signature;
@@ -28,6 +28,8 @@ pub enum Error {
     InvalidSignature,
     #[error("Invalid keys for channel {channel_id:?}")]
     EmptyKeys { channel_id: ChannelId },
+    #[error("Channel {channel_id:?} not found")]
+    ChannelNotFound { channel_id: ChannelId },
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -130,6 +132,17 @@ impl Channels {
         }
 
         Ok(self)
+    }
+
+    pub fn deposit(mut self, op: &DepositOp) -> Result<Self, Error> {
+        if let Some(channel) = self.channels.get_mut(&op.channel_id) {
+            channel.balance += op.amount;
+            Ok(self)
+        } else {
+            Err(Error::ChannelNotFound {
+                channel_id: op.channel_id,
+            })
+        }
     }
 
     #[must_use]
