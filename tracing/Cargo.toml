@@ -23,7 +23,7 @@ workspace = true
 opentelemetry                      = { default-features = false, version = "0.31" }
 opentelemetry-appender-tracing     = { default-features = false, version = "0.31" }
 opentelemetry-http                 = { default-features = false, features = ["reqwest"], version = "0.31" }
-opentelemetry-otlp                 = { default-features = false, features = ["grpc-tonic", "http-proto", "logs"], version = "0.31" }
+opentelemetry-otlp                 = { default-features = false, features = ["grpc-tonic", "http", "http-proto", "logs", "metrics", "reqwest-client"], version = "0.31" }
 opentelemetry-semantic-conventions = "0.31"
 opentelemetry_sdk                  = { default-features = false, features = ["logs", "rt-tokio"], version = "0.31" }
 rand                               = { workspace = true }

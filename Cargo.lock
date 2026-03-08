@@ -5649,6 +5649,7 @@ dependencies = [
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost 0.14.3",
+ "reqwest",
  "thiserror 2.0.18",
  "tokio",
  "tonic 0.14.4",
