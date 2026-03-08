@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use lb_core::mantle::{
-    TxHash,
+    TxHash, Value,
     ops::channel::{
         ChannelId, Ed25519PublicKey as PublicKey, MsgId, inscribe::InscriptionOp,
         set_keys::SetKeysOp,
@@ -42,6 +42,7 @@ pub struct ChannelState {
     pub tip: MsgId,
     // avoid cloning the keys every new message
     pub keys: Arc<[PublicKey]>,
+    pub balance: Value,
 }
 
 impl Default for Channels {
