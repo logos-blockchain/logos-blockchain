@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsStr,
     net::SocketAddr,
     process::{Child, Command, Stdio},
     str::FromStr as _,
@@ -134,7 +135,11 @@ impl Validator {
     }
 
     /// Restarts with the same deployment and user configs, but attaches provided cli arguments.
-    pub async fn restart_with_args(&mut self, args: Vec<String>) -> Result<(), Elapsed> {
+    pub async fn restart_with_args<I, S>(&mut self, args: I) -> Result<(), Elapsed>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         drop(self.child.kill());
         self.wait_for_exit(Duration::from_secs(5)).await;
 

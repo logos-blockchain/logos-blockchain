@@ -41,7 +41,7 @@ async fn node_restart_w_init_peers() {
     validator_2
         .wait_for_height(2, height_timeout)
         .await
-        .expect("validator should produce the first block");
+        .expect("validator should produce the first two blocks");
 
     // Third node that bootstraps from node 1.
     let (mut third_configs, _) = create_general_configs(1);
@@ -73,15 +73,14 @@ async fn node_restart_w_init_peers() {
     let sync_timeout = Duration::from_secs(30);
     let target_height = 2;
 
-    let v1_info = validator_1.consensus_info(true).await;
-    let v2_info = validator_2.consensus_info(true).await;
-
     // Wait for the restarted third_node to catch up
     third_node
         .wait_for_height(target_height, sync_timeout)
         .await
         .expect("third_node should sync to target height after restart");
 
+    let v1_info = validator_1.consensus_info(true).await;
+    let v2_info = validator_2.consensus_info(true).await;
     let v3_info = third_node.consensus_info(true).await;
 
     println!(
