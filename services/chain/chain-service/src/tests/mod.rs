@@ -55,7 +55,7 @@ fn cryptarchia_switch_to_online() {
         )
         .expect("should find a winning slot");
 
-        let (new_cryptarchia, pruned_blocks, reorged_blocks) = cryptarchia
+        let (pruned_blocks, reorged_blocks) = cryptarchia
             .try_apply_block(&block, block.header().slot())
             .unwrap();
         // No block should be pruned since LIB is not updated during Bootstrapping
@@ -63,7 +63,6 @@ fn cryptarchia_switch_to_online() {
         assert!(reorged_blocks.is_empty());
 
         block_ids.push(block.header().id());
-        cryptarchia = new_cryptarchia;
         slot = block.header().slot() + 1;
     }
 
