@@ -1,4 +1,4 @@
-use std::{fs, io::Write as _, path::Path};
+use std::{fs, io::Write as _, path::Path, time::Duration};
 
 use clap::Parser;
 use lb_common_http_client::BasicAuthCredentials;
@@ -6,6 +6,7 @@ use lb_core::mantle::ops::channel::ChannelId;
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use lb_zone_sdk::sequencer::{Error, SequencerCheckpoint, ZoneSequencer};
 use reqwest::Url;
+use tokio::task::JoinHandle;
 
 #[derive(Parser, Debug)]
 #[command(about = "Terminal UI zone sequencer - publish text inscriptions")]
@@ -21,9 +22,6 @@ pub struct InscribeArgs {
     /// Path to the checkpoint file for crash recovery
     #[arg(long, default_value = "sequencer.checkpoint", env = "CHECKPOINT_PATH")]
     checkpoint_path: String,
-
-    #[arg(long)]
-    channel_id: String,
 }
 
 fn save_checkpoint(path: &Path, checkpoint: &SequencerCheckpoint) {
@@ -59,6 +57,53 @@ fn load_or_create_signing_key(path: &Path) -> Ed25519Key {
     }
 }
 
+/// A simple spinner that prints dots while an async operation is in progress.
+struct Spinner {
+    handle: Option<JoinHandle<()>>,
+    cancel: tokio::sync::watch::Sender<bool>,
+}
+
+impl Spinner {
+    fn start(message: &str) -> Self {
+        let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+        let msg = message.to_owned();
+
+        let handle = tokio::spawn(async move {
+            #[expect(clippy::non_ascii_literal, reason = "UI animation")]
+            let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+            let mut i = 0;
+            loop {
+                print!("\r  {} {}", frames[i % frames.len()], msg);
+                drop(std::io::stdout().flush());
+                i += 1;
+
+                tokio::select! {
+                    () = tokio::time::sleep(Duration::from_millis(80)) => {}
+                    _ = cancel_rx.changed() => {
+                        // Clear the spinner line
+                        print!("\r{}\r", " ".repeat(msg.len() + 6));
+                        drop(std::io::stdout().flush());
+                        return;
+                    }
+                }
+            }
+        });
+
+        Self {
+            handle: Some(handle),
+            cancel: cancel_tx,
+        }
+    }
+
+    async fn stop(mut self) {
+        let _ = self.cancel.send(true);
+        if let Some(handle) = self.handle.take() {
+            drop(handle.await);
+        }
+    }
+}
+
+#[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
 pub async fn run(args: InscribeArgs) {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -69,8 +114,7 @@ pub async fn run(args: InscribeArgs) {
 
     let node_url: Url = args.node_url.parse().expect("invalid node URL");
     let signing_key = load_or_create_signing_key(Path::new(&args.key_path));
-    let channel_id =
-        ChannelId::from(<[u8; _]>::try_from(hex::decode(args.channel_id).unwrap()).unwrap());
+    let channel_id = ChannelId::from(signing_key.public_key().to_bytes());
 
     println!("TUI Zone Sequencer");
     println!("  Node:       {node_url}");
@@ -111,7 +155,6 @@ pub async fn run(args: InscribeArgs) {
         let bytes_read = stdin.read_line(&mut line).expect("failed to read line");
 
         if bytes_read == 0 {
-            // EOF
             println!();
             break;
         }
@@ -121,49 +164,73 @@ pub async fn run(args: InscribeArgs) {
             break;
         }
 
-        match sequencer.publish(msg.as_bytes().to_vec()).await {
+        let data = msg.as_bytes().to_vec();
+
+        let spinner = Spinner::start("Publishing zone block, waiting for inclusion...");
+        let result = sequencer.publish(data.clone()).await;
+        spinner.stop().await;
+
+        match result {
             Ok(result) => {
                 let tx_hash: [u8; 32] = result.inscription_id.into();
-                println!("  published: {}", hex::encode(tx_hash));
+                println!("  ✓ Included: {}", hex::encode(tx_hash));
                 save_checkpoint(checkpoint_path, &result.checkpoint);
+            }
+            Err(Error::InclusionTimeout) => {
+                #[expect(clippy::non_ascii_literal, reason = "UI")]
+                {
+                    println!(
+                        "  ✗ Timed out waiting for inclusion. The inscription may still be included later."
+                    );
+                }
             }
             Err(Error::Conflict { blobs }) => {
                 println!();
-                println!(
-                    "  ⚠ Conflict detected: {} previously published blob(s) were invalidated by a foreign inscription:",
-                    blobs.len()
-                );
-                for (i, blob) in blobs.iter().enumerate() {
-                    match core::str::from_utf8(blob) {
-                        Ok(text) => println!("    [{}] \"{}\"", i + 1, text),
-                        Err(_) => println!("    [{}] ({} bytes, non-UTF8)", i + 1, blob.len()),
+                if !blobs.is_empty() {
+                    println!(
+                        "  ⚠ {} blob(s) appeared on the channel since your last publish:",
+                        blobs.len()
+                    );
+                    for (i, blob) in blobs.iter().enumerate() {
+                        match core::str::from_utf8(blob) {
+                            Ok(text) => {
+                                println!("    [{}] \"{}\"", i + 1, text);
+                            }
+                            Err(_) => {
+                                println!("    [{}] ({} bytes, non-UTF8)", i + 1, blob.len());
+                            }
+                        }
                     }
                 }
                 println!();
-                print!("  Re-publish your message on top of the new chain head? [y/N] ");
+                print!("  Re-publish your message on the new chain head? [Y/n] ");
                 std::io::stdout().flush().expect("failed to flush stdout");
 
                 let mut answer = String::new();
                 stdin.read_line(&mut answer).expect("failed to read answer");
 
-                if answer.trim().eq_ignore_ascii_case("y") {
-                    // Retry the publish now that the conflicts have been consumed
-                    match sequencer.publish(msg.as_bytes().to_vec()).await {
+                let answer = answer.trim();
+                if answer.is_empty() || answer.eq_ignore_ascii_case("y") {
+                    let spinner = Spinner::start("Re-publishing, waiting for inclusion...");
+                    let retry_result = sequencer.publish(data).await;
+                    spinner.stop().await;
+
+                    match retry_result {
                         Ok(result) => {
                             let tx_hash: [u8; 32] = result.inscription_id.into();
-                            println!("  published: {}", hex::encode(tx_hash));
+                            println!("  ✓ Included: {}", hex::encode(tx_hash));
                             save_checkpoint(checkpoint_path, &result.checkpoint);
                         }
                         Err(e) => {
-                            println!("  error on retry: {e}");
+                            println!("  ✗ Error on retry: {e}");
                         }
                     }
                 } else {
-                    println!("  Aborted. The conflicting blobs have been discarded.");
+                    println!("  Aborted. Your message was not published.");
                 }
             }
             Err(e) => {
-                println!("  error: {e}");
+                println!("  ✗ Error: {e}");
             }
         }
     }

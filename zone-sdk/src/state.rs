@@ -214,6 +214,7 @@ impl TxState {
         self.pending.iter()
     }
 
+    #[must_use]
     pub fn pending_tx(&self, tx_hash: &TxHash) -> Option<&SignedMantleTx> {
         self.pending.get(tx_hash)
     }

@@ -24,6 +24,7 @@ use crate::state::{TxState, TxStatus};
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const DEFAULT_PUBLISH_CHANNEL_CAPACITY: usize = 256;
+const DEFAULT_INCLUSION_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Inscription identifier.
 pub type InscriptionId = TxHash;
@@ -59,6 +60,7 @@ pub struct SequencerConfig {
     pub resubmit_interval: Duration,
     pub reconnect_delay: Duration,
     pub publish_channel_capacity: usize,
+    pub inclusion_timeout: Duration,
 }
 
 impl Default for SequencerConfig {
@@ -67,6 +69,7 @@ impl Default for SequencerConfig {
             resubmit_interval: DEFAULT_RESUBMIT_INTERVAL,
             reconnect_delay: DEFAULT_RECONNECT_DELAY,
             publish_channel_capacity: DEFAULT_PUBLISH_CHANNEL_CAPACITY,
+            inclusion_timeout: DEFAULT_INCLUSION_TIMEOUT,
         }
     }
 }
@@ -78,12 +81,16 @@ pub enum Error {
     Unavailable { reason: &'static str },
     #[error("conflict with {} blob(s)", blobs.len())]
     Conflict { blobs: Vec<Vec<u8>> },
+    #[error("inscription was not included in a block within the timeout")]
+    InclusionTimeout,
 }
 
 enum ActorRequest {
     Publish {
         data: Vec<u8>,
         reply: oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
+        /// Sender to notify when the inscription is included in a block.
+        inclusion_notify: oneshot::Sender<Result<(), Error>>,
     },
     Status {
         id: InscriptionId,
@@ -105,6 +112,7 @@ pub struct ZoneSequencer {
     request_tx: mpsc::Sender<ActorRequest>,
     node_url: Url,
     http_client: CommonHttpClient,
+    inclusion_timeout: Duration,
 }
 
 impl ZoneSequencer {
@@ -137,6 +145,7 @@ impl ZoneSequencer {
     ) -> Self {
         let http_client = CommonHttpClient::new(auth);
         let (request_tx, request_rx) = mpsc::channel(config.publish_channel_capacity);
+        let inclusion_timeout = config.inclusion_timeout;
 
         tokio::spawn(run_loop(
             request_rx,
@@ -152,17 +161,22 @@ impl ZoneSequencer {
             request_tx,
             node_url,
             http_client,
+            inclusion_timeout,
         }
     }
 
     /// Publish an inscription to the zone's channel.
     ///
+    /// Waits until the inscription is included in a block or times out.
     /// Returns the inscription ID and a checkpoint for persistence.
     pub async fn publish(&self, data: Vec<u8>) -> Result<PublishResult, Error> {
         let (reply_tx, reply_rx) = oneshot::channel();
+        let (inclusion_tx, inclusion_rx) = oneshot::channel();
+
         let request = ActorRequest::Publish {
             data,
             reply: reply_tx,
+            inclusion_notify: inclusion_tx,
         };
 
         self.request_tx
@@ -187,7 +201,28 @@ impl ZoneSequencer {
             warn!("Failed to post transaction: {e}");
         }
 
-        Ok(result)
+        // Wait for inclusion — the waiter was already registered atomically
+        // in the actor before the block stream could process any new blocks.
+        match tokio::time::timeout(self.inclusion_timeout, inclusion_rx).await {
+            Ok(Ok(Ok(()))) => {
+                info!(
+                    "Inscription {:?} included in a block",
+                    result.inscription_id
+                );
+                Ok(result)
+            }
+            Ok(Ok(Err(e))) => Err(e),
+            Ok(Err(_)) => Err(Error::Unavailable {
+                reason: "actor dropped inclusion reply",
+            }),
+            Err(_) => {
+                warn!(
+                    "Timed out waiting for inscription {:?} to be included",
+                    result.inscription_id
+                );
+                Err(Error::InclusionTimeout)
+            }
+        }
     }
 
     /// Get the status of an inscription.
@@ -310,6 +345,7 @@ async fn connect_blocks_stream(
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
 async fn run_loop(
     mut request_rx: mpsc::Receiver<ActorRequest>,
     channel_id: ChannelId,
@@ -331,6 +367,8 @@ async fn run_loop(
     let mut resubmit_active = false;
     let mut in_flight: FuturesUnordered<BoxFuture<'static, InFlight>> = FuturesUnordered::new();
     let mut pending_conflicts: Option<Vec<Vec<u8>>> = None;
+    let mut inclusion_waiters: HashMap<InscriptionId, oneshot::Sender<Result<(), Error>>> =
+        HashMap::new();
 
     loop {
         let blocks_stream =
@@ -349,6 +387,7 @@ async fn run_loop(
                         &signing_key,
                         &mut last_msg_id,
                         &mut pending_conflicts,
+                        &mut inclusion_waiters,
                     );
                 }
                 maybe_event = blocks_stream.next() => {
@@ -366,6 +405,53 @@ async fn run_loop(
                             &mut pending_conflicts,
                         )
                         .await;
+
+                        // Notify waiters for inscriptions that are now included
+                        // (in this block or discovered during backfill/finalization).
+                        // Checking state rather than just the current block's txs
+                        // ensures we catch inclusions in backfilled blocks too.
+                        if let (Some(s), Some(tip)) = (state.as_ref(), current_tip) {
+                            let resolved: Vec<InscriptionId> = inclusion_waiters
+                                .keys()
+                                .filter(|id| {
+                                    matches!(
+                                        s.status(id, tip),
+                                        TxStatus::Safe | TxStatus::Finalized
+                                    )
+                                })
+                                .copied()
+                                .collect();
+
+                            for tx_hash in resolved {
+                                if let Some(waiter) = inclusion_waiters.remove(&tx_hash) {
+                                    drop(waiter.send(Ok(())));
+                                }
+                            }
+                        }
+
+                        // Notify waiters whose inscriptions were pruned due to conflicts
+                        if let Some(conflicts) = &pending_conflicts {
+                            let gone: Vec<InscriptionId> = inclusion_waiters
+                                .keys()
+                                .filter(|id| {
+                                    state
+                                        .as_ref()
+                                        .is_none_or(|s| s.pending_tx(id).is_none())
+                                })
+                                .copied()
+                                .collect();
+
+                            if !gone.is_empty() {
+                                let conflict_blobs = conflicts.clone();
+                                for id in gone {
+                                    if let Some(waiter) = inclusion_waiters.remove(&id) {
+                                        drop(waiter.send(Err(Error::Conflict {
+                                            blobs: conflict_blobs.clone(),
+                                        })));
+                                    }
+                                }
+                            }
+                        }
                     } else {
                         warn!("Blocks stream disconnected, reconnecting...");
                         break;
@@ -389,6 +475,10 @@ async fn run_loop(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "TODO: Address this at some point."
+)]
 fn handle_request(
     request: ActorRequest,
     state: &mut Option<TxState>,
@@ -398,13 +488,19 @@ fn handle_request(
     signing_key: &Ed25519Key,
     last_msg_id: &mut MsgId,
     pending_conflicts: &mut Option<Vec<Vec<u8>>>,
+    inclusion_waiters: &mut HashMap<InscriptionId, oneshot::Sender<Result<(), Error>>>,
 ) {
     let Some(s) = state else {
         match request {
-            ActorRequest::Publish { reply, .. } => {
+            ActorRequest::Publish {
+                reply,
+                inclusion_notify,
+                ..
+            } => {
                 drop(reply.send(Err(Error::Unavailable {
                     reason: "not initialized",
                 })));
+                drop(inclusion_notify);
             }
             ActorRequest::Status { reply, .. } => {
                 drop(reply.send(Err(Error::Unavailable {
@@ -421,12 +517,17 @@ fn handle_request(
     };
 
     match request {
-        ActorRequest::Publish { data, reply } => {
+        ActorRequest::Publish {
+            data,
+            reply,
+            inclusion_notify,
+        } => {
             // If there are accumulated conflicts, return them instead of publishing.
             if let Some(existing_pending_conflicts) = pending_conflicts.take() {
                 drop(reply.send(Err(Error::Conflict {
                     blobs: existing_pending_conflicts,
                 })));
+                drop(inclusion_notify);
                 return;
             }
 
@@ -436,6 +537,11 @@ fn handle_request(
 
             s.submit(id, signed_tx.clone());
             *last_msg_id = new_msg_id;
+
+            // Register the inclusion waiter atomically, before any block
+            // can be processed. This prevents the race where the block
+            // arrives between Publish and WaitInclusion.
+            inclusion_waiters.insert(id, inclusion_notify);
 
             let checkpoint = build_checkpoint(s, *last_msg_id, lib_slot);
             let result = PublishResult {
@@ -472,7 +578,10 @@ fn build_checkpoint(state: &TxState, last_msg_id: MsgId, lib_slot: Slot) -> Sequ
     }
 }
 
-#[expect(clippy::too_many_arguments, reason = "Demo.")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "TODO: Address this at some point."
+)]
 async fn handle_block_event(
     event: &ProcessedBlockEvent,
     state: &mut Option<TxState>,
@@ -582,6 +691,10 @@ fn handle_inflight(event: InFlight, resubmit_active: &mut bool) {
 /// Uses `state.lib()` during replay to avoid premature finalization.
 /// The caller is responsible for triggering finalization after backfill
 /// completes.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "TODO: Address this at some point."
+)]
 async fn backfill_to_lib(
     state: &mut TxState,
     from_slot: Slot,
@@ -646,6 +759,10 @@ async fn backfill_to_lib(
 /// Uses `state.lib()` during replay to avoid premature finalization.
 /// The caller is responsible for triggering finalization after backfill
 /// completes.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "TODO: Address this at some point."
+)]
 async fn backfill_canonical(
     state: &mut TxState,
     missing_parent: HeaderId,
@@ -775,7 +892,6 @@ fn prune_conflicting_txs(
         }
     }
 
-    // BFS: find all txs transitively chained from the conflicting parent.
     let mut to_prune = Vec::new();
     let mut queue = vec![conflicting_parent];
     while let Some(parent) = queue.pop() {
