@@ -124,7 +124,9 @@ fn decode_channel_deposit(input: &[u8]) -> IResult<&[u8], DepositOp> {
     // ChannelDeposit = ChannelId Amount Metadata
     let (input, channel_id) = map(decode_hash32, ChannelId::from).parse(input)?;
     let (input, amount) = decode_uint64(input)?;
-    let (input, metadata) = map(take(input.len()), |bytes: &[u8]| bytes.to_vec()).parse(input)?;
+    let (input, metadata_len) = decode_uint32(input)?;
+    let (input, metadata) =
+        map(take(metadata_len as usize), |bytes: &[u8]| bytes.to_vec()).parse(input)?;
 
     Ok((
         input,
@@ -495,6 +497,7 @@ fn encode_channel_deposit(op: &DepositOp) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_hash32(op.channel_id.as_ref()));
     bytes.extend(encode_uint64(op.amount));
+    bytes.extend(encode_uint32(op.metadata.len() as u32));
     bytes.extend(op.metadata.as_slice());
     bytes
 }
