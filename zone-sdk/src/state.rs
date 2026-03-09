@@ -197,6 +197,18 @@ impl TxState {
         self.current_lib
     }
 
+    /// Remove a pending transaction, returning it if it existed.
+    ///
+    /// Also scrubs the tx hash from every block safe set so that
+    /// [`status`](Self::status) immediately reflects the removal.
+    pub fn remove_pending(&mut self, tx_hash: &TxHash) -> Option<SignedMantleTx> {
+        let tx = self.pending.remove(tx_hash)?;
+        for safe_set in self.block_states.values_mut() {
+            *safe_set = safe_set.remove(tx_hash);
+        }
+        Some(tx)
+    }
+
     /// All pending transactions (for checkpoint serialization).
     pub fn all_pending_txs(&self) -> impl Iterator<Item = (&TxHash, &SignedMantleTx)> {
         self.pending.iter()

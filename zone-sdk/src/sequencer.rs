@@ -1,6 +1,6 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
-use futures::{StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
+use futures::{Stream, StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
 use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient, ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
@@ -24,7 +24,6 @@ use crate::state::{TxState, TxStatus};
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const DEFAULT_PUBLISH_CHANNEL_CAPACITY: usize = 256;
-
 /// Inscription identifier.
 pub type InscriptionId = TxHash;
 
@@ -76,6 +75,8 @@ impl Default for SequencerConfig {
 pub enum Error {
     #[error("sequencer unavailable: {reason}")]
     Unavailable { reason: &'static str },
+    #[error("conflict with {} blob(s)", blobs.len())]
+    Conflict { blobs: Vec<Vec<u8>> },
 }
 
 enum ActorRequest {
@@ -293,7 +294,7 @@ async fn connect_blocks_stream(
     http_client: &CommonHttpClient,
     node_url: &Url,
     reconnect_delay: Duration,
-) -> impl futures::Stream<Item = ProcessedBlockEvent> {
+) -> impl Stream<Item = ProcessedBlockEvent> {
     loop {
         match http_client.get_blocks_stream(node_url.clone()).await {
             Ok(stream) => return stream,
@@ -328,6 +329,7 @@ async fn run_loop(
     let mut resubmit_interval = tokio::time::interval(config.resubmit_interval);
     let mut resubmit_active = false;
     let mut in_flight: FuturesUnordered<BoxFuture<'static, InFlight>> = FuturesUnordered::new();
+    let mut pending_conflicts: Option<Vec<Vec<u8>>> = None;
 
     loop {
         let blocks_stream =
@@ -345,6 +347,7 @@ async fn run_loop(
                         channel_id,
                         &signing_key,
                         &mut last_msg_id,
+                        &mut pending_conflicts,
                     );
                 }
                 maybe_event = blocks_stream.next() => {
@@ -355,8 +358,11 @@ async fn run_loop(
                             &mut current_tip,
                             &mut lib_slot,
                             channel_id,
+                            &signing_key,
                             &http_client,
                             &node_url,
+                            &mut last_msg_id,
+                            &mut pending_conflicts,
                         )
                         .await;
                     } else {
@@ -390,6 +396,7 @@ fn handle_request(
     channel_id: ChannelId,
     signing_key: &Ed25519Key,
     last_msg_id: &mut MsgId,
+    pending_conflicts: &mut Option<Vec<Vec<u8>>>,
 ) {
     let Some(s) = state else {
         match request {
@@ -414,6 +421,16 @@ fn handle_request(
 
     match request {
         ActorRequest::Publish { data, reply } => {
+            // If there are accumulated conflicts, return them (plus the new blob) instead
+            // of publishing.
+            if let Some(mut pending_conflicts) = pending_conflicts.take() {
+                pending_conflicts.push(data);
+                drop(reply.send(Err(Error::Conflict {
+                    blobs: pending_conflicts,
+                })));
+                return;
+            }
+
             let (signed_tx, new_msg_id) =
                 create_inscribe_tx(channel_id, signing_key, data, *last_msg_id);
             let id = signed_tx.mantle_tx.hash();
@@ -456,15 +473,20 @@ fn build_checkpoint(state: &TxState, last_msg_id: MsgId, lib_slot: Slot) -> Sequ
     }
 }
 
+#[expect(clippy::too_many_arguments, reason = "Demo.")]
 async fn handle_block_event(
     event: &ProcessedBlockEvent,
     state: &mut Option<TxState>,
     current_tip: &mut Option<HeaderId>,
     lib_slot: &mut Slot,
     channel_id: ChannelId,
+    signing_key: &Ed25519Key,
     http_client: &CommonHttpClient,
     node_url: &Url,
+    last_msg_id: &mut MsgId,
+    pending_conflicts: &mut Option<Vec<Vec<u8>>>,
 ) {
+    println!("New block!");
     let block_id = event.block.header.id;
     let parent_id = event.block.header.parent_block;
     let tip = event.tip;
@@ -510,6 +532,44 @@ async fn handle_block_event(
         .filter(|tx| matches_channel(tx, channel_id))
         .map(|tx| tx.mantle_tx.hash())
         .collect();
+
+    // Detect foreign inscriptions on our channel
+    let our_pubkey = signing_key.public_key();
+    for tx in &event.block.transactions {
+        for op in &tx.mantle_tx.ops {
+            if let Op::ChannelInscribe(inscribe) = op {
+                if inscribe.channel_id == channel_id {
+                    println!("Channel inscription in channel {channel_id:?}: {inscribe:?}");
+                } else {
+                    println!(
+                        "Other channel inscription: {channel_id:?} != {:?}",
+                        inscribe.channel_id
+                    );
+                }
+                if inscribe.signer == our_pubkey {
+                    println!("No conflict");
+                } else {
+                    println!("Conflict detected");
+                    // Prune our pending txs that conflict with this foreign
+                    // inscription (same parent, or transitively chained after one).
+                    let pruned_blobs = prune_conflicting_txs(s, inscribe.parent, channel_id);
+
+                    if !pruned_blobs.is_empty() {
+                        println!(
+                            "Foreign inscription {:?} conflicts with {} pending tx(s), pruning",
+                            inscribe.id(),
+                            pruned_blobs.len()
+                        );
+                        let existing_conflicts = pending_conflicts.get_or_insert_default();
+                        existing_conflicts.extend(pruned_blobs);
+                    }
+                }
+                // Update last_msg_id so future publishes chain after the
+                // foreign inscription.
+                *last_msg_id = inscribe.id();
+            }
+        }
+    }
 
     // Process the actual event block with real lib (triggers finalization if lib
     // advanced)
@@ -674,6 +734,63 @@ fn enqueue_resubmit(
         }
         InFlight::ResubmittedBatch { results }
     }));
+}
+
+/// Prune pending transactions that conflict with a foreign inscription.
+///
+/// A pending tx conflicts if its inscription parent equals `conflicting_parent`
+/// (the foreign inscription claimed that slot). Txs transitively chained after
+/// a conflicting tx are also pruned.
+fn prune_conflicting_txs(
+    state: &mut TxState,
+    conflicting_parent: MsgId,
+    channel_id: ChannelId,
+) -> Vec<Vec<u8>> {
+    // Build a map: parent_msg_id -> [(tx_hash, msg_id)] for pending inscription
+    // txs.
+    let mut by_parent: HashMap<MsgId, Vec<(TxHash, MsgId)>> = HashMap::new();
+    for (tx_hash, signed_tx) in state.all_pending_txs() {
+        for op in &signed_tx.mantle_tx.ops {
+            if let Op::ChannelInscribe(inscribe) = op
+                && inscribe.channel_id == channel_id
+            {
+                by_parent
+                    .entry(inscribe.parent)
+                    .or_default()
+                    .push((*tx_hash, inscribe.id()));
+            }
+        }
+    }
+
+    // BFS: find all txs transitively chained from the conflicting parent.
+    let mut to_prune = Vec::new();
+    let mut queue = vec![conflicting_parent];
+    while let Some(parent) = queue.pop() {
+        if let Some(children) = by_parent.remove(&parent) {
+            for (tx_hash, msg_id) in children {
+                to_prune.push(tx_hash);
+                queue.push(msg_id);
+            }
+        }
+    }
+
+    // Remove from state and extract the inscription blobs to hand back to the user.
+    to_prune
+        .into_iter()
+        .filter_map(|tx_hash| {
+            let signed_tx = state.remove_pending(&tx_hash)?;
+            // Extract the inscription blob from the matching channel op.
+            signed_tx.mantle_tx.ops.into_iter().find_map(|op| {
+                if let Op::ChannelInscribe(inscribe) = op
+                    && inscribe.channel_id == channel_id
+                {
+                    Some(inscribe.inscription)
+                } else {
+                    None
+                }
+            })
+        })
+        .collect()
 }
 
 fn matches_channel(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {

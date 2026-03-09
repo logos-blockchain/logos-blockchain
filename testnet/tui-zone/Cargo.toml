@@ -22,7 +22,9 @@ workspace = true
 
 [dependencies]
 clap                             = { features = ["derive", "env", "std"], version = "4" }
+futures                          = { default-features = false, version = "0.3" }
 hex                              = "0.4"
+lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-zone-sdk                      = { workspace = true }

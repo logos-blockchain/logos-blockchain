@@ -1,9 +1,13 @@
 use std::{fs, io::Write as _, path::Path};
 
 use clap::Parser;
+use lb_common_http_client::BasicAuthCredentials;
 use lb_core::mantle::ops::channel::ChannelId;
-use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
+use lb_key_management_system_service::keys::{
+    ED25519_SECRET_KEY_SIZE, Ed25519Key, UnsecuredEd25519Key,
+};
 use lb_zone_sdk::sequencer::{SequencerCheckpoint, ZoneSequencer};
+use rand::rngs::OsRng;
 use reqwest::Url;
 
 #[derive(Parser, Debug)]
@@ -20,6 +24,9 @@ pub struct InscribeArgs {
     /// Path to the checkpoint file for crash recovery
     #[arg(long, default_value = "sequencer.checkpoint", env = "CHECKPOINT_PATH")]
     checkpoint_path: String,
+
+    #[arg(long)]
+    channel_id: String,
 }
 
 fn save_checkpoint(path: &Path, checkpoint: &SequencerCheckpoint) {
@@ -48,10 +55,9 @@ fn load_or_create_signing_key(path: &Path) -> Ed25519Key {
             key_bytes.try_into().expect("length already checked");
         Ed25519Key::from_bytes(&key_array)
     } else {
-        let mut key_bytes = [0u8; ED25519_SECRET_KEY_SIZE];
-        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut key_bytes);
-        fs::write(path, key_bytes).expect("failed to write key file");
-        Ed25519Key::from_bytes(&key_bytes)
+        let key = UnsecuredEd25519Key::generate(&mut OsRng);
+        fs::write(path, key.as_bytes()).expect("failed to write key file");
+        key.into()
     }
 }
 
@@ -65,7 +71,8 @@ pub async fn run(args: InscribeArgs) {
 
     let node_url: Url = args.node_url.parse().expect("invalid node URL");
     let signing_key = load_or_create_signing_key(Path::new(&args.key_path));
-    let channel_id = ChannelId::from(signing_key.public_key().to_bytes());
+    let channel_id =
+        ChannelId::from(<[u8; _]>::try_from(hex::decode(args.channel_id).unwrap()).unwrap());
 
     println!("TUI Zone Sequencer");
     println!("  Node:       {node_url}");
@@ -79,7 +86,16 @@ pub async fn run(args: InscribeArgs) {
         println!("  Restored checkpoint from {}", args.checkpoint_path);
     }
 
-    let sequencer = ZoneSequencer::init(channel_id, signing_key, node_url, None, checkpoint);
+    let sequencer = ZoneSequencer::init(
+        channel_id,
+        signing_key,
+        node_url,
+        Some(BasicAuthCredentials::new(
+            "strode".to_owned(),
+            Some("SzH3RP7zdVQs8LCb".to_owned()),
+        )),
+        checkpoint,
+    );
 
     println!();
     println!("Type a message and press Enter to publish it as a zone block.");
