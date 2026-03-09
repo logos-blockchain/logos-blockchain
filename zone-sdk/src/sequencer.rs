@@ -9,7 +9,7 @@ use lb_core::{
         ledger::Tx as LedgerTx,
         ops::{
             Op, OpProof,
-            channel::{ChannelId, MsgId, inscribe::InscriptionOp},
+            channel::{ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp},
         },
         tx::TxHash,
     },
@@ -24,6 +24,7 @@ use crate::state::{TxState, TxStatus};
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const DEFAULT_PUBLISH_CHANNEL_CAPACITY: usize = 256;
+
 /// Inscription identifier.
 pub type InscriptionId = TxHash;
 
@@ -421,12 +422,10 @@ fn handle_request(
 
     match request {
         ActorRequest::Publish { data, reply } => {
-            // If there are accumulated conflicts, return them (plus the new blob) instead
-            // of publishing.
-            if let Some(mut pending_conflicts) = pending_conflicts.take() {
-                pending_conflicts.push(data);
+            // If there are accumulated conflicts, return them instead of publishing.
+            if let Some(existing_pending_conflicts) = pending_conflicts.take() {
                 drop(reply.send(Err(Error::Conflict {
-                    blobs: pending_conflicts,
+                    blobs: existing_pending_conflicts,
                 })));
                 return;
             }
@@ -486,7 +485,6 @@ async fn handle_block_event(
     last_msg_id: &mut MsgId,
     pending_conflicts: &mut Option<Vec<Vec<u8>>>,
 ) {
-    println!("New block!");
     let block_id = event.block.header.id;
     let parent_id = event.block.header.parent_block;
     let tip = event.tip;
@@ -501,6 +499,8 @@ async fn handle_block_event(
         return;
     };
 
+    let sequencer_pubkey = signing_key.public_key();
+
     // Backfill if needed (self-healing on every event)
     // 1. Backfill finalized blocks up to LIB (only when state's LIB is behind)
     if lib != s.lib() {
@@ -511,8 +511,11 @@ async fn handle_block_event(
                 *lib_slot,
                 new_lib_slot,
                 channel_id,
+                &sequencer_pubkey,
                 http_client,
                 node_url,
+                last_msg_id,
+                pending_conflicts,
             )
             .await;
         }
@@ -521,7 +524,17 @@ async fn handle_block_event(
 
     // 2. Backfill canonical chain if parent is missing
     if !s.has_block(&parent_id) && parent_id != s.lib() {
-        backfill_canonical(s, parent_id, channel_id, http_client, node_url).await;
+        backfill_canonical(
+            s,
+            parent_id,
+            channel_id,
+            &sequencer_pubkey,
+            http_client,
+            node_url,
+            last_msg_id,
+            pending_conflicts,
+        )
+        .await;
     }
 
     // Extract tx hashes for our channel
@@ -533,43 +546,17 @@ async fn handle_block_event(
         .map(|tx| tx.mantle_tx.hash())
         .collect();
 
-    // Detect foreign inscriptions on our channel
-    let our_pubkey = signing_key.public_key();
-    for tx in &event.block.transactions {
-        for op in &tx.mantle_tx.ops {
-            if let Op::ChannelInscribe(inscribe) = op {
-                if inscribe.channel_id == channel_id {
-                    println!("Channel inscription in channel {channel_id:?}: {inscribe:?}");
-                } else {
-                    println!(
-                        "Other channel inscription: {channel_id:?} != {:?}",
-                        inscribe.channel_id
-                    );
-                }
-                if inscribe.signer == our_pubkey {
-                    println!("No conflict");
-                } else {
-                    println!("Conflict detected");
-                    // Prune our pending txs that conflict with this foreign
-                    // inscription (same parent, or transitively chained after one).
-                    let pruned_blobs = prune_conflicting_txs(s, inscribe.parent, channel_id);
-
-                    if !pruned_blobs.is_empty() {
-                        println!(
-                            "Foreign inscription {:?} conflicts with {} pending tx(s), pruning",
-                            inscribe.id(),
-                            pruned_blobs.len()
-                        );
-                        let existing_conflicts = pending_conflicts.get_or_insert_default();
-                        existing_conflicts.extend(pruned_blobs);
-                    }
-                }
-                // Update last_msg_id so future publishes chain after the
-                // foreign inscription.
-                *last_msg_id = inscribe.id();
-            }
-        }
-    }
+    // Detect foreign inscriptions and prune conflicts.
+    // Only foreign inscriptions update last_msg_id — our own were already
+    // tracked when we created them.
+    process_channel_inscriptions(
+        s,
+        &event.block.transactions,
+        channel_id,
+        &sequencer_pubkey,
+        last_msg_id,
+        pending_conflicts,
+    );
 
     // Process the actual event block with real lib (triggers finalization if lib
     // advanced)
@@ -600,8 +587,11 @@ async fn backfill_to_lib(
     from_slot: Slot,
     to_slot: Slot,
     channel_id: ChannelId,
+    sequencer_pubkey: &Ed25519PublicKey,
     http_client: &CommonHttpClient,
     node_url: &Url,
+    last_msg_id: &mut MsgId,
+    pending_conflicts: &mut Option<Vec<Vec<u8>>>,
 ) {
     let from: u64 = from_slot.into();
     let to: u64 = to_slot.into();
@@ -621,6 +611,16 @@ async fn backfill_to_lib(
             for block in blocks {
                 let block_id = block.header.id;
                 let parent_id = block.header.parent_block;
+
+                // Detect foreign inscriptions and prune conflicts.
+                process_channel_inscriptions(
+                    state,
+                    &block.transactions,
+                    channel_id,
+                    sequencer_pubkey,
+                    last_msg_id,
+                    pending_conflicts,
+                );
 
                 let our_txs: Vec<TxHash> = block
                     .transactions
@@ -650,8 +650,11 @@ async fn backfill_canonical(
     state: &mut TxState,
     missing_parent: HeaderId,
     channel_id: ChannelId,
+    sequencer_pubkey: &Ed25519PublicKey,
     http_client: &CommonHttpClient,
     node_url: &Url,
+    last_msg_id: &mut MsgId,
+    pending_conflicts: &mut Option<Vec<Vec<u8>>>,
 ) {
     debug!("Backfilling canonical chain from {:?}", missing_parent);
 
@@ -686,6 +689,16 @@ async fn backfill_canonical(
     for block in blocks_to_process {
         let block_id = block.header().id();
         let parent_id = block.header().parent_block();
+
+        // Detect foreign inscriptions and prune conflicts.
+        process_channel_inscriptions(
+            state,
+            block.transactions_vec(),
+            channel_id,
+            sequencer_pubkey,
+            last_msg_id,
+            pending_conflicts,
+        );
 
         let our_txs: Vec<TxHash> = block
             .transactions()
@@ -791,6 +804,43 @@ fn prune_conflicting_txs(
             })
         })
         .collect()
+}
+
+/// Scan a block's transactions for channel inscriptions, updating `last_msg_id`
+/// for foreign inscriptions and pruning conflicting pending txs.
+///
+/// Only foreign inscriptions (not in our pending set) advance `last_msg_id` and
+/// trigger conflict pruning. Our own inscriptions are skipped because
+/// `last_msg_id` was already advanced when we created them.
+///
+/// All foreign inscription blobs are accumulated in `pending_conflicts` so the
+/// caller can inform the user about channel activity since the last publish.
+fn process_channel_inscriptions(
+    state: &mut TxState,
+    transactions: &[SignedMantleTx],
+    channel_id: ChannelId,
+    _sequencer_pubkey: &Ed25519PublicKey,
+    last_msg_id: &mut MsgId,
+    pending_conflicts: &mut Option<Vec<Vec<u8>>>,
+) {
+    for tx in transactions {
+        let tx_hash = tx.mantle_tx.hash();
+        for op in &tx.mantle_tx.ops {
+            if let Op::ChannelInscribe(inscribe) = op
+                && inscribe.channel_id == channel_id
+            {
+                if state.pending_tx(&tx_hash).is_none() {
+                    // Foreign inscription — prune conflicts and record the blob
+                    let pruned_blobs = prune_conflicting_txs(state, inscribe.parent, channel_id);
+
+                    let conflicts = pending_conflicts.get_or_insert_with(Vec::new);
+                    conflicts.extend(pruned_blobs);
+                    conflicts.push(inscribe.inscription.clone());
+                }
+                *last_msg_id = inscribe.id();
+            }
+        }
+    }
 }
 
 fn matches_channel(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {

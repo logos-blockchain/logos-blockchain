@@ -213,6 +213,10 @@ impl TxState {
     pub fn all_pending_txs(&self) -> impl Iterator<Item = (&TxHash, &SignedMantleTx)> {
         self.pending.iter()
     }
+
+    pub fn pending_tx(&self, tx_hash: &TxHash) -> Option<&SignedMantleTx> {
+        self.pending.get(tx_hash)
+    }
 }
 
 #[cfg(test)]

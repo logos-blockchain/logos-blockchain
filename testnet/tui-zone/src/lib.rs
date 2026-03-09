@@ -3,11 +3,8 @@ use std::{fs, io::Write as _, path::Path};
 use clap::Parser;
 use lb_common_http_client::BasicAuthCredentials;
 use lb_core::mantle::ops::channel::ChannelId;
-use lb_key_management_system_service::keys::{
-    ED25519_SECRET_KEY_SIZE, Ed25519Key, UnsecuredEd25519Key,
-};
-use lb_zone_sdk::sequencer::{SequencerCheckpoint, ZoneSequencer};
-use rand::rngs::OsRng;
+use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
+use lb_zone_sdk::sequencer::{Error, SequencerCheckpoint, ZoneSequencer};
 use reqwest::Url;
 
 #[derive(Parser, Debug)]
@@ -55,9 +52,10 @@ fn load_or_create_signing_key(path: &Path) -> Ed25519Key {
             key_bytes.try_into().expect("length already checked");
         Ed25519Key::from_bytes(&key_array)
     } else {
-        let key = UnsecuredEd25519Key::generate(&mut OsRng);
-        fs::write(path, key.as_bytes()).expect("failed to write key file");
-        key.into()
+        let mut key_bytes = [0u8; ED25519_SECRET_KEY_SIZE];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut key_bytes);
+        fs::write(path, key_bytes).expect("failed to write key file");
+        Ed25519Key::from_bytes(&key_bytes)
     }
 }
 
@@ -128,6 +126,41 @@ pub async fn run(args: InscribeArgs) {
                 let tx_hash: [u8; 32] = result.inscription_id.into();
                 println!("  published: {}", hex::encode(tx_hash));
                 save_checkpoint(checkpoint_path, &result.checkpoint);
+            }
+            Err(Error::Conflict { blobs }) => {
+                println!();
+                println!(
+                    "  ⚠ Conflict detected: {} previously published blob(s) were invalidated by a foreign inscription:",
+                    blobs.len()
+                );
+                for (i, blob) in blobs.iter().enumerate() {
+                    match core::str::from_utf8(blob) {
+                        Ok(text) => println!("    [{}] \"{}\"", i + 1, text),
+                        Err(_) => println!("    [{}] ({} bytes, non-UTF8)", i + 1, blob.len()),
+                    }
+                }
+                println!();
+                print!("  Re-publish your message on top of the new chain head? [y/N] ");
+                std::io::stdout().flush().expect("failed to flush stdout");
+
+                let mut answer = String::new();
+                stdin.read_line(&mut answer).expect("failed to read answer");
+
+                if answer.trim().eq_ignore_ascii_case("y") {
+                    // Retry the publish now that the conflicts have been consumed
+                    match sequencer.publish(msg.as_bytes().to_vec()).await {
+                        Ok(result) => {
+                            let tx_hash: [u8; 32] = result.inscription_id.into();
+                            println!("  published: {}", hex::encode(tx_hash));
+                            save_checkpoint(checkpoint_path, &result.checkpoint);
+                        }
+                        Err(e) => {
+                            println!("  error on retry: {e}");
+                        }
+                    }
+                } else {
+                    println!("  Aborted. The conflicting blobs have been discarded.");
+                }
             }
             Err(e) => {
                 println!("  error: {e}");
