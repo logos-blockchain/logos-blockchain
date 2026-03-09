@@ -24,7 +24,7 @@ use crate::state::{TxState, TxStatus};
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const DEFAULT_PUBLISH_CHANNEL_CAPACITY: usize = 256;
-const DEFAULT_INCLUSION_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_INCLUSION_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Inscription identifier.
 pub type InscriptionId = TxHash;
@@ -215,13 +215,7 @@ impl ZoneSequencer {
             Ok(Err(_)) => Err(Error::Unavailable {
                 reason: "actor dropped inclusion reply",
             }),
-            Err(_) => {
-                warn!(
-                    "Timed out waiting for inscription {:?} to be included",
-                    result.inscription_id
-                );
-                Err(Error::InclusionTimeout)
-            }
+            Err(_) => Err(Error::InclusionTimeout),
         }
     }
 
@@ -431,19 +425,19 @@ async fn run_loop(
 
                         // Notify waiters whose inscriptions were pruned due to conflicts
                         if let Some(conflicts) = &pending_conflicts {
-                            let gone: Vec<InscriptionId> = inclusion_waiters
+                            let conflicting_txs: Vec<InscriptionId> = inclusion_waiters
                                 .keys()
                                 .filter(|id| {
                                     state
                                         .as_ref()
-                                        .is_none_or(|s| s.pending_tx(id).is_none())
+                                        .is_none_or(|s| !s.is_tx_pending(id))
                                 })
                                 .copied()
                                 .collect();
 
-                            if !gone.is_empty() {
+                            if !conflicting_txs.is_empty() {
                                 let conflict_blobs = conflicts.clone();
-                                for id in gone {
+                                for id in conflicting_txs {
                                     if let Some(waiter) = inclusion_waiters.remove(&id) {
                                         drop(waiter.send(Err(Error::Conflict {
                                             blobs: conflict_blobs.clone(),
@@ -538,9 +532,6 @@ fn handle_request(
             s.submit(id, signed_tx.clone());
             *last_msg_id = new_msg_id;
 
-            // Register the inclusion waiter atomically, before any block
-            // can be processed. This prevents the race where the block
-            // arrives between Publish and WaitInclusion.
             inclusion_waiters.insert(id, inclusion_notify);
 
             let checkpoint = build_checkpoint(s, *last_msg_id, lib_slot);
@@ -945,7 +936,7 @@ fn process_channel_inscriptions(
             if let Op::ChannelInscribe(inscribe) = op
                 && inscribe.channel_id == channel_id
             {
-                if state.pending_tx(&tx_hash).is_none() {
+                if state.is_tx_pending(&tx_hash) {
                     // Foreign inscription — prune conflicts and record the blob
                     let pruned_blobs = prune_conflicting_txs(state, inscribe.parent, channel_id);
 

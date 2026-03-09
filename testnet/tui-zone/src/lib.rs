@@ -1,4 +1,4 @@
-use std::{fs, io::Write as _, path::Path, time::Duration};
+use std::{fs, io::Write as _, path::Path};
 
 use clap::Parser;
 use lb_common_http_client::BasicAuthCredentials;
@@ -6,7 +6,10 @@ use lb_core::mantle::ops::channel::ChannelId;
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use lb_zone_sdk::sequencer::{Error, SequencerCheckpoint, ZoneSequencer};
 use reqwest::Url;
-use tokio::task::JoinHandle;
+
+use crate::spinner::Spinner;
+
+mod spinner;
 
 #[derive(Parser, Debug)]
 #[command(about = "Terminal UI zone sequencer - publish text inscriptions")]
@@ -22,6 +25,12 @@ pub struct InscribeArgs {
     /// Path to the checkpoint file for crash recovery
     #[arg(long, default_value = "sequencer.checkpoint", env = "CHECKPOINT_PATH")]
     checkpoint_path: String,
+
+    #[arg(long, env = "USERNAME")]
+    username: Option<String>,
+
+    #[arg(long, env = "PASSWORD")]
+    password: Option<String>,
 }
 
 fn save_checkpoint(path: &Path, checkpoint: &SequencerCheckpoint) {
@@ -57,52 +66,6 @@ fn load_or_create_signing_key(path: &Path) -> Ed25519Key {
     }
 }
 
-/// A simple spinner that prints dots while an async operation is in progress.
-struct Spinner {
-    handle: Option<JoinHandle<()>>,
-    cancel: tokio::sync::watch::Sender<bool>,
-}
-
-impl Spinner {
-    fn start(message: &str) -> Self {
-        let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
-        let msg = message.to_owned();
-
-        let handle = tokio::spawn(async move {
-            #[expect(clippy::non_ascii_literal, reason = "UI animation")]
-            let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-            let mut i = 0;
-            loop {
-                print!("\r  {} {}", frames[i % frames.len()], msg);
-                drop(std::io::stdout().flush());
-                i += 1;
-
-                tokio::select! {
-                    () = tokio::time::sleep(Duration::from_millis(80)) => {}
-                    _ = cancel_rx.changed() => {
-                        // Clear the spinner line
-                        print!("\r{}\r", " ".repeat(msg.len() + 6));
-                        drop(std::io::stdout().flush());
-                        return;
-                    }
-                }
-            }
-        });
-
-        Self {
-            handle: Some(handle),
-            cancel: cancel_tx,
-        }
-    }
-
-    async fn stop(mut self) {
-        let _ = self.cancel.send(true);
-        if let Some(handle) = self.handle.take() {
-            drop(handle.await);
-        }
-    }
-}
-
 #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
 pub async fn run(args: InscribeArgs) {
     tracing_subscriber::fmt()
@@ -132,10 +95,8 @@ pub async fn run(args: InscribeArgs) {
         channel_id,
         signing_key,
         node_url,
-        Some(BasicAuthCredentials::new(
-            "strode".to_owned(),
-            Some("SzH3RP7zdVQs8LCb".to_owned()),
-        )),
+        args.username
+            .map(|username| BasicAuthCredentials::new(username, args.password.clone())),
         checkpoint,
     );
 
@@ -155,6 +116,7 @@ pub async fn run(args: InscribeArgs) {
         let bytes_read = stdin.read_line(&mut line).expect("failed to read line");
 
         if bytes_read == 0 {
+            // EOF
             println!();
             break;
         }
@@ -167,6 +129,8 @@ pub async fn run(args: InscribeArgs) {
         let data = msg.as_bytes().to_vec();
 
         let spinner = Spinner::start("Publishing zone block, waiting for inclusion...");
+        // `publish` now `await`s until the inscription is included in a block or an
+        // error occurs.
         let result = sequencer.publish(data.clone()).await;
         spinner.stop().await;
 
@@ -186,30 +150,30 @@ pub async fn run(args: InscribeArgs) {
             }
             Err(Error::Conflict { blobs }) => {
                 println!();
-                if !blobs.is_empty() {
-                    println!(
-                        "  ⚠ {} blob(s) appeared on the channel since your last publish:",
-                        blobs.len()
-                    );
-                    for (i, blob) in blobs.iter().enumerate() {
-                        match core::str::from_utf8(blob) {
-                            Ok(text) => {
-                                println!("    [{}] \"{}\"", i + 1, text);
-                            }
-                            Err(_) => {
-                                println!("    [{}] ({} bytes, non-UTF8)", i + 1, blob.len());
-                            }
+                println!(
+                    "  ⚠ {} blob(s) appeared on the channel since your last publish:",
+                    blobs.len()
+                );
+                for (i, blob) in blobs.iter().enumerate() {
+                    match core::str::from_utf8(blob) {
+                        Ok(blob_content) => {
+                            println!("    [{}] \"{blob_content}\"", i + 1);
+                        }
+                        Err(_) => {
+                            println!("    [{}] ({} bytes, non-UTF8)", i + 1, blob.len());
                         }
                     }
                 }
                 println!();
                 print!("  Re-publish your message on the new chain head? [Y/n] ");
-                std::io::stdout().flush().expect("failed to flush stdout");
+                drop(std::io::stdout().flush());
 
-                let mut answer = String::new();
-                stdin.read_line(&mut answer).expect("failed to read answer");
+                let answer = {
+                    let mut buffer = String::new();
+                    stdin.read_line(&mut buffer).expect("failed to read answer");
+                    buffer.trim().to_owned()
+                };
 
-                let answer = answer.trim();
                 if answer.is_empty() || answer.eq_ignore_ascii_case("y") {
                     let spinner = Spinner::start("Re-publishing, waiting for inclusion...");
                     let retry_result = sequencer.publish(data).await;

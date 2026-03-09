@@ -215,8 +215,8 @@ impl TxState {
     }
 
     #[must_use]
-    pub fn pending_tx(&self, tx_hash: &TxHash) -> Option<&SignedMantleTx> {
-        self.pending.get(tx_hash)
+    pub fn is_tx_pending(&self, tx_hash: &TxHash) -> bool {
+        self.pending.contains_key(tx_hash)
     }
 }
 

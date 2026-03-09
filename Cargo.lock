@@ -4811,7 +4811,6 @@ name = "logos-blockchain-tui-zone"
 version = "0.2.1"
 dependencies = [
  "clap",
- "futures",
  "hex",
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
@@ -4974,7 +4973,6 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "tokio",
- "tokio-stream",
  "tracing",
 ]
 
