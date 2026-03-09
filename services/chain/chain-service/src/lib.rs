@@ -5,6 +5,8 @@ mod relays;
 mod states;
 pub mod storage;
 mod sync;
+#[cfg(test)]
+mod tests;
 
 use core::fmt::Debug;
 use std::{
@@ -262,13 +264,12 @@ impl Cryptarchia {
         self.consensus.lib()
     }
 
-    /// Create a new [`Cryptarchia`] with the updated state.
-    #[must_use = "Returns a new instance with the updated state, without modifying the original."]
+    /// Try to apply a block to the chain.
     fn try_apply_block<Tx>(
-        &self,
+        &mut self,
         block: &Block<Tx>,
         current_slot: Slot,
-    ) -> Result<(Self, PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>), Error>
+    ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>), Error>
     where
         Tx: AuthenticatedMantleTx,
     {
@@ -286,8 +287,7 @@ impl Cryptarchia {
         }
 
         // A block number of this block if it's applied to the chain.
-        let ledger = self
-            .ledger
+        self.ledger
             .try_update::<_, MainnetGasConstants>(
                 id,
                 parent,
@@ -302,6 +302,7 @@ impl Cryptarchia {
                 },
                 err => Error::Ledger(err),
             })?;
+
         let UpdatedCryptarchia {
             cryptarchia: consensus,
             pruned_blocks,
@@ -316,16 +317,12 @@ impl Cryptarchia {
                 },
                 err => Error::Consensus(err),
             })?;
+        self.consensus = consensus;
 
-        let mut cryptarchia = Self {
-            ledger,
-            consensus,
-            genesis_id: self.genesis_id,
-        };
         // Prune the ledger states of all the pruned blocks.
-        cryptarchia.prune_ledger_states(pruned_blocks.all());
+        self.prune_ledger_states(pruned_blocks.all());
 
-        Ok((cryptarchia, pruned_blocks, reorged_blocks))
+        Ok((pruned_blocks, reorged_blocks))
     }
 
     fn epoch_state_for_slot(&self, slot: Slot) -> Result<EpochState, Error> {
@@ -357,14 +354,13 @@ impl Cryptarchia {
 
     fn online(self) -> (Self, PrunedBlocks<HeaderId>) {
         let (consensus, pruned_blocks) = self.consensus.online();
-        (
-            Self {
-                ledger: self.ledger,
-                consensus,
-                genesis_id: self.genesis_id,
-            },
-            pruned_blocks,
-        )
+        let mut cryptarchia = Self {
+            ledger: self.ledger,
+            consensus,
+            genesis_id: self.genesis_id,
+        };
+        cryptarchia.prune_ledger_states(pruned_blocks.all());
+        (cryptarchia, pruned_blocks)
     }
 
     const fn is_boostrapping(&self) -> bool {
@@ -896,7 +892,7 @@ where
     #[expect(clippy::allow_attributes_without_reason)]
     #[instrument(level = "debug", skip(cryptarchia, relays))]
     async fn process_block(
-        cryptarchia: Cryptarchia,
+        mut cryptarchia: Cryptarchia,
         block: Block<Tx>,
         current_slot: Slot,
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
@@ -915,8 +911,7 @@ where
             }
         };
 
-        let (cryptarchia, pruned_blocks, reorged_blocks) =
-            cryptarchia.try_apply_block(&block, current_slot)?;
+        let (pruned_blocks, reorged_blocks) = cryptarchia.try_apply_block(&block, current_slot)?;
         let new_lib = cryptarchia.lib();
 
         relays

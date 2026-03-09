@@ -1,0 +1,72 @@
+name: Nightly Cluster Fork Detector
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      run_secs:
+        description: "Scenario duration in seconds"
+        required: false
+        default: "7200"
+      node_count:
+        description: "Cluster node count"
+        required: false
+        default: "10"
+
+concurrency:
+  group: nightly-cluster-fork-detector
+  cancel-in-progress: true
+
+jobs:
+  cluster-fork-detector:
+    name: Run cluster fork detector
+    runs-on: [self-hosted, Linux]
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+      TF_KEEP_LOGS: "true"
+      LOGOS_BLEND_MONITOR_RUN_SECS: ${{ github.event.inputs.run_secs || '7200' }}
+      LOGOS_BLEND_MONITOR_NODE_COUNT: ${{ github.event.inputs.node_count || '10' }}
+      RUST_LOG: info,blend::network::core::core::behaviour=trace
+
+    steps:
+      - name: Disable rustup override
+        run: rustup override unset
+
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+
+      - name: Setup Circuits
+        uses: ./.github/actions/setup-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build node binary
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72 # v1.0.1
+        with:
+          command: build
+          args: --locked --release -p logos-blockchain-node
+
+      - name: Run nightly cluster fork detector
+        env:
+          LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72 # v1.0.1
+        with:
+          command: test
+          args: >-
+            --locked -p logos-blockchain-tests --features testing_framework
+            --test test_testing_framework_fork_detector
+            cluster_fork_detector -- --ignored --nocapture
+
+      - name: Upload fork detector artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
+        with:
+          name: nightly-cluster-fork-detector-${{ github.run_id }}
+          include-hidden-files: true
+          if-no-files-found: warn
+          path: |
+            /tmp/node-*/__logs-node-*
+            /tmp/node-*/node-*.json
+            tests/.tmp*

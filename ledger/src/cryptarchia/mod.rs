@@ -105,6 +105,9 @@ impl EpochState {
 
 /// Tracks bedrock transactions and minimal the state needed for consensus to
 /// work.
+///
+/// NOTE: Most collection fields in this struct should use `rpds`
+/// since we keep a copy of this state for each block.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Derivative)]
 #[derivative(Clone, Eq, PartialEq)]
@@ -593,7 +596,7 @@ pub mod tests {
             .unwrap();
         let id = make_id(parent, slot, utxo);
         let proof = generate_proof(&ledger_state, &utxo, slot);
-        *ledger = ledger.try_update::<_, MainnetGasConstants>(
+        ledger.try_update::<_, MainnetGasConstants>(
             id,
             parent,
             slot,

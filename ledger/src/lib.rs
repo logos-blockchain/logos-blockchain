@@ -70,16 +70,16 @@ where
         }
     }
 
-    /// Create a new [`Ledger`] with the updated state.
-    #[must_use = "Returns a new instance with the updated state, without modifying the original."]
+    /// Try to update the ledger state by applying the given proof and
+    /// transactions on top of the parent state.
     pub fn try_update<LeaderProof, Constants>(
-        &self,
+        &mut self,
         id: Id,
         parent_id: Id,
         slot: Slot,
         proof: &LeaderProof,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx>,
-    ) -> Result<Self, LedgerError<Id>>
+    ) -> Result<(), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
         Constants: GasConstants,
@@ -94,12 +94,8 @@ where
                 .clone()
                 .try_update::<_, _, Constants>(slot, proof, txs, &self.config)?;
 
-        let mut states = self.states.clone();
-        states.insert(id, new_state);
-        Ok(Self {
-            states,
-            config: self.config.clone(),
-        })
+        self.states.insert(id, new_state);
+        Ok(())
     }
 
     pub fn state(&self, id: &Id) -> Option<&LedgerState> {
@@ -128,6 +124,10 @@ where
     }
 }
 
+/// A ledger state
+///
+/// NOTE: Most collection fields in this struct should use `rpds`
+/// since we keep a copy of this state for each block.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct LedgerState {
@@ -362,7 +362,7 @@ mod tests {
 
     #[test]
     fn test_ledger_try_update_with_transaction() {
-        let (ledger, genesis_id, utxo) = create_test_ledger();
+        let (mut ledger, genesis_id, utxo) = create_test_ledger();
         let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(1u8).into()));
         let sk = ZkKey::from(BigUint::from(0u8));
         // determine fees
@@ -384,7 +384,7 @@ mod tests {
         );
 
         let new_id = [1; 32];
-        let new_ledger = ledger
+        ledger
             .try_update::<_, MainnetGasConstants>(
                 new_id,
                 genesis_id,
@@ -395,7 +395,7 @@ mod tests {
             .unwrap();
 
         // Verify the transaction was applied
-        let new_state = new_ledger.state(&new_id).unwrap();
+        let new_state = ledger.state(&new_id).unwrap();
         assert!(!new_state.latest_utxos().contains(&utxo.id()));
 
         // Verify output was created
