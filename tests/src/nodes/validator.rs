@@ -134,7 +134,8 @@ impl Validator {
         Ok(())
     }
 
-    /// Restarts with the same deployment and user configs, but attaches provided cli arguments.
+    /// Restarts with the same deployment and user configs, but attaches
+    /// provided cli arguments.
     pub async fn restart_with_args<I, S>(&mut self, args: I) -> Result<(), Elapsed>
     where
         I: IntoIterator<Item = S>,
