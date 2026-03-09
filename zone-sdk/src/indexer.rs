@@ -17,7 +17,9 @@ pub enum Error {
 }
 
 /// Opaque cursor for pagination. Pass to `next_messages` to resume.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+///
+/// Serializable so that callers can persist it for crash recovery.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Cursor {
     slot: u64,
     last_id: Option<MsgId>,
