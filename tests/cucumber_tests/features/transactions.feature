@@ -251,7 +251,7 @@ Feature: Transactions
       | 1             | 3           | 1000000      |
       | 2             | 3           | 1000000      |
     And I have a cluster with capacity of 2 nodes
-    And we use IBD peers
+#    And we use IBD peers
     And all peers must be mode online after startup in 30 seconds
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
@@ -272,12 +272,12 @@ Feature: Transactions
       | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
       | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
       | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
-    And I have IBD peers:
-      | ibd_peer                                             |
-      | 12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
-      | 12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
-      | 12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
-      | 12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
+#    And I have IBD peers:
+#      | ibd_peer                                             |
+#      | 12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
+#      | 12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
+#      | 12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
+#      | 12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
@@ -288,7 +288,7 @@ Feature: Transactions
 
   @transactions_manual_control
   Scenario: Transactions stress devnet manual control
-    Given I have a devnet cluster with capacity of 10 nodes
+    Given I have a devnet cluster with capacity of 20 nodes
     And we join an external network
     And I have a faucet with URL "https://devnet.blockchain.logos.co" username "strode" and password "SzH3RP7zdVQs8LCb"
     And I have initial peers:
@@ -297,12 +297,12 @@ Feature: Transactions
       | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
       | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
       | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
-    And I have IBD peers:
-      | ibd_peer                                             |
-      | 12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
-      | 12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
-      | 12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
-      | 12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
+#    And I have IBD peers:
+#      | ibd_peer                                             |
+#      | 12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
+#      | 12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
+#      | 12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
+#      | 12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
@@ -315,11 +315,16 @@ Feature: Transactions
       | NODE_8    | 8             | WALLET_8A   | NODE_7       |
       | NODE_9    | 9             | WALLET_9A   | NODE_8       |
       | NODE_10   | 10            | WALLET_10A  | NODE_9       |
-#      | NODE_11   | 11            | WALLET_11A  | NODE_10      |
-#      | NODE_12   | 12            | WALLET_12A  | NODE_11      |
-#      | NODE_13   | 13            | WALLET_13A  | NODE_12      |
-#      | NODE_14   | 14            | WALLET_14A  | NODE_13      |
-#      | NODE_15   | 15            | WALLET_15A  | NODE_14      |
+      | NODE_11   | 11            | WALLET_11A  | NODE_10      |
+      | NODE_12   | 12            | WALLET_12A  | NODE_11      |
+      | NODE_13   | 13            | WALLET_13A  | NODE_12      |
+      | NODE_14   | 14            | WALLET_14A  | NODE_13      |
+      | NODE_15   | 15            | WALLET_15A  | NODE_14      |
+      | NODE_16   | 16            | WALLET_16A  | NODE_15      |
+      | NODE_17   | 17            | WALLET_17A  | NODE_16      |
+      | NODE_18   | 18            | WALLET_18A  | NODE_17      |
+      | NODE_19   | 19            | WALLET_19A  | NODE_18      |
+      | NODE_20   | 20            | WALLET_20A  | NODE_19      |
     And I request 3 rounds of faucet funds for all wallets
     When I perform manual control of transactions for all wallets no time-out
     Then I stop all nodes
