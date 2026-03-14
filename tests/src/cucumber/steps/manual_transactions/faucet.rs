@@ -68,6 +68,7 @@ impl FaucetTask {
         let step = step.to_owned();
 
         tokio::spawn(async move {
+            info!(target: TARGET, "Faucet request(s) start");
             let mut next_index: usize = 0;
             let mut number_of_loops = 0;
             loop {
@@ -79,8 +80,10 @@ impl FaucetTask {
                             let address = &wallet_addresses[next_index];
                             info!(
                                 target: TARGET,
-                                "Step `{step}` address `{address}` height `{height}` at `{}`...",
-                                &check_height_urls[0]
+                                "Faucet request {number_of_loops}/{} for `{address}` at height \
+                                `{height}` from `{}`...",
+                                 wallet_addresses.len() * rounds_per_wallet.get(),
+                                &check_height_urls[0],
                             );
                             last_height = height;
 
@@ -110,6 +113,7 @@ impl FaucetTask {
 
                 sleep(Duration::from_millis(poll_interval_ms)).await;
             }
+            info!(target: TARGET, "Faucet request(s) ended");
         })
     }
 

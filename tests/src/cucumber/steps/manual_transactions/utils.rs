@@ -43,7 +43,6 @@ impl Display for WalletStateType {
 
 use std::str::FromStr;
 
-use cucumber::gherkin::Step;
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 
 use crate::cucumber::{
@@ -426,7 +425,8 @@ pub async fn wait_for_wallet_or_encumbered_state(
         if poll_count.is_multiple_of(25) {
             info!(
                 target: TARGET,
-                "Waiting for wallet '{wallet_name}/{}' to have required '{wallet_state_type}' coins",
+                "Waiting for wallet '{wallet_name}/{}' to have required '{wallet_state_type}' \
+                coins, current count: {coin_count}, value: {value}",
                 wallet.node_name
             );
         }
@@ -723,7 +723,7 @@ fn wallet_state_from_utxos(utxos: Vec<Utxo>) -> lb_wallet::WalletState {
 
 pub(crate) fn request_faucet_funds(
     world: &mut CucumberWorld,
-    step: &Step,
+    step: &str,
     number_of_rounds: NonZero<usize>,
     wallets: &[String],
 ) -> StepResult {
@@ -734,13 +734,13 @@ pub(crate) fn request_faucet_funds(
         warn!(
             target: TARGET,
             "Step `{}` error: Faucet details not set.",
-            step.value
+            step
         );
         return Err(StepError::LogicalError {
             message: "Faucet details not set".to_owned(),
         });
     }
-    let faacet_task = FaucetTask::new(
+    let faucet_task = FaucetTask::new(
         world
             .faucet_base_url
             .clone()
@@ -760,9 +760,9 @@ pub(crate) fn request_faucet_funds(
         number_of_rounds,
     );
     if let Some(handles) = &mut world.faucet_task_handles {
-        handles.push(faacet_task.spawn(1000, &step.value));
+        handles.push(faucet_task.spawn(1000, step));
     } else {
-        world.faucet_task_handles = Some(vec![faacet_task.spawn(1000, &step.value)]);
+        world.faucet_task_handles = Some(vec![faucet_task.spawn(1000, step)]);
     }
 
     Ok(())

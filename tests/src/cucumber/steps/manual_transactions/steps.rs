@@ -355,7 +355,7 @@ fn step_request_faucet_funds_for_wallet(
 
     utils::request_faucet_funds(
         world,
-        step,
+        &step.value,
         non_zero!("number of rounds", number_of_rounds)?,
         &[wallet_pk_hex],
     )
@@ -376,7 +376,7 @@ fn step_request_faucet_funds_for_all_wallets(
 
     utils::request_faucet_funds(
         world,
-        step,
+        &step.value,
         non_zero!("number of rounds", number_of_rounds)?,
         &all_wallets_pk_hex,
     )
@@ -398,7 +398,7 @@ fn step_request_faucet_funds_for_all_user_wallets(
 
     utils::request_faucet_funds(
         world,
-        step,
+        &step.value,
         non_zero!("number of rounds", number_of_rounds)?,
         &all_wallets_pk_hex,
     )
@@ -420,7 +420,7 @@ fn step_request_faucet_funds_for_all_funding_wallets(
 
     utils::request_faucet_funds(
         world,
-        step,
+        &step.value,
         non_zero!("number of rounds", number_of_rounds)?,
         &all_wallets_pk_hex,
     )

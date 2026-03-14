@@ -227,6 +227,8 @@ Feature: Transactions
   #   VERIFY_MIN, wallet '<wallet_name>', wallet_state_type 'on-chain'/'encumbered'/'available', outputs <count>, value 14000, time_out <duration_seconds>
   #   CONTINUOUS_USER_WALLETS, coin_split_outputs <count>, coin_split_value <amount>, transactions <count>, value <amount>, cycles <count>
   #   CONTINUOUS_FUNDING_WALLETS, coin_split_outputs <count>, coin_split_value <amount>, transactions <count>, value <amount>, cycles <count>
+  #   FAUCET_ALL_USER_WALLETS, rounds <count>
+  #   FAUCET_ALL_FUNDING_WALLETS, rounds <count>
   #   STOP
   #
   # Example command file content, individual steps:
@@ -262,6 +264,45 @@ Feature: Transactions
     Then I stop all nodes
 
   @transactions_manual_control
+  Scenario: Transactions stress manual control
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 1000000      |
+      | 2             | 3           | 1000000      |
+      | 3             | 3           | 1000000      |
+      | 4             | 3           | 1000000      |
+      | 5             | 3           | 1000000      |
+    And I have a cluster with capacity of 20 nodes
+    And we use IBD peers
+    And all peers must be mode online after startup in 30 seconds
+    And I start nodes with wallet resources:
+      | node_name | account_index | wallet_name | connected_to |
+      | NODE_1    | 1             | WALLET_1A   |              |
+      | NODE_2    | 2             | WALLET_2A   | NODE_1       |
+      | NODE_3    | 3             | WALLET_3A   | NODE_1       |
+      | NODE_4    | 4             | WALLET_4A   | NODE_1       |
+      | NODE_5    | 5             | WALLET_5A   | NODE_1       |
+#      | NODE_6    | 6             | WALLET_6A   | NODE_5       |
+#      | NODE_7    | 7             | WALLET_7A   | NODE_6       |
+#      | NODE_8    | 8             | WALLET_8A   | NODE_7       |
+#      | NODE_9    | 9             | WALLET_9A   | NODE_8       |
+#      | NODE_10   | 10            | WALLET_10A  | NODE_9       |
+#      | NODE_11   | 11            | WALLET_11A  | NODE_10      |
+#      | NODE_12   | 12            | WALLET_12A  | NODE_11      |
+#      | NODE_13   | 13            | WALLET_13A  | NODE_12      |
+#      | NODE_14   | 14            | WALLET_14A  | NODE_13      |
+#      | NODE_15   | 15            | WALLET_15A  | NODE_14      |
+#      | NODE_16   | 16            | WALLET_16A  | NODE_15      |
+#      | NODE_17   | 17            | WALLET_17A  | NODE_16      |
+#      | NODE_18   | 18            | WALLET_18A  | NODE_17      |
+#      | NODE_19   | 19            | WALLET_19A  | NODE_18      |
+#      | NODE_20   | 20            | WALLET_20A  | NODE_19      |
+#    And I request 3 rounds of faucet funds for all wallets
+    When all nodes have at least 2 blocks and converged to within 1 blocks in 300 seconds
+    When I perform manual control of transactions for all wallets no time-out
+    Then I stop all nodes
+
+  @transactions_manual_control
   Scenario: Transactions devnet manual control
     Given I have a devnet cluster with capacity of 2 nodes
     And we join an external network
@@ -282,7 +323,7 @@ Feature: Transactions
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
-#    And I request 3 rounds of faucet funds for all wallets
+#    And I request 3 rounds of faucet funds for all user wallets
     When I perform manual control of transactions for all wallets no time-out
     Then I stop all nodes
 
@@ -310,21 +351,22 @@ Feature: Transactions
       | NODE_3    | 3             | WALLET_3A   | NODE_2       |
       | NODE_4    | 4             | WALLET_4A   | NODE_3       |
       | NODE_5    | 5             | WALLET_5A   | NODE_4       |
-      | NODE_6    | 6             | WALLET_6A   | NODE_5       |
-      | NODE_7    | 7             | WALLET_7A   | NODE_6       |
-      | NODE_8    | 8             | WALLET_8A   | NODE_7       |
-      | NODE_9    | 9             | WALLET_9A   | NODE_8       |
-      | NODE_10   | 10            | WALLET_10A  | NODE_9       |
-      | NODE_11   | 11            | WALLET_11A  | NODE_10      |
-      | NODE_12   | 12            | WALLET_12A  | NODE_11      |
-      | NODE_13   | 13            | WALLET_13A  | NODE_12      |
-      | NODE_14   | 14            | WALLET_14A  | NODE_13      |
-      | NODE_15   | 15            | WALLET_15A  | NODE_14      |
-      | NODE_16   | 16            | WALLET_16A  | NODE_15      |
-      | NODE_17   | 17            | WALLET_17A  | NODE_16      |
-      | NODE_18   | 18            | WALLET_18A  | NODE_17      |
-      | NODE_19   | 19            | WALLET_19A  | NODE_18      |
-      | NODE_20   | 20            | WALLET_20A  | NODE_19      |
-    And I request 3 rounds of faucet funds for all wallets
+#      | NODE_6    | 6             | WALLET_6A   | NODE_5       |
+#      | NODE_7    | 7             | WALLET_7A   | NODE_6       |
+#      | NODE_8    | 8             | WALLET_8A   | NODE_7       |
+#      | NODE_9    | 9             | WALLET_9A   | NODE_8       |
+#      | NODE_10   | 10            | WALLET_10A  | NODE_9       |
+#      | NODE_11   | 11            | WALLET_11A  | NODE_10      |
+#      | NODE_12   | 12            | WALLET_12A  | NODE_11      |
+#      | NODE_13   | 13            | WALLET_13A  | NODE_12      |
+#      | NODE_14   | 14            | WALLET_14A  | NODE_13      |
+#      | NODE_15   | 15            | WALLET_15A  | NODE_14      |
+#      | NODE_16   | 16            | WALLET_16A  | NODE_15      |
+#      | NODE_17   | 17            | WALLET_17A  | NODE_16      |
+#      | NODE_18   | 18            | WALLET_18A  | NODE_17      |
+#      | NODE_19   | 19            | WALLET_19A  | NODE_18      |
+#      | NODE_20   | 20            | WALLET_20A  | NODE_19      |
+#    And I request 3 rounds of faucet funds for all wallets
+    And I request 2 rounds of faucet funds for all user wallets
     When I perform manual control of transactions for all wallets no time-out
     Then I stop all nodes

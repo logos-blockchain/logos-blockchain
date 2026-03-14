@@ -24,9 +24,11 @@
 //     <amount>, transactions <count>, value <amount>, cycles <count>
 //   CONTINUOUS_FUNDING_WALLETS, coin_split_outputs <count>, coin_split_value
 //     <amount>, transactions <count>, value <amount>, cycles <count>
+//   FAUCET_ALL_USER_WALLETS, rounds <count>
+//   FAUCET_ALL_FUNDING_WALLETS, rounds <count>
 //   STOP
 
-use std::{env, path::Path, time::Duration};
+use std::{env, num::NonZero, path::Path, time::Duration};
 
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
@@ -142,6 +144,34 @@ pub(crate) async fn execute_manual_command(
                 command,
             )
             .await?;
+            Ok(false)
+        }
+        ManualCommand::FaucetFundsAllUserWallets { rounds } => {
+            let number_of_rounds =
+                NonZero::new(*rounds).ok_or_else(|| StepError::InvalidArgument {
+                    message: "Invalid value for 'rounds': '0'".to_owned(),
+                })?;
+            let all_wallets_pk_hex = world
+                .wallet_info
+                .values()
+                .filter(|w| w.is_user_wallet())
+                .map(|w| w.public_key_hex())
+                .collect::<Vec<_>>();
+            utils::request_faucet_funds(world, step, number_of_rounds, &all_wallets_pk_hex)?;
+            Ok(false)
+        }
+        ManualCommand::FaucetFundsAllFundingWallets { rounds } => {
+            let number_of_rounds =
+                NonZero::new(*rounds).ok_or_else(|| StepError::InvalidArgument {
+                    message: "Invalid value for 'rounds': '0'".to_owned(),
+                })?;
+            let all_wallets_pk_hex = world
+                .wallet_info
+                .values()
+                .filter(|w| w.is_funding_wallet())
+                .map(|w| w.public_key_hex())
+                .collect::<Vec<_>>();
+            utils::request_faucet_funds(world, step, number_of_rounds, &all_wallets_pk_hex)?;
             Ok(false)
         }
         ManualCommand::Stop => Ok(true),

@@ -47,6 +47,12 @@ pub enum ManualCommand {
         value: u64,
         cycles: usize,
     },
+    FaucetFundsAllUserWallets {
+        rounds: usize,
+    },
+    FaucetFundsAllFundingWallets {
+        rounds: usize,
+    },
     Stop,
 }
 
@@ -201,6 +207,12 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
             transactions: parse_usize_field(&parts, "transactions")?,
             value: parse_u64_field(&parts, "value")?,
             cycles: parse_usize_field(&parts, "cycles")?,
+        }),
+        "FAUCET_ALL_USER_WALLETS" => Ok(ManualCommand::FaucetFundsAllUserWallets {
+            rounds: parse_usize_field(&parts, "rounds")?,
+        }),
+        "FAUCET_ALL_FUNDING_WALLETS" => Ok(ManualCommand::FaucetFundsAllFundingWallets {
+            rounds: parse_usize_field(&parts, "rounds")?,
         }),
         "STOP" => Ok(ManualCommand::Stop),
         _ => Err(StepError::InvalidArgument {
