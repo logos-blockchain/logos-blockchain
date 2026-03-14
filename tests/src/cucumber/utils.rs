@@ -177,3 +177,9 @@ pub fn extract_child_dir_name(base_dir: &Path, prefix: &str) -> Result<String, S
             message: "Invalid UTF-8 in directory name".to_owned(),
         })
 }
+
+/// Truncate hash for display purposes
+#[must_use]
+pub fn truncate_hash(input: &str, length: usize) -> String {
+    input.chars().take(length).collect()
+}

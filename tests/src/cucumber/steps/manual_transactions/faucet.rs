@@ -1,10 +1,13 @@
 use std::{num::NonZero, time::Duration};
 
+use lb_http_api_common::paths::CRYPTARCHIA_INFO;
 use reqwest::Client;
 use tokio::{task::JoinHandle, time::sleep};
 use tracing::{info, warn};
 
-use crate::cucumber::steps::TARGET;
+use crate::cucumber::{steps::TARGET, utils::truncate_hash};
+
+const FAUCET_BACKEND: &str = "/web/faucet-backend";
 
 /// Background task that periodically checks the block height and requests funds
 /// from the faucet.
@@ -33,9 +36,9 @@ impl FaucetTask {
             wallet_addresses: wallet_addresses.to_owned(),
             last_height: 0,
             rounds_per_wallet,
-            faucet_url: format!("{base_url}/web/faucet-backend"),
+            faucet_url: format!("{base_url}{FAUCET_BACKEND}"),
             check_height_urls: (0..=3)
-                .map(|i| format!("{base_url}/node/{i}/cryptarchia/info"))
+                .map(|i| format!("{base_url}/node/{i}{CRYPTARCHIA_INFO}"))
                 .collect(),
         }
     }
@@ -80,9 +83,10 @@ impl FaucetTask {
                             let address = &wallet_addresses[next_index];
                             info!(
                                 target: TARGET,
-                                "Faucet request {number_of_loops}/{} for `{address}` at height \
-                                `{height}` from `{}`...",
+                                "Faucet request {number_of_loops}/{} for `{} ...` at height \
+                                `{height}` from `{}`",
                                  wallet_addresses.len() * rounds_per_wallet.get(),
+                                truncate_hash(address, 16),
                                 &check_height_urls[0],
                             );
                             last_height = height;

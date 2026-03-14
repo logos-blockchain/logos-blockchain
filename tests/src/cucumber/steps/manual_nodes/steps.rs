@@ -14,15 +14,19 @@ use crate::cucumber::{
         TARGET,
         manual_nodes::utils::{
             NodesToStartUnordered, genesis_block_utxos, nodes_converged,
-            parse_genesis_wallet_tokens_row, parse_wallet_resources_table_row,
+            parse_genesis_wallet_tokens_row, parse_url, parse_wallet_resources_table_row,
             poll_all_nodes_and_update_consensus_cache, start_node,
             start_nodes_order_respecting_dependencies,
             verify_genesis_wallet_resources_table_indexes,
-            verify_node_wallet_resources_table_indexes,
+            verify_node_wallet_resources_table_indexes, wait_for_all_nodes_to_be_synced_to_chain,
         },
     },
-    world::{CucumberWorld, GenesisTokens},
+    world::{CucumberWorld, GenesisTokens, PublicCryptarchiaEndpointPeer},
 };
+
+const PUBLIC_CRYPTARCHIA_ENDPOINT: &str = "public_cryptarchia_endpoint";
+const PUBLIC_CRYPTARCHIA_ENDPOINT_USERNAME: &str = "username";
+const PUBLIC_CRYPTARCHIA_ENDPOINT_PASSWORD: &str = "password";
 
 #[given(expr = "I have a cluster with capacity of {int} nodes")]
 #[when(expr = "I have a cluster with capacity of {int} nodes")]
@@ -193,6 +197,93 @@ const fn step_we_use_ibd_peers(world: &mut CucumberWorld) {
 #[when(expr = "we join an external network")]
 const fn step_we_join_external_network(world: &mut CucumberWorld) {
     world.join_external_network = Some(true);
+}
+
+#[given("I have public cryptarchia endpoint peers:")]
+#[when("I have public cryptarchia endpoint peers:")]
+fn step_set_public_cryptarchia_endpoint_peers(
+    world: &mut CucumberWorld,
+    step: &Step,
+) -> StepResult {
+    let table = step.table.as_ref().ok_or(StepError::MissingTable)?;
+
+    if table.rows.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: format!(
+                "Step `{step}` error: public cryptarchia endpoint peers table cannot be empty"
+            ),
+        });
+    }
+    if table.rows.iter().any(|row| row.len() != 3) {
+        return Err(StepError::InvalidArgument {
+            message: format!(
+                "Step `{step}` error: public cryptarchia endpoint peers table must have exactly three columns"
+            ),
+        });
+    }
+    if !matches!(table.rows[0][0].trim(), PUBLIC_CRYPTARCHIA_ENDPOINT)
+        || !matches!(
+            table.rows[0][1].trim(),
+            PUBLIC_CRYPTARCHIA_ENDPOINT_USERNAME
+        )
+        || !matches!(
+            table.rows[0][2].trim(),
+            PUBLIC_CRYPTARCHIA_ENDPOINT_PASSWORD
+        )
+    {
+        return Err(StepError::InvalidArgument {
+            message: format!(
+                "Step `{step}` error: public cryptarchia endpoint peers table header row must be '{PUBLIC_CRYPTARCHIA_ENDPOINT}', '{PUBLIC_CRYPTARCHIA_ENDPOINT_USERNAME}', '{PUBLIC_CRYPTARCHIA_ENDPOINT_PASSWORD}'"
+            ),
+        });
+    }
+
+    let mut endpoint_peers = Vec::with_capacity(table.rows.len().saturating_sub(1));
+    for row in table.rows.iter().skip(1) {
+        let url = parse_url(&row[0]).map_err(|e| StepError::InvalidArgument {
+            message: format!(
+                "Step `{}` error: invalid public cryptarchia endpoint '{}': {e}",
+                step.value, row[0]
+            ),
+        })?;
+
+        let username = row[1].trim();
+        if username.is_empty() {
+            return Err(StepError::InvalidArgument {
+                message: format!(
+                    "Step `{}` error: username cannot be empty for public cryptarchia endpoint '{}'",
+                    step.value, url
+                ),
+            });
+        }
+
+        let password = row[2].trim();
+        if password.is_empty() {
+            return Err(StepError::InvalidArgument {
+                message: format!(
+                    "Step `{}` error: password cannot be empty for public cryptarchia endpoint '{}'",
+                    step.value, url
+                ),
+            });
+        }
+
+        endpoint_peers.push(PublicCryptarchiaEndpointPeer {
+            url,
+            username: username.to_owned(),
+            password: password.to_owned(),
+        });
+    }
+
+    if endpoint_peers.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: format!(
+                "Step `{step}` error: at least one public cryptarchia endpoint peer is required"
+            ),
+        });
+    }
+    world.public_cryptarchia_endpoint_peers = Some(endpoint_peers);
+
+    Ok(())
 }
 
 #[given(expr = "all peers must be mode online after startup in {int} seconds")]
@@ -370,6 +461,19 @@ async fn step_all_nodes_reached_min_height_and_converged(
         time_out_seconds,
     )
     .await
+}
+
+#[when("I wait for all nodes to be synced to the chain")]
+#[then("I wait for all nodes to be synced to the chain")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_wait_for_all_nodes_to_be_synced_to_the_chain(
+    world: &mut CucumberWorld,
+    step: &Step,
+) -> StepResult {
+    wait_for_all_nodes_to_be_synced_to_chain(world, &step.value).await
 }
 
 #[then(expr = "I stop all nodes")]

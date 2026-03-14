@@ -53,6 +53,8 @@ pub enum ManualCommand {
     FaucetFundsAllFundingWallets {
         rounds: usize,
     },
+    CryptarchiaInfoAllNodes,
+    WaitAllNodesSyncedToChain,
     Stop,
 }
 
@@ -214,6 +216,8 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
         "FAUCET_ALL_FUNDING_WALLETS" => Ok(ManualCommand::FaucetFundsAllFundingWallets {
             rounds: parse_usize_field(&parts, "rounds")?,
         }),
+        "CRYPTARCHIA_INFO_ALL_NODES" => Ok(ManualCommand::CryptarchiaInfoAllNodes),
+        "WAIT_ALL_NODES_SYNCED_TO_CHAIN" => Ok(ManualCommand::WaitAllNodesSyncedToChain),
         "STOP" => Ok(ManualCommand::Stop),
         _ => Err(StepError::InvalidArgument {
             message: format!("Unknown manual command: '{action}' in '{raw}'"),

@@ -59,6 +59,13 @@ pub struct RunState {
     pub result: Option<Result<(), String>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PublicCryptarchiaEndpointPeer {
+    pub url: String,
+    pub username: String,
+    pub password: String,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct ScenarioSpec {
     pub topology: Option<TopologySpec>,
@@ -150,6 +157,9 @@ pub struct CucumberWorld {
     pub initial_peers_override: Option<Vec<Multiaddr>>,
     /// Manual: IBD peers injected into node config before start.
     pub ibd_peers_override: Option<HashSet<PeerId>>,
+    /// Manual: Public base endpoints and credentials used to query
+    /// `/cryptarchia/info` for external chain sync reference.
+    pub public_cryptarchia_endpoint_peers: Option<Vec<PublicCryptarchiaEndpointPeer>>,
     /// Manual: If set, nodes use a `DeploymentSettings` loaded from disk
     /// bypassing generated genesis/test deployment.
     pub deployment_config_override_path: Option<PathBuf>,
@@ -253,6 +263,12 @@ impl Debug for CucumberWorld {
                 &ibd_peers_override_display(self.ibd_peers_override.as_ref()),
             )
             .field(
+                "public_cryptarchia_endpoint_peers",
+                &public_cryptarchia_endpoint_peers_display(
+                    self.public_cryptarchia_endpoint_peers.as_ref(),
+                ),
+            )
+            .field(
                 "deployment_config_override_path",
                 &deployment_config_override_path_display(
                     self.deployment_config_override_path.as_ref(),
@@ -279,11 +295,8 @@ pub struct GenesisTokens {
 /// The wallet type can either be ussr defined or funding.
 #[derive(Clone, Debug)]
 pub enum WalletType {
-    /// User defined wallets are not tied to a specific node
-    User {
-        account_index: usize,
-        wallet_account: WalletAccount,
-    },
+    /// User defined wallets with are not tied to a specific node
+    User { wallet_account: WalletAccount },
     /// Funding wallets are tied to a node and participate in consensus
     Funding { wallet_pk: String },
 }
@@ -824,6 +837,12 @@ impl CucumberWorld {
                 &ibd_peers_override_display(self.ibd_peers_override.as_ref()),
             )
             .field(
+                "public_cryptarchia_endpoint_peers",
+                &public_cryptarchia_endpoint_peers_display(
+                    self.public_cryptarchia_endpoint_peers.as_ref(),
+                ),
+            )
+            .field(
                 "deployment_config_override_path",
                 &deployment_config_override_path_display(
                     self.deployment_config_override_path.as_ref(),
@@ -958,6 +977,22 @@ fn ibd_peers_override_display(ibd_peers_override: Option<&HashSet<PeerId>>) -> S
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("Some(HashSet<PeerId>({peers_str}))")
+        },
+    )
+}
+
+fn public_cryptarchia_endpoint_peers_display(
+    public_cryptarchia_endpoint_peers: Option<&Vec<PublicCryptarchiaEndpointPeer>>,
+) -> String {
+    public_cryptarchia_endpoint_peers.as_ref().map_or_else(
+        || "None".to_owned(),
+        |&peers| {
+            let peers_str = peers
+                .iter()
+                .map(|peer| format!("{} (user: {})", peer.url, peer.username))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("Vec<PublicCryptarchiaEndpointPeer>({peers_str})")
         },
     )
 }

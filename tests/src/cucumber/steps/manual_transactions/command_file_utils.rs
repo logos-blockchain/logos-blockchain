@@ -26,10 +26,13 @@
 //     <amount>, transactions <count>, value <amount>, cycles <count>
 //   FAUCET_ALL_USER_WALLETS, rounds <count>
 //   FAUCET_ALL_FUNDING_WALLETS, rounds <count>
+//   CRYPTARCHIA_INFO_ALL_NODES
+//   WAIT_ALL_NODES_SYNCED_TO_CHAIN
 //   STOP
 
 use std::{env, num::NonZero, path::Path, time::Duration};
 
+use hex::ToHex as _;
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
@@ -37,13 +40,15 @@ use crate::cucumber::{
     error::StepError,
     steps::{
         TARGET,
+        manual_nodes::utils::wait_for_all_nodes_to_be_synced_to_chain,
         manual_transactions::{
             command_file_parsing::{ManualCommand, take_next_command},
             utils,
             utils::WalletStateType,
         },
     },
-    world::CucumberWorld,
+    utils::truncate_hash,
+    world::{CucumberWorld, WalletInfo},
 };
 
 const MANUAL_COMMAND_FILE_ENV: &str = "CUCUMBER_MANUAL_COMMAND_FILE";
@@ -54,71 +59,54 @@ pub(crate) async fn execute_manual_command(
     step: &str,
     command: &ManualCommand,
 ) -> Result<bool, StepError> {
+    if matches!(command, ManualCommand::Stop) {
+        return Ok(true);
+    }
+
+    execute_non_stop_manual_command(world, step, command).await?;
+    Ok(false)
+}
+
+async fn execute_non_stop_manual_command(
+    world: &mut CucumberWorld,
+    step: &str,
+    command: &ManualCommand,
+) -> Result<(), StepError> {
     match command {
         ManualCommand::CoinSplit {
             wallet,
             outputs,
             value,
-        } => {
-            execute_coin_split(world, step, wallet, *outputs, *value).await?;
-            Ok(false)
-        }
-        ManualCommand::Verify {
-            wallet,
-            outputs,
-            value,
-            time_out,
-            wallet_state_type,
-            verify_max,
-        } => {
-            let verify_min = !*verify_max;
-            utils::wait_for_wallet_or_encumbered_state(
-                world,
-                step,
-                wallet.clone(),
-                if verify_min { outputs.as_ref() } else { None },
-                if *verify_max { outputs.as_ref() } else { None },
-                if verify_min { value.as_ref() } else { None },
-                if *verify_max { value.as_ref() } else { None },
-                *time_out,
-                *wallet_state_type,
-            )
-            .await?;
-            Ok(false)
-        }
+        } => execute_coin_split(world, step, wallet, *outputs, *value).await,
+        ManualCommand::Verify { .. } => handle_verify_command(world, step, command).await,
         ManualCommand::WalletBalance { wallet_name } => {
             utils::update_wallet_balance(world, step, wallet_name).await?;
-            Ok(false)
+            Ok(())
         }
         ManualCommand::WalletBalanceAllUserWallets => {
             utils::update_wallet_balance_all_user_wallets(world, step).await?;
-            Ok(false)
+            Ok(())
         }
         ManualCommand::WalletBalanceAllFundingWallets => {
             utils::update_wallet_balance_all_funding_wallets(world, step).await?;
-            Ok(false)
+            Ok(())
         }
         ManualCommand::WalletBalanceAllWallets => {
             utils::update_wallet_balance_all_wallets(world, step).await?;
-            Ok(false)
+            Ok(())
         }
         ManualCommand::ClearEncumbrances { wallet_name } => {
-            utils::clear_wallet_encumbrances(world, step, wallet_name)?;
-            Ok(false)
+            utils::clear_wallet_encumbrances(world, step, wallet_name)
         }
         ManualCommand::ClearEncumbrancesAllWallets => {
-            utils::clear_all_wallet_encumbrances(world, step)?;
-            Ok(false)
+            utils::clear_all_wallet_encumbrances(world, step)
         }
         ManualCommand::Send {
             transactions,
             value,
             from,
             to,
-        } => {
-            execute_send(world, step, *transactions, *value, from, to).await?;
-            Ok(false)
-        }
+        } => execute_send(world, step, *transactions, *value, from, to).await,
         ManualCommand::ContinuousUserWallets {
             coin_split_outputs,
             coin_split_value,
@@ -143,38 +131,132 @@ pub(crate) async fn execute_manual_command(
                 *cycles,
                 command,
             )
-            .await?;
-            Ok(false)
+            .await
         }
         ManualCommand::FaucetFundsAllUserWallets { rounds } => {
-            let number_of_rounds =
-                NonZero::new(*rounds).ok_or_else(|| StepError::InvalidArgument {
-                    message: "Invalid value for 'rounds': '0'".to_owned(),
-                })?;
-            let all_wallets_pk_hex = world
-                .wallet_info
-                .values()
-                .filter(|w| w.is_user_wallet())
-                .map(|w| w.public_key_hex())
-                .collect::<Vec<_>>();
-            utils::request_faucet_funds(world, step, number_of_rounds, &all_wallets_pk_hex)?;
-            Ok(false)
+            request_faucet_funds_all_user_wallets(world, step, *rounds)
         }
         ManualCommand::FaucetFundsAllFundingWallets { rounds } => {
-            let number_of_rounds =
-                NonZero::new(*rounds).ok_or_else(|| StepError::InvalidArgument {
-                    message: "Invalid value for 'rounds': '0'".to_owned(),
-                })?;
-            let all_wallets_pk_hex = world
-                .wallet_info
-                .values()
-                .filter(|w| w.is_funding_wallet())
-                .map(|w| w.public_key_hex())
-                .collect::<Vec<_>>();
-            utils::request_faucet_funds(world, step, number_of_rounds, &all_wallets_pk_hex)?;
-            Ok(false)
+            request_faucet_funds_all_funding_wallets(world, step, *rounds)
         }
-        ManualCommand::Stop => Ok(true),
+        ManualCommand::CryptarchiaInfoAllNodes => {
+            execute_cryptarchia_info_all_nodes(world, step).await;
+            Ok(())
+        }
+        ManualCommand::WaitAllNodesSyncedToChain => {
+            wait_for_all_nodes_to_be_synced_to_chain(world, step).await
+        }
+        ManualCommand::Stop => Ok(()),
+    }
+}
+
+async fn handle_verify_command(
+    world: &mut CucumberWorld,
+    step: &str,
+    command: &ManualCommand,
+) -> Result<(), StepError> {
+    let ManualCommand::Verify {
+        wallet,
+        outputs,
+        value,
+        time_out,
+        wallet_state_type,
+        verify_max,
+    } = command
+    else {
+        unreachable!("handle_verify_command must be called with ManualCommand::Verify")
+    };
+
+    let verify_min = !*verify_max;
+    utils::wait_for_wallet_or_encumbered_state(
+        world,
+        step,
+        wallet.clone(),
+        if verify_min { outputs.as_ref() } else { None },
+        if *verify_max { outputs.as_ref() } else { None },
+        if verify_min { value.as_ref() } else { None },
+        if *verify_max { value.as_ref() } else { None },
+        *time_out,
+        *wallet_state_type,
+    )
+    .await
+}
+
+fn request_faucet_funds_all_user_wallets(
+    world: &mut CucumberWorld,
+    step: &str,
+    rounds: usize,
+) -> Result<(), StepError> {
+    let number_of_rounds = NonZero::new(rounds).ok_or_else(|| StepError::InvalidArgument {
+        message: "Invalid value for 'rounds': '0'".to_owned(),
+    })?;
+    let all_wallets_pk_hex = world
+        .wallet_info
+        .values()
+        .filter(|w| w.is_user_wallet())
+        .map(WalletInfo::public_key_hex)
+        .collect::<Vec<_>>();
+    utils::request_faucet_funds(world, step, number_of_rounds, &all_wallets_pk_hex)
+}
+
+fn request_faucet_funds_all_funding_wallets(
+    world: &mut CucumberWorld,
+    step: &str,
+    rounds: usize,
+) -> Result<(), StepError> {
+    let number_of_rounds = NonZero::new(rounds).ok_or_else(|| StepError::InvalidArgument {
+        message: "Invalid value for 'rounds': '0'".to_owned(),
+    })?;
+    let all_wallets_pk_hex = world
+        .wallet_info
+        .values()
+        .filter(|w| w.is_funding_wallet())
+        .map(WalletInfo::public_key_hex)
+        .collect::<Vec<_>>();
+    utils::request_faucet_funds(world, step, number_of_rounds, &all_wallets_pk_hex)
+}
+
+pub(crate) async fn execute_cryptarchia_info_all_nodes(world: &CucumberWorld, step: &str) {
+    let mut node_names = world.nodes_info.keys().cloned().collect::<Vec<_>>();
+    node_names.sort();
+
+    if node_names.is_empty() {
+        warn!(
+            target: TARGET,
+            "Step `{step}` no nodes found for CRYPTARCHIA_INFO_ALL_NODES"
+        );
+        return;
+    }
+
+    for node_name in node_names {
+        let Some(node_info) = world.nodes_info.get(&node_name) else {
+            continue;
+        };
+        match node_info.started_node.client.consensus_info().await {
+            Ok(consensus) => {
+                let mode = if consensus.mode.is_online() {
+                    "Online"
+                } else {
+                    "Bootstrapping"
+                };
+                info!(
+                    target: TARGET,
+                    "cryptarchia/info - '{}', '{}', {}/{}, tip '{} ...', lib '{} ...'",
+                    node_name,
+                    mode,
+                    consensus.height,
+                    consensus.slot.into_inner(),
+                    truncate_hash(&consensus.tip.encode_hex::<String>(), 16),
+                    truncate_hash(&consensus.lib.encode_hex::<String>(), 16),
+                );
+            }
+            Err(e) => {
+                warn!(
+                    target: TARGET,
+                    "Step `{step}` CRYPTARCHIA_INFO failed for node `{node_name}`: {e}",
+                );
+            }
+        }
     }
 }
 
