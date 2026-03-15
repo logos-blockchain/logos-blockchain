@@ -2,6 +2,7 @@ pub mod api;
 pub mod backends;
 
 use std::{
+    collections::{BTreeSet, HashMap},
     fmt::{Debug, Display, Formatter},
     marker::PhantomData,
     num::NonZeroUsize,
@@ -10,7 +11,11 @@ use std::{
 use async_trait::async_trait;
 use backends::{StorageBackend, StorageTransaction};
 use bytes::Bytes;
-use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
+use lb_core::{
+    block::BlockNumber,
+    codec::{DeserializeOp as _, SerializeOp as _},
+    sdp::{Locator, ProviderId, ServiceType, SessionNumber},
+};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -19,21 +24,25 @@ use overwatch::{
     },
 };
 use serde::{Serialize, de::DeserializeOwned};
+use tokio::sync::oneshot::Sender;
 
-use crate::api::{StorageApiRequest, StorageOperation};
+use crate::api::{
+    StorageApiRequest, StorageOperation,
+    membership::requests::{MembershipApiRequest, SessionSender},
+};
 
 /// Storage message that maps to [`StorageBackend`] trait
 pub enum StorageMsg<Backend: StorageBackend> {
     Load {
         key: Bytes,
-        reply_channel: tokio::sync::oneshot::Sender<Option<Bytes>>,
+        reply_channel: Sender<Option<Bytes>>,
     },
     LoadPrefix {
         prefix: Bytes,
         start_key: Option<Bytes>,
         end_key: Option<Bytes>,
         limit: Option<NonZeroUsize>,
-        reply_channel: tokio::sync::oneshot::Sender<Vec<Bytes>>,
+        reply_channel: Sender<Vec<Bytes>>,
     },
     Store {
         key: Bytes,
@@ -41,12 +50,11 @@ pub enum StorageMsg<Backend: StorageBackend> {
     },
     Remove {
         key: Bytes,
-        reply_channel: tokio::sync::oneshot::Sender<Option<Bytes>>,
+        reply_channel: Sender<Option<Bytes>>,
     },
     Execute {
         transaction: Backend::Transaction,
-        reply_channel:
-            tokio::sync::oneshot::Sender<<Backend::Transaction as StorageTransaction>::Result>,
+        reply_channel: Sender<<Backend::Transaction as StorageTransaction>::Result>,
     },
     Api {
         request: StorageApiRequest<Backend>,
@@ -134,6 +142,80 @@ impl<Backend: StorageBackend> StorageMsg<Backend> {
             },
             StorageReplyReceiver::new(receiver),
         )
+    }
+
+    #[must_use]
+    pub const fn save_active_session_request(
+        service_type: ServiceType,
+        session_id: SessionNumber,
+        providers: HashMap<ProviderId, BTreeSet<Locator>>,
+    ) -> Self {
+        Self::Api {
+            request: StorageApiRequest::Membership(MembershipApiRequest::SaveActiveSession {
+                service_type,
+                session_id,
+                providers,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub const fn load_active_session_request(
+        service_type: ServiceType,
+        response_tx: SessionSender,
+    ) -> Self {
+        Self::Api {
+            request: StorageApiRequest::Membership(MembershipApiRequest::LoadActiveSession {
+                service_type,
+                response_tx,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub const fn save_latest_block_request(block_number: BlockNumber) -> Self {
+        Self::Api {
+            request: StorageApiRequest::Membership(MembershipApiRequest::SaveLatestBlock {
+                block_number,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub const fn load_latest_block_request(response_tx: Sender<Option<BlockNumber>>) -> Self {
+        Self::Api {
+            request: StorageApiRequest::Membership(MembershipApiRequest::LoadLatestBlock {
+                response_tx,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub const fn save_forming_session_request(
+        service_type: ServiceType,
+        session_id: SessionNumber,
+        providers: HashMap<ProviderId, BTreeSet<Locator>>,
+    ) -> Self {
+        Self::Api {
+            request: StorageApiRequest::Membership(MembershipApiRequest::SaveFormingSession {
+                service_type,
+                session_id,
+                providers,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub const fn load_forming_session_request(
+        service_type: ServiceType,
+        response_tx: SessionSender,
+    ) -> Self {
+        Self::Api {
+            request: StorageApiRequest::Membership(MembershipApiRequest::LoadFormingSession {
+                service_type,
+                response_tx,
+            }),
+        }
     }
 }
 
@@ -225,7 +307,7 @@ where
     async fn handle_load(
         backend: &mut Backend,
         key: Bytes,
-        reply_channel: tokio::sync::oneshot::Sender<Option<Bytes>>,
+        reply_channel: Sender<Option<Bytes>>,
     ) -> Result<(), StorageServiceError> {
         let result: Option<Bytes> = backend
             .load(&key)
@@ -245,7 +327,7 @@ where
         start_key: Option<Bytes>,
         end_key: Option<Bytes>,
         limit: Option<NonZeroUsize>,
-        reply_channel: tokio::sync::oneshot::Sender<Vec<Bytes>>,
+        reply_channel: Sender<Vec<Bytes>>,
     ) -> Result<(), StorageServiceError> {
         let result: Vec<Bytes> = backend
             .load_prefix(&prefix, start_key.as_deref(), end_key.as_deref(), limit)
@@ -262,7 +344,7 @@ where
     async fn handle_remove(
         backend: &mut Backend,
         key: Bytes,
-        reply_channel: tokio::sync::oneshot::Sender<Option<Bytes>>,
+        reply_channel: Sender<Option<Bytes>>,
     ) -> Result<(), StorageServiceError> {
         let result: Option<Bytes> = backend
             .remove(&key)
@@ -291,9 +373,7 @@ where
     async fn handle_execute(
         backend: &mut Backend,
         transaction: Backend::Transaction,
-        reply_channel: tokio::sync::oneshot::Sender<
-            <Backend::Transaction as StorageTransaction>::Result,
-        >,
+        reply_channel: Sender<<Backend::Transaction as StorageTransaction>::Result>,
     ) -> Result<(), StorageServiceError> {
         let result = backend
             .execute(transaction)

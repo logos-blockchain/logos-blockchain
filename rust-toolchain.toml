@@ -1,12 +1,11 @@
 [toolchain]
 # Keep this version in sync also in the following places:
-# * Dockerfile
 # * flake.nix
 # * testnet/Dockerfile
 # Also, update the version of the nightly toolchain to the latest nightly of the new version specified in the following places:
 # * .github/workflows/code-check.yml (fmt job)
 # * .pre-commit-config.yml (fmt hook)
 # Then, if there is any new allow-by-default rustc lint introduced/stabilized, add it to the respective entry in our `config.toml`.
-channel = "1.93.0"
+channel = "1.94.0"
 # Even if clippy should be included in the default profile, in some cases it is not installed. So we force it with an explicit declaration.
 components = ["clippy"]

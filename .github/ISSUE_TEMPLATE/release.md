@@ -28,7 +28,10 @@ Progress on the checklist must be provided as comments to the issue.
 
 ## Deployment Settings Update
 
-- [ ] Checkout `master` and push a new commit on top of `pre-X.Y.Z` with 1. the updated devnet settings and 2. the bumped up workspace version matching the new release
+- [ ] Checkout `master` and push a new commit on top of `pre-X.Y.Z` with the following changes:
+    - [ ] the updated devnet deployment settings
+    - [ ] the bumped up Cargo workspace version matching the new release
+    - [ ] the bumped up version for the C bindings in the root `flake.nix` file
 - [ ] Verify `git` shows a diff for the deployment file, otherwise it means something went wrong when downloading the new one from the deployment settings endpoint
 - [ ] Verify the HEAD of `master` has green CI ✅
 - [ ] Tag the commit with `X.Y.Z` and push the tag

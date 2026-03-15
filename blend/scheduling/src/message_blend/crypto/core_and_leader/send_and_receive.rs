@@ -60,29 +60,12 @@ where
             proofs_verifier: ProofsVerifier::new(public_info),
         }
     }
-}
 
-impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
-    SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
-where
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
-    ProofsVerifier: ProofsVerifierTrait,
-{
     pub fn rotate_epoch(&mut self, new_epoch_public: LeaderInputs, new_epoch: Epoch) {
         self.sender_processor
             .rotate_epoch(new_epoch_public, new_epoch);
         self.proofs_verifier
             .start_epoch_transition(new_epoch_public);
-    }
-}
-
-impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
-    SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
-where
-    ProofsVerifier: ProofsVerifierTrait,
-{
-    pub fn complete_epoch_transition(&mut self) {
-        self.proofs_verifier.complete_epoch_transition();
     }
 }
 
@@ -114,6 +97,10 @@ where
             },
             &self.proofs_verifier,
         )
+    }
+
+    pub fn complete_epoch_transition(&mut self) {
+        self.proofs_verifier.complete_epoch_transition();
     }
 }
 
