@@ -2,7 +2,6 @@ use std::{
     fmt::{Debug, Display, Formatter},
     io::Write,
     marker::PhantomData,
-    panic,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -315,8 +314,6 @@ where
                 .with(layers)
                 .init();
         });
-
-        panic::set_hook(Box::new(lb_tracing::panic::panic_hook));
 
         Ok(Self {
             service_resources_handle,
