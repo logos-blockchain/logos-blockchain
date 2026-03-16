@@ -35,6 +35,37 @@ pub fn is_truthy_env(key: &str) -> bool {
         .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
 }
 
+pub fn resolve_literal_or_env(value: &str, field_name: &str) -> Result<String, StepError> {
+    let trimmed = value.trim();
+    if let Some(raw_name) = trimmed
+        .strip_prefix("env(")
+        .and_then(|v| v.strip_suffix(')'))
+    {
+        let var_name = raw_name.trim();
+        if var_name.is_empty() {
+            return Err(StepError::InvalidArgument {
+                message: format!(
+                    "invalid {field_name}: expected env(VAR_NAME) with a non-empty variable name"
+                ),
+            });
+        }
+
+        return env::var(var_name).map_err(|e| {
+            let detail = match e {
+                env::VarError::NotPresent => "is not set".to_owned(),
+                env::VarError::NotUnicode(_) => "is not valid unicode".to_owned(),
+            };
+            StepError::InvalidArgument {
+                message: format!(
+                    "invalid {field_name}: environment variable `{var_name}` {detail}"
+                ),
+            }
+        });
+    }
+
+    Ok(trimmed.to_owned())
+}
+
 pub fn parse_deployer(value: &str) -> Result<DeployerKind, StepError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "local" | "host" => Ok(DeployerKind::Local),

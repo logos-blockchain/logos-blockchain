@@ -15,6 +15,7 @@ use crate::{
                 },
             },
         },
+        utils::resolve_literal_or_env,
         world::{CucumberWorld, WalletInfo},
     },
     non_zero,
@@ -317,15 +318,29 @@ async fn step_manual_control_transactions_no_time_out(
 
 #[given(expr = "I have a faucet with URL {string} username {string} and password {string}")]
 #[when(expr = "I have a faucet with URL {string} username {string} and password {string}")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Required by cucumber expression"
+)]
 fn step_faucet_details(
     world: &mut CucumberWorld,
+    step: &Step,
     base_url: String,
     username: String,
     password: String,
-) {
+) -> StepResult {
+    let username = resolve_literal_or_env(&username, "faucet username").inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
+    let password = resolve_literal_or_env(&password, "faucet password").inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
+
     world.faucet_base_url = Some(base_url);
     world.faucet_username = Some(username);
     world.faucet_password = Some(password);
+
+    Ok(())
 }
 
 #[given(expr = "I request {int} rounds of faucet funds for wallet {string}")]

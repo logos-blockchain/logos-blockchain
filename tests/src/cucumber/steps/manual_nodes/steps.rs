@@ -21,6 +21,7 @@ use crate::cucumber::{
             verify_node_wallet_resources_table_indexes, wait_for_all_nodes_to_be_synced_to_chain,
         },
     },
+    utils::resolve_literal_or_env,
     world::{CucumberWorld, GenesisTokens, PublicCryptarchiaEndpointPeer},
 };
 
@@ -233,7 +234,9 @@ fn step_set_public_cryptarchia_endpoint_peers(
     {
         return Err(StepError::InvalidArgument {
             message: format!(
-                "Step `{step}` error: public cryptarchia endpoint peers table header row must be '{PUBLIC_CRYPTARCHIA_ENDPOINT}', '{PUBLIC_CRYPTARCHIA_ENDPOINT_USERNAME}', '{PUBLIC_CRYPTARCHIA_ENDPOINT_PASSWORD}'"
+                "Step `{step}` error: public cryptarchia endpoint peers table header row must be \
+                '{PUBLIC_CRYPTARCHIA_ENDPOINT}', '{PUBLIC_CRYPTARCHIA_ENDPOINT_USERNAME}', \
+                '{PUBLIC_CRYPTARCHIA_ENDPOINT_PASSWORD}'"
             ),
         });
     }
@@ -247,7 +250,12 @@ fn step_set_public_cryptarchia_endpoint_peers(
             ),
         })?;
 
-        let username = row[1].trim();
+        let username =
+            resolve_literal_or_env(row[1].trim(), "public cryptarchia endpoint username").map_err(
+                |e| StepError::InvalidArgument {
+                    message: format!("Step `{}` error: {e}", step.value),
+                },
+            )?;
         if username.is_empty() {
             return Err(StepError::InvalidArgument {
                 message: format!(
@@ -257,7 +265,12 @@ fn step_set_public_cryptarchia_endpoint_peers(
             });
         }
 
-        let password = row[2].trim();
+        let password =
+            resolve_literal_or_env(row[2].trim(), "public cryptarchia endpoint password").map_err(
+                |e| StepError::InvalidArgument {
+                    message: format!("Step `{}` error: {e}", step.value),
+                },
+            )?;
         if password.is_empty() {
             return Err(StepError::InvalidArgument {
                 message: format!(
@@ -269,8 +282,8 @@ fn step_set_public_cryptarchia_endpoint_peers(
 
         endpoint_peers.push(PublicCryptarchiaEndpointPeer {
             url,
-            username: username.to_owned(),
-            password: password.to_owned(),
+            username,
+            password,
         });
     }
 

@@ -95,7 +95,7 @@ Feature: Manual control of transactions
   Scenario: Transactions devnet manual control
     Given I have a devnet cluster with capacity of 2 nodes
     And we join an external network
-    And I have a faucet with URL "https://devnet.blockchain.logos.co" username "strode" and password "SzH3RP7zdVQs8LCb"
+    And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
     And I have initial peers:
       | initial_peer                                                                                |
       | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
@@ -114,11 +114,11 @@ Feature: Manual control of transactions
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     And I request 3 rounds of faucet funds for all user wallets
     And I have public cryptarchia endpoint peers:
-      | public_cryptarchia_endpoint               | username | password         |
-      | https://devnet.blockchain.logos.co/node/0 | strode   | SzH3RP7zdVQs8LCb |
-      | https://devnet.blockchain.logos.co/node/1 | strode   | SzH3RP7zdVQs8LCb |
-      | https://devnet.blockchain.logos.co/node/2 | strode   | SzH3RP7zdVQs8LCb |
-      | https://devnet.blockchain.logos.co/node/3 | strode   | SzH3RP7zdVQs8LCb |
+      | public_cryptarchia_endpoint               | username               | password              |
+      | https://devnet.blockchain.logos.co/node/0 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
+      | https://devnet.blockchain.logos.co/node/1 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
+      | https://devnet.blockchain.logos.co/node/2 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
+      | https://devnet.blockchain.logos.co/node/3 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
     When I wait for all nodes to be synced to the chain
     When I perform manual control of transactions for all wallets no time-out
     Then I stop all nodes
@@ -127,7 +127,7 @@ Feature: Manual control of transactions
   Scenario: Transactions stress devnet manual control
     Given I have a devnet cluster with capacity of 10 nodes
     And we join an external network
-    And I have a faucet with URL "https://devnet.blockchain.logos.co" username "strode" and password "SzH3RP7zdVQs8LCb"
+    And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
     And I have initial peers:
       | initial_peer                                                                                |
       | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
@@ -152,13 +152,13 @@ Feature: Manual control of transactions
       | NODE_8    | 8             | WALLET_8A   | NODE_7       |
       | NODE_9    | 9             | WALLET_9A   | NODE_8       |
       | NODE_10   | 10            | WALLET_10A  | NODE_9       |
+    And I request 3 rounds of faucet funds for all user wallets
     And I have public cryptarchia endpoint peers:
-      | public_cryptarchia_endpoint               | username | password         |
-      | https://devnet.blockchain.logos.co/node/0 | strode   | SzH3RP7zdVQs8LCb |
-      | https://devnet.blockchain.logos.co/node/1 | strode   | SzH3RP7zdVQs8LCb |
-      | https://devnet.blockchain.logos.co/node/2 | strode   | SzH3RP7zdVQs8LCb |
-      | https://devnet.blockchain.logos.co/node/3 | strode   | SzH3RP7zdVQs8LCb |
+      | public_cryptarchia_endpoint               | username               | password              |
+      | https://devnet.blockchain.logos.co/node/0 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
+      | https://devnet.blockchain.logos.co/node/1 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
+      | https://devnet.blockchain.logos.co/node/2 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
+      | https://devnet.blockchain.logos.co/node/3 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
     When I wait for all nodes to be synced to the chain
-    And I request 2 rounds of faucet funds for all user wallets
-    When I perform manual control of transactions for all wallets no time-out
+     When I perform manual control of transactions for all wallets no time-out
     Then I stop all nodes
