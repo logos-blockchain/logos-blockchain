@@ -12,7 +12,7 @@ Feature: Cryptarchia
   Scenario: IBD staggered start
     Given I have a cluster with capacity of 4 nodes
     And we use IBD peers
-    And all peers must be mode online after startup
+    And all peers must be mode online after startup in 30 seconds
     And I start node "NODE_1"
     When node "NODE_1" is at height 1 in 300 seconds
     And I start peer node "NODE_2" connected to node "NODE_1"
