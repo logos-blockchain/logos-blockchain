@@ -1,17 +1,24 @@
+use std::fmt::{Debug, Display};
+
 use futures::Stream;
+use lb_banning_service::BanningService;
 use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 use lb_network_service::{
     NetworkService,
     backends::libp2p::{Command, Libp2p, Message, PubSubCommand, TopicHash},
     message::NetworkMsg,
 };
-use overwatch::services::{ServiceData, relay::OutboundRelay};
+use overwatch::services::{AsServiceId, ServiceData, relay::OutboundRelay};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio_stream::StreamExt as _;
 
 use crate::network::NetworkAdapter;
 
-pub struct Libp2pAdapter<Item, Key, RuntimeServiceId> {
+pub struct Libp2pAdapter<Item, Key, RuntimeServiceId>
+where
+    RuntimeServiceId:
+        AsServiceId<BanningService<RuntimeServiceId>> + Display + Sync + Debug + Send + 'static,
+{
     network_relay:
         OutboundRelay<<NetworkService<Libp2p, RuntimeServiceId> as ServiceData>::Message>,
     settings: Settings<Key, Item>,
@@ -23,6 +30,8 @@ impl<Item, Key, RuntimeServiceId> NetworkAdapter<RuntimeServiceId>
 where
     Item: DeserializeOwned + Serialize + Send + Sync + 'static + Clone,
     Key: Clone + Send + Sync + 'static,
+    RuntimeServiceId:
+        AsServiceId<BanningService<RuntimeServiceId>> + Display + Sync + Debug + Send + 'static,
 {
     type Backend = Libp2p;
     type Settings = Settings<Key, Item>;

@@ -7,6 +7,7 @@ use std::{
 
 use async_trait::async_trait;
 use config::{api, sdp, state, storage, wallet};
+use lb_banning_service::BanningConfig;
 use lb_core::mantle::{self, genesis_tx::GenesisTx};
 use lb_key_management_system_service::keys::{Key, secured_key::SecuredKey as _};
 use lb_libp2p::Multiaddr;
@@ -472,6 +473,7 @@ fn build_run_config(config: Config, genesis_tx: GenesisTx) -> RunConfig {
             },
         },
         state: state::Config::default(),
+        banning: BanningConfig::default(),
     };
 
     RunConfig {

@@ -3,6 +3,7 @@ use std::{collections::HashMap, net::Ipv4Addr, time::Duration};
 
 use color_eyre::eyre::{Result, eyre};
 use futures::StreamExt as _;
+use lb_banning_service::BanningConfig;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::{
     backend::preload::KeyId,
@@ -300,6 +301,8 @@ fn build_user_config(
         base_config
     };
 
+    let banning_config = BanningConfig::default();
+
     UserConfig {
         network: network_config,
         blend: blend_config,
@@ -312,6 +315,7 @@ fn build_user_config(
         kms: kms_config,
         wallet: wallet_config,
         state: state_config,
+        banning: banning_config,
     }
 }
 

@@ -7,6 +7,7 @@ use std::{
 };
 
 use futures::Stream;
+use lb_banning_service::BanningConfig;
 use lb_chain_broadcast_service::BlockInfo;
 use lb_chain_service::CryptarchiaInfo;
 use lb_common_http_client::CommonHttpClient;
@@ -512,6 +513,11 @@ pub fn create_validator_config(
         wallet: wallet_config,
         kms: kms_config,
         state: state_config,
+        banning: BanningConfig {
+            whitelist: vec![],
+            blacklist: vec![],
+            ..Default::default()
+        },
     };
 
     RunConfig {

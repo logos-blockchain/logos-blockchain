@@ -1,16 +1,23 @@
+use std::fmt::{Debug, Display};
+
+use lb_banning_service::BanningService;
 use lb_network_service::{
     NetworkService,
     backends::libp2p::{Command, Libp2p, PubSubCommand},
     message::NetworkMsg,
 };
-use overwatch::services::{ServiceData, relay::OutboundRelay};
+use overwatch::services::{AsServiceId, ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
 
 use super::NetworkAdapter;
 
 /// A network adapter for the network service that uses libp2p backend.
 #[derive(Clone)]
-pub struct Libp2pAdapter<RuntimeServiceId> {
+pub struct Libp2pAdapter<RuntimeServiceId>
+where
+    RuntimeServiceId:
+        AsServiceId<BanningService<RuntimeServiceId>> + Sync + Debug + Display + Send + 'static,
+{
     network_relay:
         OutboundRelay<<NetworkService<Libp2p, RuntimeServiceId> as ServiceData>::Message>,
 }
@@ -23,7 +30,11 @@ pub struct Libp2pBroadcastSettings {
 }
 
 #[async_trait::async_trait]
-impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for Libp2pAdapter<RuntimeServiceId> {
+impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for Libp2pAdapter<RuntimeServiceId>
+where
+    RuntimeServiceId:
+        AsServiceId<BanningService<RuntimeServiceId>> + Sync + Debug + Display + Send + 'static,
+{
     type Backend = Libp2p;
     type BroadcastSettings = Libp2pBroadcastSettings;
 

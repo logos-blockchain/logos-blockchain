@@ -16,10 +16,11 @@ macro_rules! log_error {
 use std::{collections::HashMap, time::Duration};
 
 use lb_libp2p::{
-    Multiaddr, PeerId, Protocol, Swarm, SwarmEvent,
+    DialOpts, Multiaddr, PeerId, Protocol, Swarm, SwarmEvent,
     behaviour::BehaviourEvent,
     libp2p::{kad::QueryId, swarm::ConnectionId},
 };
+use overwatch::services::relay::OutboundRelay;
 use rand::RngCore;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::StreamExt as _;
@@ -39,6 +40,7 @@ mod kademlia;
 pub use chainsync::ChainSyncCommand;
 pub use gossipsub::PubSubCommand;
 pub use kademlia::DiscoveryCommand;
+use lb_banning_service::BanningRequest;
 
 use crate::message::ChainSyncEvent;
 
@@ -66,8 +68,9 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         pubsub_events_tx: broadcast::Sender<Message>,
         chainsync_events_tx: broadcast::Sender<ChainSyncEvent>,
         rng: R,
+        banning_relay: Option<OutboundRelay<BanningRequest>>,
     ) -> Self {
-        let swarm = Swarm::build(config.inner, rng).unwrap();
+        let swarm = Swarm::build(config.inner, rng, banning_relay).unwrap();
 
         // Keep the dialing history since swarm.connect doesn't return the result
         // synchronously
@@ -99,10 +102,19 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
 
         loop {
             tokio::select! {
+                // TODO: Handle None from swarm.next() and log/exit.
                 Some(event) = self.swarm.next() => {
                     self.handle_event(event);
                 }
+                // TODO: Handle None from commands_rx.recv() and log/exit.
                 Some(command) = self.commands_rx.recv() => {
+                    if let (true, peer_id) = self.should_drop_command(&command) {
+                        tracing::warn!(
+                            "Dropping command {:?} for banned peer: {:?}",
+                            command, peer_id
+                        );
+                        continue;
+                    }
                     self.handle_command(command);
                 }
             }
@@ -210,6 +222,40 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             Command::Discovery(discovery_cmd) => self.handle_discovery_command(discovery_cmd),
             Command::ChainSync(chainsync_cmd) => self.handle_chainsync_command(chainsync_cmd),
         }
+    }
+
+    // Decide whether to drop the command based on banned peer IDs - any banned peer
+    // ID found in the command will cause the peer to be disconnected in the
+    // swarm. Returns true if the command should be dropped (i.e., if the peer
+    // is banned and disconnected), false otherwise.
+    fn should_drop_command(&mut self, command: &Command) -> (bool, Option<PeerId>) {
+        let peer_id = match command {
+            Command::Network(network_cmd) => match network_cmd {
+                NetworkCommand::Connect(dial) => {
+                    let opt = DialOpts::from(dial.addr.clone());
+                    opt.get_peer_id()
+                }
+                NetworkCommand::Info { .. } | NetworkCommand::ConnectedPeers { .. } => None,
+            },
+            Command::PubSub(_) => None,
+            Command::Discovery(discovery_cmd) => match discovery_cmd {
+                DiscoveryCommand::GetClosestPeers { peer_id, .. } => Some(*peer_id),
+                DiscoveryCommand::GetDiscoveredPeers { .. }
+                | DiscoveryCommand::DumpRoutingTable { .. } => None,
+            },
+            Command::ChainSync(chainsync_cmd) => match chainsync_cmd {
+                ChainSyncCommand::RequestTip { peer, .. }
+                | ChainSyncCommand::DownloadBlocks { peer, .. } => Some(*peer),
+            },
+        };
+
+        if let Some(peer_id) = peer_id {
+            let banned = self.swarm.process_banned_authoritative(&peer_id);
+            if banned {
+                return (banned, Some(peer_id));
+            }
+        }
+        (false, None)
     }
 
     fn handle_network_command(&mut self, command: NetworkCommand) {
@@ -383,6 +429,7 @@ mod tests {
             pubsub_events_tx,
             chainsync_events_tx,
             OsRng,
+            None,
         );
 
         let bootstrap_node_peer_id = *bootstrap_node.swarm.swarm().local_peer_id();
@@ -440,6 +487,7 @@ mod tests {
                 pubsub_events_tx,
                 chainsync_events_tx,
                 OsRng,
+                None,
             );
 
             let peer_id = *handler.swarm.swarm().local_peer_id();
@@ -534,8 +582,15 @@ mod tests {
 
         let config = create_libp2p_config(vec![], get_available_udp_port().unwrap());
 
-        let mut handler =
-            SwarmHandler::new(config, tx, rx, pubsub_events_tx, chainsync_events_tx, OsRng);
+        let mut handler = SwarmHandler::new(
+            config,
+            tx,
+            rx,
+            pubsub_events_tx,
+            chainsync_events_tx,
+            OsRng,
+            None,
+        );
 
         let remote_peer = PeerId::random();
         let remote_addr = format!(

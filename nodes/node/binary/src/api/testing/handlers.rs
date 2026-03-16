@@ -2,6 +2,7 @@ use std::fmt::{Debug, Display};
 
 use axum::{extract::State, response::Response};
 use lb_api_service::http::mantle;
+use lb_banning_service::BanningService;
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 
 use super::backend::TestHttpCryptarchiaService;
@@ -22,6 +23,7 @@ where
         + AsServiceId<TestHttpCryptarchiaService<RuntimeServiceId>>
         + AsServiceId<SdpService<RuntimeServiceId>>
         + AsServiceId<TxMempoolService<RuntimeServiceId>>,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
     make_request_and_return_response!(mantle::get_sdp_declarations::<RuntimeServiceId>(&handle))
 }

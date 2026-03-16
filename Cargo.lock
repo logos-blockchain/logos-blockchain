@@ -3823,6 +3823,7 @@ dependencies = [
  "bytes",
  "futures",
  "hyper",
+ "logos-blockchain-banning-service",
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-service",
@@ -3841,6 +3842,20 @@ dependencies = [
  "tracing",
  "utoipa",
  "utoipa-swagger-ui",
+]
+
+[[package]]
+name = "logos-blockchain-banning-service"
+version = "0.2.1"
+dependencies = [
+ "async-trait",
+ "libp2p",
+ "logos-blockchain-utils",
+ "overwatch",
+ "serde",
+ "serde_with",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3974,6 +3989,7 @@ dependencies = [
  "libp2p",
  "libp2p-stream",
  "libp2p-swarm-test",
+ "logos-blockchain-banning-service",
  "logos-blockchain-blend",
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-chain-service",
@@ -4099,6 +4115,7 @@ version = "0.2.1"
 dependencies = [
  "async-trait",
  "futures",
+ "logos-blockchain-banning-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-chain-service-common",
  "logos-blockchain-core",
@@ -4473,13 +4490,16 @@ dependencies = [
  "hex",
  "igd-next 0.16.2",
  "libp2p",
+ "libp2p-kad",
  "libp2p-swarm-test",
+ "logos-blockchain-banning-service",
  "logos-blockchain-cryptarchia-sync",
  "logos-blockchain-utils",
  "multiaddr",
  "natpmp",
  "netdev",
  "num_enum",
+ "overwatch",
  "rand 0.8.5",
  "serde",
  "serde_json",
@@ -4511,6 +4531,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "logos-blockchain-banning-service",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-sync",
  "logos-blockchain-libp2p",
@@ -4540,6 +4561,7 @@ dependencies = [
  "http 1.4.0",
  "libp2p",
  "logos-blockchain-api-service",
+ "logos-blockchain-banning-service",
  "logos-blockchain-blend",
  "logos-blockchain-blend-service",
  "logos-blockchain-chain-broadcast-service",
@@ -4717,6 +4739,7 @@ dependencies = [
  "futures",
  "futures-util",
  "hex",
+ "logos-blockchain-banning-service",
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-common-http-client",
@@ -4828,6 +4851,7 @@ version = "0.2.1"
 dependencies = [
  "async-trait",
  "futures",
+ "logos-blockchain-banning-service",
  "logos-blockchain-core",
  "logos-blockchain-network-service",
  "logos-blockchain-services-utils",
@@ -7581,6 +7605,7 @@ dependencies = [
  "async-trait",
  "futures",
  "hex",
+ "logos-blockchain-banning-service",
  "logos-blockchain-blend-service",
  "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-network-service",

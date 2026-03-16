@@ -8,10 +8,11 @@ use std::{
 use ::tracing::{Level, warn};
 use clap::{Parser, Subcommand, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
+use lb_banning_service::{BanningConfig, BanningService};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
+use overwatch::services::ServiceData;
 use serde::Deserialize;
 
-use crate::config::tracing::serde::logger::{FileConfig, GelfConfig};
 pub use crate::config::{
     api::serde::Config as ApiConfig,
     blend::serde::Config as BlendConfig,
@@ -25,6 +26,10 @@ pub use crate::config::{
     time::serde::Config as TimeConfig,
     tracing::serde::Config as TracingConfig,
     wallet::serde::Config as WalletConfig,
+};
+use crate::{
+    RuntimeServiceId,
+    config::tracing::serde::logger::{FileConfig, GelfConfig},
 };
 
 pub mod api;
@@ -325,6 +330,8 @@ pub struct UserConfig {
     pub tracing: TracingConfig,
     #[serde(default)]
     pub state: StateConfig,
+    #[serde(default)]
+    pub banning: <BanningService<RuntimeServiceId> as ServiceData>::Settings,
 }
 
 pub struct RequiredValues {
@@ -382,6 +389,7 @@ impl UserConfig {
             storage: StorageConfig::default(),
             time: TimeConfig::default(),
             tracing: TracingConfig::default(),
+            banning: BanningConfig::default(),
         }
     }
 }

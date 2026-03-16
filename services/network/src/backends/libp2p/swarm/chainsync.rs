@@ -99,16 +99,22 @@ impl From<lb_cryptarchia_sync::Event> for ChainSyncEvent {
                 latest_immutable_block,
                 additional_blocks,
                 reply_sender,
+                peer_id,
             } => Self::ProvideBlocksRequest {
                 target_block,
                 local_tip,
                 latest_immutable_block,
                 additional_blocks,
                 reply_sender,
+                peer_id,
             },
-            lb_cryptarchia_sync::Event::ProvideTipsRequest { reply_sender } => {
-                Self::ProvideTipRequest { reply_sender }
-            }
+            lb_cryptarchia_sync::Event::ProvideTipsRequest {
+                reply_sender,
+                peer_id,
+            } => Self::ProvideTipRequest {
+                reply_sender,
+                peer_id,
+            },
         }
     }
 }

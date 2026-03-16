@@ -9,6 +9,7 @@ use axum::{
     routing::get,
 };
 use lb_api_service::Backend;
+use lb_banning_service::BanningService;
 use lb_http_api_common::paths::MANTLE_SDP_DECLARATIONS;
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
@@ -48,6 +49,7 @@ where
         + AsServiceId<TestHttpCryptarchiaService<RuntimeServiceId>>
         + AsServiceId<SdpService<RuntimeServiceId>>
         + AsServiceId<generic_services::TxMempoolService<RuntimeServiceId>>,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
     type Error = std::io::Error;
     type Settings = AxumBackendSettings;

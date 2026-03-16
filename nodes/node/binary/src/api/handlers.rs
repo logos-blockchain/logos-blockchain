@@ -13,6 +13,7 @@ use lb_api_service::http::{
     libp2p, mantle, mempool,
     storage::StorageAdapter,
 };
+use lb_banning_service::BanningService;
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
 use lb_chain_service::ConsensusMsg;
@@ -113,6 +114,7 @@ where
                 RuntimeServiceId,
             >,
         >,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
     make_request_and_return_response!(mantle::mantle_mempool_metrics::<
         StorageAdapter,
@@ -126,6 +128,7 @@ pub async fn get_sdp_declarations<RuntimeServiceId>(
 where
     RuntimeServiceId:
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
     make_request_and_return_response!(mantle::get_sdp_declarations::<RuntimeServiceId>(&handle))
 }
@@ -175,6 +178,7 @@ where
                 RuntimeServiceId,
             >,
         >,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
     make_request_and_return_response!(mantle::mantle_mempool_status::<
         StorageAdapter,
@@ -242,6 +246,7 @@ pub async fn cryptarchia_lib_stream<RuntimeServiceId>(
 where
     RuntimeServiceId:
         Debug + Sync + Display + AsServiceId<BlockBroadcastService<RuntimeServiceId>> + 'static,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
     let stream = mantle::lib_block_stream(&handle).await;
     match stream {
@@ -272,6 +277,7 @@ where
                 RuntimeServiceId,
             >,
         >,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>> + Send,
 {
     make_request_and_return_response!(libp2p::libp2p_info::<RuntimeServiceId>(&handle))
 }
@@ -345,6 +351,7 @@ where
                 RuntimeServiceId,
             >,
         >,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
     make_request_and_return_response!(mempool::add_tx::<
         Libp2pNetworkBackend,
@@ -390,6 +397,7 @@ where
                 RuntimeServiceId,
             >,
         >,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
     make_request_and_return_response!(lb_api_service::http::sdp::post_declaration_handler::<
         MempoolAdapter,
@@ -429,6 +437,7 @@ where
                 RuntimeServiceId,
             >,
         >,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
     make_request_and_return_response!(lb_api_service::http::sdp::post_activity_handler::<
         MempoolAdapter,
@@ -458,7 +467,6 @@ where
         + Sync
         + Send
         + Display
-        + 'static
         + AsServiceId<ChainService>
         + AsServiceId<
             lb_sdp_service::SdpService<
@@ -468,6 +476,7 @@ where
                 RuntimeServiceId,
             >,
         >,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>> + 'static,
 {
     make_request_and_return_response!(lb_api_service::http::sdp::post_withdrawal_handler::<
         MempoolAdapter,
@@ -519,6 +528,7 @@ where
         + Display
         + 'static
         + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
     let api_blocks = mantle::get_blocks(&handle, query.slot_from, query.slot_to).map(|blocks| {
         let api_blocks = blocks?.into_iter().map(ApiBlock::from).collect::<Vec<_>>();
@@ -551,6 +561,7 @@ where
         + 'static
         + AsServiceId<ConsensusService>
         + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
     let stream = mantle::get_new_blocks_stream::<_, _, ConsensusService, _>(&handle)
         .await
@@ -663,6 +674,7 @@ pub mod wallet {
                     RuntimeServiceId,
                 >,
             >,
+        RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
     {
         let wallet_api = {
             let wallet_relay = match get_relay_or_500::<WalletService, _>(&handle).await {

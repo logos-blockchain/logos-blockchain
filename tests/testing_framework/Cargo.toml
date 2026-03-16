@@ -31,6 +31,7 @@ tokio                          = { features = ["macros", "process", "rt-multi-th
 tracing                        = { workspace = true }
 
 common-http-client               = { workspace = true }
+lb-banning-service               = { workspace = true }
 lb-blend-service                 = { workspace = true }
 lb-chain-leader-service          = { workspace = true }
 lb-chain-network-service         = { workspace = true }

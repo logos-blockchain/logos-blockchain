@@ -1,6 +1,12 @@
-use std::{collections::HashSet, fmt::Debug, hash::Hash, marker::PhantomData};
+use std::{
+    collections::HashSet,
+    fmt::{Debug, Display},
+    hash::Hash,
+    marker::PhantomData,
+};
 
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok};
+use lb_banning_service::BanningService;
 use lb_chain_service_common::NetworkMessage;
 use lb_core::{
     block::{Block, Proposal},
@@ -19,7 +25,7 @@ use lb_network_service::{
 };
 use overwatch::{
     DynError,
-    services::{ServiceData, relay::OutboundRelay},
+    services::{AsServiceId, ServiceData, relay::OutboundRelay},
 };
 use rand::{seq::IteratorRandom as _, thread_rng};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -36,6 +42,8 @@ type Relay<T, RuntimeServiceId> =
 pub struct LibP2pAdapter<Tx, RuntimeServiceId>
 where
     Tx: Clone + Eq,
+    RuntimeServiceId:
+        AsServiceId<BanningService<RuntimeServiceId>> + Sync + Debug + Display + Send + 'static,
 {
     network_relay:
         OutboundRelay<<NetworkService<Libp2p, RuntimeServiceId> as ServiceData>::Message>,
@@ -57,6 +65,8 @@ pub struct LibP2pAdapterSettings {
 impl<Tx, RuntimeServiceId> LibP2pAdapter<Tx, RuntimeServiceId>
 where
     Tx: Clone + Eq + Serialize,
+    RuntimeServiceId:
+        AsServiceId<BanningService<RuntimeServiceId>> + Sync + Debug + Display + Send + 'static,
 {
     async fn subscribe(relay: &Relay<Libp2p, RuntimeServiceId>, topic: &str) {
         if let Err((e, _)) = relay
@@ -113,6 +123,8 @@ where
 impl<Tx, RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for LibP2pAdapter<Tx, RuntimeServiceId>
 where
     Tx: AuthenticatedMantleTx + Serialize + DeserializeOwned + Clone + Eq + Send + Sync + 'static,
+    RuntimeServiceId:
+        AsServiceId<BanningService<RuntimeServiceId>> + Sync + Debug + Display + Send + 'static,
 {
     type Backend = Libp2p;
     type Settings = LibP2pAdapterSettings;

@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 async-trait             = "0.1"
 futures                 = { default-features = false, version = "0.3" }
+lb-banning-service      = { workspace = true }
 lb-chain-service        = { workspace = true }
 lb-chain-service-common = { workspace = true }
 lb-core                 = { workspace = true }

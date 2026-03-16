@@ -41,6 +41,7 @@ members = [
   "nodes/node/binary",
   "nodes/node/http-client",
   "services/api",
+  "services/banning",
   "services/blend",
   "services/chain/broadcast-service",
   "services/chain/chain-common",
@@ -86,6 +87,7 @@ resolver = "2"
 # Internal
 common-http-client                 = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
 lb-api-service                     = { default-features = false, package = "logos-blockchain-api-service", path = "./services/api" }
+lb-banning-service                 = { default-features = false, package = "logos-blockchain-banning-service", path = "./services/banning" }
 lb-blend                           = { default-features = false, package = "logos-blockchain-blend", path = "./blend/core" }
 lb-blend-crypto                    = { default-features = false, package = "logos-blockchain-blend-crypto", path = "./blend/crypto" }
 lb-blend-message                   = { default-features = false, package = "logos-blockchain-blend-message", path = "./blend/message" }

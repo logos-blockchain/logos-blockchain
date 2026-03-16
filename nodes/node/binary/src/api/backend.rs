@@ -14,6 +14,7 @@ use axum::{
     routing,
 };
 use lb_api_service::{Backend, http::consensus::Cryptarchia};
+use lb_banning_service::BanningService;
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
 use lb_chain_service::CryptarchiaConsensus;
@@ -150,6 +151,7 @@ where
         >
         + AsServiceId<WalletService>
         + AsServiceId<ChainLeader>,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
     type Error = std::io::Error;
     type Settings = AxumBackendSettings;

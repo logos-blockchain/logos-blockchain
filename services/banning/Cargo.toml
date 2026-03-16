@@ -1,0 +1,23 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-banning-service"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = "0.1"
+lb-utils    = { features = ["time"], workspace = true }
+libp2p      = { features = ["serde"], workspace = true }
+overwatch   = { workspace = true }
+serde       = { features = ["derive"], workspace = true }
+serde_with  = { features = ["macros"], workspace = true }
+tokio       = { features = ["macros", "rt", "sync", "time"], workspace = true }
+tracing     = { workspace = true }

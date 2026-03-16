@@ -107,10 +107,14 @@ pub enum Event {
         additional_blocks: HashSet<HeaderId>,
         /// Channel to send blocks to the service.
         reply_sender: Sender<BlocksResponse>,
+        /// The peer ID of the requester.
+        peer_id: PeerId,
     },
     ProvideTipsRequest {
         /// Channel to send the latest tip to the service.
         reply_sender: Sender<TipResponse>,
+        /// The peer ID of the requester.
+        peer_id: PeerId,
     },
 }
 
@@ -244,6 +248,7 @@ impl Behaviour {
 
         Poll::Ready(ToSwarm::GenerateEvent(Event::ProvideTipsRequest {
             reply_sender,
+            peer_id,
         }))
     }
 
@@ -278,6 +283,7 @@ impl Behaviour {
             latest_immutable_block: request.known_blocks.latest_immutable_block,
             additional_blocks: request.known_blocks.additional_blocks,
             reply_sender,
+            peer_id,
         }))
     }
 
@@ -826,7 +832,7 @@ mod tests {
     async fn run_provider<B: ProviderBehavior>(mut provider_swarm: Swarm<Behaviour>, behavior: B) {
         while let Some(event) = provider_swarm.next().await {
             match event {
-                SwarmEvent::Behaviour(Event::ProvideTipsRequest { reply_sender }) => {
+                SwarmEvent::Behaviour(Event::ProvideTipsRequest { reply_sender, .. }) => {
                     reply_sender
                         .send(behavior.handle_tip_request())
                         .await

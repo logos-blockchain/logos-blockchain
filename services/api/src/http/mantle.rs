@@ -3,6 +3,7 @@ use std::{fmt::Display, num::NonZeroUsize, ops::RangeInclusive};
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt as _, future::join_all};
+use lb_banning_service::BanningService;
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_chain_service::{
     ConsensusMsg, ProcessedBlockEvent, Slot,
@@ -71,9 +72,13 @@ where
         + Sync
         + Send
         + Display
-        + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
+        + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>
+        + 'static,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
+    let relay = handle
+        .relay::<MempoolService<StorageAdapter, RuntimeServiceId>>()
+        .await?;
     let (sender, receiver) = oneshot::channel();
     relay
         .send(MempoolMsg::Metrics {
@@ -101,9 +106,13 @@ where
         + Sync
         + Send
         + Display
-        + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
+        + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>
+        + 'static,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
+    let relay = handle
+        .relay::<MempoolService<StorageAdapter, RuntimeServiceId>>()
+        .await?;
     let (sender, receiver) = oneshot::channel();
     relay
         .send(MempoolMsg::Status {
@@ -124,8 +133,11 @@ pub async fn lib_block_stream<RuntimeServiceId>(
 >
 where
     RuntimeServiceId: Debug + Sync + Display + AsServiceId<BlockBroadcastService<RuntimeServiceId>>,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
+    let relay = handle
+        .relay::<BlockBroadcastService<RuntimeServiceId>>()
+        .await?;
     let (sender, receiver) = oneshot::channel();
     relay
         .send(BlockBroadcastMsg::SubscribeToFinalizedBlocks {
@@ -154,8 +166,9 @@ where
     Transaction: Send + 'static,
     Service: ServiceData<Message = ConsensusMsg<Transaction>>,
     RuntimeServiceId: Debug + Sync + Display + AsServiceId<Service>,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
+    let relay = handle.relay::<Service>().await?;
     let (sender, receiver) = oneshot::channel();
 
     relay
@@ -205,6 +218,7 @@ where
         + Display
         + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
         + AsServiceId<ConsensusService>,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
     let processed_blocks_stream =
         get_processed_blocks_event_stream::<Transaction, ConsensusService, RuntimeServiceId>(
@@ -259,8 +273,11 @@ where
     Backend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     RuntimeServiceId:
         Debug + Sync + Display + AsServiceId<StorageService<Backend, RuntimeServiceId>>,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
+    let relay = handle
+        .relay::<StorageService<Backend, RuntimeServiceId>>()
+        .await?;
     let (response_tx, response_rx) = oneshot::channel();
 
     let limit = {
@@ -326,10 +343,13 @@ where
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     RuntimeServiceId:
         Debug + Sync + Display + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
     let header_ids = get_blocks_header_ids(handle, from_slot, to_slot).await?;
 
-    let relay = handle.relay().await?;
+    let relay = handle
+        .relay::<StorageService<StorageBackend, RuntimeServiceId>>()
+        .await?;
     let storage_adapter = StorageAdapter::<_, _, RuntimeServiceId>::new(relay).await;
 
     let blocks_futures = header_ids
@@ -355,6 +375,7 @@ where
         + Display
         + 'static
         + AsServiceId<super::consensus::Cryptarchia<RuntimeServiceId>>,
+    RuntimeServiceId: AsServiceId<BanningService<RuntimeServiceId>>,
 {
     let relay = handle
         .relay::<super::consensus::Cryptarchia<RuntimeServiceId>>()
