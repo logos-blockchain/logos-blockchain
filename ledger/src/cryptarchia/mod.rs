@@ -21,7 +21,7 @@ use crate::cryptarchia::{
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
 use super::{Balance, Config, LedgerError};
-use crate::mantle::sdp::locked_notes::LockedNotes;
+use crate::{WINDOW_SIZE, mantle::sdp::locked_notes::LockedNotes};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -128,9 +128,9 @@ pub struct LedgerState {
     stake_inference: Arc<StakeInference>,
     // rolling fee window of 120 blocks, used to derive block rewards
     #[cfg_attr(feature = "serde", serde(with = "serde_arrays"))]
-    pub fee_window: [f64; 120],
+    pub fee_window: [f64; WINDOW_SIZE],
     #[cfg_attr(feature = "serde", serde(with = "serde_arrays"))]
-    pub stake_window: [f64; 120],
+    pub stake_window: [f64; WINDOW_SIZE],
 }
 
 impl LedgerState {

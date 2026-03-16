@@ -69,7 +69,7 @@ impl LeaderState {
             claimable_vouchers_root: RewardsRoot::default(),
             n_claimable_vouchers: 0,
             nfs: rpds::HashTrieSetSync::new_sync(),
-            pending_rewards: Value::default(),
+            pending_rewards: 0,
             claimable_rewards: 0,
             claimable_vouchers: DynamicMerkleTree::new(),
             claimable_voucher_indices: HashTrieMapSync::new_sync(),

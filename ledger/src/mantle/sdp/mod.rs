@@ -575,10 +575,10 @@ impl SdpLedger {
     }
 
     pub fn add_blend_rewards(&mut self, rewards: Value) {
-        if let Some(service) = self.services.get_mut(&ServiceType::BlendNetwork) {
-            match service {
-                Service::BlendNetwork(state) => state.add_rewards(rewards),
-            }
+        if let Some(Service::BlendNetwork(state)) =
+            self.services.get_mut(&ServiceType::BlendNetwork)
+        {
+            state.add_rewards(rewards);
         }
     }
 
