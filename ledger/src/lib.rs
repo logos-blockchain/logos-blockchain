@@ -234,7 +234,10 @@ impl LedgerState {
         let leader_reward = (0.4 * block_reward) as Value;
 
         //Casting as Value truncate the floating points
-        self.mantle_ledger.leaders.pending_rewards += leader_reward;
+        self.mantle_ledger.leaders = self
+            .mantle_ledger
+            .leaders
+            .add_pending_rewards(leader_reward);
 
         self.mantle_ledger.sdp.add_blend_rewards(blend_reward);
 

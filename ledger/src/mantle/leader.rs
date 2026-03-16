@@ -92,11 +92,19 @@ impl LeaderState {
             }),
             Ordering::Greater => {
                 self = self.update_claimable_vouchers();
+                self = self.update_claimable_rewards();
                 self.epoch = epoch;
-                // TODO: increase rewards, what about epoch jumps?
                 Ok(self)
             }
         }
+    }
+
+    /// Add a block reward to the pending rewards that are added to the pool
+    /// during epoch transition
+    #[must_use]
+    pub const fn add_pending_rewards(mut self, rewards: Value) -> Self {
+        self.pending_rewards += rewards;
+        self
     }
 
     /// Add a voucher to be included in the Merkle tree at the start of the
@@ -118,6 +126,13 @@ impl LeaderState {
         self.pending_vouchers = VectorSync::new_sync();
         self.claimable_vouchers_root = self.claimable_vouchers.root().into();
         self.n_claimable_vouchers = self.claimable_vouchers.size() as u64;
+        self
+    }
+
+    /// Insert all pending rewards into the reward pool and reset it
+    fn update_claimable_rewards(mut self) -> Self {
+        self.claimable_rewards += self.pending_rewards;
+        self.pending_rewards = Value::default();
         self
     }
 
