@@ -18,6 +18,9 @@
 //!
 //! - Returns [`OperationStatus::NotFound`] if the wallet addresses cannot be retrieved.
 //! pub
+
+use core::ptr;
+
 use lb_api_service::http::mempool;
 use lb_core::mantle::{SignedMantleTx, Transaction};
 use lb_groth16::{fr_from_bytes, fr_to_bytes};
@@ -95,7 +98,7 @@ pub type KnownAddressesResult = ValueResult<KnownAddresses, OperationStatus>;
 impl Default for KnownAddresses {
     fn default() -> Self {
         Self {
-            addresses: std::ptr::null_mut(),
+            addresses: ptr::null_mut(),
             len: 0,
         }
     }
@@ -255,8 +258,12 @@ pub unsafe extern "C" fn get_known_addresses(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_known_addresses(addresses: KnownAddresses) {
     if !addresses.addresses.is_null() {
-        let address_pointers =
-            unsafe { Vec::from_raw_parts(addresses.addresses, addresses.len, addresses.len) };
+        let address_pointers = unsafe {
+            Box::from_raw(ptr::slice_from_raw_parts_mut(
+                addresses.addresses,
+                addresses.len,
+            ))
+        };
         for ptr in address_pointers {
             if !ptr.is_null() {
                 unsafe {

@@ -1,6 +1,5 @@
 use std::{
-    collections::HashSet,
-    error::Error,
+    collections::{HashMap, HashSet},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -8,18 +7,23 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use lb_core::{block::Block, mantle::SignedMantleTx};
 use lb_node::HeaderId;
-use testing_framework_core::scenario::{DynError, Feed, FeedRuntime};
-use tokio::{sync::broadcast, time::sleep};
+use testing_framework_core::scenario::{DynError, Feed, FeedRuntime, NodeClients};
+use tokio::{
+    sync::{RwLock, broadcast},
+    time::sleep,
+};
 use tracing::{debug, warn};
 
 use crate::node::NodeHttpClient;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const CATCH_UP_WARN_AFTER: usize = 5;
-const MAX_CATCH_UP_BLOCKS_PER_POLL: usize = 64;
+const MAX_RETAINED_HEADERS_PER_PATH: usize = 128;
+const SAFETY_WINDOW_BELOW_LIB: usize = 32;
+const RETAIN_BELOW_MIN_LIB_HEIGHT: u64 = 1;
 
 /// Broadcasts observed blocks to subscribers while tracking simple stats.
 #[derive(Clone)]
@@ -30,13 +34,51 @@ pub struct BlockFeed {
 struct BlockFeedInner {
     sender: broadcast::Sender<Arc<BlockRecord>>,
     stats: Arc<BlockStats>,
+    snapshot: RwLock<BlockFeedSnapshot>,
 }
 
-/// Block header + payload snapshot emitted by the feed.
+/// Node head view tracked by the feed.
+#[derive(Clone, Debug)]
+pub struct NodeHeadSnapshot {
+    /// Stable node key (base URL string).
+    pub node: String,
+    /// Latest observed tip for this node.
+    pub tip: HeaderId,
+    /// Latest observed LIB for this node.
+    pub lib: HeaderId,
+}
+
+/// Read model exported by the feed for expectations.
+#[derive(Clone, Debug, Default)]
+pub struct BlockFeedSnapshot {
+    /// Current head view for each tracked node.
+    pub node_heads: Vec<NodeHeadSnapshot>,
+    /// Known header -> parent edges accumulated during backfill.
+    pub parent_edges: HashMap<HeaderId, HeaderId>,
+    /// Cumulative number of pruned headers.
+    pub pruned_blocks_total: u64,
+}
+
+/// Block payload observed in the latest feed cycle.
+#[derive(Clone)]
+pub struct ObservedBlock {
+    /// Source node base URL.
+    pub source_node: String,
+    /// Block header identifier.
+    pub header: HeaderId,
+    /// Parent header identifier referenced by this block.
+    pub parent: HeaderId,
+    /// Full block body with transactions.
+    pub block: Arc<Block<SignedMantleTx>>,
+}
+
+/// Fork-agnostic feed emission.
 #[derive(Clone)]
 pub struct BlockRecord {
-    pub header: HeaderId,
-    pub block: Arc<Block<SignedMantleTx>>,
+    /// Newly discovered blocks since the previous cycle.
+    pub new_blocks: Vec<ObservedBlock>,
+    /// Latest per-node heads at emission time.
+    pub node_heads: Vec<NodeHeadSnapshot>,
 }
 
 /// Background task driving the block feed.
@@ -65,11 +107,31 @@ impl BlockFeed {
         Arc::clone(&self.inner.stats)
     }
 
-    fn ingest(&self, header: HeaderId, block: Block<SignedMantleTx>) {
-        self.inner.stats.record_block(&block);
+    /// Returns the latest feed snapshot used by expectations.
+    pub async fn snapshot(&self) -> BlockFeedSnapshot {
+        self.inner.snapshot.read().await.clone()
+    }
+
+    async fn update_snapshot(
+        &self,
+        node_heads: Vec<NodeHeadSnapshot>,
+        parent_edges: HashMap<HeaderId, HeaderId>,
+        pruned_blocks_total: u64,
+    ) {
+        let mut snapshot = self.inner.snapshot.write().await;
+        snapshot.node_heads = node_heads;
+        snapshot.parent_edges = parent_edges;
+        snapshot.pruned_blocks_total = pruned_blocks_total;
+    }
+
+    fn ingest(&self, new_blocks: Vec<ObservedBlock>, node_heads: Vec<NodeHeadSnapshot>) {
+        for observed in &new_blocks {
+            self.inner.stats.record_block(observed.block.as_ref());
+        }
+
         let record = Arc::new(BlockRecord {
-            header,
-            block: Arc::new(block),
+            new_blocks,
+            node_heads,
         });
 
         drop(self.inner.sender.send(record));
@@ -84,40 +146,60 @@ impl Feed for BlockFeed {
     }
 }
 
-/// Prepare a block feed worker that polls blocks from the given client and
+/// Prepare a block feed worker that polls blocks from all node clients and
 /// broadcasts them.
 pub async fn prepare_block_feed(
-    client: NodeHttpClient,
+    node_clients: NodeClients<crate::framework::LbcEnv>,
 ) -> Result<(BlockFeed, BlockFeedRuntime), DynError> {
     let (sender, _) = broadcast::channel(1024);
     let feed = BlockFeed {
         inner: Arc::new(BlockFeedInner {
             sender,
             stats: Arc::new(BlockStats::default()),
+            snapshot: RwLock::new(BlockFeedSnapshot::default()),
         }),
     };
 
-    let mut scanner = BlockScanner::new(client, feed.clone());
-    scanner.catch_up().await.map_err(into_dyn_error)?;
+    let mut scanner = BlockScanner::new(node_clients.snapshot(), feed.clone());
+    scanner
+        .catch_up()
+        .await
+        .map_err(|error| -> DynError { error.into() })?;
 
     Ok((feed, BlockFeedRuntime { scanner }))
 }
 
 struct BlockScanner {
-    client: NodeHttpClient,
+    clients: Vec<NodeHttpClient>,
     feed: BlockFeed,
     seen: HashSet<HeaderId>,
+    parents: HashMap<HeaderId, HeaderId>,
+    heights: HashMap<HeaderId, u64>,
+    node_heads: HashMap<String, NodeHeadSnapshot>,
+    pruned_blocks_total: u64,
+}
+
+struct BackfillEntry {
+    source_node: String,
+    header: HeaderId,
+    height: u64,
+    block: Block<SignedMantleTx>,
 }
 
 impl BlockScanner {
-    fn new(client: NodeHttpClient, feed: BlockFeed) -> Self {
+    fn new(clients: Vec<NodeHttpClient>, feed: BlockFeed) -> Self {
         Self {
-            client,
+            clients,
             feed,
             seen: HashSet::new(),
+            parents: HashMap::new(),
+            heights: HashMap::new(),
+            node_heads: HashMap::new(),
+            pruned_blocks_total: 0,
         }
     }
 
+    /// Runs the background polling loop and keeps block-feed state updated.
     async fn run(&mut self) {
         let mut consecutive_failures = 0usize;
         loop {
@@ -134,41 +216,98 @@ impl BlockScanner {
         }
     }
 
+    /// Polls all registered clients, backfills unseen headers, and emits one
+    /// consolidated record.
     async fn catch_up(&mut self) -> Result<()> {
-        let info = self.client.consensus_info().await?;
+        let clients = self.clients.clone();
+        let mut new_blocks = Vec::new();
+        let mut processed = 0usize;
 
-        let tip = info.tip;
-        let mut remaining_height = info.height;
+        for client in clients {
+            let source_node = client.base_url().to_string();
+            let info = match client.consensus_info().await {
+                Ok(info) => info,
+                Err(error) => {
+                    debug!(source = %source_node, %error, "consensus_info failed; skipping source");
+                    continue;
+                }
+            };
 
-        let mut stack = Vec::new();
+            self.node_heads.insert(
+                source_node.clone(),
+                NodeHeadSnapshot {
+                    node: source_node.clone(),
+                    tip: info.tip,
+                    lib: info.lib,
+                },
+            );
+
+            let backfill = self
+                .collect_backfill(&client, &source_node, info.tip, info.height)
+                .await?;
+
+            let (count, mut discovered) = self.apply_backfill(backfill);
+            processed += count;
+            new_blocks.append(&mut discovered);
+        }
+
+        self.prune_graph();
+
+        let heads = self.current_heads();
+        self.feed
+            .update_snapshot(
+                heads.clone(),
+                self.parents.clone(),
+                self.pruned_blocks_total,
+            )
+            .await;
+
+        if !new_blocks.is_empty() {
+            self.feed.ingest(new_blocks, heads);
+        }
+
+        debug!(processed, "block feed processed catch up batch");
+
+        Ok(())
+    }
+
+    /// Collects unseen blocks by walking parent links backwards from `tip`
+    /// until known ancestry or a boundary condition is reached.
+    async fn collect_backfill(
+        &mut self,
+        client: &NodeHttpClient,
+        source_node: &str,
+        tip: HeaderId,
+        tip_height: u64,
+    ) -> Result<Vec<BackfillEntry>> {
+        let mut remaining_height = tip_height;
+        let mut cursor_height = tip_height;
         let mut cursor = tip;
-        let mut scanned = 0usize;
+        let mut stack = Vec::new();
 
         loop {
             if self.seen.contains(&cursor) {
                 break;
             }
-            if scanned >= MAX_CATCH_UP_BLOCKS_PER_POLL {
-                break;
-            }
 
             if remaining_height == 0 {
                 self.seen.insert(cursor);
+                self.heights.entry(cursor).or_insert(0);
                 break;
             }
 
-            let Some(block) = self.client.storage_block(&cursor).await? else {
-                debug!(
-                    tip = ?tip,
-                    missing = ?cursor,
-                    scanned,
-                    "block feed catch up stopped early: missing historical block"
-                );
-                break;
-            };
-
+            let block = client
+                .storage_block(&cursor)
+                .await?
+                .context("missing block while catching up")?;
             let parent = block.header().parent();
-            stack.push((cursor, block));
+
+            stack.push(BackfillEntry {
+                source_node: source_node.to_owned(),
+                header: cursor,
+                height: cursor_height,
+                block,
+            });
 
             if self.seen.contains(&parent) || parent == cursor {
                 break;
@@ -176,23 +315,171 @@ impl BlockScanner {
 
             cursor = parent;
             remaining_height = remaining_height.saturating_sub(1);
-            scanned += 1;
+            cursor_height = cursor_height.saturating_sub(1);
         }
 
+        Ok(stack)
+    }
+
+    /// Applies collected backfill into scanner state and returns newly observed
+    /// blocks.
+    fn apply_backfill(&mut self, mut backfill: Vec<BackfillEntry>) -> (usize, Vec<ObservedBlock>) {
         let mut processed = 0usize;
-        while let Some((header, block)) = stack.pop() {
-            self.feed.ingest(header, block);
+        let mut new_blocks = Vec::new();
+
+        while let Some(BackfillEntry {
+            source_node,
+            header,
+            height,
+            block,
+        }) = backfill.pop()
+        {
+            let parent = block.header().parent();
+            self.parents.insert(header, parent);
             self.seen.insert(header);
+            self.heights.insert(header, height);
+            self.heights
+                .entry(parent)
+                .or_insert_with(|| height.saturating_sub(1));
+
+            new_blocks.push(ObservedBlock {
+                source_node,
+                header,
+                parent,
+                block: Arc::new(block),
+            });
 
             processed += 1;
         }
 
-        debug!(processed, "block feed processed catch up batch");
+        (processed, new_blocks)
+    }
 
-        Ok(())
+    fn current_heads(&self) -> Vec<NodeHeadSnapshot> {
+        let mut heads = self.node_heads.values().cloned().collect::<Vec<_>>();
+        heads.sort_by(|left, right| left.node.cmp(&right.node));
+        heads
+    }
+
+    /// Prunes the in-memory block graph to a bounded retention set.
+    fn prune_graph(&mut self) {
+        let retain = self.retained_headers();
+        if retain.is_empty() {
+            return;
+        }
+
+        let mut removed = 0usize;
+        self.seen.retain(|header| {
+            let keep = retain.contains(header);
+            if !keep {
+                removed += 1;
+            }
+
+            keep
+        });
+
+        self.parents.retain(|header, _| retain.contains(header));
+        self.heights.retain(|header, _| retain.contains(header));
+        self.pruned_blocks_total = self.pruned_blocks_total.saturating_add(removed as u64);
+    }
+
+    /// Computes headers to keep.
+    ///
+    /// When all observed LIBs have known heights, retention is bounded by a
+    /// consensus-aware boundary: keep headers with height >= `min_lib_height` -
+    /// 1.
+    ///
+    /// When a LIB height is missing, falls back to bounded ancestry walks.
+    fn retained_headers(&self) -> HashSet<HeaderId> {
+        let min_lib_height = self.min_known_lib_height();
+        let mut retain = HashSet::new();
+
+        for head in self.node_heads.values() {
+            retain.insert(head.tip);
+            retain.insert(head.lib);
+        }
+
+        if let Some(min_lib_height) = min_lib_height {
+            let boundary_height = min_lib_height.saturating_sub(RETAIN_BELOW_MIN_LIB_HEIGHT);
+            retain.extend(self.retain_at_or_above_height(boundary_height));
+
+            return retain;
+        }
+
+        for head in self.node_heads.values() {
+            retain.extend(self.path_set_to(head.tip));
+            retain.extend(self.lib_safety_window(head.lib));
+        }
+
+        retain
+    }
+
+    fn min_known_lib_height(&self) -> Option<u64> {
+        let heights = self
+            .node_heads
+            .values()
+            .map(|head| self.heights.get(&head.lib).copied())
+            .collect::<Option<Vec<_>>>()?;
+
+        heights.into_iter().min()
+    }
+
+    fn retain_at_or_above_height(&self, boundary_height: u64) -> HashSet<HeaderId> {
+        self.heights
+            .iter()
+            .filter_map(|(header, height)| (*height >= boundary_height).then_some(*header))
+            .collect()
+    }
+
+    /// Collects a bounded ancestor set starting from `start`.
+    fn path_set_to(&self, start: HeaderId) -> HashSet<HeaderId> {
+        let mut out = HashSet::new();
+        let mut cursor = start;
+        let mut visited = HashSet::new();
+
+        while out.len() < MAX_RETAINED_HEADERS_PER_PATH && visited.insert(cursor) {
+            out.insert(cursor);
+
+            let Some(parent) = self.parents.get(&cursor).copied() else {
+                break;
+            };
+
+            if parent == cursor {
+                break;
+            }
+
+            cursor = parent;
+        }
+
+        out
+    }
+
+    /// Keeps a bounded set of ancestors directly below LIB so near-LIB context
+    /// survives pruning.
+    fn lib_safety_window(&self, lib: HeaderId) -> HashSet<HeaderId> {
+        let mut out = HashSet::new();
+        let mut cursor = lib;
+        let mut visited = HashSet::new();
+
+        while out.len() < SAFETY_WINDOW_BELOW_LIB && visited.insert(cursor) {
+            out.insert(cursor);
+            let Some(parent) = self.parents.get(&cursor).copied() else {
+                break;
+            };
+
+            if parent == cursor {
+                break;
+            }
+
+            cursor = parent;
+        }
+
+        out
     }
 }
 
+/// Logs catch-up failures and escalates from debug to warning after repeated
+/// consecutive failures.
 fn log_catchup_failure(err: &anyhow::Error, consecutive_failures: usize) {
     if consecutive_failures >= CATCH_UP_WARN_AFTER {
         warn!(
@@ -201,6 +488,7 @@ fn log_catchup_failure(err: &anyhow::Error, consecutive_failures: usize) {
             failures = consecutive_failures,
             "feed catch up failed repeatedly"
         );
+
         return;
     }
 
@@ -210,10 +498,6 @@ fn log_catchup_failure(err: &anyhow::Error, consecutive_failures: usize) {
         failures = consecutive_failures,
         "feed catch up failed"
     );
-}
-
-fn into_dyn_error(error: anyhow::Error) -> DynError {
-    Box::<dyn Error + Send + Sync>::from(error)
 }
 
 /// Accumulates simple counters over observed blocks.

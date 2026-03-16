@@ -44,6 +44,7 @@ lb-key-management-system-keys = { workspace = true }
 lb-network-service            = { features = ["mock"], workspace = true }
 lb-storage-service            = { features = ["rocksdb-backend"], workspace = true }
 lb-utxotree                   = { workspace = true }
+rand                          = { workspace = true }
 tempfile                      = { default-features = false, version = "3" }
 
 [features]

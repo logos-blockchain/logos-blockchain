@@ -7,7 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-pub use block_feed::BlockRecord;
+pub use block_feed::{BlockFeed, BlockFeedSnapshot, BlockRecord, NodeHeadSnapshot};
 use common_http_client::BasicAuthCredentials;
 use lb_node::config::RunConfig;
 use reqwest::Url;
@@ -30,8 +30,10 @@ use crate::{
             wallet::WalletConfig,
         },
     },
-    workloads::{ConsensusLiveness, inscription, transaction},
+    workloads::{ClusterForkMonitor, ConsensusLiveness, inscription, transaction},
 };
+
+const DEFAULT_PAYLOAD_BYTES: usize = 128;
 
 pub type ScenarioBuilder = CoreScenarioBuilder<LbcEnv>;
 pub type ScenarioBuilderWith = ScenarioBuilder;
@@ -64,12 +66,7 @@ impl Application for LbcEnv {
     async fn prepare_feed(
         node_clients: NodeClients<Self>,
     ) -> Result<(<Self::FeedRuntime as FeedRuntime>::Feed, Self::FeedRuntime), DynError> {
-        let client = node_clients
-            .snapshot()
-            .into_iter()
-            .next()
-            .ok_or_else(|| "prepare_feed called with no node clients".to_owned())?;
-        prepare_block_feed(client).await
+        prepare_block_feed(node_clients).await
     }
 }
 
@@ -179,6 +176,13 @@ pub trait ScenarioBuilderExt: Sized {
     #[must_use]
     fn expect_consensus_liveness(self) -> Self;
 
+    /// Adds a fail-fast fork monitor expectation.
+    ///
+    /// The scenario fails as soon as the monitor observes a LIB mismatch
+    /// between nodes.
+    #[must_use]
+    fn expect_cluster_fork_monitor(self) -> Self;
+
     #[must_use]
     fn initialize_wallet(self, total_funds: u64, users: usize) -> Self;
 }
@@ -203,7 +207,8 @@ impl ScenarioBuilderExt for ScenarioBuilderWith {
         InscriptionFlowBuilder {
             builder: self,
             channels: NonZeroUsize::MIN,
-            payload_bytes: NonZeroUsize::new(128).expect("constant is non-zero"),
+            inscription_payload_bytes: NonZeroUsize::new(DEFAULT_PAYLOAD_BYTES)
+                .expect("constant is non-zero"),
         }
     }
 
@@ -218,8 +223,12 @@ impl ScenarioBuilderExt for ScenarioBuilderWith {
         self.with_expectation(ConsensusLiveness::default())
     }
 
+    fn expect_cluster_fork_monitor(self) -> Self {
+        self.with_expectation(ClusterForkMonitor::<LbcEnv>::default())
+    }
+
     fn initialize_wallet(self, total_funds: u64, users: usize) -> Self {
-        let Some(user_count) = nonzero_users(users) else {
+        let Some(user_count) = nonzero_usize(users) else {
             tracing::warn!(
                 users,
                 "wallet user count must be non-zero; ignoring initialize_wallet"
@@ -263,7 +272,7 @@ impl TransactionFlowBuilder {
     }
 
     pub fn users(mut self, users: usize) -> Self {
-        if let Some(value) = nonzero_users(users) {
+        if let Some(value) = nonzero_usize(users) {
             self.users = Some(value);
         } else {
             tracing::warn!(
@@ -284,12 +293,12 @@ impl TransactionFlowBuilder {
 pub struct InscriptionFlowBuilder {
     builder: ScenarioBuilderWith,
     channels: NonZeroUsize,
-    payload_bytes: NonZeroUsize,
+    inscription_payload_bytes: NonZeroUsize,
 }
 
 impl InscriptionFlowBuilder {
     pub fn channels(mut self, channels: usize) -> Self {
-        if let Some(value) = nonzero_users(channels) {
+        if let Some(value) = nonzero_usize(channels) {
             self.channels = value;
         } else {
             tracing::warn!(
@@ -301,9 +310,9 @@ impl InscriptionFlowBuilder {
         self
     }
 
-    pub fn payload_bytes(mut self, payload_bytes: usize) -> Self {
-        if let Some(value) = nonzero_users(payload_bytes) {
-            self.payload_bytes = value;
+    pub fn inscription_payload_bytes(mut self, payload_bytes: usize) -> Self {
+        if let Some(value) = nonzero_usize(payload_bytes) {
+            self.inscription_payload_bytes = value;
         } else {
             tracing::warn!(
                 payload_bytes,
@@ -314,14 +323,18 @@ impl InscriptionFlowBuilder {
         self
     }
 
+    pub fn payload_bytes(self, payload_bytes: usize) -> Self {
+        self.inscription_payload_bytes(payload_bytes)
+    }
+
     pub fn apply(self) -> ScenarioBuilderWith {
         let workload = inscription::Workload::default()
             .with_channel_count(self.channels)
-            .with_payload_bytes(self.payload_bytes);
+            .with_payload_bytes(self.inscription_payload_bytes);
         self.builder.with_workload(workload)
     }
 }
 
-const fn nonzero_users(users: usize) -> Option<NonZeroUsize> {
-    NonZeroUsize::new(users)
+const fn nonzero_usize(value: usize) -> Option<NonZeroUsize> {
+    NonZeroUsize::new(value)
 }

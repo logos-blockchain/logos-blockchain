@@ -296,7 +296,7 @@ where
         }
 
         if removed_count > 0 {
-            tracing::debug!(
+            tracing::trace!(
                 removed_states = removed_count,
                 remaining_states = self.wallet_states.len(),
                 "Pruned wallet states for pruned blocks"
@@ -310,7 +310,7 @@ where
     ) {
         for voucher_nullifier in immutable_transactions {
             if let Some(id) = self.known_vouchers.remove_by_nullifier(&voucher_nullifier) {
-                tracing::debug!("Pruned voucher {:?} from wallet", id);
+                tracing::trace!("Pruned voucher {:?} from wallet", id);
             }
         }
     }

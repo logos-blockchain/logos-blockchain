@@ -6,7 +6,7 @@ keywords    = ["blockchain", "privacy"]
 license     = "MIT or Apache-2.0"
 readme      = "README.md"
 repository  = "https://github.com/logos-blockchain/logos-blockchain"
-version     = "0.1.0"
+version     = "0.2.1"
 
 [profile.release]
 codegen-units = 1     # (Much) slower build time, much better performances
@@ -158,8 +158,8 @@ hex               = { default-features = false, version = "0.4" }
 libp2p            = { default-features = false, version = "0.55" }
 libp2p-stream     = { default-features = false, version = "0.3.0-alpha" }
 log               = { default-features = false, version = "0.4" }
-overwatch         = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "f5a9902" }
-overwatch-derive  = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "f5a9902" }
+overwatch         = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
+overwatch-derive  = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
 rand              = { default-features = false, version = "0.8" }
 reqwest           = { default-features = false, version = "0.12" }
 serde             = { default-features = false, version = "1.0" }

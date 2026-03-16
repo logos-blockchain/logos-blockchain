@@ -1,6 +1,7 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, pin::Pin};
 
-use common_http_client::{BasicAuthCredentials, CommonHttpClient, Error};
+use common_http_client::{BasicAuthCredentials, CommonHttpClient, Error, ProcessedBlockEvent};
+use futures::Stream;
 use lb_chain_service::CryptarchiaInfo;
 use lb_core::{block::Block, header::HeaderId, mantle::SignedMantleTx};
 use lb_http_api_common::paths::NETWORK_INFO;
@@ -69,6 +70,17 @@ impl NodeHttpClient {
         id: &HeaderId,
     ) -> Result<Option<Block<SignedMantleTx>>, Error> {
         self.http_client.get_block(self.base_url.clone(), *id).await
+    }
+
+    /// Opens a processed-block stream from the node HTTP API.
+    pub async fn blocks_stream(
+        &self,
+    ) -> Result<Pin<Box<dyn Stream<Item = ProcessedBlockEvent> + Send + '_>>, Error> {
+        let stream = self
+            .http_client
+            .get_blocks_stream(self.base_url.clone())
+            .await?;
+        Ok(Box::pin(stream))
     }
 
     pub async fn submit_transaction(&self, tx: &SignedMantleTx) -> Result<(), Error> {

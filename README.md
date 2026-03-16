@@ -1,151 +1,107 @@
+<div align="center">
+
 # Logos Blockchain
 
-Logos blockchain is a component of the Logos technology stack, providing a privacy-preserving and censorship-resistant framework for decentralized network states.
+**A privacy-preserving, censorship-resistant blockchain for decentralized network states.**
 
-This monorepo serves as a unified codebase for the Logos blockchain ecosystem, housing all core components, services, and tools
-necessary for running and interacting with the Logos blockchain. Key features include:
+[![MIT License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](https://github.com/logos-co/logos-blockchain/blob/master/LICENSE-MIT)
+[![Apache License](https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge)](https://github.com/logos-co/logos-blockchain/blob/master/LICENSE-APACHE2.0)
+[![Discord](https://img.shields.io/discord/1085215532189261874?style=for-the-badge&logo=discord&label=Discord)][logos-discord]
 
-- Consensus mechanisms for secure and scalable network agreement
-- Ledger management for state persistence and validation
-- Networking layers leveraging libp2p for peer-to-peer communication
-- CLI tools and clients for seamless interaction with the blockchain
-- Testnet configurations for development and experimentation
+</div>
 
-## Table of Contents
+---
 
-## Table of Contents
+## What is Logos Blockchain?
 
-- [Logos blockchain](#logos-blockchain)
-  - [Table of Contents](#table-of-contents)
-  - [Requirements](#requirements)
-  - [Setting Up Zero-Knowledge Circuits](#setting-up-zero-knowledge-circuits)
-    - [Quick Setup (Recommended)](#quick-setup-recommended)
-      - [Linux](#linux)
-      - [Windows](#windows)
-    - [Custom Installation](#custom-installation)
-      - [Linux](#linux-1)
-      - [Windows](#windows-1)
-    - [macOS Users](#macos-users)
-    - [Verifying Installation](#verifying-installation)
-  - [Design Goals](#design-goals)
-    - [Service Architecture](#service-architecture)
-    - [Static Dispatching](#static-dispatching)
-  - [Project Structure](#project-structure)
-  - [Development Workflow](#development-workflow)
-    - [Feature exclusions](#feature-exclusions)
-    - [Building the Image](#building-the-image)
-      - [Docker](#docker)
-      - [Command line](#command-line)
-    - [Setting `chain_start_time` timestamp](#setting-chain_start_time-timestamp)
-      - [Manually set chain start time in config](#manually-set-chain-start-time-in-config)
-    - [Running a Logos blockchain Node](#running-a-logos-blockchain-node)
-      - [Docker](#docker-1)
-      - [Running Logos Blockchain Node locally](#running-logos-blockchain-node-locally)
-      - [Running Logos Blockchain Node with integration test](#running-logos-blockchain-node-with-integration-test)
-  - [Running Tests](#running-tests)
-  - [Generating Documentation](#generating-documentation)
-  - [Dependency Graph Visualization](#dependency-graph-visualization)
-    - [Installation](#installation)
-    - [Generating the Graph](#generating-the-graph)
-    - [Rendering the Graph](#rendering-the-graph)
-    - [Alternative: Online Visualization](#alternative-online-visualization)
-  - [Contributing](#contributing)
-  - [License](#license)
-  - [Community](#community)
+Logos Blockchain is a core component of the [Logos][logos-website] technology stack.
+It combines zero-knowledge proofs, a mix network for anonymity, and a modular service architecture to provide a foundation for sovereign digital communities.
 
-## Requirements
+This node represents the reference implementation of the Logos Blockchain specifications defined in the [Logos specifications space][notion-specs].
 
-- **Rust**
-    - We aim to maintain compatibility with the latest stable version of Rust.
-    - [Installation Guide](https://www.rust-lang.org/tools/install)
+## Quick Start
 
-## Setting Up Zero-Knowledge Circuits
+### Prerequisites
 
-Logos blockchain uses zero-knowledge circuits for various cryptographic operations. To set up the required circuit binaries and keys:
+| Requirement | Details |
+|---|---|
+| **LLVM / Clang** | Required for RocksDB and C bindings |
+| **ZK Circuits** | Downloaded via setup script (see below) |
 
-### Quick Setup (Recommended)
+### 1. Clone and install ZK circuits
 
-Run the setup script to download and install the latest logos-blockchain-circuits release, which will install circuits to 
-`~/.logos-blockchain-circuits/` (`Linux`) or `$env:USERPROFILE\.logos-blockchain-circuits` (`Windows`) by default.:
+```bash
+git clone https://github.com/logos-co/logos-blockchain.git
+cd logos-blockchain
+```
 
-#### Linux
+<details>
+<summary><b>Linux / macOS</b></summary>
 
 ```bash
 ./scripts/setup-logos-blockchain-circuits.sh
 ```
 
-#### Windows
+Circuits are installed to `~/.logos-blockchain-circuits/` by default.
 
-```powershell
-.\scripts\setup-logos-blockchain-circuits.ps1
-```
+> **macOS note:** The setup script automatically removes quarantine attributes from downloaded binaries since code-signing is not yet implemented.
 
-Also make sure that Visual Studio build tools with LLVM (or other LLVM with clang) are installed with the 
-`LIBCLANG_PATH` environment variable specified and pointing to the 64-bit `libclang.dll` folder, for example
-`setx LIBCLANG_PATH "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin"`
+</details>
 
-### Custom Installation
-
-#### Linux
-
-You can specify a custom version or installation directory:
+<details>
+<summary><b>Custom version or directory</b></summary>
 
 ```bash
-# Install a specific version
-./scripts/setup-logos-blockchain-circuits.sh v0.3.0
+# Specific version
+./scripts/setup-logos-blockchain-circuits.sh v0.4.1
 
-# Install to a custom directory
-./scripts/setup-logos-blockchain-circuits.sh v0.2.0 /opt/circuits
-```
-
-If you use a custom directory, you'll need to set the `LOGOS_BLOCKCHAIN_CIRCUITS` environment variable:
-
-```bash
+# Custom directory
+./scripts/setup-logos-blockchain-circuits.sh v0.4.1 /opt/circuits
 export LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 ```
 
-#### Windows
+</details>
 
-```powershell
-# Install a specific version
-.\scripts\setup-logos-blockchain-circuits.ps1 v0.3.0
-
-# Install to a custom directory
-.\scripts\setup-logos-blockchain-circuits.ps1 v0.2.0 $env:USERPROFILE\circuits
-```
-
-If you use a custom directory, you'll need to set the `LOGOS_BLOCKCHAIN_CIRCUITS` environment variable:
-
-```powershell
-$env:LOGOS_BLOCKCHAIN_CIRCUITS="$env:USERPROFILE\circuits"
-```
-
-### macOS Users
-
-Since we don't yet have code-signing implemented on macOS, the setup script automatically removes quarantine attributes 
-from downloaded binaries. This allows the binaries to run without manual authorization through System Settings.
-
-### Verifying Installation
-
-After installation, verify the circuits are properly set up:
+Verify the installation:
 
 ```bash
-# Run tests that use the circuits
-cargo test -p logos-blockchain-circuits-prover -p logos-blockchain-circuits-verifier --lib
+cargo test -p logos-blockchain-circuits-prover -p logos-blockchain-circuits-verifier
 ```
 
-## Design Goals
+### 2. Build
 
-### Service Architecture
+```bash
+cargo build -p logos-blockchain-node --release
+```
 
-Logos blockchain services follow a consistent design pattern: a front layer handles the `Overwatch` service, while a back layer
-implements the actual service logic.
+### 3. Run a standalone node
 
-This modular approach allows for easy replacement of components in a declarative manner.
+To start a local standalone instance of a Logos Blockchain network, run:
 
-For example:
+```bash
+target/release/logos-blockchain-node --deployment standalone-deployment-config.yaml nodes/node/standalone-node-config.yaml
+```
 
-```rust ignore
+The node stores state in the `state` directory. If you encounter issues on restart, try removing it before starting the node again.
+
+### Docker
+
+```bash
+# Build
+docker build -t logos-blockchain-node .
+
+# Run (mount your config)
+docker run -v "/path/to/node_config.yml:/node_config.yml" -v "/path/to/deployment_config.yml:/deployment_config.yml" logos-blockchain-node --deployment /deployment_config.yml /node_config.yml
+```
+
+---
+
+## Architecture
+
+Nodes are composed declaratively using the [Overwatch][overwatch-github] framework.
+Each service has a front layer (Overwatch integration) and a back layer (business logic), making components easy to swap:
+
+```rust
 #[derive_services]
 struct MockPoolNode {
     logging: Logger,
@@ -158,184 +114,127 @@ struct MockPoolNode {
 
 ### Static Dispatching
 
-Logos blockchain favours static dispatching over dynamic, influenced by Overwatch.
-This means you'll encounter Generics sprinkled throughout the codebase.
-While it might occasionally feel a bit over the top, it brings some solid advantages, such as:
+The codebase favors generics and static dispatch over dynamic dispatch. This means you'll see generics throughout — the trade-off is compile-time type safety and highly modular, adaptable applications.
 
-- Compile-time type checking
-- Highly modular and adaptable applications
+---
 
-## Development Workflow
+## Project Structure
 
-### Feature exclusions
+```
+logos-blockchain/
+├── core/                 Core types — blocks, transactions, UTXO notes, proofs
+├── consensus/
+│   ├── cryptarchia-engine/   Cryptarchia PoS consensus logic
+│   └── cryptarchia-sync/     Chain synchronization over libp2p
+├── blend/                Blend mix network
+│   ├── crypto/               Cryptographic primitives
+│   ├── message/              Message types
+│   ├── network/              Network layer
+│   ├── proofs/               ZK proofs (PoL, PoQ)
+│   └── scheduling/           Cover traffic & delay scheduling
+├── zk/                   Zero-knowledge proof infrastructure
+│   ├── groth16/              Groth16 over BN254 (arkworks)
+│   ├── poseidon2/            Poseidon2 hash function
+│   ├── circuits/             Circuit prover, verifier, witness generator
+│   └── proofs/               PoC, PoL, PoQ, ZK signatures
+├── ledger/               UTXO-based ledger & state transitions
+├── utxotree/             Persistent UTXO commitment tree
+├── mmr/                  Merkle Mountain Range (header commitments)
+├── kms/                  Key Management System (Ed25519, X25519, ZK keys)
+├── libp2p/               Networking — QUIC, GossipSub, Kademlia, AutoNAT
+├── services/             Overwatch services (chain, blend, wallet, API, …)
+├── nodes/node/           Node binary — wires everything together
+├── wallet/               Wallet logic (UTXO selection, key management)
+├── zone-sdk/             SDK for building zone sequencers & indexers
+├── c-bindings/           C-compatible dynamic library + header
+├── testnet/              Docker Compose testnets, faucet, L2 demo
+└── tests/                Integration & Cucumber BDD tests
+```
 
-Currently the `"profiling"` feature is not supported in Windows builds.
+---
 
-### Building the Image
+## Development
 
-#### Docker
-
-To build the Logos blockchain Docker image, run:
+### Running Tests
 
 ```bash
-docker build -t logos-blockchain-node .
+# Unit tests
+cargo test --workspace --exclude logos-blockchain-tests
+
+# Integration tests
+cargo build -p logos-blockchain-node --all-targets --features testing
+cargo test -p logos-blockchain-tests
 ```
 
-#### Command line
-
-To build the Logos blockchain command line executable, run:
+### Multi-Node Local Testnet
 
 ```bash
-cargo build --release
+cd testnet
+docker compose up
 ```
 
-### Setting `chain_start_time` timestamp
+See [`testnet/README.md`](testnet/README.md) for details.
 
-When running a node locally, you may encounter the following error if the configuration's start time is too far in the past:
-```
-ERROR chain_leader: trying to propose a block for slot XXXX but epoch state is not available
-```
+### Join Existing Devnet
 
-To resolve this, you must manually update the `chain_start_time` in the deployment config file to a recent timestamp (ideally within 
-a few minutes of your current system time) before launching the node.
+Visit our [GitHub releases page][github-releases-page] to get instructions on how to join our existing devnet deployment!
 
-#### Manually set chain start time in config
+You can visit the [Devnet dashboard][devnet-dashboard] to get more info about the current devnet deployment.
 
-You can generate a timestamp in the required format using the following command in your terminal:
-Bash
-```bash
-# For macOS/Linux
-date -u +"%Y-%m-%d %H:%M:%S.000000 +00:00:00"
-```
-
-Open `nodes/node/standalone-deployment-config.yaml` and locate the `time` section. Replace the `chain_start_time` value with the 
-output from the command above:
-YAML
+### L2 Demo
 
 ```bash
-time:
-  # ... other settings ...
-  chain_start_time: 2026-01-07 10:45:00.000000 +00:00:00 # <--- Update this line
+cd testnet/l2-sequencer-archival-demo
+docker compose up
+# Web UI → http://localhost:8200
 ```
 
-Once updated, restart the node.
-
-### Running a Logos Blockchain Node
-
-#### Docker
-
-To run a docker container with the Logos blockchain node you need to mount both `config.yml` and `global_params_path` specified in
-the configuration.
+### Generating Documentation
 
 ```bash
-docker run -v "/path/to/config.yml:/config.yml" logos-blockchain-node /config.yml
+cargo doc --open
 ```
 
-#### Running Logos Blockchain Node locally
-
-When the node is built locally, it can be run with example config for one node network:
-```bash
-# Build logos blockchain binaries.
-cargo build --all-features --all-targets
-
-# Run node without connecting to any other node.
-target/debug/logos-blockchain-node nodes/node/standalone-node-config.yaml
-```
-
-Node stores its state inside the `store` directory. If there are any issues when restarting the node, please try removing 
-`store` directory.
-
-#### Running Logos Blockchain Node with integration test
-
-To run the node programatically, one can use `local_testnet_one_node` integration test.
-```bash
-# Build logos blockchain binaries.
-cargo build --all-features --all-targets
-
-# Integration test uses binaries built in a previous step.
-cargo test --all-features local_testnet_one_node -- --ignored --nocapture
-```
-
-## Running Tests
-
-To run the test suite, use:
-
-```bash
-cargo test
-```
-
-## Generating Documentation
-
-To generate the project documentation locally, run:
-
-```bash
-cargo doc
-```
-
-## Dependency Graph Visualization
-
-To visualize the project's dependency structure, you can generate a dependency graph using `cargo-depgraph`.
-
-### Installation
-
-First, install the `cargo-depgraph` tool:
+### Dependency Graph
 
 ```bash
 cargo install cargo-depgraph
+cargo depgraph --workspace-only --all-features > deps.dot
+
+# Render with Graphviz
+dot -Tsvg deps.dot -o deps.svg
 ```
 
-### Generating the Graph
+Or paste the `.dot` file into [Graphviz Online][graphviz-online].
 
-Generate a DOT file containing the dependency graph:
-
-```bash
-# Full dependency graph with all transitive dependencies
-cargo depgraph --all-deps --dedup-transitive-deps --workspace-only --all-features > dependencies_graph.dot
-
-# Simplified graph showing only direct dependencies
-cargo depgraph --workspace-only --all-features > dependencies_graph_simple.dot
-```
-
-### Rendering the Graph
-
-Convert the DOT file to a viewable format using Graphviz:
-
-```bash
-# Install Graphviz (macOS)
-brew install graphviz
-
-# Install Graphviz (Ubuntu/Debian)
-sudo apt-get install graphviz
-
-# Render to PNG
-dot -Tpng dependencies_graph.dot -o dependencies_graph.png
-
-# Render to SVG (better for large graphs)
-dot -Tsvg dependencies_graph.dot -o dependencies_graph.svg
-```
-
-### Alternative: Online Visualization
-
-You can also visualize the DOT file online using tools like:
-- [Graphviz Online](https://dreampuf.github.io/GraphvizOnline/)
-- [WebGraphviz](http://www.webgraphviz.com/)
-
-Simply copy the contents of the DOT file and paste it into the online tool.
+---
 
 ## Contributing
 
-We welcome contributions! Please read our [Contributing Guidelines](CONTRIBUTING.md) for details on how to get started.
+We welcome contributions! Please read our [Contributing Guidelines](CONTRIBUTING.md) to get started.
+
+---
 
 ## License
 
-This project is primarily distributed under the terms defined by either the MIT license or the
-Apache License (Version 2.0), at your option.
+Dual-licensed under your choice of:
 
-See [LICENSE-APACHE2.0](LICENSE-APACHE2.0) and [LICENSE-MIT](LICENSE-MIT) for details.
+- [MIT](LICENSE-MIT)
+- [Apache 2.0](LICENSE-APACHE2.0)
+
+---
 
 ## Community
 
-Join the Logos community on [Discord](https://discord.gg/dUnm7CcB) and follow us
-on [Twitter](https://twitter.com/nomos_tech).
+- [Discord][logos-discord]
+- [Twitter / X][logos-x]
+- [logos.co][logos-website]
 
-For more information, visit [logos.co](https://logos.co/?utm_source=chatgpt.com).
+[notion-specs]: https://www.notion.so/nomos-tech/Research-Specifications-1fd261aa09df814da916ecefa410571f
+[overwatch-github]: https://github.com/logos-co/Overwatch
+[graphviz-online]: https://dreampuf.github.io/GraphvizOnline/
+[github-releases-page]: https://github.com/logos-blockchain/logos-blockchain/releases
+[logos-discord]: https://discord.gg/ezJefwJY
+[logos-x]: https://x.com/Logos_network
+[logos-website]: https://logos.co/
+[devnet-dashboard]: https://devnet.blockchain.logos.co/web/

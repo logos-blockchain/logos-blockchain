@@ -464,7 +464,7 @@ where
             Error::Cryptarchia(lb_chain_service::api::ApiError::ParentMissing { parent, info }) => {
                 orphan_downloader.enqueue_orphan(block_id, info.tip, info.lib);
 
-                error!(
+                info!(
                     target: LOG_TARGET, ?block_id, ?parent,
                     "Parent block missing, enqueued block for orphan processing",
                 );
@@ -517,12 +517,12 @@ where
         let content_size = 0; // TODO: calculate the actual content size
         let transactions = block.transactions().len();
 
-        info!(
+        trace!(
             counter.received_blocks = 1,
             transactions = transactions,
             bytes = content_size
         );
-        info!(
+        trace!(
             histogram.received_blocks_data = content_size,
             transactions = transactions,
         );

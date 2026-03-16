@@ -1,8 +1,4 @@
-use std::{
-    num::{NonZero, NonZeroU64},
-    ops::Add,
-    time::Duration,
-};
+use std::{num::NonZero, ops::Add, time::Duration};
 
 #[cfg(feature = "serde")]
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
@@ -152,18 +148,14 @@ pub struct EpochConfig {
 }
 
 impl EpochConfig {
-    pub fn epoch_length(&self, base_period_length: NonZero<u64>) -> u64 {
-        [
-            u64::from(NonZeroU64::from(
-                self.epoch_stake_distribution_stabilization,
-            )),
-            u64::from(NonZeroU64::from(self.epoch_period_nonce_buffer)),
-            u64::from(NonZeroU64::from(self.epoch_period_nonce_stabilization)),
-        ]
-        .into_iter()
-        .reduce(u64::saturating_add)
-        .unwrap_or(0)
-        .saturating_mul(base_period_length.get())
+    #[must_use]
+    pub const fn epoch_length(&self, base_period_length: NonZero<u64>) -> u64 {
+        epoch_length(
+            self.epoch_stake_distribution_stabilization,
+            self.epoch_period_nonce_buffer,
+            self.epoch_period_nonce_stabilization,
+            base_period_length,
+        )
     }
 
     #[must_use]
@@ -177,6 +169,19 @@ impl EpochConfig {
     pub fn starting_slot(&self, epoch: &Epoch, base_period_length: NonZero<u64>) -> Slot {
         Slot::from(u64::from(u32::from(*epoch)) * self.epoch_length(base_period_length))
     }
+}
+
+#[must_use]
+pub const fn epoch_length(
+    epoch_stake_distribution_stabilization: NonZero<u8>,
+    epoch_period_nonce_buffer: NonZero<u8>,
+    epoch_period_nonce_stabilization: NonZero<u8>,
+    base_period_length: NonZero<u64>,
+) -> u64 {
+    ((epoch_stake_distribution_stabilization.get() as u64)
+        .saturating_add(epoch_period_nonce_buffer.get() as u64)
+        .saturating_add(epoch_period_nonce_stabilization.get() as u64))
+    .saturating_mul(base_period_length.get())
 }
 
 #[cfg_attr(feature = "serde", cfg_eval::cfg_eval, serde_with::serde_as)]

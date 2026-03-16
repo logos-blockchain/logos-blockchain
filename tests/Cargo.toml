@@ -93,6 +93,10 @@ name = "test_mantle_sdp_ops"
 path = "src/tests/mantle/sdp_ops.rs"
 
 [[test]]
+name = "test_cli_restart"
+path = "src/tests/cli/restart.rs"
+
+[[test]]
 name              = "test_testing_framework_smoke_local"
 path              = "src/tests/testing_framework/smoke_local.rs"
 required-features = ["testing_framework"]
@@ -100,6 +104,11 @@ required-features = ["testing_framework"]
 [[test]]
 name              = "test_testing_framework_external_urls_inscription"
 path              = "src/tests/testing_framework/external_urls_inscription.rs"
+required-features = ["testing_framework"]
+
+[[test]]
+name              = "test_testing_framework_fork_detector"
+path              = "src/tests/testing_framework/fork_detector.rs"
 required-features = ["testing_framework"]
 
 [[test]]

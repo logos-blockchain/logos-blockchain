@@ -138,6 +138,18 @@ pub struct LogosBlockchain {
 }
 
 pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServiceId>, DynError> {
+    let blend_rewards_params = config.deployment.blend_reward_params();
+
+    let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
+        user: config.user.blend,
+        deployment: config.deployment.blend,
+    }
+    .into_blend_services_settings(
+        &config.user.state,
+        &config.deployment.time,
+        &config.deployment.cryptarchia,
+    );
+
     let time_service_config = TimeConfig {
         user: config.user.time,
         deployment: config.deployment.time,
@@ -148,13 +160,7 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
         user: config.user.cryptarchia,
         deployment: config.deployment.cryptarchia,
     }
-    .into_cryptarchia_services_settings(&config.deployment.blend, &config.user.state);
-
-    let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
-        user: config.user.blend,
-        deployment: config.deployment.blend,
-    }
-    .into_blend_services_settings(&config.user.state);
+    .into_cryptarchia_services_settings(blend_rewards_params, &config.user.state);
 
     let mempool_service_config = MempoolConfig {
         deployment: config.deployment.mempool,

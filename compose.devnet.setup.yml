@@ -83,12 +83,13 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     ports:
       - "13000:13000"
+      - "13001:13001"
     depends_on:
       - cfgsync
     volumes:
       - node-data:/node-data
-      - ./testnet/nginx-setup.conf:/etc/nginx/nginx.conf:ro
-      - ./testnet/static:/usr/share/nginx/html:ro
+      - ./testnet/nginx/setup.conf:/etc/nginx/nginx.conf:ro
+      - ./testnet/nginx/static/setup:/usr/share/nginx/html:ro
     entrypoint: [ "nginx", "-g", "daemon off;" ]
 
 volumes:
