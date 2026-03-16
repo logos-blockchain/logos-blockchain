@@ -32,6 +32,7 @@ pub struct LeaderState {
     // at the start of each epoch this is increased by the amount of rewards
     // that have been collected in the previous epoch.
     // unclaimed rewards are carried over to the next epoch.
+    pub pending_rewards: Value,
     claimable_rewards: Value,
     // Merkle tree vouchers that can be claimed in this epoch
     // this is updated once at the start of each epoch
@@ -68,6 +69,7 @@ impl LeaderState {
             claimable_vouchers_root: RewardsRoot::default(),
             n_claimable_vouchers: 0,
             nfs: rpds::HashTrieSetSync::new_sync(),
+            pending_rewards: Value::default(),
             claimable_rewards: 0,
             claimable_vouchers: DynamicMerkleTree::new(),
             claimable_voucher_indices: HashTrieMapSync::new_sync(),
@@ -164,6 +166,7 @@ impl LeaderState {
                 claimable_vouchers_root: self.claimable_vouchers_root,
                 n_claimable_vouchers: self.n_claimable_vouchers,
                 nfs,
+                pending_rewards: self.pending_rewards,
                 claimable_rewards,
                 claimable_vouchers: self.claimable_vouchers.clone(),
                 claimable_voucher_indices: self.claimable_voucher_indices.clone(),

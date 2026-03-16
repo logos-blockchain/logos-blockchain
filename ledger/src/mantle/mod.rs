@@ -46,8 +46,8 @@ pub enum Error {
 #[derive(Clone, PartialEq, Debug)]
 pub struct LedgerState {
     channels: channel::Channels,
-    sdp: sdp::SdpLedger,
-    leaders: leader::LeaderState,
+    pub sdp: sdp::SdpLedger,
+    pub leaders: leader::LeaderState,
 }
 
 impl LedgerState {

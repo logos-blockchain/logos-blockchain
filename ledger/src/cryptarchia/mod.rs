@@ -126,6 +126,11 @@ pub struct LedgerState {
     // Using an Arc wrapper here as this can be completely shared among instances of LedgerState
     #[derivative(PartialEq = "ignore")]
     stake_inference: Arc<StakeInference>,
+    // rolling fee window of 120 blocks, used to derive block rewards
+    #[cfg_attr(feature = "serde", serde(with = "serde_arrays"))]
+    pub fee_window: [f64; 120],
+    #[cfg_attr(feature = "serde", serde(with = "serde_arrays"))]
+    pub stake_window: [f64; 120],
 }
 
 impl LedgerState {
@@ -487,6 +492,8 @@ impl LedgerState {
             },
             block_density,
             stake_inference,
+            fee_window: [0f64; 120],
+            stake_window: [total_stake as f64; 120],
         }
     }
 }
@@ -729,7 +736,9 @@ pub mod tests {
                 lottery_1,
             },
             stake_inference,
+            fee_window: [0f64; 120],
             block_density,
+            stake_window: [total_stake as f64; 120],
         }
     }
 

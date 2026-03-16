@@ -1,35 +1,36 @@
 [package]
-categories  = { workspace = true }
+categories = { workspace = true }
 description = { workspace = true }
-edition     = { workspace = true }
-keywords    = { workspace = true }
-license     = { workspace = true }
-name        = "logos-blockchain-ledger"
-readme      = { workspace = true }
-repository  = { workspace = true }
-version     = { workspace = true }
+edition = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+name = "logos-blockchain-ledger"
+readme = { workspace = true }
+repository = { workspace = true }
+version = { workspace = true }
 
 [lints]
 workspace = true
 
 [dependencies]
-derivative                    = "2.2.0"
-lb-blend-crypto               = { workspace = true }
-lb-blend-message              = { workspace = true }
-lb-blend-proofs               = { workspace = true }
-lb-core                       = { workspace = true }
-lb-cryptarchia-engine         = { workspace = true }
-lb-groth16                    = { workspace = true }
+derivative = "2.2.0"
+lb-blend-crypto = { workspace = true }
+lb-blend-message = { workspace = true }
+lb-blend-proofs = { workspace = true }
+lb-core = { workspace = true }
+lb-cryptarchia-engine = { workspace = true }
+lb-groth16 = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-lb-pol                        = { workspace = true }
-lb-utils                      = { workspace = true }
-lb-utxotree                   = { workspace = true }
-num-bigint                    = { default-features = false, version = "0.4" }
-rand                          = { workspace = true }
-rpds                          = { default-features = false, version = "1.1.1" }
-serde                         = { default-features = false, features = ["derive"], optional = true, workspace = true }
-thiserror                     = "1"
-tracing                       = { workspace = true }
+lb-pol = { workspace = true }
+lb-utils = { workspace = true }
+lb-utxotree = { workspace = true }
+num-bigint = { default-features = false, version = "0.4" }
+rand = { workspace = true }
+rpds = { default-features = false, version = "1.1.1" }
+serde = { default-features = false, features = ["derive"], optional = true, workspace = true }
+serde_arrays = { version = "0.2.0", default-features = false }
+thiserror = "1"
+tracing = { workspace = true }
 
 [dev-dependencies]
 rand = { features = ["std", "std_rng"], workspace = true }

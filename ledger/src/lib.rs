@@ -13,7 +13,7 @@ use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use cryptarchia::{EpochState, UtxoTree};
 use lb_core::{
     block::BlockNumber,
-    mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, gas::GasConstants},
+    mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value, gas::GasConstants},
     proofs::leader_proof,
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
 };
@@ -21,6 +21,18 @@ use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Field as _, Fr};
 use mantle::LedgerState as MantleLedger;
 use thiserror::Error;
+
+const KPI_STAKE_TARGET: f64 = 3_000_000_000f64;
+const KPI_FEE_TARGET: f64 = 10_000_000_000f64;
+const TGE_TOKEN: f64 = 10_000_000_000f64;
+const I_MAX: f64 = 0.01;
+const DELTA_T: f64 = 1_051_200f64;
+const F: f64 = 1f64;
+const ALPHA_D: f64 = 0.25;
+const ALPHA_A: f64 = 1f64;
+const I_MIN: f64 = 0f64;
+const T: f64 = 120f64;
+const W_I: f64 = 1f64;
 
 // While individual notes are constrained to be `u64`, intermediate calculations
 // may overflow, so we use `i128` to avoid that and to easily represent negative
@@ -167,6 +179,8 @@ impl LedgerState {
         let mut cryptarchia_ledger = self
             .cryptarchia_ledger
             .try_apply_header::<LeaderProof, Id>(slot, proof, config)?;
+        cryptarchia_ledger.stake_window[self.block_number as usize % T as usize] =
+            cryptarchia_ledger.epoch_state.total_stake as f64;
         let (mantle_ledger, reward_utxos) = self.mantle_ledger.try_apply_header(
             cryptarchia_ledger.epoch_state(),
             *proof.voucher_cm(),
@@ -188,12 +202,53 @@ impl LedgerState {
         })
     }
 
+    /// For each block received, rewards are calculated based on the actual
+    /// total estimated stake and on the average of fees consumed per block over
+    /// the last T blocks
+    fn compute_block_rewards(mut self) -> Self {
+        let window_index = self.block_number as usize % T as usize;
+
+        // compute delta_t
+        let delta_t: f64 = W_I
+            * (KPI_STAKE_TARGET - self.cryptarchia_ledger.stake_window[window_index])
+            / KPI_STAKE_TARGET
+            + W_I * (KPI_FEE_TARGET - self.cryptarchia_ledger.fee_window[window_index])
+                / KPI_FEE_TARGET;
+        let gamma_t: f64 = (1f64 / DELTA_T)
+            * W_I.mul_add(
+                (1f64 / T) * self.cryptarchia_ledger.fee_window.iter().sum::<f64>()
+                    / KPI_FEE_TARGET,
+                W_I * (1f64 / T) * self.cryptarchia_ledger.stake_window.iter().sum::<f64>()
+                    / KPI_STAKE_TARGET,
+            );
+        let mut emission_rate: f64 = (ALPHA_D.mul_add(delta_t, ALPHA_A * gamma_t) + I_MIN) / I_MAX;
+        emission_rate = emission_rate.clamp(0f64, 1f64);
+        let block_reward = (emission_rate * I_MAX * TGE_TOKEN).mul_add(
+            DELTA_T / F,
+            (1f64 - emission_rate) * self.cryptarchia_ledger.fee_window[window_index],
+        );
+
+        // blend get 60% of rewards while leaders get the 40% remaining.
+        // Casting truncate the floating points
+        let blend_reward = (0.6 * block_reward) as Value;
+        let leader_reward = (0.4 * block_reward) as Value;
+
+        //Casting as Value truncate the floating points
+        self.mantle_ledger.leaders.pending_rewards += leader_reward;
+
+        self.mantle_ledger.sdp.add_blend_rewards(blend_reward);
+
+        self
+    }
+
     /// Apply the contents of an update to the ledger state.
     pub fn try_apply_contents<Id, Constants: GasConstants>(
         mut self,
         config: &Config,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx>,
     ) -> Result<Self, LedgerError<Id>> {
+        let fee_window_index = self.block_number as usize % T as usize;
+        self.cryptarchia_ledger.fee_window[fee_window_index] = 0f64;
         for tx in txs {
             let balance;
             (self.cryptarchia_ledger, balance) = self
@@ -217,7 +272,10 @@ impl LedgerState {
                 Ordering::Greater => return Err(LedgerError::UnbalancedTransaction),
                 Ordering::Equal => {} // OK!
             }
+            self.cryptarchia_ledger.fee_window[fee_window_index] +=
+                tx.gas_cost::<Constants>() as f64;
         }
+        self = self.compute_block_rewards();
         Ok(self)
     }
 
