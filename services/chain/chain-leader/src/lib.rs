@@ -480,12 +480,12 @@ where
                             {
                                 Ok((block, new_blend_session)) => {
                                     let proposal_strategy = if new_blend_session {
-                                        BlockProposalStrategy::Blend(&blend_adapter)
-                                    } else {
                                         BlockProposalStrategy::Broadcast {
                                             adapter: &network_adapter,
                                             settings: blend_broadcast_settings.clone(),
                                         }
+                                    } else {
+                                        BlockProposalStrategy::Blend(&blend_adapter)
                                     };
                                     Self::apply_and_publish_block_proposal(block, &chain_network_api, proposal_strategy).await;
                                 }
