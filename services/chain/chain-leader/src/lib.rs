@@ -1,5 +1,6 @@
 pub mod api;
 mod blend;
+mod block;
 mod kms;
 mod leadership;
 mod mempool;
@@ -52,6 +53,7 @@ use tracing_futures::Instrument as _;
 pub use crate::wallet::LeaderWalletConfig;
 use crate::{
     blend::BlendAdapter,
+    block::BlockProposalStrategy,
     kms::PreloadKmsService,
     leadership::{PotentialWinningPoLSlotNotifier, build_proof_for},
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
@@ -376,6 +378,7 @@ where
             CryptarchiaService,
             Wallet,
             PreloadKmsService<_>,
+            // TODO: Remove once the need to broadcast directly bypassing Blend is gone.
             NetworkService<_, _>
         )
         .await?;
@@ -407,6 +410,7 @@ where
             .expect("Waiting for chain to be online should succeed");
         info!("Chain is now Online. Starting block proposals.");
 
+        // TODO: Remove once the need to broadcast directly bypassing Blend is gone.
         let network_adapter = NetworkAdapter::new(relays.network_relay().clone());
 
         self.service_resources_handle.status_updater.notify_ready();
@@ -475,7 +479,15 @@ where
                             .await
                             {
                                 Ok((block, new_blend_session)) => {
-                                    Self::apply_and_publish_block_proposal(block, &chain_network_api, &blend_adapter, &network_adapter, blend_broadcast_settings.clone(), new_blend_session).await;
+                                    let proposal_strategy = if new_blend_session {
+                                        BlockProposalStrategy::Blend(&blend_adapter)
+                                    } else {
+                                        BlockProposalStrategy::Broadcast {
+                                            adapter: &network_adapter,
+                                            settings: blend_broadcast_settings.clone(),
+                                        }
+                                    };
+                                    Self::apply_and_publish_block_proposal(block, &chain_network_api, proposal_strategy).await;
                                 }
                                 Err(e) => {
                                     error!(target: LOG_TARGET, "{e}");
@@ -665,12 +677,6 @@ where
 
         let block = Block::create(parent, slot, proof, txs, signing_key)?;
 
-        if is_new_blend_session {
-            debug!(
-                "proposed block with id {:?} triggers a new Blend session {blend_session_after:?}.",
-                block.header().id()
-            );
-        }
         info!(
             "proposed block with id {:?} containing {} transactions ({} removed)",
             block.header().id(),
@@ -686,10 +692,12 @@ where
     async fn apply_and_publish_block_proposal(
         block: Block<Mempool::Item>,
         chain_network_api: &ChainNetworkServiceApi<ChainNetwork, RuntimeServiceId>,
-        blend_adapter: &BlendAdapter<BlendService>,
-        network_adapter: &NetworkAdapter,
-        broadcast_settings: BlendService::BroadcastSettings,
-        is_new_blend_session: bool,
+        proposal_strategy: BlockProposalStrategy<
+            '_,
+            BlendService,
+            NetworkAdapter,
+            RuntimeServiceId,
+        >,
     ) {
         if let Err(e) = chain_network_api
             .apply_block_and_reconcile_mempool(block.clone())
@@ -698,17 +706,18 @@ where
             error!(target: LOG_TARGET, "Failed to apply our own proposed block {:?}: {e:?}", block.header().id());
             return;
         }
-        debug!(target: LOG_TARGET, "Successfully applied our own proposed block. Publishing it to the blend network: {:?}", block.header().id());
 
-        if is_new_blend_session {
-            network_adapter
-                .broadcast(
-                    block.to_proposal().to_bytes().unwrap().to_vec(),
-                    broadcast_settings,
-                )
-                .await;
-        } else {
-            blend_adapter.publish_proposal(block.to_proposal()).await;
+        match proposal_strategy {
+            BlockProposalStrategy::Blend(blend_adapter) => {
+                debug!(target: LOG_TARGET, "Successfully applied our own proposed block. Publishing it to the blend network: {:?}", block.header().id());
+                blend_adapter.publish_proposal(block.to_proposal()).await;
+            }
+            BlockProposalStrategy::Broadcast { adapter, settings } => {
+                debug!(target: LOG_TARGET, "Successfully applied our own proposed block. First of a new session, broadcasting it directly: {:?}", block.header().id());
+                adapter
+                    .broadcast(block.to_proposal().to_bytes().unwrap().to_vec(), settings)
+                    .await;
+            }
         }
     }
 

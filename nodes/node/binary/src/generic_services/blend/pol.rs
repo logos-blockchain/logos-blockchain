@@ -9,7 +9,6 @@ use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInput
 use lb_blend_service::epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait};
 use lb_chain_leader_service::LeaderMsg;
 use lb_pol::{PolChainInputsData, PolWalletInputsData, PolWitnessInputsData};
-use lb_poq::AgedNotePathAndSelectors;
 use lb_services_utils::wait_until_services_are_ready;
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use tokio::sync::oneshot::channel;
@@ -83,13 +82,8 @@ where
                             chain: PolChainInputsData { slot_number, .. },
                         } = leader_private.input();
 
-                        let aged_path_and_selectors: AgedNotePathAndSelectors = aged_path
-                            .iter()
-                            .zip(aged_selectors.iter())
-                            .map(|(path, selector)| (*path, *selector))
-                            .collect::<Vec<_>>()
-                            .try_into()
-                            .expect("Aged path and aged selectors have same length and are guaranteed to be of the expected length.");
+                        let aged_path_and_selectors =
+                            core::array::from_fn(|i| (aged_path[i], aged_selectors[i]));
 
                         ready(Some(Some(PolEpochInfo {
                             epoch,
