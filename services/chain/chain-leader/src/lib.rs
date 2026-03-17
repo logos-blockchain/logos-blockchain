@@ -16,6 +16,7 @@ use lb_chain_service::{
     Epoch,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
+use lb_chain_service_common::NetworkMessage as ChainNetworkMessage;
 use lb_core::{
     block::{Block, Error as BlockError, MAX_TRANSACTIONS},
     codec::SerializeOp as _,
@@ -634,7 +635,8 @@ where
             .get(&ServiceType::BlendNetwork)
             .unwrap();
 
-        let is_new_blend_session = blend_session_after > blend_session_before;
+        let is_new_blend_session =
+            blend_session_after > blend_session_before && blend_session_after > 0;
 
         let mut valid_txs = Vec::new();
         let mut invalid_tx_hashes = Vec::new();
@@ -715,7 +717,14 @@ where
             BlockProposalStrategy::Broadcast { adapter, settings } => {
                 debug!(target: LOG_TARGET, "Successfully applied our own proposed block. First of a new session, broadcasting it directly: {:?}", block.header().id());
                 adapter
-                    .broadcast(block.to_proposal().to_bytes().unwrap().to_vec(), settings)
+                    .broadcast(
+                        ChainNetworkMessage::to_bytes(&ChainNetworkMessage::Proposal(
+                            block.to_proposal(),
+                        ))
+                        .expect("NetworkMessage should be able to be serialized")
+                        .to_vec(),
+                        settings,
+                    )
                     .await;
             }
         }
