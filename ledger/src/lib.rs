@@ -181,8 +181,7 @@ impl LedgerState {
         let mut cryptarchia_ledger = self
             .cryptarchia_ledger
             .try_apply_header::<LeaderProof, Id>(slot, proof, config)?;
-        cryptarchia_ledger.stake_window[self.block_number as usize % WINDOW_SIZE] =
-            cryptarchia_ledger.epoch_state.total_stake as f64;
+        cryptarchia_ledger.update_stake_window(self.block_number as usize % WINDOW_SIZE);
         let (mantle_ledger, reward_utxos) = self.mantle_ledger.try_apply_header(
             cryptarchia_ledger.epoch_state(),
             *proof.voucher_cm(),
@@ -214,17 +213,20 @@ impl LedgerState {
 
         // compute delta_t
         let delta_t: f64 = KPI_WEIGHT
-            * (KPI_STAKE_TARGET - self.cryptarchia_ledger.stake_window[window_index])
+            * (KPI_STAKE_TARGET
+                - self.cryptarchia_ledger.get_stake_from_index(window_index) as f64)
             / KPI_STAKE_TARGET
-            + KPI_WEIGHT * (KPI_FEE_TARGET - self.cryptarchia_ledger.fee_window[window_index])
+            + KPI_WEIGHT
+                * (KPI_FEE_TARGET
+                    - self.cryptarchia_ledger.get_fee_from_index(window_index) as f64)
                 / KPI_FEE_TARGET;
         let gamma_t: f64 = (1f64 / BLOCK_PER_YEAR)
             * KPI_WEIGHT.mul_add(
-                (1f64 / window_float) * self.cryptarchia_ledger.fee_window.iter().sum::<f64>()
+                (1f64 / window_float) * self.cryptarchia_ledger.get_summed_fees() as f64
                     / KPI_FEE_TARGET,
                 KPI_WEIGHT
                     * (1f64 / window_float)
-                    * self.cryptarchia_ledger.stake_window.iter().sum::<f64>()
+                    * self.cryptarchia_ledger.get_summed_stake() as f64
                     / KPI_STAKE_TARGET,
             );
         let mut emission_rate: f64 =
@@ -233,7 +235,8 @@ impl LedgerState {
         emission_rate = emission_rate.clamp(0f64, 1f64);
         let block_reward = (emission_rate * INFLATION_MAX * TGE_TOKEN).mul_add(
             BLOCK_PER_YEAR / BLOCK_PER_STEP,
-            (1f64 - emission_rate) * self.cryptarchia_ledger.fee_window[window_index],
+            (1f64 - emission_rate)
+                * self.cryptarchia_ledger.get_fee_from_index(window_index) as f64,
         );
 
         // blend get 60% of rewards while leaders get the 40% remaining.
@@ -247,7 +250,7 @@ impl LedgerState {
             .leaders
             .add_pending_rewards(leader_reward);
 
-        self.mantle_ledger.sdp.add_blend_rewards(blend_reward);
+        self.mantle_ledger.sdp.add_blend_income(blend_reward);
 
         self
     }
@@ -258,8 +261,6 @@ impl LedgerState {
         config: &Config,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx>,
     ) -> Result<Self, LedgerError<Id>> {
-        let fee_window_index = self.block_number as usize % WINDOW_SIZE;
-        self.cryptarchia_ledger.fee_window[fee_window_index] = 0f64;
         for tx in txs {
             let balance;
             (self.cryptarchia_ledger, balance) = self
@@ -283,8 +284,10 @@ impl LedgerState {
                 Ordering::Greater => return Err(LedgerError::UnbalancedTransaction),
                 Ordering::Equal => {} // OK!
             }
-            self.cryptarchia_ledger.fee_window[fee_window_index] +=
-                tx.gas_cost::<Constants>() as f64;
+            self.cryptarchia_ledger.update_fee_window(
+                self.block_number as usize % WINDOW_SIZE,
+                total_balance as u64,
+            );
         }
         self = self.compute_block_rewards();
         Ok(self)

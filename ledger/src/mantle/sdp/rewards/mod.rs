@@ -67,7 +67,7 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
     #[must_use]
     fn update_epoch(&self, epoch_state: &EpochState) -> Self;
     #[must_use]
-    fn add_rewards(&self, rewards: Value) -> Self;
+    fn add_income(&self, income: Value) -> Self;
 }
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]

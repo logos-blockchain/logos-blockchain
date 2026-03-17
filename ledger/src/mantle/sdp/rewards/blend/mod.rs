@@ -182,14 +182,14 @@ where
         }
     }
 
-    fn add_rewards(&self, rewards: Value) -> Self {
+    fn add_income(&self, income: Value) -> Self {
         match self {
             Self::WithoutTargetSession {
                 settings,
                 current_session_tracker,
             } => Self::WithoutTargetSession {
                 settings: settings.clone(),
-                current_session_tracker: current_session_tracker.add_block_rewards(rewards),
+                current_session_tracker: current_session_tracker.add_block_rewards(income),
             },
             Self::WithTargetSession {
                 target_session_state,
@@ -201,7 +201,7 @@ where
                 target_session_state: target_session_state.clone(),
                 target_session_tracker: target_session_tracker.clone(),
                 current_session_state: current_session_state.clone(),
-                current_session_tracker: current_session_tracker.add_block_rewards(rewards),
+                current_session_tracker: current_session_tracker.add_block_rewards(income),
                 settings: settings.clone(),
             },
         }

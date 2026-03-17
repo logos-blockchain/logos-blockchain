@@ -32,8 +32,10 @@ pub struct LeaderState {
     // at the start of each epoch this is increased by the amount of rewards
     // that have been collected in the previous epoch.
     // unclaimed rewards are carried over to the next epoch.
-    pub pending_rewards: Value,
     claimable_rewards: Value,
+    /// Rewards that are being collected during the current epoch.
+    /// This will be added to the `claimable_rewards` when a new epoch starts.
+    pending_rewards: Value,
     // Merkle tree vouchers that can be claimed in this epoch
     // this is updated once at the start of each epoch
     // TODO: Replace this with MMR to save space by moving merkle path
