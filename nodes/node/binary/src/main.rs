@@ -8,6 +8,9 @@ use logos_blockchain_node::{
     },
     get_services_to_start, run_node_from_config,
 };
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -54,17 +57,45 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    #[cfg(feature = "dhat-heap")]
+    let dhat_profiler = dhat::Profiler::new_heap();
+    #[cfg(feature = "dhat-heap")]
+    println!("\n\nDHAT: Profiling enabled. Run `dhat-heap` to view the results.\n\n");
+
     let run_config = {
         let user_config =
-            deserialize_config_at_path::<UserConfig>(cli_args.config_path(), OnUnknownKeys::Warn)?;
+            deserialize_config_at_path::<UserConfig>(cli_args.config_path(), OnUnknownKeys::Warn)
+                .inspect_err(|_e| {
+                    #[cfg(feature = "dhat-heap")]
+                    {
+                        println!("\nExiting... {_e}. See heap output in 'dhat-heap.json'\n");
+                    }
+                })?;
         user_config.update_from_args(cli_args)?
     };
 
-    let app = run_node_from_config(run_config).map_err(|e| eyre!("{e}"))?;
-    let services_to_start = get_services_to_start(&app).await?;
+    let app = run_node_from_config(run_config).map_err(|e| eyre!("{e}"))
+        .inspect_err(|_e| {
+            #[cfg(feature = "dhat-heap")]
+            {
+                println!("\nExiting... {_e}. See heap output in 'dhat-heap.json'\n");
+            }
+        })?;
+    let services_to_start = get_services_to_start(&app).await
+        .inspect_err(|_e| {
+            #[cfg(feature = "dhat-heap")]
+            {
+                println!("\nExiting... {_e}. See heap output in 'dhat-heap.json'\n");
+            }
+        })?;
 
     drop(app.handle().start_service_sequence(services_to_start).await);
 
     app.wait_finished().await;
+    #[cfg(feature = "dhat-heap")]
+    {
+        println!("\nCtrl-C pressed, exiting... See heap output in 'dhat-heap.json'\n");
+        drop(dhat_profiler);
+    }
     Ok(())
 }
