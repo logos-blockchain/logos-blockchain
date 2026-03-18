@@ -217,7 +217,7 @@ CARGO_PROFILE_* Environment Variables:
 ```pwsh
    $env:CARGO_PROFILE_RELEASE_DEBUG = "true"; cargo build --release --features=dhat-heap     ...(PowerShell)
 ```
-Run, then stop the node normally to capture te output, then read the generated 'dhat-heap.json' file with 
+Run, then stop the node normally to capture the output, then read the generated 'dhat-heap.json' file with 
 https://nnethercote.github.io/dh_view/dh_view.html or other.
 
 ---
