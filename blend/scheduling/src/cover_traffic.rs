@@ -118,10 +118,11 @@ where
         // proportional to the number of unprocessed data messages relative to
         // the number of cover messages that were pending (before this one was
         // consumed).
-        let should_skip = self.rng.gen_bool(
-            self.unprocessed_data_messages as f64
-                / non_zero_unprocessed_remaining_messages.get() as f64,
-        );
+        let should_skip = {
+            let threshold = self.unprocessed_data_messages as f64
+                / non_zero_unprocessed_remaining_messages.get() as f64;
+            self.rng.gen_range(0f64..=1f64) <= threshold
+        };
         if should_skip {
             self.unprocessed_data_messages = self.unprocessed_data_messages.saturating_sub(1);
             trace!(target: LOG_TARGET, "Release skipped because of data message.");
