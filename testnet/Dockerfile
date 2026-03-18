@@ -2,7 +2,7 @@
 # check=skip=SecretsUsedInArgOrEnv
 # Ignore warnings about sensitive information as this is test data.
 
-ARG VERSION=v0.4.1
+ARG VERSION=v0.4.2
 
 # ===========================
 # BUILD IMAGE

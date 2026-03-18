@@ -53,10 +53,10 @@ Circuits are installed to `~/.logos-blockchain-circuits/` by default.
 
 ```bash
 # Specific version
-./scripts/setup-logos-blockchain-circuits.sh v0.4.1
+./scripts/setup-logos-blockchain-circuits.sh v0.4.2
 
 # Custom directory
-./scripts/setup-logos-blockchain-circuits.sh v0.4.1 /opt/circuits
+./scripts/setup-logos-blockchain-circuits.sh v0.4.2 /opt/circuits
 export LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 ```
 

@@ -2,7 +2,7 @@
 # check=skip=SecretsUsedInArgOrEnv
 # Ignore warnings about sensitive information as this is test data.
 
-ARG LB_CIRCUITS_VERSION=v0.4.1
+ARG LB_CIRCUITS_VERSION=v0.4.2
 ARG LB_NODE_VERSION=0.1.3
 
 # ===========================
