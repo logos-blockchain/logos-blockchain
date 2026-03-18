@@ -60,15 +60,19 @@ async fn main() -> Result<()> {
     #[cfg(feature = "dhat-heap")]
     let dhat_profiler = dhat::Profiler::new_heap();
     #[cfg(feature = "dhat-heap")]
-    println!("\n\nDHAT: Profiling enabled. Run `dhat-heap` to view the results.\n\n");
+    println!("\n\nDHAT: Profiling enabled.\n\n");
+    #[cfg(feature = "dhat-heap")]
+    let dhat_heap_msg = "Run https://nnethercote.github.io/dh_view/dh_view.html to view the heap output results in \
+        'dhat-heap.json'.";
 
     let run_config = {
         let user_config =
             deserialize_config_at_path::<UserConfig>(cli_args.config_path(), OnUnknownKeys::Warn)
-                .inspect_err(|_e| {
+                .inspect_err(|e| {
+                    let _ = &e; // keep non-dhat builds warning-free
                 #[cfg(feature = "dhat-heap")]
                 {
-                    println!("\nExiting... {_e}. See heap output in 'dhat-heap.json'\n");
+                    println!("\nExiting... {e}. {dhat_heap_msg}\n");
                 }
             })?;
         user_config.update_from_args(cli_args)?
@@ -76,16 +80,18 @@ async fn main() -> Result<()> {
 
     let app = run_node_from_config(run_config)
         .map_err(|e| eyre!("{e}"))
-        .inspect_err(|_e| {
+        .inspect_err(|e| {
+            let _ = &e; // keep non-dhat builds warning-free
             #[cfg(feature = "dhat-heap")]
             {
-                println!("\nExiting... {_e}. See heap output in 'dhat-heap.json'\n");
+                println!("\nExiting... {e}. {dhat_heap_msg}\n");
             }
         })?;
-    let services_to_start = get_services_to_start(&app).await.inspect_err(|_e| {
+    let services_to_start = get_services_to_start(&app).await.inspect_err(|e| {
+        let _ = &e; // keep non-dhat builds warning-free
         #[cfg(feature = "dhat-heap")]
         {
-            println!("\nExiting... {_e}. See heap output in 'dhat-heap.json'\n");
+            println!("\nExiting... {e}. {dhat_heap_msg}\n");
         }
     })?;
 
@@ -93,8 +99,12 @@ async fn main() -> Result<()> {
 
     app.wait_finished().await;
     #[cfg(feature = "dhat-heap")]
+    #[expect(
+        clippy::semicolon_outside_block,
+        reason = "Contradicts `semicolon_if_nothing_returned` when feature is enabled"
+    )]
     {
-        println!("\nCtrl-C pressed, exiting... See heap output in 'dhat-heap.json'\n");
+        println!("\nCtrl-C pressed, exiting... {dhat_heap_msg}\n");
         drop(dhat_profiler);
     }
     Ok(())
