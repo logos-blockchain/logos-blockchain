@@ -643,6 +643,26 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         Some(mem::replace(&mut peer_details.negotiated_state, state))
     }
 
+    /// Handle an unhealthy connection if it exists in the current session.
+    /// If not, it is ignored.
+    #[expect(
+        dead_code,
+        reason = "TODO: We currently do not handle unhealthy cases."
+    )]
+    fn handle_unhealthy_connection(&mut self, (peer_id, connection_id): (PeerId, ConnectionId)) {
+        // Notify swarm only on first transition into unhealthy state.
+        if let Some(prev_state) = self.update_state_for_negotiated_peer(
+            (peer_id, connection_id),
+            NegotiatedPeerState::Unhealthy,
+        ) && prev_state != NegotiatedPeerState::Unhealthy
+        {
+            tracing::debug!(target: LOG_TARGET, "Peer {peer_id:?} has been marked as unhealthy.");
+            self.events
+                .push_back(ToSwarm::GenerateEvent(Event::UnhealthyPeer(peer_id)));
+            self.try_wake();
+        }
+    }
+
     /// Handle a unhealthy connection if it exists in the current session.
     /// If not, it is ignored.
     fn handle_healthy_connection(&mut self, (peer_id, connection_id): (PeerId, ConnectionId)) {
@@ -889,6 +909,11 @@ where
             )
         else {
             tracing::debug!(target: LOG_TARGET, "Neighbor sent us a message with an invalid public header. SKIPPING MARKING IT AS SPAMMY.");
+            // TODO: Re-enable once Blend is fixed.
+            // self.close_spammy_connection(
+            //     (from_peer_id, from_connection_id),
+            //     SpamReason::InvalidPublicHeader,
+            // );
             return;
         };
 
@@ -1102,9 +1127,20 @@ where
                     self.handle_negotiated_connection((peer_id, connection_id));
                 }
                 // TODO: Re-add logic once Blend observation window values calculation is fixed.
-                ToBehaviour::SpammyPeer => {}
+                ToBehaviour::SpammyPeer => {
+                    // We do not explicitly close the connection here since the
+                    // connection handler will already do
+                    // that for us.
+                    // self.set_connection_to_spammy(
+                    //     (peer_id, connection_id),
+                    //     SpamReason::TooManyMessages,
+                    // );
+                }
                 // TODO: Re-add logic once Blend observation window values calculation is fixed.
-                ToBehaviour::UnhealthyPeer => {}
+                ToBehaviour::UnhealthyPeer => {
+                    // self.handle_unhealthy_connection((peer_id,
+                    // connection_id));
+                }
                 ToBehaviour::HealthyPeer => {
                     self.handle_healthy_connection((peer_id, connection_id));
                 }
