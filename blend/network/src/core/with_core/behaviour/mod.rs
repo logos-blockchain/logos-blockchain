@@ -1110,7 +1110,6 @@ where
         connection_id: ConnectionId,
         event: THandlerOutEvent<Self>,
     ) {
-        #[expect(clippy::match_same_arms, reason = "Temporary workaround.")]
         match event {
             Either::Left(event) => match event {
                 // A message was forwarded from the peer.
@@ -1135,11 +1134,13 @@ where
                     //     (peer_id, connection_id),
                     //     SpamReason::TooManyMessages,
                     // );
+                    tracing::debug!(target: LOG_TARGET, "Peer {peer_id:?} has been marked as spammy by its connection handler. NOT TAKING ANY ACTIONS ON THIS.");
                 }
                 // TODO: Re-add logic once Blend observation window values calculation is fixed.
                 ToBehaviour::UnhealthyPeer => {
                     // self.handle_unhealthy_connection((peer_id,
                     // connection_id));
+                    tracing::debug!(target: LOG_TARGET, "Peer {peer_id:?} has been marked as unhealthy by its connection handler. NOT TAKING ANY ACTIONS ON THIS.");
                 }
                 ToBehaviour::HealthyPeer => {
                     self.handle_healthy_connection((peer_id, connection_id));
