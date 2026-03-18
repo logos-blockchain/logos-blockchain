@@ -14,7 +14,6 @@ use crate::{
         VerifyInputs,
         prove::{Inputs, PrivateInputs, PublicInputs},
     },
-    selection::derive_key_nullifier_from_secret_selection_randomness,
 };
 
 pub mod inputs;
@@ -143,12 +142,8 @@ impl VerifiedProofOfQuota {
         .map_err(|e| Error::InvalidInput(Box::new(e)))?;
         let (proof, PoQVerifierInput { key_nullifier, .. }) =
             prove(witness_inputs).map_err(Error::ProofGeneration)?;
-        println!("Generated proof of quota with key nullifier: {key_nullifier:?}");
         let secret_selection_randomness =
             generate_secret_selection_randomness(&secret_selection_randomness_input, key_index);
-        let hashed =
-            derive_key_nullifier_from_secret_selection_randomness(secret_selection_randomness);
-        println!("Generated proof of quota with test: {hashed:?}");
         Ok((
             Self(ProofOfQuota {
                 key_nullifier: key_nullifier.into_inner(),
@@ -218,11 +213,10 @@ pub enum SelectionRandomnessSecretInput {
         session_number: u64,
     },
     Leadership {
-        slot_secret_key: ZkHash,
+        note_secret_key: ZkHash,
         slot_number: u64,
     },
 }
-
 const DOMAIN_SEPARATION_TAG: [u8; 23] = *b"SELECTION_RANDOMNESS_V1";
 static DOMAIN_SEPARATION_TAG_FR: LazyLock<ZkHash> = LazyLock::new(|| {
     fr_from_bytes(&DOMAIN_SEPARATION_TAG[..])
@@ -238,9 +232,9 @@ fn generate_secret_selection_randomness(
             (sk, (*session_number).into())
         }
         SelectionRandomnessSecretInput::Leadership {
-            slot_secret_key,
+            note_secret_key,
             slot_number,
-        } => (slot_secret_key, (*slot_number).into()),
+        } => (note_secret_key, (*slot_number).into()),
     };
     [
         *DOMAIN_SEPARATION_TAG_FR,

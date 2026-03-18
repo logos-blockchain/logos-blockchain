@@ -58,7 +58,7 @@ impl Inputs {
             }
             ProofType::LeadershipQuota(leadership_quota_private_inputs) => {
                 SelectionRandomnessSecretInput::Leadership {
-                    slot_secret_key: leadership_quota_private_inputs.secret_key,
+                    note_secret_key: leadership_quota_private_inputs.secret_key,
                     slot_number: leadership_quota_private_inputs.slot,
                 }
             }
