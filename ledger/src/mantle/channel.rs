@@ -45,7 +45,12 @@ pub struct ChannelState {
     // avoid cloning the keys every new message
     pub keys: Arc<[PublicKey]>,
     pub balance: Value,
+    // Indicating how many accredited keys are required to withdraw
+    // funds from the channel.
+    pub withdraw_threshold: u16,
 }
+
+const DEFAULT_WITHDRAW_THRESHOLD: u16 = 1;
 
 impl Default for Channels {
     fn default() -> Self {
@@ -73,6 +78,7 @@ impl Channels {
                 tip: MsgId::root(),
                 keys: vec![*signer].into(),
                 balance: 0,
+                withdraw_threshold: DEFAULT_WITHDRAW_THRESHOLD,
             });
 
         if *parent != channel.tip {
@@ -96,11 +102,13 @@ impl Channels {
                 tip: msg,
                 keys: Arc::clone(&channel.keys),
                 balance: channel.balance,
+                withdraw_threshold: channel.withdraw_threshold,
             },
         );
         Ok(self)
     }
 
+    // TODO: Replace with CHANNEL_CONFIG op
     pub fn set_keys(
         mut self,
         channel_id: ChannelId,
@@ -127,6 +135,8 @@ impl Channels {
                     tip: MsgId::root(),
                     keys: op.keys.clone().into(),
                     balance: 0,
+                    // TODO: Replace with `ChannelConfig.withdraw_threshold`
+                    withdraw_threshold: DEFAULT_WITHDRAW_THRESHOLD,
                 },
             );
         }
