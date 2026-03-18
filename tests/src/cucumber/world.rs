@@ -393,6 +393,22 @@ impl CucumberWorld {
         }
     }
 
+    /// Remove all scenario artifacts from the scenario base directory. This is
+    /// useful for ensuring a clean state before starting a new scenario.
+    pub fn clear_scenario_artifacts(&self) -> StepResult {
+        if self.scenario_base_dir.is_dir() {
+            std::fs::remove_dir_all(&self.scenario_base_dir).map_err(|e| {
+                StepError::LogicalError {
+                    message: format!(
+                        "Failed to clear scenario artifacts in '{}': {e}",
+                        self.scenario_base_dir.display()
+                    ),
+                }
+            })?;
+        }
+        Ok(())
+    }
+
     /// Configure the scenario topology (number of nodes and network layout).
     pub fn set_topology(&mut self, nodes: usize, network: NetworkKind) -> StepResult {
         self.spec.topology = Some(TopologySpec {
