@@ -12,6 +12,19 @@ use logos_blockchain_node::{
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
+#[cfg(feature = "dhat-heap")]
+struct DhatExitGuard;
+
+#[cfg(feature = "dhat-heap")]
+impl Drop for DhatExitGuard {
+    fn drop(&mut self) {
+        eprintln!(
+            "\nDHAT heap output capturing, should be in 'dhat-heap.json' - run \
+            https://nnethercote.github.io/dh_view/dh_view.html to view the results.\n"
+        );
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli_args = CliArgs::parse();
@@ -58,22 +71,17 @@ async fn main() -> Result<()> {
     }
 
     #[cfg(feature = "dhat-heap")]
-    let dhat_profiler = dhat::Profiler::new_heap();
+    let _dhat_profiler = dhat::Profiler::new_heap();
+    #[cfg(feature = "dhat-heap")]
+    let _dhat_exit_guard = DhatExitGuard;
     #[cfg(feature = "dhat-heap")]
     println!("\n\nDHAT: Profiling enabled.\n\n");
-    #[cfg(feature = "dhat-heap")]
-    let dhat_heap_msg = "Run https://nnethercote.github.io/dh_view/dh_view.html to view the heap output results in \
-        'dhat-heap.json'.";
 
     let run_config = {
         let user_config =
             deserialize_config_at_path::<UserConfig>(cli_args.config_path(), OnUnknownKeys::Warn)
                 .inspect_err(|e| {
-                    let _ = &e; // keep non-dhat builds warning-free
-                #[cfg(feature = "dhat-heap")]
-                {
-                    println!("\nExiting... {e}. {dhat_heap_msg}\n");
-                }
+                eprintln!("\nExiting... {e}.\n");
             })?;
         user_config.update_from_args(cli_args)?
     };
@@ -81,31 +89,20 @@ async fn main() -> Result<()> {
     let app = run_node_from_config(run_config)
         .map_err(|e| eyre!("{e}"))
         .inspect_err(|e| {
-            let _ = &e; // keep non-dhat builds warning-free
-            #[cfg(feature = "dhat-heap")]
-            {
-                println!("\nExiting... {e}. {dhat_heap_msg}\n");
-            }
+            eprintln!("\nExiting... {e}.\n");
         })?;
     let services_to_start = get_services_to_start(&app).await.inspect_err(|e| {
-        let _ = &e; // keep non-dhat builds warning-free
-        #[cfg(feature = "dhat-heap")]
-        {
-            println!("\nExiting... {e}. {dhat_heap_msg}\n");
-        }
+        eprintln!("\nExiting... {e}.\n");
     })?;
 
-    drop(app.handle().start_service_sequence(services_to_start).await);
+    app.handle()
+        .start_service_sequence(services_to_start)
+        .await
+        .map_err(|e| eyre!("start_service_sequence failed: {e}"))
+        .inspect_err(|e| {
+            eprintln!("\nExiting... {e}.\n");
+        })?;
 
     app.wait_finished().await;
-    #[cfg(feature = "dhat-heap")]
-    #[expect(
-        clippy::semicolon_outside_block,
-        reason = "Contradicts `semicolon_if_nothing_returned` when feature is enabled"
-    )]
-    {
-        println!("\nCtrl-C pressed, exiting... {dhat_heap_msg}\n");
-        drop(dhat_profiler);
-    }
     Ok(())
 }
