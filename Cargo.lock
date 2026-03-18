@@ -5355,6 +5355,7 @@ dependencies = [
 name = "logos-blockchain-zone-sdk"
 version = "0.2.1"
 dependencies = [
+ "async-trait",
  "futures",
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
