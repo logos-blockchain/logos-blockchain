@@ -605,25 +605,14 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
 
     /// Mark the connection with the sender of a malformed message as malicious
     /// and instruct its connection handler to drop the substream.
-    #[expect(
-        clippy::needless_pass_by_ref_mut,
-        reason = "TODO: enable this logic after investigating session/epoch transition issues"
-    )]
-    #[expect(
-        clippy::unused_self,
-        reason = "TODO: enable this logic after investigating session/epoch transition issues"
-    )]
     fn close_spammy_connection(
         &mut self,
         (peer_id, connection_id): (PeerId, ConnectionId),
         reason: SpamReason,
     ) {
-        tracing::debug!(target: LOG_TARGET, ?peer_id, ?connection_id, ?reason, "Peer has been marked as spammy, but not closing the connection just for debugging");
-        // TODO: Enable this logic after investigating session/epoch transition
-        // issues tracing::debug!(target: LOG_TARGET, "Closing
-        // connection {connection_id:?} with spammy peer {peer_id:?}.");
-        // self.set_connection_to_spammy((peer_id, connection_id), reason);
-        // self.close_connection((peer_id, connection_id));
+        tracing::debug!(target: LOG_TARGET, "Closing connection {connection_id:?} with spammy peer {peer_id:?} for reason {reason:?}.");
+        self.set_connection_to_spammy((peer_id, connection_id), reason);
+        self.close_connection((peer_id, connection_id));
     }
 
     fn set_connection_to_spammy(
@@ -652,22 +641,6 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             return Some(state);
         }
         Some(mem::replace(&mut peer_details.negotiated_state, state))
-    }
-
-    /// Handle an unhealthy connection if it exists in the current session.
-    /// If not, it is ignored.
-    fn handle_unhealthy_connection(&mut self, (peer_id, connection_id): (PeerId, ConnectionId)) {
-        // Notify swarm only on first transition into unhealthy state.
-        if let Some(prev_state) = self.update_state_for_negotiated_peer(
-            (peer_id, connection_id),
-            NegotiatedPeerState::Unhealthy,
-        ) && prev_state != NegotiatedPeerState::Unhealthy
-        {
-            tracing::debug!(target: LOG_TARGET, "Peer {peer_id:?} has been marked as unhealthy.");
-            self.events
-                .push_back(ToSwarm::GenerateEvent(Event::UnhealthyPeer(peer_id)));
-            self.try_wake();
-        }
     }
 
     /// Handle a unhealthy connection if it exists in the current session.
@@ -915,11 +888,7 @@ where
                 deserialized_encapsulated_message,
             )
         else {
-            tracing::debug!(target: LOG_TARGET, "Neighbor sent us a message with an invalid public header. Marking it as spammy.");
-            self.close_spammy_connection(
-                (from_peer_id, from_connection_id),
-                SpamReason::InvalidPublicHeader,
-            );
+            tracing::debug!(target: LOG_TARGET, "Neighbor sent us a message with an invalid public header. SKIPPING MARKING IT AS SPAMMY.");
             return;
         };
 
@@ -1116,6 +1085,7 @@ where
         connection_id: ConnectionId,
         event: THandlerOutEvent<Self>,
     ) {
+        #[expect(clippy::match_same_arms, reason = "Temporary workaround.")]
         match event {
             Either::Left(event) => match event {
                 // A message was forwarded from the peer.
@@ -1131,17 +1101,10 @@ where
                 ToBehaviour::FullyNegotiatedInbound | ToBehaviour::FullyNegotiatedOutbound => {
                     self.handle_negotiated_connection((peer_id, connection_id));
                 }
-                ToBehaviour::SpammyPeer => {
-                    // We do not explicitly close the connection here since the connection handler
-                    // will already do that for us.
-                    self.set_connection_to_spammy(
-                        (peer_id, connection_id),
-                        SpamReason::TooManyMessages,
-                    );
-                }
-                ToBehaviour::UnhealthyPeer => {
-                    self.handle_unhealthy_connection((peer_id, connection_id));
-                }
+                // TODO: Re-add logic once Blend observation window values calculation is fixed.
+                ToBehaviour::SpammyPeer => {}
+                // TODO: Re-add logic once Blend observation window values calculation is fixed.
+                ToBehaviour::UnhealthyPeer => {}
                 ToBehaviour::HealthyPeer => {
                     self.handle_healthy_connection((peer_id, connection_id));
                 }
