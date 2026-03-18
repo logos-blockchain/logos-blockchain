@@ -240,10 +240,18 @@ impl LeaderPrivate {
             note_value: note.note.value,
             transaction_hash: *note.tx_hash.as_ref(),
             output_number: note.output_index as u64,
-            aged_path,
-            aged_selector,
-            latest_path,
-            latest_selector,
+            aged_path: aged_path
+                .try_into()
+                .expect("Aged path length should match the expected height"),
+            aged_selectors: aged_selector
+                .try_into()
+                .expect("Aged selector length should match the expected height"),
+            latest_path: latest_path
+                .try_into()
+                .expect("Latest path length should match the expected height"),
+            latest_selectors: latest_selector
+                .try_into()
+                .expect("Latest selector length should match the expected height"),
             secret_key,
         };
         let input = lb_pol::PolWitnessInputsData::from_chain_and_wallet_data(chain, wallet);

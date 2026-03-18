@@ -108,8 +108,9 @@ impl LeaderClaimPrivate {
             merkle_path_to_witness(voucher_path);
         let wallet = lb_poc::PoCWalletInputsData {
             secret_voucher: secret_voucher.into(),
-            voucher_merkle_path,
-            voucher_merkle_path_selectors,
+            voucher_merkle_path_and_selectors: core::array::from_fn(|i| {
+                (voucher_merkle_path[i], voucher_merkle_path_selectors[i])
+            }),
         };
         let input = lb_poc::PoCWitnessInputsData::from_chain_and_wallet_data(chain, wallet);
         Self { input }

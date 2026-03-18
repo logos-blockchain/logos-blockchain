@@ -7,6 +7,10 @@ cryptarchia:
   service:
     bootstrap:
       prolonged_bootstrap_period: '1.000000000'
+  network:
+    network:
+      max_connected_peers_to_try_download: 16
+      max_discovered_peers_to_try_download: 16
   leader:
     wallet:
       funding_pk: "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26"

@@ -17,10 +17,10 @@ workspace = true
 async-trait                      = "0.1"
 cucumber                         = { features = ["output-junit"], version = "=0.22.0" }
 derivative                       = "2.2.0"
+ed25519                          = "2.2.3"
 futures                          = { default-features = false, version = "0.3" }
 futures-util                     = { default-features = false, version = "0.3.31" }
 hex                              = { default-features = false, version = "0.4.3" }
-lb-blend-proofs                  = { workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-common-http-client            = { workspace = true }
@@ -35,9 +35,13 @@ lb-node                          = { default-features = false, features = ["test
 lb-testing-framework             = { workspace = true }
 lb-tx-service                    = { features = ["libp2p", "mock"], workspace = true }
 lb-utils                         = { workspace = true }
+lb-wallet                        = { workspace = true }
+lb-zksign                        = { workspace = true }
+libp2p                           = "0.55.0"
 num-bigint                       = { default-features = false, version = "0.4" }
 rand                             = { workspace = true }
 reqwest                          = { features = ["json"], workspace = true }
+rpds                             = "1.1"
 serde_json                       = "1.0"
 serde_yaml                       = "0.9"
 serial_test                      = "3.1.1"
@@ -89,6 +93,10 @@ name = "test_mantle_sdp_ops"
 path = "src/tests/mantle/sdp_ops.rs"
 
 [[test]]
+name = "test_cli_restart"
+path = "src/tests/cli/restart.rs"
+
+[[test]]
 name              = "test_testing_framework_smoke_local"
 path              = "src/tests/testing_framework/smoke_local.rs"
 required-features = ["testing_framework"]
@@ -96,6 +104,11 @@ required-features = ["testing_framework"]
 [[test]]
 name              = "test_testing_framework_external_urls_inscription"
 path              = "src/tests/testing_framework/external_urls_inscription.rs"
+required-features = ["testing_framework"]
+
+[[test]]
+name              = "test_testing_framework_fork_detector"
+path              = "src/tests/testing_framework/fork_detector.rs"
 required-features = ["testing_framework"]
 
 [[test]]

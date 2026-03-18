@@ -1,4 +1,5 @@
 pub mod bodies;
+pub mod metrics;
 pub mod paths;
 #[cfg(feature = "profiling")]
 pub mod pprof;

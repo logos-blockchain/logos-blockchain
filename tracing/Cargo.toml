@@ -20,19 +20,26 @@ ignored = [
 workspace = true
 
 [dependencies]
-opentelemetry                      = { default-features = false, version = "0.31" }
-opentelemetry-appender-tracing     = { default-features = false, version = "0.31" }
-opentelemetry-http                 = { default-features = false, features = ["reqwest"], version = "0.31" }
-opentelemetry-otlp                 = { default-features = false, features = ["grpc-tonic", "http-proto", "logs"], version = "0.31" }
+opentelemetry = { default-features = false, version = "0.31" }
+opentelemetry-appender-tracing = { default-features = false, version = "0.31" }
+opentelemetry-http = { default-features = false, features = ["reqwest"], version = "0.31" }
+opentelemetry-otlp = { default-features = false, features = [
+  "grpc-tonic",
+  "http",
+  "http-proto",
+  "logs",
+  "metrics",
+  "reqwest-client",
+], version = "0.31" }
 opentelemetry-semantic-conventions = "0.31"
-opentelemetry_sdk                  = { default-features = false, features = ["logs", "rt-tokio"], version = "0.31" }
-rand                               = { workspace = true }
-serde                              = { workspace = true }
-tokio                              = "1"
-tracing                            = { workspace = true }
-tracing-appender                   = "0.2"
-tracing-gelf                       = "0.7"
-tracing-loki                       = { default-features = false, features = ["compat-0-2-1"], version = "0.2.5" }
-tracing-opentelemetry              = { default-features = false, features = ["metrics"], version = "0.32.1" }
-tracing-subscriber                 = { default-features = false, features = ["env-filter", "std"], version = "0.3" }
-url                                = { default-features = false, features = ["serde"], version = "2" }
+opentelemetry_sdk = { default-features = false, features = ["logs", "rt-tokio"], version = "0.31" }
+rand = { workspace = true }
+serde = { workspace = true }
+tokio = "1"
+tracing = { workspace = true }
+tracing-appender = "0.2"
+tracing-gelf = "0.7"
+tracing-loki = { default-features = false, features = ["compat-0-2-1"], version = "0.2.5" }
+tracing-opentelemetry = { default-features = false, features = ["metrics"], version = "0.32.1" }
+tracing-subscriber = { default-features = false, features = ["env-filter", "std"], version = "0.3" }
+url = { default-features = false, features = ["serde"], version = "2" }

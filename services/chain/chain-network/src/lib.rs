@@ -1,6 +1,7 @@
 pub mod api;
 mod bootstrap;
 mod mempool;
+mod metrics;
 pub mod network;
 mod relays;
 mod sync;
@@ -85,7 +86,7 @@ pub struct ChainNetworkSettings<NodeId, NetworkAdapterSettings>
 where
     NodeId: Clone + Eq + Hash,
 {
-    pub network_adapter_settings: NetworkAdapterSettings,
+    pub network: NetworkAdapterSettings,
     pub bootstrap: BootstrapConfig<NodeId>,
     pub sync: SyncConfig,
 }
@@ -240,7 +241,7 @@ where
         .await;
 
         let ChainNetworkSettings {
-            network_adapter_settings,
+            network: network_config,
             bootstrap: bootstrap_config,
             sync: sync_config,
         } = self
@@ -249,8 +250,7 @@ where
             .notifier()
             .get_updated_settings();
 
-        let network_adapter =
-            NetAdapter::new(network_adapter_settings, relays.network_relay().clone()).await;
+        let network_adapter = NetAdapter::new(network_config, relays.network_relay().clone()).await;
 
         let mut incoming_proposals = network_adapter.proposals_stream().await?;
         let mut chainsync_events = network_adapter.chainsync_events_stream().await?;
@@ -465,7 +465,7 @@ where
             Error::Cryptarchia(lb_chain_service::api::ApiError::ParentMissing { parent, info }) => {
                 orphan_downloader.enqueue_orphan(block_id, info.tip, info.lib);
 
-                error!(
+                info!(
                     target: LOG_TARGET, ?block_id, ?parent,
                     "Parent block missing, enqueued block for orphan processing",
                 );
@@ -518,12 +518,12 @@ where
         let content_size = 0; // TODO: calculate the actual content size
         let transactions = block.transactions().len();
 
-        info!(
+        trace!(
             counter.received_blocks = 1,
             transactions = transactions,
             bytes = content_size
         );
-        info!(
+        trace!(
             histogram.received_blocks_data = content_size,
             transactions = transactions,
         );

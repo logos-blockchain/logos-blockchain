@@ -1,9 +1,9 @@
 use lb_groth16::{Field as _, Fr, Groth16Input, Groth16InputDeser};
+use lb_pol::AGED_NOTE_MERKLE_TREE_HEIGHT;
 use num_bigint::BigUint;
 use serde::Serialize;
 
-pub const AGED_NOTE_MERKLE_TREE_HEIGHT: usize = 32;
-pub type NotePathAndSelectors = [(Fr, bool); AGED_NOTE_MERKLE_TREE_HEIGHT];
+pub type AgedNotePathAndSelectors = [(Fr, bool); AGED_NOTE_MERKLE_TREE_HEIGHT];
 
 #[derive(Clone)]
 pub struct PoQWalletInputs {
@@ -20,7 +20,7 @@ pub struct PoQWalletInputsData {
     pub note_value: u64,
     pub transaction_hash: Fr,
     pub output_number: u64,
-    pub aged_path_and_selectors: NotePathAndSelectors,
+    pub aged_path_and_selectors: AgedNotePathAndSelectors,
     pub secret_key: Fr,
 }
 

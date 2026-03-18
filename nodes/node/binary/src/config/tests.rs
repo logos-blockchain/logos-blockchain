@@ -70,27 +70,33 @@ fn common_recovery_folder() {
 
     let deployment_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
 
-    let (chain_service_settings, _, _) = CryptarchiaServiceConfig {
-        user: user_config.cryptarchia.clone(),
-        deployment: deployment_settings.cryptarchia,
-    }
-    .into_cryptarchia_services_settings(&deployment_settings.blend, &user_config.state);
-    assert!(
-        chain_service_settings
-            .recovery_file
-            .starts_with(Path::new(STATE_PATH).join("recovery").join("consensus"))
-    );
+    let blend_rewards_params = deployment_settings.blend_reward_params();
 
     let (blend_service_settings, _, _) = BlendServiceConfig {
         user: user_config.blend.clone(),
         deployment: deployment_settings.blend,
     }
-    .into_blend_services_settings(&user_config.state);
+    .into_blend_services_settings(
+        &user_config.state,
+        &deployment_settings.time,
+        &deployment_settings.cryptarchia,
+    );
     assert!(
         blend_service_settings
             .common
             .recovery_path_prefix
             .starts_with(Path::new(STATE_PATH).join("recovery").join("blend"))
+    );
+
+    let (chain_service_settings, _, _) = CryptarchiaServiceConfig {
+        user: user_config.cryptarchia.clone(),
+        deployment: deployment_settings.cryptarchia,
+    }
+    .into_cryptarchia_services_settings(blend_rewards_params, &user_config.state);
+    assert!(
+        chain_service_settings
+            .recovery_file
+            .starts_with(Path::new(STATE_PATH).join("recovery").join("consensus"))
     );
 
     let wallet_service_settings = WalletServiceConfig {

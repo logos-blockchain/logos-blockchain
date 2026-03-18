@@ -13,14 +13,22 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-axum                          = { default-features = false, features = ["http1", "http2", "json", "query", "tokio"], version = "0.7.5" }
-lb-core                       = { workspace = true }
+axum = { default-features = false, features = [
+  "http1",
+  "http2",
+  "json",
+  "matched-path",
+  "query",
+  "tokio",
+], version = "0.7.5" }
+lb-core = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-serde                         = { features = ["alloc", "derive"], workspace = true }
-serde_json                    = { workspace = true }
-serde_with                    = { default-features = false, features = ["macros"], workspace = true }
-tokio                         = { default-features = false, features = ["time"], optional = true, version = "1" }
-tracing                       = { default-features = false, workspace = true }
+lb-tracing = { workspace = true }
+serde = { features = ["alloc", "derive"], workspace = true }
+serde_json = { workspace = true }
+serde_with = { default-features = false, features = ["macros"], workspace = true }
+tokio = { default-features = false, features = ["time"], optional = true, version = "1" }
+tracing = { default-features = false, workspace = true }
 
 [target.'cfg(not(windows))'.dependencies]
 pprof = { default-features = false, features = [

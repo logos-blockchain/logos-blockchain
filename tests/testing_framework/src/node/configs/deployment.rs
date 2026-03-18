@@ -47,6 +47,8 @@ pub struct TopologyConfig {
     pub active_slot_coeff: f64,
     pub security_param: u32,
     node_config_overrides: HashMap<usize, RunConfig>,
+    allow_multiple_genesis_tokens: bool,
+    allow_zero_value_genesis_tokens: bool,
 }
 
 impl TopologyConfig {
@@ -55,6 +57,18 @@ impl TopologyConfig {
             n_nodes: nodes,
             ..Self::default()
         }
+    }
+
+    #[must_use]
+    pub const fn with_allow_multiple_genesis_tokens(mut self, allow_multiple: bool) -> Self {
+        self.allow_multiple_genesis_tokens = allow_multiple;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_allow_zero_value_genesis_tokens(mut self, allow_multiple: bool) -> Self {
+        self.allow_zero_value_genesis_tokens = allow_multiple;
+        self
     }
 
     #[must_use]
@@ -85,6 +99,8 @@ impl Default for TopologyConfig {
             active_slot_coeff: DEFAULT_ACTIVE_SLOT_COEFF,
             security_param: DEFAULT_SECURITY_PARAM,
             node_config_overrides: HashMap::new(),
+            allow_multiple_genesis_tokens: false,
+            allow_zero_value_genesis_tokens: false,
         }
     }
 }
@@ -146,7 +162,10 @@ impl DeploymentBuilder {
     }
 
     pub fn build(mut self) -> Result<DeploymentPlan, TopologyBuildError> {
-        self.config.wallet_config.validate()?;
+        self.config.wallet_config.validate(
+            self.config.allow_multiple_genesis_tokens,
+            self.config.allow_zero_value_genesis_tokens,
+        )?;
 
         let node_count = self.config.n_nodes;
         if node_count == 0 {

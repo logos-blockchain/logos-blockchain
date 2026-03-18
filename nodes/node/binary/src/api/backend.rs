@@ -21,8 +21,8 @@ use lb_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction},
 };
-use lb_http_api_common::paths;
 pub use lb_http_api_common::settings::AxumBackendSettings;
+use lb_http_api_common::{metrics::http_metrics_middleware, paths};
 use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
 use lb_tx_service::{TxMempoolService, backend::Mempool};
@@ -140,7 +140,14 @@ where
                 RuntimeServiceId,
             >,
         >
-        + AsServiceId<lb_sdp_service::SdpService<SdpMempool, SdpWallet, RuntimeServiceId>>
+        + AsServiceId<
+            lb_sdp_service::SdpService<
+                SdpMempool,
+                SdpWallet,
+                Cryptarchia<RuntimeServiceId>,
+                RuntimeServiceId,
+            >,
+        >
         + AsServiceId<WalletService>
         + AsServiceId<ChainLeader>,
 {
@@ -209,15 +216,36 @@ where
             )
             .route(
                 paths::SDP_POST_DECLARATION,
-                routing::post(post_declaration::<SdpMempool, SdpWallet, RuntimeServiceId>),
+                routing::post(
+                    post_declaration::<
+                        SdpMempool,
+                        SdpWallet,
+                        Cryptarchia<RuntimeServiceId>,
+                        RuntimeServiceId,
+                    >,
+                ),
             )
             .route(
                 paths::SDP_POST_ACTIVITY,
-                routing::post(post_activity::<SdpMempool, SdpWallet, RuntimeServiceId>),
+                routing::post(
+                    post_activity::<
+                        SdpMempool,
+                        SdpWallet,
+                        Cryptarchia<RuntimeServiceId>,
+                        RuntimeServiceId,
+                    >,
+                ),
             )
             .route(
                 paths::SDP_POST_WITHDRAWAL,
-                routing::post(post_withdrawal::<SdpMempool, SdpWallet, RuntimeServiceId>),
+                routing::post(
+                    post_withdrawal::<
+                        SdpMempool,
+                        SdpWallet,
+                        Cryptarchia<RuntimeServiceId>,
+                        RuntimeServiceId,
+                    >,
+                ),
             )
             .route(
                 paths::LEADER_CLAIM,
@@ -256,6 +284,7 @@ where
 
         let app = app
             .with_state(handle.clone())
+            .layer(axum::middleware::from_fn(http_metrics_middleware))
             .layer(axum::extract::DefaultBodyLimit::max(
                 self.settings.max_body_size,
             ))

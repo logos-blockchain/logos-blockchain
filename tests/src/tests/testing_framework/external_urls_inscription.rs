@@ -10,6 +10,7 @@ use testing_framework_core::scenario::{Deployer as _, ExternalNodeSource};
 use thiserror::Error;
 
 const DEFAULT_CHANNELS: usize = 8;
+const DEFAULT_PAYLOAD_BYTES: usize = 128;
 const DEFAULT_RUN_DURATION_SECS: u64 = 60 * 60;
 
 #[derive(Debug, Error)]
@@ -25,6 +26,13 @@ enum TestConfigError {
     },
     #[error("inscription channel count must be > 0")]
     ZeroChannels,
+    #[error("invalid --inscription-payload-bytes value '{raw}': {source}")]
+    InvalidPayloadBytes {
+        raw: String,
+        source: std::num::ParseIntError,
+    },
+    #[error("inscription payload bytes must be > 0")]
+    ZeroPayloadBytes,
     #[error("invalid --run-duration-secs value '{raw}': {source}")]
     InvalidRunDuration {
         raw: String,
@@ -71,6 +79,21 @@ fn channels_from_env() -> Result<usize, TestConfigError> {
     Ok(channels)
 }
 
+fn inscription_payload_bytes_from_env() -> Result<usize, TestConfigError> {
+    let raw = env::var("LOGOS_INSCRIPTION_PAYLOAD_BYTES")
+        .unwrap_or_else(|_| DEFAULT_PAYLOAD_BYTES.to_string());
+
+    let payload_bytes = raw
+        .parse::<usize>()
+        .map_err(|source| TestConfigError::InvalidPayloadBytes { raw, source })?;
+
+    if payload_bytes == 0 {
+        return Err(TestConfigError::ZeroPayloadBytes);
+    }
+
+    Ok(payload_bytes)
+}
+
 fn run_duration_from_env() -> Result<Duration, TestConfigError> {
     let raw = env::var("LOGOS_WORKLOAD_DURATION_SECS")
         .unwrap_or_else(|_| DEFAULT_RUN_DURATION_SECS.to_string());
@@ -103,6 +126,7 @@ async fn external_urls_inscription_workload() -> Result<(), Box<dyn std::error::
 
     let external_nodes = external_nodes_from_env()?;
     let inscription_channels = channels_from_env()?;
+    let inscription_payload_bytes = inscription_payload_bytes_from_env()?;
     let run_duration = run_duration_from_env()?;
 
     let deployer = LbcLocalDeployer::new();
@@ -118,7 +142,11 @@ async fn external_urls_inscription_workload() -> Result<(), Box<dyn std::error::
 
     let mut scenario = builder
         .with_external_only_sources()
-        .inscriptions_with(|inscriptions| inscriptions.channels(inscription_channels))
+        .inscriptions_with(|inscriptions| {
+            inscriptions
+                .channels(inscription_channels)
+                .inscription_payload_bytes(inscription_payload_bytes)
+        })
         .with_run_duration(run_duration)
         .build()?;
 

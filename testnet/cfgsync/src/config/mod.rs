@@ -96,7 +96,7 @@ pub fn create_node_configs(
     // Give faucet SK to all nodes so the faucet service can route to any node.
     let kms_configs = create_kms_configs(&blend_configs, &consensus_configs, faucet_info.as_ref());
 
-    let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations);
+    let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations, hosts.len());
 
     // Add faucet SK to all nodes' other_keys so it appears in the wallet
     // known_keys.

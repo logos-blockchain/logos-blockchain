@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsStr,
     net::SocketAddr,
     process::{Child, Command, Stdio},
     str::FromStr as _,
@@ -25,12 +26,8 @@ use lb_node::{
         ApiConfig, CryptarchiaConfig, RunConfig, SdpConfig, StorageConfig, WalletConfig,
         api::serde::AxumBackendSettings,
         cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
-        deployment::DeploymentSettings,
-        sdp::serde::{
-            Declaration as SdpDeclarationConfig, RequiredValues as SdpConfigRequiredValues,
-        },
-        state::Config as StateConfig,
-        tracing::serde as tracing,
+        deployment::DeploymentSettings, sdp::serde::RequiredValues as SdpConfigRequiredValues,
+        state::Config as StateConfig, tracing::serde as tracing,
         wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
 };
@@ -95,6 +92,85 @@ impl Validator {
         })
         .await
         .is_ok()
+    }
+
+    /// Kill the validator process.
+    pub fn kill(&mut self) -> std::io::Result<()> {
+        self.child.kill()
+    }
+
+    /// Restart the validator process using the same config and state directory.
+    /// This preserves persisted state (like SDP nonces fetched from ledger).
+    pub async fn restart(&mut self) -> Result<(), Elapsed> {
+        // Kill the current process
+        drop(self.child.kill());
+        self.wait_for_exit(Duration::from_secs(5)).await;
+
+        // Re-write config files (they were temporary and may have been cleaned up)
+        let mut user_config_file = NamedTempFile::new().unwrap();
+        let mut deployment_config_file = NamedTempFile::new().unwrap();
+
+        serde_yaml::to_writer(&mut user_config_file, &self.config.user).unwrap();
+        serde_yaml::to_writer(&mut deployment_config_file, &self.config.deployment).unwrap();
+
+        // Spawn new process with same config
+        let exe_path = get_exe_path();
+        self.child = Command::new(exe_path)
+            .arg("--deployment")
+            .arg(deployment_config_file.path().as_os_str())
+            .arg(user_config_file.path().as_os_str())
+            .current_dir(self.tempdir.path())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+
+        // Wait for the node to come online
+        tokio::time::timeout(Duration::from_secs(10), async {
+            self.wait_online().await;
+        })
+        .await?;
+
+        Ok(())
+    }
+
+    /// Restarts with the same deployment and user configs, but attaches
+    /// provided cli arguments.
+    pub async fn restart_with_args<I, S>(&mut self, args: I) -> Result<(), Elapsed>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        drop(self.child.kill());
+        self.wait_for_exit(Duration::from_secs(5)).await;
+
+        // Re-write config files (they were temporary and may have been cleaned up)
+        let mut user_config_file = NamedTempFile::new().unwrap();
+        let mut deployment_config_file = NamedTempFile::new().unwrap();
+
+        serde_yaml::to_writer(&mut user_config_file, &self.config.user).unwrap();
+        serde_yaml::to_writer(&mut deployment_config_file, &self.config.deployment).unwrap();
+
+        // Spawn new process with same config
+        let exe_path = get_exe_path();
+        self.child = Command::new(exe_path)
+            .arg("--deployment")
+            .arg(deployment_config_file.path().as_os_str())
+            .args(args)
+            .arg(user_config_file.path().as_os_str())
+            .current_dir(self.tempdir.path())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+
+        // Wait for the node to come online
+        tokio::time::timeout(Duration::from_secs(10), async {
+            self.wait_online().await;
+        })
+        .await?;
+
+        Ok(())
     }
 
     pub async fn spawn(mut config: RunConfig) -> Result<Self, Elapsed> {
@@ -169,6 +245,21 @@ impl Validator {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+
+    pub async fn wait_for_height(&self, target_height: u64, duration: Duration) -> Option<()> {
+        tokio::time::timeout(duration, async {
+            loop {
+                let info = self.consensus_info(false).await;
+                println!("{info:?}");
+                if info.height >= target_height {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .ok()
     }
 
     pub async fn get_block(&self, id: HeaderId) -> Option<Block<SignedMantleTx>> {
@@ -374,11 +465,7 @@ pub fn create_validator_config(
     });
 
     if let Some(declaration_id) = config.sdp_config.declaration_id {
-        sdp_config.declaration = Some(SdpDeclarationConfig {
-            id: declaration_id,
-            zk_id: config.consensus_config.blend_note.pk,
-            locked_note_id: config.consensus_config.blend_note.note_id,
-        });
+        sdp_config.declaration_id = Some(declaration_id);
     }
 
     let wallet_config = {

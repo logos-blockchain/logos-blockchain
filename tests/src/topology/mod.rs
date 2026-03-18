@@ -35,6 +35,9 @@ pub struct TopologyConfig {
     pub n_validators: usize,
     pub network_params: NetworkParams,
     pub extra_genesis_notes: Vec<GenesisNoteSpec>,
+    /// Override the SDP `lock_period` for this test topology.
+    /// If None, uses the default from deployment settings (10).
+    pub lock_period_override: Option<u64>,
 }
 
 impl TopologyConfig {
@@ -44,6 +47,7 @@ impl TopologyConfig {
             n_validators: 1,
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
+            lock_period_override: None,
         }
     }
 
@@ -53,12 +57,29 @@ impl TopologyConfig {
             n_validators: 2,
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
+            lock_period_override: None,
+        }
+    }
+
+    #[must_use]
+    pub fn n_validators(n_validators: usize) -> Self {
+        Self {
+            n_validators,
+            network_params: NetworkParams::default(),
+            extra_genesis_notes: Vec::new(),
+            lock_period_override: None,
         }
     }
 
     #[must_use]
     pub fn with_extra_genesis_note(mut self, note_spec: GenesisNoteSpec) -> Self {
         self.extra_genesis_notes.push(note_spec);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_lock_period(mut self, lock_period: u64) -> Self {
+        self.lock_period_override = Some(lock_period);
         self
     }
 }
@@ -141,7 +162,7 @@ impl Topology {
         // Set Blend keys in KMS of each node config.
         let kms_configs = create_kms_configs(&blend_configs, &consensus_configs);
 
-        let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations);
+        let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations, n_participants);
 
         let mut node_configs = vec![];
 
@@ -160,7 +181,12 @@ impl Topology {
 
         let general_configs = node_configs.clone();
 
-        let validators = Self::spawn_validators(node_configs, genesis_tx_with_declarations).await;
+        let validators = Self::spawn_validators(
+            node_configs,
+            genesis_tx_with_declarations,
+            config.lock_period_override,
+        )
+        .await;
 
         Self {
             validators,
@@ -169,13 +195,25 @@ impl Topology {
         }
     }
 
-    async fn spawn_validators(config: Vec<GeneralConfig>, genesis_tx: GenesisTx) -> Vec<Validator> {
+    async fn spawn_validators(
+        config: Vec<GeneralConfig>,
+        genesis_tx: GenesisTx,
+        lock_period_override: Option<u64>,
+    ) -> Vec<Validator> {
         let mut validators = Vec::new();
         for general_config in config {
-            let config = create_validator_config(
-                general_config,
-                e2e_deployment_settings_with_genesis_tx(genesis_tx.clone()),
-            );
+            let mut deployment = e2e_deployment_settings_with_genesis_tx(genesis_tx.clone());
+            if let Some(lock_period) = lock_period_override {
+                for params in deployment
+                    .cryptarchia
+                    .sdp_config
+                    .service_params
+                    .values_mut()
+                {
+                    params.lock_period = lock_period;
+                }
+            }
+            let config = create_validator_config(general_config, deployment);
             validators.push(Validator::spawn(config).await.unwrap());
         }
         validators
@@ -184,6 +222,11 @@ impl Topology {
     #[must_use]
     pub fn validators(&self) -> &[Validator] {
         &self.validators
+    }
+
+    #[must_use]
+    pub fn validators_mut(&mut self) -> &mut [Validator] {
+        &mut self.validators
     }
 
     #[must_use]

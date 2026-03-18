@@ -10,6 +10,7 @@ use serde_with::serde_as;
 pub struct Config {
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
+    pub network: NetworkConfig,
 }
 
 #[serde_as]
@@ -55,6 +56,26 @@ impl Default for OrphanConfig {
     fn default() -> Self {
         Self {
             max_orphan_cache_size: NonZeroUsize::new(1000).unwrap(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct NetworkConfig {
+    /// The maximum number of connected peers to attempt downloads from
+    /// for each target block.
+    pub max_connected_peers_to_try_download: usize,
+    /// The maximum number of discovered peers to attempt downloads from
+    /// for each target block.
+    pub max_discovered_peers_to_try_download: usize,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            max_connected_peers_to_try_download: 16,
+            max_discovered_peers_to_try_download: 16,
         }
     }
 }

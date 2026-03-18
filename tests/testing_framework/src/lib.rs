@@ -9,7 +9,9 @@ use std::{net::Ipv4Addr, sync::LazyLock};
 
 use lb_libp2p::{Multiaddr, multiaddr};
 
+pub mod env;
 mod framework;
+pub use framework::local::USER_CONFIG_FILE;
 mod node;
 pub mod workloads;
 
@@ -26,13 +28,13 @@ fn node_address_from_port(port: u16) -> Multiaddr {
 }
 
 pub use framework::{
-    BlockRecord, CoreBuilderExt, LbcEnv, LbcLocalDeployer, LbcManualCluster, ScenarioBuilder,
-    ScenarioBuilderExt,
+    BlockFeed, BlockFeedSnapshot, BlockRecord, CoreBuilderExt, LbcEnv, LbcLocalDeployer,
+    LbcManualCluster, NodeHeadSnapshot, ScenarioBuilder, ScenarioBuilderExt,
 };
 // Required by reused node-test config modules importing from crate root.
 pub use node::configs::deployment::{DeploymentBuilder, TopologyConfig};
 pub use node::{NodeHttpClient, configs};
-pub use workloads::{ConsensusLiveness, inscription, transaction};
+pub use workloads::{ClusterForkMonitor, ConsensusLiveness, inscription, transaction};
 
 /// Internal helpers for sibling workspace crates.
 #[doc(hidden)]

@@ -105,15 +105,17 @@ where
             loop {
                 match receiver.recv().await {
                     Ok(record) => {
-                        if record.block.header().parent() == genesis_parent {
-                            continue;
-                        }
+                        for observed in &record.new_blocks {
+                            if observed.block.header().parent() == genesis_parent {
+                                continue;
+                            }
 
-                        capture_tx_outputs(
-                            record.block.as_ref(),
-                            tracked_accounts.as_ref(),
-                            captured_observed.as_ref(),
-                        );
+                            capture_tx_outputs(
+                                observed.block.as_ref(),
+                                tracked_accounts.as_ref(),
+                                captured_observed.as_ref(),
+                            );
+                        }
                     }
 
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {

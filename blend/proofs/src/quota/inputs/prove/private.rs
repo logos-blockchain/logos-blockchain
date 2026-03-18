@@ -1,6 +1,6 @@
 use core::fmt::{self, Debug, Formatter};
 
-use lb_poq::NotePathAndSelectors;
+use lb_poq::AgedNotePathAndSelectors;
 
 use crate::{CorePathAndSelectors, ZkHash};
 
@@ -95,7 +95,7 @@ pub struct ProofOfLeadershipQuotaInputs {
     pub note_value: u64,
     pub transaction_hash: ZkHash,
     pub output_number: u64,
-    pub aged_path_and_selectors: NotePathAndSelectors,
+    pub aged_path_and_selectors: AgedNotePathAndSelectors,
     pub secret_key: ZkHash,
 }
 
