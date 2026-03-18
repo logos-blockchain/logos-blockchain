@@ -21,7 +21,7 @@ use crate::cryptarchia::{
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
 use super::{Balance, Config, LedgerError};
-use crate::{WINDOW_SIZE, mantle::sdp::locked_notes::LockedNotes};
+use crate::{BLOCK_REWARD_WINDOW_SIZE, mantle::sdp::locked_notes::LockedNotes};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -128,9 +128,7 @@ pub struct LedgerState {
     stake_inference: Arc<StakeInference>,
     // rolling fee window of 120 blocks, used to derive block rewards
     #[cfg_attr(feature = "serde", serde(with = "serde_arrays"))]
-    fee_window: [Value; WINDOW_SIZE],
-    #[cfg_attr(feature = "serde", serde(with = "serde_arrays"))]
-    stake_window: [Value; WINDOW_SIZE],
+    fee_window: [Value; BLOCK_REWARD_WINDOW_SIZE],
 }
 
 impl LedgerState {
@@ -386,12 +384,8 @@ impl LedgerState {
         }
     }
 
-    pub const fn update_stake_window(&mut self, index: usize) {
-        self.stake_window[index] = self.epoch_state.total_stake;
-    }
-
     pub const fn update_fee_window(&mut self, index: usize, total_fee: u64) {
-        self.stake_window[index] = total_fee;
+        self.fee_window[index] = total_fee;
     }
 
     #[must_use]
@@ -400,18 +394,8 @@ impl LedgerState {
     }
 
     #[must_use]
-    pub const fn get_stake_from_index(&self, index: usize) -> Value {
-        self.stake_window[index]
-    }
-
-    #[must_use]
     pub fn get_summed_fees(&self) -> Value {
         self.fee_window.iter().sum()
-    }
-
-    #[must_use]
-    pub fn get_summed_stake(&self) -> Value {
-        self.stake_window.iter().sum()
     }
 
     #[must_use]
@@ -521,7 +505,6 @@ impl LedgerState {
             block_density,
             stake_inference,
             fee_window: [0u64; 120],
-            stake_window: [total_stake; 120],
         }
     }
 }
@@ -766,7 +749,6 @@ pub mod tests {
             stake_inference,
             fee_window: [0u64; 120],
             block_density,
-            stake_window: [total_stake; 120],
         }
     }
 
