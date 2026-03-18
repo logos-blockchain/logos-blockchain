@@ -624,7 +624,10 @@ where
         let blend_session_before = *ledger_state
             .active_sessions()
             .get(&ServiceType::BlendNetwork)
-            .unwrap();
+            .unwrap_or_else(|| {
+                tracing::warn!(target: LOG_TARGET, "No active session found for Blend in ledger state before applying block. Defaulting to 0.");
+                &0
+            });
 
         ledger_state = ledger_state
             .clone()
@@ -633,7 +636,10 @@ where
         let blend_session_after = *ledger_state
             .active_sessions()
             .get(&ServiceType::BlendNetwork)
-            .unwrap();
+            .unwrap_or_else(|| {
+                tracing::warn!(target: LOG_TARGET, "No active session found for Blend in ledger state after applying block. Defaulting to 0.");
+                &0
+            });
 
         let is_new_blend_session =
             blend_session_after > blend_session_before && blend_session_after > 0;
@@ -715,7 +721,7 @@ where
                 blend_adapter.publish_proposal(block.to_proposal()).await;
             }
             BlockProposalStrategy::Broadcast { adapter, settings } => {
-                debug!(target: LOG_TARGET, "Successfully applied our own proposed block. First of a new session, broadcasting it directly: {:?}", block.header().id());
+                debug!(target: LOG_TARGET, "Successfully applied our own proposed block. First of a new Blend session, broadcasting it directly: {:?}", block.header().id());
                 adapter
                     .broadcast(
                         ChainNetworkMessage::to_bytes(&ChainNetworkMessage::Proposal(
