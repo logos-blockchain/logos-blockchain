@@ -66,28 +66,28 @@ async fn main() -> Result<()> {
         let user_config =
             deserialize_config_at_path::<UserConfig>(cli_args.config_path(), OnUnknownKeys::Warn)
                 .inspect_err(|_e| {
-                    #[cfg(feature = "dhat-heap")]
-                    {
-                        println!("\nExiting... {_e}. See heap output in 'dhat-heap.json'\n");
-                    }
-                })?;
+                #[cfg(feature = "dhat-heap")]
+                {
+                    println!("\nExiting... {_e}. See heap output in 'dhat-heap.json'\n");
+                }
+            })?;
         user_config.update_from_args(cli_args)?
     };
 
-    let app = run_node_from_config(run_config).map_err(|e| eyre!("{e}"))
+    let app = run_node_from_config(run_config)
+        .map_err(|e| eyre!("{e}"))
         .inspect_err(|_e| {
             #[cfg(feature = "dhat-heap")]
             {
                 println!("\nExiting... {_e}. See heap output in 'dhat-heap.json'\n");
             }
         })?;
-    let services_to_start = get_services_to_start(&app).await
-        .inspect_err(|_e| {
-            #[cfg(feature = "dhat-heap")]
-            {
-                println!("\nExiting... {_e}. See heap output in 'dhat-heap.json'\n");
-            }
-        })?;
+    let services_to_start = get_services_to_start(&app).await.inspect_err(|_e| {
+        #[cfg(feature = "dhat-heap")]
+        {
+            println!("\nExiting... {_e}. See heap output in 'dhat-heap.json'\n");
+        }
+    })?;
 
     drop(app.handle().start_service_sequence(services_to_start).await);
 
