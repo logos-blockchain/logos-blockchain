@@ -14,6 +14,7 @@ use crate::{
         VerifyInputs,
         prove::{Inputs, PrivateInputs, PublicInputs},
     },
+    selection::derive_key_nullifier_from_secret_selection_randomness,
 };
 
 pub mod inputs;
@@ -132,7 +133,8 @@ impl VerifiedProofOfQuota {
         private_inputs: PrivateInputs,
     ) -> Result<(Self, ZkHash), Error> {
         let key_index = private_inputs.key_index;
-        let secret_selection_randomness_sk = private_inputs.get_secret_selection_randomness_sk();
+        let secret_selection_randomness_input =
+            private_inputs.get_secret_selection_randomness_sk(public_inputs);
         let witness_inputs: PoQWitnessInputs = Inputs {
             private: private_inputs,
             public: *public_inputs,
@@ -141,11 +143,12 @@ impl VerifiedProofOfQuota {
         .map_err(|e| Error::InvalidInput(Box::new(e)))?;
         let (proof, PoQVerifierInput { key_nullifier, .. }) =
             prove(witness_inputs).map_err(Error::ProofGeneration)?;
-        let secret_selection_randomness = generate_secret_selection_randomness(
-            secret_selection_randomness_sk,
-            key_index,
-            public_inputs.session,
-        );
+        println!("Generated proof of quota with key nullifier: {key_nullifier:?}");
+        let secret_selection_randomness =
+            generate_secret_selection_randomness(&secret_selection_randomness_input, key_index);
+        let hashed =
+            derive_key_nullifier_from_secret_selection_randomness(secret_selection_randomness);
+        println!("Generated proof of quota with test: {hashed:?}");
         Ok((
             Self(ProofOfQuota {
                 key_nullifier: key_nullifier.into_inner(),
@@ -209,18 +212,41 @@ impl PartialEq<ProofOfQuota> for VerifiedProofOfQuota {
     }
 }
 
+pub enum SelectionRandomnessSecretInput {
+    Core {
+        sk: ZkHash,
+        session_number: u64,
+    },
+    Leadership {
+        slot_secret_key: ZkHash,
+        slot_number: u64,
+    },
+}
+
 const DOMAIN_SEPARATION_TAG: [u8; 23] = *b"SELECTION_RANDOMNESS_V1";
 static DOMAIN_SEPARATION_TAG_FR: LazyLock<ZkHash> = LazyLock::new(|| {
     fr_from_bytes(&DOMAIN_SEPARATION_TAG[..])
         .expect("DST for secret selection randomness calculation must be correct.")
 });
 // As per Proof of Quota v1 spec: <https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#215261aa09df81adb8ccd1448c9afd68>.
-fn generate_secret_selection_randomness(sk: ZkHash, key_index: u64, session: u64) -> ZkHash {
+fn generate_secret_selection_randomness(
+    input: &SelectionRandomnessSecretInput,
+    key_index: u64,
+) -> ZkHash {
+    let (first_element, second_element) = match input {
+        SelectionRandomnessSecretInput::Core { sk, session_number } => {
+            (sk, (*session_number).into())
+        }
+        SelectionRandomnessSecretInput::Leadership {
+            slot_secret_key,
+            slot_number,
+        } => (slot_secret_key, (*slot_number).into()),
+    };
     [
         *DOMAIN_SEPARATION_TAG_FR,
-        sk,
+        *first_element,
         key_index.into(),
-        session.into(),
+        second_element,
     ]
     .hash()
 }
