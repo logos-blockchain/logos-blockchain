@@ -78,36 +78,36 @@ where
     ///   already-queued data message.
     fn consume_round(&mut self) -> bool {
         // We need to check this since we use it as a fraction denominator later on.
-        let Ok(non_zero_unprocessed_remaining_rounds) =
+        let Ok(non_zero_unconsumed_remaining_rounds) =
             NonZeroU128::try_from(self.remaining_rounds.inner())
         else {
-            tracing::trace!(target: LOG_TARGET, "No remaining rounds.");
-            debug_assert!(
+            assert!(
                 self.remaining_messages == 0,
                 "If there are no remaining rounds, there should be no remaining messages."
             );
+            tracing::trace!(target: LOG_TARGET, "No remaining rounds.");
             return false;
         };
         // Update remaining rounds regardless of what we do next, since we are consuming
         // this round.
-        self.remaining_rounds = (non_zero_unprocessed_remaining_rounds.get() - 1).into();
+        self.remaining_rounds = (non_zero_unconsumed_remaining_rounds.get() - 1).into();
 
         // Decide whether this round is a release round based on the ratio of
         // messages still to emit over the rounds still available.
         let is_release_round = self.rng.gen_bool(
-            self.remaining_messages as f64 / non_zero_unprocessed_remaining_rounds.get() as f64,
+            self.remaining_messages as f64 / non_zero_unconsumed_remaining_rounds.get() as f64,
         );
 
         if !is_release_round {
             return false;
         }
 
-        let non_zero_unprocessed_remaining_messages = NonZeroU64::try_from(self.remaining_messages)
+        let non_zero_unconsumed_remaining_messages = NonZeroU64::try_from(self.remaining_messages)
             .expect("There should be at least one remaining message if this is a release round.");
 
         // This is a release round, so no matter if we end up releasing a new cover
         // message or not, we consume one quota.
-        self.remaining_messages = non_zero_unprocessed_remaining_messages.get() - 1;
+        self.remaining_messages = non_zero_unconsumed_remaining_messages.get() - 1;
 
         if self.unprocessed_data_messages == 0 {
             return true;
@@ -120,7 +120,7 @@ where
         // consumed).
         let should_skip = {
             let threshold = self.unprocessed_data_messages as f64
-                / non_zero_unprocessed_remaining_messages.get() as f64;
+                / non_zero_unconsumed_remaining_messages.get() as f64;
             self.rng.gen_range(0f64..=1f64) <= threshold
         };
         if should_skip {

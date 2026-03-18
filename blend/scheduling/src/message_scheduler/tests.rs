@@ -208,6 +208,7 @@ async fn round_change() {
             release_type: Some(RoundReleaseType::OnlyCoverMessage)
         }))
     );
+    assert!(scheduler.data_messages.is_empty());
 
     scheduler.queue_data_message(3);
 
