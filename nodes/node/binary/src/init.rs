@@ -226,7 +226,6 @@ mod tests {
     use std::net::SocketAddr;
 
     use super::*;
-    use crate::config::DeploymentType;
 
     fn build_config_from_peers(initial_peers: Vec<Multiaddr>) -> UserConfig {
         let args = InitArgs {
@@ -236,7 +235,6 @@ mod tests {
             blend_port: 3400,
             http_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
             external_address: None,
-            deployment: DeploymentType::default(),
             state_path: None,
         };
         let network_key = lb_libp2p::ed25519::SecretKey::generate();

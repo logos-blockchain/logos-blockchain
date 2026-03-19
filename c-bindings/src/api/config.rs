@@ -103,31 +103,6 @@ impl From<GenerateConfigArgs> for InitArgs {
             init_args.external_address = external_address.to_string_lossy().parse().ok();
         }
 
-        // ---- deployment ----
-        if !value.deployment.is_null() {
-            let deployment = unsafe { &*value.deployment };
-
-            match deployment.deployment_type {
-                DeploymentType::WellKnown => {
-                    init_args.deployment = match deployment.well_known_deployment {
-                        WellKnownDeployment::Devnet => lb_node::config::DeploymentType::WellKnown(
-                            lb_node::config::WellKnownDeployment::Devnet,
-                        ),
-                    };
-                }
-                DeploymentType::Custom => {
-                    if !deployment.custom_deployment_config_path.is_null() {
-                        let config_path =
-                            unsafe { CStr::from_ptr(deployment.custom_deployment_config_path) };
-                        let config_path = config_path.to_string_lossy().into_owned();
-
-                        init_args.deployment =
-                            lb_node::config::DeploymentType::Custom(config_path.into());
-                    }
-                }
-            }
-        }
-
         // ---- state_path ----
         if !value.state_path.is_null() {
             let state_path = unsafe { CStr::from_ptr(value.state_path) };
