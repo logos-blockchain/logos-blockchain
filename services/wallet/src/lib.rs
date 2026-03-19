@@ -57,7 +57,6 @@ use tokio::{
 };
 use tracing::{debug, error, info, trace};
 use lb_core::mantle::tx::MantleTxGasContext;
-use lb_ledger::mantle::channel::ChannelState;
 use crate::states::{RecoveryState, ServiceState, Wallet};
 
 type KmsBackend = PreloadKMSBackend;
@@ -176,7 +175,8 @@ impl WalletMsg {
             | Self::FundTx { tip, .. }
             | Self::SignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. }
-            | Self::GetClaimableVoucher { tip, .. } => *tip,
+            | Self::GetClaimableVoucher { tip, .. }
+            | Self::GetGasContext { block_id: tip, ..}=> *tip,
             Self::GenerateNewVoucherSecret { .. } | Self::GetKnownAddresses { .. } => None,
         }
     }

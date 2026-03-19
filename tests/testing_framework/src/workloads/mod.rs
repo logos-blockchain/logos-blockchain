@@ -10,7 +10,7 @@ pub use fork_monitor::ClusterForkMonitor;
 pub use inscription::*;
 use testing_framework_core::scenario::{Application, RunContext};
 use tokio::sync::broadcast;
-
+use lb_ledger::cryptarchia::LedgerState;
 use crate::{BlockFeed, BlockRecord, NodeHttpClient, framework::LbcEnv, node::DeploymentPlan};
 
 pub type BlockFeedSubscription = broadcast::Receiver<Arc<BlockRecord>>;
@@ -28,6 +28,8 @@ pub trait LbcBlockFeedEnv: LbcScenarioEnv + Sized {
     fn block_feed_subscription(ctx: &RunContext<Self>) -> BlockFeedSubscription;
 
     fn block_feed(ctx: &RunContext<Self>) -> BlockFeed;
+
+    fn ledger_state(ctx: &RunContext<Self>) -> LedgerState;
 }
 
 impl LbcBlockFeedEnv for LbcEnv {
@@ -37,5 +39,9 @@ impl LbcBlockFeedEnv for LbcEnv {
 
     fn block_feed(ctx: &RunContext<Self>) -> BlockFeed {
         ctx.feed()
+    }
+
+    fn ledger_state(_ctx: &RunContext<Self>) -> LedgerState {
+        todo!();
     }
 }

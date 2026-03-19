@@ -39,8 +39,8 @@ pub struct Channels {
     pub channels: rpds::HashTrieMapSync<ChannelId, ChannelState>,
 }
 
-impl From<Channels> for MantleTxGasContext {
-    fn from(value: Channels) -> Self {
+impl From<&Channels> for MantleTxGasContext {
+    fn from(value: &Channels) -> Self {
         let withdraw_thresholds = value
             .channels
             .iter()
