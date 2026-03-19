@@ -24,7 +24,7 @@ async-trait                      = "0.1"
 cfg-if                           = { workspace = true }
 clap                             = { default-features = false, features = ["derive", "env", "help", "std", "string"], version = "4" }
 color-eyre                       = { default-features = false, version = "0.6.0" }
-dhat                             = { version = "0.3.3", optional = true }
+dhat                             = { optional = true, version = "0.3.3" }
 futures                          = { default-features = false, version = "0.3" }
 hex                              = { default-features = false, version = "0.4.3" }
 http                             = "1.3"
