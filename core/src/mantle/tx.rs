@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::LazyLock};
+use std::sync::LazyLock;
 use std::collections::HashMap;
 use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes, serde::serde_fr};
@@ -87,7 +87,17 @@ struct MantleTxDeSerImpl {
 
 #[derive(Debug, Clone)]
 pub struct MantleTxGasContext {
-    pub withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
+    withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
+}
+
+impl MantleTxGasContext {
+    pub fn new(withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>) -> Self {
+        Self { withdraw_thresholds }
+    }
+
+    pub fn withdraw_threshold(&self, channel_id: &ChannelId) -> Option<ChannelKeyIndex> {
+        self.withdraw_thresholds.get(channel_id).copied()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -176,8 +186,8 @@ impl GasCost for MantleTx {
 
 impl MantleTx {
     #[must_use]
-    pub fn signed_serialized_size(&self, context: &MantleTxGasContext) -> u64 {
-        super::encoding::predict_signed_mantle_tx_size(self, context) as u64
+    pub fn signed_serialized_size(&self, _context: &MantleTxGasContext) -> u64 {
+        super::encoding::predict_signed_mantle_tx_size(self) as u64
     }
 
     #[must_use]

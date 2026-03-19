@@ -15,6 +15,7 @@ use crate::{
         },
     },
 };
+use crate::mantle::tx::MantleTxGasContext;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GenesisTx(SignedMantleTx);
@@ -74,11 +75,11 @@ impl GenesisTx {
 
     #[cfg(feature = "mock")]
     #[must_use]
-    pub fn new_mocked() -> Self {
+    pub fn new_mocked(context: MantleTxGasContext) -> Self {
         use crate::mantle::tx_builder::MantleTxBuilder;
 
         Self(SignedMantleTx::new_unverified(
-            MantleTxBuilder::new().build(),
+            MantleTxBuilder::new(context).build(),
             vec![],
         ))
     }

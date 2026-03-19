@@ -10,6 +10,7 @@ use lb_core::mantle::{
 use lb_key_management_system_keys::keys::Ed25519Signature;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+use lb_core::mantle::tx::MantleTxGasContext;
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -36,6 +37,19 @@ pub enum Error {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Channels {
     pub channels: rpds::HashTrieMapSync<ChannelId, ChannelState>,
+}
+
+impl From<Channels> for MantleTxGasContext {
+    fn from(value: Channels) -> Self {
+        let withdraw_thresholds = value
+            .channels
+            .iter()
+            .map(|(channel_id, channel)| {
+                (*channel_id, channel.withdraw_threshold)
+            })
+            .collect();
+        Self::new(withdraw_thresholds)
+    }
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
