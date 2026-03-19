@@ -26,6 +26,10 @@
 //     <amount>, transactions <count>, value <amount>, cycles <count>
 //   FAUCET_ALL_USER_WALLETS, rounds <count>
 //   FAUCET_ALL_FUNDING_WALLETS, rounds <count>
+//   CREATE_BLOCKCHAIN_SNAPSHOT_ALL_NODES, snapshot_name '<snapshot_name>'
+//   CREATE_BLOCKCHAIN_SNAPSHOT_NODE, snapshot_name '<snapshot_name>',
+//     node_name '<node_name>'
+//   RESTART_NODE, node_name '<node_name>'
 //   CRYPTARCHIA_INFO_ALL_NODES
 //   WAIT_ALL_NODES_SYNCED_TO_CHAIN
 //   STOP
@@ -40,7 +44,12 @@ use crate::cucumber::{
     error::StepError,
     steps::{
         TARGET,
-        manual_nodes::utils::wait_for_all_nodes_to_be_synced_to_chain,
+        manual_nodes::{
+            snapshots::save_named_blockchain_snapshot,
+            utils::{
+                create_snapshots_all_nodes, restart_node, wait_for_all_nodes_to_be_synced_to_chain,
+            },
+        },
         manual_transactions::{
             command_file_parsing::{ManualCommand, take_next_command},
             utils,
@@ -73,6 +82,13 @@ async fn execute_non_stop_manual_command(
     command: &ManualCommand,
 ) -> Result<(), StepError> {
     match command {
+        ManualCommand::CreateBlockchainSnapshotAllNodes { snapshot_name } => {
+            execute_create_blockchain_snapshot_all_nodes(world, snapshot_name)
+        }
+        ManualCommand::CreateBlockchainSnapshotNode {
+            snapshot_name,
+            node_name,
+        } => execute_create_blockchain_snapshot_node(world, snapshot_name, node_name),
         ManualCommand::CoinSplit {
             wallet,
             outputs,
@@ -139,6 +155,7 @@ async fn execute_non_stop_manual_command(
         ManualCommand::FaucetFundsAllFundingWallets { rounds } => {
             request_faucet_funds_all_funding_wallets(world, step, *rounds)
         }
+        ManualCommand::RestartNode { node_name } => restart_node(world, step, node_name).await,
         ManualCommand::CryptarchiaInfoAllNodes => {
             execute_cryptarchia_info_all_nodes(world, step).await;
             Ok(())
@@ -147,6 +164,45 @@ async fn execute_non_stop_manual_command(
             wait_for_all_nodes_to_be_synced_to_chain(world, step).await
         }
         ManualCommand::Stop => Ok(()),
+    }
+}
+
+fn execute_create_blockchain_snapshot_all_nodes(
+    world: &CucumberWorld,
+    snapshot_name: &str,
+) -> Result<(), StepError> {
+    if world.nodes_info.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: "cannot create snapshot: no running nodes".to_owned(),
+        });
+    }
+
+    create_snapshots_all_nodes(world, snapshot_name)
+}
+
+fn execute_create_blockchain_snapshot_node(
+    world: &CucumberWorld,
+    snapshot_name: &str,
+    node_name: &str,
+) -> Result<(), StepError> {
+    if world.nodes_info.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: "cannot create snapshot: no running nodes".to_owned(),
+        });
+    }
+
+    if let Some(info) = world.nodes_info.get(node_name) {
+        save_named_blockchain_snapshot(snapshot_name, node_name, &info.runtime_dir)?;
+        info!(
+            target: TARGET,
+            "Saved blockchain snapshot `{snapshot_name}` for node {}",
+            info.runtime_dir.display()
+        );
+        Ok(())
+    } else {
+        Err(StepError::InvalidArgument {
+            message: format!("Node {node_name} does not exist"),
+        })
     }
 }
 

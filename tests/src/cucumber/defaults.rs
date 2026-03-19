@@ -23,6 +23,8 @@ const CUCUMBER_RETRIES: &str = "CUCUMBER_RETRIES";
 pub const LOGOS_BLOCKCHAIN_NODE_BIN: &str = "LOGOS_BLOCKCHAIN_NODE_BIN";
 pub const CUCUMBER_NODE_CONFIG_OVERRIDE: &str = "CUCUMBER_NODE_CONFIG_OVERRIDE";
 pub const CUCUMBER_VERBOSE_CONSOLE: &str = "CUCUMBER_VERBOSE_CONSOLE";
+const SNAPSHOTS_DIR_REL: &str = "cucumber_tests/temp/cucumber_artefacts/snapshots";
+pub const SNAPSHOT_STATE_SUBDIRS: [&str; 2] = ["db", "recovery"];
 pub const CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: &str = "CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL";
 pub const CUCUMBER_DEPLOYER_COMPOSE: &str = "CUCUMBER_DEPLOYER_COMPOSE";
 
@@ -140,6 +142,7 @@ pub fn get_retries() -> Result<Option<usize>, String> {
     )
 }
 
+/// Creates the output directory for the current scenario and returns its path.
 #[must_use]
 pub fn create_scenario_output_dir() -> PathBuf {
     let current_dir = std::env::current_dir().expect("should exist");
@@ -150,6 +153,7 @@ pub fn create_scenario_output_dir() -> PathBuf {
     output_dir
 }
 
+/// Returns the path to the features directory, panicking if it does not exist.
 #[must_use]
 pub fn get_feature_path() -> PathBuf {
     let feature_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FEATURES_DIR_REL);
@@ -159,4 +163,11 @@ pub fn get_feature_path() -> PathBuf {
         panic!("Feature path does not exist: {}", feature_path.display());
     }
     feature_path
+}
+
+/// Returns the path to the snapshots root directory, which is where named
+/// snapshots are stored.
+#[must_use]
+pub fn snapshots_root_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(SNAPSHOTS_DIR_REL)
 }

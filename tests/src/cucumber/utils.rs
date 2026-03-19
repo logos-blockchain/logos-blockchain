@@ -214,3 +214,38 @@ pub fn extract_child_dir_name(base_dir: &Path, prefix: &str) -> Result<String, S
 pub fn truncate_hash(input: &str, length: usize) -> String {
     input.chars().take(length).collect()
 }
+
+/// Recursively copies a directory tree from `src` into `dst`.
+pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if !src.exists() {
+        return Err(std::io::Error::other(format!(
+            "Directory '{}' is missing",
+            src.display()
+        )));
+    }
+    if !src.is_dir() {
+        return Err(std::io::Error::other(format!(
+            "Item '{}' is not a directory",
+            src.display()
+        )));
+    }
+    fs::create_dir_all(dst)?;
+
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = dst.join(entry.file_name());
+        let metadata = entry.metadata()?;
+
+        if metadata.is_dir() {
+            copy_dir_recursive(&source_path, &destination_path)?;
+        } else if metadata.is_file() {
+            if let Some(parent) = destination_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&source_path, &destination_path)?;
+        }
+    }
+
+    Ok(())
+}

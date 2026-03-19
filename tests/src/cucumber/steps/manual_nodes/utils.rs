@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -24,7 +24,14 @@ use tracing::{info, warn};
 
 use crate::cucumber::{
     error::{StepError, StepResult},
-    steps::{TARGET, manual_transactions::command_file_utils::execute_cryptarchia_info_all_nodes},
+    steps::{
+        TARGET,
+        manual_nodes::snapshots::{
+            restore_node_state_from_snapshot, save_named_blockchain_snapshot,
+            validate_snapshot_path_component,
+        },
+        manual_transactions::command_file_utils::execute_cryptarchia_info_all_nodes,
+    },
     utils::{
         extract_child_dir_name, funding_wallet_pk_from_node_yaml, peer_id_from_node_yaml,
         track_progress, truncate_hash,
@@ -40,6 +47,8 @@ type NodesToStartOrdered = Vec<(String, Vec<WalletStartInfo>, Vec<String>)>;
 
 const CHAIN_SYNC_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const CHAIN_SYNC_STATUS_LOG_INTERVAL: Duration = Duration::from_secs(120);
+
+// Returns the root directory for a named snapshot.
 
 enum AlignmentStatus {
     MissingChainInfo,
@@ -515,8 +524,8 @@ pub(crate) fn start_nodes_order_respecting_dependencies(
 
     // Update start list with all nodes without peers
     for node_name in nodes_without_peers {
-        if let Some((wallet_infos, peers)) = remaining.remove(&node_name) {
-            ordered.push((node_name.clone(), wallet_infos, peers));
+        if let Some((wallet_infos, initial_peers)) = remaining.remove(&node_name) {
+            ordered.push((node_name.clone(), wallet_infos, initial_peers));
             started.insert(node_name);
         }
     }
@@ -555,12 +564,16 @@ pub(crate) fn start_nodes_order_respecting_dependencies(
     Ok(ordered)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Covers startup, optional snapshot seeding, wallet wiring, and readiness in one path"
+)]
 pub async fn start_node(
     world: &mut CucumberWorld,
     step: &str,
     node_name: &str,
     wallet_start_info: &[WalletStartInfo],
-    peers: &[String],
+    initial_peers: &[String],
 ) -> StepResult {
     let cluster = world
         .local_cluster
@@ -568,23 +581,24 @@ pub async fn start_node(
         .ok_or(StepError::LogicalError {
             message: "No local cluster available".into(),
         })?;
-    let startup_settings = get_startup_settings(world, peers).inspect_err(|e| {
+    let startup_settings = get_startup_settings(world, initial_peers).inspect_err(|e| {
         warn!(target: TARGET, "Step `{step}` error: {e}");
     })?;
+    let is_bootstrap_node = startup_settings.is_bootstrap_node;
+    let join_external_network = startup_settings.join_external_network;
+    let persist_dir = world.scenario_base_dir.join(node_name);
     let started_node = Box::pin(
         cluster.start_node_with(
             node_name,
             StartNodeOptions::default()
                 .with_peers(startup_settings.peer_selection)
-                .with_persist_dir(world.scenario_base_dir.join(node_name))
+                .with_persist_dir(persist_dir)
                 .create_patch(move |mut config: RunConfig| {
                     prepare_config_patch(
                         &mut config,
                         startup_settings.join_external_network,
                         &startup_settings.deployment_override,
                         startup_settings.initial_peers_override.as_ref(),
-                        startup_settings.is_bootstrap_node,
-                        startup_settings.populate_ibd_peers,
                         &startup_settings.ibd_peers,
                     );
                     Ok(config)
@@ -595,22 +609,45 @@ pub async fn start_node(
     .inspect_err(|e| {
         warn!(target: TARGET, "Step `{step}` error: {e}");
     })?;
-
-    // Scrape the final node directory name to get the correct path to the node's
-    // YAML file for extracting the peer ID, since the actual directory name has
-    // a random suffix added by the deployer.
     let node_final_dir = extract_child_dir_name(&world.scenario_base_dir, &format!("{node_name}_"))
         .inspect_err(|e| {
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
+    let node_runtime_dir = world.scenario_base_dir.join(node_final_dir.clone());
+    let started_node_name = started_node.name.clone();
+
+    // `StartNodeOptions::with_persist_dir` currently creates a fresh runtime
+    // directory for each launch. Seed that runtime directory and restart once
+    // to effectively initialize from a named snapshot.
+    if let Some(node_snapshot) = world.blockchain_snapshot_on_startup.as_ref() {
+        cluster
+            .stop_node(&started_node_name)
+            .await
+            .inspect_err(|e| {
+                warn!(target: TARGET, "Step `{step}` error: {e}");
+            })?;
+        restore_node_state_from_snapshot(node_snapshot, &node_runtime_dir).inspect_err(|e| {
+            warn!(target: TARGET, "Step `{step}` error: {e}");
+        })?;
+        cluster
+            .restart_node(&started_node_name)
+            .await
+            .inspect_err(|e| {
+                warn!(target: TARGET, "Step `{step}` error: {e}");
+            })?;
+        info!(
+            target: TARGET,
+            "Node {node_name} started from snapshot {}/{}",
+            node_snapshot.name, node_snapshot.node
+        );
+    }
+
+    // Scrape the final node directory name to get the correct path to the node's
+    // YAML file for extracting the peer ID, since the actual directory name has
+    // a random suffix added by the deployer.
     world.node_peer_ids.insert(
         node_name.to_owned(),
-        peer_id_from_node_yaml(
-            &world
-                .scenario_base_dir
-                .join(node_final_dir.clone())
-                .join(USER_CONFIG_FILE),
-        )?,
+        peer_id_from_node_yaml(&node_runtime_dir.join(USER_CONFIG_FILE))?,
     );
 
     let wallet_info = add_wallets(
@@ -619,8 +656,8 @@ pub async fn start_node(
         node_name,
         wallet_start_info,
         &started_node,
-        node_final_dir,
-        startup_settings.join_external_network,
+        &node_runtime_dir,
+        join_external_network,
     )
     .inspect_err(|e| {
         warn!(target: TARGET, "Step `{step}` error: {e}");
@@ -630,7 +667,6 @@ pub async fn start_node(
         .wallet_info
         .extend(wallet_info.iter().map(|(k, v)| (k.clone(), v.clone())));
 
-    let started_node_name = started_node.name.clone();
     let client = started_node.client.clone();
     // Move `started_node` into the world's NodeInfo (no clone required)
     world.nodes_info.insert(
@@ -641,6 +677,7 @@ pub async fn start_node(
             run_config: None,
             chain_info: HashMap::default(),
             wallet_info,
+            runtime_dir: node_runtime_dir,
         },
     );
 
@@ -650,7 +687,7 @@ pub async fn start_node(
         &client,
         node_name,
         &started_node_name,
-        startup_settings.is_bootstrap_node,
+        is_bootstrap_node,
         world.require_all_peers_mode_online_at_startup,
     )
     .await
@@ -661,13 +698,55 @@ pub async fn start_node(
     Ok(())
 }
 
+pub async fn restart_node(world: &CucumberWorld, step: &str, node_name: &str) -> StepResult {
+    let cluster = world
+        .local_cluster
+        .as_ref()
+        .ok_or(StepError::LogicalError {
+            message: "No local cluster available".into(),
+        })?;
+    let started_node_name = world.resolve_node_name(node_name).inspect_err(|e| {
+        warn!(target: TARGET, "Step `{step}` error: {e}");
+    })?;
+
+    cluster
+        .restart_node(&started_node_name)
+        .await
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{step}` error: {e}");
+        })?;
+    let client = world.resolve_node_http_client(node_name).inspect_err(|e| {
+        warn!(target: TARGET, "Step `{step}` error: {e}");
+    })?;
+    ensure_node_ready(
+        cluster,
+        &client,
+        node_name,
+        &started_node_name,
+        // TODO: Add `is_bootstrap_node` to world
+        false,
+        None,
+    )
+    .await
+    .inspect_err(|e| {
+        warn!(target: TARGET, "Step `{step}` error: {e}");
+    })?;
+
+    info!(
+        target: TARGET,
+        "Restarted node `{node_name}` (runtime name `{started_node_name}`)"
+    );
+
+    Ok(())
+}
+
 fn add_wallets(
     world: &CucumberWorld,
     step: &str,
     node_name: &str,
     wallet_start_info: &[WalletStartInfo],
     started_node: &StartedNode<LbcEnv>,
-    node_final_dir: String,
+    node_runtime_dir: &Path,
     join_external_network: bool,
 ) -> Result<WalletInfoMap, StepError> {
     let wallet_info = compile_wallet_in_map(
@@ -675,7 +754,7 @@ fn add_wallets(
         node_name,
         world,
         step,
-        node_final_dir,
+        node_runtime_dir,
         join_external_network,
     )?;
     for (wallet_name, info) in &wallet_info {
@@ -696,7 +775,6 @@ struct StartupSettings {
     peer_selection: PeerSelection,
     ibd_peers: HashSet<PeerId>,
     is_bootstrap_node: bool,
-    populate_ibd_peers: bool,
     initial_peers_override: Option<Vec<Multiaddr>>,
     join_external_network: bool,
     deployment_override: DeploymentSettings,
@@ -704,27 +782,29 @@ struct StartupSettings {
 
 fn get_startup_settings(
     world: &CucumberWorld,
-    peers: &[String],
+    initial_peers: &[String],
 ) -> Result<StartupSettings, StepError> {
-    let peer_selection = if peers.is_empty() {
+    let peer_selection = if initial_peers.is_empty() {
         PeerSelection::None
     } else {
-        let named = peers
+        let named = initial_peers
             .iter()
             .map(|peer| world.resolve_node_name(peer))
             .collect::<Result<Vec<String>, StepError>>()?;
         PeerSelection::Named(named)
     };
     let mut ibd_peers = world.ibd_peers_override.clone().unwrap_or_default();
-    if ibd_peers.is_empty() {
-        for peer in peers {
+    let populate_ibd_peers_from_initial_peers = world
+        .populate_ibd_peers_from_initial_peers
+        .unwrap_or_default();
+    if populate_ibd_peers_from_initial_peers {
+        for peer in initial_peers {
             if let Some(peer_id) = world.node_peer_ids.get(peer) {
                 ibd_peers.insert(*peer_id);
             }
         }
     }
-    let is_bootstrap_node = ibd_peers.is_empty();
-    let populate_ibd_peers = world.populate_ibd_peers.unwrap_or_default();
+    let is_bootstrap_node = initial_peers.is_empty();
     let initial_peers_override = world.initial_peers_override.clone();
     let join_external_network = world.join_external_network.unwrap_or_default();
     let deployment_override = if let Some(path) = world.deployment_config_override_path.clone() {
@@ -737,7 +817,6 @@ fn get_startup_settings(
         peer_selection,
         ibd_peers,
         is_bootstrap_node,
-        populate_ibd_peers,
         initial_peers_override,
         join_external_network,
         deployment_override,
@@ -749,8 +828,6 @@ fn prepare_config_patch(
     join_external_network: bool,
     deployment_override: &DeploymentSettings,
     initial_peers_override: Option<&Vec<Multiaddr>>,
-    is_bootstrap_node: bool,
-    populate_ibd_peers: bool,
     ibd_peers: &HashSet<PeerId>,
 ) {
     if join_external_network {
@@ -764,16 +841,14 @@ fn prepare_config_patch(
             .initial_peers
             .clone_from(initial_peers);
     }
-    if !is_bootstrap_node && populate_ibd_peers {
-        config
-            .user
-            .cryptarchia
-            .network
-            .bootstrap
-            .ibd
-            .peers
-            .clone_from(ibd_peers);
-    }
+    config
+        .user
+        .cryptarchia
+        .network
+        .bootstrap
+        .ibd
+        .peers
+        .clone_from(ibd_peers);
 }
 
 fn load_run_config(path: &Path) -> Result<DeploymentSettings, StepError> {
@@ -785,8 +860,8 @@ fn load_run_config(path: &Path) -> Result<DeploymentSettings, StepError> {
     })
 }
 
-// Ensure this node is ready, and achieved `Mode::OnLine` if it has no IBD peers
-// (i.e. a bootstrap node).
+// Ensure this node is ready, and achieved `Mode::OnLine` if it is a bootstrap
+// node.
 async fn ensure_node_ready(
     cluster: &LbcManualCluster,
     client: &NodeHttpClient,
@@ -956,7 +1031,7 @@ fn compile_wallet_in_map(
     node_name: &str,
     world: &CucumberWorld,
     step: &str,
-    node_final_dir: String,
+    node_runtime_dir: &Path,
     join_external_network: bool,
 ) -> Result<WalletInfoMap, StepError> {
     let mut wallet_info: WalletInfoMap = HashMap::new();
@@ -1006,10 +1081,7 @@ fn compile_wallet_in_map(
             node_name: node_name.to_owned(),
             wallet_type: WalletType::Funding {
                 wallet_pk: funding_wallet_pk_from_node_yaml(
-                    &world
-                        .scenario_base_dir
-                        .join(node_final_dir)
-                        .join(USER_CONFIG_FILE),
+                    &node_runtime_dir.join(USER_CONFIG_FILE),
                 )?,
             },
         },
@@ -1255,11 +1327,35 @@ pub async fn poll_all_nodes_and_update_consensus_cache<S: ::std::hash::BuildHash
     Ok(())
 }
 
-// This struct represents the wallet resources to be associated with a node at
-// startup.
+/// This struct represents the wallet resources to be associated with a node at
+/// startup.
 pub struct WalletStartInfo {
     // Logical name of the wallet resource, used for referencing in steps.
     pub wallet_name: String,
     // The account index in the genesis tokens that this resource corresponds to.
     pub account_index: usize,
+}
+
+/// Saves the current blockchain state of all nodes into a named snapshot
+/// location for later use.
+pub fn create_snapshots_all_nodes(
+    world: &CucumberWorld,
+    snapshot_name: &str,
+) -> Result<(), StepError> {
+    validate_snapshot_path_component(snapshot_name, "Snapshot name")?;
+
+    let runtime_dir_by_node_name: Vec<(String, PathBuf)> = world
+        .nodes_info
+        .iter()
+        .map(|(node_name, info)| (node_name.clone(), info.runtime_dir.clone()))
+        .collect();
+
+    for (node_name, node_runtime_dir) in &runtime_dir_by_node_name {
+        save_named_blockchain_snapshot(snapshot_name, node_name, node_runtime_dir)?;
+        info!(
+            target: TARGET,
+            "Saved blockchain snapshot `{snapshot_name}` for node `{node_name}`",
+        );
+    }
+    Ok(())
 }
