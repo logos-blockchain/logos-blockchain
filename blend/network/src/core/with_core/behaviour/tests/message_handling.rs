@@ -86,7 +86,6 @@ async fn invalid_public_header_message_publish() {
     );
 }
 
-#[ignore = "TODO: enable this logic after investigating session/epoch transition issues"]
 #[test(tokio::test)]
 async fn undeserializable_message_received() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
@@ -137,7 +136,6 @@ async fn undeserializable_message_received() {
     }
 }
 
-#[ignore = "TODO: enable this logic after investigating session/epoch transition issues"]
 #[test(tokio::test)]
 async fn duplicate_message_received() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
@@ -303,7 +301,7 @@ async fn duplicate_message_within_sensitivity_interval_is_not_spam() {
     );
 }
 
-#[ignore = "TODO: enable this logic after investigating session/epoch transition issues"]
+#[ignore = "TODO: enable this logic after investigating session/epoch transition issues. Test disabled because we currently have some session rotation 'front-running' since we self-apply locally produced blocks, which can lead some nodes to start generating proofs from a future session."]
 #[test(tokio::test)]
 async fn invalid_public_header_message_received() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
