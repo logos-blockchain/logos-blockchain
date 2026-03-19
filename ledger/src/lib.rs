@@ -37,14 +37,25 @@ const FEE_AVG_NUM: u128 = 10_512;
 /// Numerator of `I_max` * `S_TGE` * `DELTA_t` / `f`
 /// It corresponds to `MAX_INFLATION` * `TOKEN_GENESIS` * `BLOCK_PER_BLOCK` /
 /// `BLOCK_PER_YEAR`
-const INFLATION_NUM: u128 = 62_500;
+const INFLATION_NUMERATOR: u128 = 62_500;
 
 /// Numerator of `I_max` * `S_TGE` * `DELTA_t` / `f`
 /// It corresponds to `MAX_INFLATION` * `TOKEN_GENESIS` * `BLOCK_PER_BLOCK` /
 /// `BLOCK_PER_YEAR`
-const INFLATION_DEN: u128 = 657;
+const INFLATION_DENOMINATOR: u128 = 657;
 
 const STAKE_TARGET: u128 = 3_000_000_000;
+
+// That correspond to 40% of the block rewards for leaders
+const LEADER_REWARD_SHARE_NUMERATOR: u128 = 4;
+
+const LEADER_REWARD_SHARE_DENOMINATOR: u128 = 10;
+
+// That correspond to 60% of the block rewards for blend nodes
+
+const BLEND_REWARD_SHARE_NUMERATOR: u128 = 6;
+
+const BLEND_REWARD_SHARE_DENOMINATOR: u128 = 10;
 
 // While individual notes are constrained to be `u64`, intermediate calculations
 // may overflow, so we use `i128` to avoid that and to easily represent negative
@@ -226,16 +237,20 @@ impl LedgerState {
             .saturating_sub(u128::from(self.cryptarchia_ledger.epoch_state.total_stake))
             .min(A_SCALE);
 
-        let reward_numerator = INFLATION_NUM * a_numerator
-            + INFLATION_DEN
+        let reward_numerator = INFLATION_NUMERATOR * a_numerator
+            + INFLATION_DENOMINATOR
                 * (A_SCALE - a_numerator)
                 * u128::from(self.cryptarchia_ledger.get_fee_from_index(window_index));
-        let reward_denominator = INFLATION_DEN * A_SCALE;
+        let reward_denominator = INFLATION_DENOMINATOR * A_SCALE;
 
         // blend get 60% of rewards while leaders get the 40% remaining.
         // Casting as Value truncate the floating points
-        let blend_reward = (reward_numerator * 6 / (reward_denominator * 10)) as Value;
-        let leader_reward = (reward_numerator * 4 / (reward_denominator * 10)) as Value;
+        let blend_reward = (reward_numerator * BLEND_REWARD_SHARE_NUMERATOR
+            / (reward_denominator * BLEND_REWARD_SHARE_DENOMINATOR))
+            as Value;
+        let leader_reward = (reward_numerator * LEADER_REWARD_SHARE_NUMERATOR
+            / (reward_denominator * LEADER_REWARD_SHARE_DENOMINATOR))
+            as Value;
 
         self.mantle_ledger.leaders = self
             .mantle_ledger
