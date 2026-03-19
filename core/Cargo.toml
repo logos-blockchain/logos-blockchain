@@ -21,6 +21,7 @@ bytes                         = { workspace = true }
 const-hex                     = { default-features = false, features = ["alloc"], version = "1" }
 futures                       = { default-features = false, features = ["alloc"], version = "0.3" }
 hex                           = { default-features = false, features = ["alloc"], version = "0.4" }
+lb-blend-crypto               = { workspace = true }
 lb-blend-proofs               = { workspace = true }
 lb-cryptarchia-engine         = { features = ["serde"], workspace = true }
 lb-groth16                    = { features = ["deser"], workspace = true }
@@ -39,6 +40,7 @@ thiserror                     = "1.0"
 tracing                       = { workspace = true }
 
 [dev-dependencies]
+hasher     = "0.1.4"
 rand       = { workspace = true }
 serde_json = { default-features = false, features = ["alloc"], version = "1.0" }
 tokio      = "1.49.0"

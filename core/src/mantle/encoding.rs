@@ -690,11 +690,17 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx) -> usize {
 #[cfg(test)]
 mod tests {
     use ark_ff::Field as _;
+    use lb_blend_crypto::blake2b512;
+    use lb_groth16::{GROTH16_SAFE_BYTES_SIZE, fr_from_bytes_unchecked};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use lb_poseidon2::Digest;
     use num_bigint::BigUint;
+    use tokio::time::Instant as TokioInstant;
 
     use super::*;
     use crate::{
+        codec::SerializeOp as _,
+        crypto::ZkHasher,
         mantle::{Transaction as _, TxHash},
         sdp::blend::ActivityProof,
     };
@@ -921,29 +927,82 @@ mod tests {
         assert_eq!(decoded_tx, signed_tx);
     }
 
+    struct BlakePoseidonHasher(Vec<u8>);
+    impl BlakePoseidonHasher {
+        fn hash(&self) -> TxHash {
+            let blake2 = blake2b512(&[&self.0]);
+            let frs: Vec<Fr> = blake2
+                .chunks(GROTH16_SAFE_BYTES_SIZE)
+                .map(fr_from_bytes_unchecked)
+                .collect();
+            <ZkHasher as Digest>::digest(&frs).into()
+        }
+    }
+
+    #[derive(Debug)]
+    struct BenchRow {
+        payload_size: usize,
+        pre: std::time::Duration,
+        p2: std::time::Duration,
+        pbl: std::time::Duration,
+        sign: std::time::Duration,
+        enc: std::time::Duration,
+        pred: std::time::Duration,
+        dec: std::time::Duration,
+        tot: std::time::Duration,
+        p2_over_pbl: f64,
+        p2_over_tot: f64,
+        sign_over_tot: f64,
+        dec_over_tot: f64,
+    }
+
+    // This test encodes and decodes transactions with large inscriptions to
+    // benchmark the performance of the encoding and decoding logic, as well as
+    // to verify that it works correctly for large payloads. It tests payload
+    // sizes from 128kB up to 2MiB in 128kB increments, measuring the time taken
+    // for each step of the process and printing a table of results. It also
+    // compares Blake2b + Poseidon2 hashing against the standard
+    // Poseidon2 hashing to see how much overhead the Poseidon2 only hashing step
+    // adds for large payloads.
     #[tokio::test]
     async fn test_large_payload_encoding_decoding() {
-        // Test payload sizes from 512kB up to 2MiB in 512kB increments
-        const CHUNK_SIZE: usize = 512 * 1024;
-        const MAX_SIZE: usize = 2 * 1024 * 1024;
+        // Cunks size in 128 byte increments
+        const CHUNK_SIZE: [usize; 8] = [1, 4, 8, 4 * 8, 32 * 8, 256 * 8, 1024 * 8, 4096 * 8];
+
+        let mut payload_sizes_kb = Vec::new();
+
+        for (i, pair) in CHUNK_SIZE.windows(2).enumerate() {
+            let step = pair[0];
+            let end = pair[1];
+
+            // first segment starts at 4, next segments start at 2*step to avoid duplicates
+            let start = if i == 0 { step } else { step * 2 };
+
+            for kb in (start..=end).step_by(step) {
+                payload_sizes_kb.push(kb);
+            }
+        }
 
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
 
         let mut tasks = Vec::new();
 
-        for payload_size in (CHUNK_SIZE..=MAX_SIZE).step_by(CHUNK_SIZE) {
+        for payload_kb in payload_sizes_kb {
+            let payload_size = payload_kb * 128;
+
             let signing_key = signing_key.clone();
 
             let task = tokio::task::spawn(async move {
                 let large_inscription = vec![0xAB; payload_size];
 
+                // Preamble
+                let start_time = TokioInstant::now();
                 let inscribe_op = InscriptionOp {
                     channel_id: ChannelId::from([0xAA; 32]),
                     inscription: large_inscription,
                     parent: MsgId::from([0xBB; 32]),
                     signer: signing_key.public_key(),
                 };
-
                 let mantle_tx = MantleTx {
                     ops: vec![Op::ChannelInscribe(inscribe_op)],
                     ledger_tx: LedgerTx::new(vec![], vec![]),
@@ -951,7 +1010,24 @@ mod tests {
                     storage_gas_price: 50,
                 };
 
+                let time_0 = start_time.elapsed();
+
+                // Poseidon2 hash (--1)
+                let start_time = TokioInstant::now();
+
                 let txhash = mantle_tx.hash();
+
+                let time_1 = start_time.elapsed();
+
+                // Poseidon2-Blake2b hash (--2)
+                let start_time = TokioInstant::now();
+
+                let _txhash = BlakePoseidonHasher(mantle_tx.to_bytes().unwrap().to_vec()).hash();
+
+                let time_2 = start_time.elapsed();
+
+                // Sign (--3)
+                let start_time = TokioInstant::now();
                 let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
                 let signed_tx = SignedMantleTx::new(
                     mantle_tx,
@@ -960,8 +1036,16 @@ mod tests {
                 )
                 .unwrap();
 
+                let time_3 = start_time.elapsed();
+
+                // Encode (--4)
+                let start_time = TokioInstant::now();
                 let encoded = encode_signed_mantle_tx(&signed_tx);
 
+                let time_4 = start_time.elapsed();
+                let start_time = TokioInstant::now();
+
+                // Predicted size (--5)
                 let predicted_size = predict_signed_mantle_tx_size(&signed_tx.mantle_tx);
                 assert_eq!(
                     predicted_size,
@@ -969,8 +1053,15 @@ mod tests {
                     "Size mismatch at payload size {payload_size}",
                 );
 
+                let time_5 = start_time.elapsed();
+
+                // Decode (--5)
+                let start_time = TokioInstant::now();
+
                 let (remaining, decoded_tx) = decode_signed_mantle_tx(&encoded)
                     .unwrap_or_else(|_| panic!("Failed to decode at payload size {payload_size}"));
+
+                let time_6 = start_time.elapsed();
 
                 assert!(
                     remaining.is_empty(),
@@ -980,15 +1071,112 @@ mod tests {
                     decoded_tx, signed_tx,
                     "Roundtrip mismatch at payload size {payload_size}",
                 );
+
+                let total = time_0 + time_1 + time_2 + time_3 + time_4 + time_5 + time_6;
+
+                let p2_over_pbl = time_1.as_secs_f64() / time_2.as_secs_f64();
+                let p2_over_tot = time_1.as_secs_f64() / total.as_secs_f64();
+                let sign_over_tot = time_3.as_secs_f64() / total.as_secs_f64();
+                let dec_over_tot = time_6.as_secs_f64() / total.as_secs_f64();
+
+                BenchRow {
+                    payload_size,
+                    pre: time_0,
+                    p2: time_1,
+                    pbl: time_2,
+                    sign: time_3,
+                    enc: time_4,
+                    pred: time_5,
+                    dec: time_6,
+                    tot: total,
+                    p2_over_pbl,
+                    p2_over_tot,
+                    sign_over_tot,
+                    dec_over_tot,
+                }
             });
 
             tasks.push(task);
         }
 
         // Wait for all tasks to complete
+        let mut rows = Vec::new();
         for task in tasks {
-            task.await.unwrap();
+            rows.push(task.await.unwrap());
         }
+
+        let print = false;
+        if print {
+            print_results(rows);
+        }
+    }
+
+    fn print_results(mut bench_rows: Vec<BenchRow>) {
+        const SEP_TIMINGS: &str = "+------------+------------+------------+------------+------------+------------+------------+------------+------------+";
+        const SEP_RATIOS: &str =
+            "+------------+---------------+----------+----------+------------+";
+
+        bench_rows.sort_by_key(|r| r.payload_size);
+
+        let fmt_commas = |n: usize| -> String {
+            let s = n.to_string();
+            let mut out = String::new();
+            for (i, c) in s.chars().rev().enumerate() {
+                if i > 0 && i % 3 == 0 {
+                    out.push(',');
+                }
+                out.push(c);
+            }
+            out.chars().rev().collect()
+        };
+
+        println!("{SEP_TIMINGS}");
+        println!(
+            "| {:>10} | {:>10} | {:>10} | {:>10} | {:>10} | {:>10} | {:>10} | {:>10} | {:>10} |",
+            "payload",
+            "preamble",
+            "pos2",
+            "pos2(bl)",
+            "sign",
+            "encode",
+            "predict",
+            "decode",
+            "total"
+        );
+        println!("{SEP_TIMINGS}");
+        for r in &bench_rows {
+            println!(
+                "| {:>10} | {:>10} | {:>10} | {:>10} | {:>10} | {:>10} | {:>10} | {:>10} | {:>10} |",
+                fmt_commas(r.payload_size),
+                format!("{:.2?}", r.pre),
+                format!("{:.2?}", r.p2),
+                format!("{:.2?}", r.pbl),
+                format!("{:.2?}", r.sign),
+                format!("{:.2?}", r.enc),
+                format!("{:.2?}", r.pred),
+                format!("{:.2?}", r.dec),
+                format!("{:.2?}", r.tot),
+            );
+        }
+        println!("{SEP_TIMINGS}");
+
+        println!("{SEP_RATIOS}");
+        println!(
+            "| {:>10} | {:>12} | {:>8} | {:>8} | {:>10} |",
+            "payload", "pos2:pos2(bl)", "pos2:tot", "sign:tot", "decode:tot"
+        );
+        println!("{SEP_RATIOS}");
+        for r in &bench_rows {
+            println!(
+                "| {:>10} | {:>13} | {:>8} | {:>8} | {:>10} |",
+                fmt_commas(r.payload_size),
+                format!("{:.2}x", r.p2_over_pbl),
+                format!("{:.2}%", r.p2_over_tot * 100.0),
+                format!("{:.2}%", r.sign_over_tot * 100.0),
+                format!("{:.2}%", r.dec_over_tot * 100.0),
+            );
+        }
+        println!("{SEP_RATIOS}");
     }
 
     #[test]
