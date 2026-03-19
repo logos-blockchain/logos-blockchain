@@ -8,6 +8,22 @@ use logos_blockchain_node::{
     },
     get_services_to_start, run_node_from_config,
 };
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
+#[cfg(feature = "dhat-heap")]
+struct DhatExitGuard;
+
+#[cfg(feature = "dhat-heap")]
+impl Drop for DhatExitGuard {
+    fn drop(&mut self) {
+        eprintln!(
+            "\nDHAT heap output capturing, should be in 'dhat-heap.json' - run \
+            https://nnethercote.github.io/dh_view/dh_view.html to view the results.\n"
+        );
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -54,16 +70,38 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    #[cfg(feature = "dhat-heap")]
+    let _dhat_profiler = dhat::Profiler::new_heap();
+    #[cfg(feature = "dhat-heap")]
+    let _dhat_exit_guard = DhatExitGuard;
+    #[cfg(feature = "dhat-heap")]
+    println!("\n\nDHAT: Profiling enabled.\n\n");
+
     let run_config = {
         let user_config =
-            deserialize_config_at_path::<UserConfig>(cli_args.config_path(), OnUnknownKeys::Warn)?;
+            deserialize_config_at_path::<UserConfig>(cli_args.config_path(), OnUnknownKeys::Warn)
+                .inspect_err(|e| {
+                eprintln!("\nExiting... {e}.\n");
+            })?;
         user_config.update_from_args(cli_args)?
     };
 
-    let app = run_node_from_config(run_config).map_err(|e| eyre!("{e}"))?;
-    let services_to_start = get_services_to_start(&app).await?;
+    let app = run_node_from_config(run_config)
+        .map_err(|e| eyre!("{e}"))
+        .inspect_err(|e| {
+            eprintln!("\nExiting... {e}.\n");
+        })?;
+    let services_to_start = get_services_to_start(&app).await.inspect_err(|e| {
+        eprintln!("\nExiting... {e}.\n");
+    })?;
 
-    drop(app.handle().start_service_sequence(services_to_start).await);
+    app.handle()
+        .start_service_sequence(services_to_start)
+        .await
+        .map_err(|e| eyre!("start_service_sequence failed: {e}"))
+        .inspect_err(|e| {
+            eprintln!("\nExiting... {e}.\n");
+        })?;
 
     app.wait_finished().await;
     Ok(())

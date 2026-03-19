@@ -212,6 +212,9 @@ where
                 latest_downloaded_block.map_or_else(HashSet::new, |id| HashSet::from([id])),
             )
             .await
+            .inspect_err(|_e| {
+                crate::metrics::chainsync_observe_download_blocks_err();
+            })
             .map_err(Error::BlockProvider)?;
 
         Ok(Some(Download::new(peer, target, stream)))
@@ -275,6 +278,7 @@ where
                 self.handle_download_completed(download, downloads).await
             }
             DownloadsOutput::Error { error, download } => {
+                crate::metrics::chainsync_observe_download_blocks_err();
                 error!("Download failed from {:?}: {}", download.peer(), error);
                 Err(Error::BlockProvider(error))
             }
@@ -326,6 +330,12 @@ where
             "A download completed for {:?}. Try a new download",
             download.peer()
         );
+
+        crate::metrics::chainsync_observe_download_blocks_ok(
+            download.started_at().elapsed(),
+            download.blocks_downloaded(),
+        );
+
         self.try_initiate_download(*download.peer(), download.last(), downloads)
             .await
     }

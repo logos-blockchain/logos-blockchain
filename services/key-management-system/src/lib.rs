@@ -20,6 +20,7 @@ use crate::{
 pub mod api;
 pub mod backend;
 pub mod message;
+mod metrics;
 
 pub struct KMSService<Backend, RuntimeServiceId>
 where
@@ -115,7 +116,11 @@ where
                 key_type,
                 reply_channel,
             } => {
+                metrics::kms_register_requests();
+
                 if let Err(e) = backend.register(&key_id, key_type) {
+                    metrics::kms_register_failures();
+
                     if reply_channel.send(Err(e)).is_err() {
                         error!("Could not send backend key registration error to caller.");
                     }
@@ -125,12 +130,16 @@ where
                 let pk_bytes_result = backend.public_key(&key_id).map(|pk| (key_id.clone(), pk));
                 if reply_channel.send(pk_bytes_result).is_err() {
                     error!("Could not reply to the public key request channel");
+                } else {
+                    metrics::kms_register_success();
                 }
             }
             KMSMessage::PublicKey {
                 key_id,
                 reply_channel,
             } => {
+                metrics::kms_public_key_requests();
+
                 let pk_bytes_result = backend.public_key(&key_id);
                 if reply_channel.send(pk_bytes_result).is_err() {
                     error!("Could not reply to the public key request channel");
@@ -142,9 +151,17 @@ where
                 reply_channel,
             } => {
                 let signature_result = match signing_strategy {
-                    KMSSigningStrategy::Single(key) => backend.sign(&key, payload),
+                    KMSSigningStrategy::Single(key) => {
+                        metrics::kms_sign_requests_single();
+                        let signature_result = backend.sign(&key, payload);
+                        metrics::kms_sign_single_result(&signature_result);
+                        signature_result
+                    }
                     KMSSigningStrategy::Multi(keys) => {
-                        backend.sign_multiple(keys.as_slice(), payload)
+                        metrics::kms_sign_requests_multi();
+                        let signature_result = backend.sign_multiple(keys.as_slice(), payload);
+                        metrics::kms_sign_multi_result(&signature_result);
+                        signature_result
                     }
                 };
                 if reply_channel.send(signature_result).is_err() {
@@ -153,7 +170,9 @@ where
             }
             KMSMessage::Execute { key_id, operator } => {
                 // TODO: Bubble up errors: https://github.com/logos-blockchain/logos-blockchain/issues/2079
+                metrics::kms_execute_requests();
                 drop(backend.execute(&key_id, operator).await.inspect_err(|e| {
+                    metrics::kms_execute_failures();
                     error!("Failed to execute operator with key ID {key_id:?}. Error: {e:?}");
                 }));
             }

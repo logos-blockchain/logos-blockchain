@@ -1,11 +1,13 @@
 pub mod api;
 pub mod backends;
+mod metrics;
 
 use std::{
     collections::{BTreeSet, HashMap},
     fmt::{Debug, Display, Formatter},
     marker::PhantomData,
     num::NonZeroUsize,
+    time::Instant,
 };
 
 use async_trait::async_trait;
@@ -276,7 +278,9 @@ where
     Backend: StorageBackend + Send + Sync + 'static,
 {
     async fn handle_storage_message(msg: StorageMsg<Backend>, backend: &mut Backend) {
-        if let Err(e) = match msg {
+        let started_at = Instant::now();
+
+        let result = match msg {
             StorageMsg::Load { key, reply_channel } => {
                 Self::handle_load(backend, key, reply_channel).await
             }
@@ -299,8 +303,13 @@ where
                 reply_channel,
             } => Self::handle_execute(backend, transaction, reply_channel).await,
             StorageMsg::Api { request: api_call } => Self::handle_api_call(api_call, backend).await,
-        } {
-            tracing::error!("Error handling storage message: {e}");
+        };
+
+        if let Err(err) = result {
+            metrics::storage_request_failed();
+            tracing::error!(err = %err, "Storage request failed");
+        } else {
+            metrics::storage_observe_request_ok(started_at);
         }
     }
     /// Handle load message

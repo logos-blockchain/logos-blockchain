@@ -17,6 +17,7 @@ async-trait           = "0.1"
 cfg_eval              = { optional = true, version = "0.1" }
 futures               = { default-features = false, version = "0.3" }
 lb-cryptarchia-engine = { features = ["tokio"], workspace = true }
+lb-tracing            = { workspace = true }
 lb-utils              = { optional = true, workspace = true }
 log                   = { workspace = true }
 overwatch             = { workspace = true }

@@ -12,7 +12,10 @@ use lb_key_management_system_service::keys::{Key, secured_key::SecuredKey as _};
 use lb_libp2p::Multiaddr;
 use lb_node::{
     UserConfig, config,
-    config::{RunConfig, tracing::serde::logger},
+    config::{
+        RunConfig,
+        tracing::serde::{Level, logger},
+    },
 };
 use rand::Rng as _;
 use testing_framework_core::scenario::{Application, DynError, PeerSelection, StartNodeOptions};
@@ -25,6 +28,7 @@ use testing_framework_runner_local::{
 use tracing::debug;
 
 use crate::{
+    LOGOS_BLOCKCHAIN_LOG_LEVEL,
     framework::LbcEnv,
     node::{
         DeploymentPlan, NodeHttpClient, NodePlan,
@@ -131,6 +135,7 @@ impl LocalDeployerEnv for LbcEnv {
     ) -> Result<LaunchSpec, DynError> {
         let mut config = config.clone();
         ensure_recovery_paths(dir).map_err(|source| -> DynError { source.into() })?;
+        config.user.tracing.level = configured_node_log_level();
 
         if !tf_env::debug_tracing() {
             let log_prefix = format!("{LOGS_PREFIX}-{label}");
@@ -302,6 +307,13 @@ fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layers {
         stdout: false,
         stderr: false,
     }
+}
+
+fn configured_node_log_level() -> Level {
+    env::var(LOGOS_BLOCKCHAIN_LOG_LEVEL)
+        .ok()
+        .and_then(|raw| raw.parse::<Level>().ok())
+        .unwrap_or(Level::INFO)
 }
 
 fn build_node_config_for(

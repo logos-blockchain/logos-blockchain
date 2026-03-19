@@ -18,6 +18,7 @@ futures                       = { default-features = false, version = "0.3" }
 lb-chain-service              = { workspace = true }
 lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
+lb-tracing                    = { workspace = true }
 overwatch                     = { workspace = true }
 serde                         = { features = ["derive"], workspace = true }
 thiserror                     = { workspace = true }

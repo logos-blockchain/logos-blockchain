@@ -1,5 +1,6 @@
 use std::{fs, path::PathBuf};
 
+use lb_testing_framework::LOGOS_BLOCKCHAIN_LOG_LEVEL;
 use tracing::warn;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -16,7 +17,6 @@ const TARGET: &str = "cucumber_defaults";
 const LOGOS_BLOCKCHAIN_TESTS_TRACING: &str = "LOGOS_BLOCKCHAIN_TESTS_TRACING";
 const TF_KEEP_LOGS: &str = "TF_KEEP_LOGS";
 const CUCUMBER_LOG_LEVEL: &str = "CUCUMBER_LOG_LEVEL";
-const LOGOS_BLOCKCHAIN_LOG_LEVEL: &str = "LOGOS_BLOCKCHAIN_LOG_LEVEL";
 const RUST_LOG: &str = "RUST_LOG";
 const LOGOS_BLOCKCHAIN_LOG_DIR: &str = "LOGOS_BLOCKCHAIN_LOG_DIR";
 const CUCUMBER_RETRIES: &str = "CUCUMBER_RETRIES";

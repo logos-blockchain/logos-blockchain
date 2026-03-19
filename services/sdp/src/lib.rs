@@ -1,4 +1,5 @@
 pub mod mempool;
+mod metrics;
 pub mod wallet;
 
 use std::{
@@ -179,6 +180,8 @@ where
         while let Some(msg) = self.service_resources_handle.inbound_relay.recv().await {
             match msg {
                 SdpMessage::PostActivity { metadata, .. } => {
+                    metrics::activity_posts_total();
+
                     self.handle_post_activity(metadata, &wallet_adapter, &mempool_adapter)
                         .await;
                 }
@@ -186,6 +189,8 @@ where
                     declaration,
                     reply_channel,
                 } => {
+                    metrics::declarations_total();
+
                     self.handle_post_declaration(
                         declaration,
                         &wallet_adapter,
@@ -195,6 +200,8 @@ where
                     .await;
                 }
                 SdpMessage::PostWithdrawal { declaration_id } => {
+                    metrics::withdrawals_total();
+
                     self.handle_post_withdrawal(declaration_id, &wallet_adapter, &mempool_adapter)
                         .await;
                 }
@@ -311,17 +318,21 @@ where
             Ok(tx) => tx,
             Err(e) => {
                 tracing::error!("Failed to create declaration transaction: {:?}", e);
+                metrics::declaration_tx_failures_total();
                 return;
             }
         };
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
             tracing::error!("Failed to post declaration to mempool: {:?}", e);
+            metrics::declaration_mempool_failures_total();
             return;
         }
 
         if let Err(e) = reply_channel.send(Ok(declaration_id)) {
             tracing::error!("Failed to send post declaration response: {:?}", e);
+        } else {
+            metrics::declaration_success_total();
         }
     }
 
@@ -352,12 +363,16 @@ where
             Ok(tx) => tx,
             Err(e) => {
                 tracing::error!("Failed to create activity transaction: {:?}", e);
+                metrics::activity_tx_failures_total();
                 return;
             }
         };
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
             tracing::error!("Failed to post activity to mempool: {:?}", e);
+            metrics::activity_mempool_failures_total();
+        } else {
+            metrics::activity_success_total();
         }
     }
 
@@ -369,6 +384,7 @@ where
     ) {
         if let Err(e) = self.validate_withdrawal(&declaration_id) {
             tracing::error!("{}", e);
+            metrics::withdrawal_validation_failures_total();
             return;
         }
 
@@ -388,14 +404,18 @@ where
             Ok(tx) => tx,
             Err(e) => {
                 tracing::error!("Failed to create withdrawal transaction: {:?}", e);
+                metrics::withdrawal_tx_failures_total();
                 return;
             }
         };
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
             tracing::error!("Failed to post withdrawal to mempool: {:?}", e);
+            metrics::withdrawal_mempool_failures_total();
             return;
         }
+
+        metrics::withdrawal_success_total();
 
         self.current_declaration = None;
         // TODO: how should we reset the nonce? shouldn't it be always with

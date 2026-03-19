@@ -1,6 +1,7 @@
 pub mod api;
 mod bootstrap;
 mod mempool;
+mod metrics;
 pub mod network;
 mod relays;
 mod sync;
