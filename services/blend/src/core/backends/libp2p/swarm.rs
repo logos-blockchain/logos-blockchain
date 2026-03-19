@@ -32,15 +32,18 @@ use libp2p::{
 use rand::RngCore;
 use tokio::sync::{broadcast, mpsc};
 
-use crate::core::{
-    backends::{
-        PublicInfo, SessionInfo,
-        libp2p::{
-            LOG_TARGET, Libp2pBlendBackendSettings,
-            behaviour::{BlendBehaviour, BlendBehaviourEvent},
+use crate::{
+    core::{
+        backends::{
+            PublicInfo, SessionInfo,
+            libp2p::{
+                LOG_TARGET, Libp2pBlendBackendSettings,
+                behaviour::{BlendBehaviour, BlendBehaviourEvent},
+            },
         },
+        settings::RunningBlendConfig as BlendConfig,
     },
-    settings::RunningBlendConfig as BlendConfig,
+    metrics,
 };
 
 #[derive(Debug)]
@@ -233,7 +236,7 @@ where
                 // Forward message received from node to all other core nodes.
                 self.validate_and_forward_swarm_message((*msg).clone().into(), conn);
                 // Bubble up to service for decapsulation and delaying.
-                self.report_message_to_service(*msg);
+                self.report_message_to_service(*msg, metrics::InboundMessageType::Core);
             }
             lb_blend::network::core::with_core::behaviour::Event::UnhealthyPeer(peer_id) => {
                 self.handle_unhealthy_peer(peer_id);
@@ -347,9 +350,9 @@ where
             .validate_and_publish_message(msg)
         {
             tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
-            tracing::trace!(counter.failed_outbound_messages = 1);
+            metrics::outbound_publish_err();
         } else {
-            tracing::trace!(counter.successful_outbound_messages = 1);
+            metrics::outbound_publish_ok();
         }
     }
 
@@ -371,21 +374,25 @@ where
             // know if that is the issue.
             if !matches!(e, Error::NoPeers) {
                 tracing::error!(target: LOG_TARGET, "Failed to forward message to blend network: {e:?}");
-                tracing::trace!(counter.failed_outbound_messages = 1);
+                metrics::outbound_forward_err();
             }
         } else {
-            tracing::trace!(counter.successful_outbound_messages = 1);
+            metrics::outbound_forward_ok();
         }
     }
 
-    fn report_message_to_service(&self, msg: EncapsulatedMessageWithVerifiedPublicHeader) {
-        tracing::trace!("Received message from a peer: {msg:?}");
+    fn report_message_to_service(
+        &self,
+        msg: EncapsulatedMessageWithVerifiedPublicHeader,
+        message_type: metrics::InboundMessageType,
+    ) {
+        tracing::debug!("Received message from a peer: {msg:?}");
 
         if let Err(e) = self.incoming_message_sender.send(msg) {
             tracing::error!(target: LOG_TARGET, "Failed to send incoming message to channel: {e}");
-            tracing::trace!(counter.failed_inbound_messages = 1);
+            metrics::inbound_message_err(message_type);
         } else {
-            tracing::trace!(counter.successful_inbound_messages = 1);
+            metrics::inbound_message_ok();
         }
     }
 
@@ -419,7 +426,7 @@ where
                 // Forward message received from edge node to all the core nodes.
                 self.validate_and_publish_swarm_message(msg.clone().into());
                 // Bubble up to service for decapsulation and delaying.
-                self.report_message_to_service(msg);
+                self.report_message_to_service(msg, metrics::InboundMessageType::Edge);
             }
         }
     }
@@ -433,9 +440,9 @@ where
             .validate_and_publish_message(msg)
         {
             tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
-            tracing::trace!(counter.failed_outbound_messages = 1);
+            metrics::outbound_publish_err();
         } else {
-            tracing::trace!(counter.successful_outbound_messages = 1);
+            metrics::outbound_publish_ok();
         }
     }
 }
@@ -453,6 +460,10 @@ where
         event: SwarmEvent<BlendBehaviourEvent<ProofsVerifier, ObservationWindowProvider>>,
     ) {
         match event {
+            SwarmEvent::ConnectionEstablished { .. } | SwarmEvent::ConnectionClosed { .. } => {
+                let connected_count = self.swarm.connected_peers().count();
+                metrics::peers_connected(connected_count);
+            }
             SwarmEvent::Behaviour(BlendBehaviourEvent::Blend(NetworkBehaviourEvent::WithCore(
                 e,
             ))) => {

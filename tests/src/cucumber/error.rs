@@ -1,3 +1,8 @@
+use hex::FromHexError;
+use lb_core::{codec::Error, mantle::tx::VerificationError};
+use lb_testing_framework::configs::wallet::WalletConfigError;
+use lb_wallet::WalletError;
+use lb_zksign::ZkSignError;
 use testing_framework_core::scenario::ScenarioBuildError;
 use testing_framework_runner_local::ManualClusterError;
 use thiserror::Error;
@@ -10,6 +15,8 @@ pub enum StepError {
     MissingDeployer,
     #[error("scenario topology is not configured")]
     MissingTopology,
+    #[error("Step requires a table argument, but none was provided")]
+    MissingTable,
     #[error("scenario run duration is not configured")]
     MissingRunDuration,
     #[error("unsupported deployer kind: {value}")]
@@ -34,6 +41,8 @@ pub enum StepError {
     ManualCluster(#[from] ManualClusterError),
     #[error("Logical error: {message}")]
     LogicalError { message: String },
+    #[error("Operation timed out: {message}")]
+    Timeout { message: String },
     #[error("Step fail: {message}")]
     StepFail { message: String },
     #[error(transparent)]
@@ -42,6 +51,20 @@ pub enum StepError {
     ReqwestError(#[from] reqwest::Error),
     #[error(transparent)]
     CommonHttpError(#[from] lb_common_http_client::Error),
+    #[error(transparent)]
+    WalletConfigError(#[from] WalletConfigError),
+    #[error(transparent)]
+    WalletError(#[from] WalletError),
+    #[error(transparent)]
+    ZkSignError(#[from] ZkSignError),
+    #[error(transparent)]
+    VerificationError(#[from] VerificationError),
+    #[error("Step requires a wallet, but none was provided")]
+    MissingWallet,
+    #[error(transparent)]
+    FromHexError(#[from] FromHexError),
+    #[error(transparent)]
+    Error(#[from] Error),
 }
 
 pub type StepResult = Result<(), StepError>;

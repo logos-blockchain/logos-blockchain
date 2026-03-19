@@ -22,6 +22,7 @@ use crate::{
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
     },
+    proofs::leader_claim_proof::Groth16LeaderClaimProof,
     sdp::{ActivityMetadata, DeclarationId, Locator, ProviderId, ServiceType},
 };
 
@@ -301,8 +302,11 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
         }
 
         // ProofOfClaimProof = Groth16
-        Op::LeaderClaim(_) => map(decode_groth16, |_proof| {
-            panic!("OpProof::LeaderClaimProof not yet implemented");
+        Op::LeaderClaim(leader_claim_op) => map(decode_groth16, |proof| {
+            OpProof::PoC(Groth16LeaderClaimProof::new(
+                proof,
+                leader_claim_op.voucher_nullifier,
+            ))
         })
         .parse(input),
     }
@@ -434,8 +438,16 @@ fn encode_ed25519_public_key(key: &Ed25519PublicKey) -> Vec<u8> {
 
 fn encode_zk_signature(sig: &ZkSignature) -> Vec<u8> {
     // ZkSignature wraps ZkSignProof which is CompressedGroth16Proof
-    // CompressedProof is 128 bytes: pi_a (32) + pi_b (64) + pi_c (32)
-    sig.as_proof().to_bytes().to_vec()
+    encode_groth16_proof(sig.as_proof())
+}
+
+fn encode_poc(poc: &Groth16LeaderClaimProof) -> Vec<u8> {
+    // Groth16LeaderClaimProof wraps PocProof which is CompressedGroth16Proof
+    encode_groth16_proof(poc.proof())
+}
+
+fn encode_groth16_proof(proof: &CompressedGroth16Proof) -> Vec<u8> {
+    proof.to_bytes().to_vec()
 }
 
 /// Encode channel operations
@@ -615,9 +627,7 @@ fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
             bytes
         }
         (OpProof::ZkSig(sig), Op::SDPWithdraw(_) | Op::SDPActive(_)) => encode_zk_signature(sig),
-        (_, Op::LeaderClaim(_)) => {
-            unimplemented!("ProofOfClaimProof not implemented");
-        }
+        (OpProof::PoC(poc), Op::LeaderClaim(_)) => encode_poc(poc),
         _ => {
             panic!("Mismatch between proof type and operation type");
         }
@@ -665,13 +675,8 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx) -> usize {
             // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
             Op::SDPDeclare(_) => GROTH16_BYTES + ED25519_SIG_BYTES,
 
-            // ZkSigProof  = ZkSignature
-            Op::SDPWithdraw(_) | Op::SDPActive(_) => GROTH16_BYTES,
-
-            // ProofOfClaimProof = Groth16
-            Op::LeaderClaim(_) => {
-                unimplemented!("OpProof::LeaderClaimProof not yet implemented");
-            }
+            // ZkSigProof = ZkSignature = ProofOfClaimProof = Groth16
+            Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::LeaderClaim(_) => GROTH16_BYTES,
         })
         .sum::<usize>();
 
@@ -1464,5 +1469,70 @@ mod tests {
         let actual_size = encoded.len();
 
         assert_eq!(predicted_size, actual_size);
+    }
+
+    #[test]
+    fn test_predict_signed_mantle_tx_size_with_leader_claim() {
+        use crate::proofs::leader_claim_proof::Groth16LeaderClaimProof;
+
+        let leader_claim_op = LeaderClaimOp {
+            rewards_root: RewardsRoot::default(),
+            voucher_nullifier: VoucherNullifier::default(),
+        };
+
+        let mantle_tx = MantleTx {
+            ops: vec![Op::LeaderClaim(leader_claim_op.clone())],
+            ledger_tx: LedgerTx::new(vec![], vec![]),
+            execution_gas_price: 100,
+            storage_gas_price: 50,
+        };
+
+        let predicted_size = predict_signed_mantle_tx_size(&mantle_tx);
+
+        let poc_proof = Groth16LeaderClaimProof::new(
+            CompressedGroth16Proof::from_bytes(&[0u8; 128]),
+            leader_claim_op.voucher_nullifier,
+        );
+
+        // Construct directly to skip proof verification (dummy proof won't verify)
+        let signed_tx = SignedMantleTx {
+            mantle_tx,
+            ops_proofs: vec![OpProof::PoC(poc_proof)],
+            ledger_tx_proof: ZkKey::multi_sign(&[], &Fr::from(0u64)).unwrap(),
+        };
+
+        let encoded = encode_signed_mantle_tx(&signed_tx);
+        assert_eq!(predicted_size, encoded.len());
+    }
+
+    #[test]
+    fn test_encode_decode_leader_claim_op_proof() {
+        use crate::proofs::leader_claim_proof::Groth16LeaderClaimProof;
+
+        let proof_bytes: [u8; 128] = core::array::from_fn(|i| i as u8);
+        let voucher_nf = VoucherNullifier::default();
+        let poc_proof = Groth16LeaderClaimProof::new(
+            CompressedGroth16Proof::from_bytes(&proof_bytes),
+            voucher_nf,
+        );
+
+        let leader_claim_op = LeaderClaimOp {
+            rewards_root: RewardsRoot::default(),
+            voucher_nullifier: voucher_nf,
+        };
+        let op = Op::LeaderClaim(leader_claim_op);
+
+        let encoded = encode_op_proof(&OpProof::PoC(poc_proof), &op);
+        assert_eq!(encoded.len(), GROTH16_BYTES);
+
+        let (remaining, decoded) = decode_op_proof(&encoded, &op).unwrap();
+        assert!(remaining.is_empty());
+        assert_eq!(
+            decoded,
+            OpProof::PoC(Groth16LeaderClaimProof::new(
+                CompressedGroth16Proof::from_bytes(&proof_bytes),
+                voucher_nf,
+            ))
+        );
     }
 }

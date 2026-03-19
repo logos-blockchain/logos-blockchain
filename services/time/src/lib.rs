@@ -26,6 +26,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use crate::backends::TimeBackend;
 
 pub mod backends;
+mod metrics;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SlotTick {
@@ -132,8 +133,12 @@ where
                 }
                 Some(slot_tick) = tick_stream.next() => {
                     current_slot_tick = slot_tick;
+                    metrics::time_current_slot(u64::from(slot_tick.slot));
+                    metrics::time_current_epoch(u32::from(slot_tick.epoch));
+
                     if let Err(e) = broadcast_sender.send(slot_tick) {
                         error!("Error updating slot tick: {e}");
+                        metrics::time_broadcast_errors();
                     }
                 }
             }

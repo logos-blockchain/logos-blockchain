@@ -1,4 +1,5 @@
 pub mod backend;
+mod metrics;
 pub mod network;
 pub mod storage;
 pub mod tx;

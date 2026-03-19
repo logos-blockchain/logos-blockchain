@@ -24,6 +24,7 @@ lb-ledger               = { features = ["serde"], workspace = true }
 lb-network-service      = { workspace = true }
 lb-services-utils       = { workspace = true }
 lb-time-service         = { workspace = true }
+lb-tracing              = { workspace = true }
 lb-tx-service           = { workspace = true }
 overwatch               = { workspace = true }
 rand                    = { default-features = false, version = "0.8" }

@@ -41,6 +41,7 @@ pub mod edge;
 pub mod epoch_info;
 pub mod membership;
 pub mod message;
+pub(crate) mod metrics;
 pub mod session;
 pub mod settings;
 

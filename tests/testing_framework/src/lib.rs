@@ -11,6 +11,7 @@ use lb_libp2p::{Multiaddr, multiaddr};
 
 pub mod env;
 mod framework;
+pub use framework::local::USER_CONFIG_FILE;
 mod node;
 pub mod workloads;
 
@@ -21,6 +22,7 @@ pub(crate) mod common {
 }
 
 pub static IS_DEBUG_TRACING: LazyLock<bool> = LazyLock::new(testing_framework_env::debug_tracing);
+pub const LOGOS_BLOCKCHAIN_LOG_LEVEL: &str = "LOGOS_BLOCKCHAIN_LOG_LEVEL";
 
 fn node_address_from_port(port: u16) -> Multiaddr {
     multiaddr(Ipv4Addr::LOCALHOST, port)

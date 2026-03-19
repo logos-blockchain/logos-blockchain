@@ -11,9 +11,16 @@ exporters:
     endpoint: "http://loki:3100/otlp"
     tls:
       insecure: true
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    resource_to_telemetry_conversion:
+      enabled: true
 
 service:
   pipelines:
     logs:
       receivers: [otlp]
       exporters: [otlp_http/loki]
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]
