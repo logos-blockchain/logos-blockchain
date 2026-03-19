@@ -24,22 +24,22 @@ use thiserror::Error;
 
 const WINDOW_SIZE: usize = 120;
 
-/// Denominator of 1/(I_max * D1_target * Delta_t * T)
-/// That correspond to BLOCK_PER_YEAR / (MAX_INFLATION * KPI_FEE_TARGET *
-/// WINDOW_SIZE)
+/// Denominator of 1/(`I_max` * `D1_target` * `Delta_t` * `T`)
+/// That correspond to `BLOCK_PER_YEAR` / (`MAX_INFLATION` * `KPI_FEE_TARGET` *
+/// `WINDOW_SIZE`)
 const A_SCALE: u128 = 120_000_000;
 
-/// Numerator of 1/(I_max * D1_target * Delta_t * T)
-/// That correspond to BLOCK_PER_YEAR / (MAX_INFLATION * KPI_FEE_TARGET *
-/// WINDOW_SIZE)
+/// Numerator of 1/(`I_max` * `D1_target` * `Delta_t` * `T`)
+/// That correspond to `BLOCK_PER_YEAR` / (`MAX_INFLATION` * `KPI_FEE_TARGET` *
+/// `WINDOW_SIZE`)
 const FEE_AVG_NUM: u128 = 10_512;
-/// Numerator of I_max * S_TGE * DELTA_t / f
-/// It corresponds to MAX_INFLATION * TOKEN_GENESIS * BLOCK_PER_BLOCK /
-/// BLOCK_PER_YEAR
+/// Numerator of `I_max` * `S_TGE` * `DELTA_t` / `f`
+/// It corresponds to `MAX_INFLATION` * `TOKEN_GENESIS` * `BLOCK_PER_BLOCK` /
+/// `BLOCK_PER_YEAR`
 const INFLATION_NUM: u128 = 62_500;
-/// Numerator of I_max * S_TGE * DELTA_t / f
-/// It corresponds to MAX_INFLATION * TOKEN_GENESIS * BLOCK_PER_BLOCK /
-/// BLOCK_PER_YEAR
+/// Numerator of `I_max` * `S_TGE` * `DELTA_t` / `f`
+/// It corresponds to `MAX_INFLATION` * `TOKEN_GENESIS` * `BLOCK_PER_BLOCK` /
+/// `BLOCK_PER_YEAR`
 const INFLATION_DEN: u128 = 657;
 
 const STAKE_TARGET: u128 = 3_000_000_000;
@@ -221,13 +221,13 @@ impl LedgerState {
         let sum_fees = self.cryptarchia_ledger.get_summed_fees();
         let a_numerator = STAKE_TARGET
             .saturating_add(FEE_AVG_NUM.saturating_mul(sum_fees))
-            .saturating_sub(self.cryptarchia_ledger.epoch_state.total_stake as u128)
+            .saturating_sub(u128::from(self.cryptarchia_ledger.epoch_state.total_stake))
             .min(A_SCALE);
 
         let reward_numerator = INFLATION_NUM * a_numerator
             + INFLATION_DEN
                 * (A_SCALE - a_numerator)
-                * self.cryptarchia_ledger.get_fee_from_index(window_index) as u128;
+                * u128::from(self.cryptarchia_ledger.get_fee_from_index(window_index));
         let reward_denominator = INFLATION_DEN * A_SCALE;
 
         // blend get 60% of rewards while leaders get the 40% remaining.
@@ -275,7 +275,7 @@ impl LedgerState {
                 Ordering::Equal => {} // OK!
             }
             self.cryptarchia_ledger.update_fee_window(
-                self.block_number as usize % BLOCK_REWARD_WINDOW_SIZE,
+                self.block_number as usize % WINDOW_SIZE,
                 total_balance as u64,
             );
         }
