@@ -12,7 +12,12 @@ use crate::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasConstants, GasCost},
-        ops::{Op, OpProof, transfer::TransferOp},
+        ledger::Tx as LedgerTx,
+        ops::{
+            Op, OpProof,
+            channel::{ChannelId, ChannelKeyIndex},
+            transfer::TransferOp
+        },
     },
     proofs::leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
 };
@@ -82,7 +87,7 @@ struct MantleTxDeSerImpl {
 
 #[derive(Debug, Clone)]
 pub struct MantleTxGasContext {
-    pub withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>
+    pub withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
