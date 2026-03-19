@@ -8,7 +8,7 @@ Feature: Transactions
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
     And we use IBD peers
-    And all peers must be mode online after startup
+    And all peers must be mode online after startup in 30 seconds
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
@@ -28,7 +28,7 @@ Feature: Transactions
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
     And we use IBD peers
-    And all peers must be mode online after startup
+    And all peers must be mode online after startup in 30 seconds
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
@@ -56,7 +56,7 @@ Feature: Transactions
       | 10            | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
 #    And we use IBD peers
-#    And all peers must be mode online after startup
+#    And all peers must be mode online after startup in 30 seconds
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
@@ -83,7 +83,7 @@ Feature: Transactions
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
     And we use IBD peers
-    And all peers must be mode online after startup
+    And all peers must be mode online after startup in 30 seconds
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
@@ -104,7 +104,7 @@ Feature: Transactions
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
 #    And we use IBD peers
-#    And all peers must be mode online after startup
+#    And all peers must be mode online after startup in 30 seconds
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
@@ -132,7 +132,7 @@ Feature: Transactions
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
 #    And we use IBD peers
-#    And all peers must be mode online after startup
+#    And all peers must be mode online after startup in 30 seconds
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
@@ -166,7 +166,7 @@ Feature: Transactions
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
 #    And we use IBD peers
-#    And all peers must be mode online after startup
+#    And all peers must be mode online after startup in 30 seconds
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
@@ -197,7 +197,7 @@ Feature: Transactions
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
 #    And we use IBD peers
-#    And all peers must be mode online after startup
+#    And all peers must be mode online after startup in 30 seconds
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
