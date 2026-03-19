@@ -6,6 +6,9 @@ pub mod panic;
 #[cfg(feature = "config-gen")]
 pub mod init;
 
+#[cfg(feature = "dhat-heap")]
+pub mod profiling;
+
 use std::panic::set_hook;
 
 use cfg_if::cfg_if;
@@ -43,6 +46,7 @@ use overwatch::{
     DynError, derive_services,
     overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
 };
+use tokio::runtime;
 
 pub use crate::config::{ApiArgs, Command, LogArgs, NetworkArgs, UserConfig};
 use crate::{
@@ -243,10 +247,9 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
             #[cfg(feature = "testing")]
             testing_http: testing_config,
         },
-        None,
+        Some(runtime::Handle::current()),
     )
     .map_err(|e| eyre!("Error encountered: {}", e))?;
-
     Ok(app)
 }
 

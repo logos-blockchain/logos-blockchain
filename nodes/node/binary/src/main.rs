@@ -8,25 +8,12 @@ use logos_blockchain_node::{
     },
     get_services_to_start, run_node_from_config,
 };
-#[cfg(feature = "dhat-heap")]
-#[global_allocator]
-static ALLOC: dhat::Alloc = dhat::Alloc;
-
-#[cfg(feature = "dhat-heap")]
-struct DhatExitGuard;
-
-#[cfg(feature = "dhat-heap")]
-impl Drop for DhatExitGuard {
-    fn drop(&mut self) {
-        eprintln!(
-            "\nDHAT heap output capturing, should be in 'dhat-heap.json' - run \
-            https://nnethercote.github.io/dh_view/dh_view.html to view the results.\n"
-        );
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    #[cfg(feature = "dhat-heap")]
+    let _dhat_drop_guard = logos_blockchain_node::profiling::setup();
+
     let cli_args = CliArgs::parse();
 
     if let Some(command) = cli_args.command {
@@ -69,13 +56,6 @@ async fn main() -> Result<()> {
         // Early return since we are dry-running.
         return Ok(());
     }
-
-    #[cfg(feature = "dhat-heap")]
-    let _dhat_profiler = dhat::Profiler::new_heap();
-    #[cfg(feature = "dhat-heap")]
-    let _dhat_exit_guard = DhatExitGuard;
-    #[cfg(feature = "dhat-heap")]
-    println!("\n\nDHAT: Profiling enabled.\n\n");
 
     let run_config = {
         let user_config =
