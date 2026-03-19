@@ -33,10 +33,12 @@ const A_SCALE: u128 = 120_000_000;
 /// That correspond to `BLOCK_PER_YEAR` / (`MAX_INFLATION` * `KPI_FEE_TARGET` *
 /// `WINDOW_SIZE`)
 const FEE_AVG_NUM: u128 = 10_512;
+
 /// Numerator of `I_max` * `S_TGE` * `DELTA_t` / `f`
 /// It corresponds to `MAX_INFLATION` * `TOKEN_GENESIS` * `BLOCK_PER_BLOCK` /
 /// `BLOCK_PER_YEAR`
 const INFLATION_NUM: u128 = 62_500;
+
 /// Numerator of `I_max` * `S_TGE` * `DELTA_t` / `f`
 /// It corresponds to `MAX_INFLATION` * `TOKEN_GENESIS` * `BLOCK_PER_BLOCK` /
 /// `BLOCK_PER_YEAR`
