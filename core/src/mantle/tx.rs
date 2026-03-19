@@ -1,5 +1,5 @@
-use std::sync::LazyLock;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::LazyLock};
+
 use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes, serde::serde_fr};
 use lb_poseidon2::{Digest, ZkHash};
@@ -92,7 +92,9 @@ pub struct MantleTxGasContext {
 
 impl MantleTxGasContext {
     pub fn new(withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>) -> Self {
-        Self { withdraw_thresholds }
+        Self {
+            withdraw_thresholds,
+        }
     }
 
     pub fn withdraw_threshold(&self, channel_id: &ChannelId) -> Option<ChannelKeyIndex> {

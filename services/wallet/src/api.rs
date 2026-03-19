@@ -1,7 +1,8 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, SignedMantleTx, Value, ops::leader_claim::VoucherCm, tx_builder::MantleTxBuilder,
+        Note, SignedMantleTx, Value, ops::leader_claim::VoucherCm, tx::MantleTxGasContext,
+        tx_builder::MantleTxBuilder,
     },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -14,7 +15,7 @@ use overwatch::{
     },
 };
 use tokio::sync::oneshot::{self, error::RecvError};
-use lb_core::mantle::tx::MantleTxGasContext;
+
 use crate::{
     TipResponse, UtxoWithKeyId, VoucherCommitmentAndNullifier, WalletMsg, WalletServiceError,
     WalletServiceSettings,
@@ -110,7 +111,7 @@ where
         &self,
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-        change_pk: ZkPublicKey, 
+        change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
     ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
@@ -128,7 +129,10 @@ where
         Ok(rx.await??)
     }
 
-    pub async fn get_gas_context(&self, block_id: Option<HeaderId>) -> Result<MantleTxGasContext, WalletApiError> {
+    pub async fn get_gas_context(
+        &self,
+        block_id: Option<HeaderId>,
+    ) -> Result<MantleTxGasContext, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
         self.relay
             .send(WalletMsg::GetGasContext { block_id, resp_tx })
@@ -145,7 +149,8 @@ where
         amount: Value,
     ) -> Result<TipResponse<SignedMantleTx>, WalletApiError> {
         let context = self.get_gas_context(tip).await?;
-        let mantle_tx_builder = MantleTxBuilder::new(context).add_ledger_output(Note::new(amount, recipient_pk));
+        let mantle_tx_builder =
+            MantleTxBuilder::new(context).add_ledger_output(Note::new(amount, recipient_pk));
         let funded_tx_builder = self
             .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks)
             .await?;

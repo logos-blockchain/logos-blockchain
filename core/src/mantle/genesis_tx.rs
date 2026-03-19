@@ -13,9 +13,9 @@ use crate::{
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
             transfer::TransferOp,
         },
+        tx::MantleTxGasContext,
     },
 };
-use crate::mantle::tx::MantleTxGasContext;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GenesisTx(SignedMantleTx);

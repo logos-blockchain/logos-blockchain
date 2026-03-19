@@ -6,11 +6,11 @@ use lb_core::mantle::{
         ChannelId, ChannelKeyIndex, Ed25519PublicKey as PublicKey, MsgId, deposit::DepositOp,
         inscribe::InscriptionOp, set_keys::SetKeysOp,
     },
+    tx::MantleTxGasContext,
 };
 use lb_key_management_system_keys::keys::Ed25519Signature;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use lb_core::mantle::tx::MantleTxGasContext;
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -44,9 +44,7 @@ impl From<&Channels> for MantleTxGasContext {
         let withdraw_thresholds = value
             .channels
             .iter()
-            .map(|(channel_id, channel)| {
-                (*channel_id, channel.withdraw_threshold)
-            })
+            .map(|(channel_id, channel)| (*channel_id, channel.withdraw_threshold))
             .collect();
         Self::new(withdraw_thresholds)
     }

@@ -24,6 +24,7 @@ use lb_core::{
             },
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
+        tx::MantleTxGasContext,
         tx_builder::MantleTxBuilder,
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
@@ -56,7 +57,7 @@ use tokio::{
     task::JoinError,
 };
 use tracing::{debug, error, info, trace};
-use lb_core::mantle::tx::MantleTxGasContext;
+
 use crate::states::{RecoveryState, ServiceState, Wallet};
 
 type KmsBackend = PreloadKMSBackend;
@@ -144,7 +145,7 @@ pub enum WalletMsg {
     GetGasContext {
         block_id: Option<HeaderId>,
         resp_tx: Sender<Result<MantleTxGasContext, WalletServiceError>>,
-    }
+    },
 }
 
 #[derive(Debug)]
@@ -176,7 +177,7 @@ impl WalletMsg {
             | Self::SignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. }
             | Self::GetClaimableVoucher { tip, .. }
-            | Self::GetGasContext { block_id: tip, ..}=> *tip,
+            | Self::GetGasContext { block_id: tip, .. } => *tip,
             Self::GenerateNewVoucherSecret { .. } | Self::GetKnownAddresses { .. } => None,
         }
     }
@@ -481,7 +482,7 @@ where
             }
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
-            },
+            }
             WalletMsg::GetGasContext { block_id, resp_tx } => {
                 Self::get_gas_context(block_id, resp_tx, cryptarchia).await;
             }

@@ -10,7 +10,7 @@ use std::{
 use async_trait::async_trait;
 use lb_core::mantle::{
     GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo,
-    tx_builder::MantleTxBuilder,
+    tx_builder::MantleTxBuilder, tx::MantleTxGasContext,
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use rand::{seq::SliceRandom as _, thread_rng};
@@ -20,7 +20,7 @@ use testing_framework_core::scenario::{
 use thiserror::Error;
 use tokio::time::sleep;
 use tracing::debug;
-use lb_core::mantle::tx::MantleTxGasContext;
+
 use super::expectation::TxInclusionExpectation;
 use crate::{
     framework::LbcEnv,
@@ -203,7 +203,7 @@ impl<'a, E: LbcScenarioEnv> Submission<'a, E> {
 async fn submit_wallet_transaction(
     ctx: &RunContext<impl LbcScenarioEnv>,
     input: &WalletInput,
-    gas_context: MantleTxGasContext
+    gas_context: MantleTxGasContext,
 ) -> Result<(), DynError> {
     let signed_tx = Arc::new(build_wallet_transaction(input, gas_context)?);
     submit_transaction_via_cluster(ctx, signed_tx).await
@@ -270,7 +270,10 @@ fn cluster_client_exhausted_error() -> DynError {
     TxWorkloadError::ClusterClientExhausted.into()
 }
 
-fn build_wallet_transaction(input: &WalletInput, gas_context: MantleTxGasContext) -> Result<SignedMantleTx, DynError> {
+fn build_wallet_transaction(
+    input: &WalletInput,
+    gas_context: MantleTxGasContext,
+) -> Result<SignedMantleTx, DynError> {
     let tx = MantleTxBuilder::new(gas_context)
         .add_ledger_input(input.utxo)
         .add_ledger_output(Note::new(input.utxo.note.value, input.account.public_key()))

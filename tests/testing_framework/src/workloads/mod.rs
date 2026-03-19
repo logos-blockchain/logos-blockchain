@@ -8,9 +8,10 @@ use std::sync::Arc;
 pub use consensus_liveness::ConsensusLiveness;
 pub use fork_monitor::ClusterForkMonitor;
 pub use inscription::*;
+use lb_ledger::LedgerState;
 use testing_framework_core::scenario::{Application, RunContext};
 use tokio::sync::broadcast;
-use lb_ledger::LedgerState;
+
 use crate::{BlockFeed, BlockRecord, NodeHttpClient, framework::LbcEnv, node::DeploymentPlan};
 
 pub type BlockFeedSubscription = broadcast::Receiver<Arc<BlockRecord>>;
@@ -19,7 +20,9 @@ pub type BlockFeedSubscription = broadcast::Receiver<Arc<BlockRecord>>;
 pub trait LbcScenarioEnv:
     Application<Deployment = DeploymentPlan, NodeClient = NodeHttpClient>
 {
-    fn ledger_state(ctx: &RunContext<Self>) -> LedgerState where Self: Sized;
+    fn ledger_state(ctx: &RunContext<Self>) -> LedgerState
+    where
+        Self: Sized;
 }
 
 impl LbcScenarioEnv for LbcEnv {
