@@ -56,7 +56,8 @@ use tokio::{
     task::JoinError,
 };
 use tracing::{debug, error, info, trace};
-
+use lb_core::mantle::tx::MantleTxGasContext;
+use lb_ledger::mantle::channel::ChannelState;
 use crate::states::{RecoveryState, ServiceState, Wallet};
 
 type KmsBackend = PreloadKMSBackend;
@@ -141,6 +142,10 @@ pub enum WalletMsg {
     GetKnownAddresses {
         resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
     },
+    GetGasContext {
+        block_id: Option<HeaderId>,
+        resp_tx: Sender<Result<MantleTxGasContext, WalletServiceError>>,
+    }
 }
 
 #[derive(Debug)]
@@ -476,6 +481,9 @@ where
             }
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
+            },
+            WalletMsg::GetGasContext { block_id, resp_tx } => {
+                Self::get_gas_context(block_id, resp_tx, cryptarchia).await;
             }
         }
     }
@@ -1091,6 +1099,37 @@ where
         let response: Vec<_> = wallet.known_keys().keys().copied().collect();
         if let Err(e) = tx.send(Ok(response)) {
             error!(err = ?e, "Failed to send known addresses response");
+        }
+    }
+
+    async fn get_gas_context(
+        block_id: Option<HeaderId>,
+        resp_tx: Sender<Result<MantleTxGasContext, WalletServiceError>>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    ) {
+        let block_id = match Self::msg_tip_or_latest(block_id, cryptarchia).await {
+            Ok(block_id) => block_id,
+            Err(error) => {
+                Self::send_err(resp_tx, error);
+                return;
+            }
+        };
+
+        let ledger_state = match cryptarchia.get_ledger_state(block_id).await {
+            Ok(Some(ledger_state)) => ledger_state,
+            Ok(None) => {
+                Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(block_id));
+                return;
+            }
+            Err(err) => {
+                Self::send_err(resp_tx, WalletServiceError::from(err));
+                return;
+            }
+        };
+
+        let gas_context = ledger_state.mantle_ledger().channels().into();
+        if let Err(e) = resp_tx.send(Ok(gas_context)) {
+            error!(err = ?e, "Failed to send gas context response");
         }
     }
 }
