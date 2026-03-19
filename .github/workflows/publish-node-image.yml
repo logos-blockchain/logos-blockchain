@@ -60,12 +60,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            # If manual, use the version input. If release, use the tag name.
-            LB_NODE_VERSION=${{ inputs.node_version || github.ref_name }}
+            LB_NODE_VERSION=${{ github.event.inputs.node_version || github.ref_name }}
           tags: |
-            # Primary tag (e.g., 0.2.1).
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.node_version || github.ref_name }}
-            # Only update 'latest' if this is a standard Release trigger.
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.inputs.node_version || github.ref_name }}
             ${{ github.event_name == 'release' && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
           labels: ${{ steps.meta.outputs.labels }}
 
