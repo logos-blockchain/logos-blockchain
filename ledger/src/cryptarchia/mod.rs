@@ -394,8 +394,8 @@ impl LedgerState {
     }
 
     #[must_use]
-    pub fn get_summed_fees(&self) -> Value {
-        self.fee_window.iter().sum()
+    pub fn get_summed_fees(&self) -> u128 {
+        self.fee_window.iter().map(|x| *x as u128).sum()
     }
 
     #[must_use]

@@ -22,10 +22,27 @@ use lb_groth16::{Field as _, Fr};
 use mantle::LedgerState as MantleLedger;
 use thiserror::Error;
 
-const BLOCK_REWARD_SUB_PRECISION: Value = 120_000_000;
-const BLOCK_REWARD_PRECISION: Value = 78_840_000_000;
-const BLOCK_REWARD_WINDOW_SIZE: usize = 120;
-const STAKE_TARGET: Value = 3_000_000_000;
+const WINDOW_SIZE: usize = 120;
+
+/// Denominator of 1/(I_max * D1_target * Delta_t * T)
+/// That correspond to BLOCK_PER_YEAR / (MAX_INFLATION * KPI_FEE_TARGET *
+/// WINDOW_SIZE)
+const A_SCALE: u128 = 120_000_000;
+
+/// Numerator of 1/(I_max * D1_target * Delta_t * T)
+/// That correspond to BLOCK_PER_YEAR / (MAX_INFLATION * KPI_FEE_TARGET *
+/// WINDOW_SIZE)
+const FEE_AVG_NUM: u128 = 10_512;
+/// Numerator of I_max * S_TGE * DELTA_t / f
+/// It corresponds to MAX_INFLATION * TOKEN_GENESIS * BLOCK_PER_BLOCK /
+/// BLOCK_PER_YEAR
+const INFLATION_NUM: u128 = 62_500;
+/// Numerator of I_max * S_TGE * DELTA_t / f
+/// It corresponds to MAX_INFLATION * TOKEN_GENESIS * BLOCK_PER_BLOCK /
+/// BLOCK_PER_YEAR
+const INFLATION_DEN: u128 = 657;
+
+const STAKE_TARGET: u128 = 3_000_000_000;
 
 // While individual notes are constrained to be `u64`, intermediate calculations
 // may overflow, so we use `i128` to avoid that and to easily represent negative
@@ -196,27 +213,27 @@ impl LedgerState {
     /// For each block received, rewards are calculated based on the actual
     /// total estimated stake and on the average of fees consumed per block over
     /// the last `BLOCK_REWARD_WINDOW_SIZE` blocks. See the block rewards
-    /// specification: <https://www.notion.so/nomos-tech/Block-Rewards-Specification-1fd261aa09df815b951ff7139cde3fd3>
+    /// specification: <https://www.notion.so/nomos-tech/v1-1-Block-Rewards-Specification-326261aa09df80579edddaf092057b3d>
     fn compute_block_rewards(mut self) -> Self {
-        let window_index = self.block_number as usize % BLOCK_REWARD_WINDOW_SIZE;
+        let window_index = self.block_number as usize % WINDOW_SIZE;
 
         // compute A_t'
         let sum_fees = self.cryptarchia_ledger.get_summed_fees();
-        let a_t_p = STAKE_TARGET
-            .saturating_add(10512u64.saturating_mul(sum_fees))
-            .saturating_sub(self.cryptarchia_ledger.epoch_state.total_stake)
-            .min(BLOCK_REWARD_SUB_PRECISION);
-        let reward_numerator = 62500 * a_t_p
-            + (BLOCK_REWARD_SUB_PRECISION - a_t_p)
-                * self.cryptarchia_ledger.get_fee_from_index(window_index)
-                * 657;
+        let a_numerator = STAKE_TARGET
+            .saturating_add(FEE_AVG_NUM.saturating_mul(sum_fees))
+            .saturating_sub(self.cryptarchia_ledger.epoch_state.total_stake as u128)
+            .min(A_SCALE);
+
+        let reward_numerator = INFLATION_NUM * a_numerator
+            + INFLATION_DEN
+                * (A_SCALE - a_numerator)
+                * self.cryptarchia_ledger.get_fee_from_index(window_index) as u128;
+        let reward_denominator = INFLATION_DEN * A_SCALE;
 
         // blend get 60% of rewards while leaders get the 40% remaining.
         // Casting as Value truncate the floating points
-        let blend_reward =
-            (i128::from(reward_numerator * 6) / i128::from(BLOCK_REWARD_PRECISION * 10)) as Value;
-        let leader_reward =
-            (i128::from(reward_numerator * 4) / i128::from(BLOCK_REWARD_PRECISION * 10)) as Value;
+        let blend_reward = (reward_numerator * 6 / (reward_denominator * 10)) as Value;
+        let leader_reward = (reward_numerator * 4 / (reward_denominator * 10)) as Value;
 
         self.mantle_ledger.leaders = self
             .mantle_ledger
