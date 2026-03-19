@@ -151,7 +151,7 @@ async fn main() {
                         println!(
                             "Env var '{CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL}' set, removing all \
                             artefacts\n"
-                            );
+                        );
                         if let Err(e) = world.clear_scenario_artifacts() {
                             println!("{e}");
                         }
