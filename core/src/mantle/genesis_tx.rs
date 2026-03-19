@@ -116,7 +116,9 @@ impl Transaction for GenesisTx {
 }
 
 impl GasCost for GenesisTx {
-    fn gas_cost<Constants: GasConstants>(&self) -> Gas {
+    type Context = ();
+
+    fn gas_cost<Constants: GasConstants>(&self, _context: &Self::Context) -> Gas {
         // Genesis transactions have zero gas cost as per spec
         0
     }

@@ -22,6 +22,7 @@ use ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp};
 pub use tx::{MantleTx, SignedMantleTx, TxHash};
 
 use crate::mantle::ops::transfer::TransferOp;
+use crate::mantle::gas::Gas;
 
 pub const MAX_MANTLE_TXS: usize = 1024;
 
@@ -50,6 +51,8 @@ pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCost + StorageS
     fn mantle_tx(&self) -> &MantleTx;
 
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)>;
+
+    fn gas_cost<Constants: GasConstants>(&self) -> Gas;
 }
 
 /// A genesis transaction as specified in
@@ -83,6 +86,10 @@ impl<T: AuthenticatedMantleTx> AuthenticatedMantleTx for &T {
 
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)> {
         T::ops_with_proof(self)
+    }
+
+    fn gas_cost<Constants: GasConstants>(&self) -> Gas {
+        <T as AuthenticatedMantleTx>::gas_cost::<Constants>(self)
     }
 }
 

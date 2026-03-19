@@ -1,5 +1,5 @@
-use std::sync::LazyLock;
-
+use std::{collections::HashSet, sync::LazyLock};
+use std::collections::HashMap;
 use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes, serde::serde_fr};
 use lb_poseidon2::{Digest, ZkHash};
@@ -80,6 +80,11 @@ struct MantleTxDeSerImpl {
     pub storage_gas_price: Gas,
 }
 
+#[derive(Debug, Clone)]
+pub struct MantleTxGasContext {
+    pub withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MantleTx {
     pub ops: Vec<Op>,
@@ -151,22 +156,23 @@ impl<'de> Deserialize<'de> for MantleTx {
 }
 
 impl GasCost for MantleTx {
-    fn gas_cost<Constants: GasConstants>(&self) -> Gas {
+    type Context = MantleTxGasContext;
+
+    fn gas_cost<Constants: GasConstants>(&self, context: &Self::Context) -> Gas {
         let execution_gas = self
             .ops
             .iter()
             .map(Op::execution_gas::<Constants>)
             .sum::<Gas>();
-        let storage_gas = self.signed_serialized_size();
-
+        let storage_gas = self.signed_serialized_size(context);
         execution_gas * self.execution_gas_price + storage_gas * self.storage_gas_price
     }
 }
 
 impl MantleTx {
     #[must_use]
-    pub fn signed_serialized_size(&self) -> u64 {
-        super::encoding::predict_signed_mantle_tx_size(self) as u64
+    pub fn signed_serialized_size(&self, context: &MantleTxGasContext) -> u64 {
+        super::encoding::predict_signed_mantle_tx_size(self, context) as u64
     }
 
     #[must_use]
@@ -339,10 +345,16 @@ impl AuthenticatedMantleTx for SignedMantleTx {
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)> {
         self.mantle_tx.ops.iter().zip(self.ops_proofs.iter())
     }
+
+    fn gas_cost<Constants: GasConstants>(&self) -> Gas {
+        <Self as GasCost>::gas_cost::<Constants>(&self, &())
+    }
 }
 
 impl GasCost for SignedMantleTx {
-    fn gas_cost<Constants: GasConstants>(&self) -> Gas {
+    type Context = ();
+
+    fn gas_cost<Constants: GasConstants>(&self, _context: &Self::Context) -> Gas {
         let execution_gas = self
             .mantle_tx
             .ops

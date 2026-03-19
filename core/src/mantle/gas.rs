@@ -1,13 +1,17 @@
 pub type Gas = crate::mantle::ledger::Value;
 
 pub trait GasCost {
+    type Context;
+
     /// Returns the gas cost of this operation.
-    fn gas_cost<Constants: GasConstants>(&self) -> Gas;
+    fn gas_cost<Constants: GasConstants>(&self, context: &Self::Context) -> Gas;
 }
 
 impl<T: GasCost> GasCost for &T {
-    fn gas_cost<Constants: GasConstants>(&self) -> Gas {
-        T::gas_cost::<Constants>(self)
+    type Context = T::Context;
+
+    fn gas_cost<Constants: GasConstants>(&self, context: &Self::Context) -> Gas {
+        T::gas_cost::<Constants>(self, context)
     }
 }
 

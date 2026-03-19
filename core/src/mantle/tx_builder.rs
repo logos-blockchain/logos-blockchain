@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
 use super::{GasConstants, GasCost as _, MantleTx, Note, Op, Utxo};
+use crate::mantle::{ledger::Tx as LedgerTx, tx::MantleTxGasContext};
 use crate::mantle::ops::transfer::TransferOp;
 
 #[derive(Debug, Clone)]
@@ -10,12 +11,13 @@ pub struct MantleTxBuilder {
     mantle_tx: MantleTx,
     ledger_inputs: Vec<Utxo>,
     pending_transfer: TransferOp,
+    context: MantleTxGasContext,
 }
 
 // TODO: refactor to support more than 32 inputs (more than a single transfer)
 impl MantleTxBuilder {
     #[must_use]
-    pub const fn new() -> Self {
+    pub const fn new(context: MantleTxGasContext) -> Self {
         Self {
             mantle_tx: MantleTx {
                 ops: vec![],
@@ -24,6 +26,7 @@ impl MantleTxBuilder {
             },
             ledger_inputs: vec![],
             pending_transfer: TransferOp::new(vec![], vec![]),
+            context,
         }
     }
 
@@ -139,7 +142,7 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn gas_cost<G: GasConstants>(&self) -> u64 {
         let build = self.clone().build();
-        build.gas_cost::<G>()
+        build.gas_cost::<G>(&self.context)
     }
 
     #[must_use]
@@ -156,11 +159,5 @@ impl MantleTxBuilder {
     pub fn build(mut self) -> MantleTx {
         self.mantle_tx.ops.push(Op::Transfer(self.pending_transfer));
         self.mantle_tx
-    }
-}
-
-impl Default for MantleTxBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }

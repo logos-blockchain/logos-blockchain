@@ -3,7 +3,7 @@ use std::sync::Arc;
 use lb_core::mantle::{
     TxHash, Value,
     ops::channel::{
-        ChannelId, Ed25519PublicKey as PublicKey, MsgId, deposit::DepositOp,
+        ChannelId, ChannelKeyIndex, Ed25519PublicKey as PublicKey, MsgId, deposit::DepositOp,
         inscribe::InscriptionOp, set_keys::SetKeysOp,
     },
 };
@@ -43,14 +43,14 @@ pub struct Channels {
 pub struct ChannelState {
     pub tip: MsgId,
     // avoid cloning the keys every new message
-    pub keys: Arc<[PublicKey]>,
+    pub keys: Arc<[PublicKey]>, // keys.len() <= ChannelKeyIndex::MAX
     pub balance: Value,
     // Indicating how many accredited keys are required to withdraw
     // funds from the channel.
-    pub withdraw_threshold: u16,
+    pub withdraw_threshold: ChannelKeyIndex,
 }
 
-const DEFAULT_WITHDRAW_THRESHOLD: u16 = 1;
+const DEFAULT_WITHDRAW_THRESHOLD: ChannelKeyIndex = 1;
 
 impl Default for Channels {
     fn default() -> Self {
