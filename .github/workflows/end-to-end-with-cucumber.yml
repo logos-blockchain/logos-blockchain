@@ -89,9 +89,9 @@ jobs:
         with:
           command: nextest
           # - We don't test benches as they take 6h+, leading to a timeout
-          args: run --locked --jobs 1 --retries 2 -p logos-blockchain-tests --no-fail-fast
+          args: run --locked --jobs 3 --retries 2 -p logos-blockchain-tests --no-fail-fast
 
-      - name: Upload integration tests results
+      - name: Upload integration tests results on failure
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         if: failure()
         with:
@@ -112,6 +112,7 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
           CUCUMBER_LOG_LEVEL: debug
+          CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
         with:
           command: test
           args: >-
@@ -136,6 +137,7 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
           CUCUMBER_LOG_LEVEL: debug
+          CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
         with:
           command: test
           args: >-
@@ -160,6 +162,7 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
           CUCUMBER_LOG_LEVEL: debug
+          CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
         with:
           command: test
           args: >-

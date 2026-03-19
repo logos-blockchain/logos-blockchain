@@ -1,4 +1,5 @@
-use lb_core::mantle::tx::VerificationError;
+use hex::FromHexError;
+use lb_core::{codec::Error, mantle::tx::VerificationError};
 use lb_testing_framework::configs::wallet::WalletConfigError;
 use lb_wallet::WalletError;
 use lb_zksign::ZkSignError;
@@ -60,6 +61,10 @@ pub enum StepError {
     VerificationError(#[from] VerificationError),
     #[error("Step requires a wallet, but none was provided")]
     MissingWallet,
+    #[error(transparent)]
+    FromHexError(#[from] FromHexError),
+    #[error(transparent)]
+    Error(#[from] Error),
 }
 
 pub type StepResult = Result<(), StepError>;

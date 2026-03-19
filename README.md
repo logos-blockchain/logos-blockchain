@@ -207,6 +207,19 @@ dot -Tsvg deps.dot -o deps.svg
 
 Or paste the `.dot` file into [Graphviz Online][graphviz-online].
 
+### Heap profiling
+
+To enable debug symbols with dhat profiling in release mode, enable the 'dhat-heap' feature and use
+CARGO_PROFILE_* Environment Variables:
+```bash
+   CARGO_PROFILE_RELEASE_DEBUG=true cargo build --release --features=dhat-heap               ...(Linux)
+```
+```pwsh
+   $env:CARGO_PROFILE_RELEASE_DEBUG = "true"; cargo build --release --features=dhat-heap     ...(PowerShell)
+```
+Run, then stop the node normally to capture the output, then read the generated 'dhat-heap.json' file with 
+https://nnethercote.github.io/dh_view/dh_view.html or other.
+
 ---
 
 ## Contributing

@@ -7,6 +7,9 @@ use std::{
 use lb_circuits_utils::circuits_dir;
 use tempfile::NamedTempFile;
 
+#[cfg(target_os = "windows")]
+const BINARY_NAME: &str = "verifier.exe";
+#[cfg(not(target_os = "windows"))]
 const BINARY_NAME: &str = "verifier";
 
 /// Path to the verifier binary in the `LOGOS_BLOCKCHAIN_CIRCUITS` directory.
@@ -19,12 +22,7 @@ fn verifier_binary() -> PathBuf {
     let circuits_dir = circuits_dir();
 
     // Check for verifier binary at the root of logos-blockchain-circuits directory
-    let binary_name = if cfg!(windows) {
-        &format!("{BINARY_NAME}{}", std::env::consts::EXE_SUFFIX)
-    } else {
-        BINARY_NAME
-    };
-    let verifier_path = circuits_dir.join(binary_name);
+    let verifier_path = circuits_dir.join(BINARY_NAME);
     if verifier_path.is_file() {
         return verifier_path;
     }

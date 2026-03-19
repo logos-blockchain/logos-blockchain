@@ -463,12 +463,16 @@ where
     {
         match err {
             Error::Cryptarchia(lb_chain_service::api::ApiError::ParentMissing { parent, info }) => {
-                orphan_downloader.enqueue_orphan(block_id, info.tip, info.lib);
-
                 info!(
                     target: LOG_TARGET, ?block_id, ?parent,
-                    "Parent block missing, enqueued block for orphan processing",
+                    "Parent block missing. Trying to enqueue block for orphan processing",
                 );
+                if let Err(e) = orphan_downloader.enqueue_orphan(block_id, info.tip, info.lib) {
+                    error!(
+                        target: LOG_TARGET, %e, ?block_id, ?parent,
+                        "Failed to enqueue block for orphan processing",
+                    );
+                }
             }
             err => {
                 error!(
