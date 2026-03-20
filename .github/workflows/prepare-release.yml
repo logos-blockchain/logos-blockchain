@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  LB_CIRCUITS_VERSION: v0.4.1
+  LB_CIRCUITS_VERSION: v0.4.2
   TEST_TAG_NAME: release-ci-test
 
 jobs:

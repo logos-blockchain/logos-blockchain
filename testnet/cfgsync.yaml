@@ -26,6 +26,8 @@ tracing_settings:
     gelf: null
   tracing: None
   filter: None
-  metrics: None
+  metrics: !Otlp
+    endpoint: "http://otel:4317"
+    host_identifier: "init_node"
   console: None
   level: "DEBUG"

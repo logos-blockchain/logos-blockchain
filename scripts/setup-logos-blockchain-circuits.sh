@@ -5,18 +5,18 @@
 # Usage: ./setup-logos-blockchain-circuits.sh [VERSION] [INSTALL_DIR]
 #
 # Arguments:
-#   VERSION      - Optional. Version to install (default: v0.4.1)
+#   VERSION      - Optional. Version to install (default: v0.4.2)
 #   INSTALL_DIR  - Optional. Installation directory (default: $HOME/.logos-blockchain-circuits)
 #
 # Examples:
 #   ./setup-logos-blockchain-circuits.sh                    # Install default version to default location
-#   ./setup-logos-blockchain-circuits.sh v0.4.1             # Install specific version to default location
-#   ./setup-logos-blockchain-circuits.sh v0.4.1 /opt/circuits  # Install to custom location
+#   ./setup-logos-blockchain-circuits.sh v0.4.2             # Install specific version to default location
+#   ./setup-logos-blockchain-circuits.sh v0.4.2 /opt/circuits  # Install to custom location
 
 set -e
 
 # Default values
-VERSION="${1:-v0.4.1}"
+VERSION="${1:-v0.4.2}"
 DEFAULT_INSTALL_DIR="$HOME/.logos-blockchain-circuits"
 INSTALL_DIR="${2:-$DEFAULT_INSTALL_DIR}"
 REPO="logos-blockchain/logos-blockchain-circuits"

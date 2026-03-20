@@ -5,13 +5,10 @@ use core::{
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _};
-use lb_blend::{
-    crypto::ZkHash, proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs,
-};
+use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_blend_service::epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait};
 use lb_chain_leader_service::LeaderMsg;
 use lb_pol::{PolChainInputsData, PolWalletInputsData, PolWitnessInputsData};
-use lb_poq::AGED_NOTE_MERKLE_TREE_HEIGHT;
 use lb_services_utils::wait_until_services_are_ready;
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use tokio::sync::oneshot::channel;
@@ -36,8 +33,6 @@ where
     async fn subscribe(
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     ) -> Option<Self::Stream> {
-        use lb_groth16::Field as _;
-
         wait_until_services_are_ready!(
             overwatch_handle,
             // No timeout since chain-leader service becomes ready
@@ -63,52 +58,48 @@ where
         Some(Box::new(
             WatchStream::new(pol_winning_slot_receiver)
                 .filter_map(ready)
-                .scan(None, |processed_epoch, (leader_private, leader_public, epoch)| {
-                    let should_yield_new_epoch = processed_epoch.is_none_or(|processed_epoch| processed_epoch < epoch);
-                    if !should_yield_new_epoch {
-                        return ready(Some(None));
-                    }
-
-                    *processed_epoch = Some(epoch);
-                    let PolWitnessInputsData {
-                        wallet:
-                            PolWalletInputsData {
-                            aged_path,
-                            aged_selector,
-                            note_value,
-                            output_number,
-                            secret_key,
-                            transaction_hash,
-                            ..
-                        },
-                        chain: PolChainInputsData { slot_number, .. },
-                    } = leader_private.input();
-
-                    // TODO: Remove this if `PoL` stuff also migrates to using fixed-size arrays or starts using vecs of the expected length instead of empty ones when generating `LeaderPrivate` values.
-                    let aged_path_and_selectors = {
-                        let mut vec_from_inputs: Vec<_> = aged_path.iter().copied().zip(aged_selector.iter().copied()).collect();
-                        let input_len = vec_from_inputs.len();
-                        if input_len != AGED_NOTE_MERKLE_TREE_HEIGHT {
-                            tracing::warn!("Provided merkle path for aged notes does not match the expected size for PoQ inputs.");
+                .scan(
+                    None,
+                    |processed_epoch, (leader_private, leader_public, epoch)| {
+                        let should_yield_new_epoch =
+                            processed_epoch.is_none_or(|processed_epoch| processed_epoch < epoch);
+                        if !should_yield_new_epoch {
+                            return ready(Some(None));
                         }
-                        vec_from_inputs.resize(AGED_NOTE_MERKLE_TREE_HEIGHT, (ZkHash::ZERO, false));
-                        vec_from_inputs
-                    };
 
-                    ready(Some(Some(PolEpochInfo {
-                        epoch,
-                        poq_public_inputs: leader_public,
-                        poq_private_inputs: ProofOfLeadershipQuotaInputs {
-                            aged_path_and_selectors: aged_path_and_selectors.try_into().expect("List of aged note paths and selectors does not match the expected size for PoQ inputs, although it has already been pre-processed."),
-                            note_value: *note_value,
-                            output_number: *output_number,
-                            secret_key: *secret_key,
-                            slot: *slot_number,
-                            transaction_hash: *transaction_hash,
-                        },
-                    })))
-                })
-                .filter_map(ready)
+                        *processed_epoch = Some(epoch);
+                        let PolWitnessInputsData {
+                            wallet:
+                                PolWalletInputsData {
+                                    aged_path,
+                                    aged_selectors,
+                                    note_value,
+                                    output_number,
+                                    secret_key,
+                                    transaction_hash,
+                                    ..
+                                },
+                            chain: PolChainInputsData { slot_number, .. },
+                        } = leader_private.input();
+
+                        let aged_path_and_selectors =
+                            core::array::from_fn(|i| (aged_path[i], aged_selectors[i]));
+
+                        ready(Some(Some(PolEpochInfo {
+                            epoch,
+                            poq_public_inputs: leader_public,
+                            poq_private_inputs: ProofOfLeadershipQuotaInputs {
+                                aged_path_and_selectors,
+                                note_value: *note_value,
+                                output_number: *output_number,
+                                secret_key: *secret_key,
+                                slot: *slot_number,
+                                transaction_hash: *transaction_hash,
+                            },
+                        })))
+                    },
+                )
+                .filter_map(ready),
         ))
     }
 }

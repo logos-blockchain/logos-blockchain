@@ -150,6 +150,9 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 if endpoint.is_dialer() {
                     self.complete_connect(connection_id, peer_id);
                 }
+
+                let swarm = self.swarm.swarm();
+                crate::metrics::consensus_report_connectivity(swarm);
             }
             SwarmEvent::ConnectionClosed {
                 peer_id,
@@ -160,6 +163,9 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 tracing::debug!(
                     "connection closed from peer: {peer_id} {connection_id:?} due to {cause:?}"
                 );
+
+                let swarm = self.swarm.swarm();
+                crate::metrics::consensus_report_connectivity(swarm);
             }
             SwarmEvent::OutgoingConnectionError {
                 peer_id,
@@ -170,6 +176,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 tracing::error!(
                     "Failed to connect to peer: {peer_id:?} {connection_id:?} due to: {error}"
                 );
+                crate::metrics::network_dial_failures();
                 self.retry_connect(connection_id, peer_id);
             }
             SwarmEvent::ExternalAddrConfirmed { address } => {

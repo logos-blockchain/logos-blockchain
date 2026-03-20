@@ -56,7 +56,8 @@ async fn sdp_ops_e2e() {
         3.0,
     );
 
-    wait_for_height(validator, 1, initial_height_timeout)
+    validator
+        .wait_for_height(1, initial_height_timeout)
         .await
         .expect("validator should produce the first block before submitting declare");
 
@@ -142,7 +143,8 @@ async fn sdp_ops_e2e() {
     let current_nonce = declaration_state.nonce;
 
     // Wait for chain height to pass the lock period before withdrawing
-    wait_for_height(validator, created_height + lock_period + 1, height_timeout)
+    validator
+        .wait_for_height(created_height + lock_period + 1, height_timeout)
         .await
         .expect("consensus height should pass the SDP lock period");
 
@@ -193,7 +195,8 @@ async fn sdp_declaration_restoration_e2e() {
         3.0,
     );
 
-    wait_for_height(validator, 1, height_timeout)
+    validator
+        .wait_for_height(1, height_timeout)
         .await
         .expect("validator should produce the first block");
 
@@ -249,7 +252,8 @@ async fn large_inscription_e2e() {
         topology.wait_network_ready().await;
 
         let validator = &topology.validators()[0];
-        wait_for_height(validator, 1, Duration::from_secs(30))
+        validator
+            .wait_for_height(1, Duration::from_secs(30))
             .await
             .expect("validator should produce the first block");
 
@@ -325,22 +329,4 @@ async fn wait_for_declaration_absence(
     })
     .await
     .is_ok()
-}
-
-async fn wait_for_height(
-    validator: &Validator,
-    target_height: u64,
-    duration: Duration,
-) -> Option<()> {
-    timeout(duration, async {
-        loop {
-            let info = validator.consensus_info(false).await;
-            if info.height >= target_height {
-                break;
-            }
-            sleep(Duration::from_millis(500)).await;
-        }
-    })
-    .await
-    .ok()
 }

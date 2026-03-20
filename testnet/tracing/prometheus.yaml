@@ -1,4 +1,16 @@
 global:
+  scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
     monitor: "Monitoring"
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - prometheus:9090
+
+  - job_name: otel_metrics
+    static_configs:
+      - targets:
+          - otel:8889

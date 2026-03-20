@@ -2,12 +2,12 @@
 # check=skip=SecretsUsedInArgOrEnv
 # Ignore warnings about sensitive information as this is test data.
 
-ARG VERSION=v0.4.1
+ARG VERSION=v0.4.2
 
 # ===========================
 # BUILD IMAGE
 # ===========================
-FROM rust:1.93.0-slim-bookworm AS builder
+FROM rust:1.94.0-slim-bookworm AS builder
 
 ARG VERSION
 

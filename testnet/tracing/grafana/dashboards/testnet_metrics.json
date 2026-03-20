@@ -205,7 +205,7 @@
           },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "consensus_processed_blocks",
+          "expr": "consensus_processed_blocks_total",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",

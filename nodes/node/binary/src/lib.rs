@@ -1,8 +1,15 @@
 pub mod api;
 pub mod config;
 pub mod generic_services;
+pub mod panic;
+
 #[cfg(feature = "config-gen")]
 pub mod init;
+
+#[cfg(feature = "dhat-heap")]
+pub mod profiling;
+
+use std::panic::set_hook;
 
 use cfg_if::cfg_if;
 use color_eyre::eyre::{Result, eyre};
@@ -39,6 +46,7 @@ use overwatch::{
     DynError, derive_services,
     overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
 };
+use tokio::runtime;
 
 pub use crate::config::{ApiArgs, Command, LogArgs, NetworkArgs, UserConfig};
 use crate::{
@@ -51,6 +59,7 @@ use crate::{
         time::ServiceConfig as TimeConfig, wallet::ServiceConfig as WalletConfig,
     },
     generic_services::{SdpMempoolAdapter, SdpService, SdpWalletAdapter},
+    panic::log_and_exit_hook,
 };
 
 pub const MB16: usize = 1024 * 1024 * 16;
@@ -211,6 +220,8 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
         }
     }
 
+    set_hook(Box::new(log_and_exit_hook));
+
     let app = OverwatchRunner::<LogosBlockchain>::run(
         LogosBlockchainServiceSettings {
             network: network_service_config,
@@ -236,7 +247,7 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
             #[cfg(feature = "testing")]
             testing_http: testing_config,
         },
-        None,
+        Some(runtime::Handle::current()),
     )
     .map_err(|e| eyre!("Error encountered: {}", e))?;
     Ok(app)

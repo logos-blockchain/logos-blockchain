@@ -18,6 +18,7 @@ futures             = { default-features = false, version = "0.3" }
 lb-core             = { workspace = true }
 lb-cryptarchia-sync = { workspace = true }
 lb-libp2p           = { optional = true, workspace = true }
+lb-tracing          = { workspace = true }
 overwatch           = { workspace = true }
 rand                = { features = ["std"], optional = true, workspace = true }
 rand_chacha         = { default-features = false, optional = true, version = "0.3" }

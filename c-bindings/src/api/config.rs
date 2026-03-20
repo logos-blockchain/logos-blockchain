@@ -103,36 +103,6 @@ impl From<GenerateConfigArgs> for InitArgs {
             init_args.external_address = external_address.to_string_lossy().parse().ok();
         }
 
-        // ---- no_public_ip_check ----
-        if !value.no_public_ip_check.is_null() {
-            init_args.no_public_ip_check = unsafe { *value.no_public_ip_check };
-        }
-
-        // ---- deployment ----
-        if !value.deployment.is_null() {
-            let deployment = unsafe { &*value.deployment };
-
-            match deployment.deployment_type {
-                DeploymentType::WellKnown => {
-                    init_args.deployment = match deployment.well_known_deployment {
-                        WellKnownDeployment::Devnet => lb_node::config::DeploymentType::WellKnown(
-                            lb_node::config::WellKnownDeployment::Devnet,
-                        ),
-                    };
-                }
-                DeploymentType::Custom => {
-                    if !deployment.custom_deployment_config_path.is_null() {
-                        let config_path =
-                            unsafe { CStr::from_ptr(deployment.custom_deployment_config_path) };
-                        let config_path = config_path.to_string_lossy().into_owned();
-
-                        init_args.deployment =
-                            lb_node::config::DeploymentType::Custom(config_path.into());
-                    }
-                }
-            }
-        }
-
         // ---- state_path ----
         if !value.state_path.is_null() {
             let state_path = unsafe { CStr::from_ptr(value.state_path) };
@@ -146,7 +116,7 @@ impl From<GenerateConfigArgs> for InitArgs {
 #[must_use]
 pub fn generate_config_sync(args: InitArgs) -> OperationStatus {
     let runtime = Runtime::new().expect("Failed to create Tokio runtime.");
-    let run_result = runtime.block_on(async move { lb_node::init::run(&args).await });
+    let run_result = runtime.block_on(async move { lb_node::init::run(&args) });
     match run_result {
         Ok(()) => OperationStatus::Ok,
         Err(error) => {

@@ -12,7 +12,10 @@ use lb_key_management_system_service::keys::{Key, secured_key::SecuredKey as _};
 use lb_libp2p::Multiaddr;
 use lb_node::{
     UserConfig, config,
-    config::{RunConfig, tracing::serde::logger},
+    config::{
+        RunConfig,
+        tracing::serde::{Level, logger},
+    },
 };
 use rand::Rng as _;
 use testing_framework_core::scenario::{Application, DynError, PeerSelection, StartNodeOptions};
@@ -25,6 +28,7 @@ use testing_framework_runner_local::{
 use tracing::debug;
 
 use crate::{
+    LOGOS_BLOCKCHAIN_LOG_LEVEL,
     framework::LbcEnv,
     node::{
         DeploymentPlan, NodeHttpClient, NodePlan,
@@ -38,6 +42,10 @@ use crate::{
 
 const LOGS_PREFIX: &str = "__logs";
 const DEFAULT_BLEND_NETWORK_PORT: u16 = 3400;
+/// The default filename for the user config.
+pub const USER_CONFIG_FILE: &str = "node.yaml";
+/// The default filename for the deployment config.
+pub const DEPLOYMENT_CONFIG_FILE: &str = "deployment.yaml";
 
 struct BuiltNodeConfigPlan {
     node_config: Config,
@@ -127,6 +135,7 @@ impl LocalDeployerEnv for LbcEnv {
     ) -> Result<LaunchSpec, DynError> {
         let mut config = config.clone();
         ensure_recovery_paths(dir).map_err(|source| -> DynError { source.into() })?;
+        config.user.tracing.level = configured_node_log_level();
 
         if !tf_env::debug_tracing() {
             let log_prefix = format!("{LOGS_PREFIX}-{label}");
@@ -136,8 +145,8 @@ impl LocalDeployerEnv for LbcEnv {
         config.user.state.base_folder = dir.to_path_buf();
         "db".clone_into(&mut config.user.storage.backend.folder_name);
 
-        let config_path = dir.join("node.yaml");
-        let deployment_path = dir.join("deployment.yaml");
+        let config_path = dir.join(USER_CONFIG_FILE);
+        let deployment_path = dir.join(DEPLOYMENT_CONFIG_FILE);
 
         let user_yaml = serde_yaml::to_string(&config.user).map_err(io::Error::other)?;
         let deployment_yaml =
@@ -152,11 +161,11 @@ impl LocalDeployerEnv for LbcEnv {
             binary,
             files: vec![
                 LaunchFile {
-                    relative_path: PathBuf::from("node.yaml"),
+                    relative_path: PathBuf::from(USER_CONFIG_FILE),
                     contents: user_yaml.into_bytes(),
                 },
                 LaunchFile {
-                    relative_path: PathBuf::from("deployment.yaml"),
+                    relative_path: PathBuf::from(DEPLOYMENT_CONFIG_FILE),
                     contents: deployment_yaml.into_bytes(),
                 },
             ],
@@ -298,6 +307,13 @@ fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layers {
         stdout: false,
         stderr: false,
     }
+}
+
+fn configured_node_log_level() -> Level {
+    env::var(LOGOS_BLOCKCHAIN_LOG_LEVEL)
+        .ok()
+        .and_then(|raw| raw.parse::<Level>().ok())
+        .unwrap_or(Level::INFO)
 }
 
 fn build_node_config_for(
@@ -504,7 +520,7 @@ fn build_cryptarchia_user_config(
             },
             sync: network::SyncConfig {
                 orphan: network::OrphanConfig {
-                    max_orphan_cache_size: NonZeroUsize::new(5)
+                    max_orphan_cache_size: NonZeroUsize::new(1000)
                         .expect("max orphan cache size must be non-zero"),
                 },
             },

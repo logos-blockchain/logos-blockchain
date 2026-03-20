@@ -15,6 +15,7 @@ use crate::{
     test_utils::{TestEncapsulatedMessage, crypto::MockProofsVerifier},
 };
 
+#[ignore = "TODO: enable this logic after investigating session/epoch transition issues. Test disabled because we don't let connections turn unhealthy because of too little messages now until we have proper observation window values."]
 #[test(tokio::test)]
 async fn on_unhealthy_peer() {
     let (mut identities, mut nodes) = new_nodes_with_empty_address(3);
@@ -94,6 +95,7 @@ async fn on_unhealthy_peer() {
     assert_eq!(second_swarm_connection_details.role(), Endpoint::Listener);
 }
 
+#[ignore = "TODO: enable this logic after investigating session/epoch transition issues. Test disabled because we don't let connections turn spammy because of too many messages now until we have proper observation window values."]
 #[test(tokio::test)]
 async fn on_malicious_peer() {
     let (mut identities, mut nodes) = new_nodes_with_empty_address(3);

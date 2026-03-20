@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsStr,
     net::SocketAddr,
     process::{Child, Command, Stdio},
     str::FromStr as _,
@@ -133,6 +134,45 @@ impl Validator {
         Ok(())
     }
 
+    /// Restarts with the same deployment and user configs, but attaches
+    /// provided cli arguments.
+    pub async fn restart_with_args<I, S>(&mut self, args: I) -> Result<(), Elapsed>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        drop(self.child.kill());
+        self.wait_for_exit(Duration::from_secs(5)).await;
+
+        // Re-write config files (they were temporary and may have been cleaned up)
+        let mut user_config_file = NamedTempFile::new().unwrap();
+        let mut deployment_config_file = NamedTempFile::new().unwrap();
+
+        serde_yaml::to_writer(&mut user_config_file, &self.config.user).unwrap();
+        serde_yaml::to_writer(&mut deployment_config_file, &self.config.deployment).unwrap();
+
+        // Spawn new process with same config
+        let exe_path = get_exe_path();
+        self.child = Command::new(exe_path)
+            .arg("--deployment")
+            .arg(deployment_config_file.path().as_os_str())
+            .args(args)
+            .arg(user_config_file.path().as_os_str())
+            .current_dir(self.tempdir.path())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+
+        // Wait for the node to come online
+        tokio::time::timeout(Duration::from_secs(10), async {
+            self.wait_online().await;
+        })
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn spawn(mut config: RunConfig) -> Result<Self, Elapsed> {
         let dir = create_tempdir().unwrap();
         let mut user_config_file = NamedTempFile::new().unwrap();
@@ -205,6 +245,21 @@ impl Validator {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+
+    pub async fn wait_for_height(&self, target_height: u64, duration: Duration) -> Option<()> {
+        tokio::time::timeout(duration, async {
+            loop {
+                let info = self.consensus_info(false).await;
+                println!("{info:?}");
+                if info.height >= target_height {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .ok()
     }
 
     pub async fn get_block(&self, id: HeaderId) -> Option<Block<SignedMantleTx>> {

@@ -1,7 +1,10 @@
 use std::{collections::HashSet, num::NonZeroUsize};
 
+use hex::ToHex as _;
+use lb_core::codec::SerializeOp as _;
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use num_bigint::BigUint;
+use rand::Rng as _;
 use thiserror::Error;
 
 const DEFAULT_FUNDS_PER_WALLET: u64 = 100;
@@ -57,12 +60,13 @@ impl WalletConfig {
                 WalletAccount::deterministic(
                     idx as u64,
                     allocation_for(idx, base_allocation, remainder),
+                    false,
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
 
         let wallet = Self { accounts };
-        wallet.validate()?;
+        wallet.validate(false, false)?;
 
         Ok(wallet)
     }
@@ -77,12 +81,20 @@ impl WalletConfig {
         self.accounts.len()
     }
 
-    pub fn validate(&self) -> Result<(), WalletConfigError> {
+    pub fn validate(
+        &self,
+        allow_multiple_genesis_tokens_per_wallet: bool,
+        allow_zero_value_genesis_tokens: bool,
+    ) -> Result<(), WalletConfigError> {
         let mut seen_public_keys = HashSet::new();
 
         for account in &self.accounts {
-            validate_account_value(account)?;
-            ensure_unique_public_key(account, &mut seen_public_keys)?;
+            if !allow_zero_value_genesis_tokens {
+                validate_account_value(account)?;
+            }
+            if !allow_multiple_genesis_tokens_per_wallet {
+                ensure_unique_public_key(account, &mut seen_public_keys)?;
+            }
         }
 
         Ok(())
@@ -105,7 +117,7 @@ pub fn wallet_config_for_users(users: usize) -> Result<WalletConfig, WalletConfi
     WalletConfig::uniform(total_funds, user_count)
 }
 
-/// Wallet account that holds funds in the genesis state.
+/// Wallet account that may hold funds in the genesis state.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WalletAccount {
     pub label: String,
@@ -114,8 +126,13 @@ pub struct WalletAccount {
 }
 
 impl WalletAccount {
-    pub fn new(label: String, secret_key: ZkKey, value: u64) -> Result<Self, WalletConfigError> {
-        if value == 0 {
+    pub fn new(
+        label: String,
+        secret_key: ZkKey,
+        value: u64,
+        allow_zero_value_genesis_tokens: bool,
+    ) -> Result<Self, WalletConfigError> {
+        if value == 0 && !allow_zero_value_genesis_tokens {
             return Err(WalletConfigError::ZeroAccountValue { label });
         }
 
@@ -126,18 +143,45 @@ impl WalletAccount {
         })
     }
 
-    pub fn deterministic(index: u64, value: u64) -> Result<Self, WalletConfigError> {
+    pub fn deterministic(
+        index: u64,
+        value: u64,
+        allow_zero_value_genesis_tokens: bool,
+    ) -> Result<Self, WalletConfigError> {
         let mut seed = [0u8; 32];
         seed[..2].copy_from_slice(b"wl");
         seed[2..10].copy_from_slice(&index.to_le_bytes());
 
         let secret_key = ZkKey::from(BigUint::from_bytes_le(&seed));
-        Self::new(format!("wallet-user-{index}"), secret_key, value)
+        Self::new(
+            format!("wallet-user-{index}"),
+            secret_key,
+            value,
+            allow_zero_value_genesis_tokens,
+        )
+    }
+
+    pub fn random() -> Result<Self, WalletConfigError> {
+        let mut seed = [0u8; 32];
+        rand::thread_rng().fill(&mut seed);
+
+        let secret_key = ZkKey::from(BigUint::from_bytes_le(&seed));
+        let index = u64::from_le_bytes(seed[..8].try_into().expect("seed has len 32"));
+        Self::new(format!("wallet-r-user-{index}"), secret_key, 0, true)
     }
 
     #[must_use]
     pub fn public_key(&self) -> ZkPublicKey {
         self.secret_key.to_public_key()
+    }
+
+    #[must_use]
+    pub fn public_key_hex(&self) -> String {
+        self.secret_key
+            .to_public_key()
+            .to_bytes()
+            .expect("is valid")
+            .encode_hex()
     }
 }
 

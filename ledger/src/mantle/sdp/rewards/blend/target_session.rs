@@ -5,7 +5,7 @@ use lb_blend_message::{
     reward::{BlendingTokenEvaluation, HammingDistance},
 };
 use lb_core::{
-    mantle::Utxo,
+    mantle::{Utxo, Value},
     sdp::{ProviderId, ServiceType, SessionNumber},
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -31,6 +31,8 @@ pub struct TargetSessionState<ProofsVerifier> {
     /// Verifiers for `PoQ` and `PoSel`.
     /// These are created from epoch states collected in the target session.
     proof_verifiers: Vec<ProofsVerifier>,
+    /// Session incomes stabilized from session `s-1`
+    session_income: Value,
 }
 
 impl<ProofsVerifier> TargetSessionState<ProofsVerifier> {
@@ -39,17 +41,23 @@ impl<ProofsVerifier> TargetSessionState<ProofsVerifier> {
         providers: HashTrieMapSync<ProviderId, (ZkPublicKey, u64)>,
         token_evaluation: BlendingTokenEvaluation,
         proof_verifiers: Vec<ProofsVerifier>,
+        session_income: Value,
     ) -> Self {
         Self {
             session_number,
             providers,
             token_evaluation,
             proof_verifiers,
+            session_income,
         }
     }
 
     pub const fn session_number(&self) -> SessionNumber {
         self.session_number
+    }
+
+    pub const fn session_income(&self) -> Value {
+        self.session_income
     }
 
     pub fn providers(&self) -> impl Iterator<Item = (&ProviderId, &(ZkPublicKey, u64))> {

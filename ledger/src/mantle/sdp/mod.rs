@@ -7,7 +7,7 @@ use lb_blend_message::crypto::proofs::RealProofsVerifier;
 use lb_core::{
     block::BlockNumber,
     mantle::{
-        Note, NoteId, OpProof, TxHash, Utxo,
+        Note, NoteId, OpProof, TxHash, Utxo, Value,
         ops::sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     },
     sdp::{
@@ -190,7 +190,7 @@ struct ServiceState<R: Rewards> {
     // config.session_duration
     forming: SessionState,
     // rewards calculation and tracking for this service
-    rewards: R,
+    pub rewards: R,
 }
 
 impl SessionState {
@@ -281,6 +281,10 @@ impl<R: Rewards> ServiceState<R> {
         }
         self.declarations = self.declarations.insert(id, declaration);
         Ok(())
+    }
+
+    fn add_income(&mut self, income: Value) {
+        self.rewards = self.rewards.add_income(income);
     }
 
     fn active(
@@ -568,6 +572,14 @@ impl SdpLedger {
         )?;
 
         Ok(self)
+    }
+
+    pub fn add_blend_income(&mut self, income: Value) {
+        if let Some(Service::BlendNetwork(state)) =
+            self.services.get_mut(&ServiceType::BlendNetwork)
+        {
+            state.add_income(income);
+        }
     }
 
     #[must_use]
