@@ -4276,7 +4276,6 @@ dependencies = [
  "futures",
  "hasher",
  "hex",
- "logos-blockchain-blend-crypto",
  "logos-blockchain-blend-proofs",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
