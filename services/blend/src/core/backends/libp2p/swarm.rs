@@ -176,9 +176,8 @@ where
     fn dial_random_peers_except(&mut self, amount: usize, except: Option<PeerId>) {
         tracing::debug!(target: LOG_TARGET, amount, ?except, "Dialing random peers");
 
-        let exclude_peers: HashSet<PeerId> = self
-            .swarm
-            .connected_peers()
+        let negotiated_peers = self.behaviour().blend.with_core().negotiated_peers().keys();
+        let exclude_peers: HashSet<PeerId> = negotiated_peers
             .chain(self.swarm.behaviour().blocked_peers.blocked_peers())
             .chain(self.ongoing_dials.keys())
             .chain(except.iter())

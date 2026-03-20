@@ -9,7 +9,7 @@ use serial_test::serial;
 
 // how long we let the chain grow before checking the block at tip - k is the
 // same in all chains
-const CHAIN_LENGTH_MULTIPLIER: u32 = 3;
+const CHAIN_LENGTH_MULTIPLIER: u32 = 5;
 
 async fn happy_test(topology: &Topology) {
     let nodes = topology.validators();
