@@ -174,8 +174,6 @@ where
     /// excluding the currently connected peers, the peers that we are already
     /// trying to dial, and the blocked peers.
     fn dial_random_peers_except(&mut self, amount: usize, except: Option<PeerId>) {
-        tracing::debug!(target: LOG_TARGET, amount, ?except, "Dialing random peers");
-
         let negotiated_peers = self.behaviour().blend.with_core().negotiated_peers().keys();
         let exclude_peers: HashSet<PeerId> = negotiated_peers
             .chain(self.swarm.behaviour().blocked_peers.blocked_peers())
@@ -183,6 +181,9 @@ where
             .chain(except.iter())
             .copied()
             .collect();
+
+        tracing::debug!(target: LOG_TARGET, amount, ?except, ?exclude_peers, "Dialing random peers");
+
         // We need to clone else we would not be able to call `self.dial` inside which
         // requires access to `&mut self`.
         let current_membership = self.public_info.session.membership.clone();
