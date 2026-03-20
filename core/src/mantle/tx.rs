@@ -233,7 +233,10 @@ impl From<SignedMantleTx> for MantleTx {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+// Deserializing here is dangerous, as it bypasses the verification without
+// confirmation.
+// TODO: Move Deserialization to a state machine with Verified/Unverified states.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedMantleTx {
     pub mantle_tx: MantleTx,
     // TODO: make this more efficient
