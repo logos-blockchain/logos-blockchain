@@ -2,7 +2,7 @@ mod config;
 // The ledger is split into two modules:
 // - `cryptarchia`: the base functionalities needed by the Cryptarchia consensus
 //   algorithm, including a minimal UTxO model.
-// - `mantle_ops` : our extensions in the form of Mantle operations, e.g. SDP.
+// - `mantle_ops`: our extensions in the form of Mantle operations, e.g. SDP.
 pub mod cryptarchia;
 pub mod mantle;
 
@@ -394,6 +394,10 @@ impl LedgerState {
         self.mantle_ledger.active_sessions()
     }
 
+    // Some of the ops' proofs are verified in `SignedMantleTx::verify_ops_proofs`, either fully or
+    // partially.
+    // This probably benefits from some refactoring.
+    // For now, though, you should manually ensure that everything is correctly verified.
     fn try_apply_tx<Id, Constants: GasConstants>(
         mut self,
         config: &Config,
@@ -425,6 +429,17 @@ impl LedgerState {
                     );
                     balance = balance
                         .checked_add(deposit_balance)
+                        .ok_or(LedgerError::BalanceOverflow)?;
+                }
+                (Op::ChannelWithdraw(op), Some(OpProof::ChannelWithdrawProof(_proof))) => {
+                    let withdraw_balance;
+                    (self.mantle_ledger, withdraw_balance) = self.mantle_ledger.try_apply_channel_withdraw(op)?;
+                    assert!(
+                        withdraw_balance >= 0,
+                        "withdraw balance should be non-negative: {withdraw_balance}"
+                    );
+                    balance = balance
+                        .checked_add(withdraw_balance)
                         .ok_or(LedgerError::BalanceOverflow)?;
                 }
                 (
@@ -510,7 +525,7 @@ mod tests {
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
-
+    use lb_core::mantle::tx::verifiers::NoopHelper;
     use super::*;
     use crate::cryptarchia::tests::utxo_with_sk;
 
@@ -581,7 +596,7 @@ mod tests {
             })
             .collect();
 
-        SignedMantleTx::new(mantle_tx, ops_proofs)
+        SignedMantleTx::new(mantle_tx, ops_proofs, &NoopHelper)
             .expect("Test transaction should have valid signatures")
     }
 

@@ -4,7 +4,7 @@ use lb_core::mantle::{
     TxHash, Value,
     ops::channel::{
         ChannelId, ChannelKeyIndex, Ed25519PublicKey as PublicKey, MsgId, deposit::DepositOp,
-        inscribe::InscriptionOp, set_keys::SetKeysOp,
+        inscribe::InscriptionOp, set_keys::SetKeysOp, withdraw::ChannelWithdrawOp,
     },
     tx::MantleTxGasContext,
 };
@@ -31,6 +31,10 @@ pub enum Error {
     EmptyKeys { channel_id: ChannelId },
     #[error("Channel {channel_id:?} not found")]
     ChannelNotFound { channel_id: ChannelId },
+    #[error("Insufficient funds")]
+    InsufficientFunds,
+    #[error("Balance overflow")]
+    BalanceOverflow,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -158,7 +162,24 @@ impl Channels {
 
     pub fn deposit(mut self, op: &DepositOp) -> Result<Self, Error> {
         if let Some(channel) = self.channels.get_mut(&op.channel_id) {
-            channel.balance += op.amount;
+            channel
+                .balance
+                .checked_add(op.amount)
+                .ok_or(Error::BalanceOverflow)?;
+            Ok(self)
+        } else {
+            Err(Error::ChannelNotFound {
+                channel_id: op.channel_id,
+            })
+        }
+    }
+
+    pub fn withdraw(mut self, op: &ChannelWithdrawOp) -> Result<Self, Error> {
+        if let Some(channel) = self.channels.get_mut(&op.channel_id) {
+            channel
+                .balance
+                .checked_sub(op.amount)
+                .ok_or(Error::InsufficientFunds)?;
             Ok(self)
         } else {
             Err(Error::ChannelNotFound {

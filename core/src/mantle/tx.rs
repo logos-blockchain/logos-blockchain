@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::LazyLock};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::LazyLock,
+};
 
 use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes, serde::serde_fr};
@@ -15,12 +18,16 @@ use crate::{
         gas::{Gas, GasConstants, GasCost},
         ops::{
             Op, OpProof,
-            channel::{ChannelId, ChannelKeyIndex},
+            channel::{ChannelId, ChannelKeyIndex, withdraw::ChannelWithdrawOp},
             transfer::TransferOp,
         },
     },
-    proofs::leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
+    proofs::{
+        channel_withdraw_proof::ChannelWithdrawProof,
+        leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
+    },
 };
+use crate::mantle::tx::verifiers::NoopHelper;
 
 /// The hash of a transaction
 #[derive(
@@ -190,8 +197,8 @@ impl GasCost for MantleTx {
 
 impl MantleTx {
     #[must_use]
-    pub fn signed_serialized_size(&self, _context: &MantleTxGasContext) -> u64 {
-        super::encoding::predict_signed_mantle_tx_size(self) as u64
+    pub fn signed_serialized_size(&self, context: &<Self as GasCost>::Context) -> u64 {
+        super::encoding::predict_signed_mantle_tx_size(self, context) as u64
     }
 
     #[must_use]
@@ -237,7 +244,7 @@ impl From<SignedMantleTx> for MantleTx {
 // confirmation.
 // TODO: Move Deserialization to a state machine with Verified/Unverified
 // states.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SignedMantleTx {
     pub mantle_tx: MantleTx,
     // TODO: make this more efficient
@@ -273,6 +280,23 @@ pub enum VerificationError {
     KeyNotFound {
         channel_id: ChannelId,
         key_index: ChannelKeyIndex,
+    },
+    #[error(
+        "Not enough signatures in ChannelWithdrawProof at index {op_index}: got {actual}, required {required}"
+    )]
+    ChannelWithdrawProofNotEnoughSignatures {
+        op_index: usize,
+        actual: usize,
+        required: ChannelKeyIndex,
+    },
+    #[error("Duplicate signature indices in ChannelWithdrawProof at index {op_index}")]
+    ChannelWithdrawProofDuplicateIndices { op_index: usize },
+    #[error(
+        "Invalid signature in ChannelWithdrawProof at index {op_index} for signature index {signature_index}"
+    )]
+    ChannelWithdrawProofInvalidSignature {
+        op_index: usize,
+        signature_index: usize,
     },
 }
 
@@ -323,7 +347,7 @@ impl SignedMantleTx {
     // TODO: might drop proofs after verification
     fn verify_ops_proofs(
         &self,
-        _operation_verification_helper: &impl OperationVerificationHelper,
+        operation_verification_helper: &impl OperationVerificationHelper,
     ) -> Result<(), VerificationError> {
         // Check that we have the same number of proofs as ops
         if self.mantle_tx.ops.len() != self.ops_proofs.len() {
@@ -366,6 +390,18 @@ impl SignedMantleTx {
                         return Err(VerificationError::InvalidProofOfClaim { op_index: idx });
                     }
                 }
+                (
+                    Op::ChannelWithdraw(channel_withdraw_op),
+                    OpProof::ChannelWithdrawProof(proof),
+                ) => {
+                    verify_channel_withdraw(
+                        channel_withdraw_op,
+                        proof,
+                        &tx_hash_bytes,
+                        operation_verification_helper,
+                        idx,
+                    )?;
+                }
                 // Other operations are checked by the ledger or don't require verification here
                 _ => {}
             }
@@ -377,6 +413,49 @@ impl SignedMantleTx {
     fn gas_storage_size(&self) -> u64 {
         encode_signed_mantle_tx(self).len() as u64
     }
+}
+
+fn verify_channel_withdraw(
+    operation: &ChannelWithdrawOp,
+    proof: &ChannelWithdrawProof,
+    tx_hash_bytes: &Bytes,
+    helper: &impl OperationVerificationHelper,
+    op_index: usize,
+) -> Result<(), VerificationError> {
+    let channel_id = &operation.channel_id;
+    let withdraw_threshold = helper.get_channel_withdraw_threshold(channel_id)?;
+
+    let signatures = proof.signatures();
+    let signatures_len = signatures.len();
+    if signatures_len < withdraw_threshold as usize {
+        return Err(VerificationError::ChannelWithdrawProofNotEnoughSignatures {
+            op_index,
+            actual: signatures_len,
+            required: withdraw_threshold,
+        });
+    }
+
+    let indices_set = signatures
+        .iter()
+        .map(|signature| signature.channel_key_index)
+        .collect::<HashSet<_>>();
+    let indices_set_len = indices_set.len();
+    if indices_set_len != signatures_len {
+        return Err(VerificationError::ChannelWithdrawProofDuplicateIndices { op_index });
+    }
+
+    for (i, signature) in signatures.iter().enumerate() {
+        let public_key =
+            helper.get_key_from_channel_at_index(channel_id, &signature.channel_key_index)?;
+        if let Err(_error) = public_key.verify(tx_hash_bytes.as_ref(), &signature.signature) {
+            return Err(VerificationError::ChannelWithdrawProofInvalidSignature {
+                op_index,
+                signature_index: i,
+            });
+        }
+    }
+
+    Ok(())
 }
 
 impl Transaction for SignedMantleTx {
@@ -438,7 +517,7 @@ impl<'de> Deserialize<'de> for SignedMantleTx {
         }
 
         let helper = SignedMantleTxHelper::deserialize(deserializer)?;
-        Self::new(helper.mantle_tx, helper.ops_proofs).map_err(serde::de::Error::custom)
+        Self::new(helper.mantle_tx, helper.ops_proofs, &NoopHelper).map_err(serde::de::Error::custom)
     }
 }
 

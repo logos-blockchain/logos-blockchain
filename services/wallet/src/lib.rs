@@ -106,6 +106,9 @@ pub enum WalletServiceError {
 
     #[error("blocking task failed: {0}")]
     TaskJoin(#[from] JoinError),
+
+    #[error("Failed to fetch Channel Withdraw proof for op index {0} from the TxBuilder")]
+    ChannelWithdrawProofNotFound(usize),
 }
 
 #[derive(Debug)]
@@ -518,7 +521,7 @@ where
         }
     }
 
-    async fn sign_insciption(
+    async fn sign_inscription(
         tx_hash: TxHash,
         inscribe_op: &InscriptionOp,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
@@ -683,19 +686,26 @@ where
             .map(|utxo| utxo.note.pk)
             .collect();
 
+        let mut channel_withdraw_proofs = tx_builder.channel_withdraw_proofs().clone();
         let mantle_tx = tx_builder.build();
         let tx_hash = mantle_tx.hash();
 
         let mut ops_proofs = Vec::new();
-        for op in &mantle_tx.ops {
+        for (i, op) in mantle_tx.ops.iter().enumerate() {
             let proof = match op {
                 Op::ChannelInscribe(inscribe_op) => {
-                    Self::sign_insciption(tx_hash, inscribe_op, kms).await?
+                    Self::sign_inscription(tx_hash, inscribe_op, kms).await?
                 }
                 Op::ChannelSetKeys(set_keys_op) => {
                     Self::sign_channel_set_key(tx_hash, set_keys_op, &ledger, kms).await?
                 }
                 Op::ChannelDeposit(_deposit_op) => OpProof::NoProof,
+                Op::ChannelWithdraw(_channel_withdraw_op) => {
+                    let proof = channel_withdraw_proofs
+                        .remove(&i)
+                        .ok_or(WalletServiceError::ChannelWithdrawProofNotFound(i))?;
+                    OpProof::ChannelWithdrawProof(proof)
+                }
                 Op::SDPDeclare(declare_op) => {
                     Self::sign_sdp_declare(tx_hash, declare_op, &ledger, kms).await?
                 }

@@ -42,6 +42,7 @@ tracing                       = { workspace = true }
 divan      = { workspace = true }
 hasher     = "0.1.4"
 rand       = { workspace = true }
+lb-ledger  = { workspace = true }
 serde_json = { default-features = false, features = ["alloc"], version = "1.0" }
 tokio      = "1.49.0"
 
