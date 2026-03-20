@@ -207,9 +207,6 @@ where
                 PROTOCOL_NAME,
                 self.proofs_verifier,
             ),
-            limits: connection_limits::Behaviour::new(
-                connection_limits::ConnectionLimits::default(),
-            ),
             blocked_peers: allow_block_list::Behaviour::default(),
         }
     }
