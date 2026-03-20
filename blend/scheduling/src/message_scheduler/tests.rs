@@ -2,7 +2,6 @@ use core::{
     num::NonZeroU64,
     task::{Context, Poll},
 };
-use std::collections::HashSet;
 
 use futures::{StreamExt as _, task::noop_waker_ref};
 use lb_utils::blake_rng::BlakeRng;
@@ -23,13 +22,8 @@ async fn no_substream_ready_and_no_data_messages() {
     let rng = BlakeRng::from_entropy();
     let rounds = [Round::from(0)];
     let mut scheduler = SessionMessageScheduler::<_, (), ()>::with_test_values(
-        // Round `1` scheduled, tick will yield round `0`.
-        SessionCoverTraffic::with_test_values(
-            Box::new(iter(rounds)),
-            HashSet::from_iter([1u128.into()]),
-            rng.clone(),
-            0,
-        ),
+        // No cover messages to emit, tick will yield round `0`.
+        SessionCoverTraffic::with_test_values(Box::new(iter(rounds)), 0, 1.into(), rng.clone(), 0),
         // Round `1` scheduled, tick will yield round `0`.
         SessionProcessedMessageDelayer::with_test_values(
             NonZeroU64::try_from(1).unwrap(),
@@ -54,13 +48,8 @@ async fn no_substream_ready_with_data_messages() {
     let rng = BlakeRng::from_entropy();
     let rounds = [Round::from(0)];
     let mut scheduler = SessionMessageScheduler::<_, (), u32>::with_test_values(
-        // Round `1` scheduled, tick will yield round `0`.
-        SessionCoverTraffic::with_test_values(
-            Box::new(iter(rounds)),
-            HashSet::from_iter([1u128.into()]),
-            rng.clone(),
-            0,
-        ),
+        // No cover messages to emit, tick will yield round `0`.
+        SessionCoverTraffic::with_test_values(Box::new(iter(rounds)), 0, 1.into(), rng.clone(), 0),
         // Round `1` scheduled, tick will yield round `0`.
         SessionProcessedMessageDelayer::with_test_values(
             NonZeroU64::try_from(1).unwrap(),
@@ -93,13 +82,8 @@ async fn cover_traffic_substream_ready() {
     let rng = BlakeRng::from_entropy();
     let rounds = [Round::from(0)];
     let mut scheduler = SessionMessageScheduler::<_, (), u32>::with_test_values(
-        // Round `0` scheduled, tick will yield round `0`.
-        SessionCoverTraffic::with_test_values(
-            Box::new(iter(rounds)),
-            HashSet::from_iter([0u128.into()]),
-            rng.clone(),
-            0,
-        ),
+        // 1 cover message over 1 round: guaranteed emission.
+        SessionCoverTraffic::with_test_values(Box::new(iter(rounds)), 1, 1.into(), rng.clone(), 0),
         // Round `1` scheduled, tick will yield round `0`.
         SessionProcessedMessageDelayer::with_test_values(
             NonZeroU64::try_from(1).unwrap(),
@@ -129,13 +113,8 @@ async fn release_delayer_substream_ready() {
     let rng = BlakeRng::from_entropy();
     let rounds = [Round::from(0)];
     let mut scheduler = SessionMessageScheduler::<_, u32, u32>::with_test_values(
-        // Round `1` scheduled, tick will yield round `0`.
-        SessionCoverTraffic::with_test_values(
-            Box::new(iter(rounds)),
-            HashSet::from_iter([1u128.into()]),
-            rng.clone(),
-            0,
-        ),
+        // No cover messages to emit.
+        SessionCoverTraffic::with_test_values(Box::new(iter(rounds)), 0, 1.into(), rng.clone(), 0),
         // Round `0` scheduled, tick will yield round `0`.
         SessionProcessedMessageDelayer::with_test_values(
             NonZeroU64::try_from(1).unwrap(),
@@ -165,13 +144,8 @@ async fn both_substreams_ready() {
     let rng = BlakeRng::from_entropy();
     let rounds = [Round::from(0)];
     let mut scheduler = SessionMessageScheduler::<_, u32, ()>::with_test_values(
-        // Round `0` scheduled, tick will yield round `0`.
-        SessionCoverTraffic::with_test_values(
-            Box::new(iter(rounds)),
-            HashSet::from_iter([0u128.into()]),
-            rng.clone(),
-            0,
-        ),
+        // 1 cover message over 1 round: guaranteed emission.
+        SessionCoverTraffic::with_test_values(Box::new(iter(rounds)), 1, 1.into(), rng.clone(), 0),
         // Round `0` scheduled, tick will yield round `0`.
         SessionProcessedMessageDelayer::with_test_values(
             NonZeroU64::try_from(1).unwrap(),
@@ -207,16 +181,11 @@ async fn round_change() {
         Round::from(3),
     ];
     let mut scheduler = SessionMessageScheduler::<_, (), u32>::with_test_values(
-        // Round `1` and `2` scheduled, tick will yield round `0` then round `1`, round `2`, then
-        // round `3`.
-        SessionCoverTraffic::with_test_values(
-            Box::new(iter(rounds)),
-            HashSet::from_iter([1u128.into(), 2u128.into()]),
-            rng.clone(),
-            0,
-        ),
-        // Round `3` scheduled, tick will yield round `0` then round `1`, round `2`, then round
-        // `3`.
+        // 2 cover messages over 2 remaining rounds: every round is guaranteed to be a
+        // release round. After the first emission, a data message will cause the second
+        // release to be skipped (threshold = 1/1 = 1.0).
+        SessionCoverTraffic::with_test_values(Box::new(iter(rounds)), 2, 2.into(), rng.clone(), 0),
+        // Round `3` scheduled, tick will yield rounds `0` through `3`.
         SessionProcessedMessageDelayer::with_test_values(
             NonZeroU64::try_from(1).unwrap(),
             3u128.into(),
@@ -230,10 +199,8 @@ async fn round_change() {
     );
     let mut cx = Context::from_waker(noop_waker_ref());
 
-    // Poll for round `0`, which should return `Pending`.
-    assert_eq!(scheduler.poll_next_unpin(&mut cx), Poll::Pending);
-
-    // Poll for round `1`, which should return a cover message.
+    // Poll for round `0`: cover traffic emits (prob = 2/2 = 1.0), no processed
+    // messages, no data messages.
     assert_eq!(
         scheduler.poll_next_unpin(&mut cx),
         Poll::Ready(Some(RoundInfo {
@@ -245,8 +212,9 @@ async fn round_change() {
 
     scheduler.queue_data_message(3);
 
-    // Poll for round `2`, which should skip the cover message (although it's
-    // scheduled) and should only return the queued data message instead.
+    // Poll for round `1`: cover traffic release round (prob = 1/1 = 1.0) but
+    // skipped due to unprocessed data message (threshold = 1/1 = 1.0, always
+    // skips). Returns only the queued data message.
     assert_eq!(
         scheduler.poll_next_unpin(&mut cx),
         Poll::Ready(Some(RoundInfo {
@@ -256,8 +224,11 @@ async fn round_change() {
     );
     assert!(scheduler.data_messages.is_empty());
 
-    // Poll for round `3`, which should return the processed messages and the queued
-    // data message.
+    // Poll for round `2`: no cover (remaining_messages exhausted), no processed
+    // messages, no data -> Pending.
+    assert_eq!(scheduler.poll_next_unpin(&mut cx), Poll::Pending);
+
+    // Poll for round `3`: processed messages released.
     assert_eq!(
         scheduler.poll_next_unpin(&mut cx),
         Poll::Ready(Some(RoundInfo {
