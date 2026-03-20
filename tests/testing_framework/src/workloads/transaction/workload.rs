@@ -20,7 +20,8 @@ use testing_framework_core::scenario::{
 use thiserror::Error;
 use tokio::time::sleep;
 use tracing::debug;
-
+use lb_core::mantle::tx::OperationVerificationHelper;
+use lb_ledger::mantle::helpers::MantleOperationVerificationHelper;
 use super::expectation::TxInclusionExpectation;
 use crate::{
     framework::LbcEnv,
@@ -185,8 +186,9 @@ impl<'a, E: LbcScenarioEnv> Submission<'a, E> {
 
     async fn execute(mut self) -> Result<(), DynError> {
         let gas_context = MantleTxGasContext::new(HashMap::new());
+        let helper = MantleOperationVerificationHelper::new(ledger_state.mantle_ledger());
         while let Some(input) = self.plan.pop_front() {
-            submit_wallet_transaction(self.ctx, &input, gas_context.clone()).await?;
+            submit_wallet_transaction(self.ctx, &input, gas_context.clone(), &helper).await?;
             if !self.interval.is_zero() {
                 sleep(self.interval).await;
             }
@@ -199,8 +201,9 @@ async fn submit_wallet_transaction(
     ctx: &RunContext<impl LbcScenarioEnv>,
     input: &WalletInput,
     gas_context: MantleTxGasContext,
+    helper: &(impl OperationVerificationHelper + Sync),
 ) -> Result<(), DynError> {
-    let signed_tx = Arc::new(build_wallet_transaction(input, gas_context)?);
+    let signed_tx = Arc::new(build_wallet_transaction(input, gas_context, helper)?);
     submit_transaction_via_cluster(ctx, signed_tx).await
 }
 
@@ -268,6 +271,7 @@ fn cluster_client_exhausted_error() -> DynError {
 fn build_wallet_transaction(
     input: &WalletInput,
     gas_context: MantleTxGasContext,
+    helper: &impl OperationVerificationHelper,
 ) -> Result<SignedMantleTx, DynError> {
     let tx = MantleTxBuilder::new(gas_context)
         .add_ledger_input(input.utxo)
@@ -280,7 +284,7 @@ fn build_wallet_transaction(
     )
     .map_err(|err| format!("failed to sign transaction: {err}"))?;
 
-    SignedMantleTx::new(tx, vec![OpProof::ZkSig(signature)])
+    SignedMantleTx::new(tx, vec![OpProof::ZkSig(signature)], helper)
         .map_err(|err| format!("failed to build signed transaction: {err}").into())
 }
 
