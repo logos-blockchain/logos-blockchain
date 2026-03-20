@@ -427,7 +427,7 @@ fn decode_byte(input: &[u8]) -> IResult<&[u8], u8> {
 // ==============================================================================
 
 use lb_groth16::fr_to_bytes;
-
+use crate::mantle::tx::OperationVerificationHelper;
 use super::ops::opcode;
 
 /// Encode primitives

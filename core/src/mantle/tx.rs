@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::LazyLock};
 
 use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes, serde::serde_fr};
+use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use lb_poseidon2::{Digest, ZkHash};
 use num_bigint::BigUint;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -260,6 +261,19 @@ pub enum VerificationError {
         ops_count: usize,
         proofs_count: usize,
     },
+}
+
+pub trait OperationVerificationHelper {
+    fn get_channel_withdraw_threshold(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<ChannelKeyIndex, VerificationError>;
+
+    fn get_key_from_channel_at_index(
+        &self,
+        channel_id: &ChannelId,
+        key_index: &ChannelKeyIndex,
+    ) -> Result<Ed25519PublicKey, VerificationError>;
 }
 
 impl SignedMantleTx {
