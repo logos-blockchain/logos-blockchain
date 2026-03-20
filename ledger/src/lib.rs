@@ -498,7 +498,7 @@ impl LedgerState {
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
     use lb_core::mantle::{
-        GasCost as _, MantleTx, Note, SignedMantleTx, Transaction as _,
+        MantleTx, Note, SignedMantleTx, Transaction as _,
         gas::MainnetGasConstants,
         ops::{
             channel::{
@@ -506,6 +506,7 @@ mod tests {
             },
             transfer::TransferOp,
         },
+        ledger::Tx as LedgerTx,
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
@@ -628,7 +629,7 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
         );
-        let fees = tx.gas_cost::<MainnetGasConstants>();
+        let fees = AuthenticatedMantleTx::gas_cost::<MainnetGasConstants>(&tx);
         output_note.value = utxo.note.value - fees;
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk]);
 

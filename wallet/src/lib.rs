@@ -347,6 +347,7 @@ mod tests {
             Note, Op, TxHash,
             gas::MainnetGasConstants as Gas,
             ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
+            tx::MantleTxGasContext
         },
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
@@ -508,13 +509,13 @@ mod tests {
     fn test_fund_tx_with_change() {
         let alice = pk(1);
         let alice_utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
+        let ledger_state = LedgerState::from_utxos([alice_utxo], &ledger_config());
 
-        let wallet_state = WalletState::from_ledger(
-            &HashMap::from_iter([(alice, 1)]),
-            &LedgerState::from_utxos([alice_utxo], &ledger_config()),
-        );
+        let wallet_state =
+            WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
-        let tx_builder = MantleTxBuilder::new()
+        let context: MantleTxGasContext = ledger_state.mantle_ledger().channels().into();
+        let tx_builder = MantleTxBuilder::new(context)
             .set_execution_gas_price(1)
             .set_storage_gas_price(1);
 
@@ -548,21 +549,20 @@ mod tests {
     #[test]
     fn test_fund_tx_insufficient_funds() {
         let alice = pk(1);
-
-        let wallet_state = WalletState::from_ledger(
-            &HashMap::from_iter([(alice, 1)]),
-            &LedgerState::from_utxos(
-                [
-                    Utxo::new(tx_hash(0), 0, Note::new(100, alice)),
-                    Utxo::new(tx_hash(0), 1, Note::new(100, alice)),
-                    Utxo::new(tx_hash(0), 2, Note::new(100, alice)),
-                    Utxo::new(tx_hash(0), 3, Note::new(100, alice)),
-                ],
-                &ledger_config(),
-            ),
+        let ledger_state = LedgerState::from_utxos(
+            [
+                Utxo::new(tx_hash(0), 0, Note::new(100, alice)),
+                Utxo::new(tx_hash(0), 1, Note::new(100, alice)),
+                Utxo::new(tx_hash(0), 2, Note::new(100, alice)),
+                Utxo::new(tx_hash(0), 3, Note::new(100, alice)),
+            ],
+            &ledger_config(),
         );
 
-        let mut tx_builder = MantleTxBuilder::new()
+        let wallet_state =
+            WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
+        let context: MantleTxGasContext = ledger_state.mantle_ledger().channels().into();
+        let mut tx_builder = MantleTxBuilder::new(context)
             .set_execution_gas_price(1)
             .set_storage_gas_price(1);
 
@@ -589,13 +589,13 @@ mod tests {
     #[test]
     fn test_fund_tx_zero_funds() {
         let alice = pk(1);
+        let ledger_state = LedgerState::from_utxos([], &ledger_config());
 
-        let wallet_state = WalletState::from_ledger(
-            &HashMap::from_iter([(alice, 1)]),
-            &LedgerState::from_utxos([], &ledger_config()),
-        );
+        let wallet_state =
+            WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
-        let tx_builder = MantleTxBuilder::new()
+        let context: MantleTxGasContext = ledger_state.mantle_ledger().channels().into();
+        let tx_builder = MantleTxBuilder::new(context)
             .set_execution_gas_price(1)
             .set_storage_gas_price(1);
 
@@ -611,16 +611,16 @@ mod tests {
     fn test_fund_tx_respects_pk_list() {
         let alice = pk(1);
         let bob = pk(2);
-
-        let wallet_state = WalletState::from_ledger(
-            &HashMap::from_iter([(alice, 1), (bob, 2)]),
-            &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(1_000_000, bob))],
-                &ledger_config(),
-            ),
+        let ledger_state = LedgerState::from_utxos(
+            [Utxo::new(tx_hash(0), 0, Note::new(1_000_000, bob))],
+            &ledger_config(),
         );
 
-        let tx_builder = MantleTxBuilder::new()
+        let wallet_state =
+            WalletState::from_ledger(&HashMap::from_iter([(alice, 1), (bob, 2)]), &ledger_state);
+
+        let context: MantleTxGasContext = ledger_state.mantle_ledger().channels().into();
+        let tx_builder = MantleTxBuilder::new(context)
             .set_execution_gas_price(1)
             .set_storage_gas_price(1);
 
@@ -642,7 +642,8 @@ mod tests {
     fn test_fund_tx_unfundable_region() {
         let alice = pk(1);
 
-        let tx_builder = MantleTxBuilder::new()
+        let context = MantleTxGasContext::new(HashMap::new());
+        let tx_builder = MantleTxBuilder::new(context)
             .set_execution_gas_price(1)
             .set_storage_gas_price(1);
 

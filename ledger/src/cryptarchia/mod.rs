@@ -530,6 +530,7 @@ pub mod tests {
         mantle::{
             GasCost as _, MantleTx, Note, Op, OpProof::ZkSig, SignedMantleTx, Transaction as _,
             gas::MainnetGasConstants, ops::leader_claim::VoucherCm,
+            ledger::Tx as LedgerTx,
         },
         sdp::ServiceParameters,
     };
@@ -539,7 +540,7 @@ pub mod tests {
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
-
+    use lb_core::mantle::AuthenticatedMantleTx;
     use super::*;
     use crate::{
         Ledger,
@@ -1144,7 +1145,7 @@ pub mod tests {
         let (tx, transfer_op, transfer_sig) =
             create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
 
-        let _fees = tx.gas_cost::<MainnetGasConstants>();
+        let _fees = AuthenticatedMantleTx::gas_cost::<MainnetGasConstants>(&tx);
         let (new_state, balance) = ledger_state
             .try_apply_transfer::<(), MainnetGasConstants>(
                 &locked_notes,
@@ -1180,7 +1181,7 @@ pub mod tests {
             vec![],
         );
         let locked_notes = LockedNotes::new();
-        let _fees = tx.gas_cost::<MainnetGasConstants>();
+        let _fees = AuthenticatedMantleTx::gas_cost::<MainnetGasConstants>(&tx);
         let (final_state, final_balance) = new_state
             .try_apply_transfer::<(), MainnetGasConstants>(
                 &locked_notes,
@@ -1308,7 +1309,7 @@ pub mod tests {
         let (tx, transfer_op, transfer_sig) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![]);
 
-        let _fees = tx.gas_cost::<MainnetGasConstants>();
+        let _fees = AuthenticatedMantleTx::gas_cost::<MainnetGasConstants>(&tx);
         let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
             &locked_notes,
             &transfer_op,
