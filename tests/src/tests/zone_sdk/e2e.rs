@@ -3,15 +3,15 @@ use std::{collections::HashSet, num::NonZero, time::Duration};
 use futures::future::join_all;
 use lb_core::mantle::ops::channel::ChannelId;
 use lb_key_management_system_service::keys::Ed25519Key;
+use lb_zone_sdk::{
+    indexer::ZoneIndexer,
+    sequencer::{InscriptionStatus, SequencerConfig, ZoneSequencer},
+};
 use logos_blockchain_tests::{
     nodes::{Validator, create_validator_config},
     topology::configs::{
         create_general_configs, deployment::e2e_deployment_settings_with_genesis_tx,
     },
-};
-use logos_blockchain_zone_sdk::{
-    indexer::ZoneIndexer,
-    sequencer::{SequencerConfig, ZoneSequencer},
 };
 use rand::{Rng as _, thread_rng};
 use serial_test::serial;
@@ -79,6 +79,7 @@ async fn test_sequencer_publish_and_indexer_read() {
     let mut key_bytes = [0u8; 32];
     thread_rng().fill(&mut key_bytes);
     let signing_key = Ed25519Key::from_bytes(&key_bytes);
+    let admin_pk = signing_key.public_key();
     let channel_id = channel_id_from_key(&signing_key);
 
     // Use short resubmit interval matching fast block production (1s slots).
@@ -168,6 +169,40 @@ async fn test_sequencer_publish_and_indexer_read() {
 
     for (i, expected_data) in test_data.iter().enumerate() {
         assert_eq!(&seen_ordered[i], expected_data);
+    }
+
+    // --- Test set_keys: update channel's accredited keys ---
+    // Generate a second key and add it alongside the original admin key.
+    let mut key_bytes2 = [0u8; 32];
+    thread_rng().fill(&mut key_bytes2);
+    let second_key = Ed25519Key::from_bytes(&key_bytes2);
+    let second_pk = second_key.public_key();
+
+    let set_keys_tx_hash = sequencer
+        .set_keys(vec![admin_pk, second_pk])
+        .await
+        .expect("set_keys should succeed");
+
+    // Poll status until finalized (same finality path as inscriptions).
+    let status_start = std::time::Instant::now();
+    let status_timeout = Duration::from_secs(180);
+
+    loop {
+        assert!(
+            status_start.elapsed() <= status_timeout,
+            "Timeout waiting for set_keys transaction to finalize"
+        );
+
+        let status = sequencer
+            .status(set_keys_tx_hash)
+            .await
+            .expect("status should succeed");
+
+        if matches!(status, InscriptionStatus::Finalized) {
+            break;
+        }
+
+        sleep(Duration::from_millis(500)).await;
     }
 }
 
