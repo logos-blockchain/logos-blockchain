@@ -10,9 +10,11 @@ use std::{
 use async_trait::async_trait;
 use lb_core::mantle::{
     GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo, tx::MantleTxGasContext,
+    tx::OperationVerificationHelper,
     tx_builder::MantleTxBuilder,
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
+use lb_ledger::mantle::helpers::MantleOperationVerificationHelper;
 use rand::{seq::SliceRandom as _, thread_rng};
 use testing_framework_core::scenario::{
     DynError, Expectation, RunContext, RunMetrics, Workload as ScenarioWorkload,
@@ -20,8 +22,7 @@ use testing_framework_core::scenario::{
 use thiserror::Error;
 use tokio::time::sleep;
 use tracing::debug;
-use lb_core::mantle::tx::OperationVerificationHelper;
-use lb_ledger::mantle::helpers::MantleOperationVerificationHelper;
+
 use super::expectation::TxInclusionExpectation;
 use crate::{
     framework::LbcEnv,

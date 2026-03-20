@@ -1,20 +1,22 @@
+use lb_common_http_client::CommonHttpClient;
 use lb_core::{
     mantle::{
         MantleTx, NoteId, SignedMantleTx, Transaction as _,
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp, set_keys::SetKeysOp,
+                ChannelId, ChannelKeyIndex, Ed25519PublicKey, MsgId, inscribe::InscriptionOp,
+                set_keys::SetKeysOp,
             },
         },
-        tx::TxHash,
+        tx::{OperationVerificationHelper, TxHash},
     },
     sdp::{ActiveMessage, DeclarationMessage, ServiceType, WithdrawMessage},
 };
-use lb_core::mantle::tx::OperationVerificationHelper;
 use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
+use lb_ledger::mantle::helpers::MantleOperationVerificationHelper;
 
 const TEST_SIGNING_KEY_BYTES: [u8; 32] = [0u8; 32];
 
@@ -210,4 +212,17 @@ pub fn create_inscription_transaction_with_id(
         helper
     )
     .unwrap()
+}
+
+pub async fn get_withdraw_threshold_for_channel(
+    _client: &CommonHttpClient,
+    _channel_id: &ChannelId,
+) -> Result<ChannelKeyIndex, reqwest::Error> {
+    async {}.await; // Empty `await` to silence clippy
+    todo!("The endpoint is not yet available.");
+}
+
+pub async fn get_operation_verification_helper() -> MantleOperationVerificationHelper<'static> {
+    async {}.await; // Empty `await` to silence clippy
+    todo!("The endpoint is not yet available.");
 }

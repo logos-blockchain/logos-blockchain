@@ -235,7 +235,8 @@ impl From<SignedMantleTx> for MantleTx {
 
 // Deserializing here is dangerous, as it bypasses the verification without
 // confirmation.
-// TODO: Move Deserialization to a state machine with Verified/Unverified states.
+// TODO: Move Deserialization to a state machine with Verified/Unverified
+// states.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedMantleTx {
     pub mantle_tx: MantleTx,
@@ -441,12 +442,41 @@ impl<'de> Deserialize<'de> for SignedMantleTx {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
+pub mod verifiers {
+    use lb_key_management_system_keys::keys::Ed25519PublicKey;
+
+    use crate::mantle::{
+        ops::channel::{ChannelId, ChannelKeyIndex},
+        tx::{OperationVerificationHelper, VerificationError},
+    };
+
+    pub struct NoopHelper;
+    impl OperationVerificationHelper for NoopHelper {
+        fn get_channel_withdraw_threshold(
+            &self,
+            _channel_id: &ChannelId,
+        ) -> Result<ChannelKeyIndex, VerificationError> {
+            panic!("get_channel_withdraw_threshold not implemented for NoopHelper");
+        }
+
+        fn get_key_from_channel_at_index(
+            &self,
+            _channel_id: &ChannelId,
+            _key_index: &ChannelKeyIndex,
+        ) -> Result<Ed25519PublicKey, VerificationError> {
+            panic!("get_key_from_channel_at_index not implemented for NoopHelper");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 
     use super::*;
     use crate::mantle::ops::channel::inscribe::InscriptionOp;
+    use crate::mantle::tx::verifiers::NoopHelper;
 
     fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
         MantleTx {
@@ -475,7 +505,7 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
-        let result = SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(signature)]);
+        let result = SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(signature)], &NoopHelper);
 
         assert!(result.is_ok());
     }
@@ -485,7 +515,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscribe_op = create_test_inscribe_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
-        let result = SignedMantleTx::new(mantle_tx, vec![]);
+        let result = SignedMantleTx::new(mantle_tx, vec![], &NoopHelper);
 
         assert!(matches!(
             result,
@@ -507,7 +537,7 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signature = wrong_signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
-        let result = SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(signature)]);
+        let result = SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(signature)], &NoopHelper);
 
         assert!(matches!(
             result,
@@ -524,7 +554,7 @@ mod tests {
         // Use wrong proof type
         let tx_hash = mantle_tx.hash();
         let zk_sig = OpProof::ZkSig(ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap());
-        let result = SignedMantleTx::new(mantle_tx, vec![zk_sig]);
+        let result = SignedMantleTx::new(mantle_tx, vec![zk_sig], &NoopHelper);
 
         assert!(matches!(
             result,
@@ -555,6 +585,7 @@ mod tests {
         let result = SignedMantleTx::new(
             mantle_tx,
             vec![OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)],
+            &NoopHelper,
         );
 
         assert!(result.is_ok());
@@ -581,6 +612,7 @@ mod tests {
         let result = SignedMantleTx::new(
             mantle_tx,
             vec![OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)],
+            &NoopHelper,
         );
 
         assert!(matches!(
@@ -599,7 +631,7 @@ mod tests {
         let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
         let signed_tx =
-            SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(signature)]).unwrap();
+            SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(signature)], &NoopHelper).unwrap();
 
         // Serialize and deserialize
         let serialized = serde_json::to_string(&signed_tx).unwrap();
@@ -663,7 +695,7 @@ mod tests {
         let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
         // Test too few proofs
-        let result = SignedMantleTx::new(mantle_tx.clone(), vec![]);
+        let result = SignedMantleTx::new(mantle_tx.clone(), vec![], &NoopHelper);
         assert!(matches!(
             result,
             Err(VerificationError::ProofCountMismatch {
@@ -679,6 +711,7 @@ mod tests {
                 OpProof::Ed25519Sig(signature),
                 OpProof::Ed25519Sig(signature),
             ],
+            &NoopHelper,
         );
         assert!(matches!(
             result,

@@ -427,8 +427,9 @@ fn decode_byte(input: &[u8]) -> IResult<&[u8], u8> {
 // ==============================================================================
 
 use lb_groth16::fr_to_bytes;
-use crate::mantle::tx::OperationVerificationHelper;
+
 use super::ops::opcode;
+use crate::mantle::tx::OperationVerificationHelper;
 
 /// Encode primitives
 fn encode_uint64(value: u64) -> Vec<u8> {
@@ -738,7 +739,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        mantle::{Transaction as _, TxHash},
+        mantle::{Transaction as _, TxHash, tx::verifiers::NoopHelper},
         sdp::blend::ActivityProof,
     };
 
@@ -826,7 +827,8 @@ mod tests {
 
         // DECODING
         let test_vector_bytes = hex::decode(test_vector).unwrap();
-        let (remaining, decoded_tx) = decode_signed_mantle_tx(&test_vector_bytes).unwrap();
+        let (remaining, decoded_tx) =
+            decode_signed_mantle_tx(&test_vector_bytes, &NoopHelper).unwrap();
         assert!(remaining.is_empty());
         assert_eq!(decoded_tx, signed_tx);
     }
@@ -848,7 +850,7 @@ mod tests {
         let txhash = mantle_tx.hash();
         let inscribe_sig =
             OpProof::Ed25519Sig(signing_key.sign_payload(&txhash.as_signing_bytes()));
-        let signed_tx = SignedMantleTx::new(mantle_tx, vec![inscribe_sig]).unwrap();
+        let signed_tx = SignedMantleTx::new(mantle_tx, vec![inscribe_sig], &NoopHelper).unwrap();
 
         #[expect(
             clippy::string_add,
@@ -876,7 +878,8 @@ mod tests {
 
         // DECODING
         let test_vector_bytes = hex::decode(test_vector).unwrap();
-        let (remaining, decoded_tx) = decode_signed_mantle_tx(&test_vector_bytes).unwrap();
+        let (remaining, decoded_tx) =
+            decode_signed_mantle_tx(&test_vector_bytes, &NoopHelper).unwrap();
         assert!(remaining.is_empty());
         assert_eq!(decoded_tx, signed_tx);
     }
@@ -908,11 +911,12 @@ mod tests {
         let signed_tx = SignedMantleTx::new(
             mantle_tx,
             vec![OpProof::Ed25519Sig(sig), OpProof::Ed25519Sig(sig)],
+            &NoopHelper
         )
         .unwrap();
 
         let encoded = encode_signed_mantle_tx(&signed_tx);
-        let (remaining, decoded_tx) = decode_signed_mantle_tx(&encoded).unwrap();
+        let (remaining, decoded_tx) = decode_signed_mantle_tx(&encoded, &NoopHelper).unwrap();
         assert!(remaining.is_empty());
         assert_eq!(decoded_tx, signed_tx);
     }
@@ -949,7 +953,7 @@ mod tests {
                 let txhash = mantle_tx.hash();
                 let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
                 let signed_tx =
-                    SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(op_sig)]).unwrap();
+                    SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(op_sig)], &NoopHelper).unwrap();
 
                 let encoded = encode_signed_mantle_tx(&signed_tx);
 
@@ -960,7 +964,7 @@ mod tests {
                     "Size mismatch at payload size {payload_size}",
                 );
 
-                let (remaining, decoded_tx) = decode_signed_mantle_tx(&encoded)
+                let (remaining, decoded_tx) = decode_signed_mantle_tx(&encoded, &NoopHelper)
                     .unwrap_or_else(|_| panic!("Failed to decode at payload size {payload_size}"));
 
                 assert!(
@@ -1037,13 +1041,13 @@ mod tests {
             execution_gas_price: 100,
             storage_gas_price: 50,
         };
-        let original_tx = SignedMantleTx::new(mantle_tx, vec![]).unwrap();
+        let original_tx = SignedMantleTx::new(mantle_tx, vec![], &NoopHelper).unwrap();
 
         // Encode
         let encoded = encode_signed_mantle_tx(&original_tx);
 
         // Decode
-        let (remaining, decoded_tx) = decode_signed_mantle_tx(&encoded).unwrap();
+        let (remaining, decoded_tx) = decode_signed_mantle_tx(&encoded, &NoopHelper).unwrap();
 
         // Verify
         assert!(remaining.is_empty());
@@ -1063,7 +1067,7 @@ mod tests {
         let predicted_size = predict_signed_mantle_tx_size(&mantle_tx);
 
         // Create a signed tx and encode it to get actual size
-        let signed_tx = SignedMantleTx::new(mantle_tx, vec![]).unwrap();
+        let signed_tx = SignedMantleTx::new(mantle_tx, vec![], &NoopHelper).unwrap();
         let encoded = encode_signed_mantle_tx(&signed_tx);
         let actual_size = encoded.len();
 
@@ -1092,7 +1096,7 @@ mod tests {
         // Create a signed tx and encode it to get actual size
         let txhash = mantle_tx.hash();
         let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
-        let signed_tx = SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(op_sig)]).unwrap();
+        let signed_tx = SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(op_sig)], &NoopHelper).unwrap();
         let encoded = encode_signed_mantle_tx(&signed_tx);
         let actual_size = encoded.len();
 
@@ -1126,7 +1130,7 @@ mod tests {
         // Create a signed tx and encode it to get actual size
         let dummy_ed25519_sig = Ed25519Signature::from_bytes(&[0; 64]);
         let signed_tx =
-            SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(dummy_ed25519_sig)]).unwrap();
+            SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(dummy_ed25519_sig)], &NoopHelper).unwrap();
         let encoded = encode_signed_mantle_tx(&signed_tx);
         let actual_size = encoded.len();
 
@@ -1176,6 +1180,7 @@ mod tests {
                 zk_sig: ZkKey::multi_sign(&[locked_note_sk, zk_sk], &txhash.0).unwrap(),
                 ed25519_sig: Ed25519Signature::from_bytes(&[0u8; 64]),
             }],
+            &NoopHelper,
         )
         .unwrap();
         let encoded = encode_signed_mantle_tx(&signed_tx);
@@ -1211,6 +1216,7 @@ mod tests {
             vec![OpProof::ZkSig(
                 ZkKey::multi_sign(&[ZkKey::zero()], &txhash.0).unwrap(),
             )],
+            &NoopHelper,
         )
         .unwrap();
         let encoded = encode_signed_mantle_tx(&signed_tx);
@@ -1253,6 +1259,7 @@ mod tests {
             vec![OpProof::ZkSig(
                 ZkKey::multi_sign(&[ZkKey::zero()], &txhash.0).unwrap(),
             )],
+            &NoopHelper,
         )
         .unwrap();
 
@@ -1316,6 +1323,7 @@ mod tests {
                 OpProof::Ed25519Sig(op_sig),
                 OpProof::ZkSig(ZkKey::zero().sign_payload(&txhash.0).unwrap()),
             ],
+            &NoopHelper,
         )
         .unwrap();
         let encoded = encode_signed_mantle_tx(&signed_tx);
@@ -1352,7 +1360,7 @@ mod tests {
         // Create a signed tx and encode it to get actual size
         let signed_tx = SignedMantleTx::new(
             mantle_tx,
-            vec![OpProof::ZkSig(ZkKey::multi_sign(&[], &Fr::ZERO).unwrap())],
+            vec![OpProof::ZkSig(ZkKey::multi_sign(&[], &Fr::ZERO).unwrap()), &NoopHelper],
         )
         .unwrap();
         let encoded = encode_signed_mantle_tx(&signed_tx);
@@ -1424,6 +1432,7 @@ mod tests {
                 },
                 OpProof::ZkSig(ZkKey::multi_sign(&[], &Fr::ZERO).unwrap()),
             ],
+            &NoopHelper,
         )
         .unwrap();
         let encoded = encode_signed_mantle_tx(&signed_tx);
