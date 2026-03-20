@@ -13,6 +13,7 @@ pub use self::private::{KEY_SIZE as ED25519_SECRET_KEY_SIZE, UnsecuredEd25519Key
 mod public;
 pub use self::public::{KEY_SIZE as ED25519_PUBLIC_KEY_SIZE, PublicKey};
 mod signature;
+
 mod x25519;
 pub use self::{
     signature::{SIGNATURE_SIZE as ED25519_SIGNATURE_SIZE, Signature},

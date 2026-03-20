@@ -12,7 +12,7 @@
 use blake2::Digest as _;
 use divan::{Bencher, black_box};
 use lb_groth16::{Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes_unchecked};
-use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey, ZkSignature};
 use lb_poseidon2::Digest;
 use logos_blockchain_core::{
     crypto::{Hasher, ZkHasher},
@@ -44,7 +44,7 @@ const SIZES: &[usize] = &[
     4 * 1024 * 1024,
 ];
 
-// Helper fn to create a `MantleTx`.
+// Helper fn to create an inscription `MantleTx`, no ledger inputs ot outputs.
 fn make_inscription_tx(payload_size: usize) -> MantleTx {
     let signing_key = Ed25519Key::from_bytes(&[1; 32]);
     MantleTx {
@@ -109,11 +109,58 @@ fn blake2b_poseidon2_hash(bencher: Bencher, size: usize) {
         });
 }
 
-// Ed25519 sign + `ZkKey` multi-sign.
-// Uses `with_inputs` so a fresh `MantleTx` (taken by value) is provided each
-// iteration — `SignedMantleTx::new` requires ownership.
+// Ed25519 signature over the tx hash (payload size has no influence here)
+#[divan::bench()]
+fn sign_a_ed25519_payload(bencher: Bencher) {
+    let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+    bencher
+        .with_inputs(|| {
+            let tx = make_inscription_tx(1);
+            tx.hash()
+        })
+        .bench_values(|txhash: TxHash| {
+            black_box(signing_key.sign_payload(&txhash.as_signing_bytes()))
+        });
+}
+
+// ZkKey multi-sign proof (payload size has no influence here)
+#[divan::bench()]
+fn sign_b_zk_key_multi_sign_no_keys(bencher: Bencher) {
+    bencher
+        .with_inputs(|| {
+            let tx = make_inscription_tx(1);
+            tx.hash()
+        })
+        .bench_values(|txhash: TxHash| black_box(ZkKey::multi_sign(&[], &txhash.0).unwrap()));
+}
+
+// Verify ops proofs
 #[divan::bench(args = SIZES)]
-fn sign(bencher: Bencher, size: usize) {
+fn sign_c_mantle_tx_new_verify_ops_proofs_single_proof(bencher: Bencher, size: usize) {
+    let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+    bencher
+        .with_inputs(|| {
+            let tx = make_inscription_tx(size);
+            let txhash = tx.hash();
+            let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
+            let multi_sign = ZkKey::multi_sign(&[], &txhash.0).unwrap();
+            (tx, op_sig, multi_sign)
+        })
+        .bench_values(
+            |(tx, op_sig, multi_sign): (MantleTx, Ed25519Signature, ZkSignature)| {
+                black_box(
+                    SignedMantleTx::new(tx, vec![OpProof::Ed25519Sig(op_sig)], multi_sign).unwrap(),
+                )
+            },
+        );
+}
+
+// Sign:
+// - Ed25519 signature over the tx hash
+// - ZkKey multi-sign proof
+// - Verify ops proofs (`tx.hash()` re-calculated here)
+#[divan::bench(args = SIZES)]
+fn sign_d_fully_empty(bencher: Bencher, size: usize) {
     let signing_key = Ed25519Key::from_bytes(&[1; 32]);
     bencher
         .with_inputs(|| {
