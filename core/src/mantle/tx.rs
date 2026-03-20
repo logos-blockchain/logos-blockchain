@@ -259,10 +259,19 @@ pub enum VerificationError {
         op_type: &'static str,
         op_index: usize,
     },
-    #[error("Number of proofs ({proofs_count}) does not match number of operations ({ops_count})")]
+    #[error(
+        "The number of proofs ({proofs_count}) does not match the number of operations ({ops_count})"
+    )]
     ProofCountMismatch {
         ops_count: usize,
         proofs_count: usize,
+    },
+    #[error("Channel {channel_id} could not be found")]
+    ChannelNotFound { channel_id: ChannelId },
+    #[error("Key {key_index} could not be found in channel {channel_id}")]
+    KeyNotFound {
+        channel_id: ChannelId,
+        key_index: ChannelKeyIndex,
     },
 }
 
