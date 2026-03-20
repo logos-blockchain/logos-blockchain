@@ -39,7 +39,7 @@ use lb_key_management_system_service::{
     },
     operators::zk::voucher::UnsafeVoucherOperator,
 };
-use lb_ledger::LedgerState;
+use lb_ledger::{LedgerState, mantle::helpers::MantleOperationVerificationHelper};
 use lb_services_utils::{
     overwatch::{JsonFileBackend, RecoveryOperator, recovery::backends::FileBackendSettings},
     wait_until_services_are_ready,
@@ -713,7 +713,8 @@ where
             ops_proofs.push(proof);
         }
 
-        let signed_mantle_tx = SignedMantleTx::new(mantle_tx, ops_proofs)
+        let helper = MantleOperationVerificationHelper::new(ledger.mantle_ledger());
+        let signed_mantle_tx = SignedMantleTx::new(mantle_tx, ops_proofs, &helper)
             .expect("Failed to create signed transaction");
 
         Ok(signed_mantle_tx)

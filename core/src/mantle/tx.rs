@@ -269,12 +269,16 @@ impl SignedMantleTx {
     /// This enforces at construction time that:
     /// - `ChannelInscribe` operations have a valid Ed25519 signature from the
     ///   declared signer
-    pub fn new(mantle_tx: MantleTx, ops_proofs: Vec<OpProof>) -> Result<Self, VerificationError> {
+    pub fn new(
+        mantle_tx: MantleTx,
+        ops_proofs: Vec<OpProof>,
+        operation_verification_helper: &impl OperationVerificationHelper,
+    ) -> Result<Self, VerificationError> {
         let tx = Self {
             mantle_tx,
             ops_proofs,
         };
-        tx.verify_ops_proofs()?;
+        tx.verify_ops_proofs(operation_verification_helper)?;
         Ok(tx)
     }
 
@@ -290,7 +294,10 @@ impl SignedMantleTx {
     }
 
     // TODO: might drop proofs after verification
-    fn verify_ops_proofs(&self) -> Result<(), VerificationError> {
+    fn verify_ops_proofs(
+        &self,
+        _operation_verification_helper: &impl OperationVerificationHelper,
+    ) -> Result<(), VerificationError> {
         // Check that we have the same number of proofs as ops
         if self.mantle_tx.ops.len() != self.ops_proofs.len() {
             return Err(VerificationError::ProofCountMismatch {

@@ -31,12 +31,15 @@ use crate::{
 // Top-Level Transaction Decoders
 // ==============================================================================
 
-pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx> {
+pub fn decode_signed_mantle_tx<'a>(
+    input: &'a [u8],
+    helper: &impl OperationVerificationHelper,
+) -> IResult<&'a [u8], SignedMantleTx> {
     // SignedMantleTx = MantleTx OpsProofs
     let (input, mantle_tx) = decode_mantle_tx(input)?;
     let (input, ops_proofs) = decode_ops_proofs(input, &mantle_tx.ops)?;
 
-    let signed_tx = SignedMantleTx::new(mantle_tx, ops_proofs)
+    let signed_tx = SignedMantleTx::new(mantle_tx, ops_proofs, ledger_tx_proof, helper)
         .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Verify)))?;
 
     Ok((input, signed_tx))

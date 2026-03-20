@@ -3,3 +3,4 @@ pub mod kms;
 pub mod mantle_tx;
 pub mod sync;
 pub mod time;
+pub mod http;

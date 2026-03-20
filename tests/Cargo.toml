@@ -29,6 +29,7 @@ lb-cryptarchia-engine            = { features = ["serde"], workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
+lb-ledger                        = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-network-service               = { features = ["libp2p"], workspace = true }
 lb-node                          = { default-features = false, features = ["testing"], workspace = true }

@@ -11,6 +11,7 @@ use lb_core::{
     },
     sdp::{ActiveMessage, DeclarationMessage, ServiceType, WithdrawMessage},
 };
+use lb_core::mantle::tx::OperationVerificationHelper;
 use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
@@ -181,6 +182,7 @@ pub fn create_sdp_withdraw_tx(
 pub fn create_inscription_transaction_with_id(
     id: ChannelId,
     inscription: Option<Vec<u8>>,
+    helper: &impl OperationVerificationHelper,
 ) -> SignedMantleTx {
     let signing_key = Ed25519Key::from_bytes(&TEST_SIGNING_KEY_BYTES);
     let signer = signing_key.public_key();
@@ -202,5 +204,10 @@ pub fn create_inscription_transaction_with_id(
     let tx_hash = mantle_tx.hash();
     let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
-    SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(signature)]).unwrap()
+    SignedMantleTx::new(
+        mantle_tx,
+        vec![OpProof::Ed25519Sig(signature)],
+        helper
+    )
+    .unwrap()
 }
