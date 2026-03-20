@@ -91,12 +91,14 @@ pub struct MantleTxGasContext {
 }
 
 impl MantleTxGasContext {
-    pub fn new(withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>) -> Self {
+    #[must_use]
+    pub const fn new(withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>) -> Self {
         Self {
             withdraw_thresholds,
         }
     }
 
+    #[must_use]
     pub fn withdraw_threshold(&self, channel_id: &ChannelId) -> Option<ChannelKeyIndex> {
         self.withdraw_thresholds.get(channel_id).copied()
     }
@@ -364,7 +366,7 @@ impl AuthenticatedMantleTx for SignedMantleTx {
     }
 
     fn gas_cost<Constants: GasConstants>(&self) -> Gas {
-        <Self as GasCost>::gas_cost::<Constants>(&self, &())
+        <Self as GasCost>::gas_cost::<Constants>(self, &())
     }
 }
 

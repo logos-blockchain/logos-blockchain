@@ -15,7 +15,7 @@ serde_bytes_newtype!(ChannelId, 32);
 impl Display for ChannelId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         for byte in &self.0 {
-            write!(f, "{:02x}", byte)?;
+            write!(f, "{byte:02x}")?;
         }
         Ok(())
     }
