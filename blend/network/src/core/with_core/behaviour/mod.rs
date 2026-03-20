@@ -51,7 +51,7 @@ mod old_session;
 mod tests;
 
 const LOG_TARGET: &str = "blend::network::core::core::behaviour";
-const SENSITIVITY_INTERVAL_FOR_DUPLICATES: Duration = Duration::from_millis(100);
+const SENSITIVITY_INTERVAL_FOR_DUPLICATES: Duration = Duration::from_secs(1);
 
 #[derive(Debug)]
 pub struct Config {
@@ -704,10 +704,10 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
                 // message to each other). Simply ignore it.
                 if Instant::now().duration_since(*time_sent) <= SENSITIVITY_INTERVAL_FOR_DUPLICATES
                 {
-                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged but within the sensitivity window. Simply ignoring the message.");
+                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged ({message_id:?}) but within the sensitivity window. Simply ignoring the message.");
                     Ok(())
                 } else {
-                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged. Marking it as spammy.");
+                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged ({message_id:?}). Marking it as spammy.");
                     self.close_spammy_connection(
                         (peer_id, connection_id),
                         SpamReason::DuplicateMessage,
