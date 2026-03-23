@@ -51,7 +51,7 @@ mod old_session;
 mod tests;
 
 const LOG_TARGET: &str = "blend::network::core::core::behaviour";
-const SENSITIVITY_INTERVAL_FOR_DUPLICATES: Duration = Duration::from_secs(1);
+const SENSITIVITY_INTERVAL_FOR_DUPLICATES: Duration = Duration::from_secs(3);
 
 #[derive(Debug)]
 pub struct Config {
