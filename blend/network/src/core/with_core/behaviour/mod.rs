@@ -410,6 +410,26 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         self.try_wake();
     }
 
+    fn notify_about_connection_upgrade_failure(&mut self, peer_id: PeerId, peer_role: Endpoint) {
+        self.events
+            .push_back(ToSwarm::GenerateEvent(if peer_role == Endpoint::Listener {
+                Event::OutboundConnectionUpgradeFailed(peer_id)
+            } else {
+                Event::InboundConnectionUpgradeFailed(peer_id)
+            }));
+        self.try_wake();
+    }
+
+    fn notify_about_connection_upgrade_success(&mut self, peer_id: PeerId, peer_role: Endpoint) {
+        self.events
+            .push_back(ToSwarm::GenerateEvent(if peer_role == Endpoint::Listener {
+                Event::OutboundConnectionUpgradeSucceeded(peer_id)
+            } else {
+                Event::InboundConnectionUpgradeSucceeded(peer_id)
+            }));
+        self.try_wake();
+    }
+
     fn is_network_large_enough(&self) -> bool {
         self.current_membership.size() >= self.minimum_network_size.get()
     }
@@ -476,6 +496,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         if self.available_connection_slots() == 0 {
             tracing::debug!(target: LOG_TARGET, "Connection {connection_id:?} with peer {peer_id:?} must be closed because peering degree limit has already been reached.");
             self.close_connection((peer_id, connection_id));
+            self.notify_about_connection_upgrade_failure(peer_id, peer_role);
             return;
         }
         debug_assert!(
@@ -492,13 +513,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             },
         );
         // Notify the Swarm about the successful negotiation.
-        self.events
-            .push_back(ToSwarm::GenerateEvent(if peer_role == Endpoint::Listener {
-                Event::OutboundConnectionUpgradeSucceeded(peer_id)
-            } else {
-                Event::InboundConnectionUpgradeSucceeded(peer_id)
-            }));
-        self.try_wake();
+        self.notify_about_connection_upgrade_success(peer_id, peer_role);
     }
 
     /// Handle a newly upgraded connection for a peer that this peer is already
@@ -530,10 +545,16 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             // Same connection direction (in case it was not caught at connection establishment
             // time), we ignore the new connection.
             (Endpoint::Dialer, Endpoint::Dialer) | (Endpoint::Listener, Endpoint::Listener) => {
-                self.handle_connected_peer_duplicate_connection((peer_id, new_connection_id));
+                self.handle_connected_peer_duplicate_connection(
+                    (peer_id, new_connection_id),
+                    new_role,
+                );
             }
             (Endpoint::Listener, Endpoint::Dialer) | (Endpoint::Dialer, Endpoint::Listener) => {
-                self.handle_connected_peer_reverse_connection((peer_id, new_connection_id));
+                self.handle_connected_peer_reverse_connection(
+                    (peer_id, new_connection_id),
+                    new_role,
+                );
             }
         }
     }
@@ -543,9 +564,11 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
     fn handle_connected_peer_duplicate_connection(
         &mut self,
         (peer_id, new_connection_id): (PeerId, ConnectionId),
+        new_role: Endpoint,
     ) {
         tracing::trace!(target: LOG_TARGET, "Connection {new_connection_id:?} with peer {peer_id:?} will be closed since there is already a connection established in the same direction.");
         self.close_connection((peer_id, new_connection_id));
+        self.notify_about_connection_upgrade_failure(peer_id, new_role);
     }
 
     /// Decide which connection to keep between an established one and
@@ -557,6 +580,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
     fn handle_connected_peer_reverse_connection(
         &mut self,
         (peer_id, new_connection_id): (PeerId, ConnectionId),
+        new_role: Endpoint,
     ) {
         let existing_connection_details = self
             .negotiated_peers
@@ -586,20 +610,15 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             update_connection_id_and_direction(existing_connection_details, new_connection_id);
             // After the old connection details have been updated with the new
             // ones, notify the Swarm that the new connection has been upgraded.
-            self.events.push_back(ToSwarm::GenerateEvent(
-                if existing_connection_details.role == Endpoint::Listener {
-                    Event::OutboundConnectionUpgradeSucceeded(peer_id)
-                } else {
-                    Event::InboundConnectionUpgradeSucceeded(peer_id)
-                },
-            ));
-            // Notify the current connection handler to drop the substreams.
+            let existing_role = existing_connection_details.role;
             self.close_connection(existing_connection);
+            self.notify_about_connection_upgrade_success(peer_id, existing_role);
         } else {
             tracing::trace!(target: LOG_TARGET, "Dropping upgraded connection {new_connection_id:?} with peer {peer_id:?} in favor of currently established connection {:?}", existing_connection_details.connection_id);
             // Notify the new connection handler to drop the substreams, and we do not
             // alter the storage.
             self.close_connection((peer_id, new_connection_id));
+            self.notify_about_connection_upgrade_failure(peer_id, new_role);
         }
     }
 
@@ -1066,14 +1085,7 @@ where
                     "Remote peer endpoint provided by event and the one stored do not match."
                 );
                 // Notify the swarm about the negotiation failure.
-                self.events.push_back(ToSwarm::GenerateEvent(
-                    if remote_peer_role == Endpoint::Listener {
-                        Event::OutboundConnectionUpgradeFailed(peer_id)
-                    } else {
-                        Event::InboundConnectionUpgradeFailed(peer_id)
-                    },
-                ));
-                self.try_wake();
+                self.notify_about_connection_upgrade_failure(peer_id, remote_peer_role);
                 return;
             }
 
