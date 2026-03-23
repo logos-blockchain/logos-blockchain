@@ -113,7 +113,22 @@ impl Transaction for GenesisTx {
 }
 
 impl GasCost for GenesisTx {
-    fn gas_cost<Constants: GasConstants>(&self) -> Gas {
+    fn total_gas_cost<Constants: GasConstants>(&self) -> Gas {
+        // Genesis transactions have zero gas cost as per spec
+        0
+    }
+
+    fn storage_gas_cost(&self) -> Gas {
+        // Genesis transactions have zero gas cost as per spec
+        0
+    }
+
+    fn execution_gas_consumption<Constants: GasConstants>(&self) -> Gas {
+        // Genesis transactions have zero gas cost as per spec
+        0
+    }
+
+    fn storage_gas_consumption(&self) -> Gas {
         // Genesis transactions have zero gas cost as per spec
         0
     }

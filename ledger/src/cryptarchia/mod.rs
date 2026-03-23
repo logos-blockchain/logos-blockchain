@@ -6,7 +6,10 @@ use std::sync::{Arc, LazyLock};
 use derivative::Derivative;
 use lb_core::{
     crypto::{ZkDigest, ZkHasher},
-    mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value, gas::GasConstants},
+    mantle::{
+        AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value,
+        gas::{Gas, GasConstants},
+    },
     proofs::leader_proof::{self, LeaderPublic},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
@@ -18,6 +21,19 @@ use crate::cryptarchia::{
     block_density::BlockDensity,
     stake::{PRECISION, StakeInference},
 };
+
+// Implementation precision
+const EXECUTION_MARKET_AVG_SCALE: u128 = 1_000_000;
+// corresponds to the denominator of q
+const EXECUTION_MARKET_EMA_DENOMINATOR: u128 = 10;
+// Corresponds to the numerator of q
+const EXECUTION_MARKET_EMA_PREV_WEIGHT: u128 = 9;
+// Corresponds to 7 * G_target because the numerator is 1 + phi (G_avg -
+// G_target)
+const EXECUTION_MARKET_BASE_FEE_NUMERATOR: u128 = 11_176_760;
+// Corresponds to 8 * G_target because the denominator is 1 + phi (G_avg -
+// // G_target)
+const EXECUTION_MARKET_BASE_FEE_DENOMINATOR: u128 = 12_773_440;
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
 use super::{Balance, Config, LedgerError};
@@ -129,6 +145,10 @@ pub struct LedgerState {
     // rolling fee window of 120 blocks, used to derive block rewards
     #[cfg_attr(feature = "serde", serde(with = "serde_arrays"))]
     fee_window: [Value; WINDOW_SIZE],
+    // Smoothed Average Execution Gas used up to the last block
+    average_execution_gas: Gas,
+    // Execution Base Fee that are burned and minimum required to pay.
+    execution_base_fee: Gas,
 }
 
 impl LedgerState {
@@ -276,6 +296,28 @@ impl LedgerState {
         }
     }
 
+    #[must_use]
+    pub fn update_execution_market(self, block_execution_gas_consumed: Gas) -> Self {
+        // First update the `average_execution_gas`
+        let avg_numerator = EXECUTION_MARKET_AVG_SCALE * u128::from(block_execution_gas_consumed)
+            + EXECUTION_MARKET_EMA_PREV_WEIGHT * u128::from(self.average_execution_gas);
+        let new_average_execution_gas: Gas =
+            (avg_numerator / EXECUTION_MARKET_EMA_DENOMINATOR) as Gas;
+
+        // Then update the `execution_base_fee`
+        let fee_numerator = u128::from(self.execution_base_fee)
+            * (EXECUTION_MARKET_BASE_FEE_NUMERATOR * EXECUTION_MARKET_AVG_SCALE
+                + u128::from(self.average_execution_gas));
+        let fee_denominator = EXECUTION_MARKET_BASE_FEE_DENOMINATOR * EXECUTION_MARKET_AVG_SCALE;
+        let new_base_fee = (fee_numerator / fee_denominator) as Gas;
+
+        Self {
+            average_execution_gas: new_average_execution_gas,
+            execution_base_fee: new_base_fee,
+            ..self
+        }
+    }
+
     fn try_apply_proof<LeaderProof, Id>(
         self,
         slot: Slot,
@@ -419,6 +461,11 @@ impl LedgerState {
     }
 
     #[must_use]
+    pub const fn execution_base_fee(&self) -> &Gas {
+        &self.execution_base_fee
+    }
+
+    #[must_use]
     pub const fn aged_utxos(&self) -> &UtxoTree {
         &self.epoch_state.utxos
     }
@@ -505,6 +552,8 @@ impl LedgerState {
             block_density,
             stake_inference,
             fee_window: [0u64; 120],
+            average_execution_gas: 0u64,
+            execution_base_fee: 0u64,
         }
     }
 }
@@ -748,7 +797,9 @@ pub mod tests {
             },
             stake_inference,
             fee_window: [0u64; 120],
+            average_execution_gas: 0u64,
             block_density,
+            execution_base_fee: 0u64,
         }
     }
 
@@ -1138,7 +1189,7 @@ pub mod tests {
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
         let tx = create_tx(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
 
-        let _fees = tx.gas_cost::<MainnetGasConstants>();
+        let _fees = tx.total_gas_cost::<MainnetGasConstants>();
         let (new_state, balance) = ledger_state
             .try_apply_tx::<(), MainnetGasConstants>(&locked_notes, tx)
             .unwrap();
@@ -1167,7 +1218,7 @@ pub mod tests {
             vec![],
         );
         let locked_notes = LockedNotes::new();
-        let _fees = tx.gas_cost::<MainnetGasConstants>();
+        let _fees = tx.total_gas_cost::<MainnetGasConstants>();
         let (final_state, final_balance) = new_state
             .try_apply_tx::<(), MainnetGasConstants>(&locked_notes, tx)
             .unwrap();
@@ -1271,7 +1322,7 @@ pub mod tests {
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
         let tx = create_tx(&[(&input_sk, &input_utxo)], vec![]);
 
-        let _fees = tx.gas_cost::<MainnetGasConstants>();
+        let _fees = tx.total_gas_cost::<MainnetGasConstants>();
         let result = ledger_state.try_apply_tx::<(), MainnetGasConstants>(&locked_notes, tx);
         assert!(result.is_ok());
 

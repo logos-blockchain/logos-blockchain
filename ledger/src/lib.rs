@@ -13,7 +13,10 @@ use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use cryptarchia::{EpochState, UtxoTree};
 use lb_core::{
     block::BlockNumber,
-    mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value, gas::GasConstants},
+    mantle::{
+        AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value,
+        gas::{Gas, GasConstants},
+    },
     proofs::leader_proof,
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
 };
@@ -86,6 +89,8 @@ pub enum LedgerError<Id> {
     LockedNote(NoteId),
     #[error("Input note in genesis block: {0:?}")]
     InputInGenesis(NoteId),
+    #[error("Fees don't cover the minimal execution base fee cost")]
+    InsufficientExecutionFee,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -227,8 +232,14 @@ impl LedgerState {
     /// total estimated stake and on the average of fees consumed per block over
     /// the last `BLOCK_REWARD_WINDOW_SIZE` blocks. See the block rewards
     /// specification: <https://www.notion.so/nomos-tech/v1-1-Block-Rewards-Specification-326261aa09df80579edddaf092057b3d>
-    fn compute_block_rewards(mut self) -> Self {
+    fn compute_block_rewards(mut self, total_fee_burned: Gas, total_fee_tip: Gas) -> Self {
         let window_index = self.block_number as usize % WINDOW_SIZE;
+
+        // First update the fee burned in the block
+        self.cryptarchia_ledger
+            .update_fee_window(window_index, total_fee_burned);
+
+        // Then compute the amount of the block rewards
 
         // compute A_t'
         let sum_fees = self.cryptarchia_ledger.get_summed_fees();
@@ -243,14 +254,15 @@ impl LedgerState {
                 * u128::from(self.cryptarchia_ledger.get_fee_from_index(window_index));
         let reward_denominator = INFLATION_DENOMINATOR * A_SCALE;
 
-        // blend get 60% of rewards while leaders get the 40% remaining.
-        // Casting as Value truncate the floating points
+        // blend get 60% of block rewards while leaders get the 40% remaining + the
+        // tips. Casting as Value truncate the floating points
         let blend_reward = (reward_numerator * BLEND_REWARD_SHARE_NUMERATOR
             / (reward_denominator * BLEND_REWARD_SHARE_DENOMINATOR))
             as Value;
         let leader_reward = (reward_numerator * LEADER_REWARD_SHARE_NUMERATOR
             / (reward_denominator * LEADER_REWARD_SHARE_DENOMINATOR))
-            as Value;
+            as Value
+            + total_fee_tip;
 
         self.mantle_ledger.leaders = self
             .mantle_ledger
@@ -262,12 +274,29 @@ impl LedgerState {
         self
     }
 
+    /// For each block received, execution base fees and average execution
+    /// consumption are updated based on the total execution gas consumed in the
+    /// block and the smoothed average consumption. This function update the
+    /// `average_execution_gas` and the `execution_base_fee` stored in the
+    /// cryptarchia ledger. See the specification <https://www.notion.so/nomos-tech/v1-2-Execution-Market-Specification-326261aa09df8022b1cfcfe968bdb5e1>
+    fn update_execution_market(self, block_execution_gas_consumed: Gas) -> Self {
+        Self {
+            cryptarchia_ledger: self
+                .cryptarchia_ledger
+                .update_execution_market(block_execution_gas_consumed),
+            ..self
+        }
+    }
+
     /// Apply the contents of an update to the ledger state.
     pub fn try_apply_contents<Id, Constants: GasConstants>(
         mut self,
         config: &Config,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx>,
     ) -> Result<Self, LedgerError<Id>> {
+        let mut total_block_execution_gas: Gas = 0;
+        let mut total_fee_burned: Gas = 0;
+        let mut total_fee_tip: Gas = 0;
         for tx in txs {
             let balance;
             (self.cryptarchia_ledger, balance) = self
@@ -282,21 +311,33 @@ impl LedgerState {
                     self.cryptarchia_ledger.latest_utxos(),
                     &tx,
                 )?;
-
+            total_block_execution_gas += &tx.execution_gas_consumption::<Constants>();
             let total_balance = balance
                 .checked_add(additional_balance)
                 .ok_or(LedgerError::Overflow)?;
-            match total_balance.cmp(&tx.gas_cost::<Constants>().into()) {
+            match total_balance.cmp(&tx.total_gas_cost::<Constants>().into()) {
                 Ordering::Less => return Err(LedgerError::InsufficientBalance),
                 Ordering::Greater => return Err(LedgerError::UnbalancedTransaction),
                 Ordering::Equal => {} // OK!
             }
-            self.cryptarchia_ledger.update_fee_window(
-                self.block_number as usize % WINDOW_SIZE,
-                total_balance as u64,
-            );
+            // Update the total of fee burned and tipped in the block
+            let fee_burned = total_block_execution_gas
+                * self.cryptarchia_ledger.execution_base_fee()
+                + tx.storage_gas_cost();
+
+            // Check that the transaction at least pays for the base fee
+            match total_balance.cmp(&fee_burned.into()) {
+                Ordering::Less => return Err(LedgerError::InsufficientExecutionFee),
+                Ordering::Greater | Ordering::Equal => {} // OK !
+            }
+
+            let fee_tip = total_balance as Gas - fee_burned;
+            total_fee_burned += fee_burned;
+            total_fee_tip += fee_tip;
         }
-        self = self.compute_block_rewards();
+
+        self = self.compute_block_rewards(total_fee_burned, total_fee_tip);
+        self = self.update_execution_market(total_block_execution_gas);
         Ok(self)
     }
 
@@ -450,7 +491,7 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
         );
-        let fees = tx.gas_cost::<MainnetGasConstants>();
+        let fees = tx.total_gas_cost::<MainnetGasConstants>();
         output_note.value = utxo.note.value - fees;
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk]);
 

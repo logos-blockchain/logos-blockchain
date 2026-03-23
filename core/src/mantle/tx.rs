@@ -162,16 +162,27 @@ impl<'de> Deserialize<'de> for MantleTx {
 }
 
 impl GasCost for MantleTx {
-    fn gas_cost<Constants: GasConstants>(&self) -> Gas {
-        let execution_gas = self
-            .ops
+    fn total_gas_cost<Constants: GasConstants>(&self) -> Gas {
+        let execution_gas = self.execution_gas_consumption::<Constants>();
+        let storage_gas = self.storage_gas_consumption();
+
+        execution_gas * self.execution_gas_price + storage_gas * self.storage_gas_price
+    }
+
+    fn storage_gas_cost(&self) -> Gas {
+        self.storage_gas_consumption() * self.storage_gas_price
+    }
+
+    fn execution_gas_consumption<Constants: GasConstants>(&self) -> Gas {
+        self.ops
             .iter()
             .map(Op::execution_gas::<Constants>)
             .sum::<Gas>()
-            + self.ledger_tx.execution_gas::<Constants>();
-        let storage_gas = self.signed_serialized_size();
+            + self.ledger_tx.execution_gas::<Constants>()
+    }
 
-        execution_gas * self.execution_gas_price + storage_gas * self.storage_gas_price
+    fn storage_gas_consumption(&self) -> Gas {
+        self.signed_serialized_size()
     }
 }
 
@@ -358,18 +369,29 @@ impl AuthenticatedMantleTx for SignedMantleTx {
 }
 
 impl GasCost for SignedMantleTx {
-    fn gas_cost<Constants: GasConstants>(&self) -> Gas {
-        let execution_gas = self
-            .mantle_tx
+    fn total_gas_cost<Constants: GasConstants>(&self) -> Gas {
+        let execution_gas = self.execution_gas_consumption::<Constants>();
+        let storage_gas = self.storage_gas_consumption();
+
+        execution_gas * self.mantle_tx.execution_gas_price
+            + storage_gas * self.mantle_tx.storage_gas_price
+    }
+
+    fn storage_gas_cost(&self) -> Gas {
+        self.storage_gas_consumption() * self.mantle_tx.storage_gas_price
+    }
+
+    fn execution_gas_consumption<Constants: GasConstants>(&self) -> Gas {
+        self.mantle_tx
             .ops
             .iter()
             .map(Op::execution_gas::<Constants>)
             .sum::<Gas>()
-            + self.mantle_tx.ledger_tx.execution_gas::<Constants>();
-        let storage_gas = self.gas_storage_size();
+            + self.mantle_tx.ledger_tx.execution_gas::<Constants>()
+    }
 
-        execution_gas * self.mantle_tx.execution_gas_price
-            + storage_gas * self.mantle_tx.storage_gas_price
+    fn storage_gas_consumption(&self) -> Gas {
+        self.gas_storage_size()
     }
 }
 
