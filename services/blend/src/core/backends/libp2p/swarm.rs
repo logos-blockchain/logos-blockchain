@@ -62,6 +62,8 @@ pub struct DialAttempt {
     attempt_number: NonZeroU64,
 }
 
+/// [`DialAttempt`] with session information, i.e., whether the attempt was made
+/// at this session or the previous one.
 pub enum SessionDialAttempt {
     OngoingSession(Option<DialAttempt>),
     PreviousSession,
@@ -176,8 +178,8 @@ where
         IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
 {
     /// Dial random peers from the membership list,
-    /// excluding the currently connected peers, the peers that we are already
-    /// trying to dial, and the blocked peers.
+    /// excluding the peers with a negotiated connection in the ongoing session,
+    /// the peers that we are already trying to dial, and the blocked peers.
     fn dial_random_peers_except(&mut self, amount: usize, except: Option<PeerId>) {
         let negotiated_peers = self.behaviour().blend.with_core().negotiated_peers().keys();
         let exclude_peers: HashSet<PeerId> = negotiated_peers
@@ -339,17 +341,18 @@ where
     /// * `SessionDialAttempt::Ongoing(None)` if a new dial attempt has been
     ///   performed towards the peer, since the maximum attempts have not been
     ///   reached yet;
-    /// * `SessionDialAttempt::Ongoing(Some(_))` if the maximum attempts have
-    ///   been reached and the peer has been removed from the map of ongoing
-    ///   dials, with the details of the dial attempt that has just been
-    ///   removed.
+    /// * `SessionDialAttempt::Ongoing(Some)` if the maximum attempts have been
+    ///   reached and the peer has been removed from the map of ongoing dials,
+    ///   with the details of the dial attempt that has just been removed.
     fn retry_dial(&mut self, peer_id: PeerId) -> SessionDialAttempt {
+        // We cannot `.remove()` here because `self.dial` relies on the entry being
+        // present in the map.
         let Some(DialAttempt {
             address,
             attempt_number,
         }) = self.ongoing_dials.get(&peer_id)
         else {
-            tracing::warn!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new session has cleared the map of pending dials.");
+            tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new session has cleared the map of pending dials.");
             return SessionDialAttempt::PreviousSession;
         };
         if *attempt_number < self.max_dial_attempts_per_connection {
@@ -357,7 +360,11 @@ where
             return SessionDialAttempt::OngoingSession(None);
         }
         tracing::trace!(target: LOG_TARGET, "Maximum attempts ({}) reached for peer {peer_id:?}. Re-dialing stopped.", self.max_dial_attempts_per_connection);
-        SessionDialAttempt::OngoingSession(self.ongoing_dials.remove(&peer_id))
+        SessionDialAttempt::OngoingSession(Some(
+            self.ongoing_dials
+                .remove(&peer_id)
+                .expect("At this point we are guaranteed there is an ongoing dial."),
+        ))
     }
 
     fn validate_and_publish_swarm_message(&mut self, msg: EncapsulatedMessage) {
@@ -519,6 +526,7 @@ where
                     SessionDialAttempt::OngoingSession(Some(_)) => {
                         self.check_and_dial_new_peers_except(Some(peer_id));
                     }
+                    // Retry in progress.
                     SessionDialAttempt::OngoingSession(None) => {}
                 }
             }

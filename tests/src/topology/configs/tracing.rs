@@ -44,7 +44,7 @@ impl GeneralTracingConfig {
                     host_identifier,
                 }),
                 console: tracing::console::Layer::None,
-                level: tracing::Level::TRACE,
+                level: tracing::Level::DEBUG,
             },
         }
     }

@@ -285,8 +285,6 @@ where
 
         let blend_config = settings_handle.notifier().get_updated_settings();
 
-        tracing::debug!(target: LOG_TARGET, "Starting core Blend service with config: {blend_config:?}");
-
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_secs(60)),
