@@ -22,34 +22,6 @@ pub trait Backend<RuntimeServiceId> {
     where
         Self: Sized;
 
-    /// Wait until the backend is ready to serve requests.
-    ///
-    /// # Notes
-    ///
-    /// * Because this method is async and takes a `self` reference, it would
-    ///   need to propagate `Sync` traits. To avoid this, we use a `&mut self`
-    ///   reference. In addition, this also covers potential use-cases where the
-    ///   backend might need to perform some `mut` operations when checking
-    ///   readiness, such as sending/receiving messages.
-    ///
-    /// # Arguments
-    ///
-    /// * `overwatch_handle` - A handle to Overwatch. This is mainly used to
-    ///   retrieve the
-    ///   [`StatusWatcher`](overwatch::services::status::StatusWatcher) to read
-    ///   the [`ServiceStatus`](overwatch::services::status::ServiceStatus) of
-    ///   `Services` we depend on.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` indicating:
-    /// * `Ok(())` if the backend is ready.
-    /// * `Err(DynError)` if there was an error while waiting for readiness.
-    async fn wait_until_ready(
-        &mut self,
-        overwatch_handle: OverwatchHandle<RuntimeServiceId>,
-    ) -> Result<(), DynError>;
-
     async fn serve(self, handle: OverwatchHandle<RuntimeServiceId>) -> Result<(), Self::Error>;
 }
 
@@ -95,18 +67,14 @@ where
     }
 
     /// Service main loop
-    async fn run(mut self) -> Result<(), DynError> {
-        let mut endpoint = B::new(self.settings.backend_settings).await?;
+    async fn run(self) -> Result<(), DynError> {
+        let endpoint = B::new(self.settings.backend_settings).await?;
 
         self.service_resources_handle.status_updater.notify_ready();
         tracing::info!(
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
-
-        endpoint
-            .wait_until_ready(self.service_resources_handle.overwatch_handle.clone())
-            .await?;
 
         endpoint
             .serve(self.service_resources_handle.overwatch_handle)

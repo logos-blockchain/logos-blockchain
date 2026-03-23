@@ -2,7 +2,7 @@ use lb_core::{
     crypto::ZkHash,
     sdp::{Declaration, DeclarationId, ProviderId, ServiceParameters, ServiceType, SessionNumber},
 };
-use lb_groth16::Fr;
+use lb_groth16::{Field as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
 use num_bigint::BigUint;
 
@@ -61,5 +61,7 @@ pub fn dummy_epoch_state_with(epoch: u32, nonce: u64) -> EpochState {
         nonce: ZkHash::from(BigUint::from(nonce)),
         utxos: UtxoTree::default(),
         total_stake: 0,
+        lottery_0: Fr::ZERO,
+        lottery_1: Fr::ZERO,
     }
 }

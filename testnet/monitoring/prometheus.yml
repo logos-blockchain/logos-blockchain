@@ -1,4 +1,0 @@
-global:
-  evaluation_interval: 15s
-  external_labels:
-    monitor: "Monitoring"

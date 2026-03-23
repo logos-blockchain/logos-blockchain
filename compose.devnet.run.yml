@@ -1,29 +1,46 @@
 version: '3.8'
 
+include:
+  - testnet/compose.tracing.yml
+
 services:
 
   explorer:
     container_name: explorer
-    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    image: ghcr.io/logos-blockchain/logos-blockchain-explorer:latest
     depends_on:
       - logos-blockchain-node-0
     environment:
       - NBE_NODE_API_HOST=logos-blockchain-node-0
       - NBE_NODE_API_PORT=${NODE0_API_PORT}
+      - NBE_BASE_PATH=/web/explorer
     ports:
-      - "8000:8000/tcp"
-    entrypoint: /opt/scripts/run_explorer.sh
+      - "13800:8000/tcp"
 
   cfgsync:
     container_name: cfgsync
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
+      - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
     depends_on:
       - grafana
+    environment:
+      - ENTROPY_FILE=${ENTROPY_FILE:-/etc/logos-blockchain/entropy}
     ports:
       - "4400:4400/tcp"
     entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_server.sh
+
+  faucet:
+    container_name: faucet
+    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    volumes:
+      - node-data:/node-data
+      - ./testnet:/etc/logos-blockchain
+    environment:
+      - FAUCET_PORT=18090
+      - NODE_API_ADDR=http://logos_blockchain_node_0:${NODE0_API_PORT}
+    entrypoint: /etc/logos-blockchain/scripts/run_faucet.sh
 
   logos-blockchain-node-0:
     container_name: logos_blockchain_node_0
@@ -31,7 +48,6 @@ services:
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
-      - ./tests/kzgrs/kzgrs_test_params:/kzgrs_test_params:z
     depends_on:
       - cfgsync
     environment:
@@ -40,11 +56,10 @@ services:
       - CFG_NETWORK_PORT=${NODE0_NET_PORT}
       - CFG_BLEND_PORT=${NODE0_BLEND_PORT}
       - CFG_API_PORT=${NODE0_API_PORT}
-      - FAUCET_PORT=${NODE0_FAUCET_PORT}
     ports:
       - "3000:3000/udp"
       - "3400:3400/udp"
-      - "18085:18085/tcp"
+      - "18080:18080/tcp"
     entrypoint: /etc/logos-blockchain/scripts/run_node.sh
 
   logos-blockchain-node-1:
@@ -53,7 +68,6 @@ services:
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
-      - ./tests/kzgrs/kzgrs_test_params:/kzgrs_test_params:z
     depends_on:
       - cfgsync
     environment:
@@ -62,7 +76,6 @@ services:
       - CFG_NETWORK_PORT=${NODE1_NET_PORT}
       - CFG_BLEND_PORT=${NODE1_BLEND_PORT}
       - CFG_API_PORT=${NODE1_API_PORT}
-      - FAUCET_PORT=${NODE1_FAUCET_PORT}
     ports:
       - "3001:3001/udp"
       - "3401:3401/udp"
@@ -75,7 +88,6 @@ services:
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
-      - ./tests/kzgrs/kzgrs_test_params:/kzgrs_test_params:z
     depends_on:
       - cfgsync
     environment:
@@ -84,7 +96,6 @@ services:
       - CFG_NETWORK_PORT=${NODE2_NET_PORT}
       - CFG_BLEND_PORT=${NODE2_BLEND_PORT}
       - CFG_API_PORT=${NODE2_API_PORT}
-      - FAUCET_PORT=${NODE2_FAUCET_PORT}
     ports:
       - "3002:3002/udp"
       - "3402:3402/udp"
@@ -97,7 +108,6 @@ services:
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
-      - ./tests/kzgrs/kzgrs_test_params:/kzgrs_test_params:z
     depends_on:
       - cfgsync
     environment:
@@ -106,90 +116,29 @@ services:
       - CFG_NETWORK_PORT=${NODE3_NET_PORT}
       - CFG_BLEND_PORT=${NODE3_BLEND_PORT}
       - CFG_API_PORT=${NODE3_API_PORT}
-      - FAUCET_PORT=${NODE3_FAUCET_PORT}
     ports:
       - "3003:3003/udp"
       - "3403:3403/udp"
       - "18083:18083/tcp"
     entrypoint: /etc/logos-blockchain/scripts/run_node.sh
 
-  prometheus:
-    container_name: prometheus
-    image: prom/prometheus:v3.0.1
-    volumes:
-      - ./testnet/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:z
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.retention.time=7d
-      - --web.enable-otlp-receiver
-    ports:
-      - 0.0.0.0:9090:9090
-    restart: on-failure
-
-  grafana:
-    container_name: grafana
-    image: grafana/grafana:latest
-    environment:
-      - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
-      - GF_AUTH_DISABLE_LOGIN_FORM=true
-      - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor traceQLStreaming metricsSummary
-    env_file:
-      - ./testnet/monitoring/grafana/plugins.env
-    volumes:
-      - ./testnet/monitoring/grafana/grafana.ini:/etc/grafana/grafana.ini:z
-      - ./testnet/monitoring/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:z
-      - ./testnet/monitoring/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:z
-      - ./testnet/monitoring/grafana/dashboards:/var/lib/grafana/dashboards/:z
-    ports:
-      - 9091:3000
-    restart: on-failure
-    depends_on:
-      - prometheus
-
-  loki:
-    image: grafana/loki:2.9.2
-    ports:
-      - "3100:3100"
-    command: -config.file=/etc/loki/local-config.yaml
-
-  # Tempo runs as unpriviliged user, volumes need to be chowned before running.
-  tempo-init:
-    image: busybox:latest
-    user: root
-    entrypoint:
-      - "chown"
-      - "10001:10001"
-      - "/var/tempo"
-    volumes:
-      - ./tempo-data:/var/tempo
-
-  tempo:
-    image: grafana/tempo:latest
-    container_name: tempo
-    command: [ "-config.file=/etc/tempo.yaml" ]
-    volumes:
-      - ./testnet/monitoring/tempo.yaml:/etc/tempo.yaml:z
-      - ./tempo-data:/var/tempo
-    ports:
-      - "4317:4317" # otlp grpc
-    depends_on:
-      - tempo-init
-
-  # L2 Sequencer Demo Services
-  l2-nginx:
-    container_name: l2_nginx
+  nginx:
+    container_name: nginx
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     ports:
-      - "18080:18080"
+      - "13000:13000"
+      - "13001:13001"
     depends_on:
       - cfgsync
       - explorer
+      - faucet
     volumes:
-      - ./testnet/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./testnet/static:/usr/share/nginx/html:ro
+      - node-data:/node-data
+      - ./testnet/nginx/run.conf:/etc/nginx/nginx.conf:ro
+      - ./testnet/nginx/static/run:/usr/share/nginx/html:ro
     entrypoint: [ "nginx", "-g", "daemon off;" ]
 
+  # L2 Sequencer Demo Services
   l2-sequencer:
     container_name: l2_sequencer
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet

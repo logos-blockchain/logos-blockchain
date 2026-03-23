@@ -9,6 +9,7 @@ use lb_blend_message::{
     },
 };
 use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
+use lb_cryptarchia_engine::Epoch;
 
 use crate::{
     membership::Membership,
@@ -46,6 +47,7 @@ where
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
         core_proof_of_quota_generator: CorePoQGenerator,
+        epoch: Epoch,
     ) -> Self {
         Self {
             sender_processor: SenderSessionCryptographicProcessor::new(
@@ -53,32 +55,17 @@ where
                 membership,
                 public_info,
                 core_proof_of_quota_generator,
+                epoch,
             ),
             proofs_verifier: ProofsVerifier::new(public_info),
         }
     }
-}
 
-impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
-    SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
-where
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
-    ProofsVerifier: ProofsVerifierTrait,
-{
-    pub fn rotate_epoch(&mut self, new_epoch_public: LeaderInputs) {
-        self.sender_processor.rotate_epoch(new_epoch_public);
+    pub fn rotate_epoch(&mut self, new_epoch_public: LeaderInputs, new_epoch: Epoch) {
+        self.sender_processor
+            .rotate_epoch(new_epoch_public, new_epoch);
         self.proofs_verifier
             .start_epoch_transition(new_epoch_public);
-    }
-}
-
-impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
-    SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
-where
-    ProofsVerifier: ProofsVerifierTrait,
-{
-    pub fn complete_epoch_transition(&mut self) {
-        self.proofs_verifier.complete_epoch_transition();
     }
 }
 
@@ -111,6 +98,10 @@ where
             &self.proofs_verifier,
         )
     }
+
+    pub fn complete_epoch_transition(&mut self) {
+        self.proofs_verifier.complete_epoch_transition();
+    }
 }
 
 // `Deref` and `DerefMut` so we can call the `encapsulate*` methods exposed by
@@ -140,7 +131,8 @@ mod test {
     use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
     use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
     use lb_core::crypto::ZkHash;
-    use lb_groth16::Field as _;
+    use lb_cryptarchia_engine::Epoch;
+    use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
     use multiaddr::{Multiaddr, PeerId};
 
@@ -183,20 +175,23 @@ mod test {
                     message_quota: 1,
                     pol_epoch_nonce: ZkHash::ZERO,
                     pol_ledger_aged: ZkHash::ZERO,
-                    total_stake: 1,
+                    lottery_0: Fr::ZERO,
+                    lottery_1: Fr::ZERO,
                 },
             },
             MockCorePoQGenerator,
+            Epoch::new(0),
         );
 
         let new_leader_inputs = LeaderInputs {
             pol_ledger_aged: ZkHash::ONE,
             pol_epoch_nonce: ZkHash::ONE,
             message_quota: 2,
-            total_stake: 2,
+            lottery_0: Fr::ONE,
+            lottery_1: Fr::ONE,
         };
 
-        processor.rotate_epoch(new_leader_inputs);
+        processor.rotate_epoch(new_leader_inputs, Epoch::new(1));
 
         assert_eq!(processor.proofs_verifier.0.leader, new_leader_inputs);
         assert_eq!(
@@ -205,7 +200,8 @@ mod test {
                 message_quota: 1,
                 pol_epoch_nonce: ZkHash::ZERO,
                 pol_ledger_aged: ZkHash::ZERO,
-                total_stake: 1,
+                lottery_0: Fr::ZERO,
+                lottery_1: Fr::ZERO,
             })
         );
         assert_eq!(

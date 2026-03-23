@@ -1,4 +1,5 @@
 use lb_blend_proofs::selection::inputs::VerifyInputs;
+use lb_cryptarchia_engine::Epoch;
 use test_log::test;
 
 use crate::message_blend::provers::{
@@ -20,6 +21,7 @@ async fn proof_generation() {
             local_node_index: None,
             membership_size: 1,
             public_inputs,
+            epoch: Epoch::new(0),
         },
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(private_inputs.clone()),
     );
@@ -62,6 +64,7 @@ async fn epoch_rotation() {
             local_node_index: None,
             membership_size: 1,
             public_inputs,
+            epoch: Epoch::new(0),
         },
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(private_inputs.clone()),
     );

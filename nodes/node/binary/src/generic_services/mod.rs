@@ -82,6 +82,7 @@ pub type CryptarchiaLeaderService<Cryptarchia, ChainNetwork, Wallet, RuntimeServ
         Cryptarchia,
         ChainNetwork,
         Wallet,
+        lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
         RuntimeServiceId,
     >;
 
@@ -109,5 +110,6 @@ pub type SdpWalletAdapter<RuntimeServiceId> = sdp::wallet::SdpWalletAdapter<
 pub type SdpService<RuntimeServiceId> = lb_sdp_service::SdpService<
     SdpMempoolAdapter<RuntimeServiceId>,
     SdpWalletAdapter<RuntimeServiceId>,
+    CryptarchiaService<RuntimeServiceId>,
     RuntimeServiceId,
 >;

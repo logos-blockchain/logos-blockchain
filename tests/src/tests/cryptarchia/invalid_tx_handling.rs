@@ -45,7 +45,7 @@ async fn invalid_transactions_are_handled() {
         .expect("Invalid transaction should be accepted by mempool for later pruning");
     let invalid_tx_hashes = [invalid_hash];
 
-    let first_valid_tx = create_inscription_transaction_with_id(ChannelId::from([1u8; 32]));
+    let first_valid_tx = create_inscription_transaction_with_id(ChannelId::from([1u8; 32]), None);
     let first_valid_hash = first_valid_tx.hash();
     client
         .post_transaction(validator_url.clone(), first_valid_tx)
@@ -68,7 +68,7 @@ async fn invalid_transactions_are_handled() {
     .await
     .expect("first transaction processing timed out");
 
-    let second_valid_tx = create_inscription_transaction_with_id(ChannelId::from([2u8; 32]));
+    let second_valid_tx = create_inscription_transaction_with_id(ChannelId::from([2u8; 32]), None);
     let second_valid_hash = second_valid_tx.hash();
     client
         .post_transaction(validator_url.clone(), second_valid_tx)

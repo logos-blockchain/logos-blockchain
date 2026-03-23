@@ -220,6 +220,8 @@ mod tests {
 
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::UnsecuredZkKey;
+    use lb_pol::LotteryConstants;
+    use lb_utils::math::NonNegativeRatio;
     use lb_utxotree::UtxoTree;
     use num_bigint::BigUint;
 
@@ -244,12 +246,22 @@ mod tests {
         let utxo_tree_root = utxo_tree.root();
         let utxo_merkle_path = utxo_tree.path(&utxo.id()).expect("note must exist in tree");
 
+        let (lottery_0, lottery_1) =
+            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+                .compute_lottery_values(1000);
+
         // We grind the nonce here to find a winning PoL
         let public_inputs = {
             let mut nonce = 0;
             while nonce < 1000 {
-                let inputs =
-                    LeaderPublic::new(utxo_tree_root, utxo_tree_root, Fr::from(nonce), 0, 1000);
+                let inputs = LeaderPublic::new(
+                    utxo_tree_root,
+                    utxo_tree_root,
+                    Fr::from(nonce),
+                    0,
+                    lottery_0,
+                    lottery_1,
+                );
 
                 if inputs.check_winning(utxo.note.value, *utxo.id().as_fr(), *leader_sk.as_fr()) {
                     break;
@@ -257,7 +269,14 @@ mod tests {
 
                 nonce += 1;
             }
-            LeaderPublic::new(utxo_tree_root, utxo_tree_root, Fr::from(nonce), 0, 1000)
+            LeaderPublic::new(
+                utxo_tree_root,
+                utxo_tree_root,
+                Fr::from(nonce),
+                0,
+                lottery_0,
+                lottery_1,
+            )
         };
 
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);

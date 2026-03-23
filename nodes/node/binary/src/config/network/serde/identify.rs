@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// Agent version string to advertise
@@ -20,4 +20,16 @@ pub struct Config {
     /// Whether to hide listen addresses in responses (only share external
     /// addresses)
     pub hide_listen_addrs: Option<bool>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            agent_version: None,
+            interval_secs: None,
+            push_listen_addr_updates: None,
+            cache_size: None,
+            hide_listen_addrs: Some(true),
+        }
+    }
 }

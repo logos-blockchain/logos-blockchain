@@ -30,7 +30,8 @@ impl TryFrom<Inputs> for PoQWitnessInputs {
             pol_epoch_nonce: value.public.leader.pol_epoch_nonce,
             pol_ledger_aged: value.public.leader.pol_ledger_aged,
             session: value.public.session,
-            total_stake: value.public.leader.total_stake,
+            lottery_0: value.public.leader.lottery_0,
+            lottery_1: value.public.leader.lottery_1,
         };
         let common_input_data = PoQCommonInputsData {
             core_quota: value.public.core.quota,

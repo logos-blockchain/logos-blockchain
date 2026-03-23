@@ -1,3 +1,4 @@
+pub mod config;
 pub mod cryptarchia;
 pub mod lifecycle;
 pub(crate) mod memory;

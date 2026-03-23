@@ -1,22 +1,29 @@
 use std::fmt::{Debug, Display};
 
+use lb_chain_service::api::CryptarchiaServiceData;
 use lb_core::sdp::{ActivityMetadata, DeclarationId, DeclarationMessage};
 use lb_sdp_service::{SdpService, mempool::SdpMempoolAdapter};
 use overwatch::{DynError, overwatch::OverwatchHandle};
 
-pub async fn post_declaration_handler<MempoolAdapter, WalletAdapter, RuntimeServiceId>(
+pub async fn post_declaration_handler<
+    MempoolAdapter,
+    WalletAdapter,
+    ChainService,
+    RuntimeServiceId,
+>(
     handle: OverwatchHandle<RuntimeServiceId>,
     declaration: DeclarationMessage,
 ) -> Result<DeclarationId, DynError>
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData + Send + Sync + 'static,
     RuntimeServiceId: Send
         + Sync
         + Debug
         + Display
         + 'static
         + overwatch::services::AsServiceId<
-            SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>,
+            SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>,
         >,
 {
     let relay = handle.relay().await?;
@@ -33,19 +40,20 @@ where
     reply_rx.await?
 }
 
-pub async fn post_activity_handler<MempoolAdapter, WalletAdapter, RuntimeServiceId>(
+pub async fn post_activity_handler<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>(
     handle: OverwatchHandle<RuntimeServiceId>,
     metadata: ActivityMetadata,
 ) -> Result<(), DynError>
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData + Send + Sync + 'static,
     RuntimeServiceId: Send
         + Sync
         + Debug
         + Display
         + 'static
         + overwatch::services::AsServiceId<
-            SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>,
+            SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>,
         >,
 {
     let relay = handle.relay().await?;
@@ -58,19 +66,25 @@ where
     Ok(())
 }
 
-pub async fn post_withdrawal_handler<MempoolAdapter, WalletAdapter, RuntimeServiceId>(
+pub async fn post_withdrawal_handler<
+    MempoolAdapter,
+    WalletAdapter,
+    ChainService,
+    RuntimeServiceId,
+>(
     handle: OverwatchHandle<RuntimeServiceId>,
     declaration_id: DeclarationId,
 ) -> Result<(), DynError>
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData + Send + Sync + 'static,
     RuntimeServiceId: Send
         + Sync
         + Debug
         + Display
         + 'static
         + overwatch::services::AsServiceId<
-            SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>,
+            SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>,
         >,
 {
     let relay = handle.relay().await?;

@@ -2,12 +2,12 @@
 # check=skip=SecretsUsedInArgOrEnv
 # Ignore warnings about sensitive information as this is test data.
 
-ARG VERSION=v0.4.1
+ARG VERSION=v0.4.2
 
 # ===========================
 # BUILD IMAGE
 # ===========================
-FROM rust:1.93.0-slim-bookworm AS builder
+FROM rust:1.94.0-slim-bookworm AS builder
 
 ARG VERSION
 
@@ -48,16 +48,6 @@ RUN apt-get update && apt-get install -yq \
     libstdc++6 libssl3 ca-certificates nginx \
     python3 python3-pip curl git \
     && rm -rf /var/lib/apt/lists/*
-
-# Install Block Explorer
-ENV UV_INSTALL_DIR=/usr/local/bin
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-RUN git clone https://github.com/logos-blockchain/logos-blockchain-block-explorer-template.git /opt/explorer \
-    && cd /opt/explorer \
-    && git checkout 46fa934148829a7f880de81b3ec6b76a277ddc14 \
-    && uv venv /opt/explorer/.venv \
-    && uv pip compile pyproject.toml -o requirements.txt \
-    && uv pip install --python /opt/explorer/.venv/bin/python -r requirements.txt
 
 # Copy Circuits
 COPY --from=builder /opt/circuits /opt/circuits

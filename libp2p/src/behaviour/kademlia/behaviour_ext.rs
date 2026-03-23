@@ -2,15 +2,37 @@ use std::collections::HashMap;
 
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol,
-    kad::{PeerInfo, QueryId},
+    kad::{PeerInfo, QueryId, RoutingUpdate},
 };
 use rand::RngCore;
 
 use crate::behaviour::Behaviour;
 
 impl<R: Clone + Send + RngCore + 'static> Behaviour<R> {
-    pub(crate) fn kademlia_add_address(&mut self, peer_id: PeerId, addr: Multiaddr) {
-        self.kademlia.add_address(&peer_id, addr);
+    pub(crate) fn kademlia_add_address(&mut self, peer_id: PeerId, addr: &Multiaddr) {
+        match self.kademlia.add_address(&peer_id, addr.clone()) {
+            RoutingUpdate::Success => {
+                tracing::debug!("Added address {:?} to peer {:?}", addr, peer_id);
+            }
+            RoutingUpdate::Pending => {
+                tracing::debug!("Pending to add address {:?} to peer {:?}", addr, peer_id);
+            }
+            RoutingUpdate::Failed => {
+                tracing::error!("Failed to add address {:?} to peer {:?}", addr, peer_id);
+            }
+        }
+    }
+
+    pub(crate) fn kademlia_remove_address(&mut self, peer_id: PeerId, addr: &Multiaddr) {
+        if self.kademlia.remove_address(&peer_id, addr).is_some() {
+            tracing::warn!("Removed address {:?} from peer {:?}", addr, peer_id);
+        } else {
+            tracing::warn!(
+                "Address {:?} for peer {:?} was not present in Kademlia",
+                addr,
+                peer_id
+            );
+        }
     }
 
     pub(crate) fn kademlia_routing_table_dump(&mut self) -> HashMap<u32, Vec<PeerId>> {

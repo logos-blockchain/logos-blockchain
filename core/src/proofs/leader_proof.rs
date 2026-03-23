@@ -1,3 +1,4 @@
+use core::fmt::Debug;
 use std::sync::LazyLock;
 
 use ark_ff::{Field as _, PrimeField as _};
@@ -5,7 +6,6 @@ use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use lb_utxotree::MerklePath;
-use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -17,7 +17,7 @@ use crate::{
     proofs::merkle::merkle_path_to_witness,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Groth16LeaderProof {
     #[serde(with = "proof_serde")]
     proof: lb_pol::PoLProof,
@@ -25,6 +25,20 @@ pub struct Groth16LeaderProof {
     entropy_contribution: Fr,
     leader_key: Ed25519PublicKey,
     voucher_cm: VoucherCm,
+}
+
+impl Debug for Groth16LeaderProof {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Groth16LeaderProof")
+            .field(
+                "proof",
+                &format_args!("{} bytes", size_of::<lb_pol::PoLProof>()),
+            )
+            .field("entropy_contribution", &self.entropy_contribution)
+            .field("leader_key", &self.leader_key)
+            .field("voucher_cm", &self.voucher_cm)
+            .finish()
+    }
 }
 
 #[derive(Debug, Error)]
@@ -95,7 +109,8 @@ impl LeaderProof for Groth16LeaderProof {
                 public_inputs.epoch_nonce,
                 public_inputs.aged_root,
                 public_inputs.latest_root,
-                public_inputs.total_stake,
+                public_inputs.lottery_0,
+                public_inputs.lottery_1,
                 leader_pk,
             ),
         )
@@ -128,7 +143,10 @@ pub struct LeaderPublic {
     pub slot: u64,
     #[serde(with = "serde_fr")]
     pub epoch_nonce: Fr,
-    pub total_stake: u64,
+    #[serde(with = "serde_fr")]
+    pub lottery_0: Fr,
+    #[serde(with = "serde_fr")]
+    pub lottery_1: Fr,
     #[serde(with = "serde_fr")]
     pub aged_root: Fr,
     #[serde(with = "serde_fr")]
@@ -155,12 +173,14 @@ impl LeaderPublic {
         latest_root: Fr,
         epoch_nonce: Fr,
         slot: u64,
-        total_stake: u64,
+        lottery_0: Fr,
+        lottery_1: Fr,
     ) -> Self {
         Self {
             slot,
             epoch_nonce,
-            total_stake,
+            lottery_0,
+            lottery_1,
             aged_root,
             latest_root,
         }
@@ -168,18 +188,10 @@ impl LeaderPublic {
 
     #[must_use]
     pub fn check_winning(&self, value: u64, note_id: Fr, sk: Fr) -> bool {
-        let (t0, t1) = self.scaled_phi_approx();
         let threshold =
-            Self::phi_approx(&Fr::from(value), &(Fr::from(t0), Fr::from(t1))).into_bigint();
+            Self::phi_approx(&Fr::from(value), &(self.lottery_0, self.lottery_1)).into_bigint();
         let ticket = Self::ticket(note_id, sk, self.epoch_nonce, Fr::from(self.slot)).into_bigint();
         ticket < threshold
-    }
-
-    fn scaled_phi_approx(&self) -> (BigUint, BigUint) {
-        let t0 = &*lb_pol::T0_CONSTANT / &BigUint::from(self.total_stake);
-        let total_stake_sq = &BigUint::from(self.total_stake) * &BigUint::from(self.total_stake);
-        let t1 = &*lb_pol::P - (&*lb_pol::T1_CONSTANT / &total_stake_sq);
-        (t0, t1)
     }
 
     fn phi_approx(stake: &Fr, approx: &(Fr, Fr)) -> Fr {
@@ -216,7 +228,8 @@ impl LeaderPrivate {
         let chain = lb_pol::PolChainInputsData {
             slot_number: public.slot,
             epoch_nonce: public.epoch_nonce,
-            total_stake: public.total_stake,
+            lottery_0: public.lottery_0,
+            lottery_1: public.lottery_1,
             aged_root: public.aged_root,
             latest_root: public.latest_root,
             leader_pk,
@@ -227,10 +240,18 @@ impl LeaderPrivate {
             note_value: note.note.value,
             transaction_hash: *note.tx_hash.as_ref(),
             output_number: note.output_index as u64,
-            aged_path,
-            aged_selector,
-            latest_path,
-            latest_selector,
+            aged_path: aged_path
+                .try_into()
+                .expect("Aged path length should match the expected height"),
+            aged_selectors: aged_selector
+                .try_into()
+                .expect("Aged selector length should match the expected height"),
+            latest_path: latest_path
+                .try_into()
+                .expect("Latest path length should match the expected height"),
+            latest_selectors: latest_selector
+                .try_into()
+                .expect("Latest selector length should match the expected height"),
             secret_key,
         };
         let input = lb_pol::PolWitnessInputsData::from_chain_and_wallet_data(chain, wallet);
@@ -287,6 +308,8 @@ fn ed25519_pk_to_fr_tuple(pk: &Ed25519PublicKey) -> (Fr, Fr) {
 mod tests {
     use std::str::FromStr as _;
 
+    use lb_pol::LotteryConstants;
+    use lb_utils::math::NonNegativeRatio;
     use rand::RngCore as _;
 
     use super::*;
@@ -334,14 +357,16 @@ mod tests {
         );
     }
 
-    fn rand_inputs() -> (LeaderPublic, Fr, Fr) {
+    fn rand_inputs(lottery_constants: &LotteryConstants) -> (LeaderPublic, Fr, Fr) {
+        let (lottery_0, lottery_1) = lottery_constants.compute_lottery_values(1);
         let mut rng = rand::thread_rng();
         let public = LeaderPublic::new(
             Fr::ZERO,
             Fr::ZERO,
             Fr::ZERO,
             rng.next_u64(),
-            1, // total stake
+            lottery_0,
+            lottery_1,
         );
         let note = Fr::from(rng.next_u64()); // note value
         let sk = Fr::from(rng.next_u64()); // secret key
@@ -376,9 +401,12 @@ mod tests {
 
     #[test]
     fn test_check_winning() {
+        let slot_activation_coeff = NonNegativeRatio::new(1, 10.try_into().unwrap());
+        let constants = LotteryConstants::new(slot_activation_coeff);
+
         // winning rate of all the stake should be ~ active slot coeff
-        check_prob(lb_pol::slot_activation_coefficient(), || {
-            let (public, note_id, sk) = rand_inputs();
+        check_prob(slot_activation_coeff.as_f64(), || {
+            let (public, note_id, sk) = rand_inputs(&constants);
             public.check_winning(1, note_id, sk)
         });
     }

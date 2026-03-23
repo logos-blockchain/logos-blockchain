@@ -6,7 +6,9 @@
 use std::error::Error;
 
 use lb_cryptarchia_sync::ChainSyncError;
-use libp2p::{PeerId, StreamProtocol, autonat, identify, identity, kad, swarm::NetworkBehaviour};
+use libp2p::{
+    PeerId, StreamProtocol, autonat, identify, identity, kad, kad::Mode, swarm::NetworkBehaviour,
+};
 use rand::RngCore;
 use thiserror::Error;
 
@@ -19,7 +21,7 @@ pub mod gossipsub;
 pub mod kademlia;
 pub mod nat;
 
-const DATA_LIMIT: usize = 1 << 16; // Do not serialize/deserialize more than 256 KiB
+const DATA_LIMIT: usize = 16 * 1024 * 1024; // 16 MiB (gossipsub default is 64 KiB)
 
 pub(crate) struct BehaviourConfig {
     pub gossipsub_config: libp2p::gossipsub::Config,
@@ -82,11 +84,13 @@ impl<Rng: Clone + Send + RngCore + 'static> Behaviour<Rng> {
             identify_config.to_libp2p_config(public_key, &identify_protocol_name),
         );
 
-        let kademlia = kad::Behaviour::with_config(
+        let mut kademlia = kad::Behaviour::with_config(
             peer_id,
             kad::store::MemoryStore::new(peer_id),
             kademlia_config.to_libp2p_config(kad_protocol_name),
         );
+        // set kademlia to server mode
+        kademlia.set_mode(Some(Mode::Server));
 
         let autonat_server = autonat::v2::server::Behaviour::new(rng.clone());
         let nat = nat::Behaviour::new(rng, &nat_config);

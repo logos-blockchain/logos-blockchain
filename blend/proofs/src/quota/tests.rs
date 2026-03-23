@@ -1,6 +1,6 @@
 use const_hex::FromHex as _;
 use lb_blend_crypto::{ZkHash, merkle::MerkleTree};
-use lb_groth16::{Field as _, fr_from_bytes_unchecked};
+use lb_groth16::{Field as _, Fr, fr_from_bytes_unchecked};
 use lb_key_management_system_keys::keys::UnsecuredZkKey;
 
 use crate::{
@@ -130,7 +130,8 @@ fn generate_inputs<const INPUTS: usize>() -> PoQInputs<INPUTS> {
             message_quota: 1,
             pol_epoch_nonce: ZkHash::ZERO,
             pol_ledger_aged: ZkHash::ZERO,
-            total_stake: 1,
+            lottery_0: Fr::ZERO,
+            lottery_1: Fr::ZERO,
         };
         let session = 1;
         let signing_key = Ed25519PublicKey::from_bytes(&[10; ED25519_PUBLIC_KEY_SIZE]).unwrap();

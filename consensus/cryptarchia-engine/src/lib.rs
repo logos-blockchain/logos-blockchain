@@ -8,7 +8,10 @@ pub mod config;
 pub mod time;
 
 use core::{fmt::Debug, hash::Hash};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    num::NonZero,
+};
 
 pub use config::*;
 use thiserror::Error;
@@ -44,8 +47,8 @@ impl State {
         match cryptarchia.state {
             Self::Bootstrapping => {
                 let k = cryptarchia.config.security_param().get().into();
-                let s = cryptarchia.config.s();
-                maxvalid_bg(cryptarchia.local_chain, &cryptarchia.branches, k, s)
+                let s_gen = cryptarchia.config.s_gen();
+                maxvalid_bg(cryptarchia.local_chain, &cryptarchia.branches, k, s_gen)
             }
             Self::Online => {
                 let k = cryptarchia.config.security_param().get().into();
@@ -82,7 +85,7 @@ fn maxvalid_bg<Id>(
     local_chain: Branch<Id>,
     branches: &Branches<Id>,
     k: u64,
-    s: u64,
+    s_gen: NonZero<u64>,
 ) -> (Branch<Id>, Branch<Id>)
 where
     Id: Eq + Hash + Copy,
@@ -103,7 +106,7 @@ where
         } else {
             // The chain is forking too much, we need to pay a bit more attention
             // In particular, select the chain that is the densest after the fork
-            let density_slot = Slot::from(u64::from(lowest_common_ancestor.slot) + s);
+            let density_slot = Slot::from(u64::from(lowest_common_ancestor.slot) + s_gen.get());
             let cmax_density = branches.walk_back_before(&cmax, density_slot).length;
             let candidate_density = branches.walk_back_before(&chain, density_slot).length;
             if cmax_density < candidate_density {
@@ -200,15 +203,15 @@ impl<Id> Branches<Id>
 where
     Id: Eq + Hash + Copy,
 {
-    pub fn from_lib(lib: Id) -> Self {
+    pub fn from_lib(lib: Id, slot: Slot, length: u64) -> Self {
         let mut branches = HashMap::new();
         branches.insert(
             lib,
             Branch {
                 id: lib,
                 parent: lib,
-                slot: 0.into(),
-                length: 0,
+                slot,
+                length,
             },
         );
         let tips = HashSet::from([lib]);
@@ -360,14 +363,14 @@ impl<Id> Cryptarchia<Id>
 where
     Id: Eq + Hash + Copy + Debug,
 {
-    pub fn from_lib(id: Id, config: Config, state: State) -> Self {
+    pub fn from_lib(id: Id, config: Config, state: State, slot: Slot, length: u64) -> Self {
         Self {
-            branches: Branches::from_lib(id),
+            branches: Branches::from_lib(id, slot, length),
             local_chain: Branch {
                 id,
-                length: 0,
+                length,
                 parent: id,
-                slot: 0.into(),
+                slot,
             },
             config,
             state,
@@ -579,6 +582,10 @@ where
         let pruned_blocks = new.update_lib();
         (new, pruned_blocks)
     }
+
+    pub const fn config(&self) -> &Config {
+        &self.config
+    }
 }
 
 /// The output of applying a new block to [`Cryptarchia`]
@@ -696,6 +703,8 @@ pub mod tests {
         num::NonZero,
     };
 
+    use lb_utils::math::NonNegativeRatio;
+
     use super::{Cryptarchia, Error, Slot, maxvalid_bg};
     use crate::{Config, ReorgedBlocks, State, UpdatedCryptarchia};
 
@@ -706,7 +715,11 @@ pub mod tests {
 
     #[must_use]
     pub fn config_with(security_param: u32) -> Config {
-        Config::new(NonZero::new(security_param).unwrap(), 1f64)
+        Config::new(
+            NonZero::new(security_param).unwrap(),
+            NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            1f64.try_into().expect("1 > 0"),
+        )
     }
 
     fn hash<T: Hash>(t: &T) -> [u8; 32] {
@@ -725,8 +738,13 @@ pub mod tests {
     /// index, so for a chain of length 10, the sequence of block IDs will be
     /// `[0, hash(1), hash(2), ..., hash(9)]`.
     fn create_canonical_chain(length: NonZero<u64>, c: Option<Config>) -> Cryptarchia<[u8; 32]> {
-        let mut engine =
-            Cryptarchia::from_lib(hash(&0u64), c.unwrap_or_else(config), State::Bootstrapping);
+        let mut engine = Cryptarchia::from_lib(
+            hash(&0u64),
+            c.unwrap_or_else(config),
+            State::Bootstrapping,
+            0.into(),
+            0,
+        );
         let mut parent = engine.lib();
         for i in 1..length.get() {
             let new_block = hash(&i);
@@ -752,7 +770,7 @@ pub mod tests {
         // parent
         // └── child
 
-        let mut branches = super::Branches::from_lib(hash(&0u64));
+        let mut branches = super::Branches::from_lib(hash(&0u64), 0.into(), 0);
         let parent = hash(&1u64);
         let child = hash(&2u64);
 
@@ -796,30 +814,36 @@ pub mod tests {
         // by setting a low k we trigger the density choice rule, and the shorter chain
         // is denser after the fork
         let config = config_with(10);
-        let orig_engine = create_canonical_chain(50.try_into().unwrap(), Some(config));
+        let s_gen = config.s_gen().get();
+        let initial_height = 49;
+        let orig_engine =
+            create_canonical_chain((initial_height + 1).try_into().unwrap(), Some(config));
 
         let mut engine = orig_engine.clone();
         let mut long_p = engine.tip();
         let mut short_p = engine.tip();
-        // the node sees first the short chain
-        for slot in 50..70 {
-            let new_block = hash(&format!("short-{slot}"));
-            let UpdatedCryptarchia {
-                cryptarchia,
-                reorged_blocks,
-                ..
-            } = engine
-                .receive_block(new_block, short_p, slot.into())
-                .unwrap();
-            assert!(reorged_blocks.is_empty());
-            engine = cryptarchia;
-            short_p = new_block;
+        // the node sees first the short chain.
+        for slot in initial_height..(initial_height + s_gen) {
+            // build chain not too dense because we'll build a denser chain later
+            if slot % 2 == 0 {
+                let new_block = hash(&format!("short-{slot}"));
+                let UpdatedCryptarchia {
+                    cryptarchia,
+                    reorged_blocks,
+                    ..
+                } = engine
+                    .receive_block(new_block, short_p, slot.into())
+                    .unwrap();
+                assert!(reorged_blocks.is_empty());
+                engine = cryptarchia;
+                short_p = new_block;
+            }
         }
         assert_eq!(engine.tip(), short_p);
 
         // then it receives a longer chain which is however less dense after the fork
-        for slot in 50..70 {
-            if slot % 2 == 0 {
+        for slot in initial_height..(initial_height + s_gen) {
+            if slot % 3 == 0 {
                 let new_block = hash(&format!("long-{slot}"));
                 let UpdatedCryptarchia {
                     cryptarchia,
@@ -836,7 +860,7 @@ pub mod tests {
         }
         // even if the long chain is much longer, it will never be accepted as it's not
         // dense enough
-        for slot in 70..100 {
+        for slot in (initial_height + s_gen)..(initial_height + 2 * s_gen) {
             let new_block = hash(&format!("long-{slot}"));
             let UpdatedCryptarchia {
                 cryptarchia,
@@ -859,17 +883,17 @@ pub mod tests {
             // however, if we set k to the fork length, it will be accepted
             let k = long_branch.length;
             assert_eq!(
-                maxvalid_bg(short_branch, engine.branches(), k, engine.config.s())
+                maxvalid_bg(short_branch, engine.branches(), k, engine.config.s_gen())
                     .0
                     .id,
                 long_p
             );
 
-            // a longer chain which is equally dense after the fork will be selected as the
-            // main tip
+            // a new denser chain will be selected as the main tip
             let mut parent = orig_engine.tip();
-            for slot in 50..71 {
-                let new_block = hash(&format!("long-dense-{slot}"));
+            let tip_height = engine.tip_branch().length;
+            for slot in initial_height..=tip_height {
+                let new_block = hash(&format!("dense-{slot}"));
                 let UpdatedCryptarchia {
                     cryptarchia,
                     reorged_blocks,
@@ -878,15 +902,16 @@ pub mod tests {
                     .receive_block(new_block, parent, slot.into())
                     .unwrap();
 
-                if slot < 70 {
+                if slot < tip_height {
                     assert!(reorged_blocks.is_empty());
                 } else {
                     // on the last block we trigger the reorg
+                    let expected_reorg_len = tip_height - initial_height;
                     assert_reorged_blocks(
                         &reorged_blocks,
                         &orig_engine.tip(),
                         &short_p,
-                        20,
+                        expected_reorg_len as usize,
                         &cryptarchia,
                     );
                 }
@@ -924,7 +949,8 @@ pub mod tests {
 
     #[test]
     fn test_getters() {
-        let engine = <Cryptarchia<_>>::from_lib(hash(&0u64), config(), State::Bootstrapping);
+        let engine =
+            <Cryptarchia<_>>::from_lib(hash(&0u64), config(), State::Bootstrapping, 0.into(), 0);
         let id_0 = engine.lib();
 
         // Get branch directly from HashMap

@@ -10,7 +10,7 @@ pub mod tracing;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct Config {
-    pub logger: logger::Layer,
+    pub logger: logger::Layers,
     pub tracing: tracing::Layer,
     pub filter: filter::Layer,
     pub metrics: metrics::Layer,
@@ -24,7 +24,7 @@ const DEFAULT_LOG_LEVEL: Level = Level::DEBUG;
 impl Default for Config {
     fn default() -> Self {
         Self {
-            logger: logger::Layer::default(),
+            logger: logger::Layers::default(),
             tracing: tracing::Layer::default(),
             filter: filter::Layer::default(),
             metrics: metrics::Layer::default(),
@@ -38,7 +38,14 @@ impl Config {
     #[must_use]
     pub const fn none() -> Self {
         Self {
-            logger: logger::Layer::None,
+            logger: logger::Layers {
+                file: None,
+                loki: None,
+                gelf: None,
+                otlp: None,
+                stdout: false,
+                stderr: false,
+            },
             tracing: tracing::Layer::None,
             filter: filter::Layer::None,
             metrics: metrics::Layer::None,

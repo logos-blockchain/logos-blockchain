@@ -19,7 +19,7 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::{
     core::{
@@ -41,6 +41,7 @@ pub mod edge;
 pub mod epoch_info;
 pub mod membership;
 pub mod message;
+pub(crate) mod metrics;
 pub mod session;
 pub mod settings;
 
@@ -92,7 +93,7 @@ where
             > + Send
                                 + Sync
                                 + 'static,
-            NodeId: Clone + Hash + Eq + Send + Sync + 'static,
+            NodeId: Clone + Debug + Hash + Eq + Send + Sync + 'static,
             BackendSettings: Clone + Send + Sync,
         > + Send
         + 'static,
@@ -192,8 +193,7 @@ where
 
         info!(
             target: LOG_TARGET,
-            "The current membership is ready: {} nodes.",
-            membership.size()
+            "The current membership is ready: {membership:?}.",
         );
 
         let mut instance = Instance::<CoreService, EdgeService, RuntimeServiceId>::new(
@@ -212,7 +212,7 @@ where
         loop {
             tokio::select! {
                 Some(session_event) = remaining_session_stream.next() => {
-                    debug!(target: LOG_TARGET, "Received a new session event");
+                    info!(target: LOG_TARGET, "Received a new session event: {session_event:?}");
                     instance = instance.handle_session_event(session_event, overwatch_handle, minimal_network_size).await?;
                 },
                 Some(message) = inbound_relay.next() => {

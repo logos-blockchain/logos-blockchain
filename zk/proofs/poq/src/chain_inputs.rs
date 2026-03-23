@@ -1,5 +1,5 @@
 use lb_groth16::{Fr, Groth16Input, Groth16InputDeser};
-use lb_pol::{P, compute_lottery_values};
+use lb_pol::P;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -20,7 +20,8 @@ pub struct PoQChainInputsData {
     pub core_root: Fr,
     pub pol_ledger_aged: Fr,
     pub pol_epoch_nonce: Fr,
-    pub total_stake: u64,
+    pub lottery_0: Fr,
+    pub lottery_1: Fr,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -98,23 +99,21 @@ impl TryFrom<PoQChainInputsData> for PoQChainInputs {
             core_root,
             pol_ledger_aged,
             pol_epoch_nonce,
-            total_stake,
+            lottery_0,
+            lottery_1,
         }: PoQChainInputsData,
     ) -> Result<Self, Self::Error> {
         let session = BigUint::from(session);
         if session > *P {
             return Err(PoQInputsFromDataError::SessionGreaterThanP);
         }
-
-        let (lottery_0, lottery_1) = compute_lottery_values(total_stake);
-
         Ok(Self {
             session: Groth16Input::new(session.into()),
             core_root: core_root.into(),
             pol_ledger_aged: pol_ledger_aged.into(),
             pol_epoch_nonce: pol_epoch_nonce.into(),
-            pol_t0: Groth16Input::new(lottery_0.into()),
-            pol_t1: Groth16Input::new(lottery_1.into()),
+            pol_t0: Groth16Input::new(lottery_0),
+            pol_t1: Groth16Input::new(lottery_1),
         })
     }
 }

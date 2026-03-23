@@ -163,8 +163,8 @@ where
     ) -> Poll<
         ConnectionHandlerEvent<Self::OutboundProtocol, Self::OutboundOpenInfo, Self::ToBehaviour>,
     > {
-        tracing::info!(gauge.pending_outbound_messages = self.outbound_msgs.len() as u64,);
-        tracing::info!(
+        tracing::trace!(gauge.pending_outbound_messages = self.outbound_msgs.len() as u64,);
+        tracing::trace!(
             gauge.pending_events_to_behaviour = self.pending_events_to_behaviour.len() as u64,
         );
 
@@ -184,7 +184,9 @@ where
         if let Poll::Ready(output) = self.monitor.poll(cx) {
             match output {
                 Some(ConnectionMonitorOutput::Spammy) => {
-                    self.close_substreams();
+                    // TODO: Re-enable this once we have fixed Blend observation
+                    // window range values.
+                    // self.close_substreams();
                     self.pending_events_to_behaviour
                         .push_back(ToBehaviour::SpammyPeer);
                 }
@@ -367,7 +369,7 @@ where
             }
         };
 
-        tracing::info!(counter.connection_event = 1, event = event_name);
+        tracing::trace!(counter.connection_event = 1, event = event_name);
         self.try_wake();
     }
 }

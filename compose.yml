@@ -8,6 +8,8 @@ services:
     image: logos-blockchain:latest
     volumes:
       - ./testnet:/etc/logos-blockchain
+    environment:
+      - ENTROPY_FILE=/etc/logos-blockchain/testnet/cfgsync/tests/test_entropy
     entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_server.sh
 
   logos-blockchain-node:

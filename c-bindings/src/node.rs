@@ -61,7 +61,7 @@ impl LogosBlockchainNode {
         let runtime_handle = self.get_runtime_handle();
         let overwatch_handle = self.get_overwatch_handle();
         if let Err(e) = runtime_handle.block_on(overwatch_handle.stop_all_services()) {
-            eprintln!("Could not stop services: {e}");
+            log::error!("Could not stop services: {e}");
             return OperationStatus::StopError;
         }
         OperationStatus::Ok
@@ -72,10 +72,10 @@ impl LogosBlockchainNode {
 impl Drop for LogosBlockchainNode {
     fn drop(&mut self) {
         if self.overwatch.is_null() {
-            eprintln!("Attempted to drop a null overwatch pointer. This is a bug");
+            log::error!("Attempted to drop a null overwatch pointer. This is a bug");
         }
         if self.runtime.is_null() {
-            eprintln!("Attempted to drop a null tokio runtime pointer. This is a bug");
+            log::error!("Attempted to drop a null tokio runtime pointer. This is a bug");
         }
         drop(unsafe { Box::from_raw(self.overwatch.cast::<LogosBlockchainOverwatch>()) });
         drop(unsafe { Box::from_raw(self.runtime.cast::<Runtime>()) });

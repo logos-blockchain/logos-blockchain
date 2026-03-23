@@ -1,23 +1,25 @@
 use core::{
     fmt::{self, Display, Formatter},
     str::FromStr,
+    time::Duration,
 };
 
+use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
-    blend::deployment::Settings as BlendDeploymentSettings,
+    OnUnknownKeys, blend::deployment::Settings as BlendDeploymentSettings,
     cryptarchia::deployment::Settings as CryptarchiaDeploymentSettings,
-    mempool::deployment::Settings as MempoolDeploymentSettings,
+    deserialize_config_from_reader, mempool::deployment::Settings as MempoolDeploymentSettings,
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
 
-const DEVNET: &str = "devnet";
+pub mod devnet;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
 pub enum WellKnownDeployment {
-    // Must match the `DEVNET` definition above.
+    // Must match the `DEVNET` definition in the `devnet` module.
     #[serde(rename = "devnet")]
     #[default]
     Devnet,
@@ -28,7 +30,7 @@ impl FromStr for WellKnownDeployment {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            DEVNET => Ok(Self::Devnet),
+            devnet::NAME => Ok(Self::Devnet),
             _ => Err(()),
         }
     }
@@ -37,7 +39,7 @@ impl FromStr for WellKnownDeployment {
 impl Display for WellKnownDeployment {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Devnet => write!(f, "{DEVNET}"),
+            Self::Devnet => write!(f, "{}", devnet::NAME),
         }
     }
 }
@@ -53,12 +55,34 @@ pub struct DeploymentSettings {
 
 impl From<WellKnownDeployment> for DeploymentSettings {
     fn from(value: WellKnownDeployment) -> Self {
-        Self {
-            blend: value.into(),
-            cryptarchia: value.into(),
-            mempool: value.into(),
-            network: value.into(),
-            time: value.into(),
+        match value {
+            WellKnownDeployment::Devnet => deserialize_config_from_reader(
+                devnet::SERIALIZED_DEPLOYMENT.as_bytes(),
+                OnUnknownKeys::Fail,
+            )
+            .expect("Devnet deployment config is valid."),
         }
+    }
+}
+
+impl DeploymentSettings {
+    #[must_use]
+    pub const fn blend_round_duration(&self) -> Duration {
+        self.blend.round_duration(&self.time.slot_duration)
+    }
+
+    #[must_use]
+    pub fn blend_reward_params(&self) -> RewardsParameters {
+        self.blend.rewards_params(&self.cryptarchia, &self.time)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::{DeploymentSettings, WellKnownDeployment};
+
+    #[test]
+    fn devnet_initialization() {
+        drop(DeploymentSettings::from(WellKnownDeployment::Devnet));
     }
 }

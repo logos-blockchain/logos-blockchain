@@ -170,7 +170,7 @@ where
     pub async fn get_epoch_state(
         &self,
         slot: lb_cryptarchia_engine::Slot,
-    ) -> Result<Option<lb_ledger::EpochState>, ApiError> {
+    ) -> Result<Result<lb_ledger::EpochState, crate::Error>, ApiError> {
         let (tx, rx) = oneshot::channel();
 
         self.relay

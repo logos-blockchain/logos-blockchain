@@ -9,10 +9,14 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_utxotree::{DynamicMerkleTree, MerklePath};
-use rpds::HashTrieMapSync;
+use rpds::{HashTrieMapSync, VectorSync};
 
 use crate::Balance;
 
+/// A leader state in the mantle ledger.
+///
+/// NOTE: Most collection fields in this struct should use `rpds`
+/// since we keep a copy of this state for each block.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeaderState {
@@ -29,6 +33,9 @@ pub struct LeaderState {
     // that have been collected in the previous epoch.
     // unclaimed rewards are carried over to the next epoch.
     claimable_rewards: Value,
+    /// Rewards that are being collected during the current epoch.
+    /// This will be added to the `claimable_rewards` when a new epoch starts.
+    pending_rewards: Value,
     // Merkle tree vouchers that can be claimed in this epoch
     // this is updated once at the start of each epoch
     // TODO: Replace this with MMR to save space by moving merkle path
@@ -37,7 +44,7 @@ pub struct LeaderState {
     claimable_voucher_indices: HashTrieMapSync<VoucherCm, usize>,
     // List of vouchers that are waiting to be added at the start of
     // the next epoch
-    pending_vouchers: Vec<VoucherCm>,
+    pending_vouchers: VectorSync<VoucherCm>,
 }
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
@@ -64,10 +71,11 @@ impl LeaderState {
             claimable_vouchers_root: RewardsRoot::default(),
             n_claimable_vouchers: 0,
             nfs: rpds::HashTrieSetSync::new_sync(),
+            pending_rewards: 0,
             claimable_rewards: 0,
             claimable_vouchers: DynamicMerkleTree::new(),
             claimable_voucher_indices: HashTrieMapSync::new_sync(),
-            pending_vouchers: Vec::new(),
+            pending_vouchers: VectorSync::new_sync(),
         }
     }
 
@@ -86,17 +94,25 @@ impl LeaderState {
             }),
             Ordering::Greater => {
                 self = self.update_claimable_vouchers();
+                self = self.update_claimable_rewards();
                 self.epoch = epoch;
-                // TODO: increase rewards, what about epoch jumps?
                 Ok(self)
             }
         }
     }
 
+    /// Add a block reward to the pending rewards that are added to the pool
+    /// during epoch transition
+    #[must_use]
+    pub const fn add_pending_rewards(mut self, rewards: Value) -> Self {
+        self.pending_rewards += rewards;
+        self
+    }
+
     /// Add a voucher to be included in the Merkle tree at the start of the
     /// next epoch
     fn add_pending_voucher(mut self, voucher_cm: VoucherCm) -> Self {
-        self.pending_vouchers.push(voucher_cm);
+        self.pending_vouchers.push_back_mut(voucher_cm);
         self
     }
 
@@ -109,9 +125,16 @@ impl LeaderState {
             self.claimable_voucher_indices =
                 self.claimable_voucher_indices.insert(voucher_cm, index);
         }
-        self.pending_vouchers = Vec::new();
+        self.pending_vouchers = VectorSync::new_sync();
         self.claimable_vouchers_root = self.claimable_vouchers.root().into();
         self.n_claimable_vouchers = self.claimable_vouchers.size() as u64;
+        self
+    }
+
+    /// Insert all pending rewards into the reward pool and reset it
+    fn update_claimable_rewards(mut self) -> Self {
+        self.claimable_rewards += self.pending_rewards;
+        self.pending_rewards = Value::default();
         self
     }
 
@@ -160,6 +183,7 @@ impl LeaderState {
                 claimable_vouchers_root: self.claimable_vouchers_root,
                 n_claimable_vouchers: self.n_claimable_vouchers,
                 nfs,
+                pending_rewards: self.pending_rewards,
                 claimable_rewards,
                 claimable_vouchers: self.claimable_vouchers.clone(),
                 claimable_voucher_indices: self.claimable_voucher_indices.clone(),

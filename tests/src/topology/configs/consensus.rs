@@ -2,7 +2,7 @@ use core::time::Duration;
 
 use lb_core::{
     mantle::{
-        MantleTx, Note, OpProof, Utxo,
+        MantleTx, Note, NoteId, OpProof, Utxo,
         genesis_tx::GenesisTx,
         ledger::Tx as LedgerTx,
         ops::{
@@ -45,7 +45,7 @@ impl ProviderInfo {
 #[derive(Clone, Debug)]
 pub struct GeneralConsensusConfig {
     pub known_key: ZkKey,
-    pub blend_notes: Vec<ServiceNote>,
+    pub blend_note: ServiceNote,
     pub funding_sk: ZkKey,
     pub funding_pk: ZkPublicKey,
     pub other_keys: Vec<ZkKey>,
@@ -57,6 +57,7 @@ pub struct ServiceNote {
     pub pk: ZkPublicKey,
     pub sk: ZkKey,
     pub note: Note,
+    pub note_id: NoteId,
     pub output_index: usize,
 }
 
@@ -115,9 +116,10 @@ pub fn create_consensus_configs(
             .map(|(i, sk)| {
                 let funding_sk = sdp_notes[i].sk.clone();
                 let funding_pk = sdp_notes[i].pk;
+                let blend_note = blend_notes[i].clone();
 
                 GeneralConsensusConfig {
-                    blend_notes: blend_notes.clone(),
+                    blend_note,
                     known_key: sk,
                     funding_sk,
                     funding_pk,
@@ -169,34 +171,38 @@ fn create_utxos(
         let sk_blend = ZkKey::from(BigUint::from_bytes_le(&sk_blend_data));
         let pk_blend = sk_blend.to_public_key();
         let note_blend = Note::new(1, pk_blend);
+        let utxo = Utxo {
+            note: note_blend,
+            tx_hash: BigUint::from(0u8).into(),
+            output_index: 0,
+        };
         blend_notes.push(ServiceNote {
             pk: pk_blend,
             sk: sk_blend,
             note: note_blend,
+            note_id: utxo.id(),
             output_index,
         });
-        utxos.push(Utxo {
-            note: note_blend,
-            tx_hash: BigUint::from(0u8).into(),
-            output_index: 0,
-        });
+        utxos.push(utxo);
         output_index += 1;
 
         let sk_sdp_data = derive_key_material(b"sdp", &id);
         let sk_sdp = ZkKey::from(BigUint::from_bytes_le(&sk_sdp_data));
         let pk_sdp = sk_sdp.to_public_key();
         let note_sdp = Note::new(100, pk_sdp);
+        let utxo = Utxo {
+            note: note_sdp,
+            tx_hash: BigUint::from(0u8).into(),
+            output_index,
+        };
         sdp_notes.push(ServiceNote {
             pk: pk_sdp,
             sk: sk_sdp,
             note: note_sdp,
+            note_id: utxo.id(),
             output_index,
         });
-        utxos.push(Utxo {
-            note: note_sdp,
-            tx_hash: BigUint::from(0u8).into(),
-            output_index,
-        });
+        utxos.push(utxo);
         output_index += 1;
     }
 

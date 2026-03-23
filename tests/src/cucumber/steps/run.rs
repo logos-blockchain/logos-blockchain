@@ -1,7 +1,6 @@
 use cucumber::{then, when};
+use lb_testing_framework::LbcLocalDeployer;
 use testing_framework_core::scenario::Deployer as _;
-use testing_framework_runner_compose::ComposeDeployer;
-use testing_framework_runner_local::LocalDeployer;
 
 use crate::cucumber::{
     error::{StepError, StepResult},
@@ -14,7 +13,7 @@ async fn run_scenario(world: &mut CucumberWorld) -> StepResult {
     world.run.result = Some(match deployer {
         DeployerKind::Local => {
             let mut scenario = world.build_local_scenario()?;
-            let deployer = LocalDeployer::default();
+            let deployer = LbcLocalDeployer::default();
             let result = async {
                 let runner =
                     deployer
@@ -35,29 +34,10 @@ async fn run_scenario(world: &mut CucumberWorld) -> StepResult {
 
             result.map_err(|e| e.to_string())
         }
-        DeployerKind::Compose => {
-            let mut scenario = world.build_compose_scenario()?;
-            let deployer = ComposeDeployer::default().with_readiness(world.readiness_checks);
-            let result = async {
-                let runner =
-                    deployer
-                        .deploy(&scenario)
-                        .await
-                        .map_err(|e| StepError::RunFailed {
-                            message: format!("compose deploy failed: {e}"),
-                        })?;
-                runner
-                    .run(&mut scenario)
-                    .await
-                    .map_err(|e| StepError::RunFailed {
-                        message: format!("scenario run failed: {e}"),
-                    })?;
-                Ok::<(), StepError>(())
-            }
-            .await;
-
-            result.map_err(|e| e.to_string())
-        }
+        DeployerKind::Compose => Err(StepError::UnsupportedDeployer {
+            value: "compose".to_owned(),
+        })
+        .map_err(|e| e.to_string()),
     });
 
     Ok(())

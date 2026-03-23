@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 axum                             = { default-features = false, features = ["http1", "http2", "json", "tokio"], version = "0.7.5" }
+blake2                           = { workspace = true }
 clap                             = { default-features = false, features = ["derive", "env", "std"], version = "4" }
 lb-core                          = { workspace = true }
 lb-key-management-system-service = { workspace = true }
@@ -31,6 +32,10 @@ serde_yaml                       = "0.9"
 time                             = { default-features = false, version = "0.3" }
 tokio                            = { default-features = false, features = ["macros", "net", "rt-multi-thread"], version = "1" }
 tracing                          = { workspace = true }
+
+[dev-dependencies]
+hex        = { default-features = false, features = ["alloc"], workspace = true }
+lb-groth16 = { workspace = true }
 
 [[bin]]
 name = "logos-blockchain-cfgsync-client"

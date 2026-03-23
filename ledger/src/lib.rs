@@ -13,7 +13,7 @@ use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use cryptarchia::{EpochState, UtxoTree};
 use lb_core::{
     block::BlockNumber,
-    mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, gas::GasConstants},
+    mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value, gas::GasConstants},
     proofs::leader_proof,
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
 };
@@ -21,6 +21,41 @@ use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Field as _, Fr};
 use mantle::LedgerState as MantleLedger;
 use thiserror::Error;
+
+const WINDOW_SIZE: usize = 120;
+
+/// Denominator of 1/(`I_max` * `D1_target` * `Delta_t` * `T`)
+/// That correspond to `BLOCK_PER_YEAR` / (`MAX_INFLATION` * `KPI_FEE_TARGET` *
+/// `WINDOW_SIZE`)
+const A_SCALE: u128 = 120_000_000;
+
+/// Numerator of 1/(`I_max` * `D1_target` * `Delta_t` * `T`)
+/// That correspond to `BLOCK_PER_YEAR` / (`MAX_INFLATION` * `KPI_FEE_TARGET` *
+/// `WINDOW_SIZE`)
+const FEE_AVG_NUM: u128 = 10_512;
+
+/// Numerator of `I_max` * `S_TGE` * `DELTA_t` / `f`
+/// It corresponds to `MAX_INFLATION` * `TOKEN_GENESIS` * `BLOCK_PER_BLOCK` /
+/// `BLOCK_PER_YEAR`
+const INFLATION_NUMERATOR: u128 = 62_500;
+
+/// Numerator of `I_max` * `S_TGE` * `DELTA_t` / `f`
+/// It corresponds to `MAX_INFLATION` * `TOKEN_GENESIS` * `BLOCK_PER_BLOCK` /
+/// `BLOCK_PER_YEAR`
+const INFLATION_DENOMINATOR: u128 = 657;
+
+const STAKE_TARGET: u128 = 3_000_000_000;
+
+// That correspond to 40% of the block rewards for leaders
+const LEADER_REWARD_SHARE_NUMERATOR: u128 = 4;
+
+const LEADER_REWARD_SHARE_DENOMINATOR: u128 = 10;
+
+// That correspond to 60% of the block rewards for blend nodes
+
+const BLEND_REWARD_SHARE_NUMERATOR: u128 = 6;
+
+const BLEND_REWARD_SHARE_DENOMINATOR: u128 = 10;
 
 // While individual notes are constrained to be `u64`, intermediate calculations
 // may overflow, so we use `i128` to avoid that and to easily represent negative
@@ -70,16 +105,16 @@ where
         }
     }
 
-    /// Create a new [`Ledger`] with the updated state.
-    #[must_use = "Returns a new instance with the updated state, without modifying the original."]
+    /// Try to update the ledger state by applying the given proof and
+    /// transactions on top of the parent state.
     pub fn try_update<LeaderProof, Constants>(
-        &self,
+        &mut self,
         id: Id,
         parent_id: Id,
         slot: Slot,
         proof: &LeaderProof,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx>,
-    ) -> Result<Self, LedgerError<Id>>
+    ) -> Result<(), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
         Constants: GasConstants,
@@ -94,12 +129,8 @@ where
                 .clone()
                 .try_update::<_, _, Constants>(slot, proof, txs, &self.config)?;
 
-        let mut states = self.states.clone();
-        states.insert(id, new_state);
-        Ok(Self {
-            states,
-            config: self.config.clone(),
-        })
+        self.states.insert(id, new_state);
+        Ok(())
     }
 
     pub fn state(&self, id: &Id) -> Option<&LedgerState> {
@@ -128,6 +159,10 @@ where
     }
 }
 
+/// A ledger state
+///
+/// NOTE: Most collection fields in this struct should use `rpds`
+/// since we keep a copy of this state for each block.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct LedgerState {
@@ -188,6 +223,45 @@ impl LedgerState {
         })
     }
 
+    /// For each block received, rewards are calculated based on the actual
+    /// total estimated stake and on the average of fees consumed per block over
+    /// the last `BLOCK_REWARD_WINDOW_SIZE` blocks. See the block rewards
+    /// specification: <https://www.notion.so/nomos-tech/v1-1-Block-Rewards-Specification-326261aa09df80579edddaf092057b3d>
+    fn compute_block_rewards(mut self) -> Self {
+        let window_index = self.block_number as usize % WINDOW_SIZE;
+
+        // compute A_t'
+        let sum_fees = self.cryptarchia_ledger.get_summed_fees();
+        let a_numerator = STAKE_TARGET
+            .saturating_add(FEE_AVG_NUM.saturating_mul(sum_fees))
+            .saturating_sub(u128::from(self.cryptarchia_ledger.epoch_state.total_stake))
+            .min(A_SCALE);
+
+        let reward_numerator = INFLATION_NUMERATOR * a_numerator
+            + INFLATION_DENOMINATOR
+                * (A_SCALE - a_numerator)
+                * u128::from(self.cryptarchia_ledger.get_fee_from_index(window_index));
+        let reward_denominator = INFLATION_DENOMINATOR * A_SCALE;
+
+        // blend get 60% of rewards while leaders get the 40% remaining.
+        // Casting as Value truncate the floating points
+        let blend_reward = (reward_numerator * BLEND_REWARD_SHARE_NUMERATOR
+            / (reward_denominator * BLEND_REWARD_SHARE_DENOMINATOR))
+            as Value;
+        let leader_reward = (reward_numerator * LEADER_REWARD_SHARE_NUMERATOR
+            / (reward_denominator * LEADER_REWARD_SHARE_DENOMINATOR))
+            as Value;
+
+        self.mantle_ledger.leaders = self
+            .mantle_ledger
+            .leaders
+            .add_pending_rewards(leader_reward);
+
+        self.mantle_ledger.sdp.add_blend_income(blend_reward);
+
+        self
+    }
+
     /// Apply the contents of an update to the ledger state.
     pub fn try_apply_contents<Id, Constants: GasConstants>(
         mut self,
@@ -217,7 +291,12 @@ impl LedgerState {
                 Ordering::Greater => return Err(LedgerError::UnbalancedTransaction),
                 Ordering::Equal => {} // OK!
             }
+            self.cryptarchia_ledger.update_fee_window(
+                self.block_number as usize % WINDOW_SIZE,
+                total_balance as u64,
+            );
         }
+        self = self.compute_block_rewards();
         Ok(self)
     }
 
@@ -268,9 +347,15 @@ impl LedgerState {
     /// Computes the epoch state for a given slot.
     ///
     /// This handles the case where epochs have been skipped (no blocks
-    /// produced). Returns `None` if the requested epoch is in the past.
-    #[must_use]
-    pub fn epoch_state_for_slot(&self, slot: Slot, config: &Config) -> Option<EpochState> {
+    /// produced).
+    ///
+    /// Returns [`LedgerError::InvalidSlot`] if the slot is in the past before
+    /// the current ledger state.
+    pub fn epoch_state_for_slot<Id>(
+        &self,
+        slot: Slot,
+        config: &Config,
+    ) -> Result<EpochState, LedgerError<Id>> {
         self.cryptarchia_ledger.epoch_state_for_slot(slot, config)
     }
 
@@ -356,7 +441,7 @@ mod tests {
 
     #[test]
     fn test_ledger_try_update_with_transaction() {
-        let (ledger, genesis_id, utxo) = create_test_ledger();
+        let (mut ledger, genesis_id, utxo) = create_test_ledger();
         let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(1u8).into()));
         let sk = ZkKey::from(BigUint::from(0u8));
         // determine fees
@@ -378,7 +463,7 @@ mod tests {
         );
 
         let new_id = [1; 32];
-        let new_ledger = ledger
+        ledger
             .try_update::<_, MainnetGasConstants>(
                 new_id,
                 genesis_id,
@@ -389,7 +474,7 @@ mod tests {
             .unwrap();
 
         // Verify the transaction was applied
-        let new_state = new_ledger.state(&new_id).unwrap();
+        let new_state = ledger.state(&new_id).unwrap();
         assert!(!new_state.latest_utxos().contains(&utxo.id()));
 
         // Verify output was created

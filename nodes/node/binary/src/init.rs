@@ -14,12 +14,12 @@ use rand::rngs::OsRng;
 use crate::{
     UserConfig,
     config::{
-        ApiConfig, InitArgs, KmsConfig, SdpConfig, StorageConfig, TracingConfig, WalletConfig,
+        ApiConfig, InitArgs, KmsConfig, SdpConfig, StateConfig, StorageConfig, TracingConfig,
+        WalletConfig,
         blend::serde::{Config as BlendConfig, RequiredValues as BlendConfigRequiredValues},
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaConfigRequiredValues,
         },
-        mempool::serde::Config as MempoolConfig,
         network::serde::{Config as NetworkConfig, nat},
         sdp::serde::RequiredValues as SdpRequiredValues,
         time::serde::Config as TimeConfig,
@@ -85,6 +85,10 @@ fn generate_keys() -> GeneratedKeys {
 }
 
 pub fn run(args: &InitArgs) -> Result<()> {
+    if args.initial_peers.is_empty() {
+        eprintln!("Warning: No initial peers provided. This node will start as a genesis node.");
+    }
+
     let network_key = lb_libp2p::ed25519::SecretKey::generate();
     let keys = generate_keys();
 
@@ -120,6 +124,13 @@ fn build_user_config(
         funding_pk,
     } = keys;
 
+    let state_config = args
+        .state_path
+        .as_ref()
+        .map_or_else(StateConfig::default, |path| StateConfig {
+            base_folder: path.clone(),
+        });
+
     let network_config = {
         let mut base_config = NetworkConfig::default();
         base_config.backend.swarm.port = args.net_port;
@@ -128,12 +139,12 @@ fn build_user_config(
             .backend
             .initial_peers
             .clone_from(&args.initial_peers);
-        base_config.backend.swarm.nat =
-            args.external_address
-                .as_ref()
-                .map_or_else(nat::Config::default, |addr| nat::Config::Static {
-                    external_address: addr.clone(),
-                });
+        if let Some(external_address) = &args.external_address {
+            base_config.backend.swarm.nat = nat::Config::Static {
+                external_address: external_address.clone(),
+            };
+        }
+
         base_config
     };
 
@@ -161,8 +172,6 @@ fn build_user_config(
     };
 
     let time_config = TimeConfig::default();
-
-    let mempool_config = MempoolConfig::default();
 
     let tracing_config = TracingConfig::default();
 
@@ -202,13 +211,13 @@ fn build_user_config(
         blend: blend_config,
         cryptarchia: cryptarchia_config,
         time: time_config,
-        mempool: mempool_config,
         tracing: tracing_config,
         sdp: sdp_config,
         api: api_config,
         storage: storage_config,
         kms: kms_config,
         wallet: wallet_config,
+        state: state_config,
     }
 }
 
@@ -226,6 +235,7 @@ mod tests {
             blend_port: 3400,
             http_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
             external_address: None,
+            state_path: None,
         };
         let network_key = lb_libp2p::ed25519::SecretKey::generate();
         let keys = generate_keys();

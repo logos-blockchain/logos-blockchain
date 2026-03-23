@@ -14,9 +14,12 @@ lb-api-service                = { workspace = true }
 lb-chain-service              = { workspace = true }
 lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
+lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-node                       = { default-features = true, workspace = true }
 lb-wallet-service             = { workspace = true }
+log                           = { workspace = true }
+multiaddr                     = { default-features = false, version = "0.18" }
 num-bigint                    = { default-features = false, version = "0.4" }
 overwatch                     = { workspace = true }
 serde_json                    = { workspace = true }

@@ -36,7 +36,14 @@ const fn default_timeout() -> Duration {
     Duration::from_secs(30)
 }
 
-const fn default_max_body_size() -> usize {
+#[must_use]
+pub const fn default_max_body_size() -> usize {
+    // This has to allow for JSON object bytes, which is larger than the actual
+    // payload data size. Typical JSON overhead for binary data:
+    // - Base64 encoding: ~1.33× (33% increase).
+    // - JSON structure (quotes, braces, commas): adds 10-20% typically.
+    // - Combined realistic overhead: ~1.5-1.6× for Base64-encoded binary data in
+    //   JSON.
     10 * 1024 * 1024
 }
 

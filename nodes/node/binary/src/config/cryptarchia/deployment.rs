@@ -6,19 +6,59 @@ use lb_core::{
     mantle::genesis_tx::GenesisTx,
     sdp::{MinStake, ServiceType},
 };
-use lb_cryptarchia_engine::Config as ConsensusConfig;
-use lb_pol::slot_activation_coefficient;
+use lb_cryptarchia_engine::{
+    Config as ConsensusConfig, average_slots_for_blocks, base_period_length, time::epoch_length,
+};
+use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use serde::{Deserialize, Serialize};
-
-use crate::config::deployment::WellKnownDeployment;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Settings {
     pub epoch_config: EpochConfig,
     pub security_param: NonZeroU32,
+    pub slot_activation_coeff: NonNegativeRatio,
+    pub learning_rate: NonNegativeF64,
     pub sdp_config: SdpConfig,
     pub gossipsub_protocol: String,
     pub genesis_state: GenesisTx,
+    #[serde(default)]
+    pub faucet_pk: Option<ZkPublicKey>,
+}
+
+impl Settings {
+    #[must_use]
+    pub const fn slots_per_epoch(&self) -> u64 {
+        epoch_length(
+            self.epoch_config.epoch_stake_distribution_stabilization,
+            self.epoch_config.epoch_period_nonce_buffer,
+            self.epoch_config.epoch_period_nonce_stabilization,
+            base_period_length(self.security_param, self.slot_activation_coeff),
+        )
+    }
+
+    #[must_use]
+    pub fn blocks_per_epoch(&self) -> u64 {
+        (self.slots_per_epoch() as f64 / self.average_slots_per_block() as f64).floor() as u64
+    }
+
+    #[must_use]
+    pub const fn average_slots_per_block(&self) -> u64 {
+        average_slots_for_blocks(
+            NonZero::<u32>::new(1).expect("must be non-zero"),
+            self.slot_activation_coeff,
+        )
+        .get()
+    }
+
+    #[must_use]
+    pub fn consensus_config(&self) -> ConsensusConfig {
+        ConsensusConfig::new(
+            self.security_param,
+            self.slot_activation_coeff,
+            self.learning_rate,
+        )
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,13 +73,6 @@ pub struct EpochConfig {
     // This parameter controls how many slots we wait for the nonce snapshot to be considered
     // stabilized
     pub epoch_period_nonce_stabilization: NonZero<u8>,
-}
-
-impl Settings {
-    #[must_use]
-    pub const fn consensus_config(&self) -> ConsensusConfig {
-        ConsensusConfig::new(self.security_param, slot_activation_coefficient())
-    }
 }
 
 // The same as `lb_ledger::mantle::sdp::Config`, minus the
@@ -60,42 +93,4 @@ pub struct ServiceParameters {
     pub inactivity_period: u64,
     pub retention_period: u64,
     pub timestamp: BlockNumber,
-}
-
-impl From<WellKnownDeployment> for Settings {
-    fn from(value: WellKnownDeployment) -> Self {
-        match value {
-            WellKnownDeployment::Devnet => devnet_settings(),
-        }
-    }
-}
-
-fn devnet_settings() -> Settings {
-    Settings {
-        epoch_config: EpochConfig {
-            epoch_period_nonce_buffer: 3.try_into().unwrap(),
-            epoch_period_nonce_stabilization: 4.try_into().unwrap(),
-            epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
-        },
-        gossipsub_protocol: "/logos-blockchain-devnet/cryptarchia/1.0.0".to_owned(),
-        sdp_config: SdpConfig {
-            min_stake: MinStake {
-                threshold: 1,
-                timestamp: 0,
-            },
-            service_params: [(
-                ServiceType::BlendNetwork,
-                ServiceParameters {
-                    inactivity_period: 1,
-                    lock_period: 10,
-                    retention_period: 1,
-                    timestamp: 0,
-                },
-            )]
-            .into(),
-        },
-        security_param: 20.try_into().unwrap(),
-        // TODO: Change this once the devnet genesis state is finalized.
-        genesis_state: GenesisTx::new_mocked(),
-    }
 }

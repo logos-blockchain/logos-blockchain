@@ -1,8 +1,6 @@
 use lb_groth16::{Fr, Groth16Input, Groth16InputDeser};
 use serde::{Deserialize, Serialize};
 
-use crate::lottery::compute_lottery_values;
-
 /// Public inputs of the POL cirmcom circuit with circom specific types.
 #[derive(Copy, Clone, Debug)]
 pub struct PolChainInputs {
@@ -21,7 +19,8 @@ pub struct PolChainInputs {
 pub struct PolChainInputsData {
     pub slot_number: u64,
     pub epoch_nonce: Fr,
-    pub total_stake: u64,
+    pub lottery_0: Fr,
+    pub lottery_1: Fr,
     pub aged_root: Fr,
     pub latest_root: Fr,
     pub leader_pk: (Fr, Fr),
@@ -105,21 +104,18 @@ impl From<PolChainInputsData> for PolChainInputs {
         PolChainInputsData {
             slot_number,
             epoch_nonce,
-            total_stake,
+            lottery_0,
+            lottery_1,
             aged_root,
             latest_root,
             leader_pk: (pk1, pk2),
         }: PolChainInputsData,
     ) -> Self {
-        let slot_number = Fr::from(slot_number);
-
-        let (lottery_0, lottery_1) = compute_lottery_values(total_stake);
-
         Self {
-            slot_number: Groth16Input::new(slot_number),
+            slot_number: Groth16Input::new(slot_number.into()),
             epoch_nonce: Groth16Input::new(epoch_nonce),
-            lottery_0: Groth16Input::new(lottery_0.into()),
-            lottery_1: Groth16Input::new(lottery_1.into()),
+            lottery_0: Groth16Input::new(lottery_0),
+            lottery_1: Groth16Input::new(lottery_1),
             aged_root: aged_root.into(),
             latest_root: latest_root.into(),
             leader_pk1: pk1.into(),

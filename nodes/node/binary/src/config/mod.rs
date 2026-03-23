@@ -11,16 +11,16 @@ use color_eyre::eyre::{Result, eyre};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use serde::Deserialize;
 
-use crate::config::tracing::serde::logger::{FileConfig, GelfConfig, Layer};
+use crate::config::tracing::serde::logger::{FileConfig, GelfConfig};
 pub use crate::config::{
     api::serde::Config as ApiConfig,
     blend::serde::Config as BlendConfig,
     cryptarchia::serde::Config as CryptarchiaConfig,
     deployment::{DeploymentSettings, WellKnownDeployment},
     kms::serde::Config as KmsConfig,
-    mempool::serde::Config as MempoolConfig,
     network::serde::Config as NetworkConfig,
     sdp::serde::Config as SdpConfig,
+    state::Config as StateConfig,
     storage::serde::Config as StorageConfig,
     time::serde::Config as TimeConfig,
     tracing::serde::Config as TracingConfig,
@@ -35,6 +35,7 @@ pub mod kms;
 pub mod mempool;
 pub mod network;
 pub mod sdp;
+pub mod state;
 pub mod storage;
 pub mod time;
 pub mod tracing;
@@ -71,6 +72,8 @@ pub struct CliArgs {
     api: ApiArgs,
     #[clap(flatten)]
     deployment: DeploymentArgs,
+    #[clap(flatten)]
+    state: StateArgs,
 }
 
 #[derive(Subcommand, Debug)]
@@ -86,7 +89,7 @@ pub enum Command {
 #[derive(Parser, Debug)]
 pub struct InitArgs {
     /// Trusted peers to bootstrap from (multiaddr format)
-    #[clap(long = "initial-peers", short = 'p', num_args = 1.., value_delimiter = ',', required = true)]
+    #[clap(long = "initial-peers", short = 'p', num_args = 1.., value_delimiter = ',')]
     pub initial_peers: Vec<Multiaddr>,
 
     /// Output file path for the generated config
@@ -109,6 +112,16 @@ pub struct InitArgs {
     /// traversal). Format: /ip4/<public-ip>/udp/<port>/quic-v1
     #[clap(long = "external-address")]
     pub external_address: Option<Multiaddr>,
+
+    #[clap(long = "state-path")]
+    pub state_path: Option<PathBuf>,
+}
+
+#[cfg(feature = "config-gen")]
+impl Default for InitArgs {
+    fn default() -> Self {
+        Self::parse_from::<Vec<String>, String>(vec![])
+    }
 }
 
 impl CliArgs {
@@ -216,6 +229,12 @@ pub struct ApiArgs {
 }
 
 #[derive(Parser, Debug, Clone)]
+pub struct StateArgs {
+    #[clap(long = "state-path", env = "STATE_PATH")]
+    pub path: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug, Clone)]
 pub struct DeploymentArgs {
     #[clap(long = "deployment", env = "DEPLOYMENT", default_value = DeploymentType::default())]
     deployment_type: DeploymentType,
@@ -286,8 +305,6 @@ pub struct UserConfig {
     pub cryptarchia: CryptarchiaConfig,
     #[serde(default)]
     pub time: TimeConfig,
-    #[serde(default)]
-    pub mempool: MempoolConfig,
     pub sdp: SdpConfig,
     #[serde(default)]
     pub api: ApiConfig,
@@ -298,6 +315,15 @@ pub struct UserConfig {
     pub wallet: WalletConfig,
     #[serde(default)]
     pub tracing: TracingConfig,
+    #[serde(default)]
+    pub state: StateConfig,
+}
+
+pub struct RequiredValues {
+    pub blend: BlendConfig,
+    pub cryptarchia: CryptarchiaConfig,
+    pub sdp: SdpConfig,
+    pub wallet: WalletConfig,
 }
 
 impl UserConfig {
@@ -308,12 +334,14 @@ impl UserConfig {
             network: network_args,
             blend: blend_args,
             deployment: deployment_args,
+            state: state_args,
             ..
         } = args;
         update_tracing(&mut self.tracing, log_args)?;
         update_network(&mut self.network, network_args)?;
-        update_blend(&mut self.blend, blend_args)?;
-        update_api(&mut self.api, api_args)?;
+        update_blend(&mut self.blend, blend_args);
+        update_api(&mut self.api, api_args);
+        update_state(&mut self.state, state_args);
 
         let deployment_settings = match deployment_args.deployment_type() {
             DeploymentType::WellKnown(well_known_deployment) => (*well_known_deployment).into(),
@@ -330,6 +358,24 @@ impl UserConfig {
             user: self,
         })
     }
+
+    #[must_use]
+    pub fn with_required_values(required_values: RequiredValues) -> Self {
+        Self {
+            blend: required_values.blend,
+            cryptarchia: required_values.cryptarchia,
+            sdp: required_values.sdp,
+            wallet: required_values.wallet,
+
+            api: ApiConfig::default(),
+            kms: KmsConfig::default(),
+            network: NetworkConfig::default(),
+            state: StateConfig::default(),
+            storage: StorageConfig::default(),
+            time: TimeConfig::default(),
+            tracing: TracingConfig::default(),
+        }
+    }
 }
 
 pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Result<()> {
@@ -341,32 +387,41 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
         level,
     } = tracing_args;
 
-    // Override the file config with the one from env variables.
-    if let Some(backend) = backend {
-        tracing.logger = match backend {
-            LoggerLayerType::Gelf => Layer::Gelf(GelfConfig {
-                addr: addr
-                    .ok_or_else(|| eyre!("Gelf backend requires an address."))?
-                    .to_socket_addrs()?
-                    .next()
-                    .ok_or_else(|| eyre!("Invalid gelf address"))?,
-            }),
-            LoggerLayerType::File => Layer::File(FileConfig {
-                directory: directory.ok_or_else(|| eyre!("File backend requires a directory."))?,
-                prefix,
-            }),
-            LoggerLayerType::Stdout => Layer::Stdout,
-            LoggerLayerType::Stderr => Layer::Stderr,
-        };
+    if let Some(backend_type) = backend {
+        match backend_type {
+            LoggerLayerType::Gelf => {
+                tracing.logger.gelf = Some(GelfConfig {
+                    addr: addr
+                        .ok_or_else(|| eyre!("Gelf backend requires an address."))?
+                        .to_socket_addrs()?
+                        .next()
+                        .ok_or_else(|| eyre!("Invalid gelf address"))?,
+                });
+            }
+            LoggerLayerType::File => {
+                tracing.logger.file = Some(FileConfig {
+                    directory: directory
+                        .ok_or_else(|| eyre!("File backend requires a directory."))?,
+                    prefix,
+                });
+            }
+            LoggerLayerType::Stdout => {
+                tracing.logger.stdout = true;
+            }
+            LoggerLayerType::Stderr => {
+                tracing.logger.stderr = true;
+            }
+        }
     }
 
     if let Some(level_str) = level {
-        tracing.level = match level_str.as_str() {
+        tracing.level = match level_str.to_uppercase().as_str() {
+            "TRACE" => Level::TRACE,
             "DEBUG" => Level::DEBUG,
             "INFO" => Level::INFO,
             "ERROR" => Level::ERROR,
             "WARN" => Level::WARN,
-            _ => return Err(eyre!("Invalid log level provided.")),
+            _ => return Err(eyre!("Invalid log level provided: {}", level_str)),
         };
     }
     Ok(())
@@ -402,17 +457,15 @@ pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) ->
     Ok(())
 }
 
-pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) -> Result<()> {
+pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) {
     let BlendArgs { blend_addr } = blend_args;
 
     if let Some(addr) = blend_addr {
         blend.set_listening_address(addr);
     }
-
-    Ok(())
 }
 
-pub fn update_api(api: &mut ApiConfig, args: ApiArgs) -> Result<()> {
+pub fn update_api(api: &mut ApiConfig, args: ApiArgs) {
     let ApiArgs { addr, cors_origins } = args;
 
     if let Some(addr) = addr {
@@ -422,8 +475,14 @@ pub fn update_api(api: &mut ApiConfig, args: ApiArgs) -> Result<()> {
     if let Some(cors) = cors_origins {
         api.backend.cors_origins = cors;
     }
+}
 
-    Ok(())
+pub fn update_state(state: &mut StateConfig, args: StateArgs) {
+    let StateArgs { path } = args;
+
+    if let Some(path) = path {
+        state.base_folder = path;
+    }
 }
 
 #[derive(thiserror::Error, Debug)]

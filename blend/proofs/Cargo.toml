@@ -15,9 +15,12 @@ workspace = true
 [dependencies]
 ed25519-dalek   = { workspace = true }
 generic-array   = { default-features = false, version = "1.2" }
+hex             = { workspace = true }
 lb-blend-crypto = { workspace = true }
 lb-groth16      = { workspace = true }
+lb-pol          = { workspace = true }
 lb-poq          = { workspace = true }
+lb-utils        = { workspace = true }
 num-bigint      = { default-features = false, version = "0.4" }
 serde           = { workspace = true }
 thiserror       = "1"

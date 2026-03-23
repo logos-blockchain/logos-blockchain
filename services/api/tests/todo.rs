@@ -10,7 +10,7 @@ use std::{
 use axum::{Router, routing};
 use logos_blockchain_api_service::{ApiService, ApiServiceSettings, Backend};
 use overwatch::{
-    DynError, derive_services,
+    derive_services,
     overwatch::{OverwatchRunner, handle::OverwatchHandle},
 };
 use utoipa::{
@@ -73,13 +73,6 @@ impl Backend<RuntimeServiceId> for WebServer {
         Self: Sized,
     {
         Ok(Self { addr: settings })
-    }
-
-    async fn wait_until_ready(
-        &mut self,
-        _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
-    ) -> Result<(), DynError> {
-        Ok(())
     }
 
     async fn serve(self, _handle: OverwatchHandle<RuntimeServiceId>) -> Result<(), Self::Error> {

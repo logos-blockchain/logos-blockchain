@@ -7,9 +7,9 @@ use thiserror::Error;
 
 type Result<T> = std::result::Result<T, PackingError>;
 
-type LenType = u16;
+type LenType = u32;
 const MAX_MSG_LEN_BYTES: usize = size_of::<LenType>();
-const MAX_MSG_LEN: usize = LenType::MAX as usize;
+const MAX_MSG_LEN: usize = 16 * 1024 * 1024; // 16 MiB;
 
 #[derive(Debug, Error)]
 pub enum PackingError {

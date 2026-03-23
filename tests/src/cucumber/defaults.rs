@@ -1,5 +1,6 @@
 use std::{fs, path::PathBuf};
 
+use lb_testing_framework::LOGOS_BLOCKCHAIN_LOG_LEVEL;
 use tracing::warn;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -13,14 +14,17 @@ const CONTAINER_NODE_LOG_DIR: &str = "/tmp/node_logs";
 
 const TARGET: &str = "cucumber_defaults";
 
-const LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS: &str = "LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS";
 const LOGOS_BLOCKCHAIN_TESTS_TRACING: &str = "LOGOS_BLOCKCHAIN_TESTS_TRACING";
+const TF_KEEP_LOGS: &str = "TF_KEEP_LOGS";
 const CUCUMBER_LOG_LEVEL: &str = "CUCUMBER_LOG_LEVEL";
-const LOGOS_BLOCKCHAIN_LOG_LEVEL: &str = "LOGOS_BLOCKCHAIN_LOG_LEVEL";
 const RUST_LOG: &str = "RUST_LOG";
 const LOGOS_BLOCKCHAIN_LOG_DIR: &str = "LOGOS_BLOCKCHAIN_LOG_DIR";
 const CUCUMBER_RETRIES: &str = "CUCUMBER_RETRIES";
 pub const LOGOS_BLOCKCHAIN_NODE_BIN: &str = "LOGOS_BLOCKCHAIN_NODE_BIN";
+pub const CUCUMBER_NODE_CONFIG_OVERRIDE: &str = "CUCUMBER_NODE_CONFIG_OVERRIDE";
+pub const CUCUMBER_VERBOSE_CONSOLE: &str = "CUCUMBER_VERBOSE_CONSOLE";
+pub const CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: &str = "CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL";
+pub const CUCUMBER_DEPLOYER_COMPOSE: &str = "CUCUMBER_DEPLOYER_COMPOSE";
 
 /// Set an environment variable to a default value if it is not already set.
 pub fn set_default_env(key: &str, value: &str) {
@@ -34,8 +38,8 @@ pub fn set_default_env(key: &str, value: &str) {
 }
 
 pub fn init_logging_defaults() {
-    set_default_env(LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS, "true");
-    set_default_env(LOGOS_BLOCKCHAIN_TESTS_TRACING, "true");
+    set_default_env(LOGOS_BLOCKCHAIN_TESTS_TRACING, "false");
+    set_default_env(TF_KEEP_LOGS, "true");
     // Always keep RUST_LOG at info for console output
     set_default_env(RUST_LOG, "info");
 
@@ -78,7 +82,7 @@ pub fn init_node_log_dir_defaults(deployer: &DeployerKind, log_dir: Option<&Path
                 )
             },
             |dir| {
-                set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
+                // set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
                 PathBuf::from(dir)
             },
         ),

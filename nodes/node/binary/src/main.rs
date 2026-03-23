@@ -11,6 +11,9 @@ use logos_blockchain_node::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    #[cfg(feature = "dhat-heap")]
+    let _dhat_drop_guard = logos_blockchain_node::profiling::setup();
+
     let cli_args = CliArgs::parse();
 
     if let Some(command) = cli_args.command {
@@ -56,14 +59,29 @@ async fn main() -> Result<()> {
 
     let run_config = {
         let user_config =
-            deserialize_config_at_path::<UserConfig>(cli_args.config_path(), OnUnknownKeys::Warn)?;
+            deserialize_config_at_path::<UserConfig>(cli_args.config_path(), OnUnknownKeys::Warn)
+                .inspect_err(|e| {
+                eprintln!("\nExiting... {e}.\n");
+            })?;
         user_config.update_from_args(cli_args)?
     };
 
-    let app = run_node_from_config(run_config).map_err(|e| eyre!("{e}"))?;
-    let services_to_start = get_services_to_start(&app).await?;
+    let app = run_node_from_config(run_config)
+        .map_err(|e| eyre!("{e}"))
+        .inspect_err(|e| {
+            eprintln!("\nExiting... {e}.\n");
+        })?;
+    let services_to_start = get_services_to_start(&app).await.inspect_err(|e| {
+        eprintln!("\nExiting... {e}.\n");
+    })?;
 
-    drop(app.handle().start_service_sequence(services_to_start).await);
+    app.handle()
+        .start_service_sequence(services_to_start)
+        .await
+        .map_err(|e| eyre!("start_service_sequence failed: {e}"))
+        .inspect_err(|e| {
+            eprintln!("\nExiting... {e}.\n");
+        })?;
 
     app.wait_finished().await;
     Ok(())

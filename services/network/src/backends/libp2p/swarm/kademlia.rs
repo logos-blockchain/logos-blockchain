@@ -35,7 +35,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         for peer_addr in initial_peers {
             if let Some(Protocol::P2p(peer_id_bytes)) = peer_addr.iter().last() {
                 if let Ok(peer_id) = PeerId::from_multihash(peer_id_bytes.into()) {
-                    self.swarm.kademlia_add_address(peer_id, peer_addr.clone());
+                    self.swarm.kademlia_add_address(peer_id, peer_addr);
                     tracing::debug!("Added peer to Kademlia: {} at {}", peer_id, peer_addr);
                 } else {
                     tracing::warn!("Failed to parse peer ID from multiaddr: {}", peer_addr);

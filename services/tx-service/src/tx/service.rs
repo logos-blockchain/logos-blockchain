@@ -402,6 +402,17 @@ where
                     tx_broadcast,
                 );
             }
+            Err(MempoolError::ExistingItem) => {
+                // Tx already in pool, but since this came from a local submission
+                // (not gossip), re-gossip it so leader nodes can pick it up.
+                tokio::spawn(async move {
+                    let adapter = NetworkAdapter::new(settings, network_relay).await;
+                    adapter.send(item_for_broadcast).await;
+                });
+                if let Err(e) = reply_channel.send(Ok(())) {
+                    tracing::debug!("Failed to send add reply: {:?}", e);
+                }
+            }
             Err(e) => Self::handle_add_error(e, reply_channel),
         }
     }
@@ -531,7 +542,7 @@ where
 
         drop(tx_broadcast.send(item));
 
-        tracing::info!(counter.tx_mempool_pending_items = pool.pending_item_count());
+        tracing::trace!(counter.tx_mempool_pending_items = pool.pending_item_count());
 
         state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
     }

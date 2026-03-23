@@ -1,8 +1,15 @@
 pub mod api;
 pub mod config;
 pub mod generic_services;
+pub mod panic;
+
 #[cfg(feature = "config-gen")]
 pub mod init;
+
+#[cfg(feature = "dhat-heap")]
+pub mod profiling;
+
+use std::panic::set_hook;
 
 use cfg_if::cfg_if;
 use color_eyre::eyre::{Result, eyre};
@@ -39,6 +46,7 @@ use overwatch::{
     DynError, derive_services,
     overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
 };
+use tokio::runtime;
 
 pub use crate::config::{ApiArgs, Command, LogArgs, NetworkArgs, UserConfig};
 use crate::{
@@ -51,6 +59,7 @@ use crate::{
         time::ServiceConfig as TimeConfig, wallet::ServiceConfig as WalletConfig,
     },
     generic_services::{SdpMempoolAdapter, SdpService, SdpWalletAdapter},
+    panic::log_and_exit_hook,
 };
 
 pub const MB16: usize = 1024 * 1024 * 16;
@@ -138,6 +147,18 @@ pub struct LogosBlockchain {
 }
 
 pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServiceId>, DynError> {
+    let blend_rewards_params = config.deployment.blend_reward_params();
+
+    let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
+        user: config.user.blend,
+        deployment: config.deployment.blend,
+    }
+    .into_blend_services_settings(
+        &config.user.state,
+        &config.deployment.time,
+        &config.deployment.cryptarchia,
+    );
+
     let time_service_config = TimeConfig {
         user: config.user.time,
         deployment: config.deployment.time,
@@ -148,19 +169,12 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
         user: config.user.cryptarchia,
         deployment: config.deployment.cryptarchia,
     }
-    .into_cryptarchia_services_settings(&config.deployment.blend);
-
-    let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
-        user: config.user.blend,
-        deployment: config.deployment.blend,
-    }
-    .into();
+    .into_cryptarchia_services_settings(blend_rewards_params, &config.user.state);
 
     let mempool_service_config = MempoolConfig {
-        user: config.user.mempool,
         deployment: config.deployment.mempool,
     }
-    .into();
+    .into_mempool_service_settings(&config.user.state);
 
     let network_service_config = NetworkConfig {
         user: config.user.network,
@@ -168,10 +182,15 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
     }
     .into();
 
+    let wallet_config = WalletConfig {
+        user: config.user.wallet,
+    }
+    .into_wallet_service_settings(&config.user.state);
+
     let storage_config = StorageConfig {
         user: config.user.storage,
     }
-    .into();
+    .into_rocks_backend_settings(&config.user.state);
 
     let kms_config = KmsConfig {
         user: config.user.kms,
@@ -180,11 +199,6 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
 
     let sdp_config = SdpConfig {
         user: config.user.sdp,
-    }
-    .into();
-
-    let wallet_config = WalletConfig {
-        user: config.user.wallet,
     }
     .into();
 
@@ -205,6 +219,8 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
             let http_config = api_config.into_backend_settings();
         }
     }
+
+    set_hook(Box::new(log_and_exit_hook));
 
     let app = OverwatchRunner::<LogosBlockchain>::run(
         LogosBlockchainServiceSettings {
@@ -231,7 +247,7 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
             #[cfg(feature = "testing")]
             testing_http: testing_config,
         },
-        None,
+        Some(runtime::Handle::current()),
     )
     .map_err(|e| eyre!("Error encountered: {}", e))?;
     Ok(app)

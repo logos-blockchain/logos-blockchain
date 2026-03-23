@@ -21,7 +21,7 @@ lb-core                       = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-reqwest                       = { features = ["json", "rustls-tls", "stream"], workspace = true }
+reqwest                       = { features = ["http2", "json", "rustls-tls", "stream"], workspace = true }
 serde                         = { workspace = true }
 serde_json                    = { default-features = false, version = "1.0.140" }
 thiserror                     = "1.0"
