@@ -83,8 +83,9 @@ fn blake2b(inputs: &[&[u8]]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-// Measure encoding the Mantle transaction - this overhead can be subtracted from the Poseidon2 and
-// nested Blake2b-Poseidon2 hash benches to isolate hashing only performance.
+// Measure encoding the Mantle transaction - this overhead can be subtracted
+// from the Poseidon2 and nested Blake2b-Poseidon2 hash benches to isolate
+// hashing only performance.
 #[divan::bench(args = SIZES)]
 fn bench_encode_mantle_tx(bencher: Bencher, size: usize) {
     let tx = make_inscription_tx(size);
@@ -105,8 +106,8 @@ fn bench_blake2b_poseidon2_hash(bencher: Bencher, size: usize) {
     bencher
         .with_inputs(|| make_inscription_tx(size))
         .bench_values(|tx: MantleTx| {
-            // Encoding is included here to compare fairly with the Poseidon2 hash function, which
-            // includes it.
+            // Encoding is included here to compare fairly with the Poseidon2 hash function,
+            // which includes it.
             let encoded = encode_mantle_tx(&tx);
             let digest = blake2b(&[encoded.as_slice()]);
             let frs: Vec<Fr> = digest
