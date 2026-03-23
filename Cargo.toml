@@ -18,6 +18,11 @@ strip         = true  # Remove symbols to reduce binary size
 codegen-units = 1
 opt-level     = 3
 
+[profile.release-profiling]
+debug    = true      # Include debug symbols for profiling
+inherits = "release"
+strip    = "none"    # Don't strip symbols to allow for better profiling results
+
 [workspace]
 # Make sure any excluded crates are still clipped in our CI. Also, make sure they use the same Clippy and rustc lints we specify in this file down below.
 members = [
