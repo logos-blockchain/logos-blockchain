@@ -83,9 +83,17 @@ fn blake2b(inputs: &[&[u8]]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+// Measure encoding the Mantle transaction - this overhead can be subtracted from the Poseidon2 and
+// nested Blake2b-Poseidon2 hash benches to isolate hashing only performance.
+#[divan::bench(args = SIZES)]
+fn bench_encode_mantle_tx(bencher: Bencher, size: usize) {
+    let tx = make_inscription_tx(size);
+    bencher.bench_local(|| black_box(encode_mantle_tx(&tx)));
+}
+
 // Poseidon2 hash directly over payload field-elements.
 #[divan::bench(args = SIZES)]
-fn poseidon2_hash(bencher: Bencher, size: usize) {
+fn bench_poseidon2_hash(bencher: Bencher, size: usize) {
     let tx = make_inscription_tx(size);
     bencher.bench_local(|| black_box(tx.hash()));
 }
@@ -93,13 +101,13 @@ fn poseidon2_hash(bencher: Bencher, size: usize) {
 // Blake2b over encoded bytes, then Poseidon2 over the compact 32-byte
 // digest.
 #[divan::bench(args = SIZES)]
-fn blake2b_poseidon2_hash(bencher: Bencher, size: usize) {
+fn bench_blake2b_poseidon2_hash(bencher: Bencher, size: usize) {
     bencher
-        .with_inputs(|| {
-            let tx = make_inscription_tx(size);
-            encode_mantle_tx(&tx)
-        })
-        .bench_values(|encoded: Vec<u8>| {
+        .with_inputs(|| make_inscription_tx(size))
+        .bench_values(|tx: MantleTx| {
+            // Encoding is included here to compare fairly with the Poseidon2 hash function, which
+            // includes it.
+            let encoded = encode_mantle_tx(&tx);
             let digest = blake2b(&[encoded.as_slice()]);
             let frs: Vec<Fr> = digest
                 .chunks(GROTH16_SAFE_BYTES_SIZE)
@@ -111,7 +119,7 @@ fn blake2b_poseidon2_hash(bencher: Bencher, size: usize) {
 
 // Ed25519 signature over the tx hash (payload size has no influence here)
 #[divan::bench()]
-fn sign_a_ed25519_payload(bencher: Bencher) {
+fn bench_sign_a_ed25519_payload(bencher: Bencher) {
     let signing_key = Ed25519Key::from_bytes(&[1; 32]);
     bencher
         .with_inputs(|| {
@@ -125,7 +133,7 @@ fn sign_a_ed25519_payload(bencher: Bencher) {
 
 // ZkKey multi-sign proof (payload size has no influence here)
 #[divan::bench()]
-fn sign_b_zk_key_multi_sign_no_keys(bencher: Bencher) {
+fn bench_sign_b_zk_key_multi_sign_no_keys(bencher: Bencher) {
     bencher
         .with_inputs(|| {
             let tx = make_inscription_tx(1);
@@ -136,7 +144,7 @@ fn sign_b_zk_key_multi_sign_no_keys(bencher: Bencher) {
 
 // Verify ops proofs
 #[divan::bench(args = SIZES)]
-fn sign_c_mantle_tx_new_verify_ops_proofs_single_proof(bencher: Bencher, size: usize) {
+fn bench_sign_c_mantle_tx_new_verify_ops_proofs_single_proof(bencher: Bencher, size: usize) {
     let signing_key = Ed25519Key::from_bytes(&[1; 32]);
     bencher
         .with_inputs(|| {
@@ -160,7 +168,7 @@ fn sign_c_mantle_tx_new_verify_ops_proofs_single_proof(bencher: Bencher, size: u
 // - ZkKey multi-sign proof
 // - Verify ops proofs (`tx.hash()` re-calculated here)
 #[divan::bench(args = SIZES)]
-fn sign_d_fully_empty(bencher: Bencher, size: usize) {
+fn bench_sign_d_fully_empty(bencher: Bencher, size: usize) {
     let signing_key = Ed25519Key::from_bytes(&[1; 32]);
     bencher
         .with_inputs(|| {
@@ -183,14 +191,14 @@ fn sign_d_fully_empty(bencher: Bencher, size: usize) {
 
 // Encode a `SignedMantleTx` to bytes.
 #[divan::bench(args = SIZES)]
-fn encode(bencher: Bencher, size: usize) {
+fn bench_encode_signed_mantle_tx(bencher: Bencher, size: usize) {
     let signed_tx = make_signed_tx(size);
     bencher.bench_local(|| black_box(encode_signed_mantle_tx(&signed_tx)));
 }
 
 // Decode a `SignedMantleTx` from bytes.
 #[divan::bench(args = SIZES)]
-fn decode(bencher: Bencher, size: usize) {
+fn bench_decode_signed_mantle_tx(bencher: Bencher, size: usize) {
     let signed_tx = make_signed_tx(size);
     let encoded = encode_signed_mantle_tx(&signed_tx);
     bencher.bench_local(|| {
