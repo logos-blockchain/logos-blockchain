@@ -2,8 +2,8 @@ use std::cmp::Ordering;
 
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
-use super::{GasConstants, MantleTx, Note, Op, Utxo};
-use crate::mantle::{gas::GasCost as _, ledger::Tx as LedgerTx};
+use super::{GasConstants, GasCost as _, MantleTx, Note, Op, Utxo};
+use crate::mantle::ledger::Tx as LedgerTx;
 
 #[derive(Debug, Clone)]
 pub struct MantleTxBuilder {
