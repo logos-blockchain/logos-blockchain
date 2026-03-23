@@ -103,13 +103,13 @@ Feature: Manual control of transactions
     And we join an external network
     And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
     And I have initial peers:
-      | initial_peer                                                                                |
+      | initial_peer                                                                                  |
       | /ip4/209.38.241.182/udp/3001/quic-v1/p2p/12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
       | /ip4/209.38.241.182/udp/3000/quic-v1/p2p/12D3KooWAihc6PGqjrsVp19Tvtcvec48zchuLAHpDsLvCN8xDX17 |
-      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
-      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
-      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
-      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
+      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8   |
+      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh   |
+      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD   |
+      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR   |
 #    And I have IBD peers:
 #      | ibd_peer                                             |
 #      | 12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
@@ -136,13 +136,13 @@ Feature: Manual control of transactions
     And I will create a blockchain snapshot "SNAP_TEST_03" of all nodes when stopping
     And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
     And I have initial peers:
-      | initial_peer                                                                                |
+      | initial_peer                                                                                  |
       | /ip4/209.38.241.182/udp/3001/quic-v1/p2p/12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
       | /ip4/209.38.241.182/udp/3000/quic-v1/p2p/12D3KooWAihc6PGqjrsVp19Tvtcvec48zchuLAHpDsLvCN8xDX17 |
-      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
-      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
-      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
-      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
+      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8   |
+      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh   |
+      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD   |
+      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR   |
 #    And I have IBD peers:
 #      | ibd_peer                                             |
 #      | 12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
@@ -166,13 +166,13 @@ Feature: Manual control of transactions
     And I will initialize started nodes from snapshot "SNAP_TEST_03" source node "NODE_2"
     And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
     And I have initial peers:
-      | initial_peer                                                                                |
+      | initial_peer                                                                                  |
       | /ip4/209.38.241.182/udp/3001/quic-v1/p2p/12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
       | /ip4/209.38.241.182/udp/3000/quic-v1/p2p/12D3KooWAihc6PGqjrsVp19Tvtcvec48zchuLAHpDsLvCN8xDX17 |
-      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
-      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
-      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
-      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
+      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8   |
+      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh   |
+      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD   |
+      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR   |
 #    And I have IBD peers:
 #      | ibd_peer                                             |
 #      | 12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
@@ -199,13 +199,13 @@ Feature: Manual control of transactions
     And we join an external network
     And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
     And I have initial peers:
-      | initial_peer                                                                                |
+      | initial_peer                                                                                  |
       | /ip4/209.38.241.182/udp/3001/quic-v1/p2p/12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
       | /ip4/209.38.241.182/udp/3000/quic-v1/p2p/12D3KooWAihc6PGqjrsVp19Tvtcvec48zchuLAHpDsLvCN8xDX17 |
-      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
-      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
-      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
-      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
+      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8   |
+      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh   |
+      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD   |
+      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR   |
 #    And I have IBD peers:
 #      | ibd_peer                                             |
 #      | 12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
@@ -236,13 +236,13 @@ Feature: Manual control of transactions
     And we join an external network
     And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
     And I have initial peers:
-      | initial_peer                                                                                |
+      | initial_peer                                                                                  |
       | /ip4/209.38.241.182/udp/3001/quic-v1/p2p/12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
       | /ip4/209.38.241.182/udp/3000/quic-v1/p2p/12D3KooWAihc6PGqjrsVp19Tvtcvec48zchuLAHpDsLvCN8xDX17 |
-      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
-      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
-      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
-      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
+      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8   |
+      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh   |
+      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD   |
+      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR   |
 #    And I have IBD peers:
 #      | ibd_peer                                             |
 #      | 12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
