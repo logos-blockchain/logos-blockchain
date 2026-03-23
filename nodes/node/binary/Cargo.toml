@@ -87,11 +87,8 @@ rand = { workspace = true }
 [features]
 config-gen      = ["lb-key-management-system-service/unsafe"]
 default         = ["config-gen", "tracing"]
+dhat-heap       = ["dep:dhat"]
 instrumentation = []
 profiling       = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
 testing         = ["lb-key-management-system-service/unsafe"]
 tracing         = []
-# If you are doing heap profiling, use 'dhat-heap' and enable debug symbols:
-#   CARGO_PROFILE_RELEASE_DEBUG=true cargo build --release --bin minotari_merge_mining_proxy --features=dhat-heap            ...(Linux)
-#   $env:CARGO_PROFILE_RELEASE_DEBUG = "true"; cargo build --release --bin minotari_merge_mining_proxy --features=dhat-heap  ...(PowerShell)
-dhat-heap = ["dep:dhat"]
