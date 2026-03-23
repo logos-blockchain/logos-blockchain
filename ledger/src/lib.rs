@@ -59,6 +59,7 @@ const LEADER_REWARD_SHARE_DENOMINATOR: u128 = 10;
 const BLEND_REWARD_SHARE_NUMERATOR: u128 = 6;
 
 const BLEND_REWARD_SHARE_DENOMINATOR: u128 = 10;
+const EXECUTION_GAS_LIMIT: Gas = 3_193_360;
 
 // While individual notes are constrained to be `u64`, intermediate calculations
 // may overflow, so we use `i128` to avoid that and to easily represent negative
@@ -91,6 +92,8 @@ pub enum LedgerError<Id> {
     InputInGenesis(NoteId),
     #[error("Fees don't cover the minimal execution base fee cost")]
     InsufficientExecutionFee,
+    #[error("The execution gas of the block ({gas:?}) exceeds the maximum limit ({limit:?}")]
+    TooMuchExecutionGas { gas: Gas, limit: Gas },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -336,7 +339,19 @@ impl LedgerState {
             total_fee_tip += fee_tip;
         }
 
+        // Check that the block is not exceeding the Gas limit
+        match total_block_execution_gas.cmp(&EXECUTION_GAS_LIMIT) {
+            Ordering::Greater => {
+                return Err(LedgerError::TooMuchExecutionGas {
+                    gas: total_block_execution_gas,
+                    limit: EXECUTION_GAS_LIMIT,
+                });
+            }
+            Ordering::Less | Ordering::Equal => {} // OK !
+        }
+        // Compute Block rewards and give tips
         self = self.compute_block_rewards(total_fee_burned, total_fee_tip);
+        // Update Execution market state
         self = self.update_execution_market(total_block_execution_gas);
         Ok(self)
     }
