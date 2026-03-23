@@ -22,20 +22,11 @@ use crate::{LogosBlockchainNode, api::PointerResult, errors::OperationStatus};
 /// success, or an [`OperationStatus`] error on failure.
 pub(crate) fn get_blocks_sync(
     node: &LogosBlockchainNode,
-    from_slot: u64,
-    to_slot: u64,
+    from_slot: usize,
+    to_slot: usize,
 ) -> Result<CString, OperationStatus> {
     let runtime_handle = node.get_runtime_handle();
     let overwatch_handle = node.get_overwatch_handle();
-
-    let from_slot = usize::try_from(from_slot).map_err(|_| {
-        eprintln!("[get_blocks_sync] from_slot overflow");
-        OperationStatus::RuntimeError
-    })?;
-    let to_slot = usize::try_from(to_slot).map_err(|_| {
-        eprintln!("[get_blocks_sync] to_slot overflow");
-        OperationStatus::RuntimeError
-    })?;
 
     let blocks: Vec<Block<SignedMantleTx>> = runtime_handle
         .block_on(lb_api_service::http::mantle::get_blocks::<
@@ -44,17 +35,17 @@ pub(crate) fn get_blocks_sync(
             RuntimeServiceId,
         >(overwatch_handle, from_slot, to_slot))
         .map_err(|e| {
-            eprintln!("[get_blocks_sync] Failed to get blocks: {e}");
+            log::error!("[get_blocks_sync] Failed to get blocks: {e}");
             OperationStatus::RelayError
         })?;
 
     let json = serde_json::to_string(&blocks).map_err(|e| {
-        eprintln!("[get_blocks_sync] Failed to serialize blocks: {e}");
+        log::error!("[get_blocks_sync] Failed to serialize blocks: {e}");
         OperationStatus::RuntimeError
     })?;
 
     CString::new(json).map_err(|e| {
-        eprintln!("[get_blocks_sync] Failed to create CString: {e}");
+        log::error!("[get_blocks_sync] Failed to create CString: {e}");
         OperationStatus::RuntimeError
     })
 }
@@ -96,9 +87,18 @@ pub unsafe extern "C" fn get_blocks(
     to_slot: u64,
 ) -> GetBlocksResult {
     if node.is_null() {
-        eprintln!("[get_blocks] Received a null `node` pointer. Exiting.");
+        log::error!("[get_blocks] Received a null `node` pointer. Exiting.");
         return GetBlocksResult::from_error(OperationStatus::NullPointer);
     }
+
+    let Ok(from_slot) = usize::try_from(from_slot) else {
+        log::error!("[get_blocks] from_slot overflow");
+        return GetBlocksResult::from_error(OperationStatus::ValidationError);
+    };
+    let Ok(to_slot) = usize::try_from(to_slot) else {
+        log::error!("[get_blocks] to_slot overflow");
+        return GetBlocksResult::from_error(OperationStatus::ValidationError);
+    };
 
     let node = unsafe { &*node };
     match get_blocks_sync(node, from_slot, to_slot) {
