@@ -689,6 +689,7 @@ pub async fn start_node(
         &started_node_name,
         is_bootstrap_node,
         world.require_all_peers_mode_online_at_startup,
+        startup_settings.join_external_network,
     )
     .await
     .inspect_err(|e| {
@@ -726,6 +727,7 @@ pub async fn restart_node(world: &CucumberWorld, step: &str, node_name: &str) ->
         // TODO: Add `is_bootstrap_node` to world
         false,
         None,
+        world.join_external_network.unwrap_or_default()
     )
     .await
     .inspect_err(|e| {
@@ -869,6 +871,7 @@ async fn ensure_node_ready(
     started_node_name: &str,
     is_bootstrap_node: bool,
     require_all_peers_mode_online_at_startup: Option<Duration>,
+    join_external_network: bool,
 ) -> StepResult {
     // General readiness check to ensure the node is responsive.
     let operation = format!("node '{started_node_name}' readiness");
@@ -886,7 +889,8 @@ async fn ensure_node_ready(
 
     verify_reponsive_and_network_ready(client, node_name, started_node_name).await?;
 
-    if !is_bootstrap_node && require_all_peers_mode_online_at_startup.is_none() {
+    if !is_bootstrap_node && require_all_peers_mode_online_at_startup.is_none() ||
+        join_external_network {
         return Ok(());
     }
 
