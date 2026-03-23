@@ -250,16 +250,6 @@ where
             .notifier()
             .get_updated_settings();
 
-        let network_adapter = NetAdapter::new(network_config, relays.network_relay().clone()).await;
-
-        let mut incoming_proposals = network_adapter.proposals_stream().await?;
-        let mut chainsync_events = network_adapter.chainsync_events_stream().await?;
-
-        let mut orphan_downloader = Box::pin(OrphanBlocksDownloader::new(
-            network_adapter.clone(),
-            sync_config.orphan.max_orphan_cache_size,
-        ));
-
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             Some(Duration::from_secs(60)),
@@ -270,12 +260,14 @@ where
         )
         .await?;
 
+        let network_adapter = NetAdapter::new(network_config, relays.network_relay().clone()).await;
+
         let initial_block_download = InitialBlockDownload::new(
             ChainNetworkIbdBlockProcessor::<_, Mempool, _> {
                 cryptarchia: relays.cryptarchia().clone(),
                 mempool_adapter: relays.mempool_adapter().clone(),
             },
-            network_adapter,
+            network_adapter.clone(),
         );
 
         match initial_block_download.run(bootstrap_config.ibd).await {
@@ -305,6 +297,14 @@ where
                 )));
             }
         }
+
+        let mut incoming_proposals = network_adapter.proposals_stream().await?;
+        let mut chainsync_events = network_adapter.chainsync_events_stream().await?;
+
+        let mut orphan_downloader = Box::pin(OrphanBlocksDownloader::new(
+            network_adapter,
+            sync_config.orphan.max_orphan_cache_size,
+        ));
 
         self.notify_service_ready();
 
