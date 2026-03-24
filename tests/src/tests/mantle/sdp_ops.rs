@@ -247,7 +247,9 @@ async fn sdp_declaration_restoration_e2e() {
 #[tokio::test]
 #[serial]
 async fn large_inscription_e2e() {
-    for payload_size in [32 * 1024, 128 * 1024, 512 * 1024, 1024 * 1024] {
+    // Note: MAX_BLOCK_SIZE is 1MB, so the largest payload must leave room for
+    // transaction encoding overhead (signatures, headers, etc.).
+    for payload_size in [32 * 1024, 128 * 1024, 512 * 1024, 900 * 1024] {
         let topology = Topology::spawn(TopologyConfig::two_validators()).await;
         topology.wait_network_ready().await;
 
