@@ -26,9 +26,12 @@ use crate::cucumber::{
     error::{StepError, StepResult},
     steps::{
         TARGET,
-        manual_nodes::snapshots::{
-            restore_node_state_from_snapshot, save_named_blockchain_snapshot,
-            validate_snapshot_path_component,
+        manual_nodes::{
+            config_override::apply_user_config_overrides,
+            snapshots::{
+                restore_node_state_from_snapshot, save_named_blockchain_snapshot,
+                validate_snapshot_path_component,
+            },
         },
     },
     utils::{
@@ -36,8 +39,8 @@ use crate::cucumber::{
         matching_child_dirs, peer_id_from_node_yaml, track_progress, truncate_hash,
     },
     world::{
-        ChainInfoMap, CucumberWorld, NodeInfo, PublicCryptarchiaEndpointPeer, WalletInfo,
-        WalletInfoMap, WalletType,
+        ChainInfoMap, CucumberWorld, NodeInfo, PublicCryptarchiaEndpointPeer, UserConfigOverride,
+        WalletInfo, WalletInfoMap, WalletType,
     },
 };
 
@@ -605,7 +608,8 @@ pub async fn start_node(
                         &startup_settings.deployment_override,
                         startup_settings.initial_peers_override.as_ref(),
                         &startup_settings.ibd_peers,
-                    );
+                        &startup_settings.user_config_overrides,
+                    )?;
                     Ok(config)
                 }),
         ),
@@ -816,6 +820,7 @@ struct StartupSettings {
     initial_peers_override: Option<Vec<Multiaddr>>,
     join_external_network: bool,
     deployment_override: DeploymentSettings,
+    user_config_overrides: Vec<UserConfigOverride>,
 }
 
 fn get_startup_settings(
@@ -850,6 +855,7 @@ fn get_startup_settings(
     } else {
         DeploymentSettings::from(WellKnownDeployment::Devnet)
     };
+    let user_config_overrides = world.user_config_overrides.clone();
 
     Ok(StartupSettings {
         peer_selection,
@@ -858,6 +864,7 @@ fn get_startup_settings(
         initial_peers_override,
         join_external_network,
         deployment_override,
+        user_config_overrides,
     })
 }
 
@@ -867,7 +874,8 @@ fn prepare_config_patch(
     deployment_override: &DeploymentSettings,
     initial_peers_override: Option<&Vec<Multiaddr>>,
     ibd_peers: &HashSet<PeerId>,
-) {
+    user_config_overrides: &[UserConfigOverride],
+) -> Result<(), StepError> {
     if join_external_network {
         config.deployment = deployment_override.clone();
     }
@@ -887,6 +895,9 @@ fn prepare_config_patch(
         .ibd
         .peers
         .clone_from(ibd_peers);
+
+    apply_user_config_overrides(config, user_config_overrides)?;
+    Ok(())
 }
 
 fn load_run_config(path: &Path) -> Result<DeploymentSettings, StepError> {
