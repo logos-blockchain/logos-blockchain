@@ -4,7 +4,7 @@ use core::{
     time::Duration,
 };
 use std::{
-    collections::{HashMap, VecDeque, hash_map::Entry},
+    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
     convert::Infallible,
     ops::RangeInclusive,
     task::{Context, Poll, Waker},
@@ -117,6 +117,7 @@ pub struct Behaviour<ProofsVerifier, ObservationWindowClockProvider> {
     /// Sending a message with the same identifier more than once results in
     /// the peer being flagged as malicious, and the connection dropped.
     exchanged_message_identifiers: HashMap<PeerId, HashMap<MessageIdentifier, Instant>>,
+    message_cache: HashSet<MessageIdentifier>,
     observation_window_clock_provider: ObservationWindowClockProvider,
     current_membership: Membership<PeerId>,
     /// The [minimum, maximum] peering degree of this node.
@@ -222,6 +223,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             protocol_name,
             minimum_network_size: config.minimum_network_size,
             old_session: None,
+            message_cache: HashSet::new(),
             poq_verifier,
         }
     }
@@ -248,6 +250,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
                 .map(|(peer_id, details)| (peer_id, details.connection_id))
                 .collect(),
             mem::take(&mut self.exchanged_message_identifiers),
+            mem::take(&mut self.message_cache),
             old_verifier,
         ));
 
@@ -910,6 +913,14 @@ where
         ) else {
             return;
         };
+
+        // Exit early if we've processed this message already and we know it's a valid
+        // one, so no need to check it again to potentially mark the peer as malicious.
+        if self.message_cache.contains(&message_identifier) {
+            tracing::trace!(target: LOG_TARGET, "Message with id {message_identifier:?} already processed previously. Dropping it.");
+            return;
+        }
+
         // Verify the message public header, or else mark the peer as malicious: https://www.notion.so/nomos-tech/Blend-Protocol-Version-1-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81859cebf5e3d2a5cd8f.
         let Ok(validated_message) = self
             .validate_encapsulated_message_public_header_with_current_session(
@@ -927,6 +938,7 @@ where
 
         // Notify the swarm about the received message, so that it can be further
         // processed by the core protocol module.
+        self.message_cache.insert(message_identifier);
         self.events.push_back(ToSwarm::GenerateEvent(Event::Message(
             Box::new(validated_message),
             (from_peer_id, from_connection_id),

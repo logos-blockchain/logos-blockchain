@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque, hash_map::Entry},
+    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
     convert::Infallible,
     task::{Context, Poll, Waker},
     time::Instant,
@@ -32,6 +32,7 @@ pub struct OldSession<ProofsVerifier> {
     exchanged_message_identifiers: HashMap<PeerId, HashMap<MessageIdentifier, Instant>>,
     events: VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     waker: Option<Waker>,
+    message_cache: HashSet<MessageIdentifier>,
     poq_verifier: ProofsVerifier,
 }
 
@@ -119,12 +120,17 @@ where
 
         let message_identifier = deserialized_encapsulated_message.id();
 
-        // Add the message to the set of exchanged message identifiers.
+        // Add the message to the set of exchanged message identifiers with the sender,
+        // returning `Err` if the message was already sent by this peer previously.
         check_and_update_message_cache(
             &mut self.exchanged_message_identifiers,
             &message_identifier,
             from_peer_id,
         )?;
+
+        if self.message_cache.contains(&message_identifier) {
+            return Ok(true);
+        }
 
         // Verify the message public header
         let validated_message =
@@ -132,6 +138,7 @@ where
 
         // Notify the swarm about the received message, so that it can be further
         // processed by the core protocol module.
+        self.message_cache.insert(message_identifier);
         self.events.push_back(ToSwarm::GenerateEvent(Event::Message(
             Box::new(validated_message),
             (from_peer_id, from_connection_id),
@@ -146,6 +153,7 @@ impl<ProofsVerifier> OldSession<ProofsVerifier> {
     pub const fn new(
         negotiated_peers: HashMap<PeerId, ConnectionId>,
         exchanged_message_identifiers: HashMap<PeerId, HashMap<MessageIdentifier, Instant>>,
+        message_cache: HashSet<MessageIdentifier>,
         poq_verifier: ProofsVerifier,
     ) -> Self {
         Self {
@@ -153,6 +161,7 @@ impl<ProofsVerifier> OldSession<ProofsVerifier> {
             exchanged_message_identifiers,
             events: VecDeque::new(),
             waker: None,
+            message_cache,
             poq_verifier,
         }
     }
