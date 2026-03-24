@@ -368,7 +368,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
                     .or_default()
                     .entry(message_id)
                 {
-                    tracing::debug!(target: LOG_TARGET, "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message.");
+                    tracing::debug!(target: LOG_TARGET, "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message {message_id:?}.");
                     message_peer_entry.insert(Instant::now());
                     self.events.push_back(ToSwarm::NotifyHandler {
                         peer_id: *peer_id,
@@ -377,7 +377,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
                     });
                     at_least_one_receiver = true;
                 } else {
-                    tracing::trace!(target: LOG_TARGET, "Not sending message to peer {peer_id:?} because we already exchanged this message with them.");
+                    tracing::trace!(target: LOG_TARGET, "Not sending message {message_id:?} to peer {peer_id:?} because we already exchanged this message with them.");
                 }
             });
 
