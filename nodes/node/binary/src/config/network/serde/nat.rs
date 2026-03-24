@@ -61,6 +61,8 @@ pub struct TraversalConfig {
     pub mapping: MappingConfig,
     pub gateway_monitor: GatewayConfig,
     /// Optional external address candidate to verify via `AutoNAT`.
+    /// Useful for nodes with manual port forwarding where the correct
+    /// public address may not be discovered automatically.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_address: Option<Multiaddr>,
 }

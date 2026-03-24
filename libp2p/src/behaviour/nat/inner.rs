@@ -64,8 +64,9 @@ where
     /// Current local address that is being managed
     local_address: Option<Multiaddr>,
     /// Optional external address candidate provided by the operator to be
-    /// verified via `AutoNAT`. Emitted once as a `NewExternalAddrCandidate`
-    /// on first poll.
+    /// verified via `AutoNAT`. Useful for nodes with manual port forwarding
+    /// where the correct public address may not be discovered automatically.
+    /// Emitted once as a `NewExternalAddrCandidate` on first poll.
     external_address_candidate: Option<Multiaddr>,
 }
 
