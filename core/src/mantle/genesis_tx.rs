@@ -26,6 +26,8 @@ pub enum Error {
     UnepectedInput,
     #[error("Genesis block cannot contain this op: {0:?}")]
     UnsupportedGenesisOp(Vec<Op>),
+    #[error("Expected exactly one transfer in genesis block")]
+    MissingTransfer,
     #[error("Expected exactly one inscription in genesis block")]
     MissingInscription,
     #[error("Invalid genesis inscription: {0:?}")]
@@ -41,14 +43,19 @@ impl GenesisTx {
             return Err(Error::InvalidGenesisGasPrice);
         }
 
-        // Genesis transactions should not have any inputs
-        if !mantle_tx.ledger_tx.inputs.is_empty() {
-            return Err(Error::UnepectedInput);
+        // Genesis transactions must contain exactly one transfer and one inscription as
+        // the first op and then may contain other SDP declarations
+        let mut ops = mantle_tx.ops.iter();
+        match ops.next() {
+            // Genesis transfers should not have any inputs
+            Some(Op::Transfer(op)) => {
+                if !op.inputs.is_empty() {
+                    return Err(Error::UnepectedInput);
+                }
+            }
+            _ => return Err(Error::MissingTransfer),
         }
 
-        // Genesis transactions must contain exactly one inscription as the first op
-        // and then may contain other SDP declarations
-        let mut ops = mantle_tx.ops.iter();
         match ops.next() {
             Some(Op::ChannelInscribe(op)) => valid_cryptarchia_inscription(op)?,
             _ => return Err(Error::MissingInscription),
@@ -165,8 +172,8 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            ledger::{Note, Tx as LedgerTx, Utxo, Value},
-            ops::channel::Ed25519PublicKey,
+            ledger::{Note, Utxo, Value},
+            ops::{channel::Ed25519PublicKey, transfer::TransferOp},
         },
         sdp::{ProviderId, ServiceType},
     };
@@ -205,11 +212,11 @@ mod tests {
 
     // Helper function to create a basic signed transaction
     // Genesis transactions don't need verified proofs for Blob/Inscription ops
-    fn create_tx(ops: Vec<Op>, ops_proofs: Vec<OpProof>) -> SignedMantleTx {
-        let ledger_tx = LedgerTx::new(vec![], vec![create_test_note(1000)]);
+    fn create_tx(mut ops: Vec<Op>, ops_proofs: Vec<OpProof>) -> SignedMantleTx {
+        let transfer_op = TransferOp::new(vec![], vec![create_test_note(1000)]);
+        ops.push(Op::Transfer(transfer_op));
         let mantle_tx = MantleTx {
             ops,
-            ledger_tx,
             execution_gas_price: 0,
             storage_gas_price: 0,
         };

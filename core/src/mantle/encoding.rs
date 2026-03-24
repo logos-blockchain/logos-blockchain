@@ -20,6 +20,7 @@ use crate::{
             },
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
+            transfer::TransferOp,
         },
     },
     proofs::leader_claim_proof::Groth16LeaderClaimProof,
@@ -45,7 +46,6 @@ pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx> {
 pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
     // MantleTx = Ops LedgerTx ExecutionGasPrice StorageGasPrice
     let (input, ops) = decode_ops(input)?;
-    let (input, ledger_tx) = decode_ledger_tx(input)?;
     let (input, execution_gas_price) = decode_uint64(input)?;
     let (input, storage_gas_price) = decode_uint64(input)?;
 
@@ -53,7 +53,6 @@ pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
         input,
         MantleTx {
             ops,
-            ledger_tx,
             execution_gas_price,
             storage_gas_price,
         },
@@ -228,7 +227,7 @@ fn decode_leader_claim(input: &[u8]) -> IResult<&[u8], LeaderClaimOp> {
 }
 
 // ==============================================================================
-// Ledger Transaction Decoders
+// Transfer Decoders
 // ==============================================================================
 
 fn decode_note(input: &[u8]) -> IResult<&[u8], Note> {
@@ -251,12 +250,12 @@ fn decode_outputs(input: &[u8]) -> IResult<&[u8], Vec<Note>> {
     count(decode_note, output_count as usize).parse(input)
 }
 
-fn decode_ledger_tx(input: &[u8]) -> IResult<&[u8], LedgerTx> {
+fn decode_transfer(input: &[u8]) -> IResult<&[u8], TransferOp> {
     // LedgerTx = Inputs Outputs
     let (input, inputs) = decode_inputs(input)?;
     let (input, outputs) = decode_outputs(input)?;
 
-    Ok((input, LedgerTx::new(inputs, outputs)))
+    Ok((input, TransferOp::new(inputs, outputs)))
 }
 
 // ==============================================================================
@@ -297,7 +296,7 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
         }
 
         // ZkSigProof = ZkSignature
-        Op::SDPWithdraw(_) | Op::SDPActive(_) => {
+        Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) => {
             map(decode_zk_signature, OpProof::ZkSig).parse(input)
         }
 
@@ -533,7 +532,7 @@ fn encode_leader_claim(op: &LeaderClaimOp) -> Vec<u8> {
     bytes
 }
 
-/// Encode ledger transactions
+/// Encode transfer operation
 fn encode_note(note: &Note) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_uint64(note.value));
@@ -567,6 +566,14 @@ pub fn encode_ledger_tx(tx: &LedgerTx) -> Vec<u8> {
     bytes
 }
 
+#[must_use]
+pub fn encode_transfer_op(op: &TransferOp) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend(encode_inputs(&op.inputs));
+    bytes.extend(encode_outputs(&op.outputs));
+    bytes
+}
+
 /// Encode operations
 #[must_use]
 pub fn encode_op(op: &Op) -> Vec<u8> {
@@ -595,6 +602,10 @@ pub fn encode_op(op: &Op) -> Vec<u8> {
         Op::LeaderClaim(op) => {
             bytes.extend(encode_byte(opcode::LEADER_CLAIM));
             bytes.extend(encode_leader_claim(op));
+        }
+        Op::Transfer(op) => {
+            bytes.extend(encode_byte(opcode::TRANSFER));
+            bytes.extend(encode_transfer_op(op));
         }
     }
     bytes
@@ -647,7 +658,6 @@ fn encode_ops_proofs(proofs: &[OpProof], ops: &[Op]) -> Vec<u8> {
 pub fn encode_mantle_tx(tx: &MantleTx) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_ops(&tx.ops));
-    bytes.extend(encode_ledger_tx(&tx.ledger_tx));
     bytes.extend(encode_uint64(tx.execution_gas_price));
     bytes.extend(encode_uint64(tx.storage_gas_price));
     bytes
@@ -676,7 +686,9 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx) -> usize {
             Op::SDPDeclare(_) => GROTH16_BYTES + ED25519_SIG_BYTES,
 
             // ZkSigProof = ZkSignature = ProofOfClaimProof = Groth16
-            Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::LeaderClaim(_) => GROTH16_BYTES,
+            Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::LeaderClaim(_) | Op::Transfer(_) => {
+                GROTH16_BYTES
+            }
         })
         .sum::<usize>();
 
@@ -768,10 +780,6 @@ mod tests {
     fn test_decode_signed_mantle_tx_empty() {
         let mantle_tx = MantleTx {
             ops: vec![],
-            ledger_tx: LedgerTx {
-                inputs: vec![],
-                outputs: vec![],
-            },
             execution_gas_price: 100,
             storage_gas_price: 50,
         };
@@ -825,10 +833,6 @@ mod tests {
                 parent: MsgId::from([0xBB; 32]),
                 signer: signing_key.public_key(),
             })],
-            ledger_tx: LedgerTx {
-                inputs: vec![],
-                outputs: vec![],
-            },
             execution_gas_price: 100,
             storage_gas_price: 50,
         };
@@ -895,10 +899,6 @@ mod tests {
                     keys: vec![signing_key.public_key()],
                 }),
             ],
-            ledger_tx: LedgerTx {
-                inputs: vec![],
-                outputs: vec![],
-            },
             execution_gas_price: 100,
             storage_gas_price: 50,
         };
@@ -946,7 +946,6 @@ mod tests {
 
                 let mantle_tx = MantleTx {
                     ops: vec![Op::ChannelInscribe(inscribe_op)],
-                    ledger_tx: LedgerTx::new(vec![], vec![]),
                     execution_gas_price: 100,
                     storage_gas_price: 50,
                 };
@@ -996,7 +995,6 @@ mod tests {
         // Create an empty MantleTx
         let original_tx = MantleTx {
             ops: vec![],
-            ledger_tx: LedgerTx::new(vec![], vec![]),
             execution_gas_price: 100,
             storage_gas_price: 50,
         };
@@ -1013,17 +1011,17 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_decode_roundtrip_with_ledger_tx() {
+    fn test_encode_decode_roundtrip_with_transfer() {
         use num_bigint::BigUint;
 
         // Create a MantleTx with ledger inputs and outputs
         let pk = ZkPublicKey::from(BigUint::from(42u64));
         let note = Note::new(1000, pk);
         let note_id = NoteId(BigUint::from(123u64).into());
+        let transfer_op = TransferOp::new(vec![note_id], vec![note]);
 
         let original_tx = MantleTx {
-            ops: vec![],
-            ledger_tx: LedgerTx::new(vec![note_id], vec![note]),
+            ops: vec![Op::Transfer(transfer_op)],
             execution_gas_price: 100,
             storage_gas_price: 50,
         };
@@ -1044,7 +1042,6 @@ mod tests {
         // Create a simple SignedMantleTx
         let mantle_tx = MantleTx {
             ops: vec![],
-            ledger_tx: LedgerTx::new(vec![], vec![]),
             execution_gas_price: 100,
             storage_gas_price: 50,
         };
@@ -1067,7 +1064,6 @@ mod tests {
         // Create an empty MantleTx
         let mantle_tx = MantleTx {
             ops: vec![],
-            ledger_tx: LedgerTx::new(vec![], vec![]),
             execution_gas_price: 100,
             storage_gas_price: 50,
         };
@@ -1101,7 +1097,6 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::ChannelInscribe(inscribe_op)],
-            ledger_tx: LedgerTx::new(vec![], vec![]),
             execution_gas_price: 100,
             storage_gas_price: 50,
         };
@@ -1141,7 +1136,6 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::ChannelSetKeys(set_keys_op)],
-            ledger_tx: LedgerTx::new(vec![], vec![]),
             execution_gas_price: 100,
             storage_gas_price: 50,
         };
@@ -1192,7 +1186,6 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::SDPDeclare(sdp_declare_op)],
-            ledger_tx: LedgerTx::new(vec![], vec![]),
             execution_gas_price: 100,
             storage_gas_price: 50,
         };
@@ -1229,7 +1222,6 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::SDPWithdraw(sdp_withdraw_op)],
-            ledger_tx: LedgerTx::new(vec![], vec![]),
             execution_gas_price: 100,
             storage_gas_price: 50,
         };
@@ -1276,7 +1268,6 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::SDPActive(sdp_active_op)],
-            ledger_tx: LedgerTx::new(vec![], vec![]),
             execution_gas_price: 100,
             storage_gas_price: 50,
         };
@@ -1336,7 +1327,6 @@ mod tests {
                 Op::ChannelSetKeys(set_keys_op),
                 Op::SDPActive(sdp_active_op),
             ],
-            ledger_tx: LedgerTx::new(vec![], vec![]),
             execution_gas_price: 100,
             storage_gas_price: 50,
         };
@@ -1377,9 +1367,10 @@ mod tests {
         let note_id2 = NoteId(BigUint::from(222u64).into());
         let note_id3 = NoteId(BigUint::from(333u64).into());
 
+        let transfer_op = TransferOp::new(vec![note_id1, note_id2, note_id3], vec![note1, note2]);
+
         let mantle_tx = MantleTx {
-            ops: vec![],
-            ledger_tx: LedgerTx::new(vec![note_id1, note_id2, note_id3], vec![note1, note2]),
+            ops: vec![Op::Transfer(transfer_op)],
             execution_gas_price: 100,
             storage_gas_price: 50,
         };
@@ -1420,7 +1411,7 @@ mod tests {
         };
 
         let locked_note_sk = ZkKey::from(BigUint::from(1u64));
-        let ledger_tx = LedgerTx {
+        let transfer_op = TransferOp {
             inputs: vec![NoteId(BigUint::from(777u64).into())],
             outputs: vec![Note::new(5000, locked_note_sk.to_public_key())],
         };
@@ -1432,7 +1423,7 @@ mod tests {
             locators: vec![Locator::new(locator)],
             provider_id: ProviderId(signing_key1.public_key()),
             zk_id: zk_sk.to_public_key(),
-            locked_note_id: ledger_tx.utxo_by_index(0).unwrap().id(),
+            locked_note_id: transfer_op.utxo_by_index(0).unwrap().id(),
         };
 
         let mantle_tx = MantleTx {
@@ -1440,8 +1431,8 @@ mod tests {
                 Op::ChannelInscribe(inscribe_op),
                 Op::ChannelSetKeys(set_keys_op),
                 Op::SDPDeclare(sdp_declare_op),
+                Op::Transfer(transfer_op),
             ],
-            ledger_tx,
             execution_gas_price: 150,
             storage_gas_price: 75,
         };
@@ -1482,7 +1473,6 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::LeaderClaim(leader_claim_op.clone())],
-            ledger_tx: LedgerTx::new(vec![], vec![]),
             execution_gas_price: 100,
             storage_gas_price: 50,
         };

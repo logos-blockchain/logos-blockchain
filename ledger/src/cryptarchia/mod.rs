@@ -6,7 +6,7 @@ use std::sync::{Arc, LazyLock};
 use derivative::Derivative;
 use lb_core::{
     crypto::{ZkDigest, ZkHasher},
-    mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value, gas::GasConstants},
+    mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Op, Utxo, Value, gas::GasConstants},
     proofs::leader_proof::{self, LeaderPublic},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
@@ -327,36 +327,38 @@ impl LedgerState {
     ) -> Result<(Self, Balance), LedgerError<Id>> {
         let mut balance: i128 = 0;
         let mut pks: Vec<ZkPublicKey> = vec![];
-        let ledger_tx = &tx.mantle_tx().ledger_tx;
-        for input in &ledger_tx.inputs {
-            if locked_notes.contains(input) {
-                return Err(LedgerError::LockedNote(*input));
+        for &op in &tx.mantle_tx().ops {
+            if let Op::Transfer(transfer_op) = op {
+                for input in &transfer_op.inputs {
+                    if locked_notes.contains(input) {
+                        return Err(LedgerError::LockedNote(*input));
+                    }
+                    let utxo;
+                    (self.utxos, utxo) = self
+                        .utxos
+                        .remove(input)
+                        .map_err(|_| LedgerError::InvalidNote(*input))?;
+                    balance = balance
+                        .checked_add(utxo.note.value.into())
+                        .ok_or(LedgerError::Overflow)?;
+                    pks.push(utxo.note.pk);
+                }
+
+                if !ZkPublicKey::verify_multi(&pks, &tx.hash().0, tx.ledger_tx_proof()) {
+                    return Err(LedgerError::InvalidProof);
+                }
+
+                for utxo in transfer_op.utxos() {
+                    if utxo.note.value == 0 {
+                        return Err(LedgerError::ZeroValueNote);
+                    }
+                    balance = balance
+                        .checked_sub(utxo.note.value.into())
+                        .ok_or(LedgerError::Overflow)?;
+                    self.utxos = self.utxos.insert(utxo.id(), utxo).0;
+                }
             }
-            let utxo;
-            (self.utxos, utxo) = self
-                .utxos
-                .remove(input)
-                .map_err(|_| LedgerError::InvalidNote(*input))?;
-            balance = balance
-                .checked_add(utxo.note.value.into())
-                .ok_or(LedgerError::Overflow)?;
-            pks.push(utxo.note.pk);
         }
-
-        if !ZkPublicKey::verify_multi(&pks, &tx.hash().0, tx.ledger_tx_proof()) {
-            return Err(LedgerError::InvalidProof);
-        }
-
-        for utxo in ledger_tx.utxos() {
-            if utxo.note.value == 0 {
-                return Err(LedgerError::ZeroValueNote);
-            }
-            balance = balance
-                .checked_sub(utxo.note.value.into())
-                .ok_or(LedgerError::Overflow)?;
-            self.utxos = self.utxos.insert(utxo.id(), utxo).0;
-        }
-
         Ok((self, balance))
     }
 

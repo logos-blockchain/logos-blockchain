@@ -3,12 +3,13 @@ use std::cmp::Ordering;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
 use super::{GasConstants, GasCost as _, MantleTx, Note, Op, Utxo};
-use crate::mantle::ledger::Tx as LedgerTx;
+use crate::mantle::ops::transfer::TransferOp;
 
 #[derive(Debug, Clone)]
 pub struct MantleTxBuilder {
     mantle_tx: MantleTx,
     ledger_inputs: Vec<Utxo>,
+    pending_transfer: TransferOp,
 }
 
 impl MantleTxBuilder {
@@ -17,14 +18,11 @@ impl MantleTxBuilder {
         Self {
             mantle_tx: MantleTx {
                 ops: vec![],
-                ledger_tx: LedgerTx {
-                    inputs: vec![],
-                    outputs: vec![],
-                },
                 execution_gas_price: 0,
                 storage_gas_price: 0,
             },
             ledger_inputs: vec![],
+            pending_transfer: TransferOp::new(vec![], vec![]),
         }
     }
 
@@ -47,7 +45,7 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn extend_ledger_inputs(mut self, utxos: impl IntoIterator<Item = Utxo>) -> Self {
         for utxo in utxos {
-            self.mantle_tx.ledger_tx.inputs.push(utxo.id());
+            self.pending_transfer.inputs.push(utxo.id());
             self.ledger_inputs.push(utxo);
         }
         self
@@ -60,7 +58,7 @@ impl MantleTxBuilder {
 
     #[must_use]
     pub fn extend_ledger_outputs(mut self, notes: impl IntoIterator<Item = Note>) -> Self {
-        self.mantle_tx.ledger_tx.outputs.extend(notes);
+        self.pending_transfer.outputs.extend(notes);
         self
     }
 
@@ -128,8 +126,7 @@ impl MantleTxBuilder {
             .sum();
 
         let out_sum: i128 = self
-            .mantle_tx
-            .ledger_tx
+            .pending_transfer
             .outputs
             .iter()
             .map(|n| i128::from(n.value))

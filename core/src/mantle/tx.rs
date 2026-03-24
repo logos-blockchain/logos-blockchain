@@ -16,7 +16,6 @@ use crate::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasConstants, GasCost},
-        ledger::Tx as LedgerTx,
         ops::{Op, OpProof},
     },
     proofs::leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
@@ -81,7 +80,6 @@ impl TxHash {
 #[derive(Serialize, Deserialize)]
 struct MantleTxDeSerImpl {
     pub ops: Vec<Op>,
-    pub ledger_tx: LedgerTx,
     pub execution_gas_price: Gas,
     pub storage_gas_price: Gas,
 }
@@ -89,7 +87,6 @@ struct MantleTxDeSerImpl {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MantleTx {
     pub ops: Vec<Op>,
-    pub ledger_tx: LedgerTx,
     pub execution_gas_price: Gas,
     pub storage_gas_price: Gas,
 }
@@ -98,14 +95,12 @@ impl From<MantleTxDeSerImpl> for MantleTx {
     fn from(
         MantleTxDeSerImpl {
             ops,
-            ledger_tx,
             execution_gas_price,
             storage_gas_price,
         }: MantleTxDeSerImpl,
     ) -> Self {
         Self {
             ops,
-            ledger_tx,
             execution_gas_price,
             storage_gas_price,
         }
@@ -116,14 +111,12 @@ impl From<MantleTx> for MantleTxDeSerImpl {
     fn from(
         MantleTx {
             ops,
-            ledger_tx,
             execution_gas_price,
             storage_gas_price,
         }: MantleTx,
     ) -> Self {
         Self {
             ops,
-            ledger_tx,
             execution_gas_price,
             storage_gas_price,
         }
@@ -167,8 +160,7 @@ impl GasCost for MantleTx {
             .ops
             .iter()
             .map(Op::execution_gas::<Constants>)
-            .sum::<Gas>()
-            + self.ledger_tx.execution_gas::<Constants>();
+            .sum::<Gas>();
         let storage_gas = self.signed_serialized_size();
 
         execution_gas * self.execution_gas_price + storage_gas * self.storage_gas_price
@@ -364,8 +356,7 @@ impl GasCost for SignedMantleTx {
             .ops
             .iter()
             .map(Op::execution_gas::<Constants>)
-            .sum::<Gas>()
-            + self.mantle_tx.ledger_tx.execution_gas::<Constants>();
+            .sum::<Gas>();
         let storage_gas = self.gas_storage_size();
 
         execution_gas * self.mantle_tx.execution_gas_price
@@ -402,12 +393,11 @@ mod tests {
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 
     use super::*;
-    use crate::mantle::{ledger::Tx as LedgerTx, ops::channel::inscribe::InscriptionOp};
+    use crate::mantle::ops::channel::inscribe::InscriptionOp;
 
     fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
         MantleTx {
             ops,
-            ledger_tx: LedgerTx::new(vec![], vec![]),
             execution_gas_price: 1,
             storage_gas_price: 1,
         }

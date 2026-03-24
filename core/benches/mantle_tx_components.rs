@@ -19,7 +19,6 @@ use logos_blockchain_core::{
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _, TxHash,
         encoding::{decode_signed_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
-        ledger::Tx as LedgerTx,
         ops::{
             Op, OpProof,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
@@ -54,7 +53,6 @@ fn make_inscription_tx(payload_size: usize) -> MantleTx {
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key(),
         })],
-        ledger_tx: LedgerTx::new(vec![], vec![]),
         execution_gas_price: 100,
         storage_gas_price: 50,
     }

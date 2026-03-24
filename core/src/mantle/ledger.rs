@@ -145,7 +145,7 @@ impl Tx {
 
     #[must_use]
     pub const fn execution_gas<Constants: GasConstants>(&self) -> u64 {
-        Constants::LEDGER_TX
+        Constants::TRANSFER
     }
 
     pub fn utxos(&self) -> impl Iterator<Item = Utxo> + '_ {
