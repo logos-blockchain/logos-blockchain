@@ -94,6 +94,8 @@ pub enum LedgerError<Id> {
     InsufficientExecutionFee,
     #[error("The execution gas of the block ({gas:?}) exceeds the maximum limit ({limit:?}")]
     TooMuchExecutionGas { gas: Gas, limit: Gas },
+    #[error("Storage fees aren't equal to the storage fee of the current epoch")]
+    InvalidStoragePrice,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -325,13 +327,22 @@ impl LedgerState {
             }
             // Update the total of fee burned and tipped in the block
             let fee_burned = total_block_execution_gas
-                * self.cryptarchia_ledger.execution_base_fee()
+                * *self.cryptarchia_ledger.execution_base_fee()
                 + tx.storage_gas_cost();
 
             // Check that the transaction at least pays for the base fee
             match total_balance.cmp(&fee_burned.into()) {
                 Ordering::Less => return Err(LedgerError::InsufficientExecutionFee),
                 Ordering::Greater | Ordering::Equal => {} // OK !
+            }
+
+            // Check that the transaction pays the correct storage fees
+            match tx
+                .storage_gas_consumption()
+                .cmp(self.cryptarchia_ledger.storage_gas_price())
+            {
+                Ordering::Greater | Ordering::Less => return Err(LedgerError::InvalidStoragePrice),
+                Ordering::Equal => {} // OK !
             }
 
             let fee_tip = total_balance as Gas - fee_burned;

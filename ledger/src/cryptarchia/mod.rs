@@ -35,6 +35,15 @@ const EXECUTION_MARKET_BASE_FEE_NUMERATOR: u128 = 11_176_760;
 // // G_target)
 const EXECUTION_MARKET_BASE_FEE_DENOMINATOR: u128 = 12_773_440;
 
+// Corresponds to the denominator of 1/beta
+const STORAGE_MARKET_EMA_DENOMINATOR: u128 = 2;
+// Corresponds to the denominator of 1+ alpha and 1-alpha
+const STORAGE_MARKET_CLAMP_DENOMINATOR: u128 = 8;
+// Corresponds to the numerator of 1-alpha
+const STORAGE_MARKET_CLAMP_DOWN_NUMERATOR: u128 = 7;
+// Corresponds to the numerator of 1+alpha
+const STORAGE_MARKET_CLAMP_UP_NUMERATOR: u128 = 9;
+
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
 use super::{Balance, Config, LedgerError};
 use crate::{WINDOW_SIZE, mantle::sdp::locked_notes::LockedNotes};
@@ -149,6 +158,12 @@ pub struct LedgerState {
     average_execution_gas: Gas,
     // Execution Base Fee that are burned and minimum required to pay.
     execution_base_fee: Gas,
+    // Exponential Moving Average Storage Gas used in the currect epoch
+    storage_gas_ema: Gas,
+    // Actual storage Gas price of the currect epoch
+    storage_gas_price: Gas,
+    // The amount of Storage Gas consumed in the current epoch
+    storage_gas_consumed_in_epoch: Gas,
 }
 
 impl LedgerState {
@@ -186,9 +201,11 @@ impl LedgerState {
         // 1. We are in the same epoch as the parent state: Update the next epoch state
         // 2. We are in the next epoch: Use the next epoch state as the current epoch
         //    state and reset next epoch state
-        // 3. We are in the next-next or later epoch: Use the parent state as the epoch
-        //    state and reset next epoch state. Total stake should be adjusted with zero
-        //    block density for skipped epochs.
+        // 3. We are in the next-next or later epoch (which mean that some epochs had no
+        //    block): Use the parent state as the epoch state and reset next epoch
+        //    state. Total stake should be adjusted with zero block density for skipped
+        //    epochs. Storage Market is updated with 0 storage gas used for skipped
+        //    epochs.
         if current_epoch == new_epoch {
             // case 1)
             Ok(Self {
@@ -235,11 +252,19 @@ impl LedgerState {
                 lottery_0,
                 lottery_1,
             };
+            let (new_price, new_ema) = update_storage_market(
+                self.storage_gas_price,
+                self.storage_gas_consumed_in_epoch,
+                self.storage_gas_ema,
+            );
             Ok(Self {
                 slot,
                 next_epoch_state,
                 epoch_state,
                 block_density,
+                storage_gas_consumed_in_epoch: 0u64,
+                storage_gas_ema: new_ema,
+                storage_gas_price: new_price,
                 ..self
             })
         } else {
@@ -259,6 +284,18 @@ impl LedgerState {
             let (lottery_0, lottery_1) = config
                 .lottery_constants()
                 .compute_lottery_values(total_stake);
+
+            // Update Storage Market
+            // First, using the current epoch
+            let (mut new_price, mut new_ema) = update_storage_market(
+                self.storage_gas_price,
+                self.storage_gas_consumed_in_epoch,
+                self.storage_gas_ema,
+            );
+            // Then for the empty epochs
+            for _ in u32::from(next_epoch_state.epoch())..u32::from(new_epoch) {
+                (new_price, new_ema) = update_storage_market(new_price, 0u64, new_ema);
+            }
 
             tracing::warn!(
                 old_epoch = ?current_epoch,
@@ -291,6 +328,9 @@ impl LedgerState {
                 next_epoch_state,
                 epoch_state,
                 block_density,
+                storage_gas_consumed_in_epoch: 0u64,
+                storage_gas_ema: new_ema,
+                storage_gas_price: new_price,
                 ..self
             })
         }
@@ -466,6 +506,11 @@ impl LedgerState {
     }
 
     #[must_use]
+    pub const fn storage_gas_price(&self) -> &Gas {
+        &self.storage_gas_price
+    }
+
+    #[must_use]
     pub const fn aged_utxos(&self) -> &UtxoTree {
         &self.epoch_state.utxos
     }
@@ -554,8 +599,42 @@ impl LedgerState {
             fee_window: [0u64; 120],
             average_execution_gas: 0u64,
             execution_base_fee: 0u64,
+            storage_gas_ema: 0u64,
+            storage_gas_price: 1u64,
+            storage_gas_consumed_in_epoch: 0u64,
         }
     }
+}
+
+// This function upgrade the storage Gas price when a new epoch starts assuming
+// the structure contains how much storage gas was consumed in the previous
+// epoch according to <https://www.notion.so/nomos-tech/v1-1-Storage-Markets-Specification-326261aa09df804ab483f573f522baf5>
+const fn update_storage_market(
+    storage_gas_price: Gas,
+    storage_gas_consumed_in_epoch: Gas,
+    storage_gas_ema: Gas,
+) -> (Gas, Gas) {
+    let previous_price = storage_gas_price as u128;
+    let total_storage_gas = storage_gas_consumed_in_epoch as u128;
+    let previous_ema = storage_gas_ema as u128;
+
+    let new_ema = ((total_storage_gas + previous_ema) / STORAGE_MARKET_EMA_DENOMINATOR) as Gas;
+    let new_ema_unsigned = new_ema as u128;
+    let new_price = if STORAGE_MARKET_CLAMP_DENOMINATOR * total_storage_gas
+        <= STORAGE_MARKET_CLAMP_DOWN_NUMERATOR * new_ema_unsigned
+    {
+        (previous_price * STORAGE_MARKET_CLAMP_DOWN_NUMERATOR / STORAGE_MARKET_CLAMP_DENOMINATOR)
+            as Gas
+    } else if STORAGE_MARKET_CLAMP_DENOMINATOR * total_storage_gas
+        >= STORAGE_MARKET_CLAMP_UP_NUMERATOR * new_ema_unsigned
+    {
+        (previous_price * STORAGE_MARKET_CLAMP_UP_NUMERATOR / STORAGE_MARKET_CLAMP_DENOMINATOR)
+            as Gas
+    } else {
+        (previous_price * total_storage_gas / new_ema_unsigned) as Gas
+    };
+
+    (new_price, new_ema)
 }
 
 #[expect(
@@ -800,6 +879,9 @@ pub mod tests {
             average_execution_gas: 0u64,
             block_density,
             execution_base_fee: 0u64,
+            storage_gas_ema: 0u64,
+            storage_gas_price: 1u64,
+            storage_gas_consumed_in_epoch: 0u64,
         }
     }
 
