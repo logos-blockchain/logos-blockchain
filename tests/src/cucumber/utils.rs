@@ -186,38 +186,6 @@ pub fn funding_wallet_pk_from_node_yaml(path: &Path) -> Result<String, StepError
 
 /// Extracts the child directory name that starts with a known prefix,
 /// considering the ignore list.
-// pub fn extract_child_dir_name(
-//     base_dir: &Path,
-//     prefix: &str,
-//     ignore_list: &[String],
-// ) -> Result<String, StepError> {
-//     if !ignore_list.is_empty() {
-//         info!(target: TARGET, "Child dir ignore list: '{}'",
-// ignore_list.join(", "));     }
-//
-//     let child_dir_name = base_dir
-//         .read_dir()
-//         .map_err(|e| StepError::LogicalError {
-//             message: format!("Failed to read scenario_base_dir: {e}"),
-//         })?
-//         .filter_map(Result::ok)
-//         .find_map(|entry| {
-//             if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-//                 return None;
-//             }
-//
-//             let name = entry.file_name();
-//             let name = name.to_str()?;
-//
-//             (name.starts_with(prefix) && !ignore_list.iter().any(|ignored|
-// ignored == name))                 .then(|| name.to_owned())
-//         })
-//         .ok_or_else(|| StepError::LogicalError {
-//             message: format!("No directory found starting with {prefix}"),
-//         })?;
-//
-//     Ok(child_dir_name)
-// }
 pub fn extract_child_dir_name(
     base_dir: &Path,
     prefix: &str,
