@@ -40,9 +40,9 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
     DeploymentSettings {
         blend: BlendDeploymentSettings {
             common: BlendCommonSettings {
-                minimum_network_size: NonZeroU64::try_from(32u64)
+                minimum_network_size: NonZeroU64::try_from(1u64)
                     .expect("Minimum network size cannot be zero."),
-                num_blend_layers: NonZeroU64::try_from(3)
+                num_blend_layers: NonZeroU64::try_from(2)
                     .expect("Number of blend layers cannot be zero."),
                 protocol_name: StreamProtocol::new("/blend/integration-tests"),
                 data_replication_factor: 0,
@@ -60,7 +60,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
                             .expect("Message frequency per round cannot be negative."),
                     },
                     delayer: MessageDelayerSettings {
-                        maximum_release_delay_in_rounds: NonZeroU64::try_from(3u64)
+                        maximum_release_delay_in_rounds: NonZeroU64::try_from(2u64)
                             .expect("Maximum release delay between rounds cannot be zero."),
                     },
                 },
@@ -83,12 +83,12 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
             // Setting the security parameter to some value > 1 ensures
             // nodes have some time to sync before deciding on the
             // longest chain.
-            security_param: NonZero::new(20).unwrap(),
+            security_param: NonZero::new(5).unwrap(),
             slot_activation_coeff: NonNegativeRatio::new(1, 10.try_into().unwrap()),
             epoch_config: EpochConfig {
-                epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
-                epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
-                epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
+                epoch_stake_distribution_stabilization: NonZero::new(2).unwrap(),
+                epoch_period_nonce_buffer: NonZero::new(2).unwrap(),
+                epoch_period_nonce_stabilization: NonZero::new(2).unwrap(),
             },
             sdp_config: lb_node::config::cryptarchia::deployment::SdpConfig {
                 service_params: [(
