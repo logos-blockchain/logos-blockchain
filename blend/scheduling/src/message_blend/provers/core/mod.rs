@@ -184,6 +184,7 @@ where
                 }
 
                 let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
+                tracing::trace!(target: LOG_TARGET, "Generated core PoQ for message release index {key_index:?} with key nullifier {:?} and public key {:?}.", hex::encode(fr_to_bytes(&proof_of_quota.key_nullifier())), ephemeral_signing_key.public_key());
                 Some(BlendLayerProof {
                     proof_of_quota,
                     proof_of_selection,

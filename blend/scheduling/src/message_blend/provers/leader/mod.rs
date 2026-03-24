@@ -193,6 +193,9 @@ fn create_leadership_proof_stream(
                     tracing::debug!(target: LOG_TARGET, "Leadership proof generation cancelled after completion.");
                     return None;
                 }
+                if let Some(leadership_proof) = &leadership_proof {
+                    tracing::trace!(target: LOG_TARGET, "Generated leadership PoQ for message release index {message_release_index:?} with key nullifier {:?}  and public key {:?}.", hex::encode(fr_to_bytes(&leadership_proof.proof_of_quota.key_nullifier())), leadership_proof.ephemeral_signing_key.public_key());
+                }
                 leadership_proof
             }
         })
