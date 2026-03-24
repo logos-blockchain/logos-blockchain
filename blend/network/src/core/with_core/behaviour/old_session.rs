@@ -49,6 +49,19 @@ where
         self.forward_validated_message_and_maybe_exclude(&validated_message, None)
     }
 
+    /// Forward an already-verified encapsulated message to all negotiated
+    /// peers.
+    ///
+    /// It is the responsibility of the caller to make sure the message being
+    /// published is valid when received by other peers, else the node will get
+    /// banned from the network.
+    pub fn publish_validated_message(
+        &mut self,
+        message: &EncapsulatedMessageWithVerifiedPublicHeader,
+    ) -> Result<(), Error> {
+        self.forward_validated_message_and_maybe_exclude(message, None)
+    }
+
     fn verify_encapsulated_message_public_header(
         &self,
         message: EncapsulatedMessage,

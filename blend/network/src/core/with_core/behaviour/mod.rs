@@ -824,6 +824,19 @@ where
         self.validate_and_forward_message_except(message, None)
     }
 
+    /// Publish an already-encapsulated, already-verified message to all
+    /// connected peers in the current session.
+    ///
+    /// It is the responsibility of the caller to make sure the message being
+    /// published is valid when received by other peers, else the node will get
+    /// banned from the network.
+    pub fn publish_validated_message(
+        &mut self,
+        message: &EncapsulatedMessageWithVerifiedPublicHeader,
+    ) -> Result<(), Error> {
+        self.forward_validated_message_and_maybe_exclude(message, None)
+    }
+
     /// Forwards a message to all healthy connections except the [`except`]
     /// connection.
     ///
@@ -842,6 +855,33 @@ where
         except: (PeerId, ConnectionId),
     ) -> Result<(), Error> {
         self.validate_and_forward_message_except(message, Some(except))
+    }
+
+    /// Forwards a message to all healthy connections except the [`except`]
+    /// connection.
+    ///
+    /// It is the responsibility of the caller to make sure the message being
+    /// published is valid when received by other peers, else the node will get
+    /// banned from the network.
+    ///
+    /// If the [`except`] connection is part of the old session, the message is
+    /// forwarded to the connections in the old session.
+    /// Otherwise, it is forwarded to the connections in the current session.
+    ///
+    /// Returns [`Error::NoPeers`] if there are no connected peers that support
+    /// the blend protocol.
+    pub fn forward_validated_message(
+        &mut self,
+        message: &EncapsulatedMessageWithVerifiedPublicHeader,
+        except: (PeerId, ConnectionId),
+    ) -> Result<(), Error> {
+        if let Some(old_session) = &mut self.old_session
+            && old_session.is_negotiated(&except)
+        {
+            return old_session.publish_validated_message(message);
+        }
+
+        self.forward_validated_message_and_maybe_exclude(message, Some(except.0))
     }
 
     fn validate_and_forward_message_except(
