@@ -704,7 +704,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
     /// Check if a message with a given ID has been exchanged with a peer
     /// before. If not, the cache entry is updated. Otherwise an `Error` is
     /// returned.
-    fn check_and_update_message_cache(
+    fn check_and_update_peer_message_cache(
         &mut self,
         message_id: &MessageIdentifier,
         (peer_id, connection_id): (PeerId, ConnectionId),
@@ -907,7 +907,7 @@ where
         let message_identifier = deserialized_encapsulated_message.id();
 
         // Mark a core peer as malicious if it sends a duplicate message maliciously (i.e., if a message with the same identifier was already exchanged with them): https://www.notion.so/nomos-tech/Blend-Protocol-Version-1-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81fc86bdce264466efd3.
-        let Ok(()) = self.check_and_update_message_cache(
+        let Ok(()) = self.check_and_update_peer_message_cache(
             &message_identifier,
             (from_peer_id, from_connection_id),
         ) else {
