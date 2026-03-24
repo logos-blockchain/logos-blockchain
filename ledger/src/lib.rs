@@ -337,8 +337,11 @@ impl LedgerState {
             }
 
             // Check that the transaction pays the correct storage fees
+            // TODO: remove the storage price from the Mantle Transaction and wallet should
+            // pull the price from ledger to get the fees to pay
             match tx
-                .storage_gas_consumption()
+                .mantle_tx()
+                .storage_gas_price
                 .cmp(self.cryptarchia_ledger.storage_gas_price())
             {
                 Ordering::Greater | Ordering::Less => return Err(LedgerError::InvalidStoragePrice),
