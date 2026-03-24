@@ -24,6 +24,7 @@ async-trait                      = "0.1"
 cfg-if                           = { workspace = true }
 clap                             = { default-features = false, features = ["derive", "env", "help", "std", "string"], version = "4" }
 color-eyre                       = { default-features = false, version = "0.6.0" }
+dhat                             = { optional = true, version = "0.3.3" }
 futures                          = { default-features = false, version = "0.3" }
 hex                              = { default-features = false, version = "0.4.3" }
 http                             = "1.3"
@@ -86,6 +87,7 @@ rand = { workspace = true }
 [features]
 config-gen      = ["lb-key-management-system-service/unsafe"]
 default         = ["config-gen", "tracing"]
+dhat-heap       = ["dep:dhat"]
 instrumentation = []
 profiling       = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
 testing         = ["lb-key-management-system-service/unsafe"]

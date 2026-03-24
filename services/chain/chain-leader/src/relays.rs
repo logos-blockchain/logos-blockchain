@@ -5,6 +5,9 @@ use lb_core::{
     header::HeaderId,
     mantle::{AuthenticatedMantleTx, TxHash},
 };
+use lb_network_service::{
+    NetworkService, backends::NetworkBackend as NetworkBackendTrait, message::BackendNetworkMsg,
+};
 use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend as TimeBackendTrait};
 use lb_tx_service::{
     MempoolMsg, TxMempoolService, backend::RecoverableMempool,
@@ -21,20 +24,33 @@ use crate::mempool::adapter;
 type BlendRelay<BlendService> = OutboundRelay<<BlendService as ServiceData>::Message>;
 type TimeRelay = OutboundRelay<TimeServiceMessage>;
 
-pub struct CryptarchiaConsensusRelays<BlendService, Mempool, MempoolNetAdapter, RuntimeServiceId>
-where
+pub struct CryptarchiaConsensusRelays<
+    BlendService,
+    Mempool,
+    MempoolNetAdapter,
+    NetworkBackend,
+    RuntimeServiceId,
+> where
     BlendService: ServiceData,
     Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash>,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId>,
+    NetworkBackend: NetworkBackendTrait<RuntimeServiceId>,
 {
     blend_relay: BlendRelay<BlendService>,
     mempool_adapter: adapter::MempoolAdapter<Mempool::Item>,
     time_relay: TimeRelay,
+    network_relay: OutboundRelay<BackendNetworkMsg<NetworkBackend, RuntimeServiceId>>,
     _mempool_adapter: std::marker::PhantomData<(MempoolNetAdapter, RuntimeServiceId)>,
 }
 
-impl<BlendService, Mempool, MempoolNetAdapter, RuntimeServiceId>
-    CryptarchiaConsensusRelays<BlendService, Mempool, MempoolNetAdapter, RuntimeServiceId>
+impl<BlendService, Mempool, MempoolNetAdapter, NetworkBackend, RuntimeServiceId>
+    CryptarchiaConsensusRelays<
+        BlendService,
+        Mempool,
+        MempoolNetAdapter,
+        NetworkBackend,
+        RuntimeServiceId,
+    >
 where
     BlendService: ServiceData,
     Mempool: Send + Sync + RecoverableMempool<BlockId = HeaderId, Key = TxHash>,
@@ -54,17 +70,20 @@ where
         + Send
         + Sync,
     MempoolNetAdapter::Settings: Send + Sync,
+    NetworkBackend: NetworkBackendTrait<RuntimeServiceId> + 'static,
 {
     pub const fn new(
         blend_relay: BlendRelay<BlendService>,
         mempool_relay: OutboundRelay<MempoolMsg<HeaderId, Mempool::Item, Mempool::Item, TxHash>>,
         time_relay: TimeRelay,
+        network_relay: OutboundRelay<BackendNetworkMsg<NetworkBackend, RuntimeServiceId>>,
     ) -> Self {
         let mempool_adapter = adapter::MempoolAdapter::new(mempool_relay);
         Self {
             blend_relay,
             mempool_adapter,
             time_relay,
+            network_relay,
             _mempool_adapter: std::marker::PhantomData,
         }
     }
@@ -96,7 +115,8 @@ where
                 TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
             >
             + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
-            + AsServiceId<CryptarchiaService>,
+            + AsServiceId<CryptarchiaService>
+            + AsServiceId<NetworkService<NetworkBackend, RuntimeServiceId>>,
         CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item>,
     {
         let blend_relay = service_resources_handle
@@ -120,7 +140,13 @@ where
             .await
             .expect("Relay connection with TimeService should succeed");
 
-        Self::new(blend_relay, mempool_relay, time_relay)
+        let network_relay = service_resources_handle
+            .overwatch_handle
+            .relay::<NetworkService<_, _>>()
+            .await
+            .expect("Relay connection with NetworkService should succeed");
+
+        Self::new(blend_relay, mempool_relay, time_relay, network_relay)
     }
 
     pub const fn blend_relay(&self) -> &BlendRelay<BlendService> {
@@ -133,5 +159,11 @@ where
 
     pub const fn time_relay(&self) -> &TimeRelay {
         &self.time_relay
+    }
+
+    pub const fn network_relay(
+        &self,
+    ) -> &OutboundRelay<BackendNetworkMsg<NetworkBackend, RuntimeServiceId>> {
+        &self.network_relay
     }
 }

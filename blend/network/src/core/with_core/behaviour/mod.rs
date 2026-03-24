@@ -51,7 +51,7 @@ mod old_session;
 mod tests;
 
 const LOG_TARGET: &str = "blend::network::core::core::behaviour";
-const SENSITIVITY_INTERVAL_FOR_DUPLICATES: Duration = Duration::from_millis(100);
+const SENSITIVITY_INTERVAL_FOR_DUPLICATES: Duration = Duration::from_secs(3);
 
 #[derive(Debug)]
 pub struct Config {
@@ -410,6 +410,26 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         self.try_wake();
     }
 
+    fn notify_about_connection_upgrade_failure(&mut self, peer_id: PeerId, peer_role: Endpoint) {
+        self.events
+            .push_back(ToSwarm::GenerateEvent(if peer_role == Endpoint::Listener {
+                Event::OutboundConnectionUpgradeFailed(peer_id)
+            } else {
+                Event::InboundConnectionUpgradeFailed(peer_id)
+            }));
+        self.try_wake();
+    }
+
+    fn notify_about_connection_upgrade_success(&mut self, peer_id: PeerId, peer_role: Endpoint) {
+        self.events
+            .push_back(ToSwarm::GenerateEvent(if peer_role == Endpoint::Listener {
+                Event::OutboundConnectionUpgradeSucceeded(peer_id)
+            } else {
+                Event::InboundConnectionUpgradeSucceeded(peer_id)
+            }));
+        self.try_wake();
+    }
+
     fn is_network_large_enough(&self) -> bool {
         self.current_membership.size() >= self.minimum_network_size.get()
     }
@@ -476,6 +496,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         if self.available_connection_slots() == 0 {
             tracing::debug!(target: LOG_TARGET, "Connection {connection_id:?} with peer {peer_id:?} must be closed because peering degree limit has already been reached.");
             self.close_connection((peer_id, connection_id));
+            self.notify_about_connection_upgrade_failure(peer_id, peer_role);
             return;
         }
         debug_assert!(
@@ -492,13 +513,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             },
         );
         // Notify the Swarm about the successful negotiation.
-        self.events
-            .push_back(ToSwarm::GenerateEvent(if peer_role == Endpoint::Listener {
-                Event::OutboundConnectionUpgradeSucceeded(peer_id)
-            } else {
-                Event::InboundConnectionUpgradeSucceeded(peer_id)
-            }));
-        self.try_wake();
+        self.notify_about_connection_upgrade_success(peer_id, peer_role);
     }
 
     /// Handle a newly upgraded connection for a peer that this peer is already
@@ -530,10 +545,16 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             // Same connection direction (in case it was not caught at connection establishment
             // time), we ignore the new connection.
             (Endpoint::Dialer, Endpoint::Dialer) | (Endpoint::Listener, Endpoint::Listener) => {
-                self.handle_connected_peer_duplicate_connection((peer_id, new_connection_id));
+                self.handle_connected_peer_duplicate_connection(
+                    (peer_id, new_connection_id),
+                    new_role,
+                );
             }
             (Endpoint::Listener, Endpoint::Dialer) | (Endpoint::Dialer, Endpoint::Listener) => {
-                self.handle_connected_peer_reverse_connection((peer_id, new_connection_id));
+                self.handle_connected_peer_reverse_connection(
+                    (peer_id, new_connection_id),
+                    new_role,
+                );
             }
         }
     }
@@ -543,9 +564,11 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
     fn handle_connected_peer_duplicate_connection(
         &mut self,
         (peer_id, new_connection_id): (PeerId, ConnectionId),
+        new_role: Endpoint,
     ) {
         tracing::trace!(target: LOG_TARGET, "Connection {new_connection_id:?} with peer {peer_id:?} will be closed since there is already a connection established in the same direction.");
         self.close_connection((peer_id, new_connection_id));
+        self.notify_about_connection_upgrade_failure(peer_id, new_role);
     }
 
     /// Decide which connection to keep between an established one and
@@ -557,6 +580,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
     fn handle_connected_peer_reverse_connection(
         &mut self,
         (peer_id, new_connection_id): (PeerId, ConnectionId),
+        new_role: Endpoint,
     ) {
         let existing_connection_details = self
             .negotiated_peers
@@ -586,44 +610,28 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             update_connection_id_and_direction(existing_connection_details, new_connection_id);
             // After the old connection details have been updated with the new
             // ones, notify the Swarm that the new connection has been upgraded.
-            self.events.push_back(ToSwarm::GenerateEvent(
-                if existing_connection_details.role == Endpoint::Listener {
-                    Event::OutboundConnectionUpgradeSucceeded(peer_id)
-                } else {
-                    Event::InboundConnectionUpgradeSucceeded(peer_id)
-                },
-            ));
-            // Notify the current connection handler to drop the substreams.
+            let existing_role = existing_connection_details.role;
             self.close_connection(existing_connection);
+            self.notify_about_connection_upgrade_success(peer_id, existing_role);
         } else {
             tracing::trace!(target: LOG_TARGET, "Dropping upgraded connection {new_connection_id:?} with peer {peer_id:?} in favor of currently established connection {:?}", existing_connection_details.connection_id);
             // Notify the new connection handler to drop the substreams, and we do not
             // alter the storage.
             self.close_connection((peer_id, new_connection_id));
+            self.notify_about_connection_upgrade_failure(peer_id, new_role);
         }
     }
 
     /// Mark the connection with the sender of a malformed message as malicious
     /// and instruct its connection handler to drop the substream.
-    #[expect(
-        clippy::needless_pass_by_ref_mut,
-        reason = "TODO: enable this logic after investigating session/epoch transition issues"
-    )]
-    #[expect(
-        clippy::unused_self,
-        reason = "TODO: enable this logic after investigating session/epoch transition issues"
-    )]
     fn close_spammy_connection(
         &mut self,
         (peer_id, connection_id): (PeerId, ConnectionId),
         reason: SpamReason,
     ) {
-        tracing::debug!(target: LOG_TARGET, ?peer_id, ?connection_id, ?reason, "Peer has been marked as spammy, but not closing the connection just for debugging");
-        // TODO: Enable this logic after investigating session/epoch transition
-        // issues tracing::debug!(target: LOG_TARGET, "Closing
-        // connection {connection_id:?} with spammy peer {peer_id:?}.");
-        // self.set_connection_to_spammy((peer_id, connection_id), reason);
-        // self.close_connection((peer_id, connection_id));
+        tracing::debug!(target: LOG_TARGET, "Closing connection {connection_id:?} with spammy peer {peer_id:?} for reason {reason:?}.");
+        self.set_connection_to_spammy((peer_id, connection_id), reason);
+        self.close_connection((peer_id, connection_id));
     }
 
     fn set_connection_to_spammy(
@@ -656,6 +664,10 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
 
     /// Handle an unhealthy connection if it exists in the current session.
     /// If not, it is ignored.
+    #[expect(
+        dead_code,
+        reason = "TODO: We currently do not handle unhealthy cases."
+    )]
     fn handle_unhealthy_connection(&mut self, (peer_id, connection_id): (PeerId, ConnectionId)) {
         // Notify swarm only on first transition into unhealthy state.
         if let Some(prev_state) = self.update_state_for_negotiated_peer(
@@ -711,10 +723,10 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
                 // message to each other). Simply ignore it.
                 if Instant::now().duration_since(*time_sent) <= SENSITIVITY_INTERVAL_FOR_DUPLICATES
                 {
-                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged but within the sensitivity window. Simply ignoring the message.");
+                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged ({message_id:?}) but within the sensitivity window. Simply ignoring the message.");
                     Ok(())
                 } else {
-                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged. Marking it as spammy.");
+                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged ({message_id:?}). Marking it as spammy.");
                     self.close_spammy_connection(
                         (peer_id, connection_id),
                         SpamReason::DuplicateMessage,
@@ -915,11 +927,12 @@ where
                 deserialized_encapsulated_message,
             )
         else {
-            tracing::debug!(target: LOG_TARGET, "Neighbor sent us a message with an invalid public header. Marking it as spammy.");
-            self.close_spammy_connection(
-                (from_peer_id, from_connection_id),
-                SpamReason::InvalidPublicHeader,
-            );
+            tracing::debug!(target: LOG_TARGET, "Neighbor sent us a message with an invalid public header. SKIPPING MARKING IT AS SPAMMY.");
+            // TODO: Re-enable once Blend is fixed.
+            // self.close_spammy_connection(
+            //     (from_peer_id, from_connection_id),
+            //     SpamReason::InvalidPublicHeader,
+            // );
             return;
         };
 
@@ -1072,14 +1085,7 @@ where
                     "Remote peer endpoint provided by event and the one stored do not match."
                 );
                 // Notify the swarm about the negotiation failure.
-                self.events.push_back(ToSwarm::GenerateEvent(
-                    if remote_peer_role == Endpoint::Listener {
-                        Event::OutboundConnectionUpgradeFailed(peer_id)
-                    } else {
-                        Event::InboundConnectionUpgradeFailed(peer_id)
-                    },
-                ));
-                self.try_wake();
+                self.notify_about_connection_upgrade_failure(peer_id, remote_peer_role);
                 return;
             }
 
@@ -1131,16 +1137,22 @@ where
                 ToBehaviour::FullyNegotiatedInbound | ToBehaviour::FullyNegotiatedOutbound => {
                     self.handle_negotiated_connection((peer_id, connection_id));
                 }
+                // TODO: Re-add logic once Blend observation window values calculation is fixed.
                 ToBehaviour::SpammyPeer => {
-                    // We do not explicitly close the connection here since the connection handler
-                    // will already do that for us.
-                    self.set_connection_to_spammy(
-                        (peer_id, connection_id),
-                        SpamReason::TooManyMessages,
-                    );
+                    // We do not explicitly close the connection here since the
+                    // connection handler will already do
+                    // that for us.
+                    // self.set_connection_to_spammy(
+                    //     (peer_id, connection_id),
+                    //     SpamReason::TooManyMessages,
+                    // );
+                    tracing::debug!(target: LOG_TARGET, "Peer {peer_id:?} has been marked as spammy by its connection handler. NOT TAKING ANY ACTIONS ON THIS.");
                 }
+                // TODO: Re-add logic once Blend observation window values calculation is fixed.
                 ToBehaviour::UnhealthyPeer => {
-                    self.handle_unhealthy_connection((peer_id, connection_id));
+                    // self.handle_unhealthy_connection((peer_id,
+                    // connection_id));
+                    tracing::debug!(target: LOG_TARGET, "Peer {peer_id:?} has been marked as unhealthy by its connection handler. NOT TAKING ANY ACTIONS ON THIS.");
                 }
                 ToBehaviour::HealthyPeer => {
                     self.handle_healthy_connection((peer_id, connection_id));

@@ -53,10 +53,10 @@ Circuits are installed to `~/.logos-blockchain-circuits/` by default.
 
 ```bash
 # Specific version
-./scripts/setup-logos-blockchain-circuits.sh v0.4.1
+./scripts/setup-logos-blockchain-circuits.sh v0.4.2
 
 # Custom directory
-./scripts/setup-logos-blockchain-circuits.sh v0.4.1 /opt/circuits
+./scripts/setup-logos-blockchain-circuits.sh v0.4.2 /opt/circuits
 export LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 ```
 
@@ -207,6 +207,17 @@ dot -Tsvg deps.dot -o deps.svg
 
 Or paste the `.dot` file into [Graphviz Online][graphviz-online].
 
+### Heap profiling
+
+Heap profiling can be run on release builds by using the `release-profiling` Cargo profile:
+
+```bash
+    cargo build --profile release-profiling --features=dhat-heap
+```
+
+Run, then stop the node normally to capture the output, then read the generated `dhat-heap.json` file with 
+https://nnethercote.github.io/dh_view/dh_view.html or other.
+
 ---
 
 ## Contributing
@@ -234,7 +245,7 @@ Dual-licensed under your choice of:
 [overwatch-github]: https://github.com/logos-co/Overwatch
 [graphviz-online]: https://dreampuf.github.io/GraphvizOnline/
 [github-releases-page]: https://github.com/logos-blockchain/logos-blockchain/releases
-[logos-discord]: https://discord.gg/ezJefwJY
+[logos-discord]: https://discord.gg/RxXjcHZE
 [logos-x]: https://x.com/Logos_network
 [logos-website]: https://logos.co/
 [devnet-dashboard]: https://devnet.blockchain.logos.co/web/

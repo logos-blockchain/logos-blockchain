@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use lb_core::{
     block::BlockNumber,
     crypto::{ZkDigest, ZkHasher},
-    mantle::{Note, TxHash, Utxo},
+    mantle::{Note, TxHash, Utxo, Value},
     sdp::{ActivityMetadata, ProviderId, ServiceParameters, ServiceType, SessionNumber},
 };
 use lb_groth16::{Fr, fr_from_bytes};
@@ -66,6 +66,8 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
     /// no update and returns the current state unchanged.
     #[must_use]
     fn update_epoch(&self, epoch_state: &EpochState) -> Self;
+    #[must_use]
+    fn add_income(&self, income: Value) -> Self;
 }
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]

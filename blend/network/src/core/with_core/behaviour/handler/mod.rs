@@ -184,7 +184,9 @@ where
         if let Poll::Ready(output) = self.monitor.poll(cx) {
             match output {
                 Some(ConnectionMonitorOutput::Spammy) => {
-                    self.close_substreams();
+                    // TODO: Re-enable this once we have fixed Blend observation
+                    // window range values.
+                    // self.close_substreams();
                     self.pending_events_to_behaviour
                         .push_back(ToBehaviour::SpammyPeer);
                 }

@@ -1,7 +1,10 @@
 use std::{collections::HashSet, num::NonZeroUsize};
 
+use hex::ToHex as _;
+use lb_core::codec::SerializeOp as _;
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use num_bigint::BigUint;
+use rand::Rng as _;
 use thiserror::Error;
 
 const DEFAULT_FUNDS_PER_WALLET: u64 = 100;
@@ -114,7 +117,7 @@ pub fn wallet_config_for_users(users: usize) -> Result<WalletConfig, WalletConfi
     WalletConfig::uniform(total_funds, user_count)
 }
 
-/// Wallet account that holds funds in the genesis state.
+/// Wallet account that may hold funds in the genesis state.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WalletAccount {
     pub label: String,
@@ -158,9 +161,27 @@ impl WalletAccount {
         )
     }
 
+    pub fn random() -> Result<Self, WalletConfigError> {
+        let mut seed = [0u8; 32];
+        rand::thread_rng().fill(&mut seed);
+
+        let secret_key = ZkKey::from(BigUint::from_bytes_le(&seed));
+        let index = u64::from_le_bytes(seed[..8].try_into().expect("seed has len 32"));
+        Self::new(format!("wallet-r-user-{index}"), secret_key, 0, true)
+    }
+
     #[must_use]
     pub fn public_key(&self) -> ZkPublicKey {
         self.secret_key.to_public_key()
+    }
+
+    #[must_use]
+    pub fn public_key_hex(&self) -> String {
+        self.secret_key
+            .to_public_key()
+            .to_bytes()
+            .expect("is valid")
+            .encode_hex()
     }
 }
 

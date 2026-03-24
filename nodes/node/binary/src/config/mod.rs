@@ -113,14 +113,6 @@ pub struct InitArgs {
     #[clap(long = "external-address")]
     pub external_address: Option<Multiaddr>,
 
-    /// Skip automatic public IP detection
-    #[clap(long = "no-public-ip-check")]
-    pub no_public_ip_check: bool,
-
-    /// Deployment configuration (well-known name or path to custom config)
-    #[clap(long = "deployment", default_value = DeploymentType::default())]
-    pub deployment: DeploymentType,
-
     #[clap(long = "state-path")]
     pub state_path: Option<PathBuf>,
 }

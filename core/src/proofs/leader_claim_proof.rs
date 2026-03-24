@@ -43,6 +43,11 @@ impl Groth16LeaderClaimProof {
     pub const fn proof(&self) -> &lb_poc::PoCProof {
         &self.proof
     }
+
+    #[must_use]
+    pub const fn new(proof: lb_poc::PoCProof, voucher_nf: VoucherNullifier) -> Self {
+        Self { proof, voucher_nf }
+    }
 }
 
 pub trait LeaderClaimProof {

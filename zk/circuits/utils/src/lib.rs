@@ -3,6 +3,11 @@ use std::path::PathBuf;
 const LOGOS_BLOCKCHAIN_CIRCUITS_ENV_VAR: &str = "LOGOS_BLOCKCHAIN_CIRCUITS";
 const LOGOS_BLOCKCHAIN_CIRCUITS_DEFAULT_DIR: &str = ".logos-blockchain-circuits";
 
+#[cfg(target_os = "windows")]
+const BINARY_NAME: &str = "witness_generator.exe";
+#[cfg(not(target_os = "windows"))]
+const BINARY_NAME: &str = "witness_generator";
+
 /// Get the logos-blockchain-circuits base directory.
 ///
 /// This function checks the `LOGOS_BLOCKCHAIN_CIRCUITS` environment variable
@@ -53,7 +58,7 @@ pub fn circuits_dir() -> PathBuf {
 #[must_use]
 pub fn witness_generator_path(circuit_name: &str) -> PathBuf {
     let base_dir = circuits_dir();
-    let witness_gen_path = base_dir.join(circuit_name).join("witness_generator");
+    let witness_gen_path = base_dir.join(circuit_name).join(BINARY_NAME);
 
     if witness_gen_path.is_file() {
         witness_gen_path

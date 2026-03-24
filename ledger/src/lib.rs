@@ -13,7 +13,7 @@ use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use cryptarchia::{EpochState, UtxoTree};
 use lb_core::{
     block::BlockNumber,
-    mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, gas::GasConstants},
+    mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value, gas::GasConstants},
     proofs::leader_proof,
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
 };
@@ -21,6 +21,41 @@ use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Field as _, Fr};
 use mantle::LedgerState as MantleLedger;
 use thiserror::Error;
+
+const WINDOW_SIZE: usize = 120;
+
+/// Denominator of 1/(`I_max` * `D1_target` * `Delta_t` * `T`)
+/// That correspond to `BLOCK_PER_YEAR` / (`MAX_INFLATION` * `KPI_FEE_TARGET` *
+/// `WINDOW_SIZE`)
+const A_SCALE: u128 = 120_000_000;
+
+/// Numerator of 1/(`I_max` * `D1_target` * `Delta_t` * `T`)
+/// That correspond to `BLOCK_PER_YEAR` / (`MAX_INFLATION` * `KPI_FEE_TARGET` *
+/// `WINDOW_SIZE`)
+const FEE_AVG_NUM: u128 = 10_512;
+
+/// Numerator of `I_max` * `S_TGE` * `DELTA_t` / `f`
+/// It corresponds to `MAX_INFLATION` * `TOKEN_GENESIS` * `BLOCK_PER_BLOCK` /
+/// `BLOCK_PER_YEAR`
+const INFLATION_NUMERATOR: u128 = 62_500;
+
+/// Numerator of `I_max` * `S_TGE` * `DELTA_t` / `f`
+/// It corresponds to `MAX_INFLATION` * `TOKEN_GENESIS` * `BLOCK_PER_BLOCK` /
+/// `BLOCK_PER_YEAR`
+const INFLATION_DENOMINATOR: u128 = 657;
+
+const STAKE_TARGET: u128 = 3_000_000_000;
+
+// That correspond to 40% of the block rewards for leaders
+const LEADER_REWARD_SHARE_NUMERATOR: u128 = 4;
+
+const LEADER_REWARD_SHARE_DENOMINATOR: u128 = 10;
+
+// That correspond to 60% of the block rewards for blend nodes
+
+const BLEND_REWARD_SHARE_NUMERATOR: u128 = 6;
+
+const BLEND_REWARD_SHARE_DENOMINATOR: u128 = 10;
 
 // While individual notes are constrained to be `u64`, intermediate calculations
 // may overflow, so we use `i128` to avoid that and to easily represent negative
@@ -70,16 +105,19 @@ where
         }
     }
 
-    /// Try to update the ledger state by applying the given proof and
+    /// Prepare adding a new [`LedgerState`] by applying the given proof and
     /// transactions on top of the parent state.
-    pub fn try_update<LeaderProof, Constants>(
-        &mut self,
+    ///
+    /// On success, a new [`LedgerState`] is returned, which can then be
+    /// committed by calling [`Self::commit_update`].
+    pub fn prepare_update<LeaderProof, Constants>(
+        &self,
         id: Id,
         parent_id: Id,
         slot: Slot,
         proof: &LeaderProof,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx>,
-    ) -> Result<(), LedgerError<Id>>
+    ) -> Result<(Id, LedgerState), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
         Constants: GasConstants,
@@ -94,8 +132,12 @@ where
                 .clone()
                 .try_update::<_, _, Constants>(slot, proof, txs, &self.config)?;
 
-        self.states.insert(id, new_state);
-        Ok(())
+        Ok((id, new_state))
+    }
+
+    /// Commits a new [`LedgerState`] created by [`Self::prepare_update`].
+    pub fn commit_update(&mut self, id: Id, state: LedgerState) {
+        self.states.insert(id, state);
     }
 
     pub fn state(&self, id: &Id) -> Option<&LedgerState> {
@@ -121,6 +163,15 @@ where
     /// `true` if the state was successfully removed, `false` otherwise.
     pub fn prune_state_at(&mut self, block: &Id) -> bool {
         self.states.remove(block).is_some()
+    }
+
+    /// Shrinks the map of ledger states to free up memory that has been pruned
+    /// so far.
+    ///
+    /// This shouldn't be called frequently since the entire map is
+    /// reconstructed.
+    pub fn shrink(&mut self) {
+        self.states.shrink_to_fit();
     }
 }
 
@@ -188,6 +239,45 @@ impl LedgerState {
         })
     }
 
+    /// For each block received, rewards are calculated based on the actual
+    /// total estimated stake and on the average of fees consumed per block over
+    /// the last `BLOCK_REWARD_WINDOW_SIZE` blocks. See the block rewards
+    /// specification: <https://www.notion.so/nomos-tech/v1-1-Block-Rewards-Specification-326261aa09df80579edddaf092057b3d>
+    fn compute_block_rewards(mut self) -> Self {
+        let window_index = self.block_number as usize % WINDOW_SIZE;
+
+        // compute A_t'
+        let sum_fees = self.cryptarchia_ledger.get_summed_fees();
+        let a_numerator = STAKE_TARGET
+            .saturating_add(FEE_AVG_NUM.saturating_mul(sum_fees))
+            .saturating_sub(u128::from(self.cryptarchia_ledger.epoch_state.total_stake))
+            .min(A_SCALE);
+
+        let reward_numerator = INFLATION_NUMERATOR * a_numerator
+            + INFLATION_DENOMINATOR
+                * (A_SCALE - a_numerator)
+                * u128::from(self.cryptarchia_ledger.get_fee_from_index(window_index));
+        let reward_denominator = INFLATION_DENOMINATOR * A_SCALE;
+
+        // blend get 60% of rewards while leaders get the 40% remaining.
+        // Casting as Value truncate the floating points
+        let blend_reward = (reward_numerator * BLEND_REWARD_SHARE_NUMERATOR
+            / (reward_denominator * BLEND_REWARD_SHARE_DENOMINATOR))
+            as Value;
+        let leader_reward = (reward_numerator * LEADER_REWARD_SHARE_NUMERATOR
+            / (reward_denominator * LEADER_REWARD_SHARE_DENOMINATOR))
+            as Value;
+
+        self.mantle_ledger.leaders = self
+            .mantle_ledger
+            .leaders
+            .add_pending_rewards(leader_reward);
+
+        self.mantle_ledger.sdp.add_blend_income(blend_reward);
+
+        self
+    }
+
     /// Apply the contents of an update to the ledger state.
     pub fn try_apply_contents<Id, Constants: GasConstants>(
         mut self,
@@ -217,7 +307,12 @@ impl LedgerState {
                 Ordering::Greater => return Err(LedgerError::UnbalancedTransaction),
                 Ordering::Equal => {} // OK!
             }
+            self.cryptarchia_ledger.update_fee_window(
+                self.block_number as usize % WINDOW_SIZE,
+                total_balance as u64,
+            );
         }
+        self = self.compute_block_rewards();
         Ok(self)
     }
 
@@ -384,8 +479,8 @@ mod tests {
         );
 
         let new_id = [1; 32];
-        ledger
-            .try_update::<_, MainnetGasConstants>(
+        let (_, state) = ledger
+            .prepare_update::<_, MainnetGasConstants>(
                 new_id,
                 genesis_id,
                 Slot::from(1u64),
@@ -393,6 +488,7 @@ mod tests {
                 std::iter::once(&tx),
             )
             .unwrap();
+        ledger.commit_update(new_id, state);
 
         // Verify the transaction was applied
         let new_state = ledger.state(&new_id).unwrap();

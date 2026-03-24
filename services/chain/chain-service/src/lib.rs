@@ -31,7 +31,7 @@ use lb_core::{
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType},
 };
 pub use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_cryptarchia_engine::{PrunedBlocks, ReorgedBlocks, UpdatedCryptarchia};
+use lb_cryptarchia_engine::{PrunedBlocks, ReorgedBlocks};
 use lb_cryptarchia_sync::{GetTipResponse, ProviderResponse};
 pub use lb_ledger::EpochState;
 use lb_ledger::LedgerState;
@@ -288,8 +288,9 @@ impl Cryptarchia {
         }
 
         // A block number of this block if it's applied to the chain.
-        self.ledger
-            .try_update::<_, MainnetGasConstants>(
+        let (_, state) = self
+            .ledger
+            .prepare_update::<_, MainnetGasConstants>(
                 id,
                 parent,
                 slot,
@@ -304,11 +305,7 @@ impl Cryptarchia {
                 err => Error::Ledger(err),
             })?;
 
-        let UpdatedCryptarchia {
-            cryptarchia: consensus,
-            pruned_blocks,
-            reorged_blocks,
-        } = self
+        let (pruned_blocks, reorged_blocks) = self
             .consensus
             .receive_block(id, parent, slot)
             .map_err(|err| match err {
@@ -318,7 +315,8 @@ impl Cryptarchia {
                 },
                 err => Error::Consensus(err),
             })?;
-        self.consensus = consensus;
+
+        self.ledger.commit_update(id, state);
 
         // Prune the ledger states of all the pruned blocks.
         self.prune_ledger_states(pruned_blocks.all());
@@ -355,6 +353,15 @@ impl Cryptarchia {
         tracing::debug!(target: LOG_TARGET, "Pruned {pruned_states_count} old forks and their ledger states.");
     }
 
+    /// Shrinks the memory held by the ledger states.
+    ///
+    /// This should be called after a significant number of ledger states have
+    /// been pruned by [`Self::prune_ledger_states`] to free up memory. This
+    /// should not be called frequently since it is an expensive operation.
+    fn shrink_ledger_states(&mut self) {
+        self.ledger.shrink();
+    }
+
     fn online(self) -> (Self, PrunedBlocks<HeaderId>) {
         let (consensus, pruned_blocks) = self.consensus.online();
         let mut cryptarchia = Self {
@@ -362,7 +369,13 @@ impl Cryptarchia {
             consensus,
             genesis_id: self.genesis_id,
         };
+
+        // Prune the ledger states of all the pruned blocks.
+        // Also, shrink the set of ledger states to free up memory,
+        // assuming that many blocks have been pruned during bootstrapping.
         cryptarchia.prune_ledger_states(pruned_blocks.all());
+        cryptarchia.shrink_ledger_states();
+
         (cryptarchia, pruned_blocks)
     }
 
@@ -610,7 +623,7 @@ where
                             ConsensusMsg::ApplyBlock { block, tx } => {
                                 // TODO: move this into the process_message() function after making the process_message async.
                                 match Self::process_block_and_update_state(
-                                        cryptarchia.clone(),
+                                        &mut cryptarchia,
                                         *block,
                                         current_slot,
                                         &storage_blocks_to_remove,
@@ -619,8 +632,7 @@ where
                                         &self.lib_subscription_sender,
                                         &self.service_resources_handle.state_updater,
                                     ).await {
-                                    Ok((new_cryptarchia, new_storage_blocks_to_remove, reorged_txs)) => {
-                                        cryptarchia = new_cryptarchia;
+                                    Ok((new_storage_blocks_to_remove, reorged_txs)) => {
                                         storage_blocks_to_remove = new_storage_blocks_to_remove;
                                         tx.send(Ok((cryptarchia.tip(), reorged_txs))).unwrap_or_else(|_| {
                                             error!("Could not send process block result through channel");
@@ -835,9 +847,12 @@ where
         }
     }
 
+    /// Process a block and update the state accordingly.
+    ///
+    /// On error, the `cryptarchia` is not mutated.
     #[expect(clippy::too_many_arguments, reason = "Need all args")]
     async fn process_block_and_update_state(
-        cryptarchia: Cryptarchia,
+        cryptarchia: &mut Cryptarchia,
         block: Block<Tx>,
         current_slot: Slot,
         storage_blocks_to_remove: &HashSet<HeaderId>,
@@ -845,8 +860,8 @@ where
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_subscription_sender: &broadcast::Sender<LibUpdate>,
         state_updater: &StateUpdater<Option<CryptarchiaConsensusState>>,
-    ) -> Result<(Cryptarchia, HashSet<HeaderId>, Vec<Tx>), Error> {
-        let (cryptarchia, pruned_blocks, reorged_txs) = Self::process_block(
+    ) -> Result<(HashSet<HeaderId>, Vec<Tx>), Error> {
+        let (pruned_blocks, reorged_txs) = Self::process_block(
             cryptarchia,
             block,
             current_slot,
@@ -863,13 +878,9 @@ where
         )
         .await;
 
-        Self::update_state(
-            &cryptarchia,
-            storage_blocks_to_remove.clone(),
-            state_updater,
-        );
+        Self::update_state(cryptarchia, storage_blocks_to_remove.clone(), state_updater);
 
-        Ok((cryptarchia, storage_blocks_to_remove, reorged_txs))
+        Ok((storage_blocks_to_remove, reorged_txs))
     }
 
     fn update_state(
@@ -891,17 +902,19 @@ where
     }
 
     /// Try to add a [`Block`] to [`Cryptarchia`].
-    /// A [`Block`] is only added if it's valid
+    ///
+    /// A [`Block`] is only added if it's valid.
+    /// Otherwise, the [`Cryptarchia`] is unchanged and an error is returned.
     #[expect(clippy::allow_attributes_without_reason)]
     #[instrument(level = "debug", skip(cryptarchia, relays))]
     async fn process_block(
-        mut cryptarchia: Cryptarchia,
+        cryptarchia: &mut Cryptarchia,
         block: Block<Tx>,
         current_slot: Slot,
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_broadcaster: &broadcast::Sender<LibUpdate>,
-    ) -> Result<(Cryptarchia, PrunedBlocks<HeaderId>, Vec<Tx>), Error> {
+    ) -> Result<(PrunedBlocks<HeaderId>, Vec<Tx>), Error> {
         debug!("Received proposal with ID: {:?}", block.header().id());
         let header = block.header();
         let prev_lib = cryptarchia.lib();
@@ -972,7 +985,7 @@ where
             }
 
             Self::broadcast_session_updates_for_block(
-                &cryptarchia,
+                cryptarchia,
                 &new_lib,
                 relays,
                 Some(&previous_session_numbers),
@@ -991,7 +1004,7 @@ where
         .flat_map(Block::into_transactions)
         .collect();
 
-        Ok((cryptarchia, pruned_blocks, reorged_txs))
+        Ok((pruned_blocks, reorged_txs))
     }
 
     /// Store immutable block IDs to storage, including the new LIB if needed.
@@ -1124,7 +1137,7 @@ where
         let mut pruned_blocks = PrunedBlocks::new();
         for block in blocks {
             match Self::process_block(
-                cryptarchia.clone(),
+                &mut cryptarchia,
                 block,
                 current_slot,
                 relays,
@@ -1133,8 +1146,7 @@ where
             )
             .await
             {
-                Ok((new_cryptarchia, new_pruned_blocks, _)) => {
-                    cryptarchia = new_cryptarchia;
+                Ok((new_pruned_blocks, _)) => {
                     pruned_blocks.extend(&new_pruned_blocks);
                 }
                 Err(e) => {

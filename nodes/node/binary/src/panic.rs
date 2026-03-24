@@ -3,7 +3,7 @@ use std::{
     panic::PanicHookInfo,
 };
 
-pub fn panic_hook(panic_info: &PanicHookInfo) {
+pub fn log_and_exit_hook(panic_info: &PanicHookInfo) {
     let payload = panic_info.payload();
 
     let payload = payload.downcast_ref::<&str>().map_or_else(
@@ -23,4 +23,9 @@ pub fn panic_hook(panic_info: &PanicHookInfo) {
         panic.note = note,
         "A panic occurred",
     );
+
+    #[cfg(feature = "dhat-heap")]
+    crate::profiling::drop_dhat_profiler();
+
+    std::process::exit(1);
 }

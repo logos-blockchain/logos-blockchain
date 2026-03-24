@@ -16,12 +16,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use cucumber::{World as _, WriterExt as _, writer, writer::Verbosity};
+use cucumber::{World as _, WriterExt as _, event::ScenarioFinished, writer, writer::Verbosity};
 use logos_blockchain_tests::cucumber::{
     defaults::{
-        ARTEFACTS, create_scenario_output_dir, get_feature_path, get_retries,
-        init_logging_defaults, init_tracing,
+        ARTEFACTS, CUCUMBER_DEPLOYER_COMPOSE, CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL,
+        create_scenario_output_dir, get_feature_path, get_retries, init_logging_defaults,
+        init_tracing,
     },
+    utils::is_truthy_env,
     world::{CucumberWorld, DeployerKind},
 };
 
@@ -49,7 +51,7 @@ fn increment_attempts(
 async fn main() {
     println!("args: {:?}", std::env::args());
 
-    let deployer = if std::env::var("CUCUMBER_DEPLOYER_COMPOSE").ok().is_some() {
+    let deployer = if is_truthy_env(CUCUMBER_DEPLOYER_COMPOSE) {
         DeployerKind::Compose
     } else {
         DeployerKind::Local
@@ -114,9 +116,11 @@ async fn main() {
                         .join(scenario.name.trim().replace(' ', "_"))
                         .join(run_attempt);
                     world.set_scenario_base_dir(&scenario_dir, &deployer);
+                    world.apply_deployment_config_override_path();
                 }
             })
         });
+
     if let Some(retries) = get_retries()
         .inspect_err(|e| println!("{e}"))
         .expect("should parse retries")
@@ -125,7 +129,38 @@ async fn main() {
         world = world.retries(retries);
     }
 
-    // Runs Cucumber. Features sourced from a Parser are fed to a Runner, which
-    // produces events handled by a Writer.
-    world.run_and_exit(get_feature_path()).await;
+    world
+        .after(|feature, _rule, scenario, scenario_finished, world| {
+            Box::pin(async move {
+                // Runs after the scenario has completed; useful for capturing final state/logs.
+                println!(
+                    "\nFinished - {}: {} ({}: {})\n",
+                    scenario.keyword, scenario.name, feature.keyword, feature.name,
+                );
+
+                if let Some(world) = world {
+                    let path = world.scenario_base_dir.join("debug_dump_file.log");
+                    if let Some(parent) = path.parent() {
+                        let _unused = std::fs::create_dir_all(parent);
+                    }
+                    let _unused = std::fs::write(&path, world.full_debug_info_string());
+
+                    if matches!(scenario_finished, ScenarioFinished::StepPassed)
+                        && is_truthy_env(CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL)
+                    {
+                        println!(
+                            "Env var '{CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL}' set, removing all \
+                            artefacts\n"
+                        );
+                        if let Err(e) = world.clear_scenario_artifacts() {
+                            println!("{e}");
+                        }
+                    }
+                }
+            })
+        })
+        // Runs Cucumber. Features sourced from a Parser are fed to a Runner, which
+        // produces events handled by a Writer.
+        .run_and_exit(get_feature_path())
+        .await;
 }

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     fmt::Debug,
     num::NonZero,
@@ -9,20 +9,30 @@ use std::{
 
 use cucumber::World;
 use derivative::Derivative;
-use lb_core::mantle::{SignedMantleTx, Utxo};
+use lb_core::{
+    codec::DeserializeOp as _,
+    mantle::{SignedMantleTx, TxHash, Utxo},
+};
+use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
+use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
     LbcEnv, LbcManualCluster, ScenarioBuilder, ScenarioBuilderExt as _,
     configs::wallet::WalletAccount, workloads,
 };
 use testing_framework_core::scenario::{NodeControlCapability, Scenario, StartedNode};
+use tokio::task::JoinHandle;
 use tracing::warn;
 
 use crate::{
     BIN_PATH_DEBUG, BIN_PATH_RELEASE,
     cucumber::{
         TARGET,
-        defaults::{LOGOS_BLOCKCHAIN_NODE_BIN, init_node_log_dir_defaults, set_default_env},
+        defaults::{
+            CUCUMBER_NODE_CONFIG_OVERRIDE, LOGOS_BLOCKCHAIN_NODE_BIN, init_node_log_dir_defaults,
+            set_default_env,
+        },
         error::{StepError, StepResult},
         utils::{make_builder, shared_host_bin_path},
     },
@@ -47,6 +57,13 @@ pub enum NetworkKind {
 #[derive(Debug, Default, Clone)]
 pub struct RunState {
     pub result: Option<Result<(), String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PublicCryptarchiaEndpointPeer {
+    pub url: String,
+    pub username: String,
+    pub password: String,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -109,11 +126,12 @@ pub struct CucumberWorld {
     /// information, which includes the started node instance and any relevant
     /// metadata.
     pub local_cluster: Option<LbcManualCluster>,
+    /// Manual: List of nodes with their info.
     pub nodes_info: HashMap<String, NodeInfo>,
     /// Manual: List of genesis tokens allocated to wallets accounts.
     pub genesis_tokens: Vec<GenesisTokens>,
-    /// Manual: Mapping of logical wallet names to their corresponding wallet
-    /// resources.
+    /// Manual: Mapping of logical wallet names to their corresponding
+    /// wallet resources.
     pub wallet_info: WalletInfoMap,
     /// Manual: Mapping of wallet account indices to their corresponding wallet
     /// account in the cluster.
@@ -128,12 +146,48 @@ pub struct CucumberWorld {
     pub node_header_heights: HashMap<String, HashMap<String, u64>>,
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
     /// IDs.
-    pub node_peer_ids: HashMap<String, libp2p::PeerId>,
+    pub node_peer_ids: HashMap<String, PeerId>,
     /// Manual: Whether to populate the IBD peers for each node after starting
     /// them,
     pub populate_ibd_peers: Option<bool>,
     /// Manual: Whether to require all peers to be online after starting them.
-    pub require_all_peers_mode_online_at_startup: Option<bool>,
+    pub require_all_peers_mode_online_at_startup: Option<Duration>,
+    /// Manual: Initial peers (multiaddrs) injected into node config before
+    /// start.
+    pub initial_peers_override: Option<Vec<Multiaddr>>,
+    /// Manual: IBD peers injected into node config before start.
+    pub ibd_peers_override: Option<HashSet<PeerId>>,
+    /// Manual: Public base endpoints and credentials used to query
+    /// `/cryptarchia/info` for external chain sync reference.
+    pub public_cryptarchia_endpoint_peers: Option<Vec<PublicCryptarchiaEndpointPeer>>,
+    /// Manual: If set, nodes use a `DeploymentSettings` loaded from disk
+    /// bypassing generated genesis/test deployment.
+    pub deployment_config_override_path: Option<PathBuf>,
+    /// Manual: Whether to have dynamically started nodes join the external
+    /// network
+    pub join_external_network: Option<bool>,
+    /// Manual: Faucet base URL configuration for manual transactions, if
+    /// applicable.
+    pub faucet_base_url: Option<String>,
+    /// Manual: Faucet username configuration for manual transactions, if
+    /// applicable.
+    pub faucet_username: Option<String>,
+    /// Manual: Faucet password configuration for manual transactions, if
+    /// applicable.
+    pub faucet_password: Option<String>,
+    /// Manual: Task handles for dynamically spawned faucet funding tasks.
+    #[derivative(Default(value = "None"))]
+    pub faucet_task_handles: Option<Vec<JoinHandle<()>>>,
+}
+
+impl Drop for CucumberWorld {
+    fn drop(&mut self) {
+        if let Some(handles) = self.faucet_task_handles.take() {
+            for handle in handles {
+                handle.abort();
+            }
+        }
+    }
 }
 
 /// Mapping of block header to the UTXOs and STXOs associated with a wallet in
@@ -147,103 +201,6 @@ pub struct WalletTokenMap {
     pub utxos_per_wallet: HashMap<String, Vec<Utxo>>,
 }
 
-fn nodes_info_display(nodes_info: &HashMap<String, NodeInfo>) -> String {
-    let nodes: Vec<_> = nodes_info
-        .iter()
-        .map(|(k, v)| {
-            let wallets: Vec<_> = v
-                .wallet_info
-                .values()
-                .map(|w| w.wallet_name.clone())
-                .collect();
-            let wallets_str = if wallets.is_empty() {
-                "[]".to_owned()
-            } else {
-                format!("[{}]", wallets.join(", "))
-            };
-            format!("'{}: {} {}'", k, v.started_node.name, wallets_str)
-        })
-        .collect();
-    format!("HashMap<String, NodeInfo>({})", nodes.join(", "))
-}
-
-fn wallet_info_display(wallet_info: &WalletInfoMap) -> String {
-    let wallets: Vec<_> = wallet_info
-        .iter()
-        .map(|(k, v)| format!("'{}: {}'", k, v.wallet_name))
-        .collect();
-    format!("WalletInfoMap({})", wallets.join(", "))
-}
-
-fn wallet_accounts_display(wallet_accounts: &HashMap<usize, WalletAccount>) -> String {
-    let accounts: Vec<_> = wallet_accounts
-        .iter()
-        .map(|(k, v)| format!("'{}: {:?} {:?} {:?}'", k, v.label, v.value, v.secret_key))
-        .collect();
-    format!("HashMap<usize, WalletAccount>({})", accounts.join(", "))
-}
-
-fn wallet_tokens_per_block_display(
-    wallet_tokens_per_block: &HashMap<String, WalletTokenMap>,
-) -> String {
-    let blocks: Vec<_> = wallet_tokens_per_block
-        .iter()
-        .map(|(k, v)| {
-            format!(
-                "{}: {} {}",
-                k,
-                v.header_id,
-                v.utxos_per_wallet
-                    .iter()
-                    .map(|v| format!("{}: [{}]", v.0, v.1.len()))
-                    .collect::<Vec<_>>()
-                    .join(" -")
-            )
-        })
-        .collect();
-    format!("HashMap<String, WalletTokenMap>({})", blocks.join(", "))
-}
-
-fn wallet_encumbered_tokens_display(
-    wallet_encumbered_tokens: &HashMap<String, Vec<Utxo>>,
-) -> String {
-    let tokens: Vec<_> = wallet_encumbered_tokens
-        .iter()
-        .map(|(k, v)| format!("'{}: {}'", k, v.len()))
-        .collect();
-    format!("HashMap<String, Vec<Utxo>>({})", tokens.join(", "))
-}
-
-fn node_header_heights_display(
-    node_header_heights: &HashMap<String, HashMap<String, u64>>,
-) -> String {
-    let nodes: Vec<_> = node_header_heights
-        .iter()
-        .map(|(k, v)| {
-            format!(
-                "{}: {}",
-                k,
-                v.iter()
-                    .map(|v| format!("{}: {}", v.1, v.0))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        })
-        .collect();
-    format!(
-        "HashMap<String, HashMap<String, u64>>({})",
-        nodes.join(", ")
-    )
-}
-
-fn node_peer_ids_display(node_peer_ids: &HashMap<String, libp2p::PeerId>) -> String {
-    let nodes: Vec<_> = node_peer_ids
-        .iter()
-        .map(|(k, v)| format!("'{k}: {v}'"))
-        .collect();
-    format!("HashMap<String, libp2p::PeerId>({})", nodes.join(", "))
-}
-
 impl Debug for CucumberWorld {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CucumberWorld")
@@ -253,6 +210,10 @@ impl Debug for CucumberWorld {
             .field("run", &format!("{:?}", self.run))
             .field("membership_check", &self.membership_check)
             .field("readiness_checks", &self.readiness_checks)
+            .field(
+                "join_external_network",
+                &format!("{:?}", self.join_external_network),
+            )
             .field(
                 "populate_ibd_peers",
                 &format!("{:?}", self.populate_ibd_peers),
@@ -272,26 +233,47 @@ impl Debug for CucumberWorld {
                     &"None"
                 }
             })
-            .field("nodes_info", &nodes_info_display(&self.nodes_info))
-            .field("genesis_tokens", &format!("{:?}", self.genesis_tokens))
-            .field("wallet_info", &wallet_info_display(&self.wallet_info))
+            .field("nodes_info", &self.nodes_info.len())
+            .field("genesis_tokens", &self.genesis_tokens.len())
+            .field("wallet_info", &self.wallet_info.len())
+            .field("faucet_base_url", &format!("{:?}", self.faucet_base_url))
+            .field("faucet_username", &format!("{:?}", self.faucet_username))
+            .field("faucet_password", &format!("{:?}", self.faucet_password))
             .field(
-                "wallet_accounts",
-                &wallet_accounts_display(&self.wallet_accounts),
+                "faucet_task_handles",
+                &format!("{}", self.faucet_task_handles.as_ref().map_or(0, Vec::len)),
             )
+            .field("wallet_accounts", &self.wallet_accounts.len())
             .field(
                 "wallet_tokens_per_block",
-                &wallet_tokens_per_block_display(&self.wallet_tokens_per_block),
+                &self.wallet_tokens_per_block.len(),
             )
             .field(
                 "wallet_encumbered_tokens",
-                &wallet_encumbered_tokens_display(&self.wallet_encumbered_tokens),
+                &self.wallet_encumbered_tokens.len(),
+            )
+            .field("node_header_heights", &self.node_header_heights.len())
+            .field("node_peer_ids", &self.node_peer_ids.len())
+            .field(
+                "initial_override_peers_display",
+                &initial_peers_override_display(self.initial_peers_override.as_ref()),
             )
             .field(
-                "node_header_heights",
-                &node_header_heights_display(&self.node_header_heights),
+                "ibd_peers_override_display",
+                &ibd_peers_override_display(self.ibd_peers_override.as_ref()),
             )
-            .field("node_peer_ids", &node_peer_ids_display(&self.node_peer_ids))
+            .field(
+                "public_cryptarchia_endpoint_peers",
+                &public_cryptarchia_endpoint_peers_display(
+                    self.public_cryptarchia_endpoint_peers.as_ref(),
+                ),
+            )
+            .field(
+                "deployment_config_override_path",
+                &deployment_config_override_path_display(
+                    self.deployment_config_override_path.as_ref(),
+                ),
+            )
             .finish()
     }
 }
@@ -310,6 +292,15 @@ pub struct GenesisTokens {
     pub token_amount: u64,
 }
 
+/// The wallet type can either be ussr defined or funding.
+#[derive(Clone, Debug)]
+pub enum WalletType {
+    /// User defined wallets with are not tied to a specific node
+    User { wallet_account: WalletAccount },
+    /// Funding wallets are tied to a node and participate in consensus
+    Funding { wallet_pk: String },
+}
+
 /// Information about a wallet resource created in the world, which can be used
 /// to track and reference wallets across steps.
 #[derive(Clone, Debug)]
@@ -318,17 +309,48 @@ pub struct WalletInfo {
     pub wallet_name: String,
     /// Logical name of the node resource where this wallet is referenced.
     pub node_name: String,
-    /// The account index in the genesis tokens that this resource corresponds
-    /// to.
-    pub account_index: usize,
-    /// The actual wallet account in the cluster that this resource corresponds
-    /// to.
-    pub wallet_account: WalletAccount,
+    /// The wallet type, which can be either a user-defined wallet or a funding
+    /// wallet.
+    pub wallet_type: WalletType,
+}
+
+impl WalletInfo {
+    /// Helper to get the wallet's public key as `String` type (default hex).
+    #[must_use]
+    pub fn public_key_hex(&self) -> String {
+        match &self.wallet_type {
+            WalletType::User { wallet_account, .. } => wallet_account.public_key_hex(),
+            WalletType::Funding { wallet_pk } => wallet_pk.clone(),
+        }
+    }
+
+    /// Helper to get the wallet's public key as a `ZkPublicKey` type.
+    pub fn public_key(&self) -> Result<ZkPublicKey, StepError> {
+        match &self.wallet_type {
+            WalletType::User { wallet_account, .. } => Ok(wallet_account.public_key()),
+            WalletType::Funding { wallet_pk } => {
+                Ok(ZkPublicKey::from_bytes(&hex::decode(wallet_pk)?)?)
+            }
+        }
+    }
+
+    /// Helper to determine if this wallet is a user-defined wallet.
+    #[must_use]
+    pub const fn is_user_wallet(&self) -> bool {
+        matches!(self.wallet_type, WalletType::User { .. })
+    }
+
+    /// Helper to determine if this wallet is a funding wallet.
+    #[must_use]
+    pub const fn is_funding_wallet(&self) -> bool {
+        matches!(self.wallet_type, WalletType::Funding { .. })
+    }
 }
 
 /// Mapping of chain height to the corresponding block hash at that height.
 pub type ChainInfoMap = HashMap<u64, String>;
-/// Mapping of logical wallet names to their corresponding wallet information.
+/// Mapping of logical wallet names to their corresponding wallet
+/// information.
 pub type WalletInfoMap = HashMap<String, WalletInfo>;
 
 /// Information about a started node in the world
@@ -391,6 +413,22 @@ impl CucumberWorld {
         if let Some(topology) = self.spec.topology.as_mut() {
             topology.scenario_base_dir = log_dir;
         }
+    }
+
+    /// Remove all scenario artifacts from the scenario base directory. This is
+    /// useful for ensuring a clean state before starting a new scenario.
+    pub fn clear_scenario_artifacts(&self) -> StepResult {
+        if self.scenario_base_dir.is_dir() {
+            std::fs::remove_dir_all(&self.scenario_base_dir).map_err(|e| {
+                StepError::LogicalError {
+                    message: format!(
+                        "Failed to clear scenario artifacts in '{}': {e}",
+                        self.scenario_base_dir.display()
+                    ),
+                }
+            })?;
+        }
+        Ok(())
     }
 
     /// Configure the scenario topology (number of nodes and network layout).
@@ -608,6 +646,30 @@ impl CucumberWorld {
             .clone())
     }
 
+    /// Helper to resolve all user wallet names to the actual wallet
+    /// information. This is useful for steps that refer to wallets by a
+    /// logical name, and need to find the corresponding wallet information
+    /// in the world.
+    pub fn all_user_wallets(&self) -> Vec<WalletInfo> {
+        self.wallet_info
+            .values()
+            .filter(|w| matches!(w.wallet_type, WalletType::User { .. }))
+            .cloned()
+            .collect::<Vec<_>>()
+    }
+
+    /// Helper to resolve all user wallet names to the actual wallet
+    /// information. This is useful for steps that refer to wallets by a
+    /// logical name, and need to find the corresponding wallet information
+    /// in the world.
+    pub fn all_funding_wallets(&self) -> Vec<WalletInfo> {
+        self.wallet_info
+            .values()
+            .filter(|w| matches!(w.wallet_type, WalletType::Funding { .. }))
+            .cloned()
+            .collect::<Vec<_>>()
+    }
+
     /// Helper to resolve wallet names to the actual wallet information. This
     /// is useful for steps that refer to wallets by a logical name, and
     /// need to find the corresponding wallet information in the world.
@@ -666,4 +728,296 @@ impl CucumberWorld {
 
         Ok(())
     }
+
+    /// Helper to submit a funding wallet transaction to the node associated
+    /// with the given wallet. This abstracts away the details of finding
+    /// the correct node and using its client.
+    pub async fn submit_funding_wallet_transaction(
+        &self,
+        wallet: &WalletInfo,
+        body: WalletTransferFundsRequestBody,
+    ) -> Result<TxHash, StepError> {
+        let node = self
+            .nodes_info
+            .get(&wallet.node_name)
+            .ok_or(StepError::LogicalError {
+                message: format!(
+                    "Node '{}' for wallet '{}' not found",
+                    wallet.node_name, wallet.wallet_name
+                ),
+            })?;
+        let response = tokio::time::timeout(
+            Duration::from_secs(10),
+            node.started_node.client.transfer_funds(body),
+        )
+        .await
+        .map_err(|_| StepError::Timeout {
+            message: format!(
+                "Submit transaction '{}/{}' ",
+                wallet.wallet_name, wallet.node_name
+            ),
+        })??;
+
+        Ok(response.hash)
+    }
+
+    /// Helper to set the `deployment_config_override_path` in the world based
+    /// on the `CUCUMBER_NODE_CONFIG_OVERRIDE` environment variable. This
+    /// allows scenarios to specify a custom deployment config on disk that
+    /// will be used when starting nodes, bypassing the generated
+    /// genesis/test deployment.
+    pub fn apply_deployment_config_override_path(&mut self) {
+        self.deployment_config_override_path = env::var(CUCUMBER_NODE_CONFIG_OVERRIDE)
+            .ok()
+            .map(PathBuf::from);
+    }
+
+    /// Returns the same output as `full_debug_info`, but as an owned `String`.
+    #[must_use]
+    pub fn full_debug_info_string(&self) -> String {
+        struct FullDebugInfo<'a>(&'a CucumberWorld);
+
+        impl Debug for FullDebugInfo<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.full_debug_info(f)
+            }
+        }
+
+        format!("{:?}", FullDebugInfo(self))
+    }
+
+    pub fn full_debug_info(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CucumberWorld")
+            .field("deployer", &format!("{:?}", self.deployer))
+            .field("scenario_base_dir", &self.scenario_base_dir)
+            .field("spec", &format!("{:?}", self.spec))
+            .field("run", &format!("{:?}", self.run))
+            .field("membership_check", &self.membership_check)
+            .field("readiness_checks", &self.readiness_checks)
+            .field(
+                "join_external_network",
+                &format!("{:?}", self.join_external_network),
+            )
+            .field(
+                "populate_ibd_peers",
+                &format!("{:?}", self.populate_ibd_peers),
+            )
+            .field(
+                "require_all_peers_mode_online_at_startup",
+                &format!("{:?}", self.require_all_peers_mode_online_at_startup),
+            )
+            .field(
+                "genesis_block_utxos",
+                &format!("{:?}", self.genesis_block_utxos),
+            )
+            .field("local_cluster", {
+                if self.local_cluster.is_some() {
+                    &"Has LbcManualCluster"
+                } else {
+                    &"None"
+                }
+            })
+            .field("nodes_info", &nodes_info_display(&self.nodes_info))
+            .field("genesis_tokens", &format!("{:?}", self.genesis_tokens))
+            .field("wallet_info", &wallet_info_display(&self.wallet_info))
+            .field("faucet_base_url", &format!("{:?}", self.faucet_base_url))
+            .field("faucet_username", &format!("{:?}", self.faucet_username))
+            .field("faucet_password", &format!("{:?}", self.faucet_password))
+            .field(
+                "faucet_task_handles",
+                &format!("{}", self.faucet_task_handles.as_ref().map_or(0, Vec::len)),
+            )
+            .field(
+                "wallet_accounts",
+                &wallet_accounts_display(&self.wallet_accounts),
+            )
+            .field(
+                "wallet_tokens_per_block",
+                &wallet_tokens_per_block_display(&self.wallet_tokens_per_block),
+            )
+            .field(
+                "wallet_encumbered_tokens",
+                &wallet_encumbered_tokens_display(&self.wallet_encumbered_tokens),
+            )
+            .field(
+                "node_header_heights",
+                &node_header_heights_display(&self.node_header_heights),
+            )
+            .field("node_peer_ids", &node_peer_ids_display(&self.node_peer_ids))
+            .field(
+                "initial_override_peers_display",
+                &initial_peers_override_display(self.initial_peers_override.as_ref()),
+            )
+            .field(
+                "ibd_peers_override_display",
+                &ibd_peers_override_display(self.ibd_peers_override.as_ref()),
+            )
+            .field(
+                "public_cryptarchia_endpoint_peers",
+                &public_cryptarchia_endpoint_peers_display(
+                    self.public_cryptarchia_endpoint_peers.as_ref(),
+                ),
+            )
+            .field(
+                "deployment_config_override_path",
+                &deployment_config_override_path_display(
+                    self.deployment_config_override_path.as_ref(),
+                ),
+            )
+            .finish()
+    }
+}
+
+fn nodes_info_display(nodes_info: &HashMap<String, NodeInfo>) -> String {
+    let nodes: Vec<_> = nodes_info
+        .iter()
+        .map(|(k, v)| {
+            let wallets: Vec<_> = v
+                .wallet_info
+                .values()
+                .map(|w| w.wallet_name.clone())
+                .collect();
+            let wallets_str = format!("[{}]", wallets.join(", "));
+            format!("'{k}: {} {wallets_str}'", v.started_node.name)
+        })
+        .collect();
+    format!("HashMap<String, NodeInfo>({})", nodes.join(", "))
+}
+
+fn wallet_info_display(wallet_info: &WalletInfoMap) -> String {
+    let wallets: Vec<_> = wallet_info
+        .iter()
+        .map(|(k, v)| format!("'{k}: {}'", v.wallet_name))
+        .collect();
+    format!("WalletInfoMap({})", wallets.join(", "))
+}
+
+fn wallet_accounts_display(wallet_accounts: &HashMap<usize, WalletAccount>) -> String {
+    let accounts: Vec<_> = wallet_accounts
+        .iter()
+        .map(|(k, v)| format!("'{k}: {:?} {:?} {:?}'", v.label, v.value, v.secret_key))
+        .collect();
+    format!("HashMap<usize, WalletAccount>({})", accounts.join(", "))
+}
+
+fn wallet_tokens_per_block_display(
+    wallet_tokens_per_block: &HashMap<String, WalletTokenMap>,
+) -> String {
+    let blocks: Vec<_> = wallet_tokens_per_block
+        .iter()
+        .filter_map(|(block_hash, wallet_token_map)| {
+            let non_empty_wallets: Vec<_> = wallet_token_map
+                .utxos_per_wallet
+                .iter()
+                .filter(|(_, utxos)| !utxos.is_empty())
+                .map(|(wallet, utxos)| format!("{wallet}: [{}]", utxos.len()))
+                .collect();
+            if non_empty_wallets.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "{}: {} {}",
+                    block_hash,
+                    wallet_token_map.header_id,
+                    non_empty_wallets.join(" -")
+                ))
+            }
+        })
+        .collect();
+    format!("HashMap<String, WalletTokenMap>({})", blocks.join(", "))
+}
+
+fn wallet_encumbered_tokens_display(
+    wallet_encumbered_tokens: &HashMap<String, Vec<Utxo>>,
+) -> String {
+    let tokens: Vec<_> = wallet_encumbered_tokens
+        .iter()
+        .map(|(k, v)| format!("'{k}: {}'", v.len()))
+        .collect();
+    format!("HashMap<String, Vec<Utxo>>({})", tokens.join(", "))
+}
+
+fn node_header_heights_display(
+    node_header_heights: &HashMap<String, HashMap<String, u64>>,
+) -> String {
+    let nodes: Vec<_> = node_header_heights
+        .iter()
+        .map(|(k, v)| {
+            let mut heights: Vec<u64> = v.values().copied().collect();
+            heights.sort_unstable();
+            format!(
+                "{k}: [{}]",
+                heights
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+        .collect();
+    format!(
+        "HashMap<String, HashMap<String, u64>>({})",
+        nodes.join(", ")
+    )
+}
+
+fn node_peer_ids_display(node_peer_ids: &HashMap<String, PeerId>) -> String {
+    let nodes: Vec<_> = node_peer_ids
+        .iter()
+        .map(|(k, v)| format!("'{k}: {v}'"))
+        .collect();
+    format!("HashMap<String, PeerId>({})", nodes.join(", "))
+}
+
+fn initial_peers_override_display(initial_peers_override: Option<&Vec<Multiaddr>>) -> String {
+    initial_peers_override.as_ref().map_or_else(
+        || "None".to_owned(),
+        |peers| {
+            let peers_str = peers
+                .iter()
+                .map(|p| format!("{p}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("Some(Vec<Multiaddr>({peers_str}))")
+        },
+    )
+}
+
+fn ibd_peers_override_display(ibd_peers_override: Option<&HashSet<PeerId>>) -> String {
+    ibd_peers_override.as_ref().map_or_else(
+        || "None".to_owned(),
+        |peers| {
+            let peers_str = peers
+                .iter()
+                .map(|p| format!("{p}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("Some(HashSet<PeerId>({peers_str}))")
+        },
+    )
+}
+
+fn public_cryptarchia_endpoint_peers_display(
+    public_cryptarchia_endpoint_peers: Option<&Vec<PublicCryptarchiaEndpointPeer>>,
+) -> String {
+    public_cryptarchia_endpoint_peers.as_ref().map_or_else(
+        || "None".to_owned(),
+        |&peers| {
+            let peers_str = peers
+                .iter()
+                .map(|peer| format!("{} (user: {})", peer.url, peer.username))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("Vec<PublicCryptarchiaEndpointPeer>({peers_str})")
+        },
+    )
+}
+
+fn deployment_config_override_path_display(
+    deployment_config_override_path: Option<&PathBuf>,
+) -> String {
+    deployment_config_override_path.as_ref().map_or_else(
+        || "None".to_owned(),
+        |path| format!("Some({})", path.display()),
+    )
 }

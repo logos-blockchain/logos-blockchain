@@ -21,7 +21,7 @@ use crate::cryptarchia::{
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
 use super::{Balance, Config, LedgerError};
-use crate::mantle::sdp::locked_notes::LockedNotes;
+use crate::{WINDOW_SIZE, mantle::sdp::locked_notes::LockedNotes};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -126,6 +126,9 @@ pub struct LedgerState {
     // Using an Arc wrapper here as this can be completely shared among instances of LedgerState
     #[derivative(PartialEq = "ignore")]
     stake_inference: Arc<StakeInference>,
+    // rolling fee window of 120 blocks, used to derive block rewards
+    #[cfg_attr(feature = "serde", serde(with = "serde_arrays"))]
+    fee_window: [Value; WINDOW_SIZE],
 }
 
 impl LedgerState {
@@ -381,6 +384,20 @@ impl LedgerState {
         }
     }
 
+    pub const fn update_fee_window(&mut self, index: usize, total_fee: u64) {
+        self.fee_window[index] = total_fee;
+    }
+
+    #[must_use]
+    pub const fn get_fee_from_index(&self, index: usize) -> Value {
+        self.fee_window[index]
+    }
+
+    #[must_use]
+    pub fn get_summed_fees(&self) -> u128 {
+        self.fee_window.iter().map(|x| u128::from(*x)).sum()
+    }
+
     #[must_use]
     pub const fn slot(&self) -> Slot {
         self.slot
@@ -487,6 +504,7 @@ impl LedgerState {
             },
             block_density,
             stake_inference,
+            fee_window: [0u64; 120],
         }
     }
 }
@@ -596,13 +614,14 @@ pub mod tests {
             .unwrap();
         let id = make_id(parent, slot, utxo);
         let proof = generate_proof(&ledger_state, &utxo, slot);
-        ledger.try_update::<_, MainnetGasConstants>(
+        let (_, state) = ledger.prepare_update::<_, MainnetGasConstants>(
             id,
             parent,
             slot,
             &proof,
             std::iter::empty::<&SignedMantleTx>(),
         )?;
+        ledger.commit_update(id, state);
         Ok(id)
     }
 
@@ -729,6 +748,7 @@ pub mod tests {
                 lottery_1,
             },
             stake_inference,
+            fee_window: [0u64; 120],
             block_density,
         }
     }

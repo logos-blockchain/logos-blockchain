@@ -1467,10 +1467,10 @@ where
                 Err(old_session_error) => {
                     if matches!(
                         current_session_error,
-                        MessageError::MessageDeserializationFailed
+                        MessageError::PrivateHeaderDeserializationFailed
                     ) && matches!(
                         old_session_error,
-                        MessageError::MessageDeserializationFailed
+                        MessageError::PrivateHeaderDeserializationFailed
                     ) {
                         tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message with current and old session crypto processors due to deserialization error. This can happen when the message was intended for another node or when the message is malformed. Ignoring...");
                     } else {

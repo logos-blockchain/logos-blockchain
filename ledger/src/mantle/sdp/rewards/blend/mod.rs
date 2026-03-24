@@ -10,7 +10,7 @@ use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
 use lb_core::{
     blend::core_quota,
     block::BlockNumber,
-    mantle::Utxo,
+    mantle::{Utxo, Value},
     sdp::{ActivityMetadata, ProviderId, ServiceParameters},
 };
 use lb_utils::math::NonNegativeF64;
@@ -135,12 +135,10 @@ where
                 settings,
                 ..
             } => {
-                // TODO: Calculate base rewards when session_income is added to config
-                // For now using placeholder value of 0
-                let session_income = 0;
-
-                let (target_session_tracker, rewards) = target_session_tracker
-                    .finalize(target_session_state.session_number(), session_income);
+                let (target_session_tracker, rewards) = target_session_tracker.finalize(
+                    target_session_state.session_number(),
+                    target_session_state.session_income(),
+                );
 
                 let new_state = Self::from_current_session_tracker_output(
                     current_session_tracker.finalize(
@@ -179,6 +177,31 @@ where
                 current_session_state: current_session_state.clone(),
                 current_session_tracker: current_session_tracker
                     .collect_epoch(epoch_state, settings),
+                settings: settings.clone(),
+            },
+        }
+    }
+
+    fn add_income(&self, income: Value) -> Self {
+        match self {
+            Self::WithoutTargetSession {
+                settings,
+                current_session_tracker,
+            } => Self::WithoutTargetSession {
+                settings: settings.clone(),
+                current_session_tracker: current_session_tracker.add_block_rewards(income),
+            },
+            Self::WithTargetSession {
+                target_session_state,
+                target_session_tracker,
+                current_session_state,
+                current_session_tracker,
+                settings,
+            } => Self::WithTargetSession {
+                target_session_state: target_session_state.clone(),
+                target_session_tracker: target_session_tracker.clone(),
+                current_session_state: current_session_state.clone(),
+                current_session_tracker: current_session_tracker.add_block_rewards(income),
                 settings: settings.clone(),
             },
         }
