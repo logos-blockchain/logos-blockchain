@@ -288,8 +288,9 @@ impl Cryptarchia {
         }
 
         // A block number of this block if it's applied to the chain.
-        self.ledger
-            .try_update::<_, MainnetGasConstants>(
+        let (_, state) = self
+            .ledger
+            .prepare_update::<_, MainnetGasConstants>(
                 id,
                 parent,
                 slot,
@@ -304,7 +305,6 @@ impl Cryptarchia {
                 err => Error::Ledger(err),
             })?;
 
-        // TODO: On failure, rollback `self.ledger`
         let UpdatedCryptarchia {
             cryptarchia: consensus,
             pruned_blocks,
@@ -319,7 +319,9 @@ impl Cryptarchia {
                 },
                 err => Error::Consensus(err),
             })?;
+
         self.consensus = consensus;
+        self.ledger.commit_update(id, state);
 
         // Prune the ledger states of all the pruned blocks.
         self.prune_ledger_states(pruned_blocks.all());
