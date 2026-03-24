@@ -18,7 +18,7 @@ use libp2p::{
 };
 use rand::RngCore;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::{
     behaviour::nat::{
@@ -63,6 +63,10 @@ where
     autonat_client_tick_interval: Duration,
     /// Current local address that is being managed
     local_address: Option<Multiaddr>,
+    /// Optional external address candidate provided by the operator to be
+    /// verified via `AutoNAT`. Emitted once as a `NewExternalAddrCandidate`
+    /// on first poll.
+    external_address_candidate: Option<Multiaddr>,
 }
 
 pub type NatBehaviour<Rng> = InnerNatBehaviour<Rng, ProtocolManager, SystemGatewayDetector>;
@@ -108,6 +112,7 @@ where
             next_autonat_client_tick: OptionFuture::default().fuse(),
             autonat_client_tick_interval,
             local_address: None,
+            external_address_candidate: settings.external_address.clone(),
         }
     }
 }
@@ -204,6 +209,11 @@ where
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
+        if let Some(addr) = self.external_address_candidate.take() {
+            debug!("Emitting external address candidate for AutoNAT verification: {addr}");
+            return Poll::Ready(ToSwarm::NewExternalAddrCandidate(addr));
+        }
+
         if let Poll::Ready(to_swarm) = self.autonat_client_behaviour.poll(cx) {
             // Forward all autonat results to the state machine unconditionally.
             // The state machine's own guard clauses filter by the address it is

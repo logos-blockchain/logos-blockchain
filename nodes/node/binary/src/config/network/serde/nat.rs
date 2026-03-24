@@ -41,6 +41,7 @@ impl From<Config> for lb_libp2p::NatSettings {
                 gateway_monitor: lb_libp2p::GatewaySettings {
                     check_interval: traversal_config.gateway_monitor.check_interval,
                 },
+                external_address: traversal_config.external_address,
             }),
             Config::Static { external_address } => Self::Static { external_address },
         }
@@ -59,6 +60,9 @@ pub struct TraversalConfig {
     pub autonat: AutonatClientConfig,
     pub mapping: MappingConfig,
     pub gateway_monitor: GatewayConfig,
+    /// Optional external address candidate to verify via `AutoNAT`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_address: Option<Multiaddr>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
