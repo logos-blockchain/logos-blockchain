@@ -11,7 +11,7 @@ use num_bigint::BigUint;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    crypto::ZkHasher,
+    crypto::{Digest as _, Hasher, ZkHasher},
     mantle::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
@@ -194,7 +194,8 @@ impl Transaction for MantleTx {
         // constant and structure as defined in the Mantle specification:
         // https://www.notion.so/Mantle-Specification-21c261aa09df810c8820fab1d78b53d9
         let encoded_bytes = encode_mantle_tx(self);
-        let frs = encoded_bytes
+        let first_blake_hash = Hasher::digest(encoded_bytes);
+        let frs = first_blake_hash
             .as_slice()
             .chunks(GROTH16_SAFE_BYTES_SIZE)
             // safety: Any 31 bytes fits into a groth16 Fr, there is no need to check for ranges

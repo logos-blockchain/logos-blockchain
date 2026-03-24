@@ -10,7 +10,7 @@ use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    crypto::ZkHasher,
+    crypto::{Digest as _, Hasher, ZkHasher},
     mantle::{
         Transaction, TransactionHasher, encoding::encode_ledger_tx, gas::GasConstants, tx::TxHash,
     },
@@ -127,7 +127,8 @@ impl Tx {
         // constants and structure as defined in the Mantle spec:
         // https://www.notion.so/Mantle-Specification-21c261aa09df810c8820fab1d78b53d9
         let encoded_bytes = encode_ledger_tx(self);
-        let frs = encoded_bytes
+        let first_blake_hash = Hasher::digest(encoded_bytes);
+        let frs = first_blake_hash
             .as_slice()
             .chunks(GROTH16_SAFE_BYTES_SIZE)
             .map(fr_from_bytes_unchecked);
