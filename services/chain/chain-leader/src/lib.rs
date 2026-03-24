@@ -18,7 +18,7 @@ use lb_chain_service::{
 };
 use lb_chain_service_common::NetworkMessage as ChainNetworkMessage;
 use lb_core::{
-    block::{Block, Error as BlockError, MAX_TRANSACTIONS},
+    block::{Block, Error as BlockError, MAX_BLOCK_TRANSACTIONS},
     codec::SerializeOp as _,
     header::HeaderId,
     mantle::{
@@ -681,7 +681,10 @@ where
 
         let valid_tx_stream = stream::iter(valid_txs);
         let selected_txs_stream = tx_selector.select_tx_from(valid_tx_stream);
-        let txs: Vec<_> = selected_txs_stream.take(MAX_TRANSACTIONS).collect().await;
+        let txs: Vec<_> = selected_txs_stream
+            .take(MAX_BLOCK_TRANSACTIONS)
+            .collect()
+            .await;
 
         let block = Block::create(parent, slot, proof, txs, signing_key)?;
 

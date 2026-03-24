@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::{
     crypto::ZkHasher,
     mantle::{
-        AuthenticatedMantleTx, Transaction, TransactionHasher,
+        AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasConstants, GasCost},
         ledger::Tx as LedgerTx,
@@ -370,6 +370,12 @@ impl GasCost for SignedMantleTx {
 
         execution_gas * self.mantle_tx.execution_gas_price
             + storage_gas * self.mantle_tx.storage_gas_price
+    }
+}
+
+impl StorageSize for SignedMantleTx {
+    fn storage_size(&self) -> usize {
+        self.gas_storage_size() as usize
     }
 }
 
