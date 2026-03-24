@@ -36,14 +36,13 @@
 
 use std::{env, num::NonZero, path::Path, time::Duration};
 
-use hex::ToHex as _;
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
 use crate::cucumber::{
     error::StepError,
     steps::{
-        TARGET,
+        TARGET, manual_nodes,
         manual_nodes::{
             snapshots::save_named_blockchain_snapshot,
             utils::{
@@ -56,7 +55,6 @@ use crate::cucumber::{
             utils::WalletStateType,
         },
     },
-    utils::truncate_hash,
     world::{CucumberWorld, WalletInfo},
 };
 
@@ -157,7 +155,7 @@ async fn execute_non_stop_manual_command(
         }
         ManualCommand::RestartNode { node_name } => restart_node(world, step, node_name).await,
         ManualCommand::CryptarchiaInfoAllNodes => {
-            execute_cryptarchia_info_all_nodes(world, step).await;
+            manual_nodes::utils::get_cryptarchia_info_all_nodes(world, step).await;
             Ok(())
         }
         ManualCommand::WaitAllNodesSyncedToChain => {
@@ -270,50 +268,6 @@ fn request_faucet_funds_all_funding_wallets(
         .map(WalletInfo::public_key_hex)
         .collect::<Vec<_>>();
     utils::request_faucet_funds(world, step, number_of_rounds, &all_wallets_pk_hex)
-}
-
-pub(crate) async fn execute_cryptarchia_info_all_nodes(world: &CucumberWorld, step: &str) {
-    let mut node_names = world.nodes_info.keys().cloned().collect::<Vec<_>>();
-    node_names.sort();
-
-    if node_names.is_empty() {
-        warn!(
-            target: TARGET,
-            "Step `{step}` no nodes found for CRYPTARCHIA_INFO_ALL_NODES"
-        );
-        return;
-    }
-
-    for node_name in node_names {
-        let Some(node_info) = world.nodes_info.get(&node_name) else {
-            continue;
-        };
-        match node_info.started_node.client.consensus_info().await {
-            Ok(consensus) => {
-                let mode = if consensus.mode.is_online() {
-                    "Online"
-                } else {
-                    "Bootstrapping"
-                };
-                info!(
-                    target: TARGET,
-                    "cryptarchia/info - '{}', '{}', {}/{}, tip '{} ...', lib '{} ...'",
-                    node_name,
-                    mode,
-                    consensus.height,
-                    consensus.slot.into_inner(),
-                    truncate_hash(&consensus.tip.encode_hex::<String>(), 16),
-                    truncate_hash(&consensus.lib.encode_hex::<String>(), 16),
-                );
-            }
-            Err(e) => {
-                warn!(
-                    target: TARGET,
-                    "Step `{step}` CRYPTARCHIA_INFO failed for node `{node_name}`: {e}",
-                );
-            }
-        }
-    }
 }
 
 async fn execute_coin_split(

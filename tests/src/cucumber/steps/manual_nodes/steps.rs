@@ -16,9 +16,10 @@ use crate::cucumber::{
             snapshots::{save_named_blockchain_snapshot, validate_snapshot_path_component},
             utils::{
                 NodesToStartUnordered, create_snapshots_all_nodes, genesis_block_utxos,
-                nodes_converged, parse_genesis_wallet_tokens_row, parse_url,
-                parse_wallet_resources_table_row, poll_all_nodes_and_update_consensus_cache,
-                restart_node, start_node, start_nodes_order_respecting_dependencies,
+                get_cryptarchia_info_all_nodes, nodes_converged, parse_genesis_wallet_tokens_row,
+                parse_url, parse_wallet_resources_table_row,
+                poll_all_nodes_and_update_consensus_cache, restart_node, start_node,
+                start_nodes_order_respecting_dependencies,
                 verify_genesis_wallet_resources_table_indexes,
                 verify_node_wallet_resources_table_indexes,
                 wait_for_all_nodes_to_be_synced_to_chain,
@@ -615,6 +616,16 @@ async fn step_wait_for_all_nodes_to_be_synced_to_the_chain(
     step: &Step,
 ) -> StepResult {
     wait_for_all_nodes_to_be_synced_to_chain(world, &step.value).await
+}
+
+#[when("I query cryptarchia info for all nodes")]
+#[then("I query cryptarchia info for all nodes")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_query_cryptarchia_info_all_nodes(world: &mut CucumberWorld, step: &Step) {
+    get_cryptarchia_info_all_nodes(world, &step.value).await;
 }
 
 #[then(expr = "I stop all nodes")]

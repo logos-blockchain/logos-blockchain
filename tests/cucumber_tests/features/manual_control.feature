@@ -163,7 +163,7 @@ Feature: Manual control of transactions
   Scenario: Start from base snapshot
     Given I have a devnet cluster with capacity of 2 nodes
     And we join an external network
-    And I will initialize started nodes from snapshot "SNAP_TEST_03" source node "NODE_2"
+    And I will initialize started nodes from snapshot "000_076_658" source node "NODE"
     And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
     And I have initial peers:
       | initial_peer                                                                                  |
@@ -191,6 +191,7 @@ Feature: Manual control of transactions
     When I restart node "NODE_2"
     When node "NODE_1" is at height 30300 in 30000 seconds
     When node "NODE_2" is at height 30300 in 30000 seconds
+    When I query cryptarchia info for all nodes
     Then I stop all nodes
 
   @transactions_devnet_manual_control

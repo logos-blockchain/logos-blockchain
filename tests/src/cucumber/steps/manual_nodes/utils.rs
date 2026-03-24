@@ -30,11 +30,10 @@ use crate::cucumber::{
             restore_node_state_from_snapshot, save_named_blockchain_snapshot,
             validate_snapshot_path_component,
         },
-        manual_transactions::command_file_utils::execute_cryptarchia_info_all_nodes,
     },
     utils::{
-        extract_child_dir_name, funding_wallet_pk_from_node_yaml, peer_id_from_node_yaml,
-        track_progress, truncate_hash,
+        display_last_path_components, extract_child_dir_name, funding_wallet_pk_from_node_yaml,
+        matching_child_dirs, peer_id_from_node_yaml, track_progress, truncate_hash,
     },
     world::{
         ChainInfoMap, CucumberWorld, NodeInfo, PublicCryptarchiaEndpointPeer, WalletInfo,
@@ -324,7 +323,7 @@ pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
         if let Some(target) = majority_target.as_ref()
             && all_local_nodes_match_sync_target(world, target).await
         {
-            execute_cryptarchia_info_all_nodes(world, step).await;
+            get_cryptarchia_info_all_nodes(world, step).await;
             info!(
                 target: TARGET,
                 "All nodes synced to the chain in {:.2?}",
@@ -340,7 +339,7 @@ pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
                 &public_snapshots,
                 majority_target.as_ref(),
             );
-            execute_cryptarchia_info_all_nodes(world, step).await;
+            get_cryptarchia_info_all_nodes(world, step).await;
             last_status_log_at = Some(Instant::now());
         }
 
@@ -587,6 +586,8 @@ pub async fn start_node(
     let is_bootstrap_node = startup_settings.is_bootstrap_node;
     let join_external_network = startup_settings.join_external_network;
     let persist_dir = world.scenario_base_dir.join(node_name);
+    let runtime_dir_prefix = format!("{node_name}_");
+    let final_dir_ignore_list = matching_child_dirs(&persist_dir, &runtime_dir_prefix);
     let started_node = Box::pin(
         cluster.start_node_with(
             node_name,
@@ -609,12 +610,22 @@ pub async fn start_node(
     .inspect_err(|e| {
         warn!(target: TARGET, "Step `{step}` error: {e}");
     })?;
-    let node_final_dir = extract_child_dir_name(&world.scenario_base_dir, &format!("{node_name}_"))
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{step}` error: {e}");
-        })?;
+
+    let node_final_dir = extract_child_dir_name(
+        &world.scenario_base_dir,
+        &runtime_dir_prefix,
+        &final_dir_ignore_list,
+    )
+    .inspect_err(|e| {
+        warn!(target: TARGET, "Step `{step}` error: {e}");
+    })?;
     let node_runtime_dir = world.scenario_base_dir.join(node_final_dir.clone());
     let started_node_name = started_node.name.clone();
+    info!(
+        target: TARGET,
+        "Starting node `{node_name}` with runtime_dir='{}'",
+        display_last_path_components(&node_runtime_dir, 4)
+    );
 
     // `StartNodeOptions::with_persist_dir` currently creates a fresh runtime
     // directory for each launch. Seed that runtime directory and restart once
@@ -696,6 +707,27 @@ pub async fn start_node(
         warn!(target: TARGET, "Step `{step}` error: {e}");
     })?;
 
+    if world.blockchain_snapshot_on_startup.is_some() {
+        match client.consensus_info().await {
+            Ok(info) => {
+                info!(
+                    target: TARGET,
+                    "Node `{node_name}` snapshot state - height: {}/{}, tip: {}, lib: {}",
+                    info.height,
+                    info.slot.into_inner(),
+                    truncate_hash(&info.tip.encode_hex::<String>(), 16),
+                    truncate_hash(&info.lib.encode_hex::<String>(), 16)
+                );
+            }
+            Err(e) => {
+                warn!(
+                    target: TARGET,
+                    "Node `{node_name}` failed to fetch post-start consensus after snapshot init: {e}"
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -727,7 +759,7 @@ pub async fn restart_node(world: &CucumberWorld, step: &str, node_name: &str) ->
         // TODO: Add `is_bootstrap_node` to world
         false,
         None,
-        world.join_external_network.unwrap_or_default()
+        world.join_external_network.unwrap_or_default(),
     )
     .await
     .inspect_err(|e| {
@@ -889,8 +921,9 @@ async fn ensure_node_ready(
 
     verify_reponsive_and_network_ready(client, node_name, started_node_name).await?;
 
-    if !is_bootstrap_node && require_all_peers_mode_online_at_startup.is_none() ||
-        join_external_network {
+    if !is_bootstrap_node && require_all_peers_mode_online_at_startup.is_none()
+        || join_external_network
+    {
         return Ok(());
     }
 
@@ -1362,4 +1395,51 @@ pub fn create_snapshots_all_nodes(
         );
     }
     Ok(())
+}
+
+/// Fetches and logs the consensus info of all nodes, for debugging purposes.
+/// Does not require the nodes to be aligned or have any specific state, and is
+/// resilient to some nodes being offline or unresponsive.
+pub(crate) async fn get_cryptarchia_info_all_nodes(world: &CucumberWorld, step: &str) {
+    let mut node_names = world.nodes_info.keys().cloned().collect::<Vec<_>>();
+    node_names.sort();
+
+    if node_names.is_empty() {
+        warn!(
+            target: TARGET,
+            "Step `{step}` no nodes found for CRYPTARCHIA_INFO_ALL_NODES"
+        );
+        return;
+    }
+
+    for node_name in node_names {
+        let Some(node_info) = world.nodes_info.get(&node_name) else {
+            continue;
+        };
+        match node_info.started_node.client.consensus_info().await {
+            Ok(consensus) => {
+                let mode = if consensus.mode.is_online() {
+                    "Online"
+                } else {
+                    "Bootstrapping"
+                };
+                info!(
+                    target: TARGET,
+                    "cryptarchia/info - '{}', '{}', {}/{}, tip '{} ...', lib '{} ...'",
+                    node_name,
+                    mode,
+                    consensus.height,
+                    consensus.slot.into_inner(),
+                    truncate_hash(&consensus.tip.encode_hex::<String>(), 16),
+                    truncate_hash(&consensus.lib.encode_hex::<String>(), 16),
+                );
+            }
+            Err(e) => {
+                warn!(
+                    target: TARGET,
+                    "Step `{step}` CRYPTARCHIA_INFO failed for node `{node_name}`: {e}",
+                );
+            }
+        }
+    }
 }
