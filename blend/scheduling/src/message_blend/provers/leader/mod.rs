@@ -1,4 +1,4 @@
-use core::{future::ready, pin::Pin};
+use core::{future::ready, num::NonZeroU64, pin::Pin};
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _, stream};
@@ -27,7 +27,6 @@ use crate::message_blend::provers::{BlendLayerProof, ProofsGeneratorSettings};
 mod tests;
 
 const LOG_TARGET: &str = "blend::scheduling::proofs::leader";
-const PROOFS_GENERATOR_BUFFER_SIZE: usize = 10;
 
 /// A `PoQ` generator that deals only with leadership proofs, suitable for edge
 /// nodes.
@@ -67,6 +66,7 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
             proof_stream: Box::pin(create_leadership_proof_stream(
                 settings.public_inputs,
                 private_inputs,
+                settings.encapsulation_layers,
                 cancellation_token.clone(),
             )),
             settings,
@@ -112,6 +112,7 @@ impl RealLeaderProofsGenerator {
         self.proof_stream = Box::pin(create_leadership_proof_stream(
             self.settings.public_inputs,
             *private_inputs,
+            self.settings.encapsulation_layers,
             new_cancellation_token,
         ));
     }
@@ -128,6 +129,7 @@ impl RealLeaderProofsGenerator {
 fn create_leadership_proof_stream(
     public_inputs: PoQVerificationInputsMinusSigningKey,
     private_inputs: ProofOfLeadershipQuotaInputs,
+    encapsulation_layers: NonZeroU64,
     cancellation_token: CancellationToken,
 ) -> impl Stream<Item = BlendLayerProof> {
     let message_quota = public_inputs.leader.message_quota;
@@ -194,6 +196,6 @@ fn create_leadership_proof_stream(
                 leadership_proof
             }
         })
-        .buffered(PROOFS_GENERATOR_BUFFER_SIZE)
+        .buffered(encapsulation_layers.get() as usize)
         .filter_map(ready)
 }

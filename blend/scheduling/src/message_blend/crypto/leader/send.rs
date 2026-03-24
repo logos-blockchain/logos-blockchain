@@ -48,6 +48,7 @@ where
             local_node_index: membership.local_index(),
             membership_size: membership.size(),
             public_inputs: public_info,
+            encapsulation_layers: num_blend_layers,
             epoch,
         };
         Self {
