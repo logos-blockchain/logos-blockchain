@@ -1,7 +1,7 @@
 on:
   pull_request:
   push:
-    branches: [ master, aa/epoch-management ]
+    branches: [ master ]
 
 name: End-to-end integration tests (including cucumber)
 

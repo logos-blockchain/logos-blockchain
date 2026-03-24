@@ -7,11 +7,15 @@ use logos_blockchain_tests::{
 };
 use serial_test::serial;
 
+// how long we let the chain grow before checking the block at tip - k is the
+// same in all chains
+const CHAIN_LENGTH_MULTIPLIER: u32 = 2;
+
 async fn happy_test(topology: &Topology) {
     let nodes = topology.validators();
     let config = nodes[0].config();
 
-    let n_blocks = 350;
+    let n_blocks = config.deployment.cryptarchia.security_param.get() * CHAIN_LENGTH_MULTIPLIER;
     let timeout = max_block_propagation_time(
         n_blocks,
         nodes.len().try_into().unwrap(),
@@ -61,6 +65,6 @@ async fn happy_test(topology: &Topology) {
 #[tokio::test]
 #[serial]
 async fn two_nodes_happy() {
-    let topology = Topology::spawn(TopologyConfig::n_validators(4)).await;
+    let topology = Topology::spawn(TopologyConfig::two_validators()).await;
     happy_test(&topology).await;
 }

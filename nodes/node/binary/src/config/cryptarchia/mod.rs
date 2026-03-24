@@ -35,7 +35,7 @@ impl ServiceConfig {
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
         lb_chain_leader_service::LeaderSettings<(), Libp2pBroadcastSettings>,
     ) {
-        let blocks_per_session = u64::MAX;
+        let blocks_per_session = self.deployment.blocks_per_epoch();
 
         let ledger_config = lb_ledger::Config {
             consensus_config: self.deployment.consensus_config(),

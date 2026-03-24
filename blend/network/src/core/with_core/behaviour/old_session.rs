@@ -47,21 +47,36 @@ where
         except: PeerId,
     ) -> Result<(), Error> {
         let validated_message = self.verify_encapsulated_message_public_header(message)?;
-        self.forward_validated_message_and_maybe_exclude(&validated_message, Some(except))
-    }
 
-    /// Forward an already-verified encapsulated message to all negotiated
-    /// peers minus the sender.
-    ///
-    /// It is the responsibility of the caller to make sure the message being
-    /// published is valid when received by other peers, else the node will get
-    /// banned from the network.
-    pub fn forward_validated_message(
-        &mut self,
-        message: &EncapsulatedMessageWithVerifiedPublicHeader,
-        except: PeerId,
-    ) -> Result<(), Error> {
-        self.forward_validated_message_and_maybe_exclude(message, Some(except))
+        let message_id = validated_message.id();
+        let serialized_message = serialize_encapsulated_message(&validated_message);
+        let mut at_least_one_receiver = false;
+        self.negotiated_peers
+            .iter()
+            .filter(|(peer_id, _)| **peer_id != except)
+            .for_each(|(&peer_id, &connection_id)| {
+                if check_and_update_message_cache(
+                    &mut self.exchanged_message_identifiers,
+                    &message_id,
+                    peer_id,
+                )
+                .is_ok()
+                {
+                    self.events.push_back(ToSwarm::NotifyHandler {
+                        peer_id,
+                        handler: NotifyHandler::One(connection_id),
+                        event: Either::Left(FromBehaviour::Message(serialized_message.clone())),
+                    });
+                    at_least_one_receiver = true;
+                }
+            });
+
+        if at_least_one_receiver {
+            self.try_wake();
+            Ok(())
+        } else {
+            Err(Error::NoPeers)
+        }
     }
 
     fn verify_encapsulated_message_public_header(
@@ -164,46 +179,6 @@ impl<ProofsVerifier> OldSession<ProofsVerifier> {
         self.negotiated_peers
             .get(peer_id)
             .is_some_and(|&id| id == *connection_id)
-    }
-
-    /// Forwards a message to all connections except the [`except`] connection.
-    ///
-    /// Public header validation checks are skipped, since the message is
-    /// assumed to have been properly formed.
-    fn forward_validated_message_and_maybe_exclude(
-        &mut self,
-        message: &EncapsulatedMessageWithVerifiedPublicHeader,
-        except: Option<PeerId>,
-    ) -> Result<(), Error> {
-        let message_id = message.id();
-        let serialized_message = serialize_encapsulated_message(message);
-        let mut at_least_one_receiver = false;
-        self.negotiated_peers
-            .iter()
-            .filter(|(peer_id, _)| Some(**peer_id) != except)
-            .for_each(|(&peer_id, &connection_id)| {
-                if check_and_update_message_cache(
-                    &mut self.exchanged_message_identifiers,
-                    &message_id,
-                    peer_id,
-                )
-                .is_ok()
-                {
-                    self.events.push_back(ToSwarm::NotifyHandler {
-                        peer_id,
-                        handler: NotifyHandler::One(connection_id),
-                        event: Either::Left(FromBehaviour::Message(serialized_message.clone())),
-                    });
-                    at_least_one_receiver = true;
-                }
-            });
-
-        if at_least_one_receiver {
-            self.try_wake();
-            Ok(())
-        } else {
-            Err(Error::NoPeers)
-        }
     }
 
     /// Should be called when a connection is detected as closed.

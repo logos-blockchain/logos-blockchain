@@ -826,19 +826,6 @@ where
         self.forward_validated_message_and_maybe_exclude(&validated_message, None)
     }
 
-    /// Publish an already-encapsulated, already-verified message to all
-    /// connected peers in the current session.
-    ///
-    /// It is the responsibility of the caller to make sure the message being
-    /// published is valid when received by other peers, else the node will get
-    /// banned from the network.
-    pub fn publish_validated_message(
-        &mut self,
-        message: &EncapsulatedMessageWithVerifiedPublicHeader,
-    ) -> Result<(), Error> {
-        self.forward_validated_message_and_maybe_exclude(message, None)
-    }
-
     /// Forwards a message to all healthy connections except the [`except`]
     /// connection.
     ///
@@ -857,43 +844,14 @@ where
         except: (PeerId, ConnectionId),
     ) -> Result<(), Error> {
         if let Some(old_session) = &mut self.old_session
-            && old_session
-                .validate_and_forward_message(message.clone(), except.0)
-                .is_ok()
+            && old_session.is_negotiated(&except)
         {
-            return Ok(());
+            return old_session.validate_and_forward_message(message, except.0);
         }
 
         let validated_message =
             self.validate_encapsulated_message_public_header_with_current_session(message)?;
         self.forward_validated_message_and_maybe_exclude(&validated_message, Some(except.0))
-    }
-
-    /// Forwards a message to all healthy connections except the [`except`]
-    /// connection.
-    ///
-    /// It is the responsibility of the caller to make sure the message being
-    /// published is valid when received by other peers, else the node will get
-    /// banned from the network.
-    ///
-    /// If the [`except`] connection is part of the old session, the message is
-    /// forwarded to the connections in the old session.
-    /// Otherwise, it is forwarded to the connections in the current session.
-    ///
-    /// Returns [`Error::NoPeers`] if there are no connected peers that support
-    /// the blend protocol.
-    pub fn forward_validated_message(
-        &mut self,
-        message: &EncapsulatedMessageWithVerifiedPublicHeader,
-        except: (PeerId, ConnectionId),
-    ) -> Result<(), Error> {
-        if let Some(old_session) = &mut self.old_session
-            && old_session.is_negotiated(&except)
-        {
-            return old_session.forward_validated_message(message, except.0);
-        }
-
-        self.forward_validated_message_and_maybe_exclude(message, Some(except.0))
     }
 
     // Try to validate an encapsulated public header with the current session

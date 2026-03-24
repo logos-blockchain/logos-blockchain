@@ -240,8 +240,8 @@ where
     fn handle_blend_core_behaviour_event(&mut self, blend_event: CoreToCoreEvent) {
         match blend_event {
             lb_blend::network::core::with_core::behaviour::Event::Message(msg, conn) => {
-                // Forward message received from node to all other core nodes (in current or previous session, minus the sender) without re-verifying it.
-                self.forward_validated_swarm_message(&msg, conn);
+                // Forward message received from node to all other core nodes.
+                self.validate_and_forward_swarm_message((*msg).clone().into(), conn);
                 // Bubble up to service for decapsulation and delaying.
                 self.report_message_to_service(*msg, metrics::InboundMessageType::Core);
             }
@@ -367,27 +367,24 @@ where
         ))
     }
 
-    fn publish_validated_swarm_message(
-        &mut self,
-        msg: &EncapsulatedMessageWithVerifiedPublicHeader,
-    ) {
+    fn validate_and_publish_swarm_message(&mut self, msg: EncapsulatedMessage) {
         if let Err(e) = self
             .swarm
             .behaviour_mut()
             .blend
             .with_core_mut()
-            .publish_validated_message(msg)
+            .validate_and_publish_message(msg)
         {
-            tracing::error!(target: LOG_TARGET, "Failed to publish validated message to blend network: {e:?}");
+            tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
             metrics::outbound_publish_err();
         } else {
             metrics::outbound_publish_ok();
         }
     }
 
-    fn forward_validated_swarm_message(
+    fn validate_and_forward_swarm_message(
         &mut self,
-        msg: &EncapsulatedMessageWithVerifiedPublicHeader,
+        msg: EncapsulatedMessage,
         except: (PeerId, ConnectionId),
     ) {
         if let Err(e) = self
@@ -395,7 +392,7 @@ where
             .behaviour_mut()
             .blend
             .with_core_mut()
-            .forward_validated_message(msg, except)
+            .validate_and_forward_message(msg, except)
         {
             // If we have a single connection, then we will always hit the `NoPeers` error.
             // In this case it's ok not to log such error, since this function is only
@@ -452,9 +449,8 @@ where
     fn handle_blend_edge_behaviour_event(&mut self, blend_event: CoreToEdgeEvent) {
         match blend_event {
             lb_blend::network::core::with_edge::behaviour::Event::Message(msg) => {
-                // Publish message received from edge node to all the core nodes in the current
-                // session without re-verifying it.
-                self.publish_validated_swarm_message(&msg);
+                // Forward message received from edge node to all the core nodes.
+                self.validate_and_publish_swarm_message(msg.clone().into());
                 // Bubble up to service for decapsulation and delaying.
                 self.report_message_to_service(msg, metrics::InboundMessageType::Edge);
             }
