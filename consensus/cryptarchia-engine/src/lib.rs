@@ -567,16 +567,11 @@ where
             .expect("Local chain tip height must be >= LIB height.")
     }
 
-    pub fn online(self) -> (Self, PrunedBlocks<Id>) {
-        let mut new = Self {
-            local_chain: self.local_chain,
-            branches: self.branches.clone(),
-            config: self.config,
-            state: State::Online,
-        };
+    pub fn online(mut self) -> (Self, PrunedBlocks<Id>) {
+        self.state = State::Online;
         // Update the LIB to the current local chain's tip
-        let pruned_blocks = new.update_lib();
-        (new, pruned_blocks)
+        let pruned_blocks = self.update_lib();
+        (self, pruned_blocks)
     }
 
     pub const fn config(&self) -> &Config {

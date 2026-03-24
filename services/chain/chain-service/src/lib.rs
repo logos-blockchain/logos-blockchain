@@ -564,7 +564,7 @@ where
             .await;
         // These are blocks that have been pruned by the cryptarchia engine but have not
         // yet been deleted from the storage layer.
-        let mut storage_blocks_to_remove = Self::delete_pruned_blocks_from_storage(
+        let mut storage_blocks_to_remove = Self::delete_stale_blocks_from_storage(
             pruned_blocks.stale_blocks().copied(),
             &self.state.storage_blocks_to_remove,
             relays.storage_adapter(),
@@ -871,7 +871,7 @@ where
         )
         .await?;
 
-        let storage_blocks_to_remove = Self::delete_pruned_blocks_from_storage(
+        let storage_blocks_to_remove = Self::delete_stale_blocks_from_storage(
             pruned_blocks.stale_blocks().copied(),
             storage_blocks_to_remove,
             relays.storage_adapter(),
@@ -1158,7 +1158,7 @@ where
         (cryptarchia, pruned_blocks)
     }
 
-    /// Remove the pruned blocks from the storage layer.
+    /// Remove the stale blocks from the storage layer.
     ///
     /// Also, this removes the `additional_blocks` from the storage
     /// layer. These blocks might belong to previous pruning operations and
@@ -1166,13 +1166,13 @@ where
     ///
     /// This function returns any block that fails to be deleted from the
     /// storage layer.
-    async fn delete_pruned_blocks_from_storage(
-        pruned_blocks: impl Iterator<Item = HeaderId> + Send,
+    async fn delete_stale_blocks_from_storage(
+        stale_blocks: impl Iterator<Item = HeaderId> + Send,
         additional_blocks: &HashSet<HeaderId>,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
     ) -> HashSet<HeaderId> {
         match Self::delete_blocks_from_storage(
-            pruned_blocks.chain(additional_blocks.iter().copied()),
+            stale_blocks.chain(additional_blocks.iter().copied()),
             storage_adapter,
         )
         .await
@@ -1329,7 +1329,7 @@ where
             error!("Could not store immutable block IDs: {e}");
         }
 
-        let storage_blocks_to_remove = Self::delete_pruned_blocks_from_storage(
+        let storage_blocks_to_remove = Self::delete_stale_blocks_from_storage(
             pruned_blocks.stale_blocks().copied(),
             storage_blocks_to_remove,
             storage_adapter,
