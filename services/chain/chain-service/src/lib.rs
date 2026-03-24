@@ -55,7 +55,7 @@ use tokio::{
     sync::{broadcast, mpsc, oneshot, watch},
     time::Instant,
 };
-use tracing::{Level, debug, error, info, instrument, span, trace, warn};
+use tracing::{Level, debug, error, info, instrument, span, warn};
 use tracing_futures::Instrument as _;
 
 pub use crate::bootstrap::config::{BootstrapConfig, OfflineGracePeriodConfig};
@@ -1105,15 +1105,6 @@ where
         // of structural sharing If forking is low, this might not be necessary
         let blocks =
             Self::get_blocks_in_range(lib_id, self.state.tip, relays.storage_adapter()).await;
-        let replay_block_count = blocks.len().saturating_sub(1);
-        trace!(
-            target: LOG_TARGET,
-            lib = ?lib_id,
-            tip = ?self.state.tip,
-            slot = current_slot.into_inner(),
-            replay_block_count,
-            "initialize_cryptarchia startup state loaded"
-        );
 
         // Skip LIB block since it's already applied
         let blocks = blocks.into_iter().skip(1);
