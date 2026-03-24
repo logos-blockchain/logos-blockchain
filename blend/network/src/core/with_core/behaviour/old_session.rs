@@ -40,26 +40,28 @@ where
     ProofsVerifier: encap::ProofsVerifier,
 {
     /// Validates the public header of an encapsulated message, and
-    /// if valid, forwards it to all negotiated peers.
-    pub fn validate_and_publish_message(
+    /// if valid, forwards it to all negotiated peers minus the sender.
+    pub fn validate_and_forward_message(
         &mut self,
         message: EncapsulatedMessage,
+        except: PeerId,
     ) -> Result<(), Error> {
         let validated_message = self.verify_encapsulated_message_public_header(message)?;
-        self.forward_validated_message_and_maybe_exclude(&validated_message, None)
+        self.forward_validated_message_and_maybe_exclude(&validated_message, Some(except))
     }
 
     /// Forward an already-verified encapsulated message to all negotiated
-    /// peers.
+    /// peers minus the sender.
     ///
     /// It is the responsibility of the caller to make sure the message being
     /// published is valid when received by other peers, else the node will get
     /// banned from the network.
-    pub fn publish_validated_message(
+    pub fn forward_validated_message(
         &mut self,
         message: &EncapsulatedMessageWithVerifiedPublicHeader,
+        except: PeerId,
     ) -> Result<(), Error> {
-        self.forward_validated_message_and_maybe_exclude(message, None)
+        self.forward_validated_message_and_maybe_exclude(message, Some(except))
     }
 
     fn verify_encapsulated_message_public_header(

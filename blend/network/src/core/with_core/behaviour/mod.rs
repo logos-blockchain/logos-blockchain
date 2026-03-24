@@ -821,7 +821,9 @@ where
         &mut self,
         message: EncapsulatedMessage,
     ) -> Result<(), Error> {
-        self.validate_and_forward_message_except(message, None)
+        let validated_message =
+            self.validate_encapsulated_message_public_header_with_current_session(message)?;
+        self.forward_validated_message_and_maybe_exclude(&validated_message, None)
     }
 
     /// Publish an already-encapsulated, already-verified message to all
@@ -854,7 +856,17 @@ where
         message: EncapsulatedMessage,
         except: (PeerId, ConnectionId),
     ) -> Result<(), Error> {
-        self.validate_and_forward_message_except(message, Some(except))
+        if let Some(old_session) = &mut self.old_session
+            && old_session
+                .validate_and_forward_message(message.clone(), except.0)
+                .is_ok()
+        {
+            return Ok(());
+        }
+
+        let validated_message =
+            self.validate_encapsulated_message_public_header_with_current_session(message)?;
+        self.forward_validated_message_and_maybe_exclude(&validated_message, Some(except.0))
     }
 
     /// Forwards a message to all healthy connections except the [`except`]
@@ -878,31 +890,10 @@ where
         if let Some(old_session) = &mut self.old_session
             && old_session.is_negotiated(&except)
         {
-            return old_session.publish_validated_message(message);
+            return old_session.forward_validated_message(message, except.0);
         }
 
         self.forward_validated_message_and_maybe_exclude(message, Some(except.0))
-    }
-
-    fn validate_and_forward_message_except(
-        &mut self,
-        message: EncapsulatedMessage,
-        except: Option<(PeerId, ConnectionId)>,
-    ) -> Result<(), Error> {
-        if let Some(old_session) = &mut self.old_session
-            && old_session
-                .validate_and_publish_message(message.clone())
-                .is_ok()
-        {
-            return Ok(());
-        }
-
-        let validated_message =
-            self.validate_encapsulated_message_public_header_with_current_session(message)?;
-        self.forward_validated_message_and_maybe_exclude(
-            &validated_message,
-            except.map(|(peer_id, _)| peer_id),
-        )
     }
 
     // Try to validate an encapsulated public header with the current session

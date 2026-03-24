@@ -240,7 +240,7 @@ where
     fn handle_blend_core_behaviour_event(&mut self, blend_event: CoreToCoreEvent) {
         match blend_event {
             lb_blend::network::core::with_core::behaviour::Event::Message(msg, conn) => {
-                // Forward message received from node to all other core nodes (in current or previous session) without re-verifying it.
+                // Forward message received from node to all other core nodes (in current or previous session, minus the sender) without re-verifying it.
                 self.forward_validated_swarm_message(&msg, conn);
                 // Bubble up to service for decapsulation and delaying.
                 self.report_message_to_service(*msg, metrics::InboundMessageType::Core);
@@ -452,7 +452,7 @@ where
     fn handle_blend_edge_behaviour_event(&mut self, blend_event: CoreToEdgeEvent) {
         match blend_event {
             lb_blend::network::core::with_edge::behaviour::Event::Message(msg) => {
-                // Forward message received from edge node to all the core nodes in the current
+                // Publish message received from edge node to all the core nodes in the current
                 // session without re-verifying it.
                 self.publish_validated_swarm_message(&msg);
                 // Bubble up to service for decapsulation and delaying.
