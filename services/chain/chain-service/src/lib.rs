@@ -31,7 +31,7 @@ use lb_core::{
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType},
 };
 pub use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_cryptarchia_engine::{PrunedBlocks, ReorgedBlocks, UpdatedCryptarchia};
+use lb_cryptarchia_engine::{PrunedBlocks, ReorgedBlocks};
 use lb_cryptarchia_sync::{GetTipResponse, ProviderResponse};
 pub use lb_ledger::EpochState;
 use lb_ledger::LedgerState;
@@ -305,12 +305,7 @@ impl Cryptarchia {
                 err => Error::Ledger(err),
             })?;
 
-        // TODO: On failure, rollback `self.ledger`
-        let UpdatedCryptarchia {
-            cryptarchia: consensus,
-            pruned_blocks,
-            reorged_blocks,
-        } = self
+        let (pruned_blocks, reorged_blocks) = self
             .consensus
             .receive_block(id, parent, slot)
             .map_err(|err| match err {
@@ -321,7 +316,6 @@ impl Cryptarchia {
                 err => Error::Consensus(err),
             })?;
 
-        self.consensus = consensus;
         self.ledger.commit_update(id, state);
 
         // Prune the ledger states of all the pruned blocks.
