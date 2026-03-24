@@ -331,21 +331,15 @@ impl LedgerState {
                 + tx.storage_gas_cost();
 
             // Check that the transaction at least pays for the base fee
-            match total_balance.cmp(&fee_burned.into()) {
-                Ordering::Less => return Err(LedgerError::InsufficientExecutionFee),
-                Ordering::Greater | Ordering::Equal => {} // OK !
+            if total_balance < fee_burned.into() {
+                return Err(LedgerError::InsufficientExecutionFee);
             }
 
             // Check that the transaction pays the correct storage fees
             // TODO: remove the storage price from the Mantle Transaction and wallet should
             // pull the price from ledger to get the fees to pay
-            match tx
-                .mantle_tx()
-                .storage_gas_price
-                .cmp(self.cryptarchia_ledger.storage_gas_price())
-            {
-                Ordering::Greater | Ordering::Less => return Err(LedgerError::InvalidStoragePrice),
-                Ordering::Equal => {} // OK !
+            if tx.mantle_tx().storage_gas_price != *self.cryptarchia_ledger.storage_gas_price() {
+                return Err(LedgerError::InvalidStoragePrice);
             }
 
             let fee_tip = total_balance as Gas - fee_burned;
@@ -354,14 +348,11 @@ impl LedgerState {
         }
 
         // Check that the block is not exceeding the Gas limit
-        match total_block_execution_gas.cmp(&EXECUTION_GAS_LIMIT) {
-            Ordering::Greater => {
-                return Err(LedgerError::TooMuchExecutionGas {
-                    gas: total_block_execution_gas,
-                    limit: EXECUTION_GAS_LIMIT,
-                });
-            }
-            Ordering::Less | Ordering::Equal => {} // OK !
+        if total_block_execution_gas > EXECUTION_GAS_LIMIT {
+            return Err(LedgerError::TooMuchExecutionGas {
+                gas: total_block_execution_gas,
+                limit: EXECUTION_GAS_LIMIT,
+            });
         }
         // Compute Block rewards and give tips
         self = self.compute_block_rewards(total_fee_burned, total_fee_tip);

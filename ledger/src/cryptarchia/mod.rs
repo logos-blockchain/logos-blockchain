@@ -620,14 +620,11 @@ const fn update_storage_market(
 
     let new_ema = ((total_storage_gas + previous_ema) / STORAGE_MARKET_EMA_DENOMINATOR) as Gas;
     let new_ema_unsigned = new_ema as u128;
-    let new_price = if STORAGE_MARKET_CLAMP_DENOMINATOR * total_storage_gas
-        <= STORAGE_MARKET_CLAMP_DOWN_NUMERATOR * new_ema_unsigned
-    {
+    let comparator = STORAGE_MARKET_CLAMP_DENOMINATOR * total_storage_gas;
+    let new_price = if comparator <= STORAGE_MARKET_CLAMP_DOWN_NUMERATOR * new_ema_unsigned {
         (previous_price * STORAGE_MARKET_CLAMP_DOWN_NUMERATOR / STORAGE_MARKET_CLAMP_DENOMINATOR)
             as Gas
-    } else if STORAGE_MARKET_CLAMP_DENOMINATOR * total_storage_gas
-        >= STORAGE_MARKET_CLAMP_UP_NUMERATOR * new_ema_unsigned
-    {
+    } else if comparator >= STORAGE_MARKET_CLAMP_UP_NUMERATOR * new_ema_unsigned {
         (previous_price * STORAGE_MARKET_CLAMP_UP_NUMERATOR / STORAGE_MARKET_CLAMP_DENOMINATOR)
             as Gas
     } else {
