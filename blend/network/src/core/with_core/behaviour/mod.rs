@@ -811,7 +811,7 @@ where
     ProofsVerifier: encap::ProofsVerifier,
 {
     /// Publish an already-encapsulated message to all connected peers
-    /// in the current or old session.
+    /// in the current session.
     ///
     /// Before the message is propagated, its public header is validated to
     /// make sure the receiving peer won't mark us as malicious.
