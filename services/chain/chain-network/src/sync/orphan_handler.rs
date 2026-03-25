@@ -9,7 +9,7 @@ use std::{
 use futures::{Stream, StreamExt as _};
 use lb_core::header::HeaderId;
 use overwatch::DynError;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 use crate::{
     metrics,
@@ -155,7 +155,7 @@ where
 
         self.pending_orphans_queue
             .insert(block_id, OrphanInfo::new(block_id, current_tip, lib));
-        info!(
+        debug!(
             target: LOG_TARGET,
             ?block_id, ?current_tip, ?lib, queue_size = self.pending_orphans_queue.len(),
             "Orphan block enqueued for sync"
@@ -312,7 +312,7 @@ where
                         metrics::orphan_blocks_received_total();
 
                         if download.orphan_info.orphan_id == block_id {
-                            info!(
+                            debug!(
                                 target: LOG_TARGET,
                                 ?block_id,
                                 total_blocks_received = download.total_blocks_received,

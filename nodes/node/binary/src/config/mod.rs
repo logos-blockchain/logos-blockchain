@@ -9,7 +9,9 @@ use ::tracing::{Level, warn};
 use clap::{Parser, Subcommand, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
+use lb_tracing::filter::envfilter::default_envfilter_config;
 use serde::Deserialize;
+use tracing::serde::filter::{EnvConfig, Layer};
 
 use crate::config::tracing::serde::logger::{FileConfig, GelfConfig};
 pub use crate::config::{
@@ -223,6 +225,11 @@ pub struct LogArgs {
 
     #[clap(long = "log-level", env = "LOG_LEVEL")]
     level: Option<String>,
+
+    /// Per-target log filter directives, e.g.
+    /// `libp2p_gossipsub=info,h2=warn`
+    #[clap(long = "log-filter", env = "LOG_FILTER")]
+    filter: Option<String>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -413,6 +420,7 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
         directory,
         prefix,
         level,
+        filter,
     } = tracing_args;
 
     if let Some(backend_type) = backend {
@@ -452,7 +460,30 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
             _ => return Err(eyre!("Invalid log level provided: {}", level_str)),
         };
     }
+
+    if let Some(filter_string) = filter {
+        tracing.filter = parse_log_filter_layer(filter_string);
+    } else {
+        apply_default_debug_log_filter(tracing);
+    }
+
     Ok(())
+}
+
+const fn parse_log_filter_layer(raw: String) -> Layer {
+    Layer::Env(EnvConfig { filter: raw })
+}
+
+fn apply_default_debug_log_filter(tracing: &mut TracingConfig) {
+    if !matches!(tracing.filter, Layer::None) {
+        return;
+    }
+
+    if let Some(filter) = default_envfilter_config(tracing.level) {
+        tracing.filter = Layer::Env(EnvConfig {
+            filter: filter.filter,
+        });
+    }
 }
 
 pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) -> Result<()> {

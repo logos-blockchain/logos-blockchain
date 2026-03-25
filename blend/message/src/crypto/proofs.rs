@@ -69,7 +69,12 @@ impl ProofsVerifier for RealProofsVerifier {
     type Error = Error;
 
     fn new(public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-        tracing::debug!("Generating new proof verifier with public inputs: {public_inputs:?}");
+        tracing::trace!(
+            session = public_inputs.session,
+            quota = public_inputs.core.quota,
+            message_quota = public_inputs.leader.message_quota,
+            "Generating new proof verifier"
+        );
         Self {
             current_inputs: public_inputs,
             previous_epoch_inputs: None,
@@ -82,8 +87,10 @@ impl ProofsVerifier for RealProofsVerifier {
             swap(&mut self.current_inputs.leader, &mut new_pol_inputs);
             new_pol_inputs
         };
-        tracing::debug!(
-            "Transitioning epochs for proof verifier from: {old_epoch_inputs:?} to: {new_pol_inputs:?}"
+        tracing::trace!(
+            previous_message_quota = old_epoch_inputs.message_quota,
+            new_message_quota = new_pol_inputs.message_quota,
+            "Transitioning epochs for proof verifier"
         );
         self.previous_epoch_inputs = Some(old_epoch_inputs);
     }
@@ -105,8 +112,13 @@ impl ProofsVerifier for RealProofsVerifier {
 
         // Try with current input, and if it fails, try with the previous one, if any
         // (i.e., within the epoch transition period).
-        tracing::debug!(
-            "Verifying proof of quota {proof:?} with session {session:?}, public core inputs: {core:?}, leader inputs: {leader:?} and signing key: {signing_key:?}."
+        tracing::trace!(
+            key_nullifier = ?proof.key_nullifier(),
+            session,
+            quota = core.quota,
+            message_quota = leader.message_quota,
+            signing_key = ?signing_key,
+            "Verifying proof of quota"
         );
         let start = Instant::now();
         let proof_verification_result = proof
@@ -118,11 +130,13 @@ impl ProofsVerifier for RealProofsVerifier {
             })
             .or_else(|_| {
                 let Some(previous_epoch_inputs) = self.previous_epoch_inputs else {
-                    tracing::debug!("Input proof invalid and no previous epoch to try with.");
+                    tracing::trace!("Input proof invalid and no previous epoch to try with");
                     return Err(Error::ProofOfQuota(quota::Error::InvalidProof));
                 };
-                tracing::debug!(
-                    "Verifying same proof of quota with previous epoch leader inputs: {previous_epoch_inputs:?}."
+                tracing::trace!(
+                    session,
+                    message_quota = previous_epoch_inputs.message_quota,
+                    "Verifying proof of quota with previous epoch leader inputs"
                 );
                 proof
                     .verify(&PublicInputs {
@@ -131,8 +145,11 @@ impl ProofsVerifier for RealProofsVerifier {
                         session,
                         signing_key: *signing_key.as_inner(),
                     })
-                    .map_err(Error::ProofOfQuota).inspect_err(|_| {
-                        tracing::debug!("Input proof invalid with both current and previous epoch public inputs.");
+                    .map_err(Error::ProofOfQuota)
+                    .inspect_err(|_| {
+                        tracing::trace!(
+                            "Input proof invalid with both current and previous epoch public inputs"
+                        );
                     })
             });
 

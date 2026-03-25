@@ -29,13 +29,7 @@ impl GeneralTracingConfig {
                     service_name: host_identifier.clone(),
                 }),
                 filter: tracing::filter::Layer::Env(tracing::filter::EnvConfig {
-                    // Allow events only from modules that matches the regex, if it matches -
-                    // use provided tracing level. Libp2p related crates
-                    // are very log intensive in debug mode.
-                    filters: [("logos-blockchain", "debug"), ("libp2p", "debug")]
-                        .into_iter()
-                        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-                        .collect(),
+                    filter: "logos_blockchain=debug,libp2p=debug".to_owned(),
                 }),
                 metrics: tracing::metrics::Layer::Otlp(tracing::metrics::OtlpConfig {
                     endpoint: "http://127.0.0.1:9090/api/v1/otlp/v1/metrics"

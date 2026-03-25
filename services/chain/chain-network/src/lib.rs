@@ -55,7 +55,7 @@ use crate::{
 
 const SERVICE_ID: &str = "ChainNetwork";
 
-pub(crate) const LOG_TARGET: &str = "chain-network::service";
+pub(crate) const LOG_TARGET: &str = "chain_network::service";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -598,7 +598,11 @@ where
 /// Try to add a [`Block`] to [`Cryptarchia`].
 /// A [`Block`] is only added if it's valid
 #[expect(clippy::allow_attributes_without_reason)]
-#[instrument(level = "debug", skip(cryptarchia, mempool_adapter))]
+#[instrument(
+    level = "debug",
+    skip(block, cryptarchia, mempool_adapter),
+    fields(block_id = %block.header().id(), tx_count = block.transactions().count())
+)]
 async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool, RuntimeServiceId>(
     block: Block<Cryptarchia::Tx>,
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,

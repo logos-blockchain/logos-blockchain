@@ -78,7 +78,7 @@ use overwatch::{
 use rand::{RngCore, SeedableRng as _, seq::SliceRandom as _};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 use crate::{
     core::{
@@ -651,8 +651,11 @@ where
 
     info!(
         target: LOG_TARGET,
-        "The current membership is ready: {:?}",
-        current_membership_info.public
+        session = current_membership_info.public.session,
+        members = current_membership_info.public.membership.size(),
+        local_node_index = current_membership_info.public.membership.local_index(),
+        quota = current_membership_info.public.poq_core_public_inputs.quota,
+        "Current membership is ready"
     );
 
     let current_public_info = PublicInfo {
@@ -670,7 +673,14 @@ where
         },
     };
 
-    debug!(target: LOG_TARGET, "Current public info: {:?}", current_public_info);
+    trace!(
+        target: LOG_TARGET,
+        session = current_public_info.session.session_number,
+        members = current_public_info.session.membership.size(),
+        local_node_index = current_public_info.session.membership.local_index(),
+        quota = current_public_info.session.core_public_inputs.quota,
+        "Current public info initialized"
+    );
 
     let crypto_processor = CoreCryptographicProcessor::<
         _,
@@ -695,10 +705,18 @@ where
     let current_recovery_checkpoint = if let Some(saved_state) = last_saved_state.take()
         && saved_state.last_seen_session() == current_membership_info.public.session
     {
-        tracing::debug!(target: LOG_TARGET, "Found recovery state for session {:?}: {saved_state:?}", current_membership_info.public.session);
+        tracing::trace!(
+            target: LOG_TARGET,
+            session = current_membership_info.public.session,
+            "Found recovery state for current session"
+        );
         saved_state
     } else {
-        tracing::debug!(target: LOG_TARGET, "No recovery state found for session {:?}. Initializing a new one.", current_membership_info.public.session);
+        tracing::trace!(
+            target: LOG_TARGET,
+            session = current_membership_info.public.session,
+            "No recovery state found for current session; initializing a new one"
+        );
 
         ServiceState::with_session(
             current_membership_info.public.session,
@@ -722,7 +740,7 @@ where
     // establishing connections for the old session.
     let mut state_updater = current_recovery_checkpoint.start_updating();
     if let Some(old_session_token_collector) = state_updater.clear_old_session_token_collector() {
-        tracing::info!(target: LOG_TARGET, "Old session token collector loaded. Computing activity proof");
+        tracing::debug!(target: LOG_TARGET, "Old session token collector loaded. Computing activity proof");
         compute_and_submit_activity_proof(old_session_token_collector, sdp_relay).await;
     }
     let current_recovery_checkpoint = state_updater.commit_changes();
@@ -1151,7 +1169,7 @@ where
                     new_processor
                 }
                 Err(e @ (Error::LocalIsNotCoreNode | Error::NetworkIsTooSmall(_))) => {
-                    tracing::info!(target: LOG_TARGET, "New membership does not satisfy the core node condition: {e:?}");
+                    tracing::warn!(target: LOG_TARGET, "New membership does not satisfy the core node condition: {e:?}");
                     return HandleSessionEventOutput::Retiring {
                         old_crypto_processor: current_cryptographic_processor,
                         old_scheduler: current_scheduler
@@ -1184,7 +1202,7 @@ where
             }
         }
         SessionEvent::NewSession(MaybeEmptyCoreSessionInfo::Empty { session }) => {
-            tracing::info!(target: LOG_TARGET, "New session event received, but no session info is available due to empty membership set.");
+            tracing::warn!(target: LOG_TARGET, "New session event received, but no session info is available due to empty membership set.");
             let (_, _, _, _, current_session_blending_token_collector, _, _) =
                 current_recovery_checkpoint.into_components();
             let new_reward_session_info = reward::SessionInfo::new(
@@ -1244,7 +1262,7 @@ async fn compute_and_submit_activity_proof(
             error!(target: LOG_TARGET, "Failed to submit activity proof for the old session: {e:?}");
         }
     } else {
-        info!(target: LOG_TARGET, "No activity proof generated for the old session");
+        debug!(target: LOG_TARGET, "No activity proof generated for the old session");
     }
 }
 
@@ -1600,7 +1618,11 @@ where
 {
     let (blending_tokens, decapsulated_message_type) =
         multi_layer_decapsulation_output.into_components();
-    tracing::debug!(target: LOG_TARGET, "Batch-decapsulated {} layers from the received message.", blending_tokens.len());
+    tracing::trace!(
+        target: LOG_TARGET,
+        layers = blending_tokens.len(),
+        "Batch-decapsulated received message"
+    );
 
     match decapsulated_message_type {
         DecapsulatedMessageType::Completed(fully_decapsulated_message) => {
@@ -1613,7 +1635,11 @@ where
                     tracing::trace!(target: LOG_TARGET, "Processing a fully decapsulated data message.");
                     match NetworkMessage::from_bytes(&serialized_data_message) {
                         Ok(deserialized_network_message) => {
-                            tracing::debug!(target: LOG_TARGET, "Fully decapsulated and deserialized processed data message: {deserialized_network_message:?}");
+                            tracing::trace!(
+                                target: LOG_TARGET,
+                                message_bytes = deserialized_network_message.message.len(),
+                                "Fully decapsulated processed data message"
+                            );
                             let processed_message =
                                 ProcessedMessage::from(deserialized_network_message);
                             scheduler.schedule_processed_message(processed_message.clone());
@@ -1628,7 +1654,11 @@ where
             }
         }
         DecapsulatedMessageType::Incompleted(remaining_encapsulated_message) => {
-            tracing::debug!(target: LOG_TARGET, "Processed encapsulated message: {remaining_encapsulated_message:?}");
+            tracing::trace!(
+                target: LOG_TARGET,
+                message_id = ?remaining_encapsulated_message.id(),
+                "Processed encapsulated message"
+            );
             let processed_message = ProcessedMessage::from(*remaining_encapsulated_message);
 
             crate::metrics::mix_packets_processed_total();
@@ -1733,7 +1763,13 @@ where
 
     // Release all messages concurrently, and wait for all of them to be sent.
     join_all(message_futures).await;
-    tracing::debug!(target: LOG_TARGET, "Sent out {data_count} data, {processed_count} processed and {cover_count} cover messages at this release window.");
+    tracing::debug!(
+        target: LOG_TARGET,
+        data_count,
+        processed_count,
+        cover_count,
+        "Sent messages at release window"
+    );
 
     state_updater.commit_changes()
 }
@@ -1767,7 +1803,11 @@ async fn handle_release_round_for_old_session<
     // Release all messages concurrently, and wait for all of them to be sent.
     let num_futures = futures.len();
     join_all(futures).await;
-    tracing::debug!(target: LOG_TARGET, "Sent out {num_futures} processed messages at this release window for the old session");
+    tracing::debug!(
+        target: LOG_TARGET,
+        processed_count = num_futures,
+        "Sent old-session processed messages at release window"
+    );
 }
 
 fn build_futures_to_release_processed_messages<
@@ -1851,7 +1891,7 @@ where
     let Ok(multi_layer_decapsulation_output) = self_decapsulation_output else {
         // First layer not addressed to ourselves. Publish as regular cover message,
         // hence we consume a core quota.
-        tracing::debug!(target: LOG_TARGET, "Locally generated cover message does not have its outermost layer addressed to us. Sending it out fully encapsulated...");
+        tracing::trace!(target: LOG_TARGET, "Locally generated cover message does not have its outermost layer addressed to us. Sending it out fully encapsulated...");
         state_updater.consume_core_quota(1);
         return Some(encapsulated_cover_message.into());
     };
@@ -2028,7 +2068,12 @@ where
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
-    tracing::debug!(target: LOG_TARGET, "Received new secret PoL info for the epoch: {new_pol_info:?}. Updating the cryptographic processor...");
+    tracing::debug!(
+        target: LOG_TARGET,
+        current_epoch = ?current_epoch,
+        slot = ?new_pol_info.poq_public_inputs.slot,
+        "Received new secret PoL info; updating cryptographic processor"
+    );
     let new_leader_inputs = LeaderInputs {
         pol_ledger_aged: new_pol_info.poq_public_inputs.aged_root,
         pol_epoch_nonce: new_pol_info.poq_public_inputs.epoch_nonce,
@@ -2066,7 +2111,7 @@ async fn submit_activity_proof(
     proof: ActivityProof,
     sdp_relay: &OutboundRelay<SdpMessage>,
 ) -> Result<(), RelayError> {
-    info!(target: LOG_TARGET, "Submitting activity proof for the old session: {proof:?}");
+    debug!(target: LOG_TARGET, "Submitting activity proof for the old session");
     sdp_relay
         .send(SdpMessage::PostActivity {
             metadata: ActivityMetadata::Blend(Box::new((&proof).into())),

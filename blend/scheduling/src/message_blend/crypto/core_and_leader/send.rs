@@ -64,7 +64,7 @@ where
         core_proof_of_quota_generator: CorePoQGenerator,
         epoch: Epoch,
     ) -> Self {
-        tracing::debug!(
+        tracing::trace!(
             "Creating session cryptographic processor with public info {public_info:?} and epoch {epoch:?}"
         );
 
@@ -88,7 +88,7 @@ where
     }
 
     pub fn rotate_epoch(&mut self, new_epoch_public_info: LeaderInputs, new_epoch: Epoch) {
-        tracing::debug!(
+        tracing::trace!(
             "Rotating epoch with new public info {new_epoch_public_info:?} and new epoch {new_epoch:?}"
         );
         self.proofs_generator
@@ -175,7 +175,7 @@ where
             // Map retrieved indices to the nodes' public keys.
             .enumerate()
             .inspect(|(layer, (_, node_index))| {
-                tracing::debug!("Encapsulating layer {layer:?} of message type {payload_type:?} for node at index {node_index:?}. Local node index: {:?}", self.membership.local_index());
+                tracing::trace!("Encapsulating layer {layer:?} of message type {payload_type:?} for node at index {node_index:?}. Local node index: {:?}", self.membership.local_index());
             })
             .map(|(_, (proof, node_index))| {
                 (

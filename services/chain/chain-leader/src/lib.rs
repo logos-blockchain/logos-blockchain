@@ -66,7 +66,7 @@ pub(crate) type WinningPolInfo = (LeaderPrivate, LeaderPublic, Epoch);
 
 const SERVICE_ID: &str = "ChainLeader";
 
-pub(crate) const LOG_TARGET: &str = "chain-leader::service";
+pub(crate) const LOG_TARGET: &str = "chain_leader::service";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -595,7 +595,8 @@ where
     )]
     #[instrument(
         level = "debug",
-        skip(tx_selector, relays, ledger_state, ledger_config)
+        skip(tx_selector, relays, ledger_state, ledger_config, proof, signing_key),
+        fields(parent = %parent, slot = ?slot)
     )]
     async fn propose_block(
         parent: HeaderId,
@@ -661,9 +662,9 @@ where
                 }
                 Err(err) => {
                     tracing::debug!(
-                        "failed to apply tx {:?} during block assembly: {:?}",
-                        tx_hash,
-                        err
+                        tx_hash = ?tx_hash,
+                        error = %err,
+                        "failed to apply tx during block assembly"
                     );
                     invalid_tx_hashes.push(tx_hash);
                 }

@@ -259,6 +259,7 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
                 if !winning {
                     continue;
                 }
+                tracing::trace!("Found winning utxo with ID {:?} for slot {slot}", utxo.id());
 
                 // Note: We discard the signing key here since this is just for pre-computing
                 // winning slots. The actual signing key will be generated when building the
@@ -288,7 +289,7 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
                     .send(Some((leader_private, public_inputs, epoch_state.epoch)))
                     .is_err()
                 {
-                    tracing::debug!(
+                    tracing::trace!(
                         "No active listeners for pre-calculated PoL winning slots. Not broadcasting."
                     );
                 } else {
@@ -336,7 +337,7 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
             .send(Some((private_inputs, public_inputs, epoch)))
             .is_err()
         {
-            tracing::debug!(
+            tracing::trace!(
                 "No active listeners for pre-calculated PoL winning slots. Not broadcasting."
             );
         }
