@@ -12,7 +12,6 @@ use nom::{
 use crate::{
     mantle::{
         MantleTx, Note, NoteId, SignedMantleTx,
-        ledger::Tx as LedgerTx,
         ops::{
             Op, OpProof,
             channel::{
@@ -79,6 +78,7 @@ pub fn decode_op(input: &[u8]) -> IResult<&[u8], Op> {
         opcode::SDP_WITHDRAW => map(decode_sdp_withdraw, Op::SDPWithdraw).parse(input),
         opcode::SDP_ACTIVE => map(decode_sdp_active, Op::SDPActive).parse(input),
         opcode::LEADER_CLAIM => map(decode_leader_claim, Op::LeaderClaim).parse(input),
+        opcode::TRANSFER => map(decode_transfer, Op::Transfer).parse(input),
         _ => Err(nom::Err::Error(Error::new(input, ErrorKind::Fail))),
     }
 }
@@ -554,14 +554,6 @@ fn encode_outputs(outputs: &[Note]) -> Vec<u8> {
     for output in outputs {
         bytes.extend(encode_note(output));
     }
-    bytes
-}
-
-#[must_use]
-pub fn encode_ledger_tx(tx: &LedgerTx) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_inputs(&tx.inputs));
-    bytes.extend(encode_outputs(&tx.outputs));
     bytes
 }
 

@@ -507,6 +507,7 @@ where
         }
     }
 
+    #[expect(clippy::too_many_lines, reason = "TODO: address this at some point")]
     async fn sign_tx(
         tx_builder: MantleTxBuilder,
         ledger: LedgerState,
@@ -914,10 +915,10 @@ where
             header_id,
             storage_adapter,
         )
-        .await
-        .inspect_err(|e| {
-            error!(block_id=?header_id, err=%e, "Failed to fetch new block and ledger for wallet");
-        }) else {
+            .await
+            .inspect_err(|e| {
+                error!(block_id=?header_id, err=%e, "Failed to fetch new block and ledger for wallet");
+            }) else {
             return;
         };
 

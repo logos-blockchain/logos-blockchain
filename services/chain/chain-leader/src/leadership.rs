@@ -341,8 +341,8 @@ mod pol_tests {
 
     use lb_core::{
         mantle::{
-            ledger::{Note, Tx},
-            ops::leader_claim::VoucherCm,
+            ledger::Note,
+            ops::{leader_claim::VoucherCm, transfer::TransferOp},
         },
         proofs::leader_proof::{LeaderProof as _, check_winning},
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -377,7 +377,7 @@ mod pol_tests {
         let pk = sk.to_public_key();
 
         // Create a UTXO
-        let utxo = Tx::new(vec![], vec![Note::new(1000u64, pk)])
+        let utxo = TransferOp::new(vec![], vec![Note::new(1000u64, pk)])
             .utxo_by_index(0)
             .unwrap();
 

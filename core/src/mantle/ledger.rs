@@ -1,20 +1,13 @@
 use std::sync::LazyLock;
 
 use bytes::Bytes;
-use lb_groth16::{
-    Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes, fr_from_bytes_unchecked, serde::serde_fr,
-};
+use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_poseidon2::Digest;
+use lb_poseidon2::Digest as _;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    crypto::ZkHasher,
-    mantle::{
-        Transaction, TransactionHasher, encoding::encode_ledger_tx, gas::GasConstants, tx::TxHash,
-    },
-};
+use crate::{crypto::ZkHasher, mantle::tx::TxHash};
 
 pub type Value = u64;
 
@@ -64,12 +57,6 @@ impl Note {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Tx {
-    pub inputs: Vec<NoteId>,
-    pub outputs: Vec<Note>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Utxo {
     pub tx_hash: TxHash,
@@ -113,7 +100,7 @@ impl Utxo {
     }
 }
 
-static LEDGER_TXHASH_V1_FR: LazyLock<Fr> =
+/*static LEDGER_TXHASH_V1_FR: LazyLock<Fr> =
     LazyLock::new(|| fr_from_bytes(b"LEDGER_TXHASH_V1").expect("Constant should be valid Fr"));
 
 impl Tx {
@@ -169,7 +156,7 @@ impl Transaction for Tx {
     fn as_signing_frs(&self) -> Vec<Fr> {
         Self::as_signing_frs(self)
     }
-}
+}*/
 
 #[cfg(test)]
 mod test {
@@ -196,46 +183,5 @@ mod test {
                 .unwrap()
             )
         );
-    }
-
-    #[test]
-    fn test_utxo_by_index() {
-        let pk0 = ZkPublicKey::from(Fr::from(BigUint::from(0u8)));
-        let pk1 = ZkPublicKey::from(Fr::from(BigUint::from(1u8)));
-        let pk2 = ZkPublicKey::from(Fr::from(BigUint::from(2u8)));
-        let tx = Tx {
-            inputs: vec![NoteId(BigUint::from(0u8).into())],
-            outputs: vec![
-                Note::new(100, pk0),
-                Note::new(200, pk1),
-                Note::new(300, pk2),
-            ],
-        };
-        assert_eq!(
-            tx.utxo_by_index(0),
-            Some(Utxo {
-                tx_hash: tx.hash(),
-                output_index: 0,
-                note: Note::new(100, pk0),
-            })
-        );
-        assert_eq!(
-            tx.utxo_by_index(1),
-            Some(Utxo {
-                tx_hash: tx.hash(),
-                output_index: 1,
-                note: Note::new(200, pk1),
-            })
-        );
-        assert_eq!(
-            tx.utxo_by_index(2),
-            Some(Utxo {
-                tx_hash: tx.hash(),
-                output_index: 2,
-                note: Note::new(300, pk2),
-            })
-        );
-
-        assert!(tx.utxo_by_index(3).is_none());
     }
 }

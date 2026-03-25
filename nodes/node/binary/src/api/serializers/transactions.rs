@@ -1,7 +1,4 @@
-use lb_core::mantle::{
-    MantleTx, Op, OpProof, SignedMantleTx, TxHash, gas::Gas, ledger::Tx as LedgerTx,
-};
-use lb_key_management_system_service::keys::ZkSignature;
+use lb_core::mantle::{MantleTx, Op, OpProof, SignedMantleTx, TxHash, gas::Gas};
 use serde::Serialize;
 
 #[derive(Serialize)]

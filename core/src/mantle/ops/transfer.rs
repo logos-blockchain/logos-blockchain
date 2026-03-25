@@ -69,3 +69,53 @@ impl Transaction for TransferOp {
         Self::as_signing_frs(self)
     }
 }
+
+#[cfg(test)]
+mod test {
+
+    use lb_key_management_system_keys::keys::ZkPublicKey;
+    use num_bigint::BigUint;
+
+    use super::*;
+
+    #[test]
+    fn test_utxo_by_index() {
+        let pk0 = ZkPublicKey::from(Fr::from(BigUint::from(0u8)));
+        let pk1 = ZkPublicKey::from(Fr::from(BigUint::from(1u8)));
+        let pk2 = ZkPublicKey::from(Fr::from(BigUint::from(2u8)));
+        let transfer = TransferOp {
+            inputs: vec![NoteId(BigUint::from(0u8).into())],
+            outputs: vec![
+                Note::new(100, pk0),
+                Note::new(200, pk1),
+                Note::new(300, pk2),
+            ],
+        };
+        assert_eq!(
+            transfer.utxo_by_index(0),
+            Some(Utxo {
+                tx_hash: transfer.hash(),
+                output_index: 0,
+                note: Note::new(100, pk0),
+            })
+        );
+        assert_eq!(
+            transfer.utxo_by_index(1),
+            Some(Utxo {
+                tx_hash: transfer.hash(),
+                output_index: 1,
+                note: Note::new(200, pk1),
+            })
+        );
+        assert_eq!(
+            transfer.utxo_by_index(2),
+            Some(Utxo {
+                tx_hash: transfer.hash(),
+                output_index: 2,
+                note: Note::new(300, pk2),
+            })
+        );
+
+        assert!(transfer.utxo_by_index(3).is_none());
+    }
+}

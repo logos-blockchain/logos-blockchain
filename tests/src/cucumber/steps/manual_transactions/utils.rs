@@ -43,6 +43,7 @@ impl Display for WalletStateType {
 
 use std::str::FromStr;
 
+use lb_core::mantle::OpProof;
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 
 use crate::cucumber::{
@@ -100,7 +101,7 @@ pub async fn create_and_submit_transaction(
 
             let mantle_tx = funded_builder.build();
             let tx_hash = mantle_tx.hash();
-            let ledger_tx_proof = ZkKey::multi_sign(
+            let transfer_proof = ZkKey::multi_sign(
                 std::slice::from_ref(&wallet_account.secret_key),
                 tx_hash.as_ref(),
             )
@@ -108,8 +109,8 @@ pub async fn create_and_submit_transaction(
                 warn!(target: TARGET, "Step `{}` error: {e}", step);
             })?;
 
-            let signed_tx =
-                SignedMantleTx::new(mantle_tx, vec![], ledger_tx_proof).inspect_err(|e| {
+            let signed_tx = SignedMantleTx::new(mantle_tx, vec![OpProof::ZkSig(transfer_proof)])
+                .inspect_err(|e| {
                     warn!(target: TARGET, "Step `{}` error: {e}", step);
                 })?;
 
@@ -651,32 +652,38 @@ async fn collect_wallet_utxos(
 
         for tx in block.transactions() {
             // Unspent outputs
-            for utxo in tx.mantle_tx.ledger_tx.utxos() {
-                if utxo.note.pk == wallet_pk {
-                    owned.insert(utxo.id(), utxo);
-                    if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
-                        info!(
-                            target: TARGET,
-                            "Found UTXO for `{wallet_name}/{wallet_node_name}`: value: {}, id: {:?}",
-                            utxo.note.value,
-                            utxo.id(),
-                        );
+            for transfer in tx.mantle_tx.transfers() {
+                for utxo in transfer.utxos() {
+                    if utxo.note.pk == wallet_pk {
+                        owned.insert(utxo.id(), utxo);
+                        if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
+                            info!(
+                                target: TARGET,
+                                "Found UTXO for `{wallet_name}/{wallet_node_name}`: value: {}, id: {:?}",
+                                utxo.note.value,
+                                utxo.id(),
+                            );
+                        }
                     }
                 }
             }
 
             // Spent outputs
-            for spent in &tx.mantle_tx.ledger_tx.inputs {
-                if owned.remove(spent).is_some() {
-                    if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
-                        info!(
-                            target: TARGET,
-                            "Found spent UTXO for `{wallet_name}/{wallet_node_name}`: id: {:?}",
-                            spent
-                        );
-                    }
-                    if let Some(encumbered) = world.wallet_encumbered_tokens.get_mut(wallet_name) {
-                        encumbered.retain(|u| u.id() != *spent);
+            for transfer in tx.mantle_tx.transfers() {
+                for spent in &transfer.inputs {
+                    if owned.remove(spent).is_some() {
+                        if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
+                            info!(
+                                target: TARGET,
+                                "Found spent UTXO for `{wallet_name}/{wallet_node_name}`: id: {:?}",
+                                spent
+                            );
+                        }
+                        if let Some(encumbered) =
+                            world.wallet_encumbered_tokens.get_mut(wallet_name)
+                        {
+                            encumbered.retain(|u| u.id() != *spent);
+                        }
                     }
                 }
             }

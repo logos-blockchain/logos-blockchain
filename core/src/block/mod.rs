@@ -250,13 +250,13 @@ mod tests {
         crypto::ZkHasher,
         mantle::{
             TransactionHasher,
-            ledger::{Note, Tx, Utxo},
-            ops::leader_claim::VoucherCm,
+            ledger::{Note, Utxo},
+            ops::{leader_claim::VoucherCm, transfer::TransferOp},
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
 
-    impl StorageSize for Tx {
+    impl StorageSize for TransferOp {
         fn storage_size(&self) -> usize {
             0
         }
@@ -321,8 +321,8 @@ mod tests {
             .expect("Proof generation should succeed")
     }
 
-    fn create_transactions(count: usize) -> Vec<Tx> {
-        iter::repeat_with(|| Tx {
+    fn create_transactions(count: usize) -> Vec<TransferOp> {
+        iter::repeat_with(|| TransferOp {
             inputs: vec![],
             outputs: vec![],
         })
@@ -335,7 +335,7 @@ mod tests {
         let parent_block = [0u8; 32].into();
         let slot = Slot::from(42u64);
         let proof_of_leadership = create_proof();
-        let transactions: Vec<Tx> = vec![];
+        let transactions: Vec<TransferOp> = vec![];
 
         let valid_signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let valid_block = Block::create(
@@ -374,7 +374,7 @@ mod tests {
         let proof_of_leadership = create_proof();
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);
 
-        let _valid_block: Block<Tx> = Block::create(
+        let _valid_block: Block<TransferOp> = Block::create(
             parent_block,
             slot,
             proof_of_leadership.clone(),
@@ -401,9 +401,9 @@ mod tests {
     }
 
     #[derive(Clone, Copy, Debug)]
-    pub struct TestTx;
-    impl Transaction for TestTx {
-        const HASHER: TransactionHasher<Self> = |_tx| TxHash(Fr::ZERO);
+    pub struct TestTransferOp;
+    impl Transaction for TestTransferOp {
+        const HASHER: TransactionHasher<Self> = |_transfer| TxHash(Fr::ZERO);
         type Hash = TxHash;
 
         fn as_signing_frs(&self) -> Vec<Fr> {
@@ -411,7 +411,7 @@ mod tests {
         }
     }
 
-    impl StorageSize for TestTx {
+    impl StorageSize for TestTransferOp {
         fn storage_size(&self) -> usize {
             usize::MAX
         }
@@ -423,9 +423,9 @@ mod tests {
         let slot = Slot::from(42u64);
         let proof_of_leadership = create_proof();
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);
-        let tx = TestTx;
+        let transfer = TestTransferOp;
 
-        let _valid_block: Block<Tx> = Block::create(
+        let _valid_block: Block<TransferOp> = Block::create(
             parent_block,
             slot,
             proof_of_leadership.clone(),
@@ -438,14 +438,14 @@ mod tests {
             parent_block,
             slot,
             proof_of_leadership,
-            vec![tx],
+            vec![transfer],
             &signing_key,
         );
 
         assert!(invalid_block_result.is_err());
         let error = invalid_block_result.unwrap_err();
         assert!(
-            matches!(error, Error::ContentTooBig { count, max } if count == tx.storage_size() && max == MAX_BLOCK_SIZE)
+            matches!(error, Error::ContentTooBig { count, max } if count == transfer.storage_size() && max == MAX_BLOCK_SIZE)
         );
     }
 }

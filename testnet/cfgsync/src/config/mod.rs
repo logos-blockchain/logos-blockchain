@@ -89,8 +89,8 @@ pub fn create_node_configs(
     let providers = create_providers(&hosts, &consensus_configs, &blend_configs);
 
     // Update genesis TX to contain Blend providers.
-    let ledger_tx = genesis_tx.mantle_tx().ledger_tx.clone();
-    let genesis_tx_with_declarations = create_genesis_tx_with_declarations(ledger_tx, providers);
+    let transfer_op = genesis_tx.genesis_transfer().clone();
+    let genesis_tx_with_declarations = create_genesis_tx_with_declarations(&transfer_op, providers);
 
     // Set Blend keys in KMS of each node config.
     // Give faucet SK to all nodes so the faucet service can route to any node.
@@ -492,8 +492,8 @@ mod cfgsync_tests {
         // Same entropy + same hosts → identical genesis ledger transactions
         // (ZK proofs use internal randomness, so compare the ledger_tx only).
         assert_eq!(
-            serde_json::to_string(&genesis1.mantle_tx().ledger_tx).unwrap(),
-            serde_json::to_string(&genesis2.mantle_tx().ledger_tx).unwrap(),
+            serde_json::to_string(&genesis1.genesis_transfer()).unwrap(),
+            serde_json::to_string(&genesis2.genesis_transfer()).unwrap(),
         );
 
         // Same entropy + same hosts → identical node network keys.
