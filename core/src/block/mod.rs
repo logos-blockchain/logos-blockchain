@@ -321,7 +321,7 @@ mod tests {
             .expect("Proof generation should succeed")
     }
 
-    fn create_transactions(count: usize) -> Vec<TransferOp> {
+    fn create_transfers(count: usize) -> Vec<TransferOp> {
         iter::repeat_with(|| TransferOp {
             inputs: vec![],
             outputs: vec![],
@@ -387,7 +387,7 @@ mod tests {
             parent_block,
             slot,
             proof_of_leadership,
-            create_transactions(MAX_BLOCK_TRANSACTIONS + 1),
+            create_transfers(MAX_BLOCK_TRANSACTIONS + 1),
             &signing_key,
         );
 

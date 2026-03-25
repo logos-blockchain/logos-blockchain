@@ -31,7 +31,7 @@ use crate::{
 // ==============================================================================
 
 pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx> {
-    // SignedMantleTx = MantleTx OpsProofs LedgerTxProof
+    // SignedMantleTx = MantleTx OpsProofs
     let (input, mantle_tx) = decode_mantle_tx(input)?;
     let (input, ops_proofs) = decode_ops_proofs(input, &mantle_tx.ops)?;
 
@@ -42,7 +42,7 @@ pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx> {
 }
 
 pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
-    // MantleTx = Ops LedgerTx ExecutionGasPrice StorageGasPrice
+    // MantleTx = Ops ExecutionGasPrice StorageGasPrice
     let (input, ops) = decode_ops(input)?;
     let (input, execution_gas_price) = decode_uint64(input)?;
     let (input, storage_gas_price) = decode_uint64(input)?;
@@ -250,7 +250,7 @@ fn decode_outputs(input: &[u8]) -> IResult<&[u8], Vec<Note>> {
 }
 
 fn decode_transfer(input: &[u8]) -> IResult<&[u8], TransferOp> {
-    // LedgerTx = Inputs Outputs
+    // Transfer = Inputs Outputs
     let (input, inputs) = decode_inputs(input)?;
     let (input, outputs) = decode_outputs(input)?;
 
@@ -682,11 +682,11 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx) -> usize {
         })
         .sum::<usize>();
 
-    // LedgerTxProof = ZkSignature
+    // transfer_op_proof = ZkSignature
     // ZkSignature   = Groth16
-    let ledger_tx_proof_size = GROTH16_BYTES;
+    let transfer_op_proof_size = GROTH16_BYTES;
 
-    mantle_tx_size + ops_proofs_size + ledger_tx_proof_size
+    mantle_tx_size + ops_proofs_size + transfer_op_proof_size
 }
 
 #[cfg(test)]

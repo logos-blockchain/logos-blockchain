@@ -17,8 +17,8 @@ pub struct TransferOp {
     pub outputs: Vec<Note>,
 }
 
-static LEDGER_TXHASH_V1_FR: LazyLock<Fr> =
-    LazyLock::new(|| fr_from_bytes(b"LEDGER_TXHASH_V1").expect("Constant should be valid Fr"));
+static TRANSFER_HASH_V1_FR: LazyLock<Fr> =
+    LazyLock::new(|| fr_from_bytes(b"TRANSFER_HASH_V1").expect("Constant should be valid Fr"));
 
 impl TransferOp {
     #[must_use]
@@ -35,7 +35,7 @@ impl TransferOp {
             .as_slice()
             .chunks(GROTH16_SAFE_BYTES_SIZE)
             .map(fr_from_bytes_unchecked);
-        std::iter::once(*LEDGER_TXHASH_V1_FR).chain(frs).collect()
+        std::iter::once(*TRANSFER_HASH_V1_FR).chain(frs).collect()
     }
 
     #[must_use]

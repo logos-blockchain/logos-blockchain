@@ -490,7 +490,7 @@ mod cfgsync_tests {
         assert_eq!(faucet_pk1, faucet_pk2);
 
         // Same entropy + same hosts → identical genesis ledger transactions
-        // (ZK proofs use internal randomness, so compare the ledger_tx only).
+        // (ZK proofs use internal randomness, so compare the transfers only).
         assert_eq!(
             serde_json::to_string(&genesis1.genesis_transfer()).unwrap(),
             serde_json::to_string(&genesis2.genesis_transfer()).unwrap(),

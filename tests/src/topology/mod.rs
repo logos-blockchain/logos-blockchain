@@ -148,8 +148,8 @@ impl Topology {
         // Update genesis TX to contain Blend providers.
         let genesis_tx_with_declarations =
             create_genesis_tx_with_declarations(transfer_op, providers);
-        let updated_ledger_tx = genesis_tx_with_declarations.genesis_transfer().clone();
-        let injected_utxos: Vec<_> = updated_ledger_tx
+        let updated_transfer_op = genesis_tx_with_declarations.genesis_transfer().clone();
+        let injected_utxos: Vec<_> = updated_transfer_op
             .utxos()
             .skip(base_outputs)
             .collect::<Vec<_>>();
