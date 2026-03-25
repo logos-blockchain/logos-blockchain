@@ -219,9 +219,10 @@ mod tests {
     // Genesis transactions don't need verified proofs for Blob/Inscription ops
     fn create_tx(mut ops: Vec<Op>, mut ops_proofs: Vec<OpProof>) -> SignedMantleTx {
         let transfer_op = TransferOp::new(vec![], vec![create_test_note(1000)]);
-        ops.push(Op::Transfer(transfer_op));
+        let mut new_ops = vec![Op::Transfer(transfer_op)];
+        new_ops.append(&mut ops);
         let mantle_tx = MantleTx {
-            ops,
+            ops: new_ops,
             execution_gas_price: 0,
             storage_gas_price: 0,
         };
