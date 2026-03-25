@@ -8,7 +8,7 @@ use num_bigint::BigUint;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTE, Hasher, ZkHasher},
+    crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTES_SIZE, Hasher, ZkHasher},
     mantle::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
@@ -194,7 +194,7 @@ impl Transaction for MantleTx {
         let first_blake_hash = Hasher::digest(encoded_bytes);
         let frs = first_blake_hash
             .as_slice()
-            .chunks(HALF_BLAKE_DIGEST_BYTE)
+            .chunks(HALF_BLAKE_DIGEST_BYTES_SIZE)
             .map(fr_from_bytes_unchecked);
         std::iter::once(*MANTLE_TXHASH_V1_FR).chain(frs).collect()
     }

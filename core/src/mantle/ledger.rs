@@ -8,7 +8,7 @@ use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTE, Hasher, ZkHasher},
+    crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTES_SIZE, Hasher, ZkHasher},
     mantle::{
         Transaction, TransactionHasher, encoding::encode_ledger_tx, gas::GasConstants, tx::TxHash,
     },
@@ -128,7 +128,7 @@ impl Tx {
         let first_blake_hash = Hasher::digest(encoded_bytes);
         let frs = first_blake_hash
             .as_slice()
-            .chunks(HALF_BLAKE_DIGEST_BYTE)
+            .chunks(HALF_BLAKE_DIGEST_BYTES_SIZE)
             .map(fr_from_bytes_unchecked);
         std::iter::once(*LEDGER_TXHASH_V1_FR).chain(frs).collect()
     }
