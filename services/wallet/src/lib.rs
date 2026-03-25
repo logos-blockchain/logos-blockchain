@@ -617,13 +617,17 @@ where
                     Self::prove_leader_claim_op(claim_op.clone(), tx_hash, &ledger, wallet, kms)
                         .await?
                 }
+                // TODO: Mantle Tx Builder should come with different ledger inputs for each
+                Op::Transfer(_) => {
+                    let zk_sig = Self::sign_zksig(tx_hash, input_pks.clone(), kms).await?;
+
+                    OpProof::ZkSig(zk_sig)
+                }
             };
             ops_proofs.push(proof);
         }
 
-        let ledger_tx_proof = Self::sign_zksig(tx_hash, input_pks, kms).await?;
-
-        let signed_mantle_tx = SignedMantleTx::new(mantle_tx, ops_proofs, ledger_tx_proof)
+        let signed_mantle_tx = SignedMantleTx::new(mantle_tx, ops_proofs)
             .expect("Failed to create signed transaction");
 
         Ok(signed_mantle_tx)

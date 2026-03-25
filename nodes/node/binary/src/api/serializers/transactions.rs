@@ -10,7 +10,6 @@ pub struct ApiTransactionSerializer {
     #[serde(getter = "<MantleTx as lb_core::mantle::Transaction>::hash")]
     hash: TxHash,
     ops: Vec<Op>,
-    ledger_tx: LedgerTx,
     execution_gas_price: Gas,
     storage_gas_price: Gas,
 }
@@ -21,7 +20,6 @@ pub struct ApiSignedTransactionSerializer {
     #[serde(with = "ApiTransactionSerializer")]
     mantle_tx: MantleTx,
     ops_proofs: Vec<OpProof>,
-    ledger_tx_proof: ZkSignature,
 }
 
 #[derive(serde::Serialize)]

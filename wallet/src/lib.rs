@@ -35,9 +35,9 @@ pub struct WalletBlock {
 impl<Tx: AuthenticatedMantleTx> From<Block<Tx>> for WalletBlock {
     fn from(block: Block<Tx>) -> Self {
         let mut transfers: Vec<TransferOp> = vec![];
-        let _ = block
-            .transactions()
-            .map(|auth_tx| transfers.extend(auth_tx.mantle_tx().transfers()));
+        for auth_tx in block.transactions() {
+            transfers.append(&mut auth_tx.mantle_tx().transfers());
+        }
         Self {
             id: block.header().id(),
             parent: block.header().parent(),

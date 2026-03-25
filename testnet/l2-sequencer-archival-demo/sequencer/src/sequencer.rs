@@ -5,12 +5,10 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
-        ledger::Tx as LedgerTx,
         ops::{
             Op, OpProof,
             channel::{ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp},
         },
-        tx::TxHash,
     },
 };
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
@@ -73,11 +71,6 @@ pub struct Sequencer {
 }
 
 const MAX_DEPTH_PER_POLL: usize = 50;
-
-fn empty_ledger_signature(tx_hash: &TxHash) -> lb_key_management_system_service::keys::ZkSignature {
-    lb_key_management_system_service::keys::ZkKey::multi_sign(&[], tx_hash.as_ref())
-        .expect("multi-sign with empty key set works")
-}
 
 /// Load signing key from file or generate a new one if it doesn't exist
 fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
@@ -172,11 +165,8 @@ impl Sequencer {
             signer: verifying_key,
         };
 
-        let ledger_tx = LedgerTx::new(vec![], vec![]);
-
         let inscribe_tx = MantleTx {
             ops: vec![Op::ChannelInscribe(inscribe_op)],
-            ledger_tx,
             storage_gas_price: 0,
             execution_gas_price: 0,
         };
@@ -191,7 +181,6 @@ impl Sequencer {
 
         SignedMantleTx {
             ops_proofs: vec![OpProof::Ed25519Sig(signature)],
-            ledger_tx_proof: empty_ledger_signature(&tx_hash),
             mantle_tx: inscribe_tx,
         }
     }
