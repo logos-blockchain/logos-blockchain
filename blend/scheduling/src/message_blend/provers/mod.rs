@@ -1,3 +1,4 @@
+use ::core::num::NonZeroU64;
 use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
 use lb_blend_proofs::{
     quota::{VerifiedProofOfQuota, inputs::prove::public::CoreInputs},
@@ -28,6 +29,7 @@ pub struct ProofsGeneratorSettings {
     pub local_node_index: Option<usize>,
     pub membership_size: usize,
     pub public_inputs: PoQVerificationInputsMinusSigningKey,
+    pub encapsulation_layers: NonZeroU64,
     pub epoch: Epoch,
 }
 

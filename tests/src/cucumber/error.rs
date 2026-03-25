@@ -1,3 +1,5 @@
+use std::io::Error as IoError;
+
 use hex::FromHexError;
 use lb_core::{codec::Error, mantle::tx::VerificationError};
 use lb_testing_framework::configs::wallet::WalletConfigError;
@@ -65,6 +67,8 @@ pub enum StepError {
     FromHexError(#[from] FromHexError),
     #[error(transparent)]
     Error(#[from] Error),
+    #[error(transparent)]
+    IoError(#[from] IoError),
 }
 
 pub type StepResult = Result<(), StepError>;

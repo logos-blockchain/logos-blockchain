@@ -14,6 +14,7 @@ pub enum OperationStatus {
     InitializationError = 0x9,
     StopError = 0xA,
     ConfigurationError = 0xB,
+    ValidationError = 0xC,
 }
 
 impl OperationStatus {

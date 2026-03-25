@@ -148,6 +148,15 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
         SubstreamProtocol::new(ReadyUpgrade::new(self.protocol_name.clone()), ())
     }
 
+    // We need this override because the Swarm is configured with a keepalive
+    // timeout of `0`, which causes connections with edge nodes to be dropped before
+    // there is even an active stream. So we manage the keepalive state ourselves,
+    // by marking the connection as stale if the connection handler is dropped for
+    // any reason.
+    fn connection_keep_alive(&self) -> bool {
+        !matches!(self.state, Some(ConnectionState::Dropped(_)))
+    }
+
     fn on_behaviour_event(&mut self, event: Self::FromBehaviour) {
         let state = self.state.take().expect("Inconsistent state");
         self.state = Some(state.on_behaviour_event(event));

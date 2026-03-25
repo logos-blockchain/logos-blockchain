@@ -7,8 +7,10 @@ use lb_poseidon2::{Digest, Fr};
 use rpds::StackSync;
 
 const EMPTY_VALUE: Fr = Fr::ZERO;
+const ACCEPTABLE_MAX_HEIGHT: u8 = 32;
 
-/// An append-only persistent Merkle Mountain Range (MMR).
+/// An append-only persistent Merkle Mountain Range (MMR), which can accept up
+/// to 2^(`MAX_HEIGHT`-1) elements (leaves).
 ///
 /// Compared to other merkle tree variants, this does not store leaves but
 /// only the necessary internal nodes to update the root hash with new
@@ -22,7 +24,7 @@ const EMPTY_VALUE: Fr = Fr::ZERO;
 /// need to preserve structural sharing, you should use a custom serialization.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone)]
-pub struct MerkleMountainRange<T, Hash, const MAX_HEIGHT: u8 = 32> {
+pub struct MerkleMountainRange<T, Hash, const MAX_HEIGHT: u8 = ACCEPTABLE_MAX_HEIGHT> {
     roots: StackSync<Root>,
     #[cfg_attr(feature = "serde", serde(skip))]
     _hash: std::marker::PhantomData<(T, Hash)>,
@@ -62,8 +64,8 @@ where
     #[must_use]
     pub fn new() -> Self {
         assert!(
-            MAX_HEIGHT <= 32,
-            "MAX_HEIGHT must be less than or equal to 32"
+            MAX_HEIGHT <= ACCEPTABLE_MAX_HEIGHT,
+            "MAX_HEIGHT must be <= {ACCEPTABLE_MAX_HEIGHT}"
         );
         Self {
             roots: StackSync::new_sync(),
@@ -71,8 +73,11 @@ where
         }
     }
 
-    #[must_use]
-    pub fn push(&self, elem: T) -> Self {
+    pub fn push(&self, elem: T) -> Result<Self, MmrFull> {
+        if self.roots.peek().is_some_and(|r| r.height == MAX_HEIGHT) {
+            return Err(MmrFull);
+        }
+
         let root = Hash::digest(&[*elem.as_ref()]);
         let mut last_root = Root { root, height: 1 };
         let mut roots = self.roots.clone();
@@ -84,11 +89,9 @@ where
                     root: Hash::compress(&[root.root, last_root.root]),
                     height: last_root.height + 1,
                 };
-                // we want the frontier root to have a fixed height, so each individual root
-                // must be less than MAX_HEIGHT
                 assert!(
-                    last_root.height < MAX_HEIGHT,
-                    "Height must be less than {MAX_HEIGHT}"
+                    last_root.height <= MAX_HEIGHT,
+                    "Height must be less than or equal to {MAX_HEIGHT}"
                 );
             } else {
                 break;
@@ -97,42 +100,55 @@ where
 
         roots = roots.push(last_root);
 
-        Self {
+        Ok(Self {
             roots,
             _hash: std::marker::PhantomData,
-        }
+        })
     }
 
     #[must_use]
     pub fn frontier_root(&self) -> Fr {
-        let mut root = empty_subtree_root::<Hash>(0);
-        let mut height = 0;
-        for last in &self.roots {
-            while height < last.height - 1 {
-                root = Hash::compress(&[root, empty_subtree_root::<Hash>(height as usize)]);
+        let mut iter = self.roots.iter();
+
+        let (mut root, mut height) = match iter.next() {
+            Some(last) => (last.root, last.height),
+            None => {
+                // MMR is empty. Return the root of an entirely empty tree.
+                return empty_subtree_root::<Hash>(MAX_HEIGHT);
+            }
+        };
+
+        for last in iter {
+            while height < last.height {
+                root = Hash::compress(&[root, empty_subtree_root::<Hash>(height)]);
                 height += 1;
             }
             root = Hash::compress(&[last.root, root]);
             height += 1;
         }
+
         assert!(height <= MAX_HEIGHT);
-        // ensure a fixed depth
         while height < MAX_HEIGHT {
-            root = Hash::compress(&[root, empty_subtree_root::<Hash>(height as usize)]);
+            root = Hash::compress(&[root, empty_subtree_root::<Hash>(height)]);
             height += 1;
         }
-
         assert_eq!(height, MAX_HEIGHT);
 
         root
     }
 
     #[must_use]
+    pub const fn capacity(&self) -> usize {
+        Self::num_leaves(MAX_HEIGHT)
+    }
+
+    const fn num_leaves(height: u8) -> usize {
+        1 << (height - 1)
+    }
+
+    #[must_use]
     pub fn len(&self) -> usize {
-        self.roots
-            .iter()
-            .map(|r| (1 << (r.height - 1)) as usize)
-            .sum()
+        self.roots.iter().map(|r| Self::num_leaves(r.height)).sum()
     }
 
     #[must_use]
@@ -141,17 +157,25 @@ where
     }
 }
 
-fn empty_subtree_root<Hash: Digest>(height: usize) -> Fr {
-    static PRECOMPUTED_EMPTY_ROOTS: OnceLock<[Fr; 32]> = OnceLock::new();
-    assert!(height < 32, "Height must be less than 32: {height}");
+fn empty_subtree_root<Hash: Digest>(height: u8) -> Fr {
+    static PRECOMPUTED_EMPTY_ROOTS: OnceLock<[Fr; ACCEPTABLE_MAX_HEIGHT as usize]> =
+        OnceLock::new();
+    assert!(
+        (1..=ACCEPTABLE_MAX_HEIGHT).contains(&height),
+        "Height:{height} must be in 1..={ACCEPTABLE_MAX_HEIGHT}"
+    );
     PRECOMPUTED_EMPTY_ROOTS.get_or_init(|| {
-        let mut hashes = [EMPTY_VALUE; 32];
-        for i in 1..32 {
+        let mut hashes = [EMPTY_VALUE; ACCEPTABLE_MAX_HEIGHT as usize];
+        for i in 1..ACCEPTABLE_MAX_HEIGHT as usize {
             hashes[i] = Hash::compress(&[hashes[i - 1], hashes[i - 1]]);
         }
         hashes
-    })[height]
+    })[(height - 1) as usize]
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("MMR is full")]
+pub struct MmrFull;
 
 #[cfg(test)]
 mod test {
@@ -191,7 +215,7 @@ mod test {
     #[expect(clippy::clone_on_copy, reason = "for the sake of the test")]
     fn test_empty_roots() {
         let mut root = Fr::ZERO;
-        for i in 0..32 {
+        for i in 1..=32 {
             assert_eq!(root, empty_subtree_root::<ZkHasher>(i));
             root = <ZkHasher as Digest>::compress(&[root.clone(), root]);
         }
@@ -202,7 +226,7 @@ mod test {
             .into_iter()
             .map(|e| leaf(e.as_ref()))
             .collect::<Vec<_>>();
-        let pad = (1 << height as usize) - leaves.len();
+        let pad = (1 << (height - 1) as usize) - leaves.len();
         leaves.extend(std::iter::repeat_n(EMPTY_VALUE, pad));
         leaves
     }
@@ -224,7 +248,7 @@ mod test {
     fn test_frontier_root_8(elems: Vec<[u8; 32]>) {
         let mut mmr = <MerkleMountainRange<TestFr, ZkHasher, 8>>::new();
         for elem in &elems {
-            mmr = mmr.push(elem.as_ref().into());
+            mmr = mmr.push(elem.as_ref().into()).unwrap();
         }
         assert_eq!(mmr.frontier_root(), root(&padded_leaves(elems, 8)));
     }
@@ -234,27 +258,38 @@ mod test {
     fn test_frontier_root_16(elems: Vec<[u8; 32]>) {
         let mut mmr = <MerkleMountainRange<TestFr, ZkHasher, 16>>::new();
         for elem in &elems {
-            mmr = mmr.push(elem.as_ref().into());
+            mmr = mmr.push(elem.as_ref().into()).unwrap();
         }
         assert_eq!(mmr.frontier_root(), root(&padded_leaves(elems, 16)));
     }
 
     #[test]
     fn test_empty_tree() {
-        let mmr = <MerkleMountainRange<TestFr, ZkHasher>>::new();
+        let mmr = <MerkleMountainRange<TestFr, ZkHasher, 3>>::new();
         assert_eq!(mmr.len(), 0);
         assert!(mmr.is_empty());
+        assert_eq!(mmr.frontier_root(), empty_subtree_root::<ZkHasher>(3));
     }
 
     #[test]
+    #[expect(clippy::cognitive_complexity, reason = "test continuity")]
     fn test_mmr_push() {
-        let mut mmr = <MerkleMountainRange<TestFr, ZkHasher>>::new().push(b"hello".as_ref().into());
+        const HEIGHT: u8 = 3; // max 2^(3-1) = 4 leaves
+        let mut mmr = <MerkleMountainRange<TestFr, ZkHasher, HEIGHT>>::new();
+        assert_eq!(mmr.capacity(), 4);
+        assert_eq!(mmr.len(), 0);
+        let frontier_root0 = mmr.frontier_root();
+        assert_eq!(frontier_root0, empty_subtree_root::<ZkHasher>(HEIGHT));
+
+        mmr = mmr.push(b"hello".as_ref().into()).unwrap();
         assert_eq!(mmr.len(), 1);
         assert_eq!(mmr.roots.size(), 1);
         assert_eq!(mmr.roots.peek().unwrap().height, 1);
         assert_eq!(mmr.roots.peek().unwrap().root, leaf(b"hello"));
+        let frontier_root1 = mmr.frontier_root();
+        assert_ne!(frontier_root1, frontier_root0);
 
-        mmr = mmr.push(b"world".as_ref().into());
+        mmr = mmr.push(b"world".as_ref().into()).unwrap();
         assert_eq!(mmr.len(), 2);
         assert_eq!(mmr.roots.size(), 1);
         assert_eq!(mmr.roots.peek().unwrap().height, 2);
@@ -262,8 +297,10 @@ mod test {
             mmr.roots.peek().unwrap().root,
             <ZkHasher as Digest>::compress(&[leaf(b"hello"), leaf(b"world")])
         );
+        let frontier_root2 = mmr.frontier_root();
+        assert_ne!(frontier_root2, frontier_root1);
 
-        mmr = mmr.push(b"!".as_ref().into());
+        mmr = mmr.push(b"!".as_ref().into()).unwrap();
         assert_eq!(mmr.len(), 3);
         assert_eq!(mmr.roots.size(), 2);
         let top_root = mmr.roots.iter().last().unwrap();
@@ -274,8 +311,10 @@ mod test {
         );
         assert_eq!(mmr.roots.peek().unwrap().height, 1);
         assert_eq!(mmr.roots.peek().unwrap().root, leaf(b"!"));
+        let frontier_root3 = mmr.frontier_root();
+        assert_ne!(frontier_root3, frontier_root2);
 
-        mmr = mmr.push(b"!".as_ref().into());
+        mmr = mmr.push(b"!".as_ref().into()).unwrap();
         assert_eq!(mmr.len(), 4);
         assert_eq!(mmr.roots.size(), 1);
         assert_eq!(mmr.roots.peek().unwrap().height, 3);
@@ -286,5 +325,12 @@ mod test {
                 <ZkHasher as Digest>::compress(&[leaf(b"!"), leaf(b"!")])
             ])
         );
+        let frontier_root4 = mmr.frontier_root();
+        assert_ne!(frontier_root4, frontier_root3);
+
+        assert!(matches!(
+            mmr.push(b"already full".as_ref().into()),
+            Err(MmrFull)
+        ));
     }
 }
