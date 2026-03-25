@@ -100,64 +100,6 @@ impl Utxo {
     }
 }
 
-/*static LEDGER_TXHASH_V1_FR: LazyLock<Fr> =
-    LazyLock::new(|| fr_from_bytes(b"LEDGER_TXHASH_V1").expect("Constant should be valid Fr"));
-
-impl Tx {
-    #[must_use]
-    pub const fn new(inputs: Vec<NoteId>, outputs: Vec<Note>) -> Self {
-        Self { inputs, outputs }
-    }
-
-    #[must_use]
-    pub fn as_signing_frs(&self) -> Vec<Fr> {
-        // constants and structure as defined in the Mantle spec:
-        // https://www.notion.so/Mantle-Specification-21c261aa09df810c8820fab1d78b53d9
-        let encoded_bytes = encode_ledger_tx(self);
-        let frs = encoded_bytes
-            .as_slice()
-            .chunks(GROTH16_SAFE_BYTES_SIZE)
-            .map(fr_from_bytes_unchecked);
-        std::iter::once(*LEDGER_TXHASH_V1_FR).chain(frs).collect()
-    }
-
-    #[must_use]
-    pub fn utxo_by_index(&self, index: usize) -> Option<Utxo> {
-        self.outputs.get(index).map(|note| Utxo {
-            tx_hash: self.hash(),
-            output_index: index,
-            note: *note,
-        })
-    }
-
-    #[must_use]
-    pub const fn execution_gas<Constants: GasConstants>(&self) -> u64 {
-        Constants::TRANSFER
-    }
-
-    pub fn utxos(&self) -> impl Iterator<Item = Utxo> + '_ {
-        let tx_hash = self.hash();
-        self.outputs
-            .iter()
-            .enumerate()
-            .map(move |(index, note)| Utxo {
-                tx_hash,
-                output_index: index,
-                note: *note,
-            })
-    }
-}
-
-impl Transaction for Tx {
-    const HASHER: TransactionHasher<Self> =
-        |tx| <ZkHasher as Digest>::digest(&tx.as_signing_frs()).into();
-    type Hash = TxHash;
-
-    fn as_signing_frs(&self) -> Vec<Fr> {
-        Self::as_signing_frs(self)
-    }
-}*/
-
 #[cfg(test)]
 mod test {
     use std::str::FromStr as _;

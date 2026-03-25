@@ -79,7 +79,7 @@ pub fn apply_wallet_genesis_overrides(
             .push(Note::new(*value, secret_key.to_public_key()));
     }
 
-    let genesis_tx = create_genesis_tx_with_declarations(&transfer_op, providers);
+    let genesis_tx = create_genesis_tx_with_declarations(transfer_op, providers);
 
     for general in general_configs.iter_mut() {
         for (secret_key, _) in wallet_accounts {

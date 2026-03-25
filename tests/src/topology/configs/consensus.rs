@@ -214,7 +214,7 @@ fn create_utxos(
 
 #[must_use]
 pub fn create_genesis_tx_with_declarations(
-    transfer_op: &TransferOp,
+    transfer_op: TransferOp,
     providers: Vec<ProviderInfo>,
 ) -> GenesisTx {
     let inscription = InscriptionOp {
@@ -226,7 +226,7 @@ pub fn create_genesis_tx_with_declarations(
 
     let transfer_hash = transfer_op.hash();
 
-    let mut ops = vec![Op::ChannelInscribe(inscription)];
+    let mut ops = vec![Op::Transfer(transfer_op), Op::ChannelInscribe(inscription)];
 
     for provider in &providers {
         let utxo = Utxo {
@@ -241,7 +241,6 @@ pub fn create_genesis_tx_with_declarations(
             zk_id: provider.zk_id(),
             locked_note_id: utxo.id(),
         };
-        ops.push(Op::Transfer(transfer_op.clone()));
         ops.push(Op::SDPDeclare(declaration));
     }
 
