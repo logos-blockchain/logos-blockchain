@@ -6,7 +6,9 @@ use std::sync::{Arc, LazyLock};
 use derivative::Derivative;
 use lb_core::{
     crypto::{ZkDigest, ZkHasher},
-    mantle::{AuthenticatedMantleTx, GenesisTx, NoteId, Op, Utxo, Value, gas::GasConstants},
+    mantle::{
+        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value, gas::GasConstants,
+    },
     proofs::leader_proof::{self, LeaderPublic},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
@@ -327,8 +329,10 @@ impl LedgerState {
     ) -> Result<(Self, Balance), LedgerError<Id>> {
         let mut balance: i128 = 0;
         let mut pks: Vec<ZkPublicKey> = vec![];
-        for &op in &tx.mantle_tx().ops {
-            if let Op::Transfer(transfer_op) = op {
+        for (op, op_proof) in tx.ops_with_proof().map(|(op, proof)| (op, Some(proof))) {
+            if let (Op::Transfer(transfer_op), Some(OpProof::ZkSig(transfer_proof))) =
+                (op, op_proof)
+            {
                 for input in &transfer_op.inputs {
                     if locked_notes.contains(input) {
                         return Err(LedgerError::LockedNote(*input));
@@ -344,7 +348,7 @@ impl LedgerState {
                     pks.push(utxo.note.pk);
                 }
 
-                if !ZkPublicKey::verify_multi(&pks, &tx.hash().0, tx.ledger_tx_proof()) {
+                if !ZkPublicKey::verify_multi(&pks, &tx.hash().0, transfer_proof) {
                     return Err(LedgerError::InvalidProof);
                 }
 
@@ -449,17 +453,12 @@ impl LedgerState {
         config: &Config,
         epoch_nonce: Fr,
     ) -> Result<Self, LedgerError<Id>> {
-        if !tx.mantle_tx().ledger_tx.inputs.is_empty() {
-            return Err(LedgerError::InputInGenesis(
-                tx.mantle_tx().ledger_tx.inputs[0],
-            ));
+        let transfer_op = tx.genesis_transfer();
+        if !transfer_op.inputs.is_empty() {
+            return Err(LedgerError::InputInGenesis(transfer_op.inputs[0]));
         }
 
-        Ok(Self::from_utxos(
-            tx.mantle_tx().ledger_tx.utxos(),
-            config,
-            epoch_nonce,
-        ))
+        Ok(Self::from_utxos(transfer_op.utxos(), config, epoch_nonce))
     }
 
     pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config, nonce: Fr) -> Self {
@@ -532,8 +531,11 @@ pub mod tests {
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
-            GasCost as _, MantleTx, Note, SignedMantleTx, Transaction as _,
-            gas::MainnetGasConstants, ledger::Tx as LedgerTx, ops::leader_claim::VoucherCm,
+            GasCost as _, MantleTx, Note,
+            OpProof::ZkSig,
+            SignedMantleTx, Transaction as _,
+            gas::MainnetGasConstants,
+            ops::{leader_claim::VoucherCm, transfer::TransferOp},
         },
         sdp::ServiceParameters,
     };
@@ -1107,16 +1109,16 @@ pub mod tests {
             .map(|(sk, _)| (*sk).clone())
             .collect::<Vec<_>>();
         let inputs = inputs.iter().map(|(_, utxo)| utxo.id()).collect::<Vec<_>>();
-        let ledger_tx = LedgerTx::new(inputs, outputs);
+        let transfer_op = TransferOp::new(inputs, outputs);
         let mantle_tx = MantleTx {
-            ops: vec![],
-            ledger_tx,
+            ops: vec![Op::Transfer(transfer_op)],
             execution_gas_price: 1,
             storage_gas_price: 1,
         };
         SignedMantleTx {
-            ops_proofs: vec![],
-            ledger_tx_proof: ZkKey::multi_sign(&sks, &mantle_tx.hash().into()).unwrap(),
+            ops_proofs: vec![ZkSig(
+                ZkKey::multi_sign(&sks, &mantle_tx.hash().into()).unwrap(),
+            )],
             mantle_tx,
         }
     }
@@ -1155,30 +1157,35 @@ pub mod tests {
 
         // Verify outputs were created
         let mantle_tx = create_tx(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
-        let output_utxo1 = mantle_tx.mantle_tx.ledger_tx.utxo_by_index(0).unwrap();
-        let output_utxo2 = mantle_tx.mantle_tx.ledger_tx.utxo_by_index(1).unwrap();
-        assert!(new_state.utxos.contains(&output_utxo1.id()));
-        assert!(new_state.utxos.contains(&output_utxo2.id()));
+        if let Op::Transfer(transfer_op) = &mantle_tx.mantle_tx.ops[0] {
+            let output_utxo1 = transfer_op.utxo_by_index(0).unwrap();
+            let output_utxo2 = transfer_op.utxo_by_index(1).unwrap();
 
-        // The new outputs can be spent in future transactions
-        let tx = create_tx(
-            &[
-                (&output_note1_sk, &output_utxo1),
-                (&output_note2_sk, &output_utxo2),
-            ],
-            vec![],
-        );
-        let locked_notes = LockedNotes::new();
-        let _fees = tx.gas_cost::<MainnetGasConstants>();
-        let (final_state, final_balance) = new_state
-            .try_apply_tx::<(), MainnetGasConstants>(&locked_notes, tx)
-            .unwrap();
-        assert_eq!(
-            final_balance,
-            i128::from(output_note1.value + output_note2.value)
-        );
-        assert!(!final_state.utxos.contains(&output_utxo1.id()));
-        assert!(!final_state.utxos.contains(&output_utxo2.id()));
+            assert!(new_state.utxos.contains(&output_utxo1.id()));
+            assert!(new_state.utxos.contains(&output_utxo2.id()));
+
+            // The new outputs can be spent in future transactions
+            let tx = create_tx(
+                &[
+                    (&output_note1_sk, &output_utxo1),
+                    (&output_note2_sk, &output_utxo2),
+                ],
+                vec![],
+            );
+            let locked_notes = LockedNotes::new();
+            let _fees = tx.gas_cost::<MainnetGasConstants>();
+            let (final_state, final_balance) = new_state
+                .try_apply_tx::<(), MainnetGasConstants>(&locked_notes, tx)
+                .unwrap();
+            assert_eq!(
+                final_balance,
+                i128::from(output_note1.value + output_note2.value)
+            );
+            assert!(!final_state.utxos.contains(&output_utxo1.id()));
+            assert!(!final_state.utxos.contains(&output_utxo2.id()));
+        } else {
+            panic!("first op must be a transfer")
+        }
     }
 
     #[test]

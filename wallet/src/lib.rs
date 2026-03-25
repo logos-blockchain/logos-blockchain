@@ -14,8 +14,10 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, GasConstants, NoteId, Utxo, Value,
-        ledger::Tx as LedgerTx,
-        ops::leader_claim::{VoucherCm, VoucherNullifier},
+        ops::{
+            leader_claim::{VoucherCm, VoucherNullifier},
+            transfer::TransferOp,
+        },
         tx_builder::MantleTxBuilder,
     },
 };
@@ -27,18 +29,19 @@ pub use crate::voucher::Vouchers;
 pub struct WalletBlock {
     pub id: HeaderId,
     pub parent: HeaderId,
-    pub ledger_txs: Vec<LedgerTx>,
+    pub transfers: Vec<TransferOp>,
 }
 
 impl<Tx: AuthenticatedMantleTx> From<Block<Tx>> for WalletBlock {
     fn from(block: Block<Tx>) -> Self {
+        let mut transfers: Vec<TransferOp> = vec![];
+        let _ = block
+            .transactions()
+            .map(|auth_tx| transfers.extend(auth_tx.mantle_tx().transfers()));
         Self {
             id: block.header().id(),
             parent: block.header().parent(),
-            ledger_txs: block
-                .transactions()
-                .map(|auth_tx| auth_tx.mantle_tx().ledger_tx.clone())
-                .collect(),
+            transfers,
         }
     }
 }
@@ -151,9 +154,9 @@ impl WalletState {
         let mut pk_index = self.pk_index.clone();
 
         // Process each transaction in the block
-        for ledger_tx in &block.ledger_txs {
+        for transfer in &block.transfers {
             // Remove spent UTXOs (inputs)
-            for spent_id in &ledger_tx.inputs {
+            for spent_id in &transfer.inputs {
                 if let Some(utxo) = utxos.get(spent_id) {
                     let pk = utxo.note.pk;
                     utxos = utxos.remove(spent_id);
@@ -170,7 +173,7 @@ impl WalletState {
             }
 
             // Add new UTXOs (outputs) - only if they belong to our known keys
-            for utxo in ledger_tx.utxos() {
+            for utxo in transfer.utxos() {
                 if known_keys.contains_key(&utxo.note.pk) {
                     let note_id = utxo.id();
                     utxos = utxos.insert(note_id, utxo);
@@ -326,7 +329,7 @@ mod tests {
 
     use lb_core::{
         crypto::{ZkDigest as _, ZkHasher},
-        mantle::{Note, TxHash, gas::MainnetGasConstants as Gas},
+        mantle::{Note, Op, TxHash, gas::MainnetGasConstants as Gas},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::EpochConfig;
@@ -429,7 +432,7 @@ mod tests {
 
         // Block 1
         // - alice is minted 104 NMO in two notes (100 NMO and 4 NMO)
-        let tx1 = LedgerTx {
+        let transfer1 = TransferOp {
             inputs: vec![],
             outputs: vec![Note::new(100, alice), Note::new(4, alice)],
         };
@@ -437,19 +440,19 @@ mod tests {
         let block_1 = WalletBlock {
             id: HeaderId::from([1; 32]),
             parent: genesis,
-            ledger_txs: vec![tx1.clone()],
+            transfers: vec![transfer1.clone()],
         };
 
         wallet.apply_block(&block_1).unwrap();
 
         // Block 2
         //  - alice spends 100 NMO utxo, sending 20 NMO to bob and 80 to herself
-        let alice_100_nmo_utxo = tx1.utxo_by_index(0).unwrap();
+        let alice_100_nmo_utxo = transfer1.utxo_by_index(0).unwrap();
 
         let block_2 = WalletBlock {
             id: HeaderId::from([2; 32]),
             parent: block_1.id,
-            ledger_txs: vec![LedgerTx {
+            transfers: vec![TransferOp {
                 inputs: vec![alice_100_nmo_utxo.id()],
                 outputs: vec![Note::new(20, bob), Note::new(80, alice)],
             }],
@@ -492,16 +495,20 @@ mod tests {
 
         let funded_tx = funded_tx_builder.build();
 
-        // ensure alices utxo was used to pay the fee
-        assert_eq!(funded_tx.ledger_tx.inputs, vec![alice_utxo.id()]);
-        // ensure change was returned to alice
-        assert_eq!(
-            funded_tx.ledger_tx.outputs,
-            vec![Note {
-                value: 2076,
-                pk: alice,
-            }]
-        );
+        if let Op::Transfer(transfer_op) = &funded_tx.ops[funded_tx.ops.len() - 1] {
+            // ensure alices utxo was used to pay the fee
+            assert_eq!(transfer_op.inputs, vec![alice_utxo.id()]);
+            // ensure change was returned to alice
+            assert_eq!(
+                transfer_op.outputs,
+                vec![Note {
+                    value: 2076,
+                    pk: alice,
+                }]
+            );
+        } else {
+            panic!("last op must be a transfer")
+        }
     }
 
     #[test]
@@ -619,7 +626,13 @@ mod tests {
             .build(); // successfully funded the tx
 
         // verify that no change output was used.
-        assert_eq!(funded_tx_wo_change.ledger_tx.outputs, vec![]);
+        if let Op::Transfer(transfer_op) =
+            &funded_tx_wo_change.ops[funded_tx_wo_change.ops.len() - 1]
+        {
+            assert_eq!(transfer_op.outputs, vec![]);
+        } else {
+            panic!("last op must be a transfer")
+        }
 
         // Determine gas cost with change note
         assert_eq!(
@@ -666,10 +679,13 @@ mod tests {
             .build(); // successfully funded the tx
 
         // verify that indeed a change output was used.
-        assert_eq!(
-            funded_tx_wo_change.ledger_tx.outputs,
-            vec![Note::new(1, alice)]
-        );
+        if let Op::Transfer(transfer_op) =
+            &funded_tx_wo_change.ops[funded_tx_wo_change.ops.len() - 1]
+        {
+            assert_eq!(transfer_op.outputs, vec![Note::new(1, alice)]);
+        } else {
+            panic!("the last operation must be a transfer")
+        }
     }
 
     #[must_use]

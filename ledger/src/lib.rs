@@ -86,6 +86,8 @@ pub enum LedgerError<Id> {
     LockedNote(NoteId),
     #[error("Input note in genesis block: {0:?}")]
     InputInGenesis(NoteId),
+    #[error("The first Transfer Operation is missing in genesis tx")]
+    MissingTransferGenesis(),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -397,8 +399,8 @@ impl LedgerState {
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
     use lb_core::mantle::{
-        GasCost as _, MantleTx, Note, SignedMantleTx, Transaction as _, gas::MainnetGasConstants,
-        ledger::Tx as LedgerTx,
+        GasCost as _, MantleTx, Note, Op, OpProof::ZkSig, SignedMantleTx, Transaction as _,
+        gas::MainnetGasConstants, ops::transfer::TransferOp,
     };
     use lb_key_management_system_keys::keys::{ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
@@ -408,16 +410,16 @@ mod tests {
     type HeaderId = [u8; 32];
 
     fn create_tx(inputs: Vec<NoteId>, outputs: Vec<Note>, sks: &[ZkKey]) -> SignedMantleTx {
-        let ledger_tx = LedgerTx::new(inputs, outputs);
+        let transfer_op = TransferOp::new(inputs, outputs);
         let mantle_tx = MantleTx {
-            ops: vec![],
-            ledger_tx,
+            ops: vec![Op::Transfer(transfer_op)],
             execution_gas_price: 1,
             storage_gas_price: 1,
         };
         SignedMantleTx {
-            ops_proofs: vec![],
-            ledger_tx_proof: ZkKey::multi_sign(sks, mantle_tx.hash().as_ref()).unwrap(),
+            ops_proofs: vec![ZkSig(
+                ZkKey::multi_sign(sks, mantle_tx.hash().as_ref()).unwrap(),
+            )],
             mantle_tx,
         }
     }
@@ -478,7 +480,11 @@ mod tests {
         assert!(!new_state.latest_utxos().contains(&utxo.id()));
 
         // Verify output was created
-        let output_utxo = tx.mantle_tx.ledger_tx.utxo_by_index(0).unwrap();
-        assert!(new_state.latest_utxos().contains(&output_utxo.id()));
+        if let Op::Transfer(transfer_op) = &tx.mantle_tx.ops[0] {
+            let output_utxo = transfer_op.utxo_by_index(0).unwrap();
+            assert!(new_state.latest_utxos().contains(&output_utxo.id()));
+        } else {
+            panic!("first op must be a transfer")
+        }
     }
 }

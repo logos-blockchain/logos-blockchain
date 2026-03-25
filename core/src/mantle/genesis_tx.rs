@@ -11,6 +11,7 @@ use crate::{
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
+            transfer::TransferOp,
         },
     },
 };
@@ -75,15 +76,11 @@ impl GenesisTx {
     #[cfg(feature = "mock")]
     #[must_use]
     pub fn new_mocked() -> Self {
-        use lb_groth16::CompressedGroth16Proof;
-        use lb_key_management_system_keys::keys::ZkSignature;
-
         use crate::mantle::tx_builder::MantleTxBuilder;
 
         Self(SignedMantleTx::new_unverified(
             MantleTxBuilder::new().build(),
             vec![],
-            ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0; _])),
         ))
     }
 }
@@ -129,9 +126,17 @@ impl GasCost for GenesisTx {
 impl crate::mantle::GenesisTx for GenesisTx {
     fn genesis_inscription(&self) -> &InscriptionOp {
         // Safe to unwrap because we validated this in from_tx
-        match &self.mantle_tx().ops[0] {
+        match &self.mantle_tx().ops[1] {
             Op::ChannelInscribe(op) => op,
-            _ => unreachable!("GenesisTx always has a valid inscription as first op"),
+            _ => unreachable!("GenesisTx always has a valid inscription as second op"),
+        }
+    }
+
+    fn genesis_transfer(&self) -> &TransferOp {
+        // Safe to unwrap because we validated this in from_tx
+        match &self.mantle_tx().ops[0] {
+            Op::Transfer(op) => op,
+            _ => unreachable!("GenesisTx always has a valid transfer as first op"),
         }
     }
 
@@ -173,7 +178,7 @@ mod tests {
     use crate::{
         mantle::{
             ledger::{Note, Utxo, Value},
-            ops::{channel::Ed25519PublicKey, transfer::TransferOp},
+            ops::channel::Ed25519PublicKey,
         },
         sdp::{ProviderId, ServiceType},
     };
@@ -212,7 +217,7 @@ mod tests {
 
     // Helper function to create a basic signed transaction
     // Genesis transactions don't need verified proofs for Blob/Inscription ops
-    fn create_tx(mut ops: Vec<Op>, ops_proofs: Vec<OpProof>) -> SignedMantleTx {
+    fn create_tx(mut ops: Vec<Op>, mut ops_proofs: Vec<OpProof>) -> SignedMantleTx {
         let transfer_op = TransferOp::new(vec![], vec![create_test_note(1000)]);
         ops.push(Op::Transfer(transfer_op));
         let mantle_tx = MantleTx {
@@ -220,10 +225,12 @@ mod tests {
             execution_gas_price: 0,
             storage_gas_price: 0,
         };
+        ops_proofs.push(OpProof::ZkSig(
+            ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap(),
+        ));
         SignedMantleTx {
-            mantle_tx: mantle_tx.clone(),
+            mantle_tx,
             ops_proofs,
-            ledger_tx_proof: ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap(),
         }
     }
 

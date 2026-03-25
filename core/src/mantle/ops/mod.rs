@@ -4,7 +4,7 @@ pub mod leader_claim;
 pub mod opcode;
 pub mod sdp;
 mod serde_;
-pub(crate) mod transfer;
+pub mod transfer;
 
 use channel::{inscribe::InscriptionOp, set_keys::SetKeysOp};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};

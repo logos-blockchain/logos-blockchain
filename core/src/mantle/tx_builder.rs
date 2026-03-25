@@ -151,7 +151,8 @@ impl MantleTxBuilder {
     }
 
     #[must_use]
-    pub fn build(self) -> MantleTx {
+    pub fn build(mut self) -> MantleTx {
+        self.mantle_tx.ops.push(Op::Transfer(self.pending_transfer));
         self.mantle_tx
     }
 }
