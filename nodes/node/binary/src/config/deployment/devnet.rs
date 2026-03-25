@@ -120,7 +120,7 @@ cryptarchia:
         - value: 18446744073709151211
           pk: faf8a7e44e9f45d35efcd9043c4a55095339e229c4115dbeb6231e2b8422f610
       execution_gas_price: 0
-      storage_gas_price: 1
+      storage_gas_price: 0
     ops_proofs:
     - NoProof
     - !ZkAndEd25519Sigs
