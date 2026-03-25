@@ -105,10 +105,10 @@ pub const fn base_period_length(
 
 #[must_use]
 pub const fn average_slots_for_blocks(
-    security_param: NonZero<u32>,
+    num_blocks: NonZero<u32>,
     slot_activation_coeff: NonNegativeRatio,
 ) -> NonZero<u64> {
-    NonZero::new((security_param.get() as f64 / slot_activation_coeff.as_f64()).floor() as u64)
+    NonZero::new((num_blocks.get() as f64 / slot_activation_coeff.as_f64()).floor() as u64)
         .expect("base_period_length with proper configuration should never be zero")
 }
 
