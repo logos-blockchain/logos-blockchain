@@ -158,6 +158,7 @@ where
                     session: current_session,
                     leader: new_epoch_public,
                 },
+                encapsulation_layers: self.core_proofs_generator.settings.encapsulation_layers,
             },
             new_epoch_private,
         ));

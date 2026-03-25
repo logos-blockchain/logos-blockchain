@@ -1467,10 +1467,10 @@ where
                 Err(old_session_error) => {
                     if matches!(
                         current_session_error,
-                        MessageError::MessageDeserializationFailed
+                        MessageError::PrivateHeaderDeserializationFailed
                     ) && matches!(
                         old_session_error,
-                        MessageError::MessageDeserializationFailed
+                        MessageError::PrivateHeaderDeserializationFailed
                     ) {
                         tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message with current and old session crypto processors due to deserialization error. This can happen when the message was intended for another node or when the message is malformed. Ignoring...");
                     } else {
@@ -1551,10 +1551,10 @@ where
     let (maybe_processed_message, blending_tokens) =
         schedule_decapsulated_incoming_message(multi_layer_decapsulation_output, scheduler);
 
-    if let Some(processed_message) = maybe_processed_message
-        && state_updater.add_unsent_processed_message(processed_message) == Err(())
-    {
-        tracing::warn!(target: LOG_TARGET, "The same processed message was already added to the recovery state. Ignoring the new one...");
+    if let Some(processed_message) = maybe_processed_message {
+        state_updater
+            .add_unsent_processed_message(processed_message)
+            .expect("Swarm should bubble up unique messages only.");
     }
 
     state_updater.collect_current_session_tokens(blending_tokens);

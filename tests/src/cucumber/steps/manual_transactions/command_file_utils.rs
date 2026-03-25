@@ -26,28 +26,35 @@
 //     <amount>, transactions <count>, value <amount>, cycles <count>
 //   FAUCET_ALL_USER_WALLETS, rounds <count>
 //   FAUCET_ALL_FUNDING_WALLETS, rounds <count>
+//   CREATE_BLOCKCHAIN_SNAPSHOT_ALL_NODES, snapshot_name '<snapshot_name>'
+//   CREATE_BLOCKCHAIN_SNAPSHOT_NODE, snapshot_name '<snapshot_name>',
+//     node_name '<node_name>'
+//   RESTART_NODE, node_name '<node_name>'
 //   CRYPTARCHIA_INFO_ALL_NODES
 //   WAIT_ALL_NODES_SYNCED_TO_CHAIN
 //   STOP
 
 use std::{env, num::NonZero, path::Path, time::Duration};
 
-use hex::ToHex as _;
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
 use crate::cucumber::{
     error::StepError,
     steps::{
-        TARGET,
-        manual_nodes::utils::wait_for_all_nodes_to_be_synced_to_chain,
+        TARGET, manual_nodes,
+        manual_nodes::{
+            snapshots::save_named_blockchain_snapshot,
+            utils::{
+                create_snapshots_all_nodes, restart_node, wait_for_all_nodes_to_be_synced_to_chain,
+            },
+        },
         manual_transactions::{
             command_file_parsing::{ManualCommand, take_next_command},
             utils,
             utils::WalletStateType,
         },
     },
-    utils::truncate_hash,
     world::{CucumberWorld, WalletInfo},
 };
 
@@ -73,6 +80,13 @@ async fn execute_non_stop_manual_command(
     command: &ManualCommand,
 ) -> Result<(), StepError> {
     match command {
+        ManualCommand::CreateBlockchainSnapshotAllNodes { snapshot_name } => {
+            execute_create_blockchain_snapshot_all_nodes(world, snapshot_name)
+        }
+        ManualCommand::CreateBlockchainSnapshotNode {
+            snapshot_name,
+            node_name,
+        } => execute_create_blockchain_snapshot_node(world, snapshot_name, node_name),
         ManualCommand::CoinSplit {
             wallet,
             outputs,
@@ -139,14 +153,54 @@ async fn execute_non_stop_manual_command(
         ManualCommand::FaucetFundsAllFundingWallets { rounds } => {
             request_faucet_funds_all_funding_wallets(world, step, *rounds)
         }
+        ManualCommand::RestartNode { node_name } => restart_node(world, step, node_name).await,
         ManualCommand::CryptarchiaInfoAllNodes => {
-            execute_cryptarchia_info_all_nodes(world, step).await;
+            manual_nodes::utils::get_cryptarchia_info_all_nodes(world, step).await;
             Ok(())
         }
         ManualCommand::WaitAllNodesSyncedToChain => {
             wait_for_all_nodes_to_be_synced_to_chain(world, step).await
         }
         ManualCommand::Stop => Ok(()),
+    }
+}
+
+fn execute_create_blockchain_snapshot_all_nodes(
+    world: &CucumberWorld,
+    snapshot_name: &str,
+) -> Result<(), StepError> {
+    if world.nodes_info.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: "cannot create snapshot: no running nodes".to_owned(),
+        });
+    }
+
+    create_snapshots_all_nodes(world, snapshot_name)
+}
+
+fn execute_create_blockchain_snapshot_node(
+    world: &CucumberWorld,
+    snapshot_name: &str,
+    node_name: &str,
+) -> Result<(), StepError> {
+    if world.nodes_info.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: "cannot create snapshot: no running nodes".to_owned(),
+        });
+    }
+
+    if let Some(info) = world.nodes_info.get(node_name) {
+        save_named_blockchain_snapshot(snapshot_name, node_name, &info.runtime_dir)?;
+        info!(
+            target: TARGET,
+            "Saved blockchain snapshot `{snapshot_name}` for node {}",
+            info.runtime_dir.display()
+        );
+        Ok(())
+    } else {
+        Err(StepError::InvalidArgument {
+            message: format!("Node {node_name} does not exist"),
+        })
     }
 }
 
@@ -214,50 +268,6 @@ fn request_faucet_funds_all_funding_wallets(
         .map(WalletInfo::public_key_hex)
         .collect::<Vec<_>>();
     utils::request_faucet_funds(world, step, number_of_rounds, &all_wallets_pk_hex)
-}
-
-pub(crate) async fn execute_cryptarchia_info_all_nodes(world: &CucumberWorld, step: &str) {
-    let mut node_names = world.nodes_info.keys().cloned().collect::<Vec<_>>();
-    node_names.sort();
-
-    if node_names.is_empty() {
-        warn!(
-            target: TARGET,
-            "Step `{step}` no nodes found for CRYPTARCHIA_INFO_ALL_NODES"
-        );
-        return;
-    }
-
-    for node_name in node_names {
-        let Some(node_info) = world.nodes_info.get(&node_name) else {
-            continue;
-        };
-        match node_info.started_node.client.consensus_info().await {
-            Ok(consensus) => {
-                let mode = if consensus.mode.is_online() {
-                    "Online"
-                } else {
-                    "Bootstrapping"
-                };
-                info!(
-                    target: TARGET,
-                    "cryptarchia/info - '{}', '{}', {}/{}, tip '{} ...', lib '{} ...'",
-                    node_name,
-                    mode,
-                    consensus.height,
-                    consensus.slot.into_inner(),
-                    truncate_hash(&consensus.tip.encode_hex::<String>(), 16),
-                    truncate_hash(&consensus.lib.encode_hex::<String>(), 16),
-                );
-            }
-            Err(e) => {
-                warn!(
-                    target: TARGET,
-                    "Step `{step}` CRYPTARCHIA_INFO failed for node `{node_name}`: {e}",
-                );
-            }
-        }
-    }
 }
 
 async fn execute_coin_split(

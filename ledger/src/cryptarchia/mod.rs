@@ -614,13 +614,14 @@ pub mod tests {
             .unwrap();
         let id = make_id(parent, slot, utxo);
         let proof = generate_proof(&ledger_state, &utxo, slot);
-        ledger.try_update::<_, MainnetGasConstants>(
+        let (_, state) = ledger.prepare_update::<_, MainnetGasConstants>(
             id,
             parent,
             slot,
             &proof,
             std::iter::empty::<&SignedMantleTx>(),
         )?;
+        ledger.commit_update(id, state);
         Ok(id)
     }
 

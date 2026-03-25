@@ -15,6 +15,7 @@ lb-groth16   = { workspace = true }
 lb-poseidon2 = { workspace = true }
 rpds         = { default-features = false, version = "1.1.1" }
 serde        = { features = ["derive"], optional = true, workspace = true }
+thiserror    = { workspace = true }
 
 [dev-dependencies]
 proptest       = { default-features = false, features = ["std"], version = "1.0" }

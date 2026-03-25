@@ -105,16 +105,19 @@ where
         }
     }
 
-    /// Try to update the ledger state by applying the given proof and
+    /// Prepare adding a new [`LedgerState`] by applying the given proof and
     /// transactions on top of the parent state.
-    pub fn try_update<LeaderProof, Constants>(
-        &mut self,
+    ///
+    /// On success, a new [`LedgerState`] is returned, which can then be
+    /// committed by calling [`Self::commit_update`].
+    pub fn prepare_update<LeaderProof, Constants>(
+        &self,
         id: Id,
         parent_id: Id,
         slot: Slot,
         proof: &LeaderProof,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx>,
-    ) -> Result<(), LedgerError<Id>>
+    ) -> Result<(Id, LedgerState), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
         Constants: GasConstants,
@@ -129,8 +132,12 @@ where
                 .clone()
                 .try_update::<_, _, Constants>(slot, proof, txs, &self.config)?;
 
-        self.states.insert(id, new_state);
-        Ok(())
+        Ok((id, new_state))
+    }
+
+    /// Commits a new [`LedgerState`] created by [`Self::prepare_update`].
+    pub fn commit_update(&mut self, id: Id, state: LedgerState) {
+        self.states.insert(id, state);
     }
 
     pub fn state(&self, id: &Id) -> Option<&LedgerState> {
@@ -156,6 +163,15 @@ where
     /// `true` if the state was successfully removed, `false` otherwise.
     pub fn prune_state_at(&mut self, block: &Id) -> bool {
         self.states.remove(block).is_some()
+    }
+
+    /// Shrinks the map of ledger states to free up memory that has been pruned
+    /// so far.
+    ///
+    /// This shouldn't be called frequently since the entire map is
+    /// reconstructed.
+    pub fn shrink(&mut self) {
+        self.states.shrink_to_fit();
     }
 }
 
@@ -463,8 +479,8 @@ mod tests {
         );
 
         let new_id = [1; 32];
-        ledger
-            .try_update::<_, MainnetGasConstants>(
+        let (_, state) = ledger
+            .prepare_update::<_, MainnetGasConstants>(
                 new_id,
                 genesis_id,
                 Slot::from(1u64),
@@ -472,6 +488,7 @@ mod tests {
                 std::iter::once(&tx),
             )
             .unwrap();
+        ledger.commit_update(new_id, state);
 
         // Verify the transaction was applied
         let new_state = ledger.state(&new_id).unwrap();

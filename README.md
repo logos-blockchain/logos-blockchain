@@ -245,7 +245,7 @@ Dual-licensed under your choice of:
 [overwatch-github]: https://github.com/logos-co/Overwatch
 [graphviz-online]: https://dreampuf.github.io/GraphvizOnline/
 [github-releases-page]: https://github.com/logos-blockchain/logos-blockchain/releases
-[logos-discord]: https://discord.gg/ezJefwJY
+[logos-discord]: https://discord.gg/RxXjcHZE
 [logos-x]: https://x.com/Logos_network
 [logos-website]: https://logos.co/
 [devnet-dashboard]: https://devnet.blockchain.logos.co/web/

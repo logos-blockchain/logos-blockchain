@@ -4,7 +4,7 @@ use core::{
     time::Duration,
 };
 use std::{
-    collections::{HashMap, VecDeque, hash_map::Entry},
+    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
     convert::Infallible,
     ops::RangeInclusive,
     task::{Context, Poll, Waker},
@@ -51,7 +51,7 @@ mod old_session;
 mod tests;
 
 const LOG_TARGET: &str = "blend::network::core::core::behaviour";
-const SENSITIVITY_INTERVAL_FOR_DUPLICATES: Duration = Duration::from_millis(100);
+const SENSITIVITY_INTERVAL_FOR_DUPLICATES: Duration = Duration::from_secs(3);
 
 #[derive(Debug)]
 pub struct Config {
@@ -117,6 +117,7 @@ pub struct Behaviour<ProofsVerifier, ObservationWindowClockProvider> {
     /// Sending a message with the same identifier more than once results in
     /// the peer being flagged as malicious, and the connection dropped.
     exchanged_message_identifiers: HashMap<PeerId, HashMap<MessageIdentifier, Instant>>,
+    message_cache: HashSet<MessageIdentifier>,
     observation_window_clock_provider: ObservationWindowClockProvider,
     current_membership: Membership<PeerId>,
     /// The [minimum, maximum] peering degree of this node.
@@ -222,6 +223,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             protocol_name,
             minimum_network_size: config.minimum_network_size,
             old_session: None,
+            message_cache: HashSet::new(),
             poq_verifier,
         }
     }
@@ -248,6 +250,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
                 .map(|(peer_id, details)| (peer_id, details.connection_id))
                 .collect(),
             mem::take(&mut self.exchanged_message_identifiers),
+            mem::take(&mut self.message_cache),
             old_verifier,
         ));
 
@@ -368,7 +371,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
                     .or_default()
                     .entry(message_id)
                 {
-                    tracing::debug!(target: LOG_TARGET, "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message.");
+                    tracing::debug!(target: LOG_TARGET, "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message {message_id:?}.");
                     message_peer_entry.insert(Instant::now());
                     self.events.push_back(ToSwarm::NotifyHandler {
                         peer_id: *peer_id,
@@ -377,7 +380,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
                     });
                     at_least_one_receiver = true;
                 } else {
-                    tracing::trace!(target: LOG_TARGET, "Not sending message to peer {peer_id:?} because we already exchanged this message with them.");
+                    tracing::trace!(target: LOG_TARGET, "Not sending message {message_id:?} to peer {peer_id:?} because we already exchanged this message with them.");
                 }
             });
 
@@ -407,6 +410,26 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             handler: NotifyHandler::One(connection_id),
             event: Either::Left(FromBehaviour::CloseSubstreams),
         });
+        self.try_wake();
+    }
+
+    fn notify_about_connection_upgrade_failure(&mut self, peer_id: PeerId, peer_role: Endpoint) {
+        self.events
+            .push_back(ToSwarm::GenerateEvent(if peer_role == Endpoint::Listener {
+                Event::OutboundConnectionUpgradeFailed(peer_id)
+            } else {
+                Event::InboundConnectionUpgradeFailed(peer_id)
+            }));
+        self.try_wake();
+    }
+
+    fn notify_about_connection_upgrade_success(&mut self, peer_id: PeerId, peer_role: Endpoint) {
+        self.events
+            .push_back(ToSwarm::GenerateEvent(if peer_role == Endpoint::Listener {
+                Event::OutboundConnectionUpgradeSucceeded(peer_id)
+            } else {
+                Event::InboundConnectionUpgradeSucceeded(peer_id)
+            }));
         self.try_wake();
     }
 
@@ -476,6 +499,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         if self.available_connection_slots() == 0 {
             tracing::debug!(target: LOG_TARGET, "Connection {connection_id:?} with peer {peer_id:?} must be closed because peering degree limit has already been reached.");
             self.close_connection((peer_id, connection_id));
+            self.notify_about_connection_upgrade_failure(peer_id, peer_role);
             return;
         }
         debug_assert!(
@@ -492,13 +516,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             },
         );
         // Notify the Swarm about the successful negotiation.
-        self.events
-            .push_back(ToSwarm::GenerateEvent(if peer_role == Endpoint::Listener {
-                Event::OutboundConnectionUpgradeSucceeded(peer_id)
-            } else {
-                Event::InboundConnectionUpgradeSucceeded(peer_id)
-            }));
-        self.try_wake();
+        self.notify_about_connection_upgrade_success(peer_id, peer_role);
     }
 
     /// Handle a newly upgraded connection for a peer that this peer is already
@@ -530,10 +548,16 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             // Same connection direction (in case it was not caught at connection establishment
             // time), we ignore the new connection.
             (Endpoint::Dialer, Endpoint::Dialer) | (Endpoint::Listener, Endpoint::Listener) => {
-                self.handle_connected_peer_duplicate_connection((peer_id, new_connection_id));
+                self.handle_connected_peer_duplicate_connection(
+                    (peer_id, new_connection_id),
+                    new_role,
+                );
             }
             (Endpoint::Listener, Endpoint::Dialer) | (Endpoint::Dialer, Endpoint::Listener) => {
-                self.handle_connected_peer_reverse_connection((peer_id, new_connection_id));
+                self.handle_connected_peer_reverse_connection(
+                    (peer_id, new_connection_id),
+                    new_role,
+                );
             }
         }
     }
@@ -543,9 +567,11 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
     fn handle_connected_peer_duplicate_connection(
         &mut self,
         (peer_id, new_connection_id): (PeerId, ConnectionId),
+        new_role: Endpoint,
     ) {
         tracing::trace!(target: LOG_TARGET, "Connection {new_connection_id:?} with peer {peer_id:?} will be closed since there is already a connection established in the same direction.");
         self.close_connection((peer_id, new_connection_id));
+        self.notify_about_connection_upgrade_failure(peer_id, new_role);
     }
 
     /// Decide which connection to keep between an established one and
@@ -557,6 +583,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
     fn handle_connected_peer_reverse_connection(
         &mut self,
         (peer_id, new_connection_id): (PeerId, ConnectionId),
+        new_role: Endpoint,
     ) {
         let existing_connection_details = self
             .negotiated_peers
@@ -586,20 +613,15 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             update_connection_id_and_direction(existing_connection_details, new_connection_id);
             // After the old connection details have been updated with the new
             // ones, notify the Swarm that the new connection has been upgraded.
-            self.events.push_back(ToSwarm::GenerateEvent(
-                if existing_connection_details.role == Endpoint::Listener {
-                    Event::OutboundConnectionUpgradeSucceeded(peer_id)
-                } else {
-                    Event::InboundConnectionUpgradeSucceeded(peer_id)
-                },
-            ));
-            // Notify the current connection handler to drop the substreams.
+            let existing_role = existing_connection_details.role;
             self.close_connection(existing_connection);
+            self.notify_about_connection_upgrade_success(peer_id, existing_role);
         } else {
             tracing::trace!(target: LOG_TARGET, "Dropping upgraded connection {new_connection_id:?} with peer {peer_id:?} in favor of currently established connection {:?}", existing_connection_details.connection_id);
             // Notify the new connection handler to drop the substreams, and we do not
             // alter the storage.
             self.close_connection((peer_id, new_connection_id));
+            self.notify_about_connection_upgrade_failure(peer_id, new_role);
         }
     }
 
@@ -682,7 +704,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
     /// Check if a message with a given ID has been exchanged with a peer
     /// before. If not, the cache entry is updated. Otherwise an `Error` is
     /// returned.
-    fn check_and_update_message_cache(
+    fn check_and_update_peer_message_cache(
         &mut self,
         message_id: &MessageIdentifier,
         (peer_id, connection_id): (PeerId, ConnectionId),
@@ -704,10 +726,10 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
                 // message to each other). Simply ignore it.
                 if Instant::now().duration_since(*time_sent) <= SENSITIVITY_INTERVAL_FOR_DUPLICATES
                 {
-                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged but within the sensitivity window. Simply ignoring the message.");
+                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged ({message_id:?}) but within the sensitivity window. Simply ignoring the message.");
                     Ok(())
                 } else {
-                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged. Marking it as spammy.");
+                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged ({message_id:?}). Marking it as spammy.");
                     self.close_spammy_connection(
                         (peer_id, connection_id),
                         SpamReason::DuplicateMessage,
@@ -789,7 +811,7 @@ where
     ProofsVerifier: encap::ProofsVerifier,
 {
     /// Publish an already-encapsulated message to all connected peers
-    /// in the current or old session.
+    /// in the current session.
     ///
     /// Before the message is propagated, its public header is validated to
     /// make sure the receiving peer won't mark us as malicious.
@@ -802,7 +824,9 @@ where
         &mut self,
         message: EncapsulatedMessage,
     ) -> Result<(), Error> {
-        self.validate_and_forward_message_except(message, None)
+        let validated_message =
+            self.validate_encapsulated_message_public_header_with_current_session(message)?;
+        self.forward_validated_message_and_maybe_exclude(&validated_message, None)
     }
 
     /// Forwards a message to all healthy connections except the [`except`]
@@ -822,28 +846,15 @@ where
         message: EncapsulatedMessage,
         except: (PeerId, ConnectionId),
     ) -> Result<(), Error> {
-        self.validate_and_forward_message_except(message, Some(except))
-    }
-
-    fn validate_and_forward_message_except(
-        &mut self,
-        message: EncapsulatedMessage,
-        except: Option<(PeerId, ConnectionId)>,
-    ) -> Result<(), Error> {
         if let Some(old_session) = &mut self.old_session
-            && old_session
-                .validate_and_publish_message(message.clone())
-                .is_ok()
+            && old_session.is_negotiated(&except)
         {
-            return Ok(());
+            return old_session.validate_and_forward_message(message, except.0);
         }
 
         let validated_message =
             self.validate_encapsulated_message_public_header_with_current_session(message)?;
-        self.forward_validated_message_and_maybe_exclude(
-            &validated_message,
-            except.map(|(peer_id, _)| peer_id),
-        )
+        self.forward_validated_message_and_maybe_exclude(&validated_message, Some(except.0))
     }
 
     // Try to validate an encapsulated public header with the current session
@@ -896,12 +907,20 @@ where
         let message_identifier = deserialized_encapsulated_message.id();
 
         // Mark a core peer as malicious if it sends a duplicate message maliciously (i.e., if a message with the same identifier was already exchanged with them): https://www.notion.so/nomos-tech/Blend-Protocol-Version-1-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81fc86bdce264466efd3.
-        let Ok(()) = self.check_and_update_message_cache(
+        let Ok(()) = self.check_and_update_peer_message_cache(
             &message_identifier,
             (from_peer_id, from_connection_id),
         ) else {
             return;
         };
+
+        // Exit early if we've processed this message already and we know it's a valid
+        // one, so no need to check it again to potentially mark the peer as malicious.
+        if self.message_cache.contains(&message_identifier) {
+            tracing::trace!(target: LOG_TARGET, "Message with id {message_identifier:?} already processed previously. Dropping it.");
+            return;
+        }
+
         // Verify the message public header, or else mark the peer as malicious: https://www.notion.so/nomos-tech/Blend-Protocol-Version-1-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81859cebf5e3d2a5cd8f.
         let Ok(validated_message) = self
             .validate_encapsulated_message_public_header_with_current_session(
@@ -919,6 +938,7 @@ where
 
         // Notify the swarm about the received message, so that it can be further
         // processed by the core protocol module.
+        self.message_cache.insert(message_identifier);
         self.events.push_back(ToSwarm::GenerateEvent(Event::Message(
             Box::new(validated_message),
             (from_peer_id, from_connection_id),
@@ -1066,14 +1086,7 @@ where
                     "Remote peer endpoint provided by event and the one stored do not match."
                 );
                 // Notify the swarm about the negotiation failure.
-                self.events.push_back(ToSwarm::GenerateEvent(
-                    if remote_peer_role == Endpoint::Listener {
-                        Event::OutboundConnectionUpgradeFailed(peer_id)
-                    } else {
-                        Event::InboundConnectionUpgradeFailed(peer_id)
-                    },
-                ));
-                self.try_wake();
+                self.notify_about_connection_upgrade_failure(peer_id, remote_peer_role);
                 return;
             }
 

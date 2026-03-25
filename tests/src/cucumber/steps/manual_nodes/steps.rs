@@ -12,17 +12,22 @@ use crate::cucumber::{
     error::{StepError, StepResult},
     steps::{
         TARGET,
-        manual_nodes::utils::{
-            NodesToStartUnordered, genesis_block_utxos, nodes_converged,
-            parse_genesis_wallet_tokens_row, parse_url, parse_wallet_resources_table_row,
-            poll_all_nodes_and_update_consensus_cache, start_node,
-            start_nodes_order_respecting_dependencies,
-            verify_genesis_wallet_resources_table_indexes,
-            verify_node_wallet_resources_table_indexes, wait_for_all_nodes_to_be_synced_to_chain,
+        manual_nodes::{
+            snapshots::{save_named_blockchain_snapshot, validate_snapshot_path_component},
+            utils::{
+                NodesToStartUnordered, create_snapshots_all_nodes, genesis_block_utxos,
+                get_cryptarchia_info_all_nodes, nodes_converged, parse_genesis_wallet_tokens_row,
+                parse_url, parse_wallet_resources_table_row,
+                poll_all_nodes_and_update_consensus_cache, restart_node, start_node,
+                start_nodes_order_respecting_dependencies,
+                verify_genesis_wallet_resources_table_indexes,
+                verify_node_wallet_resources_table_indexes,
+                wait_for_all_nodes_to_be_synced_to_chain,
+            },
         },
     },
     utils::resolve_literal_or_env,
-    world::{CucumberWorld, GenesisTokens, PublicCryptarchiaEndpointPeer},
+    world::{CucumberWorld, GenesisTokens, NodeSnapshot, PublicCryptarchiaEndpointPeer},
 };
 
 const PUBLIC_CRYPTARCHIA_ENDPOINT: &str = "public_cryptarchia_endpoint";
@@ -169,10 +174,17 @@ async fn step_start_nodes_with_wallet_resources(
         .inspect_err(|e| {
             warn!(target: TARGET, "Step `{}` error: {e}", step.value);
         })?;
-    for (node_name, wallet_start_info, mut peers) in nodes_to_start_ordered {
-        peers.sort();
-        peers.dedup();
-        start_node(world, &step.value, &node_name, &wallet_start_info, &peers).await?;
+    for (node_name, wallet_start_info, mut initial_peers) in nodes_to_start_ordered {
+        initial_peers.sort();
+        initial_peers.dedup();
+        start_node(
+            world,
+            &step.value,
+            &node_name,
+            &wallet_start_info,
+            &initial_peers,
+        )
+        .await?;
     }
 
     Ok(())
@@ -188,16 +200,133 @@ async fn step_start_manual_stand_alone_node(
     start_node(world, &step.value, &node_name, &Vec::new(), &Vec::new()).await
 }
 
+#[when(expr = "I restart node {string}")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_restart_node(
+    world: &mut CucumberWorld,
+    step: &Step,
+    node_name: String,
+) -> StepResult {
+    restart_node(world, &step.value, &node_name).await
+}
+
 #[given(expr = "we use IBD peers")]
 #[when(expr = "we use IBD peers")]
 const fn step_we_use_ibd_peers(world: &mut CucumberWorld) {
-    world.populate_ibd_peers = Some(true);
+    world.populate_ibd_peers_from_initial_peers = Some(true);
 }
 
 #[given(expr = "we join an external network")]
 #[when(expr = "we join an external network")]
 const fn step_we_join_external_network(world: &mut CucumberWorld) {
     world.join_external_network = Some(true);
+}
+
+#[given(expr = "I will create a blockchain snapshot {string} of all nodes when stopping")]
+#[when(expr = "I will create a blockchain snapshot {string} of all nodes when stopping")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Required by cucumber expression"
+)]
+fn step_set_blockchain_snapshot_on_stop(
+    world: &mut CucumberWorld,
+    snapshot_name: String,
+) -> StepResult {
+    if snapshot_name.trim().is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: "Snapshot name cannot be empty".to_owned(),
+        });
+    }
+    validate_snapshot_path_component(&snapshot_name, "Snapshot name")?;
+    world.blockchain_snapshot_name_on_stop = Some(snapshot_name.trim().to_owned());
+    Ok(())
+}
+
+#[given(expr = "I will initialize started nodes from snapshot {string} source node {string}")]
+#[when(expr = "I will initialize started nodes from snapshot {string} source node {string}")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Required by cucumber expression"
+)]
+fn step_set_blockchain_snapshot_on_startup(
+    world: &mut CucumberWorld,
+    snapshot_name: String,
+    node_name: String,
+) -> StepResult {
+    validate_snapshot_path_component(&snapshot_name, "Snapshot name")?;
+    validate_snapshot_path_component(&node_name, "Node name")?;
+
+    world.blockchain_snapshot_on_startup = Some(NodeSnapshot {
+        name: snapshot_name.trim().to_owned(),
+        node: node_name.trim().to_owned(),
+    });
+    Ok(())
+}
+
+#[given(expr = "I create a blockchain snapshot {string} of all nodes")]
+#[when(expr = "I create a blockchain snapshot {string} of all nodes")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Required by cucumber expression"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+fn step_create_blockchain_snapshot_all_nodes_now(
+    world: &mut CucumberWorld,
+    snapshot_name: String,
+) -> StepResult {
+    if world.nodes_info.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: "cannot create snapshot: no running nodes".to_owned(),
+        });
+    }
+
+    create_snapshots_all_nodes(world, &snapshot_name)?;
+
+    Ok(())
+}
+
+#[given(expr = "I create a blockchain snapshot {string} of node {string}")]
+#[when(expr = "I create a blockchain snapshot {string} of node {string}")]
+#[then(expr = "I create a blockchain snapshot {string} of node {string}")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Required by cucumber expression"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+fn step_create_blockchain_snapshot_node_now(
+    world: &mut CucumberWorld,
+    snapshot_name: String,
+    node_name: String,
+) -> StepResult {
+    if world.nodes_info.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: "cannot create snapshot: no running nodes".to_owned(),
+        });
+    }
+
+    if let Some(info) = world.nodes_info.get(&node_name) {
+        save_named_blockchain_snapshot(&snapshot_name, &node_name, &info.runtime_dir)?;
+        info!(
+            target: TARGET,
+            "Saved blockchain snapshot `{snapshot_name}` for node {}",
+            info.runtime_dir.display()
+        );
+    } else {
+        return Err(StepError::InvalidArgument {
+            message: format!("Node {node_name} does not exist"),
+        });
+    }
+
+    Ok(())
 }
 
 #[given("I have public cryptarchia endpoint peers:")]
@@ -364,7 +493,7 @@ fn step_set_ibd_peers(world: &mut CucumberWorld, step: &Step) -> StepResult {
     }
 
     world.ibd_peers_override = Some(peers);
-    world.populate_ibd_peers = Some(true);
+    world.populate_ibd_peers_from_initial_peers = Some(true);
     Ok(())
 }
 
@@ -489,20 +618,41 @@ async fn step_wait_for_all_nodes_to_be_synced_to_the_chain(
     wait_for_all_nodes_to_be_synced_to_chain(world, &step.value).await
 }
 
+#[when("I query cryptarchia info for all nodes")]
+#[then("I query cryptarchia info for all nodes")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_query_cryptarchia_info_all_nodes(world: &mut CucumberWorld, step: &Step) {
+    get_cryptarchia_info_all_nodes(world, &step.value).await;
+}
+
 #[then(expr = "I stop all nodes")]
 fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
+    let runtime_dir_by_node_name: Vec<(String, String)> = world
+        .nodes_info
+        .iter()
+        .map(|(node_name, info)| (node_name.clone(), info.started_node.name.clone()))
+        .collect();
+
     let cluster = world
         .local_cluster
         .as_ref()
         .ok_or(StepError::LogicalError {
             message: "No local cluster available".into(),
         })?;
-    let node_names: Vec<String> = world.nodes_info.keys().cloned().collect();
-    for node_name in node_names {
-        info!(target: TARGET, "Stopping node '{node_name}'");
-        let _unused = world.nodes_info.remove(&node_name);
-    }
+
     cluster.stop_all();
+
+    if let Some(snapshot_name) = world.blockchain_snapshot_name_on_stop.as_ref() {
+        create_snapshots_all_nodes(world, snapshot_name)?;
+    }
+
+    for (node_name, _) in &runtime_dir_by_node_name {
+        info!(target: TARGET, "Stopping node '{node_name}'");
+    }
+    world.nodes_info.clear();
 
     Ok(())
 }
