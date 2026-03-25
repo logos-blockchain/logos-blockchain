@@ -613,9 +613,20 @@ mod tests {
     fn test_fund_tx_unfundable_region() {
         let alice = pk(1);
 
-        let tx_builder = MantleTxBuilder::new()
+        let mut tx_builder = MantleTxBuilder::new()
             .set_execution_gas_price(1)
             .set_storage_gas_price(1);
+
+        // Add a costly inscription
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+        let inscription = Op::ChannelInscribe(InscriptionOp {
+            channel_id: ChannelId::from([0xAA; 32]),
+            inscription: vec![0xAB; 2680],
+            parent: MsgId::from([0xBB; 32]),
+            signer: signing_key.public_key(),
+        });
+
+        tx_builder = tx_builder.push_op(inscription);
 
         // Determine gas cost without change note
         assert_eq!(
