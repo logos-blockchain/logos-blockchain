@@ -16,7 +16,10 @@ use lb_blend::{
     network::core::{
         NetworkBehaviourEvent,
         with_core::{
-            behaviour::{Event as CoreToCoreEvent, IntervalStreamProvider, NegotiatedPeerState},
+            behaviour::{
+                ConnectionUpgradeFailureReason, Event as CoreToCoreEvent, IntervalStreamProvider,
+                NegotiatedPeerState,
+            },
             error::Error,
         },
         with_edge::behaviour::Event as CoreToEdgeEvent,
@@ -257,18 +260,27 @@ where
             ) => {
                 self.handle_disconnected_peer(peer_id, peer_state);
             }
-            lb_blend::network::core::with_core::behaviour::Event::OutboundConnectionUpgradeFailed(peer_id) => {
-                // If we ran out of dial attempts, we try to connect to another random peer that we are not yet connected to, if the dial attempt was performed in the current session.
-                let SessionDialAttempt::OngoingSession(Some(_)) = self.retry_dial(peer_id) else {
-                    return;
-                };
-                self.dial_random_peers_except(1, Some(peer_id));
+            lb_blend::network::core::with_core::behaviour::Event::OutboundConnectionUpgradeFailed { peer, reason } => {
+                match reason {
+                    ConnectionUpgradeFailureReason::ConnectionFailure => {
+                        // If we ran out of dial attempts, we try to connect to another random peer that we are not yet connected to, if the dial attempt was performed in the current session.
+                        let SessionDialAttempt::OngoingSession(Some(_)) = self.retry_dial(peer) else {
+                            return;
+                        };
+                        self.check_and_dial_new_peers_except(Some(peer));
+                    }
+                    upgrade_error @ (ConnectionUpgradeFailureReason::DuplicateConnection | ConnectionUpgradeFailureReason::MaximumPeeringDegreeReached | ConnectionUpgradeFailureReason::ReverseDirectionPreferred) => {
+                        tracing::trace!(target: LOG_TARGET, "Outbound connection upgrade somewhat expectedly failed for {peer:?}. Reason: {upgrade_error:?}. Trying with a different peer if necessary.");
+                        self.ongoing_dials.remove(&peer);
+                        self.check_and_dial_new_peers_except(Some(peer));
+                    }
+                }
             }
             lb_blend::network::core::with_core::behaviour::Event::OutboundConnectionUpgradeSucceeded(peer_id) => {
                 assert!(self.ongoing_dials.remove(&peer_id).is_some(), "Peer ID for a successfully upgraded connection must be present in storage");
             }
-            lb_blend::network::core::with_core::behaviour::Event::InboundConnectionUpgradeFailed(peer_id) => {
-                tracing::warn!(target: LOG_TARGET, "Inbound connection upgrade failed for {peer_id:?}");
+            lb_blend::network::core::with_core::behaviour::Event::InboundConnectionUpgradeFailed { peer, reason } => {
+                tracing::trace!(target: LOG_TARGET, "Inbound connection upgrade expectedly failed for {peer:?} with reason {reason:?}");
             }
             lb_blend::network::core::with_core::behaviour::Event::InboundConnectionUpgradeSucceeded(peer_id) => {
                 tracing::debug!(target: LOG_TARGET, "Inbound connection upgrade succeeded for {peer_id:?}");
