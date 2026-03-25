@@ -427,6 +427,7 @@ mod tests {
 
     fn assert_balance_all_user_wallets_command() {
         let command = parse_ok("BALANCE_ALL_USER_WALLETS");
+
         assert!(matches!(
             command,
             ManualCommand::WalletBalanceAllUserWallets
@@ -435,6 +436,7 @@ mod tests {
 
     fn assert_balance_all_funding_wallets_command() {
         let command = parse_ok("BALANCE_ALL_FUNDING_WALLETS");
+
         assert!(matches!(
             command,
             ManualCommand::WalletBalanceAllFundingWallets
@@ -443,6 +445,7 @@ mod tests {
 
     fn assert_balance_all_wallets_command() {
         let command = parse_ok("BALANCE_ALL_WALLETS");
+
         assert!(matches!(command, ManualCommand::WalletBalanceAllWallets));
     }
 

@@ -316,6 +316,13 @@ async fn step_manual_control_transactions_no_time_out(
     perform_manual_step_control(world, &step.value, u64::MAX).await
 }
 
+#[given(expr = "I update all user wallets balances")]
+#[when(expr = "I update all user wallets balances")]
+async fn step_update_all_wallets_balances(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    utils::update_wallet_balance_all_user_wallets(world, &step.value).await?;
+    Ok(())
+}
+
 #[given(expr = "I have a faucet with URL {string} username {string} and password {string}")]
 #[when(expr = "I have a faucet with URL {string} username {string} and password {string}")]
 #[expect(

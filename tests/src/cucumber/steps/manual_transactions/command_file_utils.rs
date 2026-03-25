@@ -106,7 +106,8 @@ async fn execute_non_stop_manual_command(
             Ok(())
         }
         ManualCommand::WalletBalanceAllWallets => {
-            utils::update_wallet_balance_all_wallets(world, step).await?;
+            utils::update_wallet_balance_all_user_wallets(world, step).await?;
+            utils::update_wallet_balance_all_funding_wallets(world, step).await?;
             Ok(())
         }
         ManualCommand::ClearEncumbrances { wallet_name } => {
