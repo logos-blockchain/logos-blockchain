@@ -22,6 +22,8 @@ use crate::{
     proofs::leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
 };
 
+const HALF_BLAKE_DIGEST_BYTE: usize = 16;
+
 /// The hash of a transaction
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord, Serialize, Deserialize,
@@ -192,13 +194,12 @@ impl Transaction for MantleTx {
 
     fn as_signing_frs(&self) -> Vec<Fr> {
         // constant and structure as defined in the Mantle specification:
-        // https://www.notion.so/Mantle-Specification-21c261aa09df810c8820fab1d78b53d9
+        // https://www.notion.so/nomos-tech/v1-2-1-Mantle-Specification-31e261aa09df8005988deef29a1286b4
         let encoded_bytes = encode_mantle_tx(self);
         let first_blake_hash = Hasher::digest(encoded_bytes);
         let frs = first_blake_hash
             .as_slice()
-            .chunks(GROTH16_SAFE_BYTES_SIZE)
-            // safety: Any 31 bytes fits into a groth16 Fr, there is no need to check for ranges
+            .chunks(HALF_BLAKE_DIGEST_BYTE)
             .map(fr_from_bytes_unchecked);
         std::iter::once(*MANTLE_TXHASH_V1_FR).chain(frs).collect()
     }

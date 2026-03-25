@@ -94,7 +94,7 @@ impl Utxo {
     #[must_use]
     pub fn id(&self) -> NoteId {
         // constants and structure as defined in the Mantle spec:
-        // https://www.notion.so/Mantle-Specification-21c261aa09df810c8820fab1d78b53d9
+        // https://www.notion.so/nomos-tech/v1-2-1-Mantle-Specification-31e261aa09df8005988deef29a1286b4
 
         let tx_hash: Fr = *self.tx_hash.as_ref();
         let output_index =
