@@ -20,7 +20,7 @@ use crate::cucumber::{
 
 /// Specifies which subset of wallet UTXOs to consider when checking for
 /// expected wallet state.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum WalletStateType {
     /// All UTXOs that are on-chain, regardless of whether they are encumbered
     /// or not.

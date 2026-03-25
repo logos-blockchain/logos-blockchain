@@ -806,11 +806,9 @@ mod tests {
                 }
 
                 if i > 0 {
-                    self.cryptarchia = self
-                        .cryptarchia
+                    self.cryptarchia
                         .receive_block(*header_id, *prev_header, *slot)
-                        .expect("Failed to add block to cryptarchia")
-                        .cryptarchia;
+                        .expect("Failed to add block to cryptarchia");
                 }
 
                 // Store in storage but NOT as immutable storage
@@ -844,11 +842,9 @@ mod tests {
             prev_header: HeaderId,
             slot: Slot,
         ) {
-            self.cryptarchia = self
-                .cryptarchia
+            self.cryptarchia
                 .receive_block(header_id, prev_header, slot)
-                .expect("Failed to add block to cryptarchia")
-                .cryptarchia;
+                .expect("Failed to add block to cryptarchia");
 
             self.store_block_in_storage(block, header_id, slot).await;
         }

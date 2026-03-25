@@ -414,8 +414,8 @@ where
     ) {
         tracing::debug!("Received message from a peer: {msg:?}");
 
-        if let Err(e) = self.incoming_message_sender.send(msg) {
-            tracing::error!(target: LOG_TARGET, "Failed to send incoming message to channel: {e}");
+        if self.incoming_message_sender.send(msg).is_err() {
+            tracing::trace!(target: LOG_TARGET, "Failed to send incoming message to channel. No active listeners yet.");
             metrics::inbound_message_err(message_type);
         } else {
             metrics::inbound_message_ok();

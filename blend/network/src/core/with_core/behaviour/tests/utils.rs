@@ -1,6 +1,6 @@
 use core::{num::NonZeroUsize, ops::RangeInclusive, time::Duration};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     iter::repeat_with,
 };
 
@@ -161,6 +161,7 @@ impl BehaviourBuilder {
                 .minimum_network_size
                 .unwrap_or_else(|| 1usize.try_into().unwrap()),
             old_session: None,
+            message_cache: HashSet::new(),
             poq_verifier: ProofsVerifier::new(
                 self.poq_verification_inputs
                     .unwrap_or_else(|| default_poq_verification_inputs_for_session(0)),
