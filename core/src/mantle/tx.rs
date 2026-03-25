@@ -2,7 +2,6 @@ use std::sync::LazyLock;
 
 use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes, serde::serde_fr};
-use lb_key_management_system_keys::keys::ZkSignature;
 use lb_poseidon2::{Digest, ZkHash};
 use num_bigint::BigUint;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};

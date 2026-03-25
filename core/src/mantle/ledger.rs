@@ -1,18 +1,13 @@
 use std::sync::LazyLock;
 
 use bytes::Bytes;
-use lb_groth16::{Fr, fr_from_bytes, fr_from_bytes_unchecked, serde::serde_fr};
+use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTES_SIZE, Hasher, ZkHasher},
-    mantle::{
-        Transaction, TransactionHasher, encoding::encode_ledger_tx, gas::GasConstants, tx::TxHash,
-    },
-};
+use crate::{crypto::ZkHasher, mantle::tx::TxHash};
 
 pub type Value = u64;
 

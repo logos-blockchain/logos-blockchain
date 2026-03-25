@@ -1,11 +1,11 @@
 use std::sync::LazyLock;
 
-use lb_groth16::{Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes, fr_from_bytes_unchecked};
+use lb_groth16::{Fr, fr_from_bytes, fr_from_bytes_unchecked};
 use lb_poseidon2::Digest;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    crypto::ZkHasher,
+    crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTES_SIZE, Hasher, ZkHasher},
     mantle::{
         Note, NoteId, Transaction, TransactionHasher, TxHash, Utxo, encoding::encode_transfer_op,
     },
@@ -31,9 +31,10 @@ impl TransferOp {
         // constants and structure as defined in the Mantle spec:
         // <https://www.notion.so/nomos-tech/v1-3-Mantle-Specification-31e261aa09df818f9327ee87e5a6d433#31e261aa09df80aea7cff4eb98d61b6e>
         let encoded_bytes = encode_transfer_op(self);
-        let frs = encoded_bytes
+        let first_blake_hash = Hasher::digest(encoded_bytes);
+        let frs = first_blake_hash
             .as_slice()
-            .chunks(GROTH16_SAFE_BYTES_SIZE)
+            .chunks(HALF_BLAKE_DIGEST_BYTES_SIZE)
             .map(fr_from_bytes_unchecked);
         std::iter::once(*TRANSFER_HASH_V1_FR).chain(frs).collect()
     }
