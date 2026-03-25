@@ -53,7 +53,7 @@ pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCost + StorageS
 }
 
 /// A genesis transaction as specified in
-//  https://www.notion.so/nomos-tech/Bedrock-Genesis-Block-21d261aa09df80bb8dc3c768802eb527?d=27a261aa09df808e9c66001cf0585dee
+//  https://www.notion.so/nomos-tech/v1-1-Bedrock-Genesis-Block-32e261aa09df80689540ec445172b00d
 pub trait GenesisTx: Transaction<Hash = TxHash> {
     fn genesis_transfer(&self) -> &TransferOp;
     fn genesis_inscription(&self) -> &InscriptionOp;

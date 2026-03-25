@@ -71,7 +71,7 @@ pub fn create_genesis_tx(utxos: &[Utxo]) -> GenesisTx {
         signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
     };
 
-    // Create ledger transaction with the utxos as outputs
+    // Create transfer op with the utxos as outputs
     let outputs: Vec<Note> = utxos.iter().map(|u| u.note).collect();
     let transfer_op = TransferOp::new(vec![], outputs);
 
@@ -251,7 +251,12 @@ pub fn create_genesis_tx_with_declarations(
     };
 
     let mantle_tx_hash = mantle_tx.hash();
-    let mut ops_proofs = vec![OpProof::NoProof];
+    let mut ops_proofs = vec![
+        OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
+            &[0u8; 128],
+        ))),
+        OpProof::NoProof,
+    ];
 
     for provider in providers {
         let zk_sig =
@@ -260,10 +265,6 @@ pub fn create_genesis_tx_with_declarations(
         let ed25519_sig = provider
             .provider_sk
             .sign_payload(mantle_tx_hash.as_signing_bytes().as_ref());
-
-        ops_proofs.push(OpProof::ZkSig(ZkSignature::new(
-            CompressedGroth16Proof::from_bytes(&[0u8; 128]),
-        )));
         ops_proofs.push(OpProof::ZkAndEd25519Sigs {
             zk_sig,
             ed25519_sig,
