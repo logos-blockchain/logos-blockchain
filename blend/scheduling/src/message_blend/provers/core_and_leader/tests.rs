@@ -22,6 +22,7 @@ async fn proof_generation() {
             local_node_index: None,
             membership_size: 1,
             public_inputs: core_public_inputs,
+            encapsulation_layers: 1.try_into().unwrap(),
             epoch: Epoch::new(0),
         },
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs),
@@ -72,6 +73,7 @@ async fn proof_generation() {
         local_node_index: None,
         membership_size: 1,
         public_inputs: leadership_public_inputs,
+        encapsulation_layers: 1.try_into().unwrap(),
         epoch: Epoch::new(0),
     });
     core_and_leader_proofs_generator.set_epoch_private(
@@ -117,6 +119,7 @@ async fn epoch_rotation() {
             local_node_index: None,
             membership_size: 1,
             public_inputs,
+            encapsulation_layers: 1.try_into().unwrap(),
             epoch: Epoch::new(1),
         },
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(private_inputs),
@@ -209,6 +212,7 @@ async fn epoch_private_info() {
             local_node_index: None,
             membership_size: 1,
             public_inputs: leadership_public_inputs,
+            encapsulation_layers: 1.try_into().unwrap(),
             epoch: Epoch::new(0),
         },
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs.clone()),
@@ -277,6 +281,7 @@ async fn epoch_private_info() {
         local_node_index: None,
         membership_size: 1,
         public_inputs: core_public_inputs,
+        encapsulation_layers: 1.try_into().unwrap(),
         epoch: Epoch::new(0),
     });
     core_and_leader_proofs_generator.rotate_epoch(core_public_inputs.leader, Epoch::new(1));

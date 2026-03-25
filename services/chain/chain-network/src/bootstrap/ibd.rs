@@ -427,7 +427,7 @@ mod tests {
         block::Proposal,
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use lb_cryptarchia_engine::{EpochConfig, Slot, UpdatedCryptarchia};
+    use lb_cryptarchia_engine::{EpochConfig, Slot};
     use lb_ledger::{
         LedgerState,
         mantle::sdp::{ServiceRewardsParameters, rewards},
@@ -871,11 +871,7 @@ mod tests {
             // Add the block only to the consensus, not to the ledger state
             // because the mocked block doesn't have a proof.
             // It's enough because the tests doesn't check the ledger state.
-            let UpdatedCryptarchia {
-                cryptarchia: consensus,
-                ..
-            } = self
-                .cryptarchia
+            self.cryptarchia
                 .consensus
                 .receive_block(block.id, block.parent, block.slot)
                 .map_err(|e| {
@@ -883,8 +879,6 @@ mod tests {
                         "Consensus error: {e:?}"
                     )))
                 })?;
-
-            self.cryptarchia.consensus = consensus;
             Ok(())
         }
 

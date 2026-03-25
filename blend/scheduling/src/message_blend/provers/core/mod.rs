@@ -1,4 +1,4 @@
-use core::{future::ready, pin::Pin};
+use core::{future::ready, num::NonZeroU64, pin::Pin};
 
 use async_trait::async_trait;
 use futures::stream::{self, Stream, StreamExt as _};
@@ -23,7 +23,6 @@ use crate::message_blend::{
 mod tests;
 
 const LOG_TARGET: &str = "blend::scheduling::proofs::core";
-const PROOFS_GENERATOR_BUFFER_SIZE: usize = 10;
 
 /// Proof generator for core `PoQ` variants.
 #[async_trait]
@@ -66,6 +65,7 @@ where
                 settings.public_inputs,
                 proof_of_quota_generator.clone(),
                 0,
+                settings.encapsulation_layers,
                 cancellation_token.clone(),
             )),
             proof_of_quota_generator,
@@ -123,6 +123,7 @@ where
             self.settings.public_inputs,
             self.proof_of_quota_generator.clone(),
             starting_key_index,
+            self.settings.encapsulation_layers,
             new_cancellation_token,
         ));
     }
@@ -132,6 +133,7 @@ fn create_proof_stream<Generator>(
     public_inputs: PoQVerificationInputsMinusSigningKey,
     proof_of_quota_generator: Generator,
     starting_key_index: u64,
+    encapsulation_layers: NonZeroU64,
     cancellation_token: CancellationToken,
 ) -> impl Stream<Item = BlendLayerProof>
 where
@@ -182,6 +184,7 @@ where
                 }
 
                 let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
+                tracing::trace!(target: LOG_TARGET, "Generated core PoQ for message release index {key_index:?} with key nullifier {:?} and public key {:?}.", hex::encode(fr_to_bytes(&proof_of_quota.key_nullifier())), ephemeral_signing_key.public_key());
                 Some(BlendLayerProof {
                     proof_of_quota,
                     proof_of_selection,
@@ -189,7 +192,7 @@ where
                 })
             }
         })
-        .buffered(PROOFS_GENERATOR_BUFFER_SIZE)
+        .buffered(encapsulation_layers.get() as usize)
         // Filter out cancelled/failed proofs
         .filter_map(ready)
 }

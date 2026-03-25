@@ -97,7 +97,7 @@ where
             let poq = res_receiver
                 .await
                 .expect("Should not fail to get PoQ generation result from KMS.")?;
-            tracing::debug!(target: LOG_TARGET, "KMS-based PoQ generation succeeded.");
+            tracing::trace!(target: LOG_TARGET, "KMS-based PoQ generation succeeded.");
             Ok(poq)
         }
     }

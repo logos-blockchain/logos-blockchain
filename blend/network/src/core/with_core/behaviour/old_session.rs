@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque, hash_map::Entry},
+    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
     convert::Infallible,
     task::{Context, Poll, Waker},
     time::Instant,
@@ -32,6 +32,7 @@ pub struct OldSession<ProofsVerifier> {
     exchanged_message_identifiers: HashMap<PeerId, HashMap<MessageIdentifier, Instant>>,
     events: VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     waker: Option<Waker>,
+    message_cache: HashSet<MessageIdentifier>,
     poq_verifier: ProofsVerifier,
 }
 
@@ -40,13 +41,43 @@ where
     ProofsVerifier: encap::ProofsVerifier,
 {
     /// Validates the public header of an encapsulated message, and
-    /// if valid, forwards it to all negotiated peers.
-    pub fn validate_and_publish_message(
+    /// if valid, forwards it to all negotiated peers minus the sender.
+    pub fn validate_and_forward_message(
         &mut self,
         message: EncapsulatedMessage,
+        except: PeerId,
     ) -> Result<(), Error> {
         let validated_message = self.verify_encapsulated_message_public_header(message)?;
-        self.forward_validated_message_and_maybe_exclude(&validated_message, None)
+
+        let message_id = validated_message.id();
+        let serialized_message = serialize_encapsulated_message(&validated_message);
+        let mut at_least_one_receiver = false;
+        self.negotiated_peers
+            .iter()
+            .filter(|(peer_id, _)| **peer_id != except)
+            .for_each(|(&peer_id, &connection_id)| {
+                if check_and_update_message_cache(
+                    &mut self.exchanged_message_identifiers,
+                    &message_id,
+                    peer_id,
+                )
+                .is_ok()
+                {
+                    self.events.push_back(ToSwarm::NotifyHandler {
+                        peer_id,
+                        handler: NotifyHandler::One(connection_id),
+                        event: Either::Left(FromBehaviour::Message(serialized_message.clone())),
+                    });
+                    at_least_one_receiver = true;
+                }
+            });
+
+        if at_least_one_receiver {
+            self.try_wake();
+            Ok(())
+        } else {
+            Err(Error::NoPeers)
+        }
     }
 
     fn verify_encapsulated_message_public_header(
@@ -89,12 +120,17 @@ where
 
         let message_identifier = deserialized_encapsulated_message.id();
 
-        // Add the message to the set of exchanged message identifiers.
+        // Add the message to the set of exchanged message identifiers with the sender,
+        // returning `Err` if the message was already sent by this peer previously.
         check_and_update_message_cache(
             &mut self.exchanged_message_identifiers,
             &message_identifier,
             from_peer_id,
         )?;
+
+        if self.message_cache.contains(&message_identifier) {
+            return Ok(true);
+        }
 
         // Verify the message public header
         let validated_message =
@@ -102,6 +138,7 @@ where
 
         // Notify the swarm about the received message, so that it can be further
         // processed by the core protocol module.
+        self.message_cache.insert(message_identifier);
         self.events.push_back(ToSwarm::GenerateEvent(Event::Message(
             Box::new(validated_message),
             (from_peer_id, from_connection_id),
@@ -116,6 +153,7 @@ impl<ProofsVerifier> OldSession<ProofsVerifier> {
     pub const fn new(
         negotiated_peers: HashMap<PeerId, ConnectionId>,
         exchanged_message_identifiers: HashMap<PeerId, HashMap<MessageIdentifier, Instant>>,
+        message_cache: HashSet<MessageIdentifier>,
         poq_verifier: ProofsVerifier,
     ) -> Self {
         Self {
@@ -123,6 +161,7 @@ impl<ProofsVerifier> OldSession<ProofsVerifier> {
             exchanged_message_identifiers,
             events: VecDeque::new(),
             waker: None,
+            message_cache,
             poq_verifier,
         }
     }
@@ -149,46 +188,6 @@ impl<ProofsVerifier> OldSession<ProofsVerifier> {
         self.negotiated_peers
             .get(peer_id)
             .is_some_and(|&id| id == *connection_id)
-    }
-
-    /// Forwards a message to all connections except the [`except`] connection.
-    ///
-    /// Public header validation checks are skipped, since the message is
-    /// assumed to have been properly formed.
-    fn forward_validated_message_and_maybe_exclude(
-        &mut self,
-        message: &EncapsulatedMessageWithVerifiedPublicHeader,
-        except: Option<PeerId>,
-    ) -> Result<(), Error> {
-        let message_id = message.id();
-        let serialized_message = serialize_encapsulated_message(message);
-        let mut at_least_one_receiver = false;
-        self.negotiated_peers
-            .iter()
-            .filter(|(peer_id, _)| Some(**peer_id) != except)
-            .for_each(|(&peer_id, &connection_id)| {
-                if check_and_update_message_cache(
-                    &mut self.exchanged_message_identifiers,
-                    &message_id,
-                    peer_id,
-                )
-                .is_ok()
-                {
-                    self.events.push_back(ToSwarm::NotifyHandler {
-                        peer_id,
-                        handler: NotifyHandler::One(connection_id),
-                        event: Either::Left(FromBehaviour::Message(serialized_message.clone())),
-                    });
-                    at_least_one_receiver = true;
-                }
-            });
-
-        if at_least_one_receiver {
-            self.try_wake();
-            Ok(())
-        } else {
-            Err(Error::NoPeers)
-        }
     }
 
     /// Should be called when a connection is detected as closed.

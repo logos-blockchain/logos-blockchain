@@ -4809,6 +4809,7 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "strum",
+ "strum_macros",
  "tempfile",
  "testing-framework-core",
  "testing-framework-runner-local",

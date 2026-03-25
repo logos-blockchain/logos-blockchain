@@ -18,7 +18,7 @@ use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
-    LbcEnv, LbcManualCluster, ScenarioBuilder, ScenarioBuilderExt as _,
+    LbcEnv, LbcManualCluster, NodeHttpClient, ScenarioBuilder, ScenarioBuilderExt as _,
     configs::wallet::WalletAccount, workloads,
 };
 use testing_framework_core::scenario::{NodeControlCapability, Scenario, StartedNode};
@@ -149,7 +149,7 @@ pub struct CucumberWorld {
     pub node_peer_ids: HashMap<String, PeerId>,
     /// Manual: Whether to populate the IBD peers for each node after starting
     /// them,
-    pub populate_ibd_peers: Option<bool>,
+    pub populate_ibd_peers_from_initial_peers: Option<bool>,
     /// Manual: Whether to require all peers to be online after starting them.
     pub require_all_peers_mode_online_at_startup: Option<Duration>,
     /// Manual: Initial peers (multiaddrs) injected into node config before
@@ -163,6 +163,13 @@ pub struct CucumberWorld {
     /// Manual: If set, nodes use a `DeploymentSettings` loaded from disk
     /// bypassing generated genesis/test deployment.
     pub deployment_config_override_path: Option<PathBuf>,
+    /// Manual: If set, all running nodes are copied into a named snapshot when
+    /// the scenario stops them.
+    pub blockchain_snapshot_name_on_stop: Option<String>,
+    /// Manual: If set, dynamically started nodes should initialize their chain
+    /// state from this named snapshot. This is a scenario-wide startup seeding
+    /// setting.
+    pub blockchain_snapshot_on_startup: Option<NodeSnapshot>,
     /// Manual: Whether to have dynamically started nodes join the external
     /// network
     pub join_external_network: Option<bool>,
@@ -201,6 +208,17 @@ pub struct WalletTokenMap {
     pub utxos_per_wallet: HashMap<String, Vec<Utxo>>,
 }
 
+/// Information about a node snapshot, which can be used to initialize
+/// dynamically
+#[derive(Debug, Default, Clone)]
+pub struct NodeSnapshot {
+    /// Logical name of the snapshot, used for referencing in steps.
+    pub name: String,
+    /// The node name that this snapshot corresponds to. This is used to
+    /// determine which node's data directory will be used.
+    pub node: String,
+}
+
 impl Debug for CucumberWorld {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CucumberWorld")
@@ -216,7 +234,7 @@ impl Debug for CucumberWorld {
             )
             .field(
                 "populate_ibd_peers",
-                &format!("{:?}", self.populate_ibd_peers),
+                &format!("{:?}", self.populate_ibd_peers_from_initial_peers),
             )
             .field(
                 "require_all_peers_mode_online_at_startup",
@@ -272,6 +290,16 @@ impl Debug for CucumberWorld {
                 "deployment_config_override_path",
                 &deployment_config_override_path_display(
                     self.deployment_config_override_path.as_ref(),
+                ),
+            )
+            .field(
+                "blockchain_snapshot_name_on_stop",
+                &self.blockchain_snapshot_name_on_stop,
+            )
+            .field(
+                "blockchain_snapshot_name_on_startup",
+                &blockchain_snapshot_on_startup_display(
+                    self.blockchain_snapshot_on_startup.as_ref(),
                 ),
             )
             .finish()
@@ -365,6 +393,9 @@ pub struct NodeInfo {
     pub chain_info: ChainInfoMap,
     /// The wallets associated with this node.
     pub wallet_info: WalletInfoMap,
+    /// The node's runtime directory where all its runtime artifacts will be
+    /// collected
+    pub runtime_dir: PathBuf,
 }
 
 impl NodeInfo {
@@ -631,9 +662,7 @@ impl CucumberWorld {
         Ok(builder)
     }
 
-    /// Helper to resolve a node name to the actual started node name. This is
-    /// useful for steps that refer to nodes by a logical name, and need to
-    /// find the corresponding started node in the world.
+    /// Helper to resolve a node name to the actual started node name.
     pub fn resolve_node_name(&self, node_name: &str) -> Result<String, StepError> {
         Ok(self
             .nodes_info
@@ -646,10 +675,21 @@ impl CucumberWorld {
             .clone())
     }
 
+    /// Helper to resolve a node http client to the actual started node name.
+    pub fn resolve_node_http_client(&self, node_name: &str) -> Result<NodeHttpClient, StepError> {
+        Ok(self
+            .nodes_info
+            .get(node_name)
+            .ok_or(StepError::LogicalError {
+                message: format!("Node info for '{node_name}' not found in world"),
+            })?
+            .started_node
+            .client
+            .clone())
+    }
+
     /// Helper to resolve all user wallet names to the actual wallet
-    /// information. This is useful for steps that refer to wallets by a
-    /// logical name, and need to find the corresponding wallet information
-    /// in the world.
+    /// information.
     pub fn all_user_wallets(&self) -> Vec<WalletInfo> {
         self.wallet_info
             .values()
@@ -658,10 +698,8 @@ impl CucumberWorld {
             .collect::<Vec<_>>()
     }
 
-    /// Helper to resolve all user wallet names to the actual wallet
-    /// information. This is useful for steps that refer to wallets by a
-    /// logical name, and need to find the corresponding wallet information
-    /// in the world.
+    /// Helper to resolve all funding wallet names to the actual wallet
+    /// information.
     pub fn all_funding_wallets(&self) -> Vec<WalletInfo> {
         self.wallet_info
             .values()
@@ -670,9 +708,7 @@ impl CucumberWorld {
             .collect::<Vec<_>>()
     }
 
-    /// Helper to resolve wallet names to the actual wallet information. This
-    /// is useful for steps that refer to wallets by a logical name, and
-    /// need to find the corresponding wallet information in the world.
+    /// Helper to resolve a wallet name to the actual wallet information.
     pub fn resolve_wallet(&self, wallet_name: &str) -> Result<WalletInfo, StepError> {
         self.resolve_wallets(&[wallet_name.to_owned()])?
             .into_iter()
@@ -680,9 +716,8 @@ impl CucumberWorld {
             .ok_or(StepError::MissingWallet)
     }
 
-    /// Helper to resolve wallet names to the actual wallet information. This
-    /// is useful for steps that refer to wallets by a logical name, and
-    /// need to find the corresponding wallet information in the world.
+    /// Helper to resolve multiple wallet names to their actual wallet
+    /// information.
     pub fn resolve_wallets(&self, wallet_names: &[String]) -> Result<Vec<WalletInfo>, StepError> {
         wallet_names
             .iter()
@@ -698,8 +733,7 @@ impl CucumberWorld {
     }
 
     /// Helper to submit a transaction to the node associated with the given
-    /// wallet. This abstracts away the details of finding the correct node
-    /// and using its client.
+    /// wallet.
     pub async fn submit_transaction(
         &self,
         wallet: &WalletInfo,
@@ -730,8 +764,7 @@ impl CucumberWorld {
     }
 
     /// Helper to submit a funding wallet transaction to the node associated
-    /// with the given wallet. This abstracts away the details of finding
-    /// the correct node and using its client.
+    /// with the given wallet.
     pub async fn submit_funding_wallet_transaction(
         &self,
         wallet: &WalletInfo,
@@ -800,7 +833,7 @@ impl CucumberWorld {
             )
             .field(
                 "populate_ibd_peers",
-                &format!("{:?}", self.populate_ibd_peers),
+                &format!("{:?}", self.populate_ibd_peers_from_initial_peers),
             )
             .field(
                 "require_all_peers_mode_online_at_startup",
@@ -994,6 +1027,13 @@ fn ibd_peers_override_display(ibd_peers_override: Option<&HashSet<PeerId>>) -> S
                 .join(", ");
             format!("Some(HashSet<PeerId>({peers_str}))")
         },
+    )
+}
+
+fn blockchain_snapshot_on_startup_display(node_snapshot: Option<&NodeSnapshot>) -> String {
+    node_snapshot.as_ref().map_or_else(
+        || "None".to_owned(),
+        |snapshot| format!("Some(NodeSnapshot({}-{}))", snapshot.name, snapshot.node),
     )
 }
 
