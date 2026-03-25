@@ -226,12 +226,13 @@ mod tests {
             execution_gas_price: 0,
             storage_gas_price: 0,
         };
-        ops_proofs.push(OpProof::ZkSig(
+        let mut new_op_proofs = vec![OpProof::ZkSig(
             ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap(),
-        ));
+        )];
+        new_op_proofs.append(&mut ops_proofs);
         SignedMantleTx {
             mantle_tx,
-            ops_proofs,
+            ops_proofs: new_op_proofs,
         }
     }
 

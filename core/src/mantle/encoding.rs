@@ -628,7 +628,9 @@ fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
             bytes.extend(encode_ed25519_signature(ed25519_sig));
             bytes
         }
-        (OpProof::ZkSig(sig), Op::SDPWithdraw(_) | Op::SDPActive(_)) => encode_zk_signature(sig),
+        (OpProof::ZkSig(sig), Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_)) => {
+            encode_zk_signature(sig)
+        }
         (OpProof::PoC(poc), Op::LeaderClaim(_)) => encode_poc(poc),
         _ => {
             panic!("Mismatch between proof type and operation type");
@@ -682,11 +684,7 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx) -> usize {
         })
         .sum::<usize>();
 
-    // transfer_op_proof = ZkSignature
-    // ZkSignature   = Groth16
-    let transfer_op_proof_size = GROTH16_BYTES;
-
-    mantle_tx_size + ops_proofs_size + transfer_op_proof_size
+    mantle_tx_size + ops_proofs_size
 }
 
 #[cfg(test)]
@@ -773,14 +771,8 @@ mod tests {
         )]
         let test_vector = String::new()
             + "00"                                                               // OpCount=0u8
-            + "00"                                                               // LedgerInputCount=0u8
-            + "00"                                                               // LedgerOutputCount=0u8
             + "6400000000000000"                                                 // ExecutionGasPrice
-            + "3200000000000000"                                                 // StorageGasPrice
-            + "fcdf9c12b2871b271f64f39722ce0f5ff1809d5f61e11233387d9b04af2c1da2" // ZkSignature (128Byte)
-            + "bb61b193d57333661e4c6151c6c35b999ee1ab6fb957658511f19887256ef71c"
-            + "c13cda86473ef9c4af10b2c31eb714b50177d68ca185c37779b3de83c78e5bb0"
-            + "48e2d8da6ae97eb1d51514e0df379ff72f14175121c1b07f3affe85206a1d992";
+            + "3200000000000000"; // StorageGasPrice
 
         // ENCODING
         let encoded = hex::encode(encode_signed_mantle_tx(&signed_tx));
@@ -821,22 +813,16 @@ mod tests {
         )]
         let test_vector = String::new()
             + "01"                                                               // OpCount
-            + "00"                                                               // OpCode
+            + "11"                                                               // OpCode
             + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // ChannelID (32Byte)
             + "05000000"                                                         // InscriptionLength
             + "68656c6c6f"                                                       // Inscription
             + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" // Parent (32Byte)
             + "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c" // Signer (32Byte)
-            + "00"                                                               // LedgerInputCount
-            + "00"                                                               // LedgerOutputCount
             + "6400000000000000"                                                 // ExecutionGasPrice
             + "3200000000000000"                                                 // StorageGasPrice
-            + "e0195c329ab39c18b05b7e226d1ecea2f3dc40ac2f4fa3eb4caf98c9563a6255" // Signature (64Byte)
-            + "25a9e5048368ea31d50c74da105d41ad3723c001371553e3da1bbe762859ed0b"
-            + "f8bdd66cbbbae6cba142f2c15ccc8b0c3cb10566e7ca89978ef987515f922c95" // ZkSignature (128Byte)
-            + "ef2c897d66d12352fcbf7657da8cec24a3e8a6b9338278b0e7be953be416ce25"
-            + "10b53711585e78e1e4d402f7348f72adc134608a520e8b7ec5dad75b287f14a5"
-            + "1836b52db2760aba14e4a3cc820f5393a97595a06403d8aac284bf4e8cf85d99";
+            + "2013339707150c9b0f1637c6b540f4ad97c773b0d4cc4f1b097924154cb029c3" // Signature (64Byte)
+            + "bfa2d881827a3082aa7fd1ae2401051c20fc09402a9d544c43a50326cc81f002";
 
         // ENCODING
         let encoded = hex::encode(encode_signed_mantle_tx(&signed_tx));
@@ -1393,6 +1379,7 @@ mod tests {
                     zk_sig: ZkKey::multi_sign(&[locked_note_sk, zk_sk], &txhash.0).unwrap(),
                     ed25519_sig: op_ed25519_sig,
                 },
+                OpProof::ZkSig(ZkKey::multi_sign(&[], &Fr::ZERO).unwrap()),
             ],
         )
         .unwrap();
