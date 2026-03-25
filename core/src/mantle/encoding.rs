@@ -1923,20 +1923,20 @@ mod tests {
         // Verify that all iterative allocations are bounded to prevent
         // cumulative memory exhaustion attacks
 
-        // Max keys: 16 × 32 bytes = 512 bytes
+        // Max keys: 16 ï¿½ 32 bytes = 512 bytes
         assert!(MAX_KEY_COUNT as usize * 32 <= 1024);
 
-        // Max locators: 8 × 329 bytes = 2632 bytes (~2.6 KiB)
+        // Max locators: 8 ï¿½ 329 bytes = 2632 bytes (~2.6 KiB)
         assert!(MAX_LOCATOR_COUNT as usize * 329 <= 4096);
 
-        // Max inputs: 64 × 32 bytes = 2048 bytes (2 KiB)
+        // Max inputs: 64 ï¿½ 32 bytes = 2048 bytes (2 KiB)
         assert!(MAX_INPUT_COUNT as usize * 32 <= 4096);
 
-        // Max outputs: 64 × 40 bytes = 2560 bytes (~2.6 KiB)
+        // Max outputs: 64 ï¿½ 40 bytes = 2560 bytes (~2.6 KiB)
         assert!(MAX_OUTPUT_COUNT as usize * 40 <= 4096);
 
         // Total worst case for a single transaction:
-        // 32 ops × (512 + 2632 + 2048 + 2560) = ~240 KiB
+        // 32 ops ï¿½ (512 + 2632 + 2048 + 2560) = ~240 KiB
         // This is well within reasonable bounds
     }
 }
