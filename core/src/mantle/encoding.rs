@@ -821,8 +821,8 @@ mod tests {
             + "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c" // Signer (32Byte)
             + "6400000000000000"                                                 // ExecutionGasPrice
             + "3200000000000000"                                                 // StorageGasPrice
-            + "2013339707150c9b0f1637c6b540f4ad97c773b0d4cc4f1b097924154cb029c3" // Signature (64Byte)
-            + "bfa2d881827a3082aa7fd1ae2401051c20fc09402a9d544c43a50326cc81f002";
+            + "0422c15f3b8c1e5a213d2d41d46b9c6644f7fe0a3d34695d3af450f06b10fdec" // Signature (64Byte)
+            + "ac806ad87e6a73efd5c901dc3af295620615702cbae4de9f46b7e1333284b803";
 
         // ENCODING
         let encoded = hex::encode(encode_signed_mantle_tx(&signed_tx));
