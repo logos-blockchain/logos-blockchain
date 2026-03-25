@@ -39,9 +39,15 @@ thiserror                     = "1.0"
 tracing                       = { workspace = true }
 
 [dev-dependencies]
+divan      = { workspace = true }
+hasher     = "0.1.4"
 rand       = { workspace = true }
 serde_json = { default-features = false, features = ["alloc"], version = "1.0" }
 tokio      = "1.49.0"
+
+[[bench]]
+harness = false
+name    = "mantle_tx_components"
 
 [features]
 default = []

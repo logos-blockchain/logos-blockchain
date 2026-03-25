@@ -26,6 +26,10 @@ pub const MAX_MANTLE_TXS: usize = 1024;
 
 pub type TransactionHasher<T> = fn(&T) -> <T as Transaction>::Hash;
 
+pub trait StorageSize {
+    fn storage_size(&self) -> usize;
+}
+
 pub trait Transaction {
     const HASHER: TransactionHasher<Self>;
     type Hash: Hash + Eq + Clone;
@@ -40,7 +44,7 @@ pub trait Transaction {
     fn as_signing_frs(&self) -> Vec<Fr>;
 }
 
-pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCost {
+pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCost + StorageSize {
     /// Returns the underlying `MantleTx` that this transaction represents.
     fn mantle_tx(&self) -> &MantleTx;
 
@@ -64,6 +68,12 @@ impl<T: Transaction> Transaction for &T {
 
     fn as_signing_frs(&self) -> Vec<Fr> {
         T::as_signing_frs(self)
+    }
+}
+
+impl<T: StorageSize> StorageSize for &T {
+    fn storage_size(&self) -> usize {
+        T::storage_size(self)
     }
 }
 

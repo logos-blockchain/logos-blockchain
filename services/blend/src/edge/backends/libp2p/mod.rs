@@ -7,7 +7,7 @@ use lb_blend::{
     scheduling::membership::Membership,
 };
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
-use lb_libp2p::ed25519::Keypair;
+use lb_libp2p::identity::Keypair;
 use libp2p::PeerId;
 use overwatch::overwatch::OverwatchHandle;
 use rand::RngCore;
@@ -46,7 +46,7 @@ impl<RuntimeServiceId> BlendBackend<PeerId, RuntimeServiceId> for Libp2pBlendBac
         let (swarm_command_sender, swarm_command_receiver) = mpsc::channel(CHANNEL_SIZE);
         let swarm_identity = {
             let mut non_ephemeral_signing_key_bytes = non_ephemeral_signing_key.to_bytes();
-            Keypair::try_from_bytes(&mut non_ephemeral_signing_key_bytes[..])
+            Keypair::ed25519_from_bytes(&mut non_ephemeral_signing_key_bytes)
                 .expect("Cryptographic secret key should be a valid Ed25519 private key.")
         };
         let swarm = BlendSwarm::new(
@@ -54,7 +54,7 @@ impl<RuntimeServiceId> BlendBackend<PeerId, RuntimeServiceId> for Libp2pBlendBac
             membership,
             rng,
             swarm_command_receiver,
-            swarm_identity.into(),
+            swarm_identity,
         );
 
         let (swarm_task_abort_handle, swarm_task_abort_registration) = AbortHandle::new_pair();

@@ -22,8 +22,7 @@ use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_libp2p::{Protocol, SwarmEvent};
 use lb_utils::blake_rng::BlakeRng;
 use libp2p::{
-    Multiaddr, PeerId, Swarm, allow_block_list, connection_limits, core::transport::ListenerId,
-    identity::Keypair,
+    Multiaddr, PeerId, Swarm, allow_block_list, core::transport::ListenerId, identity::Keypair,
 };
 use libp2p_swarm_test::SwarmExt as _;
 use rand::SeedableRng as _;
@@ -206,9 +205,6 @@ where
                 self.peer_id,
                 PROTOCOL_NAME,
                 self.proofs_verifier,
-            ),
-            limits: connection_limits::Behaviour::new(
-                connection_limits::ConnectionLimits::default(),
             ),
             blocked_peers: allow_block_list::Behaviour::default(),
         }
