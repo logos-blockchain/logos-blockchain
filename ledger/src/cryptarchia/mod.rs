@@ -115,6 +115,7 @@ impl EpochState {
 #[derivative(Clone, Eq, PartialEq)]
 pub struct LedgerState {
     // All available Unspent Transtaction Outputs (UTXOs) at the current slot
+    // TODO: move UTXOs in the mantle ledger. There is no reason to keep them here
     pub utxos: UtxoTree,
     // randomness contribution
     #[cfg_attr(feature = "serde", serde(with = "lb_groth16::serde::serde_fr"))]

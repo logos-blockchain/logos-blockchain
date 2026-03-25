@@ -221,6 +221,8 @@ impl LedgerState {
                     (self.leaders, leader_balance) = self.leaders.claim(op).inspect_err(|err| error!(target: LOG_TARGET, %err, "failed to apply leader claim message"))?;
                     balance += leader_balance;
                 }
+                (Op::Transfer(_), Some(OpProof::ZkSig(_))) => {} /* Ok! it's already process in
+                                                                   * Cryptarchia Ledger */
                 _ => {
                     return Err(Error::UnsupportedOp);
                 }
