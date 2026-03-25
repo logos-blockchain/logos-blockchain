@@ -1,17 +1,14 @@
 use std::sync::LazyLock;
 
 use bytes::Bytes;
-use lb_groth16::{
-    Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes,
-    serde::serde_fr,
-};
+use lb_groth16::{Fr, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkSignature;
 use lb_poseidon2::{Digest, ZkHash};
 use num_bigint::BigUint;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    crypto::{Digest as _, Hasher, ZkHasher},
+    crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTE, Hasher, ZkHasher},
     mantle::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
@@ -21,8 +18,6 @@ use crate::{
     },
     proofs::leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
 };
-
-const HALF_BLAKE_DIGEST_BYTE: usize = 16;
 
 /// The hash of a transaction
 #[derive(

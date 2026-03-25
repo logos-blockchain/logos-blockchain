@@ -1,16 +1,14 @@
 use std::sync::LazyLock;
 
 use bytes::Bytes;
-use lb_groth16::{
-    Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes, fr_from_bytes_unchecked, serde::serde_fr,
-};
+use lb_groth16::{Fr, fr_from_bytes, fr_from_bytes_unchecked, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    crypto::{Digest as _, Hasher, ZkHasher},
+    crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTE, Hasher, ZkHasher},
     mantle::{
         Transaction, TransactionHasher, encoding::encode_ledger_tx, gas::GasConstants, tx::TxHash,
     },
@@ -130,7 +128,7 @@ impl Tx {
         let first_blake_hash = Hasher::digest(encoded_bytes);
         let frs = first_blake_hash
             .as_slice()
-            .chunks(GROTH16_SAFE_BYTES_SIZE)
+            .chunks(HALF_BLAKE_DIGEST_BYTE)
             .map(fr_from_bytes_unchecked);
         std::iter::once(*LEDGER_TXHASH_V1_FR).chain(frs).collect()
     }

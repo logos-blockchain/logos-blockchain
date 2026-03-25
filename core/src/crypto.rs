@@ -1,5 +1,6 @@
 use blake2::digest::typenum::U32;
 pub type Hasher = blake2::Blake2b<U32>;
+pub(crate) const HALF_BLAKE_DIGEST_BYTE: usize = 16;
 pub use blake2::digest::Digest;
 pub type Hash = [u8; 32];
 
