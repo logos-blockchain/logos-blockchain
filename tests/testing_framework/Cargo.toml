@@ -50,7 +50,6 @@ lb-utils                         = { workspace = true }
 
 [package.metadata.cargo-machete]
 ignored = [
-  "hex",
   "lb-blend-service",
   "lb-chain-leader-service",
   "lb-chain-network-service",
@@ -59,5 +58,6 @@ ignored = [
   "lb-groth16",
   "lb-ledger",
   "lb-time-service",
+  "lb-utils",
   "serde_json",
 ]

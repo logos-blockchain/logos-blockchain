@@ -14,8 +14,8 @@ use lb_core::{
     sdp::{Locator, ServiceType},
 };
 use lb_node::config::{KmsConfig, kms::serde::PreloadKmsBackendSettings};
-use lb_utils::net::get_available_udp_port;
-use network::GeneralNetworkConfig;
+use lb_testing_framework::get_reserved_available_udp_port;
+use network::{GeneralNetworkConfig, NetworkParams};
 use rand::{Rng as _, thread_rng};
 use tracing::GeneralTracingConfig;
 
@@ -24,9 +24,8 @@ use crate::{
     topology::configs::{
         api::GeneralApiConfig,
         consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD,
-        network::NetworkParams,
         sdp::{GeneralSdpConfig, create_sdp_configs},
-        time::GeneralTimeConfig,
+        time::{GeneralTimeConfig, set_time_config},
     },
 };
 
@@ -75,7 +74,7 @@ pub fn create_general_configs_with_blend_core_subset(
 
     for id in &mut ids {
         thread_rng().fill(id);
-        blend_ports.push(get_available_udp_port().unwrap());
+        blend_ports.push(get_reserved_available_udp_port().unwrap());
     }
 
     let (consensus_configs, genesis_tx) =
@@ -84,7 +83,7 @@ pub fn create_general_configs_with_blend_core_subset(
     let api_configs = api::create_api_configs(&ids);
     let blend_configs = blend::create_blend_configs(&ids, &blend_ports);
     let tracing_configs = tracing::create_tracing_configs(&ids);
-    let time_config = time::default_time_config();
+    let time_config = set_time_config(None);
 
     let providers: Vec<_> = blend_configs
         .iter()

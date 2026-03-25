@@ -18,7 +18,9 @@ fn create_tempdir() -> std::io::Result<TempDir> {
     // It's easier to use the current location instead of OS-default tempfile
     // location because Github Actions can easily access files in the current
     // location using wildcard to upload them as artifacts.
-    TempDir::new_in(std::env::current_dir()?)
+    let mut suffix = "_".to_owned();
+    suffix.push_str(std::thread::current().name().unwrap_or("NODE"));
+    TempDir::with_suffix_in(&suffix, std::env::current_dir()?)
 }
 
 fn persist_tempdir(tempdir: &mut TempDir, label: &str) -> std::io::Result<()> {

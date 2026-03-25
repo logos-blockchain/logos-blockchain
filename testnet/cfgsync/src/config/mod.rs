@@ -22,7 +22,7 @@ use lb_tests::topology::configs::{
     },
     network::{NetworkParams, create_network_configs},
     sdp::{GeneralSdpConfig, create_sdp_configs},
-    time::default_time_config,
+    time::set_time_config,
     tracing::GeneralTracingConfig,
 };
 use rand::{Rng as _, thread_rng};
@@ -131,7 +131,7 @@ pub fn create_node_configs(
         let tracing_config = update_tracing_identifier(tracing_settings.clone(), &host.identifier);
 
         // Time config
-        let time_config = default_time_config();
+        let time_config = set_time_config(Some(true));
 
         configured_hosts.insert(
             host.clone(),

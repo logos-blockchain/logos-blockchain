@@ -17,6 +17,7 @@ use std::{
 };
 
 use cucumber::{World as _, WriterExt as _, event::ScenarioFinished, writer, writer::Verbosity};
+use lb_testing_framework::release_reserved_port_block;
 use logos_blockchain_tests::cucumber::{
     defaults::{
         ARTEFACTS, CUCUMBER_DEPLOYER_COMPOSE, CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL,
@@ -157,6 +158,9 @@ async fn main() {
                         }
                     }
                 }
+
+                // Clean up manually reserved handshake port block files for this process
+                release_reserved_port_block();
             })
         })
         // Runs Cucumber. Features sourced from a Parser are fed to a Runner, which

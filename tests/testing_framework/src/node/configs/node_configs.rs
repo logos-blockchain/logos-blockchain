@@ -31,7 +31,9 @@ use network::GeneralNetworkConfig;
 use tracing::GeneralTracingConfig;
 
 use self::{api::GeneralApiConfig, network::NetworkParams, time::GeneralTimeConfig};
-use crate::common::kms::key_id_for_preload_backend;
+use crate::{
+    common::kms::key_id_for_preload_backend, configs::node_configs::time::set_time_config,
+};
 
 const PROLONGED_BOOTSTRAP_PERIOD: Duration = Duration::from_secs(5);
 
@@ -74,7 +76,7 @@ pub fn create_general_configs_from_ids(
     let api_configs = api::create_api_configs(ids);
     let blend_configs = blend::create_blend_configs(ids, blend_ports);
     let tracing_configs = tracing::create_tracing_configs(ids);
-    let time_config = time::default_time_config();
+    let time_config = set_time_config(None);
 
     let providers: Vec<_> = blend_configs
         .iter()

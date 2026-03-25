@@ -2,7 +2,6 @@ use std::{collections::HashMap, error::Error, path::PathBuf, sync::Arc, time::Du
 
 use lb_core::mantle::genesis_tx::GenesisTx;
 use lb_node::config::RunConfig;
-use lb_utils::net::get_available_udp_port;
 use rand::{Rng, SeedableRng as _};
 use testing_framework_core::topology::{DeploymentProvider, DeploymentSeed, DynTopologyError};
 use thiserror::Error;
@@ -11,9 +10,12 @@ use super::{
     Libp2pNetworkLayout, NetworkParams,
     wallet::{WalletConfig, WalletConfigError},
 };
-use crate::node::{
-    DeploymentPlan, NodePlan,
-    configs::{Config, create_node_configs_from_ids, key_id_for_preload_backend, postprocess},
+use crate::{
+    get_reserved_available_udp_port,
+    node::{
+        DeploymentPlan, NodePlan,
+        configs::{Config, create_node_configs_from_ids, key_id_for_preload_backend, postprocess},
+    },
 };
 
 pub type DynError = Box<dyn Error + Send + Sync + 'static>;
@@ -208,7 +210,7 @@ fn allocate_blend_ports(node_count: usize) -> Result<Vec<u16>, TopologyBuildErro
     let mut ports = Vec::with_capacity(node_count);
 
     for _ in 0..node_count {
-        let Some(port) = get_available_udp_port() else {
+        let Some(port) = get_reserved_available_udp_port() else {
             return Err(TopologyBuildError::BlendPortAllocation);
         };
         ports.push(port);

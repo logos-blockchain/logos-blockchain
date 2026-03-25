@@ -6,14 +6,19 @@
 //! - `NodeHttpClient` for node API calls
 
 use std::{net::Ipv4Addr, sync::LazyLock};
-
+extern crate self as lb_testing_framework;
 use lb_libp2p::{Multiaddr, multiaddr};
 
 pub mod env;
 mod framework;
 pub use framework::local::USER_CONFIG_FILE;
 mod node;
+mod unique_persistent;
 pub mod workloads;
+pub use unique_persistent::{
+    get_reserved_available_tcp_port, get_reserved_available_udp_port, owner_for_current_test,
+    release_reserved_port_block,
+};
 
 pub(crate) mod common {
     pub mod kms {
