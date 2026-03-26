@@ -618,7 +618,8 @@ where
                     Self::prove_leader_claim_op(claim_op.clone(), tx_hash, &ledger, wallet, kms)
                         .await?
                 }
-                // TODO: Mantle Tx Builder should come with different ledger inputs for each transfer
+                // TODO: Mantle Tx Builder should come with different ledger inputs for each
+                // transfer
                 Op::Transfer(_) => {
                     let zk_sig = Self::sign_zksig(tx_hash, input_pks.clone(), kms).await?;
 
