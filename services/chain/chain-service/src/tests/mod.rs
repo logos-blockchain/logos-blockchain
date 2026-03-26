@@ -63,7 +63,6 @@ fn cryptarchia_switch_to_online() {
         assert!(reorged_blocks.is_empty());
 
         block_ids.push(block.header().id());
-
         slot = block.header().slot() + 1;
     }
 
