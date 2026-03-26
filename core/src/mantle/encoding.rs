@@ -1834,9 +1834,10 @@ mod tests {
     fn test_reject_excessive_locator_count() {
         // Test that locator_count > MAX_LOCATOR_COUNT is rejected
         let malicious_input = vec![
-            0x00,                         // ServiceType (1 byte)
-            MAX_DECODE_LOCATOR_COUNT + 1, /* LocatorCount = MAX_LOCATOR_COUNT + 1 (should be
-                                           * rejected) */
+            // ServiceType (1 byte)
+            0x00,
+            // LocatorCount = MAX_LOCATOR_COUNT + 1 (should be rejected)
+            MAX_DECODE_LOCATOR_COUNT + 1,
         ];
 
         // Should fail with TooLarge error
