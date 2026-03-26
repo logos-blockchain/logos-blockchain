@@ -942,8 +942,8 @@ mod tests {
             + "00000000"                                                         // LedgerOutputCount (4 bytes for 0 outputs)
             + "6400000000000000"                                                 // ExecutionGasPrice
             + "3200000000000000"                                                 // StorageGasPrice
-            + "becb2f3066f3a8490cfc78cb7a7da1cbbf587247b56552cdfc2a35ee42ccad09" // Signature (64Byte)
-            + "2c7e59c67846861e47f47b9b947d33e12c9bd17312e4f41ef6672d1b1670ad05"
+            + "da94b51b92b5586d1f1649954be5118177175fb2afefdde63c75f747cad1a633" // Signature (64Byte)
+            + "c4d91310e83d64afdeb1002625cf0cb05e34ee30778c1ea566b2776110cd300e"
             + "f8bdd66cbbbae6cba142f2c15ccc8b0c3cb10566e7ca89978ef987515f922c95" // ZkSignature (128Byte)
             + "ef2c897d66d12352fcbf7657da8cec24a3e8a6b9338278b0e7be953be416ce25"
             + "10b53711585e78e1e4d402f7348f72adc134608a520e8b7ec5dad75b287f14a5"
