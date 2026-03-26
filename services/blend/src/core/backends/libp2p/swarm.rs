@@ -364,7 +364,7 @@ where
             attempt_number,
         }) = self.ongoing_dials.get(&peer_id)
         else {
-            tracing::trace!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new session has cleared the map of pending dials.");
+            tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new session has cleared the map of pending dials.");
             return SessionDialAttempt::PreviousSession;
         };
         if *attempt_number < self.max_dial_attempts_per_connection {
@@ -533,7 +533,7 @@ where
 
                 match self.retry_dial(peer_id) {
                     SessionDialAttempt::PreviousSession => {
-                        tracing::trace!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new session has cleared the map of pending dials. No retry will be performed.");
+                        tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new session has cleared the map of pending dials. No retry will be performed.");
                     }
                     SessionDialAttempt::OngoingSession(Some(_)) => {
                         self.check_and_dial_new_peers_except(Some(peer_id));
