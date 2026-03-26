@@ -7,13 +7,13 @@ use derivative::Derivative;
 use lb_core::{
     crypto::{ZkDigest, ZkHasher},
     mantle::{
-        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value, gas::GasConstants,
+        GenesisTx, NoteId, TxHash, Utxo, Value, gas::GasConstants, ops::transfer::TransferOp,
     },
     proofs::leader_proof::{self, LeaderPublic},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Fr, fr_from_bytes};
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use lb_utxotree::MerklePath;
 
 use crate::cryptarchia::{
@@ -323,46 +323,42 @@ impl LedgerState {
             .increment_block_density(slot))
     }
 
-    pub fn try_apply_tx<Id, Constants: GasConstants>(
+    pub fn try_apply_transfer<Id, Constants: GasConstants>(
         mut self,
         locked_notes: &LockedNotes,
-        tx: impl AuthenticatedMantleTx,
+        transfer_op: &TransferOp,
+        transfer_sig: &ZkSignature,
+        tx_hash: TxHash,
     ) -> Result<(Self, Balance), LedgerError<Id>> {
         let mut balance: i128 = 0;
         let mut pks: Vec<ZkPublicKey> = vec![];
-        for (op, op_proof) in tx.ops_with_proof().map(|(op, proof)| (op, Some(proof))) {
-            if let (Op::Transfer(transfer_op), Some(OpProof::ZkSig(transfer_proof))) =
-                (op, op_proof)
-            {
-                for input in &transfer_op.inputs {
-                    if locked_notes.contains(input) {
-                        return Err(LedgerError::LockedNote(*input));
-                    }
-                    let utxo;
-                    (self.utxos, utxo) = self
-                        .utxos
-                        .remove(input)
-                        .map_err(|_| LedgerError::InvalidNote(*input))?;
-                    balance = balance
-                        .checked_add(utxo.note.value.into())
-                        .ok_or(LedgerError::Overflow)?;
-                    pks.push(utxo.note.pk);
-                }
-
-                if !ZkPublicKey::verify_multi(&pks, &tx.hash().0, transfer_proof) {
-                    return Err(LedgerError::InvalidProof);
-                }
-
-                for utxo in transfer_op.utxos() {
-                    if utxo.note.value == 0 {
-                        return Err(LedgerError::ZeroValueNote);
-                    }
-                    balance = balance
-                        .checked_sub(utxo.note.value.into())
-                        .ok_or(LedgerError::Overflow)?;
-                    self.utxos = self.utxos.insert(utxo.id(), utxo).0;
-                }
+        for input in &transfer_op.inputs {
+            if locked_notes.contains(input) {
+                return Err(LedgerError::LockedNote(*input));
             }
+            let utxo;
+            (self.utxos, utxo) = self
+                .utxos
+                .remove(input)
+                .map_err(|_| LedgerError::InvalidNote(*input))?;
+            balance = balance
+                .checked_add(utxo.note.value.into())
+                .ok_or(LedgerError::Overflow)?;
+            pks.push(utxo.note.pk);
+        }
+
+        if !ZkPublicKey::verify_multi(&pks, &tx_hash.0, transfer_sig) {
+            return Err(LedgerError::InvalidProof);
+        }
+
+        for utxo in transfer_op.utxos() {
+            if utxo.note.value == 0 {
+                return Err(LedgerError::ZeroValueNote);
+            }
+            balance = balance
+                .checked_sub(utxo.note.value.into())
+                .ok_or(LedgerError::Overflow)?;
+            self.utxos = self.utxos.insert(utxo.id(), utxo).0;
         }
         Ok((self, balance))
     }
@@ -532,11 +528,8 @@ pub mod tests {
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
-            GasCost as _, MantleTx, Note,
-            OpProof::ZkSig,
-            SignedMantleTx, Transaction as _,
-            gas::MainnetGasConstants,
-            ops::{leader_claim::VoucherCm, transfer::TransferOp},
+            GasCost as _, MantleTx, Note, Op, OpProof::ZkSig, SignedMantleTx, Transaction as _,
+            gas::MainnetGasConstants, ops::leader_claim::VoucherCm,
         },
         sdp::ServiceParameters,
     };
@@ -1105,7 +1098,10 @@ pub mod tests {
         assert_eq!(Some(LedgerError::InvalidProof), update_err);
     }
 
-    fn create_tx(inputs: &[(&ZkKey, &Utxo)], outputs: Vec<Note>) -> SignedMantleTx {
+    fn create_tx_with_transfer(
+        inputs: &[(&ZkKey, &Utxo)],
+        outputs: Vec<Note>,
+    ) -> (SignedMantleTx, TransferOp, ZkSignature) {
         let sks = inputs
             .iter()
             .map(|(sk, _)| (*sk).clone())
@@ -1113,16 +1109,19 @@ pub mod tests {
         let inputs = inputs.iter().map(|(_, utxo)| utxo.id()).collect::<Vec<_>>();
         let transfer_op = TransferOp::new(inputs, outputs);
         let mantle_tx = MantleTx {
-            ops: vec![Op::Transfer(transfer_op)],
+            ops: vec![Op::Transfer(transfer_op.clone())],
             execution_gas_price: 1,
             storage_gas_price: 1,
         };
-        SignedMantleTx {
-            ops_proofs: vec![ZkSig(
-                ZkKey::multi_sign(&sks, &mantle_tx.hash().into()).unwrap(),
-            )],
-            mantle_tx,
-        }
+        let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().into()).unwrap();
+        (
+            SignedMantleTx {
+                ops_proofs: vec![ZkSig(transfer_sig.clone())],
+                mantle_tx,
+            },
+            transfer_op,
+            transfer_sig,
+        )
     }
 
     #[test]
@@ -1142,11 +1141,17 @@ pub mod tests {
 
         let locked_notes = LockedNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let tx = create_tx(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
+        let (tx, transfer_op, transfer_sig) =
+            create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
 
         let _fees = tx.gas_cost::<MainnetGasConstants>();
         let (new_state, balance) = ledger_state
-            .try_apply_tx::<(), MainnetGasConstants>(&locked_notes, tx)
+            .try_apply_transfer::<(), MainnetGasConstants>(
+                &locked_notes,
+                &transfer_op,
+                &transfer_sig,
+                tx.hash(),
+            )
             .unwrap();
 
         assert_eq!(
@@ -1158,36 +1163,38 @@ pub mod tests {
         assert!(!new_state.utxos.contains(&input_utxo.id()));
 
         // Verify outputs were created
-        let mantle_tx = create_tx(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
-        if let Op::Transfer(transfer_op) = &mantle_tx.mantle_tx.ops[0] {
-            let output_utxo1 = transfer_op.utxo_by_index(0).unwrap();
-            let output_utxo2 = transfer_op.utxo_by_index(1).unwrap();
+        let (_, transfer_op, _) =
+            create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
+        let output_utxo1 = transfer_op.utxo_by_index(0).unwrap();
+        let output_utxo2 = transfer_op.utxo_by_index(1).unwrap();
 
-            assert!(new_state.utxos.contains(&output_utxo1.id()));
-            assert!(new_state.utxos.contains(&output_utxo2.id()));
+        assert!(new_state.utxos.contains(&output_utxo1.id()));
+        assert!(new_state.utxos.contains(&output_utxo2.id()));
 
-            // The new outputs can be spent in future transactions
-            let tx = create_tx(
-                &[
-                    (&output_note1_sk, &output_utxo1),
-                    (&output_note2_sk, &output_utxo2),
-                ],
-                vec![],
-            );
-            let locked_notes = LockedNotes::new();
-            let _fees = tx.gas_cost::<MainnetGasConstants>();
-            let (final_state, final_balance) = new_state
-                .try_apply_tx::<(), MainnetGasConstants>(&locked_notes, tx)
-                .unwrap();
-            assert_eq!(
-                final_balance,
-                i128::from(output_note1.value + output_note2.value)
-            );
-            assert!(!final_state.utxos.contains(&output_utxo1.id()));
-            assert!(!final_state.utxos.contains(&output_utxo2.id()));
-        } else {
-            panic!("first op must be a transfer")
-        }
+        // The new outputs can be spent in future transactions
+        let (tx, transfer_op, transfer_sig) = create_tx_with_transfer(
+            &[
+                (&output_note1_sk, &output_utxo1),
+                (&output_note2_sk, &output_utxo2),
+            ],
+            vec![],
+        );
+        let locked_notes = LockedNotes::new();
+        let _fees = tx.gas_cost::<MainnetGasConstants>();
+        let (final_state, final_balance) = new_state
+            .try_apply_transfer::<(), MainnetGasConstants>(
+                &locked_notes,
+                &transfer_op,
+                &transfer_sig,
+                tx.hash(),
+            )
+            .unwrap();
+        assert_eq!(
+            final_balance,
+            i128::from(output_note1.value + output_note2.value)
+        );
+        assert!(!final_state.utxos.contains(&output_utxo1.id()));
+        assert!(!final_state.utxos.contains(&output_utxo2.id()));
     }
 
     #[test]
@@ -1228,10 +1235,16 @@ pub mod tests {
 
         let locked_notes = LockedNotes::new();
         for non_existent_utxo in invalid_utxos {
-            let tx = create_tx(&[(&ZkKey::zero(), &non_existent_utxo)], vec![]);
+            let (tx, transfer_op, transfer_sig) =
+                create_tx_with_transfer(&[(&ZkKey::zero(), &non_existent_utxo)], vec![]);
             let result = ledger_state
                 .clone()
-                .try_apply_tx::<(), MainnetGasConstants>(&locked_notes, tx);
+                .try_apply_transfer::<(), MainnetGasConstants>(
+                    &locked_notes,
+                    &transfer_op,
+                    &transfer_sig,
+                    tx.hash(),
+                );
             assert!(matches!(result, Err(LedgerError::InvalidNote(_))));
         }
     }
@@ -1250,18 +1263,30 @@ pub mod tests {
 
         let locked_notes = LockedNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let tx = create_tx(&[(&input_sk, &input_utxo)], vec![output_note, output_note]);
+        let (tx, transfer_op, transfer_sig) =
+            create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![output_note, output_note]);
 
         let (_, balance) = ledger_state
             .clone()
-            .try_apply_tx::<(), MainnetGasConstants>(&locked_notes, tx)
+            .try_apply_transfer::<(), MainnetGasConstants>(
+                &locked_notes,
+                &transfer_op,
+                &transfer_sig,
+                tx.hash(),
+            )
             .unwrap();
         assert_eq!(balance, -1);
 
-        let tx = create_tx(&[(&input_sk, &input_utxo)], vec![output_note]);
+        let (tx, transfer_op, transfer_sig) =
+            create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![output_note]);
         assert_eq!(
             ledger_state
-                .try_apply_tx::<(), MainnetGasConstants>(&locked_notes, tx)
+                .try_apply_transfer::<(), MainnetGasConstants>(
+                    &locked_notes,
+                    &transfer_op,
+                    &transfer_sig,
+                    tx.hash()
+                )
                 .unwrap()
                 .1,
             0
@@ -1280,10 +1305,16 @@ pub mod tests {
 
         let locked_notes = LockedNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let tx = create_tx(&[(&input_sk, &input_utxo)], vec![]);
+        let (tx, transfer_op, transfer_sig) =
+            create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![]);
 
         let _fees = tx.gas_cost::<MainnetGasConstants>();
-        let result = ledger_state.try_apply_tx::<(), MainnetGasConstants>(&locked_notes, tx);
+        let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
+            &locked_notes,
+            &transfer_op,
+            &transfer_sig,
+            tx.hash(),
+        );
         assert!(result.is_ok());
 
         let (new_state, balance) = result.unwrap();
@@ -1304,12 +1335,17 @@ pub mod tests {
 
         let locked_notes = LockedNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let tx = create_tx(
+        let (tx, transfer_op, transfer_sig) = create_tx_with_transfer(
             &[(&input_sk, &input_utxo)],
             vec![Note::new(0, Fr::from(BigUint::from(2u8)).into())],
         );
 
-        let result = ledger_state.try_apply_tx::<(), MainnetGasConstants>(&locked_notes, tx);
+        let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
+            &locked_notes,
+            &transfer_op,
+            &transfer_sig,
+            tx.hash(),
+        );
         assert!(matches!(result, Err(LedgerError::ZeroValueNote)));
     }
 
