@@ -1,17 +1,14 @@
 use std::sync::LazyLock;
 
 use bytes::Bytes;
-use lb_groth16::{
-    Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes,
-    serde::serde_fr,
-};
+use lb_groth16::{Fr, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkSignature;
 use lb_poseidon2::{Digest, ZkHash};
 use num_bigint::BigUint;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    crypto::ZkHasher,
+    crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTES_SIZE, Hasher, ZkHasher},
     mantle::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
@@ -192,12 +189,12 @@ impl Transaction for MantleTx {
 
     fn as_signing_frs(&self) -> Vec<Fr> {
         // constant and structure as defined in the Mantle specification:
-        // https://www.notion.so/Mantle-Specification-21c261aa09df810c8820fab1d78b53d9
+        // https://www.notion.so/nomos-tech/v1-2-1-Mantle-Specification-31e261aa09df8005988deef29a1286b4
         let encoded_bytes = encode_mantle_tx(self);
-        let frs = encoded_bytes
+        let first_blake_hash = Hasher::digest(encoded_bytes);
+        let frs = first_blake_hash
             .as_slice()
-            .chunks(GROTH16_SAFE_BYTES_SIZE)
-            // safety: Any 31 bytes fits into a groth16 Fr, there is no need to check for ranges
+            .chunks(HALF_BLAKE_DIGEST_BYTES_SIZE)
             .map(fr_from_bytes_unchecked);
         std::iter::once(*MANTLE_TXHASH_V1_FR).chain(frs).collect()
     }

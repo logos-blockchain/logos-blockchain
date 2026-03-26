@@ -11,6 +11,7 @@ use tokio::time::{Instant, MissedTickBehavior};
 use tracing::{info, warn};
 
 use crate::cucumber::{
+    TARGET,
     error::{StepError, StepResult},
     world::{DeployerKind, NetworkKind, TopologySpec},
 };
@@ -86,7 +87,7 @@ pub async fn track_progress<Fut>(operation: &str, interval: Duration, wait: Fut)
 where
     Fut: Future<Output = StepResult>,
 {
-    info!(target: super::TARGET, "Waiting for {operation}");
+    info!(target: TARGET, "Waiting for {operation}");
 
     let started_at = Instant::now();
 
@@ -102,7 +103,7 @@ where
             result = &mut wait_task => {
                 result.inspect_err(|source| {
                     warn!(
-                        target: super::TARGET,
+                        target: TARGET,
                         "{operation} failed after {:.2?}: {source}",
                         started_at.elapsed()
                     );
@@ -111,7 +112,7 @@ where
             }
             _ = progress.tick() => {
                 info!(
-                    target: super::TARGET,
+                    target: TARGET,
                     "Still waiting for {operation} after {:.2?}",
                     started_at.elapsed()
                 );
@@ -120,7 +121,7 @@ where
     }
 
     info!(
-        target: super::TARGET,
+        target: TARGET,
         "{operation} completed in {:.2?}",
         started_at.elapsed()
     );
@@ -183,34 +184,113 @@ pub fn funding_wallet_pk_from_node_yaml(path: &Path) -> Result<String, StepError
         })
 }
 
-/// Extracts the child directory name that starts with a known prefix.
-pub fn extract_child_dir_name(base_dir: &Path, prefix: &str) -> Result<String, StepError> {
-    base_dir
-        .read_dir()
-        .map_err(|e| StepError::LogicalError {
-            message: format!("Failed to read scenario_base_dir: {e}"),
-        })?
-        .filter_map(Result::ok)
-        .find(|entry| {
-            entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
-                && entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|name| name.starts_with(prefix))
-        })
-        .ok_or_else(|| StepError::LogicalError {
-            message: format!("No directory found starting with {prefix}",),
-        })?
-        .file_name()
-        .to_str()
-        .map(String::from)
-        .ok_or_else(|| StepError::LogicalError {
-            message: "Invalid UTF-8 in directory name".to_owned(),
-        })
+/// Extracts the child directory name that starts with a known prefix,
+/// considering the ignore list.
+pub fn extract_child_dir_name(
+    base_dir: &Path,
+    prefix: &str,
+    ignore_list: &[String],
+) -> Result<String, StepError> {
+    let entries = base_dir.read_dir().map_err(|e| StepError::LogicalError {
+        message: format!("No child dir entries in '{}': {e}", base_dir.display()),
+    })?;
+
+    let mut matching_dirs = Vec::new();
+    for entry in entries.filter_map(Result::ok) {
+        if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with(prefix) && !ignore_list.contains(&name) {
+            matching_dirs.push(name);
+        }
+    }
+
+    matching_dirs.sort_unstable(); // ← DETERMINISTIC ORDERING
+
+    match matching_dirs.len() {
+        1 => Ok(matching_dirs.into_iter().next().unwrap()),
+        0 => Err(StepError::LogicalError {
+            message: format!("No directory found starting with {prefix}"),
+        }),
+        _ => Err(StepError::LogicalError {
+            message: format!("Ambiguous: multiple dirs match {prefix}: {matching_dirs:?}",),
+        }),
+    }
+}
+
+/// Returns a list of child directory names that start with a known prefix.
+#[must_use]
+pub fn matching_child_dirs(partial_persist_dir: &Path, prefix: &str) -> Vec<String> {
+    let base_dir = partial_persist_dir.parent().unwrap_or(partial_persist_dir);
+
+    let mut dirs = fs::read_dir(base_dir).map_or_else(
+        |_| Vec::new(),
+        |entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+                .filter_map(|entry| {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    name.starts_with(prefix).then_some(name)
+                })
+                .collect::<Vec<_>>()
+        },
+    );
+    dirs.sort_unstable();
+    dirs
 }
 
 /// Truncate hash for display purposes
 #[must_use]
 pub fn truncate_hash(input: &str, length: usize) -> String {
     input.chars().take(length).collect()
+}
+
+/// Recursively copies a directory tree from `src` into `dst`.
+pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if !src.exists() {
+        return Err(std::io::Error::other(format!(
+            "Directory '{}' is missing",
+            src.display()
+        )));
+    }
+    if !src.is_dir() {
+        return Err(std::io::Error::other(format!(
+            "Item '{}' is not a directory",
+            src.display()
+        )));
+    }
+    fs::create_dir_all(dst)?;
+
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = dst.join(entry.file_name());
+        let metadata = entry.metadata()?;
+
+        if metadata.is_dir() {
+            copy_dir_recursive(&source_path, &destination_path)?;
+        } else if metadata.is_file() {
+            if let Some(parent) = destination_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&source_path, &destination_path)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Returns a string representation of the last levels components of the given
+/// path joined by '/'.
+#[must_use]
+pub fn display_last_path_components(path: &Path, levels: usize) -> String {
+    let components = path
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+    let start = components.len().saturating_sub(levels);
+    components[start..].join("/")
 }

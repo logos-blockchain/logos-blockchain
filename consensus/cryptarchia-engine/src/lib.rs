@@ -331,6 +331,12 @@ where
         }
         *current
     }
+
+    /// Shrink internal data structures to release unused capacity.
+    fn shrink(&mut self) {
+        self.branches.shrink_to_fit();
+        self.tips.shrink_to_fit();
+    }
 }
 
 #[derive(Debug, Clone, Error)]
@@ -541,6 +547,16 @@ where
         })
     }
 
+    /// Shrink internal data structures to release unused capacity.
+    ///
+    /// This should be called after a significant number of blocks have been
+    /// pruned by [`Self::prune_fork`] and [`Self::prune_immutable_blocks`] to
+    /// free up memory. This should not be called frequently since it is an
+    /// expensive operation.
+    fn shrink(&mut self) {
+        self.branches.shrink();
+    }
+
     pub const fn branches(&self) -> &Branches<Id> {
         &self.branches
     }
@@ -567,16 +583,12 @@ where
             .expect("Local chain tip height must be >= LIB height.")
     }
 
-    pub fn online(self) -> (Self, PrunedBlocks<Id>) {
-        let mut new = Self {
-            local_chain: self.local_chain,
-            branches: self.branches.clone(),
-            config: self.config,
-            state: State::Online,
-        };
+    pub fn online(mut self) -> (Self, PrunedBlocks<Id>) {
+        self.state = State::Online;
         // Update the LIB to the current local chain's tip
-        let pruned_blocks = new.update_lib();
-        (new, pruned_blocks)
+        let pruned_blocks = self.update_lib();
+        self.shrink();
+        (self, pruned_blocks)
     }
 
     pub const fn config(&self) -> &Config {

@@ -253,16 +253,19 @@ where
 
         // Allow only inbound connections from edge nodes, if the Blend network is large
         // enough.
-        Ok(
-            if self.current_membership.contains(&peer) || !self.is_network_large_enough() {
-                Either::Right(DummyConnectionHandler)
-            } else {
-                Either::Left(ConnectionHandler::new(
-                    self.connection_timeout,
-                    self.protocol_name.clone(),
-                ))
-            },
-        )
+        Ok(if !self.is_network_large_enough() {
+            tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer:?} because membership size is too small.");
+            Either::Right(DummyConnectionHandler)
+        } else if self.current_membership.contains(&peer) {
+            tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with core peer {peer:?}.");
+            Either::Right(DummyConnectionHandler)
+        } else {
+            tracing::debug!(target: LOG_TARGET, "Upgrading inbound connection {connection_id:?} with edge peer {peer:?}.");
+            Either::Left(ConnectionHandler::new(
+                self.connection_timeout,
+                self.protocol_name.clone(),
+            ))
+        })
     }
 
     fn handle_established_outbound_connection(
