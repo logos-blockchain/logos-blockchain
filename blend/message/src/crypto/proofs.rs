@@ -130,7 +130,7 @@ impl ProofsVerifier for RealProofsVerifier {
             })
             .or_else(|_| {
                 let Some(previous_epoch_inputs) = self.previous_epoch_inputs else {
-                    tracing::trace!("Input proof invalid and no previous epoch to try with");
+                    tracing::debug!("Input proof invalid and no previous epoch to try with");
                     return Err(Error::ProofOfQuota(quota::Error::InvalidProof));
                 };
                 tracing::trace!(
@@ -147,7 +147,7 @@ impl ProofsVerifier for RealProofsVerifier {
                     })
                     .map_err(Error::ProofOfQuota)
                     .inspect_err(|_| {
-                        tracing::trace!(
+                        tracing::debug!(
                             "Input proof invalid with both current and previous epoch public inputs"
                         );
                     })

@@ -1169,7 +1169,7 @@ where
                     new_processor
                 }
                 Err(e @ (Error::LocalIsNotCoreNode | Error::NetworkIsTooSmall(_))) => {
-                    tracing::warn!(target: LOG_TARGET, "New membership does not satisfy the core node condition: {e:?}");
+                    tracing::info!(target: LOG_TARGET, "New membership does not satisfy the core node condition: {e:?}");
                     return HandleSessionEventOutput::Retiring {
                         old_crypto_processor: current_cryptographic_processor,
                         old_scheduler: current_scheduler
@@ -1202,7 +1202,7 @@ where
             }
         }
         SessionEvent::NewSession(MaybeEmptyCoreSessionInfo::Empty { session }) => {
-            tracing::warn!(target: LOG_TARGET, "New session event received, but no session info is available due to empty membership set.");
+            tracing::info!(target: LOG_TARGET, "New session event received, but no session info is available due to empty membership set.");
             let (_, _, _, _, current_session_blending_token_collector, _, _) =
                 current_recovery_checkpoint.into_components();
             let new_reward_session_info = reward::SessionInfo::new(
