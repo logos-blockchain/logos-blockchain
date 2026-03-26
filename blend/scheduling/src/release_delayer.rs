@@ -141,7 +141,7 @@ where
         };
 
         // If it's time to release messages...
-        if new_round == self.next_release_round {
+        if new_round >= self.next_release_round {
             // Reset the next release round.
             self.next_release_round = calculate_next_release_round(
                 new_round,

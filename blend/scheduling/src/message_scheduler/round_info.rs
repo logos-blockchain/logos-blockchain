@@ -5,7 +5,7 @@ use core::{
 
 use futures::Stream;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Round(u128);
 
 impl Round {
