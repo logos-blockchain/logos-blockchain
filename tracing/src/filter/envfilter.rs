@@ -16,10 +16,15 @@ const DEFAULT_DEBUG_TARGETS: &[&str] = &[
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EnvFilterConfig {
+    /// Per-target level overrides stored in typed form.
+    ///
+    /// The global default directive is represented internally with the `*`
+    /// key and converted back into native `EnvFilter` syntax at the boundary.
     #[serde(with = "serde_filters")]
     pub filters: HashMap<String, Level>,
 }
 
+/// Builds the native `EnvFilter` from the typed config representation.
 pub fn create_envfilter_layer(
     config: &EnvFilterConfig,
 ) -> Result<EnvFilter, Box<dyn Error + Send + Sync>> {
@@ -27,6 +32,7 @@ pub fn create_envfilter_layer(
 }
 
 #[must_use]
+/// Returns the built-in verbose filter policy for `DEBUG` and `TRACE`.
 pub fn default_envfilter_config(level: Level) -> Option<EnvFilterConfig> {
     (level >= Level::DEBUG).then(|| EnvFilterConfig {
         filters: default_debug_log_filter(level),
@@ -34,6 +40,7 @@ pub fn default_envfilter_config(level: Level) -> Option<EnvFilterConfig> {
 }
 
 #[must_use]
+/// Builds the default verbose filter policy as a typed map.
 pub fn default_debug_log_filter(level: Level) -> HashMap<String, Level> {
     let mut filters = HashMap::from([("*".to_owned(), Level::WARN)]);
     filters.extend(
@@ -44,6 +51,7 @@ pub fn default_debug_log_filter(level: Level) -> HashMap<String, Level> {
     filters
 }
 
+/// Converts the typed filter config into native `EnvFilter` directives.
 fn envfilter_directives(filters: &HashMap<String, Level>) -> String {
     let mut directives = filters
         .iter()

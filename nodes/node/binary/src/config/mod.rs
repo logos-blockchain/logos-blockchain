@@ -471,6 +471,7 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
     Ok(())
 }
 
+/// Parses CLI/env filter overrides into the typed filter config form.
 fn parse_log_filter_layer(raw: &str) -> Result<Layer> {
     let filters = raw
         .split(',')
@@ -486,6 +487,8 @@ fn parse_log_filter_layer(raw: &str) -> Result<Layer> {
     Ok(Layer::Env(EnvConfig { filters }))
 }
 
+/// Applies the built-in verbose filter policy only when no explicit filter was
+/// configured.
 fn apply_default_debug_log_filter(tracing: &mut TracingConfig) {
     if !matches!(tracing.filter, Layer::None) {
         return;
@@ -498,6 +501,8 @@ fn apply_default_debug_log_filter(tracing: &mut TracingConfig) {
     }
 }
 
+/// Parses a single filter directive of the form `target=level` or a bare
+/// global level such as `warn`.
 fn parse_log_filter_directive(directive: &str) -> Result<(String, Level)> {
     if let Some((target, level)) = directive.split_once('=') {
         let target = target.trim();
