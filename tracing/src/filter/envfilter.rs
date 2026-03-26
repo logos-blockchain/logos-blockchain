@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{collections::HashMap, error::Error};
 
 use serde::{Deserialize, Serialize};
 use tracing::Level;
@@ -16,44 +16,106 @@ const DEFAULT_DEBUG_TARGETS: &[&str] = &[
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EnvFilterConfig {
-    /// `EnvFilter` directive string. More:
-    /// <https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives>
-    pub filter: String,
+    #[serde(with = "serde_filters")]
+    pub filters: HashMap<String, Level>,
 }
 
 pub fn create_envfilter_layer(
-    config: EnvFilterConfig,
+    config: &EnvFilterConfig,
 ) -> Result<EnvFilter, Box<dyn Error + Send + Sync>> {
-    EnvFilter::try_new(config.filter).map_err(Into::into)
+    EnvFilter::try_new(envfilter_directives(&config.filters)).map_err(Into::into)
 }
 
 #[must_use]
 pub fn default_envfilter_config(level: Level) -> Option<EnvFilterConfig> {
     (level >= Level::DEBUG).then(|| EnvFilterConfig {
-        filter: default_debug_log_filter(level),
+        filters: default_debug_log_filter(level),
     })
 }
 
 #[must_use]
-pub fn default_debug_log_filter(level: Level) -> String {
-    let mut directives = vec!["warn".to_owned()];
-    let app_level = default_filter_level(level);
-
-    directives.extend(
+pub fn default_debug_log_filter(level: Level) -> HashMap<String, Level> {
+    let mut filters = HashMap::from([("*".to_owned(), Level::WARN)]);
+    filters.extend(
         DEFAULT_DEBUG_TARGETS
             .iter()
-            .map(|target| format!("{target}={app_level}")),
+            .map(|target| ((*target).to_owned(), level)),
     );
+    filters
+}
 
+fn envfilter_directives(filters: &HashMap<String, Level>) -> String {
+    let mut directives = filters
+        .iter()
+        .map(|(target, level)| {
+            if target == "*" {
+                level.as_str().to_owned()
+            } else {
+                format!("{target}={}", level.as_str())
+            }
+        })
+        .collect::<Vec<_>>();
+
+    directives.sort();
     directives.join(",")
 }
 
-const fn default_filter_level(level: Level) -> &'static str {
-    match level {
-        Level::ERROR => "error",
-        Level::WARN => "warn",
-        Level::INFO => "info",
-        Level::DEBUG => "debug",
-        Level::TRACE => "trace",
+pub mod serde_filters {
+    use std::collections::HashMap;
+
+    use serde::{Deserialize as _, Deserializer, Serialize as _, Serializer, de::Error as _};
+    use tracing::Level;
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<HashMap<String, Level>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = <HashMap<String, String>>::deserialize(deserializer)?;
+
+        raw.into_iter()
+            .map(|(target, level)| {
+                level
+                    .parse()
+                    .map(|level| (target, level))
+                    .map_err(|e| D::Error::custom(format!("invalid log level {e}")))
+            })
+            .collect()
+    }
+
+    pub fn serialize<S, H>(
+        value: &HashMap<String, Level, H>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        H: std::hash::BuildHasher,
+    {
+        value
+            .iter()
+            .map(|(target, level)| (target.clone(), level.as_str().to_owned()))
+            .collect::<HashMap<_, _>>()
+            .serialize(serializer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use tracing::Level;
+
+    use super::{EnvFilterConfig, create_envfilter_layer};
+
+    #[test]
+    fn create_envfilter_layer_accepts_global_and_target_directives() {
+        let config = EnvFilterConfig {
+            filters: HashMap::from([
+                ("*".to_owned(), Level::WARN),
+                ("logos_blockchain".to_owned(), Level::DEBUG),
+                ("libp2p".to_owned(), Level::INFO),
+            ]),
+        };
+
+        assert!(create_envfilter_layer(&config).is_ok());
     }
 }

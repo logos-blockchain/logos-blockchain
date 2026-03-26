@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use lb_node::config::tracing::serde as tracing;
 
 use crate::IS_DEBUG_TRACING;
@@ -29,7 +31,10 @@ impl GeneralTracingConfig {
                     service_name: host_identifier.clone(),
                 }),
                 filter: tracing::filter::Layer::Env(tracing::filter::EnvConfig {
-                    filter: "logos_blockchain=debug,libp2p=debug".to_owned(),
+                    filters: HashMap::from([
+                        ("logos_blockchain".to_owned(), tracing::Level::DEBUG),
+                        ("libp2p".to_owned(), tracing::Level::DEBUG),
+                    ]),
                 }),
                 metrics: tracing::metrics::Layer::Otlp(tracing::metrics::OtlpConfig {
                     endpoint: "http://127.0.0.1:9090/api/v1/otlp/v1/metrics"

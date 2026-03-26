@@ -242,7 +242,7 @@ where
             .get_updated_settings();
 
         let env_filter = match effective_filter_settings(&config) {
-            FilterLayerSettings::EnvFilter(config) => Some(create_envfilter_layer(config)?),
+            FilterLayerSettings::EnvFilter(config) => Some(create_envfilter_layer(&config)?),
             FilterLayerSettings::None => None,
         };
 
