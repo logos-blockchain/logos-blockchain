@@ -184,7 +184,7 @@ pub enum ConnectionUpgradeFailureReason {
 }
 
 #[derive(Debug)]
-pub struct ConnectionUpgradeFailure {
+struct ConnectionUpgradeFailure {
     remote_peer_role: Endpoint,
     reason: ConnectionUpgradeFailureReason,
 }
