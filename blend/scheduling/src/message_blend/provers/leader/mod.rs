@@ -139,11 +139,7 @@ fn spawn_proof_generation(
     let (proof_sender, proof_receiver) = mpsc::channel(buffer_size);
     let handle = tokio::spawn(async move {
         tokio::pin!(stream);
-        loop {
-            let proof = stream
-                .next()
-                .await
-                .expect("Proof stream should always yield proofs when polled.");
+        while let Some(proof) = stream.next().await {
             if proof_sender.send(proof).await.is_err() {
                 break;
             }
