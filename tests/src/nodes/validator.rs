@@ -424,10 +424,7 @@ impl Validator {
 }
 
 #[must_use]
-pub fn create_validator_config(
-    config: GeneralConfig,
-    deployment_config: DeploymentSettings,
-) -> RunConfig {
+pub fn create_validator_user_config(config: GeneralConfig) -> UserConfig {
     let network_config = config.network_config;
 
     let blend_config = config.blend_config.0;
@@ -504,7 +501,7 @@ pub fn create_validator_config(
 
     let state_config = StateConfig::default();
 
-    let user_config = UserConfig {
+    UserConfig {
         network: network_config,
         blend: blend_config,
         time: time_config,
@@ -516,10 +513,15 @@ pub fn create_validator_config(
         wallet: wallet_config,
         kms: kms_config,
         state: state_config,
-    };
+    }
+}
 
+pub fn create_validator_config(
+    config: GeneralConfig,
+    deployment_config: DeploymentSettings,
+) -> RunConfig {
     RunConfig {
         deployment: deployment_config,
-        user: user_config,
+        user: create_validator_user_config(config),
     }
 }

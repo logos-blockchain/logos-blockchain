@@ -114,8 +114,18 @@ path              = "src/tests/testing_framework/fork_detector.rs"
 required-features = ["testing_framework"]
 
 [[test]]
+name              = "test_testing_framework_k8s_smoke"
+path              = "src/tests/testing_framework/k8s_smoke.rs"
+required-features = ["testing_framework"]
+
+[[test]]
 name              = "test_testing_framework_cucumber_smoke_local"
 path              = "cucumber_tests/stand_alone_tests/cucumber_smoke_local.rs"
+required-features = ["cucumber_stand_alone"]
+
+[[test]]
+name              = "test_testing_framework_cucumber_smoke_k8s"
+path              = "cucumber_tests/stand_alone_tests/cucumber_smoke_k8s.rs"
 required-features = ["cucumber_stand_alone"]
 
 [[test]]

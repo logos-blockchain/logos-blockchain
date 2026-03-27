@@ -71,6 +71,7 @@ pub fn parse_deployer(value: &str) -> Result<DeployerKind, StepError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "local" | "host" => Ok(DeployerKind::Local),
         "compose" | "docker" => Ok(DeployerKind::Compose),
+        "k8s" | "kubernetes" => Ok(DeployerKind::K8s),
         other => Err(StepError::UnsupportedDeployer {
             value: other.to_owned(),
         }),
