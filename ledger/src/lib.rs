@@ -16,10 +16,6 @@ use lb_core::{
     mantle::{
         AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value, gas::GasConstants,
     },
-    mantle::{
-        AuthenticatedMantleTx, GenesisTx, NoteId, Utxo, Value,
-        gas::{Gas, GasConstants},
-    },
     proofs::leader_proof,
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
 };
@@ -94,6 +90,8 @@ pub enum LedgerError<Id> {
     InputInGenesis(NoteId),
     #[error("The first Transfer Operation is missing in genesis tx")]
     MissingTransferGenesis(),
+    #[error("Unsupported operation")]
+    UnsupportedOp,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -294,31 +292,9 @@ impl LedgerState {
     ) -> Result<Self, LedgerError<Id>> {
         for tx in txs {
             let balance;
-            (self.cryptarchia_ledger, balance) = self
-                .cryptarchia_ledger
-                .try_apply_tx::<_, Constants>(self.mantle_ledger.locked_notes(), &tx)?;
-            let additional_balance;
-
-            (self.mantle_ledger, additional_balance) =
-                self.mantle_ledger.try_apply_tx::<Constants>(
-                    self.block_number,
-                    config,
-                    self.cryptarchia_ledger.latest_utxos(),
-                    &tx,
-                )?;
-
-            let total_balance = balance
-                .checked_add(additional_balance)
-                .ok_or(LedgerError::Overflow)?;
-            match total_balance.cmp(&tx.gas_cost::<Constants>().into()) {
-                Ordering::Less => return Err(LedgerError::InsufficientBalance),
-                Ordering::Greater => return Err(LedgerError::UnbalancedTransaction),
-                Ordering::Equal => {} // OK!
-            }
-            self.cryptarchia_ledger.update_fee_window(
-                self.block_number as usize % WINDOW_SIZE,
-                total_balance as u64,
-            );
+            (self, balance) = self.try_apply_tx::<_, Constants>(config, &tx)?;
+            self.cryptarchia_ledger
+                .update_fee_window(self.block_number as usize % WINDOW_SIZE, balance as u64);
         }
         self = self.compute_block_rewards();
         Ok(self)
@@ -415,13 +391,96 @@ impl LedgerState {
     pub fn active_sessions(&self) -> HashMap<ServiceType, SessionNumber> {
         self.mantle_ledger.active_sessions()
     }
+
+    fn try_apply_tx<Id, Constants: GasConstants>(
+        mut self,
+        config: &Config,
+        tx: impl AuthenticatedMantleTx,
+    ) -> Result<(Self, Balance), LedgerError<Id>> {
+        let mut balance: Balance = 0;
+        let tx_hash = tx.hash();
+        let ops = tx.ops_with_proof().map(|(op, proof)| (op, Some(proof)));
+        for (op, proof) in ops {
+            match (op, proof) {
+                // The signature for channel ops can be verified before reaching this point,
+                // as you only need the signer's public key and tx hash
+                // Callers are expected to validate the proof before calling this function.
+                (Op::ChannelInscribe(op), _) => {
+                    self.mantle_ledger = self.mantle_ledger.try_apply_channel_inscription(op)?;
+                }
+                (Op::ChannelSetKeys(op), Some(OpProof::Ed25519Sig(sig))) => {
+                    self.mantle_ledger = self
+                        .mantle_ledger
+                        .try_apply_channel_set_keys(op, sig, &tx_hash)?;
+                }
+                (
+                    Op::SDPDeclare(op),
+                    Some(OpProof::ZkAndEd25519Sigs {
+                        zk_sig,
+                        ed25519_sig,
+                    }),
+                ) => {
+                    self.mantle_ledger = self.mantle_ledger.try_apply_sdp_declaration(
+                        op,
+                        zk_sig,
+                        ed25519_sig,
+                        self.cryptarchia_ledger.latest_utxos(),
+                        tx_hash,
+                        config,
+                    )?;
+                }
+                (Op::SDPActive(op), Some(OpProof::ZkSig(sig))) => {
+                    self.mantle_ledger = self
+                        .mantle_ledger
+                        .try_apply_sdp_active(op, sig, tx_hash, config)?;
+                }
+                (Op::SDPWithdraw(op), Some(OpProof::ZkSig(sig))) => {
+                    self.mantle_ledger = self
+                        .mantle_ledger
+                        .try_apply_sdp_withdraw(op, sig, tx_hash, config)?;
+                }
+                (Op::LeaderClaim(op), None) => {
+                    // Correct derivation of the voucher nullifier and membership in the merkle tree
+                    // can be verified outside of this function since public inputs are already
+                    // available. Callers are expected to validate the proof
+                    // before calling this function.
+                    let leader_balance;
+                    (self.mantle_ledger, leader_balance) =
+                        self.mantle_ledger.try_apply_leader_claim(op)?;
+                    balance += leader_balance;
+                }
+                (Op::Transfer(op), Some(OpProof::ZkSig(sig))) => {
+                    let transfer_balance;
+                    (self.cryptarchia_ledger, transfer_balance) =
+                        self.cryptarchia_ledger.try_apply_transfer::<_, Constants>(
+                            self.mantle_ledger.locked_notes(),
+                            op,
+                            sig,
+                            tx_hash,
+                        )?;
+                    balance += transfer_balance;
+                }
+                _ => {
+                    return Err(LedgerError::UnsupportedOp);
+                }
+            }
+        }
+
+        match balance.cmp(&tx.total_gas_cost::<Constants>().into()) {
+            Ordering::Less => return Err(LedgerError::InsufficientBalance),
+            Ordering::Greater => return Err(LedgerError::UnbalancedTransaction),
+            Ordering::Equal => {} // OK!
+        }
+
+        Ok((self, balance))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
     use lb_core::mantle::{
-        GasCost as _, MantleTx, Note, Op, OpProof::ZkSig, SignedMantleTx, Transaction as _,
+        GasCost as _, MantleTx, Note, OpProof::ZkSig, SignedMantleTx, Transaction as _,
         gas::MainnetGasConstants, ops::transfer::TransferOp,
     };
     use lb_key_management_system_keys::keys::{ZkKey, ZkPublicKey};
@@ -474,7 +533,7 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
         );
-        let fees = tx.gas_cost::<MainnetGasConstants>();
+        let fees = tx.total_gas_cost::<MainnetGasConstants>();
         output_note.value = utxo.note.value - fees;
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk]);
 
