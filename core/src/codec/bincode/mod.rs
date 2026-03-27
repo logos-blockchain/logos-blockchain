@@ -35,18 +35,14 @@ use serde::{Serialize, de::DeserializeOwned};
 use crate::codec::{Error as WireError, Result};
 
 const ONE_GB_MEMORY_WARNING_THRESHOLD: usize = 1024 * 1024 * 1024; // 1 GB
-const DEFAULT_SERIALIZATION_CAPACITY: usize = 16 * 1024; // 16 KB
 
 /// Serialize an object directly into bytes
 pub fn serialize<T: Serialize>(item: &T) -> Result<Bytes> {
-    // Start with a reasonable default capacity to avoid multiple reallocations.
-    // This will be automatically resized if the serialized data exceeds this
-    // capacity, but it helps optimize for small to medium-sized objects. The
-    // alternative would be to compute the serialized size first and allocate
-    // exactly that much memory, but that would require serializing the object
-    // twice (once to compute size and once to serialize), which is inefficient
-    // for larger objects.
-    let buf = BytesMut::with_capacity(DEFAULT_SERIALIZATION_CAPACITY);
+    let size = OPTIONS
+        .serialized_size(item)
+        .map_err(|e| WireError::Serialize(Box::new(e)))?;
+
+    let buf = BytesMut::with_capacity(size as usize);
 
     let mut writer = buf.writer();
     bincode::serialize_into(&mut writer, item).map_err(|e| WireError::Serialize(Box::new(e)))?;
