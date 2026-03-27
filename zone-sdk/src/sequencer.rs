@@ -6,15 +6,16 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
-        ledger::Tx as LedgerTx,
         ops::{
             Op, OpProof,
-            channel::{ChannelId, MsgId, inscribe::InscriptionOp},
+            channel::{
+                ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp, set_keys::SetKeysOp,
+            },
         },
         tx::TxHash,
     },
 };
-use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
+use lb_key_management_system_service::keys::Ed25519Key;
 use reqwest::Url;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
@@ -82,6 +83,10 @@ enum ActorRequest {
     Publish {
         data: Vec<u8>,
         reply: oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
+    },
+    SetKeys {
+        keys: Vec<Ed25519PublicKey>,
+        reply: oneshot::Sender<Result<SignedMantleTx, Error>>,
     },
     Status {
         id: InscriptionId,
@@ -223,6 +228,44 @@ impl ZoneSequencer {
         reply_rx.await.map_err(|_| Error::Unavailable {
             reason: "actor dropped reply",
         })?
+    }
+
+    /// Update the channel's accredited keys.
+    ///
+    /// The sequencer's signing key must be the channel administrator
+    /// (`keys[0]`). This overwrites the entire key list — include the admin
+    /// key if it should remain authorized.
+    pub async fn set_keys(&self, keys: Vec<Ed25519PublicKey>) -> Result<TxHash, Error> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let request = ActorRequest::SetKeys {
+            keys,
+            reply: reply_tx,
+        };
+
+        self.request_tx
+            .send(request)
+            .await
+            .map_err(|_| Error::Unavailable {
+                reason: "actor channel closed",
+            })?;
+
+        let signed_tx = reply_rx.await.map_err(|_| Error::Unavailable {
+            reason: "actor dropped reply",
+        })??;
+
+        let tx_hash = signed_tx.mantle_tx.hash();
+        info!("Submitted set_keys transaction {:?}", tx_hash);
+
+        // Post to network (best effort, will be resubmitted if needed)
+        if let Err(e) = self
+            .http_client
+            .post_transaction(self.node_url.clone(), signed_tx)
+            .await
+        {
+            warn!("Failed to post set_keys transaction: {e}");
+        }
+
+        Ok(tx_hash)
     }
 }
 
@@ -398,6 +441,11 @@ fn handle_request(
                     reason: "not initialized",
                 })));
             }
+            ActorRequest::SetKeys { reply, .. } => {
+                drop(reply.send(Err(Error::Unavailable {
+                    reason: "not initialized",
+                })));
+            }
             ActorRequest::Status { reply, .. } => {
                 drop(reply.send(Err(Error::Unavailable {
                     reason: "not initialized",
@@ -427,6 +475,12 @@ fn handle_request(
                 checkpoint,
             };
             drop(reply.send(Ok((signed_tx, result))));
+        }
+        ActorRequest::SetKeys { keys, reply } => {
+            let signed_tx = create_set_keys_tx(channel_id, signing_key, keys);
+            let id = signed_tx.mantle_tx.hash();
+            s.submit(id, signed_tx.clone());
+            drop(reply.send(Ok(signed_tx)));
         }
         ActorRequest::Status { id, reply } => {
             let result = current_tip.map_or(
@@ -677,10 +731,11 @@ fn enqueue_resubmit(
 }
 
 fn matches_channel(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
-    tx.mantle_tx
-        .ops
-        .iter()
-        .any(|op| matches!(op, Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id))
+    tx.mantle_tx.ops.iter().any(|op| match op {
+        Op::ChannelInscribe(inscribe) => inscribe.channel_id == channel_id,
+        Op::ChannelSetKeys(set_keys) => set_keys.channel == channel_id,
+        _ => false,
+    })
 }
 
 fn create_inscribe_tx(
@@ -699,11 +754,8 @@ fn create_inscribe_tx(
     };
     let msg_id = inscribe_op.id();
 
-    let ledger_tx = LedgerTx::new(vec![], vec![]);
-
     let inscribe_tx = MantleTx {
         ops: vec![Op::ChannelInscribe(inscribe_op)],
-        ledger_tx,
         storage_gas_price: 0,
         execution_gas_price: 0,
     };
@@ -713,10 +765,33 @@ fn create_inscribe_tx(
 
     let signed_tx = SignedMantleTx {
         ops_proofs: vec![OpProof::Ed25519Sig(signature)],
-        ledger_tx_proof: ZkKey::multi_sign(&[], tx_hash.as_ref())
-            .expect("multi-sign with empty key set"),
         mantle_tx: inscribe_tx,
     };
 
     (signed_tx, msg_id)
+}
+
+fn create_set_keys_tx(
+    channel_id: ChannelId,
+    signing_key: &Ed25519Key,
+    keys: Vec<Ed25519PublicKey>,
+) -> SignedMantleTx {
+    let set_keys_op = SetKeysOp {
+        channel: channel_id,
+        keys,
+    };
+
+    let set_keys_tx = MantleTx {
+        ops: vec![Op::ChannelSetKeys(set_keys_op)],
+        storage_gas_price: 0,
+        execution_gas_price: 0,
+    };
+
+    let tx_hash = set_keys_tx.hash();
+    let signature = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
+
+    SignedMantleTx {
+        ops_proofs: vec![OpProof::Ed25519Sig(signature)],
+        mantle_tx: set_keys_tx,
+    }
 }

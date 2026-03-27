@@ -91,8 +91,8 @@ pub fn create_general_configs_from_ids(
         )
         .collect();
 
-    let ledger_tx = genesis_tx.mantle_tx().ledger_tx.clone();
-    let genesis_tx_with_declarations = create_genesis_tx_with_declarations(ledger_tx, providers);
+    let transfer_op = genesis_tx.genesis_transfer().clone();
+    let genesis_tx_with_declarations = create_genesis_tx_with_declarations(transfer_op, providers);
 
     let kms_configs: Vec<_> = blend_configs
         .iter()

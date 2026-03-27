@@ -47,6 +47,36 @@ cryptarchia:
       ops:
       - opcode: 0
         payload:
+            inputs: []
+            outputs:
+            - value: 100000
+              pk: eb3158fd1e5b25449eec9dc753595da361295e85ad93bb82b01f6db0c70a600a
+            - value: 1
+              pk: 3c147e1d8a44e726903ff4d3c82d08a8c6e07b34ae6ae2fe19f28af005693a0d
+            - value: 100
+              pk: 0ead813832eea418b36d09724d19db5a07f86142b676a53cfcdc968b66f14002
+            - value: 100000
+              pk: cd035cf2ca2b16a52cada554796335f1a69c132aa9997967aba878e72cd6f507
+            - value: 1
+              pk: f406445a75c65716774d133f878e288e097e34e76a9f2b49dca0107ad63b9c17
+            - value: 100
+              pk: 422dfbd9835e4a9f99e5eeb20b75d302db3487f9435cd6b4089d31311dbf4b0e
+            - value: 100000
+              pk: 9c5043de2ccf00a5deb078598788646387b6c98260e4112495b4e2d101c89a2e
+            - value: 1
+              pk: 4b71288e57901f2f33fa7c3609c311447f401f08f0bec9c1076d5cdbe5d47909
+            - value: 100
+              pk: 45085fb7118152739a6d95b4c27b004bfc39b58fa6fc7dfe564e04d1dde69422
+            - value: 100000
+              pk: a4aafde553c92aa1947da3b31188877f3f11362dbd5537cff5a02dd63982c70c
+            - value: 1
+              pk: 23c9dc6813bf5d090f8f5119c48a86ff808bbc0371cfef67af3551e63bcba20c
+            - value: 100
+              pk: be8492b9c322485c707ff92fe0785163feb63273c82417f14b1ef6b90674e90e
+            - value: 18446744073709151211
+              pk: faf8a7e44e9f45d35efcd9043c4a55095339e229c4115dbeb6231e2b8422f610
+      - opcode: 17
+        payload:
           channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
           inscription:
           - 103
@@ -90,38 +120,24 @@ cryptarchia:
           provider_id: 0e78cd0bf8cff5faa364776ac024c4c632c48f8a9d35789541a1b71009c3537e
           zk_id: ea7c784a570634bb4afb67553336984a9ce40eec02ed3d9249bd6d093b281f30
           locked_note_id: f31739eb4397e7e117a6422d84eb89388765c86d4d2a912625a6d821a4bbe701
-      ledger_tx:
-        inputs: []
-        outputs:
-        - value: 100000
-          pk: eb3158fd1e5b25449eec9dc753595da361295e85ad93bb82b01f6db0c70a600a
-        - value: 1
-          pk: 3c147e1d8a44e726903ff4d3c82d08a8c6e07b34ae6ae2fe19f28af005693a0d
-        - value: 100
-          pk: 0ead813832eea418b36d09724d19db5a07f86142b676a53cfcdc968b66f14002
-        - value: 100000
-          pk: cd035cf2ca2b16a52cada554796335f1a69c132aa9997967aba878e72cd6f507
-        - value: 1
-          pk: f406445a75c65716774d133f878e288e097e34e76a9f2b49dca0107ad63b9c17
-        - value: 100
-          pk: 422dfbd9835e4a9f99e5eeb20b75d302db3487f9435cd6b4089d31311dbf4b0e
-        - value: 100000
-          pk: 9c5043de2ccf00a5deb078598788646387b6c98260e4112495b4e2d101c89a2e
-        - value: 1
-          pk: 4b71288e57901f2f33fa7c3609c311447f401f08f0bec9c1076d5cdbe5d47909
-        - value: 100
-          pk: 45085fb7118152739a6d95b4c27b004bfc39b58fa6fc7dfe564e04d1dde69422
-        - value: 100000
-          pk: a4aafde553c92aa1947da3b31188877f3f11362dbd5537cff5a02dd63982c70c
-        - value: 1
-          pk: 23c9dc6813bf5d090f8f5119c48a86ff808bbc0371cfef67af3551e63bcba20c
-        - value: 100
-          pk: be8492b9c322485c707ff92fe0785163feb63273c82417f14b1ef6b90674e90e
-        - value: 18446744073709151211
-          pk: faf8a7e44e9f45d35efcd9043c4a55095339e229c4115dbeb6231e2b8422f610
       execution_gas_price: 0
       storage_gas_price: 0
     ops_proofs:
+    - !ZkSig
+        pi_a: [
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+        ]
+        pi_b: [
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+        ]
+        pi_c: [
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+        ]
     - NoProof
     - !ZkAndEd25519Sigs
       zk_sig:
@@ -915,138 +931,6 @@ cryptarchia:
       - 208
       - 241
       - 7
-    ledger_tx_proof:
-      pi_a:
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      pi_b:
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      pi_c:
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
   faucet_pk: faf8a7e44e9f45d35efcd9043c4a55095339e229c4115dbeb6231e2b8422f610
 time:
   slot_duration: '1.000000000'

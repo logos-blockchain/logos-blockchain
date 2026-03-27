@@ -4,10 +4,10 @@ use lb_core::{
     mantle::{
         MantleTx, Note, NoteId, OpProof, Utxo,
         genesis_tx::GenesisTx,
-        ledger::Tx as LedgerTx,
         ops::{
             Op,
             channel::{ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp},
+            transfer::TransferOp,
         },
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
@@ -71,21 +71,24 @@ pub fn create_genesis_tx(utxos: &[Utxo]) -> GenesisTx {
         signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
     };
 
-    // Create ledger transaction with the utxos as outputs
+    // Create transfer op with the utxos as outputs
     let outputs: Vec<Note> = utxos.iter().map(|u| u.note).collect();
-    let ledger_tx = LedgerTx::new(vec![], outputs);
+    let transfer_op = TransferOp::new(vec![], outputs);
 
     // Create the mantle transaction
     let mantle_tx = MantleTx {
-        ops: vec![Op::ChannelInscribe(inscription)],
-        ledger_tx,
+        ops: vec![Op::Transfer(transfer_op), Op::ChannelInscribe(inscription)],
         execution_gas_price: 0,
         storage_gas_price: 0,
     };
     let signed_mantle_tx = SignedMantleTx {
         mantle_tx,
-        ops_proofs: vec![OpProof::NoProof],
-        ledger_tx_proof: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+        ops_proofs: vec![
+            OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
+                &[0u8; 128],
+            ))),
+            OpProof::NoProof,
+        ],
     };
 
     // Wrap in GenesisTx
@@ -162,7 +165,7 @@ fn create_utxos(
         regular_note_keys.push(sk);
         utxos.push(Utxo {
             note: Note::new(100_000, pk),
-            tx_hash: BigUint::from(0u8).into(),
+            transfer_hash: BigUint::from(0u8).into(),
             output_index: 0,
         });
         output_index += 1;
@@ -173,7 +176,7 @@ fn create_utxos(
         let note_blend = Note::new(1, pk_blend);
         let utxo = Utxo {
             note: note_blend,
-            tx_hash: BigUint::from(0u8).into(),
+            transfer_hash: BigUint::from(0u8).into(),
             output_index: 0,
         };
         blend_notes.push(ServiceNote {
@@ -192,7 +195,7 @@ fn create_utxos(
         let note_sdp = Note::new(100, pk_sdp);
         let utxo = Utxo {
             note: note_sdp,
-            tx_hash: BigUint::from(0u8).into(),
+            transfer_hash: BigUint::from(0u8).into(),
             output_index,
         };
         sdp_notes.push(ServiceNote {
@@ -211,7 +214,7 @@ fn create_utxos(
 
 #[must_use]
 pub fn create_genesis_tx_with_declarations(
-    ledger_tx: LedgerTx,
+    transfer_op: TransferOp,
     providers: Vec<ProviderInfo>,
 ) -> GenesisTx {
     let inscription = InscriptionOp {
@@ -221,13 +224,13 @@ pub fn create_genesis_tx_with_declarations(
         signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
     };
 
-    let ledger_tx_hash = ledger_tx.hash();
+    let transfer_hash = transfer_op.hash();
 
-    let mut ops = vec![Op::ChannelInscribe(inscription)];
+    let mut ops = vec![Op::Transfer(transfer_op), Op::ChannelInscribe(inscription)];
 
     for provider in &providers {
         let utxo = Utxo {
-            tx_hash: ledger_tx_hash,
+            transfer_hash,
             output_index: provider.note.output_index,
             note: provider.note.note,
         };
@@ -243,13 +246,17 @@ pub fn create_genesis_tx_with_declarations(
 
     let mantle_tx = MantleTx {
         ops,
-        ledger_tx,
         execution_gas_price: 0,
         storage_gas_price: 0,
     };
 
     let mantle_tx_hash = mantle_tx.hash();
-    let mut ops_proofs = vec![OpProof::NoProof];
+    let mut ops_proofs = vec![
+        OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
+            &[0u8; 128],
+        ))),
+        OpProof::NoProof,
+    ];
 
     for provider in providers {
         let zk_sig =
@@ -258,7 +265,6 @@ pub fn create_genesis_tx_with_declarations(
         let ed25519_sig = provider
             .provider_sk
             .sign_payload(mantle_tx_hash.as_signing_bytes().as_ref());
-
         ops_proofs.push(OpProof::ZkAndEd25519Sigs {
             zk_sig,
             ed25519_sig,
@@ -268,7 +274,6 @@ pub fn create_genesis_tx_with_declarations(
     let signed_mantle_tx = SignedMantleTx {
         mantle_tx,
         ops_proofs,
-        ledger_tx_proof: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
     };
 
     GenesisTx::from_tx(signed_mantle_tx).expect("Invalid genesis transaction")

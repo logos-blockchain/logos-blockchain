@@ -507,6 +507,7 @@ where
         }
     }
 
+    #[expect(clippy::too_many_lines, reason = "TODO: address this at some point")]
     async fn sign_tx(
         tx_builder: MantleTxBuilder,
         ledger: LedgerState,
@@ -617,13 +618,16 @@ where
                     Self::prove_leader_claim_op(claim_op.clone(), tx_hash, &ledger, wallet, kms)
                         .await?
                 }
+                Op::Transfer(_) => {
+                    let zk_sig = Self::sign_zksig(tx_hash, input_pks.clone(), kms).await?;
+
+                    OpProof::ZkSig(zk_sig)
+                }
             };
             ops_proofs.push(proof);
         }
 
-        let ledger_tx_proof = Self::sign_zksig(tx_hash, input_pks, kms).await?;
-
-        let signed_mantle_tx = SignedMantleTx::new(mantle_tx, ops_proofs, ledger_tx_proof)
+        let signed_mantle_tx = SignedMantleTx::new(mantle_tx, ops_proofs)
             .expect("Failed to create signed transaction");
 
         Ok(signed_mantle_tx)
@@ -910,10 +914,10 @@ where
             header_id,
             storage_adapter,
         )
-        .await
-        .inspect_err(|e| {
-            error!(block_id=?header_id, err=%e, "Failed to fetch new block and ledger for wallet");
-        }) else {
+            .await
+            .inspect_err(|e| {
+                error!(block_id=?header_id, err=%e, "Failed to fetch new block and ledger for wallet");
+            }) else {
             return;
         };
 

@@ -4,6 +4,8 @@ pub mod leader_claim;
 pub mod opcode;
 pub mod sdp;
 mod serde_;
+pub mod transfer;
+
 use channel::{inscribe::InscriptionOp, set_keys::SetKeysOp};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -12,14 +14,20 @@ use super::{
     gas::{Gas, GasConstants},
     ops::{
         leader_claim::LeaderClaimOp,
-        opcode::{INSCRIBE, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, SET_CHANNEL_KEYS},
+        opcode::{
+            INSCRIBE, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, SET_CHANNEL_KEYS,
+            TRANSFER,
+        },
         sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     },
 };
 use crate::{
     mantle::{
         encoding::{decode_op, encode_op},
-        ops::internal::{OpDe, OpSer},
+        ops::{
+            internal::{OpDe, OpSer},
+            transfer::TransferOp,
+        },
     },
     proofs::leader_claim_proof::Groth16LeaderClaimProof,
 };
@@ -35,7 +43,7 @@ use crate::{
 /// `#[serde(untagged)]` enums, binary deserialization is routed through
 /// [`OpWireVisitor`], which correctly handles `opcode` to select the
 /// appropriate variant.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Op {
     ChannelInscribe(InscriptionOp),
     ChannelSetKeys(SetKeysOp),
@@ -43,6 +51,7 @@ pub enum Op {
     SDPWithdraw(SDPWithdrawOp),
     SDPActive(SDPActiveOp),
     LeaderClaim(LeaderClaimOp),
+    Transfer(TransferOp),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +118,7 @@ impl Op {
             Self::SDPWithdraw(_) => "SDPWithdraw",
             Self::SDPActive(_) => "SDPActive",
             Self::LeaderClaim(_) => "LeaderClaim",
+            Self::Transfer(_) => "Transfer",
         }
     }
     #[must_use]
@@ -120,6 +130,7 @@ impl Op {
             Self::SDPWithdraw(_) => SDP_WITHDRAW,
             Self::SDPActive(_) => SDP_ACTIVE,
             Self::LeaderClaim(_) => LEADER_CLAIM,
+            Self::Transfer(_) => TRANSFER,
         }
     }
 
@@ -132,6 +143,7 @@ impl Op {
             Self::SDPWithdraw(_) => Constants::SDP_WITHDRAW,
             Self::SDPActive(_) => Constants::SDP_ACTIVE,
             Self::LeaderClaim(_) => Constants::LEADER_CLAIM,
+            Self::Transfer(_) => Constants::TRANSFER,
         }
     }
 }

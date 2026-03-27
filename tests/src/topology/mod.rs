@@ -125,11 +125,11 @@ impl Topology {
         let time_config = default_time_config();
 
         // Setup genesis TX with Blend service declarations.
-        let base_ledger_tx = genesis_tx.mantle_tx().ledger_tx.clone();
-        let mut ledger_tx = base_ledger_tx.clone();
-        let base_outputs = ledger_tx.outputs.len();
+        let base_transfer_op = genesis_tx.genesis_transfer().clone();
+        let mut transfer_op = base_transfer_op.clone();
+        let base_outputs = transfer_op.outputs.len();
         for note_spec in &config.extra_genesis_notes {
-            ledger_tx.outputs.push(note_spec.note);
+            transfer_op.outputs.push(note_spec.note);
         }
         let providers: Vec<_> = blend_configs
             .iter()
@@ -147,9 +147,9 @@ impl Topology {
 
         // Update genesis TX to contain Blend providers.
         let genesis_tx_with_declarations =
-            create_genesis_tx_with_declarations(ledger_tx, providers);
-        let updated_ledger_tx = genesis_tx_with_declarations.mantle_tx().ledger_tx.clone();
-        let injected_utxos: Vec<_> = updated_ledger_tx
+            create_genesis_tx_with_declarations(transfer_op, providers);
+        let updated_transfer_op = genesis_tx_with_declarations.genesis_transfer().clone();
+        let injected_utxos: Vec<_> = updated_transfer_op
             .utxos()
             .skip(base_outputs)
             .collect::<Vec<_>>();

@@ -221,6 +221,8 @@ impl LedgerState {
                     (self.leaders, leader_balance) = self.leaders.claim(op).inspect_err(|err| error!(target: LOG_TARGET, %err, "failed to apply leader claim message"))?;
                     balance += leader_balance;
                 }
+                (Op::Transfer(_), Some(OpProof::ZkSig(_))) => {} /* Ok! it's already process in */
+                // Cryptarchia Ledger
                 _ => {
                     return Err(Error::UnsupportedOp);
                 }
@@ -236,10 +238,9 @@ mod tests {
     use lb_core::mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
         gas::MainnetGasConstants,
-        ledger::Tx as LedgerTx,
         ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp, set_keys::SetKeysOp},
     };
-    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey};
+    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
 
     use super::*;
     use crate::cryptarchia::tests::{config, genesis_state, utxo};
@@ -259,10 +260,8 @@ mod tests {
     }
 
     fn create_multi_signed_tx(ops: Vec<Op>, signing_keys: Vec<&Ed25519Key>) -> SignedMantleTx {
-        let ledger_tx = LedgerTx::new(vec![], vec![]);
         let mantle_tx = MantleTx {
             ops: ops.clone(),
-            ledger_tx,
             execution_gas_price: 1,
             storage_gas_price: 1,
         };
@@ -276,9 +275,7 @@ mod tests {
             })
             .collect();
 
-        let ledger_tx_proof = ZkKey::multi_sign(&[], &tx_hash.0).unwrap();
-
-        SignedMantleTx::new(mantle_tx, ops_proofs, ledger_tx_proof)
+        SignedMantleTx::new(mantle_tx, ops_proofs)
             .expect("Test transaction should have valid signatures")
     }
 
