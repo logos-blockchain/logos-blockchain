@@ -35,6 +35,8 @@ pub enum Error {
     Sdp(#[from] SdpLedgerError),
     #[error("Note not found: {0:?}")]
     NoteNotFound(NoteId),
+    #[error("Applying this transaction would cause a balance overflow")]
+    BalanceOverflow,
 }
 
 /// A state of the mantle ledger
