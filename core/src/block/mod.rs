@@ -249,14 +249,14 @@ mod tests {
     use crate::{
         crypto::ZkHasher,
         mantle::{
-            TransactionHasher,
-            ledger::{Note, Tx, Utxo},
+            MantleTx, TransactionHasher,
+            ledger::{Note, Utxo},
             ops::leader_claim::VoucherCm,
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
 
-    impl StorageSize for Tx {
+    impl StorageSize for MantleTx {
         fn storage_size(&self) -> usize {
             0
         }
@@ -265,7 +265,7 @@ mod tests {
     pub fn create_proof() -> Groth16LeaderProof {
         let leader_sk = UnsecuredZkKey::zero();
         let utxo = Utxo {
-            tx_hash: Fr::from(BigUint::from(1u8)).into(),
+            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
             output_index: 0,
             note: Note::new(1000, leader_sk.to_public_key()),
         };
@@ -321,10 +321,11 @@ mod tests {
             .expect("Proof generation should succeed")
     }
 
-    fn create_transactions(count: usize) -> Vec<Tx> {
-        iter::repeat_with(|| Tx {
-            inputs: vec![],
-            outputs: vec![],
+    fn create_tx(count: usize) -> Vec<MantleTx> {
+        iter::repeat_with(|| MantleTx {
+            ops: vec![],
+            execution_gas_price: 0,
+            storage_gas_price: 0,
         })
         .take(count)
         .collect()
@@ -335,7 +336,7 @@ mod tests {
         let parent_block = [0u8; 32].into();
         let slot = Slot::from(42u64);
         let proof_of_leadership = create_proof();
-        let transactions: Vec<Tx> = vec![];
+        let transactions: Vec<MantleTx> = vec![];
 
         let valid_signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let valid_block = Block::create(
@@ -374,7 +375,7 @@ mod tests {
         let proof_of_leadership = create_proof();
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);
 
-        let _valid_block: Block<Tx> = Block::create(
+        let _valid_block: Block<MantleTx> = Block::create(
             parent_block,
             slot,
             proof_of_leadership.clone(),
@@ -387,7 +388,7 @@ mod tests {
             parent_block,
             slot,
             proof_of_leadership,
-            create_transactions(MAX_BLOCK_TRANSACTIONS + 1),
+            create_tx(MAX_BLOCK_TRANSACTIONS + 1),
             &signing_key,
         );
 
@@ -401,8 +402,8 @@ mod tests {
     }
 
     #[derive(Clone, Copy, Debug)]
-    pub struct TestTx;
-    impl Transaction for TestTx {
+    pub struct TestMantleTx;
+    impl Transaction for TestMantleTx {
         const HASHER: TransactionHasher<Self> = |_tx| TxHash(Fr::ZERO);
         type Hash = TxHash;
 
@@ -411,7 +412,7 @@ mod tests {
         }
     }
 
-    impl StorageSize for TestTx {
+    impl StorageSize for TestMantleTx {
         fn storage_size(&self) -> usize {
             usize::MAX
         }
@@ -423,9 +424,9 @@ mod tests {
         let slot = Slot::from(42u64);
         let proof_of_leadership = create_proof();
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);
-        let tx = TestTx;
+        let tx = TestMantleTx;
 
-        let _valid_block: Block<Tx> = Block::create(
+        let _valid_block: Block<MantleTx> = Block::create(
             parent_block,
             slot,
             proof_of_leadership.clone(),

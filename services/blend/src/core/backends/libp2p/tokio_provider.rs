@@ -6,6 +6,7 @@ use lb_blend::{
     network::core::with_core::behaviour::IntervalStreamProvider, scheduling::membership::Membership,
 };
 use lb_utils::math::NonNegativeF64;
+use tokio::time::MissedTickBehavior;
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::core::{
@@ -48,12 +49,15 @@ impl IntervalStreamProvider for ObservationWindowTokioIntervalProvider {
 
     fn interval_stream(&self) -> Self::IntervalStream {
         let expected_message_range = self.calculate_expected_message_range();
-        Box::new(
-            IntervalStream::new(tokio::time::interval(Duration::from_secs(
+        let interval = {
+            let mut interval = tokio::time::interval(Duration::from_secs(
                 (self.rounds_per_observation_window.get()) * self.round_duration_seconds.get(),
-            )))
-            .map(move |_| expected_message_range.clone()),
-        )
+            ));
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+            interval
+        };
+        Box::new(IntervalStream::new(interval).map(move |_| expected_message_range.clone()))
     }
 }
 

@@ -13,7 +13,7 @@ impl<T: GasCost> GasCost for &T {
 
 pub trait GasConstants {
     /// Verify the proof of ownership and relative balance.
-    const LEDGER_TX: Gas;
+    const TRANSFER: Gas;
 
     /// Verify the inscription signature.
     const CHANNEL_INSCRIBE: Gas;
@@ -37,7 +37,7 @@ pub trait GasConstants {
 pub struct MainnetGasConstants;
 
 impl GasConstants for MainnetGasConstants {
-    const LEDGER_TX: Gas = 2705;
+    const TRANSFER: Gas = 2705;
     const CHANNEL_INSCRIBE: Gas = 22;
     const CHANNEL_SET_KEYS: Gas = 22;
     const SDP_DECLARE: Gas = 2727;

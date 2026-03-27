@@ -4,9 +4,12 @@ use super::{
     Op,
     channel::{inscribe::InscriptionOp, set_keys::SetKeysOp},
     leader_claim::LeaderClaimOp,
-    opcode::{INSCRIBE, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, SET_CHANNEL_KEYS},
+    opcode::{
+        INSCRIBE, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, SET_CHANNEL_KEYS, TRANSFER,
+    },
     sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     serde_,
+    transfer::TransferOp,
 };
 
 /// Core set of supported Mantle operations and their serialization behaviour.
@@ -43,6 +46,10 @@ pub enum OpSer<'a> {
         )]
         &'a LeaderClaimOp,
     ),
+    Transfer(
+        #[serde(serialize_with = "serde_::serialize_op_variant::<{TRANSFER}, TransferOp, _>")]
+        &'a TransferOp,
+    ),
 }
 
 impl<'a> From<&'a Op> for OpSer<'a> {
@@ -54,6 +61,7 @@ impl<'a> From<&'a Op> for OpSer<'a> {
             Op::SDPWithdraw(op) => OpSer::SDPWithdraw(op),
             Op::SDPActive(op) => OpSer::SDPActive(op),
             Op::LeaderClaim(op) => OpSer::LeaderClaim(op),
+            Op::Transfer(op) => OpSer::Transfer(op),
         }
     }
 }
@@ -98,6 +106,10 @@ pub enum OpDe {
         )]
         LeaderClaimOp,
     ),
+    Transfer(
+        #[serde(deserialize_with = "serde_::deserialize_op_variant::<{TRANSFER}, TransferOp, _>")]
+        TransferOp,
+    ),
 }
 
 impl From<OpDe> for Op {
@@ -109,6 +121,7 @@ impl From<OpDe> for Op {
             OpDe::SDPWithdraw(sdp_withdraw) => Self::SDPWithdraw(sdp_withdraw),
             OpDe::SDPActive(sdp_active) => Self::SDPActive(sdp_active),
             OpDe::LeaderClaim(leader_claim) => Self::LeaderClaim(leader_claim),
+            OpDe::Transfer(transfer) => Self::Transfer(transfer),
         }
     }
 }

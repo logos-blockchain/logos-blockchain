@@ -205,7 +205,7 @@ impl TxState {
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{MantleTx, Transaction as _, ledger::Tx as LedgerTx};
+    use lb_core::mantle::{MantleTx, Transaction as _};
 
     use super::*;
 
@@ -216,20 +216,13 @@ mod tests {
     }
 
     fn make_dummy_tx(data: u8) -> SignedMantleTx {
-        let ledger_tx = LedgerTx::new(vec![], vec![]);
         let mantle_tx = MantleTx {
             ops: vec![],
-            ledger_tx,
             storage_gas_price: 0,
             execution_gas_price: data.into(),
         };
         SignedMantleTx {
             ops_proofs: vec![],
-            ledger_tx_proof: lb_key_management_system_service::keys::ZkKey::multi_sign(
-                &[],
-                mantle_tx.hash().as_ref(),
-            )
-            .expect("empty multi-sign"),
             mantle_tx,
         }
     }

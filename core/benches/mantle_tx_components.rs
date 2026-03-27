@@ -12,14 +12,13 @@
 use blake2::Digest as _;
 use divan::{Bencher, black_box};
 use lb_groth16::{Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes_unchecked};
-use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey, ZkSignature};
+use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_poseidon2::Digest;
 use logos_blockchain_core::{
     crypto::{Hasher, ZkHasher},
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _, TxHash,
         encoding::{decode_signed_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
-        ledger::Tx as LedgerTx,
         ops::{
             Op, OpProof,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
@@ -54,7 +53,6 @@ fn make_inscription_tx(payload_size: usize) -> MantleTx {
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key(),
         })],
-        ledger_tx: LedgerTx::new(vec![], vec![]),
         execution_gas_price: 100,
         storage_gas_price: 50,
     }
@@ -66,12 +64,7 @@ fn make_signed_tx(payload_size: usize) -> SignedMantleTx {
     let tx = make_inscription_tx(payload_size);
     let txhash = tx.hash();
     let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
-    SignedMantleTx::new(
-        tx,
-        vec![OpProof::Ed25519Sig(op_sig)],
-        ZkKey::multi_sign(&[], &txhash.0).unwrap(),
-    )
-    .unwrap()
+    SignedMantleTx::new(tx, vec![OpProof::Ed25519Sig(op_sig)]).unwrap()
 }
 
 // `Blake2b` wrapper function usign the defined `Hasher`.
@@ -152,16 +145,11 @@ fn bench_sign_c_mantle_tx_new_verify_ops_proofs_single_proof(bencher: Bencher, s
             let tx = make_inscription_tx(size);
             let txhash = tx.hash();
             let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
-            let multi_sign = ZkKey::multi_sign(&[], &txhash.0).unwrap();
-            (tx, op_sig, multi_sign)
+            (tx, op_sig)
         })
-        .bench_values(
-            |(tx, op_sig, multi_sign): (MantleTx, Ed25519Signature, ZkSignature)| {
-                black_box(
-                    SignedMantleTx::new(tx, vec![OpProof::Ed25519Sig(op_sig)], multi_sign).unwrap(),
-                )
-            },
-        );
+        .bench_values(|(tx, op_sig): (MantleTx, Ed25519Signature)| {
+            black_box(SignedMantleTx::new(tx, vec![OpProof::Ed25519Sig(op_sig)]).unwrap())
+        });
 }
 
 // Sign:
@@ -179,14 +167,7 @@ fn bench_sign_d_fully_empty(bencher: Bencher, size: usize) {
         })
         .bench_values(|(tx, txhash): (MantleTx, TxHash)| {
             let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
-            black_box(
-                SignedMantleTx::new(
-                    tx,
-                    vec![OpProof::Ed25519Sig(op_sig)],
-                    ZkKey::multi_sign(&[], &txhash.0).unwrap(),
-                )
-                .unwrap(),
-            )
+            black_box(SignedMantleTx::new(tx, vec![OpProof::Ed25519Sig(op_sig)]).unwrap())
         });
 }
 

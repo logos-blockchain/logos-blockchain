@@ -13,7 +13,10 @@ use lb_ledger::{EpochState, UtxoTree};
 use lb_wallet_service::{UtxoWithKeyId, api::WalletApi};
 use overwatch::services::AsServiceId;
 use rand::rngs::OsRng;
-use tokio::sync::{oneshot, watch::Sender};
+use tokio::{
+    sync::{oneshot, watch::Sender},
+    time::Instant,
+};
 
 use crate::{WinningPolInfo, kms::KmsAdapter};
 
@@ -243,6 +246,7 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
             .into();
 
         let mut first_winning_slot: Option<Slot> = None;
+        let start = Instant::now();
         for UtxoWithKeyId { utxo, key_id } in utxos {
             for offset in 0..slots_per_epoch {
                 let slot = epoch_starting_slot
@@ -255,7 +259,6 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
                 if !winning {
                     continue;
                 }
-                tracing::debug!("Found winning utxo with ID {:?} for slot {slot}", utxo.id());
 
                 // Note: We discard the signing key here since this is just for pre-computing
                 // winning slots. The actual signing key will be generated when building the
@@ -296,6 +299,12 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
                 }
             }
         }
+        tracing::debug!(
+            "Found all winning utxos for epoch {:?} in {:?} ms",
+            epoch_state.epoch,
+            start.elapsed().as_millis()
+        );
+
         self.last_processed_epoch_and_found_first_winning_slot =
             Some((epoch_state.epoch, first_winning_slot));
     }
@@ -341,8 +350,8 @@ mod pol_tests {
 
     use lb_core::{
         mantle::{
-            ledger::{Note, Tx},
-            ops::leader_claim::VoucherCm,
+            ledger::Note,
+            ops::{leader_claim::VoucherCm, transfer::TransferOp},
         },
         proofs::leader_proof::{LeaderProof as _, check_winning},
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -377,7 +386,7 @@ mod pol_tests {
         let pk = sk.to_public_key();
 
         // Create a UTXO
-        let utxo = Tx::new(vec![], vec![Note::new(1000u64, pk)])
+        let utxo = TransferOp::new(vec![], vec![Note::new(1000u64, pk)])
             .utxo_by_index(0)
             .unwrap();
 

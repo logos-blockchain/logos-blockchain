@@ -1,7 +1,6 @@
 use std::{hash::Hash, pin::Pin};
 
 use futures::Stream;
-use lb_key_management_system_keys::keys::ZkSignature;
 use thiserror::Error;
 
 pub mod encoding;
@@ -21,6 +20,8 @@ pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
 use ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp};
 pub use tx::{MantleTx, SignedMantleTx, TxHash};
+
+use crate::mantle::ops::transfer::TransferOp;
 
 pub const MAX_MANTLE_TXS: usize = 1024;
 
@@ -48,15 +49,13 @@ pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCost + StorageS
     /// Returns the underlying `MantleTx` that this transaction represents.
     fn mantle_tx(&self) -> &MantleTx;
 
-    /// Returns the proof of the ledger transaction
-    fn ledger_tx_proof(&self) -> &ZkSignature;
-
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)>;
 }
 
 /// A genesis transaction as specified in
-//  https://www.notion.so/nomos-tech/Bedrock-Genesis-Block-21d261aa09df80bb8dc3c768802eb527?d=27a261aa09df808e9c66001cf0585dee
+//  https://www.notion.so/nomos-tech/v1-1-Bedrock-Genesis-Block-32e261aa09df80689540ec445172b00d
 pub trait GenesisTx: Transaction<Hash = TxHash> {
+    fn genesis_transfer(&self) -> &TransferOp;
     fn genesis_inscription(&self) -> &InscriptionOp;
     fn sdp_declarations(&self) -> impl Iterator<Item = (&SDPDeclareOp, &OpProof)>;
     fn mantle_tx(&self) -> &MantleTx;
@@ -82,16 +81,15 @@ impl<T: AuthenticatedMantleTx> AuthenticatedMantleTx for &T {
         T::mantle_tx(self)
     }
 
-    fn ledger_tx_proof(&self) -> &ZkSignature {
-        T::ledger_tx_proof(self)
-    }
-
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)> {
         T::ops_with_proof(self)
     }
 }
 
 impl<T: GenesisTx> GenesisTx for &T {
+    fn genesis_transfer(&self) -> &TransferOp {
+        T::genesis_transfer(self)
+    }
     fn genesis_inscription(&self) -> &InscriptionOp {
         T::genesis_inscription(self)
     }

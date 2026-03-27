@@ -6,7 +6,6 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
-        ledger::Tx as LedgerTx,
         ops::{
             Op, OpProof,
             channel::{
@@ -16,7 +15,7 @@ use lb_core::{
         tx::TxHash,
     },
 };
-use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
+use lb_key_management_system_service::keys::Ed25519Key;
 use reqwest::Url;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
@@ -755,11 +754,8 @@ fn create_inscribe_tx(
     };
     let msg_id = inscribe_op.id();
 
-    let ledger_tx = LedgerTx::new(vec![], vec![]);
-
     let inscribe_tx = MantleTx {
         ops: vec![Op::ChannelInscribe(inscribe_op)],
-        ledger_tx,
         storage_gas_price: 0,
         execution_gas_price: 0,
     };
@@ -769,8 +765,6 @@ fn create_inscribe_tx(
 
     let signed_tx = SignedMantleTx {
         ops_proofs: vec![OpProof::Ed25519Sig(signature)],
-        ledger_tx_proof: ZkKey::multi_sign(&[], tx_hash.as_ref())
-            .expect("multi-sign with empty key set"),
         mantle_tx: inscribe_tx,
     };
 
@@ -787,11 +781,8 @@ fn create_set_keys_tx(
         keys,
     };
 
-    let ledger_tx = LedgerTx::new(vec![], vec![]);
-
     let set_keys_tx = MantleTx {
         ops: vec![Op::ChannelSetKeys(set_keys_op)],
-        ledger_tx,
         storage_gas_price: 0,
         execution_gas_price: 0,
     };
@@ -801,8 +792,6 @@ fn create_set_keys_tx(
 
     SignedMantleTx {
         ops_proofs: vec![OpProof::Ed25519Sig(signature)],
-        ledger_tx_proof: ZkKey::multi_sign(&[], tx_hash.as_ref())
-            .expect("multi-sign with empty key set"),
         mantle_tx: set_keys_tx,
     }
 }

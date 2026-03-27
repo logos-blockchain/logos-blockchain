@@ -9,14 +9,13 @@ use std::{
 use async_trait::async_trait;
 use lb_core::mantle::{
     MantleTx, SignedMantleTx, Transaction as _,
-    ledger::Tx as LedgerTx,
     ops::{
         Op, OpProof,
         channel::{ChannelId, MsgId, inscribe::InscriptionOp},
     },
     tx::TxHash,
 };
-use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
+use lb_key_management_system_service::keys::Ed25519Key;
 use rand::{seq::SliceRandom as _, thread_rng};
 use testing_framework_core::scenario::{
     DynError, RunContext, RunMetrics, Workload as ScenarioWorkload,
@@ -48,8 +47,6 @@ enum InscriptionWorkloadError {
     ClusterClientExhausted,
     #[error("block feed subscription closed")]
     FeedClosed,
-    #[error("failed to build ledger proof: {0}")]
-    LedgerProofBuild(String),
     #[error("failed to build signed inscription transaction: {0}")]
     SignedTransactionBuild(String),
     #[error("inscription workload confirmed {confirmed} txs; required at least {required}")]
@@ -394,7 +391,6 @@ fn build_inscription_transaction(
 
     let mantle_tx = MantleTx {
         ops: vec![Op::ChannelInscribe(op)],
-        ledger_tx: LedgerTx::new(vec![], vec![]),
         storage_gas_price: 0,
         execution_gas_price: 0,
     };
@@ -404,15 +400,8 @@ fn build_inscription_transaction(
         .signing_key
         .sign_payload(tx_hash.as_signing_bytes().as_ref());
 
-    let ledger_tx_proof = ZkKey::multi_sign(&[], tx_hash.as_ref())
-        .map_err(|error| InscriptionWorkloadError::LedgerProofBuild(error.to_string()))?;
-
-    let signed_tx = SignedMantleTx::new(
-        mantle_tx,
-        vec![OpProof::Ed25519Sig(ed25519_signature)],
-        ledger_tx_proof,
-    )
-    .map_err(|error| InscriptionWorkloadError::SignedTransactionBuild(error.to_string()))?;
+    let signed_tx = SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(ed25519_signature)])
+        .map_err(|error| InscriptionWorkloadError::SignedTransactionBuild(error.to_string()))?;
 
     channel.next_nonce = channel.next_nonce.saturating_add(1);
 

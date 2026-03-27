@@ -1,6 +1,5 @@
 use lb_common_http_client::CommonHttpClient;
-use lb_core::mantle::{MantleTx, SignedMantleTx, Transaction as _, ledger::Tx as LedgerTx};
-use lb_key_management_system_service::keys::ZkKey;
+use lb_core::mantle::{MantleTx, SignedMantleTx};
 use logos_blockchain_tests::topology::{Topology, TopologyConfig};
 use reqwest::Url;
 use serial_test::serial;
@@ -22,14 +21,12 @@ async fn test_post_mantle_tx() {
 
     let mantle_tx = MantleTx {
         ops: Vec::new(),
-        ledger_tx: LedgerTx::new(vec![], vec![]),
         storage_gas_price: 0,
         execution_gas_price: 0,
     };
 
     let signed_tx = SignedMantleTx {
         ops_proofs: Vec::new(),
-        ledger_tx_proof: ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap(),
         mantle_tx,
     };
 
