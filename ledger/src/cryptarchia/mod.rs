@@ -7,7 +7,7 @@ use derivative::Derivative;
 use lb_core::{
     crypto::{ZkDigest, ZkHasher},
     mantle::{
-        GenesisTx, NoteId, TxHash, Utxo, Value, gas::GasConstants, ops::transfer::TransferOp,
+        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value, gas::GasConstants,
     },
     proofs::leader_proof::{self, LeaderPublic},
 };
@@ -336,15 +336,6 @@ impl LedgerState {
             if locked_notes.contains(input) {
                 return Err(LedgerError::LockedNote(*input));
             }
-            let utxo;
-            (self.utxos, utxo) = self
-                .utxos
-                .remove(input)
-                .map_err(|_| LedgerError::InvalidNote(*input))?;
-            balance = balance
-                .checked_add(utxo.note.value.into())
-                .ok_or(LedgerError::Overflow)?;
-            pks.push(utxo.note.pk);
         }
 
         if !ZkPublicKey::verify_multi(&pks, &tx_hash.0, transfer_sig) {
@@ -556,10 +547,10 @@ pub mod tests {
 
     #[must_use]
     pub fn utxo_with_sk() -> (ZkKey, Utxo) {
-        let tx_hash: Fr = BigUint::from(thread_rng().next_u64()).into();
+        let transfer_hash: Fr = BigUint::from(thread_rng().next_u64()).into();
         let zk_sk = ZkKey::from(BigUint::from(0u64));
         let utxo = Utxo {
-            tx_hash: tx_hash.into(),
+            transfer_hash: transfer_hash.into(),
             output_index: 0,
             note: Note::new(10000, zk_sk.to_public_key()),
         };
@@ -1131,7 +1122,7 @@ pub mod tests {
         let output_note2_sk = ZkKey::from(BigUint::from(3u8));
         let input_note = Note::new(11000, note_sk.to_public_key());
         let input_utxo = Utxo {
-            tx_hash: Fr::from(BigUint::from(1u8)).into(),
+            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
             output_index: 0,
             note: input_note,
         };
@@ -1202,25 +1193,25 @@ pub mod tests {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(1000, input_sk.to_public_key());
         let input_utxo = Utxo {
-            tx_hash: Fr::from(BigUint::from(1u8)).into(),
+            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
             output_index: 0,
             note: input_note,
         };
 
         let non_existent_utxo_1 = Utxo {
-            tx_hash: Fr::from(BigUint::from(1u8)).into(),
+            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
             output_index: 1,
             note: input_note,
         };
 
         let non_existent_utxo_2 = Utxo {
-            tx_hash: Fr::from(BigUint::from(2u8)).into(),
+            transfer_hash: Fr::from(BigUint::from(2u8)).into(),
             output_index: 0,
             note: input_note,
         };
 
         let non_existent_utxo_3 = Utxo {
-            tx_hash: Fr::from(BigUint::from(1u8)).into(),
+            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
             output_index: 0,
             note: Note::new(999, Fr::from(BigUint::from(1u8)).into()),
         };
@@ -1254,7 +1245,7 @@ pub mod tests {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(1, input_sk.to_public_key());
         let input_utxo = Utxo {
-            tx_hash: Fr::from(BigUint::from(1u8)).into(),
+            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
             output_index: 0,
             note: input_note,
         };
@@ -1298,7 +1289,7 @@ pub mod tests {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(10000, input_sk.to_public_key());
         let input_utxo = Utxo {
-            tx_hash: Fr::from(BigUint::from(1u8)).into(),
+            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
             output_index: 0,
             note: input_note,
         };
@@ -1328,7 +1319,7 @@ pub mod tests {
     fn test_output_not_zero() {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_utxo = Utxo {
-            tx_hash: Fr::from(BigUint::from(1u8)).into(),
+            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
             output_index: 0,
             note: Note::new(10000, input_sk.to_public_key()),
         };

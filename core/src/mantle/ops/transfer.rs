@@ -42,19 +42,19 @@ impl TransferOp {
     #[must_use]
     pub fn utxo_by_index(&self, index: usize) -> Option<Utxo> {
         self.outputs.get(index).map(|note| Utxo {
-            tx_hash: self.hash(),
+            transfer_hash: self.hash(),
             output_index: index,
             note: *note,
         })
     }
 
     pub fn utxos(&self) -> impl Iterator<Item = Utxo> + '_ {
-        let tx_hash = self.hash();
+        let transfer_hash = self.hash();
         self.outputs
             .iter()
             .enumerate()
             .map(move |(index, note)| Utxo {
-                tx_hash,
+                transfer_hash,
                 output_index: index,
                 note: *note,
             })
@@ -95,7 +95,7 @@ mod test {
         assert_eq!(
             transfer.utxo_by_index(0),
             Some(Utxo {
-                tx_hash: transfer.hash(),
+                transfer_hash: transfer.hash(),
                 output_index: 0,
                 note: Note::new(100, pk0),
             })
@@ -103,7 +103,7 @@ mod test {
         assert_eq!(
             transfer.utxo_by_index(1),
             Some(Utxo {
-                tx_hash: transfer.hash(),
+                transfer_hash: transfer.hash(),
                 output_index: 1,
                 note: Note::new(200, pk1),
             })
@@ -111,7 +111,7 @@ mod test {
         assert_eq!(
             transfer.utxo_by_index(2),
             Some(Utxo {
-                tx_hash: transfer.hash(),
+                transfer_hash: transfer.hash(),
                 output_index: 2,
                 note: Note::new(300, pk2),
             })

@@ -12,6 +12,7 @@ pub struct MantleTxBuilder {
     pending_transfer: TransferOp,
 }
 
+// TODO: refactor to support more than 32 inputs (more than a single transfer)
 impl MantleTxBuilder {
     #[must_use]
     pub const fn new() -> Self {

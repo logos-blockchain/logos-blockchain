@@ -59,7 +59,7 @@ impl Note {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Utxo {
-    pub tx_hash: TxHash,
+    pub transfer_hash: TxHash,
     pub output_index: usize,
     pub note: Note,
 }
@@ -70,9 +70,9 @@ static NOTE_ID_V1: LazyLock<Fr> = LazyLock::new(|| {
 
 impl Utxo {
     #[must_use]
-    pub const fn new(tx_hash: TxHash, output_index: usize, note: Note) -> Self {
+    pub const fn new(transfer_hash: TxHash, output_index: usize, note: Note) -> Self {
         Self {
-            tx_hash,
+            transfer_hash,
             output_index,
             note,
         }
@@ -83,7 +83,7 @@ impl Utxo {
         // constants and structure as defined in the Mantle spec:
         // https://www.notion.so/nomos-tech/v1-3-Mantle-Specification-31e261aa09df818f9327ee87e5a6d433#31e261aa09df80aea7cff4eb98d61b6e
 
-        let tx_hash: Fr = *self.tx_hash.as_ref();
+        let transfer_hash: Fr = *self.transfer_hash.as_ref();
         let output_index =
             fr_from_bytes(self.output_index.to_le_bytes().as_slice()).expect("usize fits in Fr");
         let note_value: Fr =
@@ -92,7 +92,7 @@ impl Utxo {
 
         NoteId(ZkHasher::digest(&[
             *NOTE_ID_V1,
-            tx_hash,
+            transfer_hash,
             output_index,
             note_value,
             note_pk,

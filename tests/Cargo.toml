@@ -37,6 +37,7 @@ lb-tx-service                    = { features = ["libp2p", "mock"], workspace = 
 lb-utils                         = { workspace = true }
 lb-wallet                        = { workspace = true }
 lb-zksign                        = { workspace = true }
+lb-zone-sdk                      = { workspace = true }
 libp2p                           = "0.55.0"
 num-bigint                       = { default-features = false, version = "0.4" }
 rand                             = { workspace = true }
@@ -122,3 +123,7 @@ harness           = false                        # Cucumber will have its own ma
 name              = "cucumber"
 path              = "cucumber_tests/cucumber.rs"
 required-features = ["cucumber"]
+
+[[test]]
+name = "test_zone_sdk_e2e"
+path = "src/tests/zone_sdk/e2e.rs"

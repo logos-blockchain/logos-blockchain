@@ -189,7 +189,7 @@ fn utxo() -> (ZkKey, Utxo) {
     let tx_hash: Fr = BigUint::from(thread_rng().next_u64()).into();
     let zk_sk = ZkKey::from(Fr::ZERO);
     let utxo = Utxo {
-        tx_hash: tx_hash.into(),
+        transfer_hash: tx_hash.into(),
         output_index: 0,
         note: Note::new(10000, zk_sk.to_public_key()),
     };
