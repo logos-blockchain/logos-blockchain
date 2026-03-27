@@ -359,14 +359,12 @@ impl LedgerState {
                     gas: total_block_execution_gas,
                     limit: EXECUTION_GAS_LIMIT,
                 });
-
-            self.cryptarchia_ledger
-                .update_fee_window(self.block_number as usize % WINDOW_SIZE, balance);
         }
-            // Compute Block rewards and give tips
-            self = self.compute_block_rewards(total_fee_burned, total_fee_tip);
-            // Update Execution market state
-            self = self.update_execution_market(total_block_execution_gas);
+
+        // Compute Block rewards and give tips
+        self = self.compute_block_rewards(total_fee_burned, total_fee_tip);
+        // Update Execution market state
+        self = self.update_execution_market(total_block_execution_gas);
         Ok(self)
     }
 
