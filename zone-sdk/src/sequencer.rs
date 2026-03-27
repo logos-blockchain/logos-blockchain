@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{pin::Pin, time::Duration};
 
 use futures::{StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
 use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient, ProcessedBlockEvent, Slot};
@@ -17,10 +17,10 @@ use lb_core::{
 };
 use lb_key_management_system_service::keys::Ed25519Key;
 use reqwest::Url;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, warn};
 
-use crate::state::{TxState, TxStatus};
+use crate::state::TxState;
 
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -28,9 +28,6 @@ const DEFAULT_PUBLISH_CHANNEL_CAPACITY: usize = 256;
 
 /// Inscription identifier.
 pub type InscriptionId = TxHash;
-
-/// Inscription status.
-pub type InscriptionStatus = TxStatus;
 
 /// Checkpoint for stop/resume functionality.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -77,23 +74,25 @@ impl Default for SequencerConfig {
 pub enum Error {
     #[error("sequencer unavailable: {reason}")]
     Unavailable { reason: &'static str },
+    #[error("network error: {0}")]
+    Network(String),
+}
+
+/// Events emitted by the sequencer.
+#[derive(Debug, Clone)]
+pub enum Event {
+    /// Transactions finalized (at or below LIB).
+    TxsFinalized { tx_hashes: Vec<TxHash> },
 }
 
 enum ActorRequest {
     Publish {
         data: Vec<u8>,
-        reply: oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
+        reply: tokio::sync::oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
     },
     SetKeys {
         keys: Vec<Ed25519PublicKey>,
-        reply: oneshot::Sender<Result<SignedMantleTx, Error>>,
-    },
-    Status {
-        id: InscriptionId,
-        reply: oneshot::Sender<Result<TxStatus, Error>>,
-    },
-    Checkpoint {
-        reply: oneshot::Sender<Result<SequencerCheckpoint, Error>>,
+        reply: tokio::sync::oneshot::Sender<Result<SignedMantleTx, Error>>,
     },
 }
 
@@ -103,66 +102,23 @@ enum InFlight {
     },
 }
 
-/// Zone sequencer client.
-pub struct ZoneSequencer {
+/// Handle for submitting requests to the sequencer from other tasks.
+///
+/// This is cheaply cloneable and can be shared across tasks.
+#[derive(Clone)]
+pub struct SequencerHandle {
     request_tx: mpsc::Sender<ActorRequest>,
     node_url: Url,
     http_client: CommonHttpClient,
+    event_tx: broadcast::Sender<Event>,
 }
 
-impl ZoneSequencer {
-    #[must_use]
-    pub fn init(
-        channel_id: ChannelId,
-        signing_key: Ed25519Key,
-        node_url: Url,
-        auth: Option<BasicAuthCredentials>,
-        checkpoint: Option<SequencerCheckpoint>,
-    ) -> Self {
-        Self::init_with_config(
-            channel_id,
-            signing_key,
-            node_url,
-            auth,
-            SequencerConfig::default(),
-            checkpoint,
-        )
-    }
-
-    #[must_use]
-    pub fn init_with_config(
-        channel_id: ChannelId,
-        signing_key: Ed25519Key,
-        node_url: Url,
-        auth: Option<BasicAuthCredentials>,
-        config: SequencerConfig,
-        checkpoint: Option<SequencerCheckpoint>,
-    ) -> Self {
-        let http_client = CommonHttpClient::new(auth);
-        let (request_tx, request_rx) = mpsc::channel(config.publish_channel_capacity);
-
-        tokio::spawn(run_loop(
-            request_rx,
-            channel_id,
-            signing_key,
-            node_url.clone(),
-            http_client.clone(),
-            config,
-            checkpoint,
-        ));
-
-        Self {
-            request_tx,
-            node_url,
-            http_client,
-        }
-    }
-
+impl SequencerHandle {
     /// Publish an inscription to the zone's channel.
     ///
     /// Returns the inscription ID and a checkpoint for persistence.
     pub async fn publish(&self, data: Vec<u8>) -> Result<PublishResult, Error> {
-        let (reply_tx, reply_rx) = oneshot::channel();
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let request = ActorRequest::Publish {
             data,
             reply: reply_tx,
@@ -172,11 +128,11 @@ impl ZoneSequencer {
             .send(request)
             .await
             .map_err(|_| Error::Unavailable {
-                reason: "actor channel closed",
+                reason: "sequencer channel closed",
             })?;
 
         let (signed_tx, result) = reply_rx.await.map_err(|_| Error::Unavailable {
-            reason: "actor dropped reply",
+            reason: "sequencer dropped reply",
         })??;
 
         info!("Created inscription {:?}", result.inscription_id);
@@ -193,50 +149,25 @@ impl ZoneSequencer {
         Ok(result)
     }
 
-    /// Get the status of an inscription.
-    pub async fn status(&self, id: InscriptionId) -> Result<InscriptionStatus, Error> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        let request = ActorRequest::Status {
-            id,
-            reply: reply_tx,
-        };
-
-        self.request_tx
-            .send(request)
-            .await
-            .map_err(|_| Error::Unavailable {
-                reason: "actor channel closed",
-            })?;
-
-        reply_rx.await.map_err(|_| Error::Unavailable {
-            reason: "actor dropped reply",
-        })?
-    }
-
-    /// Get the current checkpoint for persistence.
-    pub async fn checkpoint(&self) -> Result<SequencerCheckpoint, Error> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        let request = ActorRequest::Checkpoint { reply: reply_tx };
-
-        self.request_tx
-            .send(request)
-            .await
-            .map_err(|_| Error::Unavailable {
-                reason: "actor channel closed",
-            })?;
-
-        reply_rx.await.map_err(|_| Error::Unavailable {
-            reason: "actor dropped reply",
-        })?
-    }
-
     /// Update the channel's accredited keys.
     ///
     /// The sequencer's signing key must be the channel administrator
     /// (`keys[0]`). This overwrites the entire key list — include the admin
     /// key if it should remain authorized.
-    pub async fn set_keys(&self, keys: Vec<Ed25519PublicKey>) -> Result<TxHash, Error> {
-        let (reply_tx, reply_rx) = oneshot::channel();
+    ///
+    /// Returns a future that resolves when the transaction is finalized.
+    /// The first `.await` submits the transaction, the second `.await`
+    /// waits for finalization:
+    ///
+    /// ```ignore
+    /// let finalized = handle.set_keys(vec![admin_pk]).await?;
+    /// finalized.await?; // wait for finalization
+    /// ```
+    pub async fn set_keys(
+        &self,
+        keys: Vec<Ed25519PublicKey>,
+    ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let request = ActorRequest::SetKeys {
             keys,
             reply: reply_tx,
@@ -246,14 +177,19 @@ impl ZoneSequencer {
             .send(request)
             .await
             .map_err(|_| Error::Unavailable {
-                reason: "actor channel closed",
+                reason: "sequencer channel closed",
             })?;
 
         let signed_tx = reply_rx.await.map_err(|_| Error::Unavailable {
-            reason: "actor dropped reply",
+            reason: "sequencer dropped reply",
         })??;
 
         let tx_hash = signed_tx.mantle_tx.hash();
+
+        // Subscribe to events BEFORE posting to avoid a race where the tx
+        // finalizes between posting and subscribing.
+        let mut event_rx = self.event_tx.subscribe();
+
         info!("Submitted set_keys transaction {:?}", tx_hash);
 
         // Post to network (best effort, will be resubmitted if needed)
@@ -265,235 +201,334 @@ impl ZoneSequencer {
             warn!("Failed to post set_keys transaction: {e}");
         }
 
-        Ok(tx_hash)
-    }
-}
-
-async fn initialize_from_checkpoint(
-    http_client: &CommonHttpClient,
-    node_url: &Url,
-    reconnect_delay: Duration,
-    checkpoint: Option<SequencerCheckpoint>,
-) -> (TxState, HeaderId, Slot, MsgId) {
-    // Get current network state
-    let info = loop {
-        match http_client.consensus_info(node_url.clone()).await {
-            Ok(info) => {
-                info!(
-                    "Sequencer connected: tip={:?}, lib={:?}",
-                    info.tip, info.lib
-                );
-                break info;
+        Ok(async move {
+            loop {
+                match event_rx.recv().await {
+                    Ok(Event::TxsFinalized { ref tx_hashes }) if tx_hashes.contains(&tx_hash) => {
+                        return Ok(());
+                    }
+                    Ok(_) => {}
+                    Err(_) => {
+                        return Err(Error::Unavailable {
+                            reason: "sequencer stopped",
+                        });
+                    }
+                }
             }
-            Err(e) => {
-                warn!(
-                    "Failed to fetch consensus info: {e}, retrying in {:?}",
-                    reconnect_delay
-                );
-                tokio::time::sleep(reconnect_delay).await;
-            }
-        }
-    };
-
-    if let Some(cp) = checkpoint {
-        info!(
-            "Restoring from checkpoint: {} pending txs, lib={:?}, lib_slot={:?}",
-            cp.pending_txs.len(),
-            cp.lib,
-            cp.lib_slot
-        );
-        let mut state = TxState::new(cp.lib);
-        // Restore pending transactions
-        for (hash, tx) in cp.pending_txs {
-            state.submit(hash, tx);
-        }
-        // Use checkpoint's lib_slot as starting point for backfill
-        (state, info.tip, cp.lib_slot, cp.last_msg_id)
-    } else {
-        // Fresh start: get lib slot from network
-        let lib_slot = get_lib_slot(http_client, node_url, info.lib).await;
-        info!("Starting fresh (no checkpoint)");
-        (TxState::new(info.lib), info.tip, lib_slot, MsgId::root())
+        })
     }
 }
 
-async fn get_lib_slot(http_client: &CommonHttpClient, node_url: &Url, lib: HeaderId) -> Slot {
-    // Try to get the block to find its slot
-    match http_client.get_block(node_url.clone(), lib).await {
-        Ok(Some(block)) => block.header().slot(),
-        Ok(None) => {
-            // Genesis case - slot 0
-            Slot::genesis()
-        }
-        Err(e) => {
-            warn!("Failed to get lib block slot: {e}, assuming slot 0");
-            Slot::genesis()
-        }
-    }
-}
-
-async fn connect_blocks_stream(
-    http_client: &CommonHttpClient,
-    node_url: &Url,
-    reconnect_delay: Duration,
-) -> impl futures::Stream<Item = ProcessedBlockEvent> {
-    loop {
-        match http_client.get_blocks_stream(node_url.clone()).await {
-            Ok(stream) => return stream,
-            Err(e) => {
-                warn!(
-                    "Failed to connect to blocks stream: {e}, retrying in {:?}",
-                    reconnect_delay
-                );
-                tokio::time::sleep(reconnect_delay).await;
-            }
-        }
-    }
-}
-
-async fn run_loop(
-    mut request_rx: mpsc::Receiver<ActorRequest>,
+/// Zone sequencer.
+///
+/// The caller drives execution by calling [`next_event`](Self::next_event) in a
+/// loop. Publish and admin operations are submitted via the [`SequencerHandle`]
+/// which can be used from any task.
+pub struct ZoneSequencer {
+    // Config
     channel_id: ChannelId,
     signing_key: Ed25519Key,
     node_url: Url,
     http_client: CommonHttpClient,
     config: SequencerConfig,
-    checkpoint: Option<SequencerCheckpoint>,
-) {
-    let (state, current_tip, lib_slot, last_msg_id) =
-        initialize_from_checkpoint(&http_client, &node_url, config.reconnect_delay, checkpoint)
-            .await;
-    let mut state = Some(state);
-    let mut current_tip = Some(current_tip);
-    let mut lib_slot = lib_slot;
-    let mut last_msg_id = last_msg_id;
 
-    let mut resubmit_interval = tokio::time::interval(config.resubmit_interval);
-    let mut resubmit_active = false;
-    let mut in_flight: FuturesUnordered<BoxFuture<'static, InFlight>> = FuturesUnordered::new();
+    // Actor channel for receiving requests from other tasks
+    request_rx: mpsc::Receiver<ActorRequest>,
 
-    loop {
-        let blocks_stream =
-            connect_blocks_stream(&http_client, &node_url, config.reconnect_delay).await;
-        tokio::pin!(blocks_stream);
+    // State
+    state: Option<TxState>,
+    current_tip: Option<HeaderId>,
+    lib_slot: Slot,
+    last_msg_id: MsgId,
 
-        loop {
-            tokio::select! {
-                Some(request) = request_rx.recv() => {
-                    handle_request(
-                        request,
-                        &mut state,
-                        current_tip,
-                        lib_slot,
-                        channel_id,
-                        &signing_key,
-                        &mut last_msg_id,
-                    );
-                }
-                maybe_event = blocks_stream.next() => {
-                    if let Some(ref event) = maybe_event {
-                        handle_block_event(
-                            event,
-                            &mut state,
-                            &mut current_tip,
-                            &mut lib_slot,
-                            channel_id,
-                            &http_client,
-                            &node_url,
-                        )
-                        .await;
-                    } else {
-                        warn!("Blocks stream disconnected, reconnecting...");
-                        break;
+    // Block stream
+    blocks_stream: Option<Pin<Box<dyn futures::Stream<Item = ProcessedBlockEvent> + Send>>>,
+
+    // Resubmission
+    resubmit_interval: tokio::time::Interval,
+    resubmit_active: bool,
+    in_flight: FuturesUnordered<BoxFuture<'static, InFlight>>,
+
+    // Buffered events to deliver
+
+    // Broadcast channel for events — handles subscribe to receive events
+    event_tx: broadcast::Sender<Event>,
+}
+
+impl ZoneSequencer {
+    /// Create a new sequencer with default configuration.
+    ///
+    /// Returns the sequencer (to drive via [`next_event`](Self::next_event))
+    /// and a handle (for submitting requests from other tasks).
+    ///
+    /// For a simpler API that spawns the sequencer automatically, see
+    /// [`spawn`](Self::spawn).
+    #[must_use]
+    pub fn init(
+        channel_id: ChannelId,
+        signing_key: Ed25519Key,
+        node_url: Url,
+        auth: Option<BasicAuthCredentials>,
+        checkpoint: Option<SequencerCheckpoint>,
+    ) -> (Self, SequencerHandle) {
+        Self::init_with_config(
+            channel_id,
+            signing_key,
+            node_url,
+            auth,
+            SequencerConfig::default(),
+            checkpoint,
+        )
+    }
+
+    /// Create a new sequencer with custom configuration.
+    ///
+    /// Returns the sequencer (to drive via [`next_event`](Self::next_event))
+    /// and a handle (for submitting requests from other tasks).
+    #[must_use]
+    pub fn init_with_config(
+        channel_id: ChannelId,
+        signing_key: Ed25519Key,
+        node_url: Url,
+        auth: Option<BasicAuthCredentials>,
+        config: SequencerConfig,
+        checkpoint: Option<SequencerCheckpoint>,
+    ) -> (Self, SequencerHandle) {
+        let http_client = CommonHttpClient::new(auth);
+        let (request_tx, request_rx) = mpsc::channel(config.publish_channel_capacity);
+
+        let (state, lib_slot, last_msg_id) = if let Some(cp) = checkpoint {
+            info!(
+                "Restoring from checkpoint: {} pending txs, lib={:?}, lib_slot={:?}",
+                cp.pending_txs.len(),
+                cp.lib,
+                cp.lib_slot
+            );
+            let mut tx_state = TxState::new(cp.lib);
+            for (hash, tx) in cp.pending_txs {
+                tx_state.submit(hash, tx);
+            }
+            (Some(tx_state), cp.lib_slot, cp.last_msg_id)
+        } else {
+            info!("Starting fresh (no checkpoint)");
+            (None, Slot::genesis(), MsgId::root())
+        };
+
+        let resubmit_interval = tokio::time::interval(config.resubmit_interval);
+        let (event_tx, _) = broadcast::channel(256);
+
+        let handle = SequencerHandle {
+            request_tx,
+            node_url: node_url.clone(),
+            http_client: http_client.clone(),
+            event_tx: event_tx.clone(),
+        };
+
+        let sequencer = Self {
+            channel_id,
+            signing_key,
+            node_url,
+            http_client,
+            config,
+            request_rx,
+            state,
+            current_tip: None,
+            lib_slot,
+            last_msg_id,
+            blocks_stream: None,
+            resubmit_interval,
+            resubmit_active: false,
+            in_flight: FuturesUnordered::new(),
+            event_tx,
+        };
+
+        (sequencer, handle)
+    }
+
+    /// Get the current checkpoint for persistence.
+    ///
+    /// Returns `None` if the sequencer has not yet initialized.
+    #[must_use]
+    pub fn checkpoint(&self) -> Option<SequencerCheckpoint> {
+        self.state
+            .as_ref()
+            .map(|s| build_checkpoint(s, self.last_msg_id, self.lib_slot))
+    }
+
+    /// Spawn the sequencer in a background task and return a handle.
+    ///
+    /// This is a convenience wrapper around
+    /// [`init_with_config`](Self::init_with_config) for users who don't
+    /// need to drive the event loop manually.
+    ///
+    /// ```ignore
+    /// let handle = ZoneSequencer::spawn(channel_id, key, url, None, None, None);
+    /// handle.publish(b"hello".to_vec()).await?;
+    /// ```
+    #[must_use]
+    pub fn spawn(
+        channel_id: ChannelId,
+        signing_key: Ed25519Key,
+        node_url: Url,
+        auth: Option<BasicAuthCredentials>,
+        config: Option<SequencerConfig>,
+        checkpoint: Option<SequencerCheckpoint>,
+    ) -> SequencerHandle {
+        let (mut sequencer, handle) = Self::init_with_config(
+            channel_id,
+            signing_key,
+            node_url,
+            auth,
+            config.unwrap_or_default(),
+            checkpoint,
+        );
+        tokio::spawn(async move {
+            loop {
+                sequencer.next_event().await;
+            }
+        });
+        handle
+    }
+
+    /// Drive the sequencer and return the next event.
+    ///
+    /// This processes block events, resubmission, and pending requests.
+    /// The caller must call this in a loop to keep the sequencer running.
+    pub async fn next_event(&mut self) -> Option<Event> {
+        // Always drain pending requests, even while disconnected
+        while let Ok(request) = self.request_rx.try_recv() {
+            self.handle_request(request);
+        }
+
+        // If no blocks stream, try to connect
+        if self.blocks_stream.is_none() {
+            // Initialize state from consensus info if needed
+            if self.state.is_none() {
+                match self.http_client.consensus_info(self.node_url.clone()).await {
+                    Ok(info) => {
+                        info!(
+                            "Sequencer connected: tip={:?}, lib={:?}",
+                            info.tip, info.lib
+                        );
+                        self.state = Some(TxState::new(info.lib));
+                        self.current_tip = Some(info.tip);
+                        self.lib_slot =
+                            get_lib_slot(&self.http_client, &self.node_url, info.lib).await;
+                    }
+                    Err(e) => {
+                        warn!("Failed to fetch consensus info: {e}");
+                        tokio::time::sleep(self.config.reconnect_delay).await;
+                        return None;
                     }
                 }
-                Some(event) = in_flight.next(), if !in_flight.is_empty() => {
-                    handle_inflight(event, &mut resubmit_active);
+            }
+
+            match self
+                .http_client
+                .get_blocks_stream(self.node_url.clone())
+                .await
+            {
+                Ok(stream) => {
+                    self.blocks_stream = Some(Box::pin(stream));
                 }
-                _ = resubmit_interval.tick(), if !resubmit_active && state.is_some() && current_tip.is_some() => {
-                    enqueue_resubmit(
-                        state.as_ref().unwrap(),
-                        current_tip.unwrap(),
-                        &http_client,
-                        &node_url,
-                        &in_flight,
-                        &mut resubmit_active,
-                    );
+                Err(e) => {
+                    warn!("Failed to connect to blocks stream: {e}");
+                    tokio::time::sleep(self.config.reconnect_delay).await;
+                    return None;
                 }
+            }
+        }
+
+        let stream = self.blocks_stream.as_mut()?;
+
+        tokio::select! {
+            Some(request) = self.request_rx.recv() => {
+                self.handle_request(request);
+                None
+            }
+            maybe_event = stream.next() => {
+                if let Some(ref block_event) = maybe_event {
+                    let newly_finalized = handle_block_event(
+                        block_event,
+                        &mut self.state,
+                        &mut self.current_tip,
+                        &mut self.lib_slot,
+                        self.channel_id,
+                        &self.http_client,
+                        &self.node_url,
+                    )
+                    .await;
+
+                    if newly_finalized.is_empty() {
+                        None
+                    } else {
+                        let event = Event::TxsFinalized { tx_hashes: newly_finalized };
+                        drop(self.event_tx.send(event.clone()));
+                        Some(event)
+                    }
+                } else {
+                    warn!("Blocks stream disconnected, will reconnect on next call");
+                    self.blocks_stream = None;
+                    None
+                }
+            }
+            Some(inflight_result) = self.in_flight.next(), if !self.in_flight.is_empty() => {
+                handle_inflight(inflight_result, &mut self.resubmit_active);
+                None
+            }
+            _ = self.resubmit_interval.tick(), if !self.resubmit_active && self.state.is_some() && self.current_tip.is_some() => {
+                enqueue_resubmit(
+                    self.state.as_ref().unwrap(),
+                    self.current_tip.unwrap(),
+                    &self.http_client,
+                    &self.node_url,
+                    &self.in_flight,
+                    &mut self.resubmit_active,
+                );
+                None
             }
         }
     }
-}
 
-fn handle_request(
-    request: ActorRequest,
-    state: &mut Option<TxState>,
-    current_tip: Option<HeaderId>,
-    lib_slot: Slot,
-    channel_id: ChannelId,
-    signing_key: &Ed25519Key,
-    last_msg_id: &mut MsgId,
-) {
-    let Some(s) = state else {
+    fn handle_request(&mut self, request: ActorRequest) {
+        let Some(s) = self.state.as_mut() else {
+            match request {
+                ActorRequest::Publish { reply, .. } => {
+                    drop(reply.send(Err(Error::Unavailable {
+                        reason: "not initialized",
+                    })));
+                }
+                ActorRequest::SetKeys { reply, .. } => {
+                    drop(reply.send(Err(Error::Unavailable {
+                        reason: "not initialized",
+                    })));
+                }
+            }
+            return;
+        };
+
         match request {
-            ActorRequest::Publish { reply, .. } => {
-                drop(reply.send(Err(Error::Unavailable {
-                    reason: "not initialized",
-                })));
-            }
-            ActorRequest::SetKeys { reply, .. } => {
-                drop(reply.send(Err(Error::Unavailable {
-                    reason: "not initialized",
-                })));
-            }
-            ActorRequest::Status { reply, .. } => {
-                drop(reply.send(Err(Error::Unavailable {
-                    reason: "not initialized",
-                })));
-            }
-            ActorRequest::Checkpoint { reply } => {
-                drop(reply.send(Err(Error::Unavailable {
-                    reason: "not initialized",
-                })));
-            }
-        }
-        return;
-    };
+            ActorRequest::Publish { data, reply } => {
+                let (signed_tx, new_msg_id) =
+                    create_inscribe_tx(self.channel_id, &self.signing_key, data, self.last_msg_id);
+                let id = signed_tx.mantle_tx.hash();
 
-    match request {
-        ActorRequest::Publish { data, reply } => {
-            let (signed_tx, new_msg_id) =
-                create_inscribe_tx(channel_id, signing_key, data, *last_msg_id);
-            let id = signed_tx.mantle_tx.hash();
+                s.submit(id, signed_tx.clone());
+                self.last_msg_id = new_msg_id;
 
-            s.submit(id, signed_tx.clone());
-            *last_msg_id = new_msg_id;
-
-            let checkpoint = build_checkpoint(s, *last_msg_id, lib_slot);
-            let result = PublishResult {
-                inscription_id: id,
-                checkpoint,
-            };
-            drop(reply.send(Ok((signed_tx, result))));
-        }
-        ActorRequest::SetKeys { keys, reply } => {
-            let signed_tx = create_set_keys_tx(channel_id, signing_key, keys);
-            let id = signed_tx.mantle_tx.hash();
-            s.submit(id, signed_tx.clone());
-            drop(reply.send(Ok(signed_tx)));
-        }
-        ActorRequest::Status { id, reply } => {
-            let result = current_tip.map_or(
-                Err(Error::Unavailable {
-                    reason: "not synced (no tip yet)",
-                }),
-                |tip| Ok(s.status(&id, tip)),
-            );
-            drop(reply.send(result));
-        }
-        ActorRequest::Checkpoint { reply } => {
-            let checkpoint = build_checkpoint(s, *last_msg_id, lib_slot);
-            drop(reply.send(Ok(checkpoint)));
+                let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
+                let result = PublishResult {
+                    inscription_id: id,
+                    checkpoint,
+                };
+                drop(reply.send(Ok((signed_tx, result))));
+            }
+            ActorRequest::SetKeys { keys, reply } => {
+                let signed_tx = create_set_keys_tx(self.channel_id, &self.signing_key, keys);
+                let id = signed_tx.mantle_tx.hash();
+                s.submit(id, signed_tx.clone());
+                drop(reply.send(Ok(signed_tx)));
+            }
         }
     }
 }
@@ -510,6 +545,7 @@ fn build_checkpoint(state: &TxState, last_msg_id: MsgId, lib_slot: Slot) -> Sequ
     }
 }
 
+/// Process a block event. Returns newly finalized tx hashes.
 async fn handle_block_event(
     event: &ProcessedBlockEvent,
     state: &mut Option<TxState>,
@@ -518,7 +554,7 @@ async fn handle_block_event(
     channel_id: ChannelId,
     http_client: &CommonHttpClient,
     node_url: &Url,
-) {
+) -> Vec<TxHash> {
     let block_id = event.block.header.id;
     let parent_id = event.block.header.parent_block;
     let tip = event.tip;
@@ -530,7 +566,7 @@ async fn handle_block_event(
     }
 
     let Some(s) = state.as_mut() else {
-        return;
+        return Vec::new();
     };
 
     // Backfill if needed (self-healing on every event)
@@ -567,19 +603,36 @@ async fn handle_block_event(
 
     // Process the actual event block with real lib (triggers finalization if lib
     // advanced)
-    s.process_block(block_id, parent_id, lib, our_txs);
+    let newly_finalized = s.process_block(block_id, parent_id, lib, our_txs);
     *current_tip = Some(tip);
+
+    newly_finalized
 }
 
 fn handle_inflight(event: InFlight, resubmit_active: &mut bool) {
     match event {
         InFlight::ResubmittedBatch { results } => {
-            for (id, result) in results {
+            for (id, result) in &results {
                 if let Err(e) = result {
                     warn!("Failed to resubmit inscription {id:?}: {e}");
                 }
             }
             *resubmit_active = false;
+        }
+    }
+}
+
+async fn get_lib_slot(http_client: &CommonHttpClient, node_url: &Url, lib: HeaderId) -> Slot {
+    // Try to get the block to find its slot
+    match http_client.get_block(node_url.clone(), lib).await {
+        Ok(Some(block)) => block.header().slot(),
+        Ok(None) => {
+            // Genesis case - slot 0
+            Slot::genesis()
+        }
+        Err(e) => {
+            warn!("Failed to get lib block slot: {e}, assuming slot 0");
+            Slot::genesis()
         }
     }
 }

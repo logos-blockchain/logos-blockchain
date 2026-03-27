@@ -1,23 +1,10 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use lb_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, tx::TxHash},
 };
 use rpds::HashTrieSetSync;
-
-/// Transaction status in the lifecycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TxStatus {
-    /// Not yet on canonical chain, needs resubmitting.
-    Pending,
-    /// On canonical chain between LIB and tip.
-    Safe,
-    /// At or below LIB, permanent.
-    Finalized,
-    /// Unknown transaction.
-    Unknown,
-}
 
 /// Transaction state tracker.
 pub struct TxState {
@@ -27,8 +14,6 @@ pub struct TxState {
     block_states: BTreeMap<HeaderId, HashTrieSetSync<TxHash>>,
     /// Block parent relationships for pruning.
     parent_map: HashMap<HeaderId, HeaderId>,
-    /// Finalized transactions.
-    finalized: HashSet<TxHash>,
     /// Current LIB for pruning.
     current_lib: HeaderId,
 }
@@ -42,7 +27,6 @@ impl TxState {
             pending: HashMap::new(),
             block_states,
             parent_map: HashMap::new(),
-            finalized: HashSet::new(),
             current_lib: lib,
         }
     }
@@ -52,14 +36,14 @@ impl TxState {
         self.pending.insert(tx_hash, signed_tx);
     }
 
-    /// Process a new block.
+    /// Process a new block. Returns newly finalized tx hashes.
     pub fn process_block(
         &mut self,
         block_id: HeaderId,
         parent_id: HeaderId,
         lib: HeaderId,
         our_txs: impl IntoIterator<Item = TxHash>,
-    ) {
+    ) -> Vec<TxHash> {
         // Store parent relationship for pruning
         self.parent_map.insert(block_id, parent_id);
 
@@ -81,6 +65,8 @@ impl TxState {
         }
         self.block_states.insert(block_id, safe_set);
 
+        let mut newly_finalized = Vec::new();
+
         // When lib advances: finalize txs and prune
         if lib != self.current_lib {
             // Finalize txs in all blocks from new lib back to old lib (inclusive).
@@ -91,7 +77,7 @@ impl TxState {
                 if let Some(block_safe) = self.block_states.get(&block) {
                     for tx_hash in block_safe.iter() {
                         if self.pending.remove(tx_hash).is_some() {
-                            self.finalized.insert(*tx_hash);
+                            newly_finalized.push(*tx_hash);
                         }
                     }
                 }
@@ -110,9 +96,25 @@ impl TxState {
                 prune_cursor = self.parent_map.remove(&b);
             }
 
+            // Rebuild the safe set at LIB to contain only still-pending tx
+            // hashes. This breaks the rpds sharing chain with pruned ancestors,
+            // preventing unbounded accumulation of finalized hashes in the
+            // persistent structure.
+            if let Some(lib_safe_set) = self.block_states.get(&lib) {
+                let mut fresh = HashTrieSetSync::new_sync();
+                for hash in lib_safe_set.iter() {
+                    if self.pending.contains_key(hash) {
+                        fresh = fresh.insert(*hash);
+                    }
+                }
+                self.block_states.insert(lib, fresh);
+            }
+
             self.prune_orphans(lib);
             self.current_lib = lib;
         }
+
+        newly_finalized
     }
 
     /// Remove orphaned blocks whose parent was pruned.
@@ -142,25 +144,6 @@ impl TxState {
         }
     }
 
-    #[must_use]
-    pub fn status(&self, tx_hash: &TxHash, tip: HeaderId) -> TxStatus {
-        if self.finalized.contains(tx_hash) {
-            return TxStatus::Finalized;
-        }
-
-        if let Some(safe_set) = self.block_states.get(&tip)
-            && safe_set.contains(tx_hash)
-        {
-            return TxStatus::Safe;
-        }
-
-        if self.pending.contains_key(tx_hash) {
-            return TxStatus::Pending;
-        }
-
-        TxStatus::Unknown
-    }
-
     /// Pending txs for resubmission (not safe at tip).
     pub fn pending_txs(&self, tip: HeaderId) -> impl Iterator<Item = (&TxHash, &SignedMantleTx)> {
         let safe = self
@@ -177,12 +160,6 @@ impl TxState {
     #[must_use]
     pub fn pending_count(&self) -> usize {
         self.pending.len()
-    }
-
-    /// Number of finalized transactions.
-    #[must_use]
-    pub fn finalized_count(&self) -> usize {
-        self.finalized.len()
     }
 
     /// Check if we have state for a block.
@@ -236,11 +213,10 @@ mod tests {
 
         state.submit(hash, tx);
         assert_eq!(state.pending_count(), 1);
-        assert_eq!(state.status(&hash, genesis), TxStatus::Pending);
     }
 
     #[test]
-    fn block_promotes_to_safe() {
+    fn block_includes_tx() {
         let genesis = header_id(0);
         let b1 = header_id(1);
         let mut state = TxState::new(genesis);
@@ -252,8 +228,11 @@ mod tests {
         // Process block containing our tx, lib stays at genesis
         state.process_block(b1, genesis, genesis, vec![hash]);
 
-        assert_eq!(state.status(&hash, b1), TxStatus::Safe);
-        assert_eq!(state.status(&hash, genesis), TxStatus::Pending);
+        // Tx is still pending (not finalized yet, lib hasn't advanced)
+        assert_eq!(state.pending_count(), 1);
+
+        // But pending_txs at b1 excludes it (it's in the safe set)
+        assert!(state.pending_txs(b1).next().is_none());
     }
 
     #[test]
@@ -269,12 +248,12 @@ mod tests {
 
         // b1 with our tx
         state.process_block(b1, genesis, genesis, vec![hash]);
-        assert_eq!(state.status(&hash, b1), TxStatus::Safe);
+        assert_eq!(state.pending_count(), 1);
 
         // b2, lib advances to b1
-        state.process_block(b2, b1, b1, vec![]);
-        assert_eq!(state.status(&hash, b2), TxStatus::Finalized);
-        assert_eq!(state.finalized_count(), 1);
+        let finalized = state.process_block(b2, b1, b1, vec![]);
+        assert_eq!(finalized, vec![hash]);
+        assert_eq!(state.pending_count(), 0);
     }
 
     #[test]
@@ -301,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn reorg_changes_safe_status() {
+    fn reorg_changes_pending_status() {
         // G -> b1 (has tx)
         //   -> b2 (no tx)
         let genesis = header_id(0);
@@ -315,15 +294,15 @@ mod tests {
 
         // b1 has our tx
         state.process_block(b1, genesis, genesis, vec![hash]);
-        assert_eq!(state.status(&hash, b1), TxStatus::Safe);
+
+        // At b1 tip, tx is in safe set (not in pending_txs)
+        assert!(state.pending_txs(b1).next().is_none());
 
         // b2 forks from genesis, no tx
         state.process_block(b2, genesis, genesis, vec![]);
 
-        // At b2 tip, tx is not safe (different branch)
-        assert_eq!(state.status(&hash, b2), TxStatus::Pending);
-        // At b1 tip, tx is still safe
-        assert_eq!(state.status(&hash, b1), TxStatus::Safe);
+        // At b2 tip, tx is back in pending_txs (different branch)
+        assert!(state.pending_txs(b2).any(|(h, _)| *h == hash));
     }
 
     #[test]
@@ -419,11 +398,12 @@ mod tests {
         // b2 has tx2
         state.process_block(b2, b1, genesis, vec![hash2]);
         // b3, lib jumps from genesis to b2 (skipping b1)
-        state.process_block(b3, b2, b2, vec![]);
+        let finalized = state.process_block(b3, b2, b2, vec![]);
 
         // Both tx1 (in b1) and tx2 (in b2) should be finalized
-        assert_eq!(state.status(&hash1, b3), TxStatus::Finalized);
-        assert_eq!(state.status(&hash2, b3), TxStatus::Finalized);
-        assert_eq!(state.finalized_count(), 2);
+        assert!(finalized.contains(&hash1));
+        assert!(finalized.contains(&hash2));
+        assert_eq!(finalized.len(), 2);
+        assert_eq!(state.pending_count(), 0);
     }
 }

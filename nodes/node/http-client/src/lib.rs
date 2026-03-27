@@ -249,7 +249,7 @@ impl CommonHttpClient {
     pub async fn get_blocks_stream(
         &self,
         base_url: Url,
-    ) -> Result<impl Stream<Item = ProcessedBlockEvent>, Error> {
+    ) -> Result<impl Stream<Item = ProcessedBlockEvent> + use<>, Error> {
         let request_url = base_url
             .join(BLOCKS_STREAM.trim_start_matches('/'))
             .map_err(Error::Url)?;
