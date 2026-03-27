@@ -333,7 +333,7 @@ impl LedgerState {
             }
 
             // Update the total of fee burned and tipped in the block
-            let tx_fee_burned = tx.execution_gas_consumption()
+            let tx_fee_burned = tx.execution_gas_consumption::<Constants>()
                 * self.cryptarchia_ledger.execution_base_fee()
                 + tx.storage_gas_cost();
 
@@ -359,8 +359,8 @@ impl LedgerState {
                     gas: total_block_execution_gas,
                     limit: EXECUTION_GAS_LIMIT,
                 });
+            }
         }
-
         // Compute Block rewards and give tips
         self = self.compute_block_rewards(total_fee_burned, total_fee_tip);
         // Update Execution market state
