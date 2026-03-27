@@ -24,13 +24,13 @@ pub enum Error {
     #[error("Genesis transaction must have gas price of zero")]
     InvalidGenesisGasPrice,
     #[error("Genesis transaction should not have any inputs")]
-    UnepectedInput,
+    UnexpectedInput,
     #[error("Genesis block cannot contain this op: {0:?}")]
     UnsupportedGenesisOp(Vec<Op>),
-    #[error("Expected exactly one transfer in genesis block")]
-    MissingTransfer,
-    #[error("Expected exactly one inscription in genesis block")]
-    MissingInscription,
+    #[error(
+        "Genesis transaction must have a transfer and an inscription as the two first operations"
+    )]
+    MissingTransferAndInscription,
     #[error("Invalid genesis inscription: {0:?}")]
     InvalidInscription(Box<Op>),
 }
@@ -46,30 +46,29 @@ impl GenesisTx {
 
         // Genesis transactions must contain exactly one transfer as the first op,
         // one inscription as the second op, and then may contain other SDP declarations
-        let mut ops = mantle_tx.ops.iter();
-        match ops.next() {
-            // Genesis transfers should not have any inputs
-            Some(Op::Transfer(op)) => {
-                if !op.inputs.is_empty() {
-                    return Err(Error::UnepectedInput);
+        match mantle_tx.ops.as_slice() {
+            [
+                Op::Transfer(transfer),
+                Op::ChannelInscribe(inscription),
+                rest @ ..,
+            ] => {
+                if !transfer.inputs.is_empty() {
+                    return Err(Error::UnexpectedInput);
+                }
+                valid_cryptarchia_inscription(inscription)?;
+
+                let unsupported_ops = rest
+                    .iter()
+                    .filter(|op| !matches!(op, Op::SDPDeclare(_)))
+                    .cloned()
+                    .collect::<Vec<_>>();
+
+                if !unsupported_ops.is_empty() {
+                    return Err(Error::UnsupportedGenesisOp(unsupported_ops));
                 }
             }
-            _ => return Err(Error::MissingTransfer),
+            _ => return Err(Error::MissingTransferAndInscription),
         }
-
-        match ops.next() {
-            Some(Op::ChannelInscribe(op)) => valid_cryptarchia_inscription(op)?,
-            _ => return Err(Error::MissingInscription),
-        }
-
-        let unsupported_ops = ops
-            .filter(|op| !matches!(op, Op::SDPDeclare(_)))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !unsupported_ops.is_empty() {
-            return Err(Error::UnsupportedGenesisOp(unsupported_ops));
-        }
-
         Ok(Self(signed_mantle_tx))
     }
 
@@ -305,7 +304,7 @@ mod tests {
         // Test cases: (operations, expected_error)
         let test_cases = [
             // no inscription -> error
-            (vec![], Some(Error::MissingInscription)),
+            (vec![], Some(Error::MissingTransferAndInscription)),
             // one inscription -> ok
             (vec![Op::ChannelInscribe(inscription_op())], None),
             // two inscriptions -> error
@@ -353,7 +352,7 @@ mod tests {
             // SDP without inscription
             (
                 vec![Op::SDPDeclare(sdp_declare_op_helper(utxo1, 0))],
-                Some(Error::MissingInscription),
+                Some(Error::MissingTransferAndInscription),
             ),
             // Valid SDP combinations
             (
