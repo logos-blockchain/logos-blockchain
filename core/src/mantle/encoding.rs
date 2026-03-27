@@ -1101,7 +1101,7 @@ mod tests {
 
         let locked_note_sk = ZkKey::from(BigUint::from(1u64));
         let locked_note = crate::mantle::Utxo {
-            tx_hash: TxHash::from(BigUint::from(42u64)),
+            transfer_hash: TxHash::from(BigUint::from(42u64)),
             output_index: 12,
             note: Note {
                 value: 500,

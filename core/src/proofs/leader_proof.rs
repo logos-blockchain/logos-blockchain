@@ -238,7 +238,7 @@ impl LeaderPrivate {
         let (latest_path, latest_selector) = merkle_path_to_witness(latest_path);
         let wallet = lb_pol::PolWalletInputsData {
             note_value: note.note.value,
-            transaction_hash: *note.tx_hash.as_ref(),
+            transaction_hash: *note.transfer_hash.as_ref(),
             output_number: note.output_index as u64,
             aged_path: aged_path
                 .try_into()

@@ -44,8 +44,8 @@ impl GenesisTx {
             return Err(Error::InvalidGenesisGasPrice);
         }
 
-        // Genesis transactions must contain exactly one transfer and one inscription as
-        // the first op and then may contain other SDP declarations
+        // Genesis transactions must contain exactly one transfer as the first op,
+        // one inscription as the second op, and then may contain other SDP declarations
         let mut ops = mantle_tx.ops.iter();
         match ops.next() {
             // Genesis transfers should not have any inputs
