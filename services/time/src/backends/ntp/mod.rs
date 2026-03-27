@@ -143,21 +143,21 @@ impl NtpStream {
         let roundtrip = Duration::from_micros(timestamp.roundtrip());
         let ts_nanos_u128 = (seconds + nanos_fraction + roundtrip / 2).as_nanos();
 
-        let ts_nanos = match u64::try_from(ts_nanos_u128) {
+        let ts_nanos_i128 = match i128::try_from(ts_nanos_u128) {
             Ok(ts_nanos) => ts_nanos,
             Err(e) => {
                 tracing::warn!(
                     "Skipping invalid NTP timestamp {ts_nanos_u128} vs. {}: {e}",
-                    u64::MAX
+                    i128::MAX
                 );
                 return;
             }
         };
 
-        let date = match OffsetDateTime::from_unix_timestamp_nanos(i128::from(ts_nanos)) {
+        let date = match OffsetDateTime::from_unix_timestamp_nanos(ts_nanos_i128) {
             Ok(date) => date,
             Err(e) => {
-                tracing::warn!("Skipping invalid NTP timestamp: {e:?} (ts_nanos={ts_nanos})");
+                tracing::warn!("Skipping invalid NTP timestamp: {e:?} (ts_nanos={ts_nanos_i128})");
                 return;
             }
         };
