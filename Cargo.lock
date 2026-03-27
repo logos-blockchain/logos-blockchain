@@ -4801,6 +4801,7 @@ dependencies = [
  "logos-blockchain-utils",
  "logos-blockchain-wallet",
  "logos-blockchain-zksign",
+ "logos-blockchain-zone-sdk",
  "num-bigint",
  "rand 0.8.5",
  "reqwest",
