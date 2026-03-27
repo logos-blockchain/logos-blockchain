@@ -44,8 +44,36 @@ pub mod wallet;
 #[cfg(test)]
 mod tests;
 
+fn long_version() -> String {
+    let head_commit_hash = env!("HEAD_COMMIT_HASH");
+    let head_tag_name = env!("HEAD_TAG_NAME");
+    let pkg_version = env!("PKG_VERSION");
+    let target = env!("TARGET");
+    let profile = env!("PROFILE");
+    let rustc_version = env!("RUSTC_VERSION");
+
+    let commit_line = match (head_commit_hash, head_tag_name) {
+        (commit_hash, tag_name) if !commit_hash.is_empty() && !tag_name.is_empty() => {
+            format!("commit:  {commit_hash} (tag {tag_name})")
+        }
+        (commit_hash, _) if !commit_hash.is_empty() => {
+            format!("commit:  {commit_hash}")
+        }
+        _ => "commit:  unknown".to_owned(),
+    };
+
+    format!(
+        "\
+{pkg_version}
+{commit_line}
+target:  {target}
+profile: {profile}
+rustc:   {rustc_version}"
+    )
+}
+
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None,
+#[command(author, version, long_version = long_version(), about, long_about = None,
           args_conflicts_with_subcommands = true,
           subcommand_negates_reqs = true)]
 pub struct CliArgs {

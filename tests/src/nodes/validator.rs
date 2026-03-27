@@ -67,6 +67,10 @@ impl Drop for Validator {
         if let Err(e) = self.child.kill() {
             println!("failed to kill the child process: {e}");
         }
+        // Wait for the process to fully exit so that ports and other resources
+        // are released before the next test iteration spawns new validators.
+        // After SIGKILL, wait() returns almost immediately.
+        drop(self.child.wait());
     }
 }
 
