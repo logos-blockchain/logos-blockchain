@@ -395,12 +395,10 @@ impl ZoneSequencer {
     /// This processes block events, resubmission, and pending requests.
     /// The caller must call this in a loop to keep the sequencer running.
     pub async fn next_event(&mut self) -> Option<Event> {
-        // Always drain pending requests, even while disconnected
-        while let Ok(request) = self.request_rx.try_recv() {
-            self.handle_request(request);
-        }
-
-        // If no blocks stream, try to connect
+        // If no blocks stream, try to connect.
+        // Requests are not processed until connected — this ensures
+        // publish() cannot run before state is initialized and backfill
+        // has a chance to start.
         if self.blocks_stream.is_none() {
             // Initialize state from consensus info if needed
             if self.state.is_none() {
