@@ -4931,6 +4931,7 @@ dependencies = [
  "blake2",
  "cipher",
  "const-hex",
+ "futures",
  "humantime",
  "nistrs",
  "overwatch",
@@ -4940,6 +4941,8 @@ dependencies = [
  "serde_json",
  "serde_with",
  "time",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

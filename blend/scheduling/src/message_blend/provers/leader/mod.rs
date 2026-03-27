@@ -1,3 +1,5 @@
+use core::pin::Pin;
+
 use async_trait::async_trait;
 use futures::stream::{self, Stream, StreamExt as _};
 use lb_blend_message::crypto::{
@@ -16,11 +18,8 @@ use lb_blend_proofs::{
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
-use tokio::{
-    sync::mpsc,
-    task::{JoinHandle, spawn_blocking},
-    time::Instant,
-};
+use lb_utils::tokio::stream::Buffered;
+use tokio::{task::spawn_blocking, time::Instant};
 
 use crate::message_blend::provers::{BlendLayerProof, ProofsGeneratorSettings};
 
@@ -52,14 +51,7 @@ pub trait LeaderProofsGenerator: Sized {
 pub struct RealLeaderProofsGenerator {
     pub(super) settings: ProofsGeneratorSettings,
     private_inputs: ProofOfLeadershipQuotaInputs,
-    proof_receiver: mpsc::Receiver<BlendLayerProof>,
-    proof_generation_task_handle: JoinHandle<()>,
-}
-
-impl Drop for RealLeaderProofsGenerator {
-    fn drop(&mut self) {
-        self.proof_generation_task_handle.abort();
-    }
+    proofs_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send + Sync>>,
 }
 
 #[async_trait]
@@ -68,16 +60,13 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
         settings: ProofsGeneratorSettings,
         private_inputs: ProofOfLeadershipQuotaInputs,
     ) -> Self {
-        let (proof_receiver, proof_generation_task_handle) = spawn_proof_generation(
-            create_proof_stream(settings.public_inputs, private_inputs),
-            settings.encapsulation_layers.get() as usize,
-        );
-
         Self {
             settings,
             private_inputs,
-            proof_receiver,
-            proof_generation_task_handle,
+            proofs_stream: Box::pin(Buffered::new(
+                create_proof_stream(settings.public_inputs, private_inputs),
+                settings.public_inputs.leader.message_quota as usize,
+            )),
         }
     }
 
@@ -102,8 +91,8 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
     async fn get_next_proof(&mut self) -> BlendLayerProof {
         let start = Instant::now();
         let proof = self
-            .proof_receiver
-            .recv()
+            .proofs_stream
+            .next()
             .await
             .expect("Underlying proof generation task should always yield items.");
         tracing::trace!(target: LOG_TARGET, "Generated leadership Blend layer proof with key nullifier {:?} addressed to node at index {:?} in {:?} ms.", hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), proof.proof_of_selection.expected_index(self.settings.membership_size), start.elapsed().as_millis());
@@ -113,39 +102,15 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
 
 impl RealLeaderProofsGenerator {
     fn generate_new_proofs_stream(&mut self) {
-        self.proof_generation_task_handle.abort();
-
-        let (proof_receiver, generation_task) = spawn_proof_generation(
+        self.proofs_stream = Box::pin(Buffered::new(
             create_proof_stream(self.settings.public_inputs, self.private_inputs),
-            self.settings.encapsulation_layers.get() as usize,
-        );
-        self.proof_receiver = proof_receiver;
-        self.proof_generation_task_handle = generation_task;
+            self.settings.public_inputs.leader.message_quota as usize,
+        ));
     }
 
     pub(super) const fn current_epoch(&self) -> Epoch {
         self.settings.epoch
     }
-}
-
-// Spawns a background task that eagerly drives the proof stream, sending
-// generated proofs into a bounded channel. This ensures proofs are
-// pre-generated and ready for immediate consumption, rather than being lazily
-// produced only when polled as is the case with a buffered stream.
-fn spawn_proof_generation(
-    stream: impl Stream<Item = BlendLayerProof> + Send + 'static,
-    buffer_size: usize,
-) -> (mpsc::Receiver<BlendLayerProof>, JoinHandle<()>) {
-    let (proof_sender, proof_receiver) = mpsc::channel(buffer_size);
-    let handle = tokio::spawn(async move {
-        tokio::pin!(stream);
-        while let Some(proof) = stream.next().await {
-            if proof_sender.send(proof).await.is_err() {
-                break;
-            }
-        }
-    });
-    (proof_receiver, handle)
 }
 
 #[expect(

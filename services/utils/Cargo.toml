@@ -21,7 +21,7 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1.83"
-futures     = { default-features = false, version = "0.3" }
+futures     = { workspace = true }
 log         = { workspace = true }
 overwatch   = { features = ["derive"], workspace = true }
 serde       = { workspace = true }
