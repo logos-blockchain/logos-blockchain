@@ -20,8 +20,8 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
-use tokio::sync::{broadcast, oneshot};
-use tokio_stream::wrappers::BroadcastStream;
+use tokio::sync::{oneshot, watch};
+use tokio_stream::wrappers::WatchStream;
 
 use crate::backends::TimeBackend;
 
@@ -108,9 +108,6 @@ where
     }
 
     async fn run(self) -> Result<(), DynError> {
-        // 3 slots buffer should be enough
-        const SLOTS_BUFFER: usize = 3;
-
         let Self {
             service_resources_handle,
             backend,
@@ -118,7 +115,7 @@ where
         let mut inbound_relay = service_resources_handle.inbound_relay;
         let (mut current_slot_tick, mut tick_stream) = backend.tick_stream();
 
-        let (broadcast_sender, broadcast_receiver) = broadcast::channel(SLOTS_BUFFER);
+        let (watch_sender, watch_receiver) = watch::channel(current_slot_tick);
 
         service_resources_handle.status_updater.notify_ready();
         tracing::info!(
@@ -129,14 +126,14 @@ where
         loop {
             tokio::select! {
                 Some(service_message) = inbound_relay.recv() => {
-                    handle_service_message(service_message, &broadcast_receiver, &current_slot_tick);
+                    handle_service_message(service_message, &watch_receiver, &current_slot_tick);
                 }
                 Some(slot_tick) = tick_stream.next() => {
                     current_slot_tick = slot_tick;
                     metrics::time_current_slot(u64::from(slot_tick.slot));
                     metrics::time_current_epoch(u32::from(slot_tick.epoch));
 
-                    if let Err(e) = broadcast_sender.send(slot_tick) {
+                    if let Err(e) = watch_sender.send(slot_tick) {
                         error!("Error updating slot tick: {e}");
                         metrics::time_broadcast_errors();
                     }
@@ -148,26 +145,12 @@ where
 
 fn handle_service_message(
     message: TimeServiceMessage,
-    broadcast_receiver: &broadcast::Receiver<SlotTick>,
+    watch_receiver: &watch::Receiver<SlotTick>,
     current_slot_tick: &SlotTick,
 ) {
     match message {
         TimeServiceMessage::Subscribe { sender } => {
-            let channel_stream =
-                BroadcastStream::new(broadcast_receiver.resubscribe()).filter_map(|result| {
-                    Box::pin(async {
-                        match result {
-                            Ok(tick) => Some(tick),
-                            Err(e) => {
-                                // log lagging errors, services should always aim to be ready for
-                                // next slot
-                                error!("Lagging behind slot ticks: {e:?}");
-                                None
-                            }
-                        }
-                    })
-                });
-            let stream = Pin::new(Box::new(channel_stream));
+            let stream = Pin::new(Box::new(WatchStream::from_changes(watch_receiver.clone())));
             if sender.send(stream).is_err() {
                 error!("Couldn't send back a Subscribe response");
             }

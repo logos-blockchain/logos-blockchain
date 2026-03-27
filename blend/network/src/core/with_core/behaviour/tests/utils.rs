@@ -21,7 +21,7 @@ use libp2p::{
     identity::{PublicKey, ed25519},
 };
 use libp2p_swarm_test::SwarmExt as _;
-use tokio::time::interval;
+use tokio::time::{MissedTickBehavior, interval};
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::core::{
@@ -38,7 +38,13 @@ impl IntervalStreamProvider for IntervalProvider {
 
     fn interval_stream(&self) -> Self::IntervalStream {
         let range = self.1.clone();
-        Box::new(IntervalStream::new(interval(self.0)).map(move |_| range.clone()))
+        let interval = {
+            let mut interval = interval(self.0);
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+            interval
+        };
+        Box::new(IntervalStream::new(interval).map(move |_| range.clone()))
     }
 }
 

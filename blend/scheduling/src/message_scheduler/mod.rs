@@ -10,7 +10,7 @@ use core::{
 use fork_stream::StreamExt as _;
 use futures::{Stream, StreamExt as _};
 use rand::RngCore;
-use tokio::time::interval;
+use tokio::time::{MissedTickBehavior, interval};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{info, trace};
 
@@ -60,8 +60,14 @@ where
     DataMessage: Debug + Unpin,
 {
     pub fn new(session_info: SessionInfo, rng: Rng, settings: Settings) -> Self {
+        let interval = {
+            let mut interval = interval(settings.round_duration);
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+            interval
+        };
         let round_clock = Box::new(
-            IntervalStream::new(interval(settings.round_duration))
+            IntervalStream::new(interval)
                 .enumerate()
                 .map(|(round, _)| (round as u128).into()),
         )
