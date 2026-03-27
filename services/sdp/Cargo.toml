@@ -22,5 +22,5 @@ lb-tracing                    = { workspace = true }
 overwatch                     = { workspace = true }
 serde                         = { features = ["derive"], workspace = true }
 thiserror                     = { workspace = true }
-tokio                         = { default-features = false, version = "1" }
+tokio                         = { workspace = true }
 tracing                       = { workspace = true }

@@ -16,7 +16,7 @@ futures     = { workspace = true }
 hex         = "0.4"
 serde       = { features = ["derive"], workspace = true }
 thiserror   = "1.0"
-tokio       = { features = ["sync"], version = "1" }
+tokio       = { features = ["sync"], workspace = true }
 tracing     = { workspace = true }
 
 lb-chain-service                 = { workspace = true }

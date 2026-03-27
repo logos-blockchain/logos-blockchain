@@ -65,7 +65,7 @@ serde_json                       = { workspace = true }
 serde_with                       = { default-features = false, version = "3.14.0" }
 serde_yaml                       = { workspace = true }
 thiserror                        = { workspace = true }
-tokio                            = "1"
+tokio                            = { workspace = true }
 tokio-stream                     = { workspace = true }
 tracing                          = { workspace = true }
 url                              = { default-features = false, version = "2.5.8" }

@@ -23,12 +23,11 @@ overwatch             = { workspace = true }
 rocksdb               = { default-features = false, features = ["bindgen-runtime"], optional = true, version = "0.24" }
 serde                 = { workspace = true }
 thiserror             = "1.0"
-tokio                 = { default-features = false, version = "1" }
+tokio                 = { workspace = true }
 tracing               = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-tokio    = { default-features = false, version = "1" }
 
 [features]
 default         = []

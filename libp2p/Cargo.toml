@@ -42,7 +42,7 @@ rand = { default-features = false, version = "0.8" }
 serde = { features = ["derive"], workspace = true }
 serde_with = { workspace = true }
 thiserror = "1.0.40"
-tokio = { features = ["macros", "test-util", "time"], version = "1" }
+tokio = { features = ["macros", "test-util", "time"], workspace = true }
 tracing = { workspace = true }
 zerocopy = { features = ["derive"], version = "0.8.26" }
 

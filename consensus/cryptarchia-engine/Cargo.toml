@@ -24,7 +24,7 @@ serde      = { optional = true, workspace = true }
 serde_with = { features = ["macros"], optional = true, workspace = true }
 thiserror  = "1"
 time       = { default-features = false, version = "0.3" }
-tokio      = { default-features = false, features = ["time"], optional = true, version = "1" }
+tokio      = { features = ["time"], optional = true, workspace = true }
 tracing    = { workspace = true }
 
 [features]

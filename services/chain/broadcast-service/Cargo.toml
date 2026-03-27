@@ -19,6 +19,6 @@ futures      = { workspace = true }
 lb-core      = { workspace = true }
 overwatch    = { workspace = true }
 serde        = { features = ["derive"], workspace = true }
-tokio        = { default-features = false, version = "1" }
+tokio        = { workspace = true }
 tokio-stream = { workspace = true }
 tracing      = { workspace = true }
