@@ -439,14 +439,14 @@ mod tests {
             parent_block,
             slot,
             proof_of_leadership,
-            vec![transfer],
+            vec![tx],
             &signing_key,
         );
 
         assert!(invalid_block_result.is_err());
         let error = invalid_block_result.unwrap_err();
         assert!(
-            matches!(error, Error::ContentTooBig { count, max } if count == transfer.storage_size() && max == MAX_BLOCK_SIZE)
+            matches!(error, Error::ContentTooBig { count, max } if count == tx.storage_size() && max == MAX_BLOCK_SIZE)
         );
     }
 }

@@ -230,7 +230,7 @@ pub fn create_genesis_tx_with_declarations(
 
     for provider in &providers {
         let utxo = Utxo {
-            tx_hash: transfer_hash,
+            transfer_hash,
             output_index: provider.note.output_index,
             note: provider.note.note,
         };

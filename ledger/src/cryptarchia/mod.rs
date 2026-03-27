@@ -7,7 +7,7 @@ use derivative::Derivative;
 use lb_core::{
     crypto::{ZkDigest, ZkHasher},
     mantle::{
-        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value, gas::GasConstants,
+        GenesisTx, NoteId, TxHash, Utxo, Value, gas::GasConstants, ops::transfer::TransferOp,
     },
     proofs::leader_proof::{self, LeaderPublic},
 };
@@ -336,6 +336,15 @@ impl LedgerState {
             if locked_notes.contains(input) {
                 return Err(LedgerError::LockedNote(*input));
             }
+            let utxo;
+            (self.utxos, utxo) = self
+                .utxos
+                .remove(input)
+                .map_err(|_| LedgerError::InvalidNote(*input))?;
+            balance = balance
+                .checked_add(utxo.note.value.into())
+                .ok_or(LedgerError::Overflow)?;
+            pks.push(utxo.note.pk);
         }
 
         if !ZkPublicKey::verify_multi(&pks, &tx_hash.0, transfer_sig) {
