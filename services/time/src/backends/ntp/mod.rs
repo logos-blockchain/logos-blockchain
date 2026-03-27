@@ -122,50 +122,78 @@ impl Stream for NtpStream {
     type Item = SlotTick;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // try update time
-        if let Poll::Ready(Some(timestamp)) = self.interval.poll_next_unpin(cx) {
-            let seconds = Duration::from_secs(timestamp.sec().into());
-            let nanos_fraction =
-                Duration::from_nanos(fraction_to_nanoseconds(timestamp.sec_fraction()).into());
-            let roundtrip = Duration::from_micros(timestamp.roundtrip());
+        // Try update time
+        self.as_mut().handle_ntp_update(cx);
+        // Poll from internal last updated `SlotTick` stream
+        self.as_mut().poll_slot_timer(cx)
+    }
+}
 
-            let ts_nanos = (seconds + nanos_fraction + roundtrip / 2).as_nanos() as i128;
-            match OffsetDateTime::from_unix_timestamp_nanos(ts_nanos) {
-                Ok(date) => {
-                    let current_slot = Slot::from_offset_and_config(date, self.slot_config);
-                    if current_slot >= self.last_emitted_slot {
-                        let epoch_config = self.epoch_config;
-                        let base_period_length = self.base_period_length;
-                        (_, self.slot_timer) = slot_timer(
-                            self.slot_config,
-                            date,
-                            current_slot,
-                            epoch_config,
-                            base_period_length,
-                        );
-                        self.last_emitted_slot = current_slot;
-                    } else {
-                        tracing::warn!(
-                            "NTP resync moved backwards: computed_slot={:?}, last_emitted_slot={:?}; clamping",
-                            current_slot,
-                            self.last_emitted_slot
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Skipping invalid NTP timestamp: {e:?} (ts_nanos={ts_nanos})");
-                }
+impl NtpStream {
+    fn handle_ntp_update(self: Pin<&mut Self>, cx: &mut Context<'_>) {
+        let this = self.get_mut();
+
+        let Poll::Ready(Some(timestamp)) = this.interval.as_mut().poll_next_unpin(cx) else {
+            return;
+        };
+
+        let seconds = Duration::from_secs(timestamp.sec().into());
+        let nanos_fraction =
+            Duration::from_nanos(fraction_to_nanoseconds(timestamp.sec_fraction()).into());
+        let roundtrip = Duration::from_micros(timestamp.roundtrip());
+        let ts_nanos_u128 = (seconds + nanos_fraction + roundtrip / 2).as_nanos();
+
+        let ts_nanos = match u64::try_from(ts_nanos_u128) {
+            Ok(ts_nanos) => ts_nanos,
+            Err(e) => {
+                tracing::warn!(
+                    "Skipping invalid NTP timestamp {ts_nanos_u128} vs. {}: {e}",
+                    u64::MAX
+                );
+                return;
             }
+        };
+
+        let date = match OffsetDateTime::from_unix_timestamp_nanos(i128::from(ts_nanos)) {
+            Ok(date) => date,
+            Err(e) => {
+                tracing::warn!("Skipping invalid NTP timestamp: {e:?} (ts_nanos={ts_nanos})");
+                return;
+            }
+        };
+
+        let current_slot = Slot::from_offset_and_config(date, this.slot_config);
+        if current_slot < this.last_emitted_slot {
+            tracing::warn!(
+                "NTP resync moved backwards: computed_slot={current_slot:?}, \
+                last_emitted_slot={:?}; clamping",
+                this.last_emitted_slot
+            );
+            return;
         }
-        // poll from internal last updated `SlotTick` stream
-        match self.slot_timer.poll_next_unpin(cx) {
-            Poll::Ready(Some(mut tick)) => {
+
+        let epoch_config = this.epoch_config;
+        let base_period_length = this.base_period_length;
+        (_, this.slot_timer) = slot_timer(
+            this.slot_config,
+            date,
+            current_slot,
+            epoch_config,
+            base_period_length,
+        );
+        this.last_emitted_slot = current_slot;
+    }
+
+    // Polls the slot_timer and clamps slot to never go backwards.
+    fn poll_slot_timer(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<SlotTick>> {
+        let this = self.as_mut().get_mut();
+        match this.slot_timer.as_mut().poll_next_unpin(cx) {
+            Poll::Ready(Some(tick)) => {
                 // Clamp slot to never go backwards
-                if tick.slot < self.last_emitted_slot {
-                    tick.slot = self.last_emitted_slot;
-                } else {
-                    self.last_emitted_slot = tick.slot;
+                if tick.slot < this.last_emitted_slot {
+                    return Poll::Pending;
                 }
+                this.last_emitted_slot = tick.slot;
                 Poll::Ready(Some(tick))
             }
             other => other,
@@ -528,9 +556,10 @@ mod tests {
         let mut previous_tick: Option<SlotTick> = None;
         for _ in 0..poll_count {
             let tick = stream.next().await;
+            // println!("tick: {tick:?}");
             if let Some(current) = tick {
                 if let Some(previous) = previous_tick {
-                    assert!(current.slot.into_inner() >= previous.slot.into_inner());
+                    assert!(current.slot.into_inner() > previous.slot.into_inner());
                     assert!(current.epoch.into_inner() >= previous.epoch.into_inner());
                 }
                 previous_tick = tick;
