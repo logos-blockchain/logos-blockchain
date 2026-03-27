@@ -100,8 +100,8 @@ pub fn create_general_configs_with_blend_core_subset(
             },
         )
         .collect();
-    let ledger_tx = genesis_tx.mantle_tx().ledger_tx.clone();
-    let genesis_tx_with_declarations = create_genesis_tx_with_declarations(ledger_tx, providers);
+    let transfer_op = genesis_tx.genesis_transfer().clone();
+    let genesis_tx_with_declarations = create_genesis_tx_with_declarations(transfer_op, providers);
     let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations, n_nodes);
 
     // Set note keys and Blend keys in KMS of each node config.

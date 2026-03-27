@@ -103,14 +103,14 @@ impl SyncTargetStats {
 pub(crate) fn genesis_block_utxos(
     genesis_tx: &lb_core::mantle::genesis_tx::GenesisTx,
 ) -> Vec<Utxo> {
-    let ledger_tx = genesis_tx.mantle_tx().ledger_tx.clone();
-    let tx_hash = ledger_tx.hash();
+    let transfer_op = genesis_tx.genesis_transfer().clone();
+    let transfer_hash = transfer_op.hash();
 
-    ledger_tx
+    transfer_op
         .outputs
         .iter()
         .enumerate()
-        .map(|(idx, note)| Utxo::new(tx_hash, idx, *note))
+        .map(|(idx, note)| Utxo::new(transfer_hash, idx, *note))
         .collect()
 }
 

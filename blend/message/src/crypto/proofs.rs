@@ -1,4 +1,5 @@
 use core::mem::swap;
+use std::time::Instant;
 
 use lb_blend_proofs::{
     quota::{
@@ -107,7 +108,8 @@ impl ProofsVerifier for RealProofsVerifier {
         tracing::debug!(
             "Verifying proof of quota {proof:?} with session {session:?}, public core inputs: {core:?}, leader inputs: {leader:?} and signing key: {signing_key:?}."
         );
-        proof
+        let start = Instant::now();
+        let proof_verification_result = proof
             .verify(&PublicInputs {
                 core,
                 leader,
@@ -132,7 +134,14 @@ impl ProofsVerifier for RealProofsVerifier {
                     .map_err(Error::ProofOfQuota).inspect_err(|_| {
                         tracing::debug!("Input proof invalid with both current and previous epoch public inputs.");
                     })
-            })
+            });
+
+        tracing::trace!(
+            "Proof verification time: {} ms",
+            start.elapsed().as_millis()
+        );
+
+        proof_verification_result
     }
 
     fn verify_proof_of_selection(

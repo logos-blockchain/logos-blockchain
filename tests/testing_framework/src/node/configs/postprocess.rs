@@ -67,19 +67,19 @@ pub fn apply_wallet_genesis_overrides(
         });
     }
 
-    let mut ledger_tx = genesis_tx.mantle_tx().ledger_tx.clone();
-    for output in &mut ledger_tx.outputs {
+    let mut transfer_op = genesis_tx.genesis_transfer().clone();
+    for output in &mut transfer_op.outputs {
         if leader_keys.contains(&output.pk) {
             output.value = leader_stake;
         }
     }
     for (secret_key, value) in wallet_accounts {
-        ledger_tx
+        transfer_op
             .outputs
             .push(Note::new(*value, secret_key.to_public_key()));
     }
 
-    let genesis_tx = create_genesis_tx_with_declarations(ledger_tx, providers);
+    let genesis_tx = create_genesis_tx_with_declarations(transfer_op, providers);
 
     for general in general_configs.iter_mut() {
         for (secret_key, _) in wallet_accounts {

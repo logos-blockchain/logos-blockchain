@@ -9,7 +9,8 @@ use std::{
 
 use async_trait::async_trait;
 use lb_core::mantle::{
-    GenesisTx as _, Note, SignedMantleTx, Transaction as _, Utxo, tx_builder::MantleTxBuilder,
+    GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo,
+    tx_builder::MantleTxBuilder,
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use rand::{seq::SliceRandom as _, thread_rng};
@@ -275,17 +276,17 @@ fn build_wallet_transaction(input: &WalletInput) -> Result<SignedMantleTx, DynEr
     )
     .map_err(|err| format!("failed to sign transaction: {err}"))?;
 
-    SignedMantleTx::new(tx, Vec::new(), signature)
+    SignedMantleTx::new(tx, vec![OpProof::ZkSig(signature)])
         .map_err(|err| format!("failed to build signed transaction: {err}").into())
 }
 
 fn wallet_utxo_map(
     genesis_tx: &lb_core::mantle::genesis_tx::GenesisTx,
 ) -> HashMap<ZkPublicKey, Utxo> {
-    let ledger_tx = genesis_tx.mantle_tx().ledger_tx.clone();
-    let tx_hash = ledger_tx.hash();
+    let transfer_op = genesis_tx.genesis_transfer().clone();
+    let tx_hash = transfer_op.hash();
 
-    ledger_tx
+    transfer_op
         .outputs
         .iter()
         .enumerate()

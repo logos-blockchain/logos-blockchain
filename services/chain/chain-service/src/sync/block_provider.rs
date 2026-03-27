@@ -954,7 +954,7 @@ mod tests {
         ) -> lb_core::proofs::leader_proof::Groth16LeaderProof {
             let leader_sk = UnsecuredZkKey::zero();
             let utxo = Utxo {
-                tx_hash: Fr::from(BigUint::from(1u8)).into(),
+                transfer_hash: Fr::from(BigUint::from(1u8)).into(),
                 output_index: 0,
                 note: Note::new(1000, leader_sk.to_public_key()),
             };

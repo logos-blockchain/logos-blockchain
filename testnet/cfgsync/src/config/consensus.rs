@@ -97,7 +97,7 @@ fn create_utxos(
         regular_note_keys.push(sk);
         utxos.push(Utxo {
             note: Note::new(100_000, pk),
-            tx_hash: BigUint::from(0u8).into(),
+            transfer_hash: BigUint::from(0u8).into(),
             output_index: 0,
         });
         output_index += 1;
@@ -108,7 +108,7 @@ fn create_utxos(
         let note_blend = Note::new(1, pk_blend);
         let utxo = Utxo {
             note: note_blend,
-            tx_hash: BigUint::from(0u8).into(),
+            transfer_hash: BigUint::from(0u8).into(),
             output_index: 0,
         };
         blend_notes.push(ServiceNote {
@@ -127,7 +127,7 @@ fn create_utxos(
         let note_sdp = Note::new(100, pk_sdp);
         let utxo = Utxo {
             note: note_sdp,
-            tx_hash: BigUint::from(0u8).into(),
+            transfer_hash: BigUint::from(0u8).into(),
             output_index,
         };
         sdp_notes.push(ServiceNote {
@@ -149,7 +149,7 @@ fn create_utxos(
         let faucet_pk = faucet_sk.to_public_key();
         utxos.push(Utxo {
             note: Note::new(faucet_value, faucet_pk),
-            tx_hash: BigUint::from(0u8).into(),
+            transfer_hash: BigUint::from(0u8).into(),
             output_index,
         });
         FaucetInfo {

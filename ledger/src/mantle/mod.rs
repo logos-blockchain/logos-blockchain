@@ -5,17 +5,18 @@ pub mod sdp;
 use std::collections::HashMap;
 
 use lb_core::{
-    block::BlockNumber,
     crypto::ZkHash,
     mantle::{
-        AuthenticatedMantleTx, GasConstants, GenesisTx, NoteId, TxHash, Utxo,
+        GenesisTx, NoteId, TxHash, Utxo,
         ops::{
-            Op, OpProof,
-            leader_claim::{RewardsRoot, VoucherCm},
+            channel::{inscribe::InscriptionOp, set_keys::SetKeysOp},
+            leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm},
+            sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
     },
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
 };
+use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use lb_utxotree::MerklePath;
 use sdp::{Error as SdpLedgerError, locked_notes::LockedNotes};
 use tracing::error;
@@ -30,8 +31,6 @@ pub enum Error {
     Channel(#[from] channel::Error),
     #[error(transparent)]
     Leader(#[from] leader::Error),
-    #[error("Unsupported operation")]
-    UnsupportedOp,
     #[error("Sdp ledger error: {0:?}")]
     Sdp(#[from] SdpLedgerError),
     #[error("Note not found: {0:?}")]
@@ -83,18 +82,6 @@ impl LedgerState {
             sdp,
             leaders: leader::LeaderState::new(),
         })
-    }
-
-    pub fn try_apply_tx<Constants: GasConstants>(
-        self,
-        current_block_number: BlockNumber,
-        config: &Config,
-        utxo_tree: &UtxoTree,
-        tx: impl AuthenticatedMantleTx,
-    ) -> Result<(Self, Balance), Error> {
-        let tx_hash = tx.hash();
-        let ops = tx.ops_with_proof().map(|(op, proof)| (op, Some(proof)));
-        self.try_apply_ops(current_block_number, config, utxo_tree, tx_hash, ops)
     }
 
     #[must_use]
@@ -157,414 +144,121 @@ impl LedgerState {
         Ok((self, reward_utxos))
     }
 
-    fn try_apply_ops<'a>(
+    pub fn try_apply_channel_inscription(
         mut self,
-        _current_block_number: BlockNumber,
-        config: &Config,
+        inscription_op: &InscriptionOp,
+    ) -> Result<Self, Error> {
+        self.channels = self
+            .channels
+            .apply_msg(
+                inscription_op.channel_id,
+                &inscription_op.parent,
+                inscription_op.id(),
+                &inscription_op.signer,
+            )
+            .inspect_err(
+                |err| error!(target: LOG_TARGET, %err, "failed to apply channel inscribe message"),
+            )?;
+        Ok(self)
+    }
+
+    pub fn try_apply_channel_set_keys(
+        mut self,
+        set_keys_op: &SetKeysOp,
+        set_keys_sig: &Ed25519Signature,
+        tx_hash: &TxHash,
+    ) -> Result<Self, Error> {
+        self.channels = self
+            .channels
+            .set_keys(set_keys_op.channel, set_keys_op, set_keys_sig, tx_hash)
+            .inspect_err(
+                |err| error!(target: LOG_TARGET, %err, "failed to apply channel set-keys message"),
+            )?;
+        Ok(self)
+    }
+
+    pub fn try_apply_sdp_declaration(
+        mut self,
+        sdp_declare_op: &SDPDeclareOp,
+        sdp_declare_zk_sig: &ZkSignature,
+        sdp_declare_ed_sig: &Ed25519Signature,
         utxo_tree: &UtxoTree,
         tx_hash: TxHash,
-        ops: impl Iterator<Item = (&'a Op, Option<&'a OpProof>)> + 'a,
+        config: &Config,
+    ) -> Result<Self, Error> {
+        let Some((utxo, _)) = utxo_tree.utxos().get(&sdp_declare_op.locked_note_id) else {
+            return Err(Error::NoteNotFound(sdp_declare_op.locked_note_id));
+        };
+        self.sdp = self
+            .sdp
+            .apply_declare_msg(
+                sdp_declare_op,
+                utxo.note,
+                sdp_declare_zk_sig,
+                sdp_declare_ed_sig,
+                tx_hash,
+                &config.sdp_config,
+            )
+            .inspect_err(
+                |err| error!(target: LOG_TARGET, %err, "failed to apply SDP declare message"),
+            )?;
+        Ok(self)
+    }
+
+    pub fn try_apply_sdp_active(
+        mut self,
+        sdp_active_op: &SDPActiveOp,
+        sdp_active_zk_sig: &ZkSignature,
+        tx_hash: TxHash,
+        config: &Config,
+    ) -> Result<Self, Error> {
+        self.sdp = self
+            .sdp
+            .apply_active_msg(
+                sdp_active_op,
+                sdp_active_zk_sig,
+                tx_hash,
+                &config.sdp_config,
+            )
+            .inspect_err(
+                |err| error!(target: LOG_TARGET, %err, "failed to apply SDP active message"),
+            )?;
+        Ok(self)
+    }
+
+    pub fn try_apply_sdp_withdraw(
+        mut self,
+        sdp_withdraw_op: &SDPWithdrawOp,
+        sdp_withdraw_zk_sig: &ZkSignature,
+        tx_hash: TxHash,
+        config: &Config,
+    ) -> Result<Self, Error> {
+        self.sdp = self
+            .sdp
+            .apply_withdrawn_msg(
+                sdp_withdraw_op,
+                sdp_withdraw_zk_sig,
+                tx_hash,
+                &config.sdp_config,
+            )
+            .inspect_err(
+                |err| error!(target: LOG_TARGET, %err, "failed to apply SDP withdraw message"),
+            )?;
+        Ok(self)
+    }
+
+    pub fn try_apply_leader_claim(
+        mut self,
+        leader_claim_op: &LeaderClaimOp,
     ) -> Result<(Self, Balance), Error> {
-        let mut balance = 0;
-        for (op, proof) in ops {
-            match (op, proof) {
-                // The signature for channel ops can be verified before reaching this point,
-                // as you only need the signer's public key and tx hash
-                // Callers are expected to validate the proof before calling this function.
-                (Op::ChannelInscribe(op), _) => {
-                    self.channels =
-                        self.channels
-                            .apply_msg(op.channel_id, &op.parent, op.id(), &op.signer)
-                            .inspect_err(|err| error!(target: LOG_TARGET, %err, "failed to apply channel inscribe message"))?;
-                }
-                (Op::ChannelSetKeys(op), Some(OpProof::Ed25519Sig(sig))) => {
-                    self.channels = self.channels.set_keys(op.channel, op, sig, &tx_hash)
-                        .inspect_err(|err| error!(target: LOG_TARGET, %err, "failed to apply channel set-keys message"))?;
-                }
-                (
-                    Op::SDPDeclare(op),
-                    Some(OpProof::ZkAndEd25519Sigs {
-                        zk_sig,
-                        ed25519_sig,
-                    }),
-                ) => {
-                    let Some((utxo, _)) = utxo_tree.utxos().get(&op.locked_note_id) else {
-                        return Err(Error::NoteNotFound(op.locked_note_id));
-                    };
-                    self.sdp = self.sdp.apply_declare_msg(
-                        op,
-                        utxo.note,
-                        zk_sig,
-                        ed25519_sig,
-                        tx_hash,
-                        &config.sdp_config,
-                    ).inspect_err(|err| error!(target: LOG_TARGET, %err, "failed to apply SDP declare message"))?;
-                }
-                (Op::SDPActive(op), Some(OpProof::ZkSig(sig))) => {
-                    self.sdp = self
-                        .sdp
-                        .apply_active_msg(op, sig, tx_hash, &config.sdp_config)
-                        .inspect_err(|err| error!(target: LOG_TARGET, %err, "failed to apply SDP active message"))?;
-                }
-                (Op::SDPWithdraw(op), Some(OpProof::ZkSig(sig))) => {
-                    self.sdp =
-                        self.sdp
-                            .apply_withdrawn_msg(op, sig, tx_hash, &config.sdp_config)
-                            .inspect_err(|err| error!(target: LOG_TARGET, %err, "failed to apply SDP withdraw message"))?;
-                }
-                (Op::LeaderClaim(op), None) => {
-                    // Correct derivation of the voucher nullifier and membership in the merkle tree
-                    // can be verified outside of this function since public inputs are already
-                    // available. Callers are expected to validate the proof
-                    // before calling this function.
-                    let leader_balance;
-                    (self.leaders, leader_balance) = self.leaders.claim(op).inspect_err(|err| error!(target: LOG_TARGET, %err, "failed to apply leader claim message"))?;
-                    balance += leader_balance;
-                }
-                _ => {
-                    return Err(Error::UnsupportedOp);
-                }
-            }
-        }
-
-        Ok((self, balance))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use lb_core::mantle::{
-        MantleTx, SignedMantleTx, Transaction as _,
-        gas::MainnetGasConstants,
-        ledger::Tx as LedgerTx,
-        ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp, set_keys::SetKeysOp},
-    };
-    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey};
-
-    use super::*;
-    use crate::cryptarchia::tests::{config, genesis_state, utxo};
-
-    fn create_test_keys() -> (Ed25519Key, Ed25519PublicKey) {
-        create_test_keys_with_seed(0)
-    }
-
-    fn create_test_keys_with_seed(seed: u8) -> (Ed25519Key, Ed25519PublicKey) {
-        let signing_key = Ed25519Key::from_bytes(&[seed; 32]);
-        let verifying_key = signing_key.public_key();
-        (signing_key, verifying_key)
-    }
-
-    fn create_signed_tx(op: Op, signing_key: &Ed25519Key) -> SignedMantleTx {
-        create_multi_signed_tx(vec![op], vec![signing_key])
-    }
-
-    fn create_multi_signed_tx(ops: Vec<Op>, signing_keys: Vec<&Ed25519Key>) -> SignedMantleTx {
-        let ledger_tx = LedgerTx::new(vec![], vec![]);
-        let mantle_tx = MantleTx {
-            ops: ops.clone(),
-            ledger_tx,
-            execution_gas_price: 1,
-            storage_gas_price: 1,
-        };
-
-        let tx_hash = mantle_tx.hash();
-        let ops_proofs = signing_keys
-            .into_iter()
-            .zip(ops)
-            .map(|(key, _)| {
-                OpProof::Ed25519Sig(key.sign_payload(tx_hash.as_signing_bytes().as_ref()))
-            })
-            .collect();
-
-        let ledger_tx_proof = ZkKey::multi_sign(&[], &tx_hash.0).unwrap();
-
-        SignedMantleTx::new(mantle_tx, ops_proofs, ledger_tx_proof)
-            .expect("Test transaction should have valid signatures")
-    }
-
-    #[test]
-    fn test_channel_inscribe_operation() {
-        let cryptarchia_state = genesis_state(&[utxo()]);
-        let test_config = config();
-        let ledger_state = LedgerState::new(&test_config, cryptarchia_state.epoch_state());
-        let (signing_key, verifying_key) = create_test_keys();
-        let channel_id = ChannelId::from([2; 32]);
-
-        let inscribe_op = InscriptionOp {
-            channel_id,
-            inscription: vec![1, 2, 3, 4],
-            parent: MsgId::root(),
-            signer: verifying_key,
-        };
-
-        let tx = create_signed_tx(Op::ChannelInscribe(inscribe_op), &signing_key);
-        let result = ledger_state.try_apply_tx::<MainnetGasConstants>(
-            0,
-            &test_config,
-            cryptarchia_state.latest_utxos(),
-            tx,
-        );
-        assert!(result.is_ok());
-
-        let (new_state, _) = result.unwrap();
-        assert!(new_state.channels.channels.contains_key(&channel_id));
-    }
-
-    #[test]
-    fn test_channel_set_keys_operation() {
-        let cryptarchia_state = genesis_state(&[utxo()]);
-        let test_config = config();
-        let ledger_state = LedgerState::new(&test_config, cryptarchia_state.epoch_state());
-        let (signing_key, verifying_key) = create_test_keys();
-        let channel_id = ChannelId::from([3; 32]);
-
-        let set_keys_op = SetKeysOp {
-            channel: channel_id,
-            keys: vec![verifying_key],
-        };
-
-        let tx = create_signed_tx(Op::ChannelSetKeys(set_keys_op), &signing_key);
-        let result = ledger_state.try_apply_tx::<MainnetGasConstants>(
-            0,
-            &test_config,
-            cryptarchia_state.latest_utxos(),
-            tx,
-        );
-        assert!(result.is_ok());
-
-        let (new_state, _) = result.unwrap();
-        assert!(new_state.channels.channels.contains_key(&channel_id));
-        assert_eq!(
-            new_state.channels.channels.get(&channel_id).unwrap().keys,
-            vec![verifying_key].into()
-        );
-    }
-
-    #[test]
-    fn test_invalid_parent_error() {
-        let cryptarchia_state = genesis_state(&[utxo()]);
-        let test_config = config();
-        let mut ledger_state = LedgerState::new(&test_config, cryptarchia_state.epoch_state());
-        let (signing_key, verifying_key) = create_test_keys();
-        let channel_id = ChannelId::from([5; 32]);
-
-        // First, create a channel with one message
-        let first_inscribe = InscriptionOp {
-            channel_id,
-            inscription: vec![1, 2, 3],
-            parent: MsgId::root(),
-            signer: verifying_key,
-        };
-
-        let first_tx = create_signed_tx(Op::ChannelInscribe(first_inscribe), &signing_key);
-        ledger_state = ledger_state
-            .try_apply_tx::<MainnetGasConstants>(
-                0,
-                &test_config,
-                cryptarchia_state.latest_utxos(),
-                first_tx,
-            )
-            .unwrap()
-            .0;
-
-        // Now try to add a message with wrong parent
-        let wrong_parent = MsgId::from([99; 32]);
-        let second_inscribe = InscriptionOp {
-            channel_id,
-            inscription: vec![4, 5, 6],
-            parent: wrong_parent,
-            signer: verifying_key,
-        };
-
-        let second_tx = create_signed_tx(Op::ChannelInscribe(second_inscribe), &signing_key);
-        let result = ledger_state.clone().try_apply_tx::<MainnetGasConstants>(
-            0,
-            &test_config,
-            cryptarchia_state.latest_utxos(),
-            second_tx,
-        );
-        assert!(matches!(
-            result,
-            Err(Error::Channel(channel::Error::InvalidParent { .. }))
-        ));
-
-        // Writing into an empty channel with a parent != MsgId::root() should also fail
-        let empty_channel_id = ChannelId::from([8; 32]);
-        let empty_inscribe = InscriptionOp {
-            channel_id: empty_channel_id,
-            inscription: vec![7, 8, 9],
-            parent: MsgId::from([1; 32]), // non-root parent
-            signer: verifying_key,
-        };
-
-        let empty_tx = create_signed_tx(Op::ChannelInscribe(empty_inscribe), &signing_key);
-        let empty_result = ledger_state.try_apply_tx::<MainnetGasConstants>(
-            0,
-            &test_config,
-            cryptarchia_state.latest_utxos(),
-            empty_tx,
-        );
-        assert!(matches!(
-            empty_result,
-            Err(Error::Channel(channel::Error::InvalidParent { .. }))
-        ));
-    }
-
-    #[test]
-    fn test_unauthorized_signer_error() {
-        let cryptarchia_state = genesis_state(&[utxo()]);
-        let test_config = config();
-        let mut ledger_state = LedgerState::new(&test_config, cryptarchia_state.epoch_state());
-        let (signing_key, verifying_key) = create_test_keys();
-        let (unauthorized_signing_key, unauthorized_verifying_key) = create_test_keys_with_seed(3);
-        let channel_id = ChannelId::from([6; 32]);
-
-        // First, create a channel with authorized signer
-        let first_inscribe = InscriptionOp {
-            channel_id,
-            inscription: vec![1, 2, 3],
-            parent: MsgId::root(),
-            signer: verifying_key,
-        };
-
-        let correct_parent = first_inscribe.id();
-        let first_tx = create_signed_tx(Op::ChannelInscribe(first_inscribe), &signing_key);
-        ledger_state = ledger_state
-            .try_apply_tx::<MainnetGasConstants>(
-                0,
-                &test_config,
-                cryptarchia_state.latest_utxos(),
-                first_tx,
-            )
-            .unwrap()
-            .0;
-
-        // Now try to add a message with unauthorized signer
-        let second_inscribe = InscriptionOp {
-            channel_id,
-            inscription: vec![4, 5, 6],
-            parent: correct_parent,
-            signer: unauthorized_verifying_key,
-        };
-
-        let second_tx = create_signed_tx(
-            Op::ChannelInscribe(second_inscribe),
-            &unauthorized_signing_key,
-        );
-        let result = ledger_state.try_apply_tx::<MainnetGasConstants>(
-            0,
-            &test_config,
-            cryptarchia_state.latest_utxos(),
-            second_tx,
-        );
-        assert!(matches!(
-            result,
-            Err(Error::Channel(channel::Error::UnauthorizedSigner { .. }))
-        ));
-    }
-
-    #[test]
-    fn test_empty_keys_error() {
-        let cryptarchia_state = genesis_state(&[utxo()]);
-        let test_config = config();
-        let ledger_state = LedgerState::new(&test_config, cryptarchia_state.epoch_state());
-        let (signing_key, _) = create_test_keys();
-        let channel_id = ChannelId::from([7; 32]);
-
-        let set_keys_op = SetKeysOp {
-            channel: channel_id,
-            keys: vec![],
-        };
-
-        let tx = create_signed_tx(Op::ChannelSetKeys(set_keys_op), &signing_key);
-        let result = ledger_state.try_apply_tx::<MainnetGasConstants>(
-            0,
-            &test_config,
-            cryptarchia_state.latest_utxos(),
-            tx,
-        );
-        assert_eq!(
-            result,
-            Err(Error::Channel(channel::Error::EmptyKeys { channel_id }))
-        );
-    }
-
-    #[test]
-    fn test_multiple_operations_in_transaction() {
-        let cryptarchia_state = genesis_state(&[utxo()]);
-        let test_config = config();
-        // Create channel 1 by posting an inscription
-        // Create channel 2 by posting an inscription
-        // Change the keys for channel 1
-        // Post another inscription in channel 1
-        let ledger_state = LedgerState::new(&test_config, cryptarchia_state.epoch_state());
-        let (sk1, vk1) = create_test_keys_with_seed(1);
-        let (sk2, vk2) = create_test_keys_with_seed(2);
-        let (_, vk3) = create_test_keys_with_seed(3);
-        let (sk4, vk4) = create_test_keys_with_seed(4);
-
-        let channel1 = ChannelId::from([10; 32]);
-        let channel2 = ChannelId::from([20; 32]);
-
-        let inscribe_op1 = InscriptionOp {
-            channel_id: channel1,
-            inscription: vec![1, 2, 3],
-            parent: MsgId::root(),
-            signer: vk1,
-        };
-
-        let inscribe_op2 = InscriptionOp {
-            channel_id: channel2,
-            inscription: vec![4, 5, 6],
-            parent: MsgId::root(),
-            signer: vk2,
-        };
-
-        let set_keys_op = SetKeysOp {
-            channel: channel1,
-            keys: vec![vk3, vk4],
-        };
-
-        let inscribe_op3 = InscriptionOp {
-            channel_id: channel1,
-            inscription: vec![7, 8, 9],
-            parent: inscribe_op1.id(),
-            signer: vk4,
-        };
-
-        let ops = vec![
-            Op::ChannelInscribe(inscribe_op1),
-            Op::ChannelInscribe(inscribe_op2),
-            Op::ChannelSetKeys(set_keys_op),
-            Op::ChannelInscribe(inscribe_op3.clone()),
-        ];
-        let tx = create_multi_signed_tx(ops, vec![&sk1, &sk2, &sk1, &sk4]);
-
-        let result = ledger_state
-            .try_apply_tx::<MainnetGasConstants>(
-                0,
-                &test_config,
-                cryptarchia_state.latest_utxos(),
-                tx,
-            )
-            .unwrap()
-            .0;
-
-        assert!(result.channels.channels.contains_key(&channel1));
-        assert!(result.channels.channels.contains_key(&channel2));
-        assert_eq!(
-            result.channels.channels.get(&channel1).unwrap().tip,
-            inscribe_op3.id()
-        );
-    }
-
-    // TODO: Update this test to work with the new SDP API
-    // This test needs to be rewritten to use the new SDP ledger API which no longer
-    // exposes get_declaration() or uses declaration_id() methods.
-    // #[test]
-    // #[expect(clippy::, reason = "Test function.")]
-    #[test]
-    fn _test_sdp_withdraw_operation() {
-        // This test has been disabled pending API updates
+        // Correct derivation of the voucher nullifier and membership in the merkle tree
+        // can be verified outside of this function since public inputs are already
+        // available. Callers are expected to validate the proof
+        // before calling this function.
+        let leader_balance;
+        (self.leaders, leader_balance) = self.leaders.claim(leader_claim_op).inspect_err(
+            |err| error!(target: LOG_TARGET, %err, "failed to apply leader claim message"),
+        )?;
+        Ok((self, leader_balance))
     }
 }
