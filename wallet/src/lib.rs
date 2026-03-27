@@ -486,8 +486,8 @@ mod tests {
             .fund_tx::<Gas>(&tx_builder, alice, [alice])
             .unwrap();
 
-        assert_eq!(2927, funded_tx_builder.gas_cost::<Gas>());
-        assert_eq!(2927, funded_tx_builder.net_balance());
+        assert_eq!(2924, funded_tx_builder.gas_cost::<Gas>());
+        assert_eq!(2924, funded_tx_builder.net_balance());
         assert_eq!(0, funded_tx_builder.funding_delta::<Gas>());
 
         let funded_tx = funded_tx_builder.build();
@@ -498,7 +498,7 @@ mod tests {
         assert_eq!(
             funded_tx.ledger_tx.outputs,
             vec![Note {
-                value: 2073,
+                value: 2076,
                 pk: alice,
             }]
         );
@@ -596,7 +596,7 @@ mod tests {
 
         // Determine gas cost without change note
         assert_eq!(
-            2887,
+            2884,
             tx_builder
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
@@ -608,7 +608,7 @@ mod tests {
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(2887, alice))],
+                [Utxo::new(tx_hash(0), 0, Note::new(2884, alice))],
                 &ledger_config(),
             ),
         );
@@ -623,7 +623,7 @@ mod tests {
 
         // Determine gas cost with change note
         assert_eq!(
-            2927,
+            2924,
             tx_builder
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
@@ -631,7 +631,7 @@ mod tests {
                 .gas_cost::<Gas>()
         );
 
-        for value in 2888..=2926 {
+        for value in 2885..=2924 {
             // this region of note values will fail to fund the tx.
             // We can fund the tx if the note value is exactly the gas cost without change
             // note
@@ -655,7 +655,7 @@ mod tests {
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(2928, alice))],
+                [Utxo::new(tx_hash(0), 0, Note::new(2925, alice))],
                 &ledger_config(),
             ),
         );

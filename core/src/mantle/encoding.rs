@@ -8,6 +8,7 @@ use nom::{
     multi::count,
     number::complete::{le_u32, le_u64, u8 as decode_u8},
 };
+use tracing::error;
 
 use crate::{
     mantle::{
@@ -65,7 +66,7 @@ const MAX_DECODE_INPUT_COUNT: u8 = 250;
 /// Maximum number of outputs that can be decoded in a single ledger
 /// transaction. Protects against unbounded iterative allocation in
 /// `decode_outputs()`.
-const MAX_DECODE_OUTPUT_COUNT: u32 = 4096;
+const MAX_DECODE_OUTPUT_COUNT: u8 = u8::MAX;
 
 // ==============================================================================
 // Top-Level Transaction Decoders
@@ -324,12 +325,7 @@ fn decode_inputs(input: &[u8]) -> IResult<&[u8], Vec<NoteId>> {
 
 fn decode_outputs(input: &[u8]) -> IResult<&[u8], Vec<Note>> {
     // Outputs = OutputCount *Note
-    let (input, output_count) = decode_uint32(input)?;
-
-    // Validate output count to prevent unbounded iterative allocation
-    if output_count > MAX_DECODE_OUTPUT_COUNT {
-        return Err(nom::Err::Error(Error::new(input, ErrorKind::TooLarge)));
-    }
+    let (input, output_count) = decode_byte(input)?;
 
     count(decode_note, output_count as usize).parse(input)
 }
@@ -635,7 +631,15 @@ fn encode_inputs(inputs: &[NoteId]) -> Vec<u8> {
 
 fn encode_outputs(outputs: &[Note]) -> Vec<u8> {
     let mut bytes = Vec::new();
-    bytes.extend(encode_uint32(outputs.len() as u32));
+    if outputs.len() > MAX_DECODE_OUTPUT_COUNT as usize {
+        let msg = format!(
+            "Fatal error in 'encode_outputs' - {} outputs clipped to {MAX_DECODE_OUTPUT_COUNT}",
+            outputs.len()
+        );
+        error!("{msg}");
+        panic!("{msg}");
+    }
+    bytes.extend(encode_byte(outputs.len() as u8));
     for output in outputs {
         bytes.extend(encode_note(output));
     }
@@ -772,6 +776,8 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::panic;
+
     use ark_ff::Field as _;
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use num_bigint::BigUint;
@@ -876,7 +882,7 @@ mod tests {
         let test_vector = String::new()
             + "00"                                                               // OpCount=0u8
             + "00"                                                               // LedgerInputCount=0u8
-            + "00000000"                                                         // LedgerOutputCount (4 bytes for 0 outputs)
+            + "00"                                                               // LedgerOutputCount=0u8
             + "6400000000000000"                                                 // ExecutionGasPrice
             + "3200000000000000"                                                 // StorageGasPrice
             + "fcdf9c12b2871b271f64f39722ce0f5ff1809d5f61e11233387d9b04af2c1da2" // ZkSignature (128Byte)
@@ -939,11 +945,11 @@ mod tests {
             + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" // Parent (32Byte)
             + "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c" // Signer (32Byte)
             + "00"                                                               // LedgerInputCount
-            + "00000000"                                                         // LedgerOutputCount (4 bytes for 0 outputs)
+            + "00"                                                               // LedgerOutputCount
             + "6400000000000000"                                                 // ExecutionGasPrice
             + "3200000000000000"                                                 // StorageGasPrice
-            + "da94b51b92b5586d1f1649954be5118177175fb2afefdde63c75f747cad1a633" // Signature (64Byte)
-            + "c4d91310e83d64afdeb1002625cf0cb05e34ee30778c1ea566b2776110cd300e"
+            + "706fb09b0f7b62ee54ca92b0aa5ab1a2c741ea99fcae14e1846ea15349811cbb" // Signature (64Byte)
+            + "a19ed0ce381f78ad721fc9a61cb2ff1e3e2c27f5b08ba7337b3c3558b8c37c09"
             + "f8bdd66cbbbae6cba142f2c15ccc8b0c3cb10566e7ca89978ef987515f922c95" // ZkSignature (128Byte)
             + "ef2c897d66d12352fcbf7657da8cec24a3e8a6b9338278b0e7be953be416ce25"
             + "10b53711585e78e1e4d402f7348f72adc134608a520e8b7ec5dad75b287f14a5"
@@ -1871,19 +1877,14 @@ mod tests {
 
     #[test]
     fn test_reject_excessive_output_count() {
-        // Test that output_count > MAX_OUTPUT_COUNT is rejected
-        let malicious_input = (MAX_DECODE_OUTPUT_COUNT + 1).to_le_bytes().to_vec();
+        let note = Note::new(1000, ZkPublicKey::from(BigUint::from(42u64)));
+        let outputs = [note; MAX_DECODE_OUTPUT_COUNT as usize + 1];
 
-        // Should fail with TooLarge error
-        let result = decode_outputs(&malicious_input);
+        // Should panic
+        let result = panic::catch_unwind(|| {
+            encode_outputs(&outputs);
+        });
         assert!(result.is_err(), "Should reject excessive output count");
-
-        match result {
-            Err(nom::Err::Error(e)) => {
-                assert_eq!(e.code, ErrorKind::TooLarge);
-            }
-            _ => panic!("Expected TooLarge error"),
-        }
     }
 
     #[test]
