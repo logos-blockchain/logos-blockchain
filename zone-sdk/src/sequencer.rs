@@ -781,11 +781,8 @@ fn create_set_keys_tx(
         keys,
     };
 
-    let ledger_tx = LedgerTx::new(vec![], vec![]);
-
     let set_keys_tx = MantleTx {
         ops: vec![Op::ChannelSetKeys(set_keys_op)],
-        ledger_tx,
         storage_gas_price: 0,
         execution_gas_price: 0,
     };
@@ -795,8 +792,6 @@ fn create_set_keys_tx(
 
     SignedMantleTx {
         ops_proofs: vec![OpProof::Ed25519Sig(signature)],
-        ledger_tx_proof: ZkKey::multi_sign(&[], tx_hash.as_ref())
-            .expect("multi-sign with empty key set"),
         mantle_tx: set_keys_tx,
     }
 }
