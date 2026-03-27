@@ -7,7 +7,8 @@ use derivative::Derivative;
 use lb_core::{
     crypto::{ZkDigest, ZkHasher},
     mantle::{
-        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value, gas::GasConstants,
+        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value,
+        gas::{Gas, GasConstants},
     },
     proofs::leader_proof::{self, LeaderPublic},
 };

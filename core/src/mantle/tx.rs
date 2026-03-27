@@ -166,8 +166,8 @@ impl GasCost for MantleTx {
         self.ops
             .iter()
             .map(Op::execution_gas::<Constants>)
-            .sum::<Gas>();
-        let storage_gas = self.signed_serialized_size();
+            .sum::<Gas>()
+    }
 
     fn storage_gas_consumption(&self) -> Gas {
         self.signed_serialized_size()
@@ -368,8 +368,8 @@ impl GasCost for SignedMantleTx {
             .ops
             .iter()
             .map(Op::execution_gas::<Constants>)
-            .sum::<Gas>();
-        let storage_gas = self.gas_storage_size();
+            .sum::<Gas>()
+    }
 
     fn storage_gas_consumption(&self) -> Gas {
         self.gas_storage_size()
