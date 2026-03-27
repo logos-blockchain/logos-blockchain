@@ -18,10 +18,11 @@ use lb_core::{
         AuthenticatedMantleTx, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo, Value,
         gas::MainnetGasConstants,
         ops::{
-            channel::ChannelId,
+            channel::{ChannelId, inscribe::InscriptionOp, set_keys::SetKeysOp},
             leader_claim::{
                 LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier, VoucherSecret,
             },
+            sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
         tx_builder::MantleTxBuilder,
     },
@@ -507,7 +508,158 @@ where
         }
     }
 
-    #[expect(clippy::too_many_lines, reason = "TODO: address this at some point")]
+    async fn sign_insciption(
+        tx_hash: TxHash,
+        inscribe_op: &InscriptionOp,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<OpProof, WalletServiceError> {
+        let ed25519_sig = Self::sign_ed25519(tx_hash, inscribe_op.signer, kms).await?;
+        Ok(OpProof::Ed25519Sig(ed25519_sig))
+    }
+
+    async fn sign_channel_set_key(
+        tx_hash: TxHash,
+        set_keys_op: &SetKeysOp,
+        ledger: &LedgerState,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<OpProof, WalletServiceError> {
+        let channel = ledger
+            .mantle_ledger()
+            .channels()
+            .channel_state(&set_keys_op.channel)
+            .ok_or(WalletServiceError::MissingChannelState(set_keys_op.channel))?;
+
+        let authorized_key = channel.keys[0]; // First key is authorized key (guaranteed non-empty)
+        let ed25519_sig = Self::sign_ed25519(tx_hash, authorized_key, kms).await?;
+
+        Ok(OpProof::Ed25519Sig(ed25519_sig))
+    }
+
+    async fn sign_sdp_declare(
+        tx_hash: TxHash,
+        declare_op: &SDPDeclareOp,
+        ledger: &LedgerState,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<OpProof, WalletServiceError> {
+        // For a new declaration, the note is still in the UTXOs (not yet locked).
+        // We look it up from the UTXO set to get the public key for signing.
+        let utxo_tree = ledger.latest_utxos();
+        info!(
+            "SDPDeclare: Looking for note_id={}, utxo_tree has {} UTXOs",
+            hex::encode(declare_op.locked_note_id.as_bytes()),
+            utxo_tree.size()
+        );
+        let note = utxo_tree
+            .utxos()
+            .get(&declare_op.locked_note_id)
+            .map(|(utxo, _)| utxo.note)
+            .ok_or(WalletServiceError::MissingLockedNote(
+                declare_op.locked_note_id,
+            ))?;
+
+        let zk_sig = Self::sign_zksig(tx_hash, [note.pk, declare_op.zk_id], kms).await?;
+        let ed25519_sig = Self::sign_ed25519(tx_hash, declare_op.provider_id.0, kms).await?;
+
+        Ok(OpProof::ZkAndEd25519Sigs {
+            zk_sig,
+            ed25519_sig,
+        })
+    }
+
+    async fn sign_sdp_withdraw(
+        tx_hash: TxHash,
+        withdraw_op: &SDPWithdrawOp,
+        ledger: &LedgerState,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<OpProof, WalletServiceError> {
+        let declaration = ledger
+            .mantle_ledger()
+            .sdp_ledger()
+            .get_declaration(&withdraw_op.declaration_id)
+            .ok_or(WalletServiceError::MissingDeclaration(
+                withdraw_op.declaration_id,
+            ))?;
+
+        let locked_note = ledger
+            .mantle_ledger()
+            .locked_notes()
+            .get(&declaration.locked_note_id)
+            .ok_or(WalletServiceError::MissingLockedNote(
+                declaration.locked_note_id,
+            ))?;
+
+        let zk_sig = Self::sign_zksig(tx_hash, [locked_note.pk, declaration.zk_id], kms).await?;
+
+        Ok(OpProof::ZkSig(zk_sig))
+    }
+
+    async fn sign_sdp_active(
+        tx_hash: TxHash,
+        active_op: &SDPActiveOp,
+        ledger: &LedgerState,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<OpProof, WalletServiceError> {
+        let declaration = ledger
+            .mantle_ledger()
+            .sdp_ledger()
+            .get_declaration(&active_op.declaration_id)
+            .ok_or(WalletServiceError::MissingDeclaration(
+                active_op.declaration_id,
+            ))?;
+
+        let locked_note = ledger
+            .mantle_ledger()
+            .locked_notes()
+            .get(&declaration.locked_note_id)
+            .ok_or(WalletServiceError::MissingLockedNote(
+                declaration.locked_note_id,
+            ))?;
+
+        let zk_sig = Self::sign_zksig(tx_hash, [locked_note.pk, declaration.zk_id], kms).await?;
+
+        Ok(OpProof::ZkSig(zk_sig))
+    }
+
+    async fn sign_leader_claim(
+        tx_hash: TxHash,
+        leader_claim_op: &LeaderClaimOp,
+        ledger: &LedgerState,
+        wallet: &Wallet,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<OpProof, WalletServiceError> {
+        let (voucher_master_key_id, voucher_index) = wallet
+            .get_voucher_by_nullifier(&leader_claim_op.voucher_nullifier)
+            .ok_or(WalletServiceError::VoucherNotFound(
+                leader_claim_op.voucher_nullifier,
+            ))?;
+        let voucher_secret =
+            Self::derive_voucher_from_kms(kms, voucher_master_key_id.clone(), *voucher_index).await;
+
+        let voucher_cm = VoucherCm::from_secret(voucher_secret);
+        let path = ledger
+            .mantle_ledger()
+            .voucher_merkle_path(voucher_cm)
+            .ok_or(WalletServiceError::VoucherMerklePathNotFound(voucher_cm))?;
+        let rewards_root = leader_claim_op.rewards_root;
+
+        // TODO: This should happen in KMS
+        let poc = tokio::task::spawn_blocking(move || {
+            Self::generate_poc(voucher_secret, &path, rewards_root, tx_hash)
+        })
+        .await??;
+
+        Ok(OpProof::PoC(poc))
+    }
+
+    async fn sign_transfer(
+        tx_hash: TxHash,
+        input_pks: Vec<ZkPublicKey>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<OpProof, WalletServiceError> {
+        let zk_sig = Self::sign_zksig(tx_hash, input_pks, kms).await?;
+        Ok(OpProof::ZkSig(zk_sig))
+    }
+
     async fn sign_tx(
         tx_builder: MantleTxBuilder,
         ledger: LedgerState,
@@ -528,101 +680,24 @@ where
         for op in &mantle_tx.ops {
             let proof = match op {
                 Op::ChannelInscribe(inscribe_op) => {
-                    let ed25519_sig = Self::sign_ed25519(tx_hash, inscribe_op.signer, kms).await?;
-                    OpProof::Ed25519Sig(ed25519_sig)
+                    Self::sign_insciption(tx_hash, inscribe_op, kms).await?
                 }
                 Op::ChannelSetKeys(set_keys_op) => {
-                    let channel = ledger
-                        .mantle_ledger()
-                        .channels()
-                        .channel_state(&set_keys_op.channel)
-                        .ok_or(WalletServiceError::MissingChannelState(set_keys_op.channel))?;
-
-                    let authorized_key = channel.keys[0]; // First key is authorized key (guaranteed non-empty)
-                    let ed25519_sig = Self::sign_ed25519(tx_hash, authorized_key, kms).await?;
-
-                    OpProof::Ed25519Sig(ed25519_sig)
+                    Self::sign_channel_set_key(tx_hash, set_keys_op, &ledger, kms).await?
                 }
                 Op::SDPDeclare(declare_op) => {
-                    // For a new declaration, the note is still in the UTXOs (not yet locked).
-                    // We look it up from the UTXO set to get the public key for signing.
-                    let utxo_tree = ledger.latest_utxos();
-                    info!(
-                        "SDPDeclare: Looking for note_id={}, utxo_tree has {} UTXOs",
-                        hex::encode(declare_op.locked_note_id.as_bytes()),
-                        utxo_tree.size()
-                    );
-                    let note = utxo_tree
-                        .utxos()
-                        .get(&declare_op.locked_note_id)
-                        .map(|(utxo, _)| utxo.note)
-                        .ok_or(WalletServiceError::MissingLockedNote(
-                            declare_op.locked_note_id,
-                        ))?;
-
-                    let zk_sig =
-                        Self::sign_zksig(tx_hash, [note.pk, declare_op.zk_id], kms).await?;
-                    let ed25519_sig =
-                        Self::sign_ed25519(tx_hash, declare_op.provider_id.0, kms).await?;
-
-                    OpProof::ZkAndEd25519Sigs {
-                        zk_sig,
-                        ed25519_sig,
-                    }
+                    Self::sign_sdp_declare(tx_hash, declare_op, &ledger, kms).await?
                 }
                 Op::SDPWithdraw(withdraw_op) => {
-                    let declaration = ledger
-                        .mantle_ledger()
-                        .sdp_ledger()
-                        .get_declaration(&withdraw_op.declaration_id)
-                        .ok_or(WalletServiceError::MissingDeclaration(
-                            withdraw_op.declaration_id,
-                        ))?;
-
-                    let locked_note = ledger
-                        .mantle_ledger()
-                        .locked_notes()
-                        .get(&declaration.locked_note_id)
-                        .ok_or(WalletServiceError::MissingLockedNote(
-                            declaration.locked_note_id,
-                        ))?;
-
-                    let zk_sig =
-                        Self::sign_zksig(tx_hash, [locked_note.pk, declaration.zk_id], kms).await?;
-
-                    OpProof::ZkSig(zk_sig)
+                    Self::sign_sdp_withdraw(tx_hash, withdraw_op, &ledger, kms).await?
                 }
                 Op::SDPActive(active_op) => {
-                    let declaration = ledger
-                        .mantle_ledger()
-                        .sdp_ledger()
-                        .get_declaration(&active_op.declaration_id)
-                        .ok_or(WalletServiceError::MissingDeclaration(
-                            active_op.declaration_id,
-                        ))?;
-
-                    let locked_note = ledger
-                        .mantle_ledger()
-                        .locked_notes()
-                        .get(&declaration.locked_note_id)
-                        .ok_or(WalletServiceError::MissingLockedNote(
-                            declaration.locked_note_id,
-                        ))?;
-
-                    let zk_sig =
-                        Self::sign_zksig(tx_hash, [locked_note.pk, declaration.zk_id], kms).await?;
-
-                    OpProof::ZkSig(zk_sig)
+                    Self::sign_sdp_active(tx_hash, active_op, &ledger, kms).await?
                 }
                 Op::LeaderClaim(claim_op) => {
-                    Self::prove_leader_claim_op(claim_op.clone(), tx_hash, &ledger, wallet, kms)
-                        .await?
+                    Self::sign_leader_claim(tx_hash, claim_op, &ledger, wallet, kms).await?
                 }
-                Op::Transfer(_) => {
-                    let zk_sig = Self::sign_zksig(tx_hash, input_pks.clone(), kms).await?;
-
-                    OpProof::ZkSig(zk_sig)
-                }
+                Op::Transfer(_) => Self::sign_transfer(tx_hash, input_pks.clone(), kms).await?,
             };
             ops_proofs.push(proof);
         }
@@ -680,34 +755,6 @@ where
         };
 
         Ok(zk_sig)
-    }
-
-    async fn prove_leader_claim_op(
-        op: LeaderClaimOp,
-        tx_hash: TxHash,
-        ledger: &LedgerState,
-        wallet: &Wallet,
-        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<OpProof, WalletServiceError> {
-        let (voucher_master_key_id, voucher_index) = wallet
-            .get_voucher_by_nullifier(&op.voucher_nullifier)
-            .ok_or(WalletServiceError::VoucherNotFound(op.voucher_nullifier))?;
-        let voucher_secret =
-            Self::derive_voucher_from_kms(kms, voucher_master_key_id.clone(), *voucher_index).await;
-
-        let voucher_cm = VoucherCm::from_secret(voucher_secret);
-        let path = ledger
-            .mantle_ledger()
-            .voucher_merkle_path(voucher_cm)
-            .ok_or(WalletServiceError::VoucherMerklePathNotFound(voucher_cm))?;
-
-        // TODO: This should happen in KMS
-        let poc = tokio::task::spawn_blocking(move || {
-            Self::generate_poc(voucher_secret, &path, op.rewards_root, tx_hash)
-        })
-        .await??;
-
-        Ok(OpProof::PoC(poc))
     }
 
     fn generate_poc(
