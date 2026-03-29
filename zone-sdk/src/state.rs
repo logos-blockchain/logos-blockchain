@@ -31,7 +31,7 @@ pub struct ChannelUpdateInfo {
     pub invalidated: Vec<InscriptionInfo>,
     /// New inscriptions that appeared on chain (from LCM to new tip).
     pub adopted: Vec<InscriptionInfo>,
-    /// The new channel tip MsgId.
+    /// The new channel tip `MsgId`.
     pub new_channel_tip: MsgId,
 }
 
@@ -39,7 +39,7 @@ impl ChannelUpdateInfo {
     /// Returns true if this update invalidated pending inscriptions,
     /// meaning a competing inscription or L1 reorg broke our pending chain.
     #[must_use]
-    pub fn is_conflict(&self) -> bool {
+    pub const fn is_conflict(&self) -> bool {
         !self.invalidated.is_empty()
     }
 }
@@ -58,9 +58,9 @@ pub struct PendingInscription {
 pub struct TxState {
     /// Local pending inscriptions indexed by tx hash.
     pending: HashMap<TxHash, PendingInscription>,
-    /// Reverse index: parent MsgId → tx hashes that chain from it.
+    /// Reverse index: parent `MsgId` → tx hashes that chain from it.
     pending_by_parent: HashMap<MsgId, Vec<TxHash>>,
-    /// Non-inscription pending txs (e.g. set_keys).
+    /// Non-inscription pending txs (e.g. `set_keys`).
     pending_other: HashMap<TxHash, SignedMantleTx>,
     /// Per-block cumulative safe sets.
     block_states: BTreeMap<HeaderId, HashTrieSetSync<TxHash>>,
@@ -91,14 +91,14 @@ impl TxState {
         }
     }
 
-    /// Last finalized channel tip MsgId.
+    /// Last finalized channel tip `MsgId`.
     #[must_use]
     pub const fn finalized_msg(&self) -> MsgId {
         self.finalized_msg
     }
 
     /// Update the finalized channel tip from backfilled finalized history.
-    pub fn set_finalized_msg(&mut self, msg: MsgId) {
+    pub const fn set_finalized_msg(&mut self, msg: MsgId) {
         self.finalized_msg = msg;
     }
 
@@ -127,7 +127,7 @@ impl TxState {
         );
     }
 
-    /// Submit a non-inscription tx for tracking (e.g. set_keys).
+    /// Submit a non-inscription tx for tracking (e.g. `set_keys`).
     pub fn submit_other(&mut self, tx_hash: TxHash, signed_tx: SignedMantleTx) {
         self.pending_other.insert(tx_hash, signed_tx);
     }
@@ -310,6 +310,7 @@ impl TxState {
     }
 
     /// All pending transactions (for checkpoint serialization).
+    #[must_use]
     pub fn all_pending_txs(&self) -> Vec<(TxHash, SignedMantleTx)> {
         let inscriptions = self
             .pending
@@ -342,6 +343,7 @@ impl TxState {
     /// Walks the local pending suffix from canonical tip only if the
     /// lineage is unambiguous (exactly one child at each step).
     /// Falls back to canonical tip if ambiguous or no pending suffix.
+    #[must_use]
     pub fn publish_parent(&self, tip: HeaderId) -> MsgId {
         let channel_tip = self.channel_tip_at(tip);
         self.pending_publish_tail(channel_tip)
@@ -357,20 +359,20 @@ impl TxState {
 
         loop {
             let Some(children) = self.pending_by_parent.get(&current) else {
-                return if found_any { Some(current) } else { None };
+                return found_any.then_some(current);
             };
             if children.len() != 1 {
-                return if found_any { Some(current) } else { None };
+                return found_any.then_some(current);
             }
             let Some(pending) = self.pending.get(&children[0]) else {
-                return if found_any { Some(current) } else { None };
+                return found_any.then_some(current);
             };
             current = pending.this_msg;
             found_any = true;
         }
     }
 
-    /// Derive the channel tip MsgId at a given L1 block by walking backwards
+    /// Derive the channel tip `MsgId` at a given L1 block by walking backwards
     /// through the block tree and finding the most recent inscription.
     /// Returns `finalized_msg` if no inscriptions are found in the
     /// unfinalized window.
@@ -378,10 +380,10 @@ impl TxState {
     pub fn channel_tip_at(&self, block_id: HeaderId) -> MsgId {
         let mut current = block_id;
         loop {
-            if let Some(inscs) = self.block_inscriptions.get(&current) {
-                if let Some(last) = inscs.last() {
-                    return last.this_msg;
-                }
+            if let Some(inscs) = self.block_inscriptions.get(&current)
+                && let Some(last) = inscs.last()
+            {
+                return last.this_msg;
             }
 
             if current == self.current_lib {
@@ -397,12 +399,13 @@ impl TxState {
 
     /// Detect a channel update between old and new L1 tips.
     ///
-    /// - Extension: channel tip in new_tip extends from old_tip → report
+    /// - Extension: channel tip in `new_tip` extends from `old_tip` → report
     ///   adopted inscriptions, no invalidation
     /// - Reorg: channel tips diverged → find LCM, orphan entire pending suffix
     ///   from LCM, report adopted from LCM to new tip
     ///
     /// Returns `None` if no channel state change.
+    #[must_use]
     pub fn detect_channel_update(
         &self,
         old_tip: HeaderId,
@@ -433,16 +436,13 @@ impl TxState {
             .iter()
             .rev()
             .find(|i| new_chain.contains(&i.this_msg))
-            .map(|i| i.this_msg)
-            .unwrap_or(self.finalized_msg);
+            .map_or(self.finalized_msg, |i| i.this_msg);
 
         // Adopted: inscriptions on the new branch after the LCM.
-        let adopted: Vec<InscriptionInfo> =
-            if let Some(start_idx) = new_branch.iter().position(|i| i.parent_msg == lcm) {
-                new_branch[start_idx..].to_vec()
-            } else {
-                Vec::new()
-            };
+        let adopted: Vec<InscriptionInfo> = new_branch
+            .iter()
+            .position(|i| i.parent_msg == lcm)
+            .map_or_else(Vec::new, |start_idx| new_branch[start_idx..].to_vec());
 
         if extends && adopted.is_empty() {
             return None;
@@ -451,9 +451,7 @@ impl TxState {
         // Invalidated: on reorg, the entire pending suffix from LCM is
         // orphaned. On extension, local pending suffixes can STILL become
         // stale if a competing inscription consumed the same parent.
-        let invalidated = if !extends {
-            self.collect_pending_suffix(lcm)
-        } else {
+        let invalidated = if extends {
             // Extension: find pending inscriptions whose parent was consumed
             // by a COMPETING inscription (not our own). An adopted inscription
             // that matches one of our pending txs (same tx_hash) is ours —
@@ -485,6 +483,8 @@ impl TxState {
                 }
             }
             all_invalidated
+        } else {
+            self.collect_pending_suffix(lcm)
         };
 
         Some(ChannelUpdateInfo {
@@ -526,6 +526,7 @@ impl TxState {
 
     /// Collect all inscriptions on a branch from the given block back to LIB,
     /// in oldest-first order.
+    #[must_use]
     pub fn collect_inscriptions_on_branch(&self, tip: HeaderId) -> Vec<InscriptionInfo> {
         let mut blocks = Vec::new();
         let mut current = tip;

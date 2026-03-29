@@ -463,6 +463,11 @@ impl ZoneSequencer {
     ///
     /// This processes block events, resubmission, and pending requests.
     /// The caller must call this in a loop to keep the sequencer running.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: split into smaller functions"
+    )]
+    #[expect(clippy::too_many_lines, reason = "TODO: split into smaller functions")]
     pub async fn next_event(&mut self) -> Option<Event> {
         // Return buffered event from previous call if any
         if let Some(event) = self.buffered_event.take() {
@@ -477,7 +482,7 @@ impl ZoneSequencer {
             self.backfill_from,
             self.backfill_to,
             self.resubmit_active,
-            self.state.as_ref().map(|s| s.pending_count()).unwrap_or(0),
+            self.state.as_ref().map_or(0, TxState::pending_count),
             self.current_tip.is_some(),
         );
         // Process incremental backfill — one batch per next_event() call.
@@ -656,7 +661,7 @@ impl ZoneSequencer {
                         let has_pending_inscriptions = self
                             .state
                             .as_ref()
-                            .is_some_and(|s| s.has_pending_inscriptions());
+                            .is_some_and(TxState::has_pending_inscriptions);
 
                         if !update.invalidated.is_empty() {
                             // Conflict — rewind to canonical tip and remove
@@ -909,7 +914,7 @@ async fn handle_block_event(
                         None
                     }
                 })
-                .unwrap_or_else(|| "non-inscription".to_string());
+                .unwrap_or_else(|| "non-inscription".to_owned());
             eprintln!("[SEQ] Backfill-finalized: payload={payload_str:?}, tx={tx_hash:?}");
             newly_finalized.push(*tx_hash);
         }
@@ -927,20 +932,18 @@ async fn handle_block_event(
             // Treat as a reorg from root: the LCM is finalized_msg, and
             // any pending inscriptions chaining from it are orphaned.
             let channel_tip = s.channel_tip_at(tip);
-            if channel_tip != MsgId::root() {
+            if channel_tip == MsgId::root() {
+                None
+            } else {
                 let adopted = s.collect_inscriptions_on_branch(tip);
                 let invalidated = s.collect_pending_suffix(s.finalized_msg());
-                if !adopted.is_empty() || !invalidated.is_empty() {
-                    Some(crate::state::ChannelUpdateInfo {
+                (!adopted.is_empty() || !invalidated.is_empty()).then_some(
+                    crate::state::ChannelUpdateInfo {
                         invalidated,
                         adopted,
                         new_channel_tip: channel_tip,
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
+                    },
+                )
             }
         }
         _ => None, // tip unchanged
@@ -994,7 +997,7 @@ async fn backfill_batch(
     http_client: &CommonHttpClient,
     node_url: &Url,
 ) -> Vec<InscriptionInfo> {
-    eprintln!("[SEQ] Backfill batch: slots {} to {}", from_slot, to_slot);
+    eprintln!("[SEQ] Backfill batch: slots {from_slot} to {to_slot}");
 
     match http_client
         .get_blocks(node_url.clone(), from_slot, to_slot)

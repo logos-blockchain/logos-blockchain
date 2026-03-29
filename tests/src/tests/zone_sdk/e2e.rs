@@ -395,8 +395,8 @@ fn payload_id(p: &[u8]) -> Vec<u8> {
     p.split(|&b| b == b':').next().unwrap_or(p).to_vec()
 }
 
-/// Shared tx→payload_id map. Used by both initial publishes and re-publishes
-/// so that TxsFinalized can identify which logical payload was finalized.
+/// Shared `tx→payload_id` map. Used by both initial publishes and re-publishes
+/// so that `TxsFinalized` can identify which logical payload was finalized.
 type TxIdMap = std::sync::Arc<tokio::sync::Mutex<HashMap<lb_core::mantle::tx::TxHash, Vec<u8>>>>;
 
 /// Publish a payload and register the resulting tx hash in the shared map.
@@ -433,7 +433,7 @@ fn spawn_sequencer_with_republish(
 
     // Republisher: publishes one payload at a time, registers tx→id.
     {
-        let tx_to_id = tx_to_id.clone();
+        let tx_to_id = TxIdMap::clone(&tx_to_id);
         let republish_handle = handle;
         tokio::spawn(async move {
             while let Some(payload) = republish_rx.recv().await {
@@ -442,10 +442,10 @@ fn spawn_sequencer_with_republish(
                     tx_to_id.lock().await.insert(result.inscription_id, id);
                 }
             }
-        });
-    }
+        })
+    };
 
-    let shared_finalized = finalized.clone();
+    let shared_finalized = finalized;
     let shared_tx_to_id = tx_to_id;
 
     tokio::spawn(async move {
@@ -455,40 +455,45 @@ fn spawn_sequencer_with_republish(
         loop {
             match sequencer.next_event().await {
                 Some(Event::TxsFinalized { tx_hashes }) => {
-                    let mut tx_map = shared_tx_to_id.lock().await;
-                    let mut fin = shared_finalized.lock().await;
-                    for tx_hash in tx_hashes {
-                        if let Some(id) = tx_map.remove(&tx_hash) {
-                            eprintln!(
-                                "[CLIENT] Finalized: {:?}",
-                                String::from_utf8_lossy(
-                                    republish_payloads
-                                        .get(&id)
-                                        .map(|v| v.as_slice())
-                                        .unwrap_or(b"?")
-                                )
-                            );
+                    let finalized_ids = {
+                        let mut tx_map = shared_tx_to_id.lock().await;
+                        tx_hashes
+                            .into_iter()
+                            .filter_map(|h| tx_map.remove(&h))
+                            .collect::<Vec<_>>()
+                    };
+                    {
+                        let mut fin = shared_finalized.lock().await;
+                        for id in &finalized_ids {
                             fin.insert(id.clone());
-                            in_flight.remove(&id);
                         }
+                    }
+                    for id in finalized_ids {
+                        eprintln!(
+                            "[CLIENT] Finalized: {:?}",
+                            String::from_utf8_lossy(
+                                republish_payloads.get(&id).map_or(b"?", Vec::as_slice)
+                            )
+                        );
+                        in_flight.remove(&id);
                     }
                 }
                 Some(Event::ChannelUpdate { invalidated, .. }) => {
-                    let fin = shared_finalized.lock().await;
+                    let finalized_ids = shared_finalized.lock().await.clone();
                     for inv in &invalidated {
                         let id = payload_id(&inv.payload);
-                        if !my_ids.contains(&id) || fin.contains(&id) {
+                        if !my_ids.contains(&id) || finalized_ids.contains(&id) {
                             continue;
                         }
                         in_flight.remove(&id);
-                        if in_flight.insert(id.clone()) {
-                            if let Some(payload) = republish_payloads.get(&id) {
-                                eprintln!(
-                                    "[CLIENT] Re-publishing orphaned: {:?}",
-                                    String::from_utf8_lossy(payload)
-                                );
-                                drop(republish_tx.send(payload.clone()));
-                            }
+                        if in_flight.insert(id.clone())
+                            && let Some(payload) = republish_payloads.get(&id)
+                        {
+                            eprintln!(
+                                "[CLIENT] Re-publishing orphaned: {:?}",
+                                String::from_utf8_lossy(payload)
+                            );
+                            drop(republish_tx.send(payload.clone()));
                         }
                     }
                 }
@@ -877,19 +882,19 @@ async fn test_concurrent_multi_sequencer() {
         sequencer_a,
         handle_a.clone(),
         data_a.clone(),
-        tx_map_a.clone(),
+        TxIdMap::clone(&tx_map_a),
     );
     let poll_b = spawn_sequencer_with_republish(
         sequencer_b,
         handle_b.clone(),
         data_b.clone(),
-        tx_map_b.clone(),
+        TxIdMap::clone(&tx_map_b),
     );
     let poll_c = spawn_sequencer_with_republish(
         sequencer_c,
         handle_c.clone(),
         data_c.clone(),
-        tx_map_c.clone(),
+        TxIdMap::clone(&tx_map_c),
     );
 
     // Wait for all three to be ready
