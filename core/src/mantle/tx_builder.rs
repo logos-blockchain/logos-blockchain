@@ -133,7 +133,27 @@ impl MantleTxBuilder {
             .map(|n| i128::from(n.value))
             .sum();
 
-        in_sum - out_sum
+        let op_sum: i128 = self
+            .mantle_tx
+            .ops
+            .iter()
+            .map(|op| match op {
+            Op::ChannelDeposit(deposit) => -i128::from(deposit.amount),
+            Op::ChannelInscribe(_)
+            | Op::ChannelSetKeys(_)
+            | Op::SDPDeclare(_)
+            | Op::SDPWithdraw(_)
+            | Op::SDPActive(_)
+            // Balances for Transfer operations have been already accounted for in the
+            // `ledger_inputs` and `pending_transfer`.
+            | Op::Transfer(_)
+            // TODO: LeaderClaim should have a positive balance but depends on leader_rewards
+            // https://www.notion.so/Anonymous-Leaders-Reward-Protocol-206261aa09df8120a49ffa49c71ba70d?source=copy_link#240261aa09df80de83eace3d556eddfc
+            | Op::LeaderClaim(_) => 0,
+        })
+            .sum();
+
+        in_sum - out_sum + op_sum
     }
 
     #[must_use]
