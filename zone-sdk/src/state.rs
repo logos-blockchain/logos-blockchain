@@ -176,52 +176,19 @@ impl TxState {
             self.block_inscriptions.insert(block_id, inscriptions);
         }
 
-        let mut newly_finalized = Vec::new();
-
-        // When lib advances: finalize txs and prune
+        // When lib advances: update finalized_msg and prune.
+        // NOTE: we do NOT remove pending txs here. Pending txs are only
+        // removed when confirmed by backfill ground truth (canonical
+        // finalized blocks from the node). The safe set is used for
+        // branch-relative status (pending_txs resubmission) but not
+        // as proof of canonical finalization — it can include blocks
+        // from orphaned branches in concurrent scenarios.
         if lib != self.current_lib {
             eprintln!(
                 "[SEQ] LIB advanced: {:?} -> {:?}, pending={}",
                 self.current_lib,
                 lib,
                 self.pending.len()
-            );
-            // Walk from new LIB back to old LIB via parent_map.
-            // Finalize pending txs found in safe sets along this path.
-            let mut walk_count = 0;
-            let mut block_opt = Some(lib);
-            while let Some(block) = block_opt {
-                walk_count += 1;
-                if let Some(block_safe) = self.block_states.get(&block) {
-                    for tx_hash in block_safe.iter() {
-                        if let Some(removed) = self.pending.remove(tx_hash) {
-                            eprintln!(
-                                "[SEQ] Safe-set finalized inscription tx={tx_hash:?}, payload={:?}",
-                                String::from_utf8_lossy(&removed.payload)
-                            );
-                            if let Some(children) =
-                                self.pending_by_parent.get_mut(&removed.parent_msg)
-                            {
-                                children.retain(|h| h != tx_hash);
-                                if children.is_empty() {
-                                    self.pending_by_parent.remove(&removed.parent_msg);
-                                }
-                            }
-                            newly_finalized.push(*tx_hash);
-                        } else if self.pending_other.remove(tx_hash).is_some() {
-                            eprintln!("[SEQ] Safe-set finalized other tx={tx_hash:?}");
-                            newly_finalized.push(*tx_hash);
-                        }
-                    }
-                }
-                if block == self.current_lib {
-                    break;
-                }
-                block_opt = self.parent_map.get(&block).copied();
-            }
-            eprintln!(
-                "[SEQ] Finalization walk: walked {walk_count} blocks, finalized {}",
-                newly_finalized.len()
             );
 
             // Compute finalized_msg BEFORE pruning — walk from new LIB
@@ -254,7 +221,8 @@ impl TxState {
             self.current_lib = lib;
         }
 
-        newly_finalized
+        // No finalization from safe set — caller uses backfill ground truth
+        Vec::new()
     }
 
     /// Remove orphaned blocks whose parent was pruned.
@@ -656,9 +624,18 @@ mod tests {
         state.process_block(b1, genesis, genesis, vec![hash], vec![]);
         assert_eq!(state.pending_count(), 1);
 
-        // b2, lib advances to b1
+        // b2, lib advances to b1 — process_block no longer removes from
+        // pending (that's done by backfill ground truth)
         let finalized = state.process_block(b2, b1, b1, vec![], vec![]);
-        assert_eq!(finalized, vec![hash]);
+        assert!(finalized.is_empty(), "process_block should not finalize");
+        assert_eq!(
+            state.pending_count(),
+            1,
+            "tx still in pending until backfill confirms"
+        );
+
+        // Simulate backfill confirming the tx
+        assert!(state.remove_pending(&hash).is_some());
         assert_eq!(state.pending_count(), 0);
     }
 
@@ -970,10 +947,13 @@ mod tests {
         // b3, lib jumps from genesis to b2 (skipping b1)
         let finalized = state.process_block(b3, b2, b2, vec![], vec![]);
 
-        // Both tx1 (in b1) and tx2 (in b2) should be finalized
-        assert!(finalized.contains(&hash1));
-        assert!(finalized.contains(&hash2));
-        assert_eq!(finalized.len(), 2);
+        // process_block no longer finalizes — backfill does that
+        assert!(finalized.is_empty());
+        assert_eq!(state.pending_count(), 2, "txs still pending until backfill");
+
+        // Simulate backfill confirming both txs
+        assert!(state.remove_pending(&hash1).is_some());
+        assert!(state.remove_pending(&hash2).is_some());
         assert_eq!(state.pending_count(), 0);
     }
 }

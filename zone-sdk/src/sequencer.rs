@@ -659,11 +659,16 @@ impl ZoneSequencer {
                             .is_some_and(|s| s.has_pending_inscriptions());
 
                         if !update.invalidated.is_empty() {
-                            // Conflict — rewind and remove invalidated
+                            // Conflict — rewind to canonical tip and remove
+                            // stale txs. The user decides whether to
+                            // re-publish the payloads.
                             self.last_msg_id = update.new_channel_tip;
                             if let Some(s) = self.state.as_mut() {
                                 for inv in &update.invalidated {
-                                    eprintln!("[SEQ] Invalidated: tx={:?}, payload={:?}", inv.tx_hash, String::from_utf8_lossy(&inv.payload));
+                                    eprintln!(
+                                        "[SEQ] Invalidated: payload={:?}",
+                                        String::from_utf8_lossy(&inv.payload)
+                                    );
                                     s.remove_pending(&inv.tx_hash);
                                 }
                             }
@@ -847,6 +852,12 @@ async fn handle_block_event(
     let mut lib_finalized = Vec::new();
     if lib != s.lib() {
         let new_lib_slot = get_lib_slot(http_client, node_url, lib).await;
+        eprintln!(
+            "[SEQ] LIB slot check: old_lib_slot={:?}, new_lib_slot={:?}, advancing={}",
+            *lib_slot,
+            new_lib_slot,
+            *lib_slot < new_lib_slot
+        );
         if *lib_slot < new_lib_slot {
             lib_finalized = backfill_to_lib(
                 s,
@@ -884,10 +895,23 @@ async fn handle_block_event(
     // from the node. LIB blocks are truly final (can't be reorged), so
     // txs found there are definitively on the canonical chain. Our safe
     // set may miss them due to gaps or reorgs in the block event stream.
-    for tx_hash in lib_finalized {
-        if s.remove_pending(&tx_hash).is_some() {
-            eprintln!("[SEQ] Backfill-finalized tx={tx_hash:?}");
-            newly_finalized.push(tx_hash);
+    for tx_hash in &lib_finalized {
+        if let Some(tx) = s.remove_pending(tx_hash) {
+            // Try to extract payload for debug
+            let payload_str: String = tx
+                .mantle_tx
+                .ops
+                .iter()
+                .find_map(|op| {
+                    if let Op::ChannelInscribe(i) = op {
+                        Some(String::from_utf8_lossy(&i.inscription).to_string())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| "non-inscription".to_string());
+            eprintln!("[SEQ] Backfill-finalized: payload={payload_str:?}, tx={tx_hash:?}");
+            newly_finalized.push(*tx_hash);
         }
     }
     *current_tip = Some(tip);
@@ -1025,6 +1049,9 @@ async fn backfill_batch(
 }
 
 /// Returns tx hashes of our channel's txs found in finalized blocks.
+///
+/// Uses `get_blocks` by slot range which returns only immutable
+/// (canonically finalized) blocks via `ScanImmutableBlockIds`.
 async fn backfill_to_lib(
     state: &mut TxState,
     from_slot: Slot,
@@ -1040,19 +1067,22 @@ async fn backfill_to_lib(
         return Vec::new();
     }
 
-    debug!(
-        "Backfilling finalized blocks from slot {} to {}",
+    eprintln!(
+        "[SEQ] Backfill LIB: slots {}..{}, node={}",
         from + 1,
-        to
+        to,
+        node_url
     );
 
     let mut finalized_txs = Vec::new();
 
     match http_client.get_blocks(node_url.clone(), from + 1, to).await {
         Ok(blocks) => {
+            eprintln!("[SEQ] Backfill LIB: got {} blocks", blocks.len());
             for block in blocks {
                 let block_id = block.header.id;
                 let parent_id = block.header.parent_block;
+                let slot: u64 = block.header.slot.into();
 
                 let our_txs: Vec<TxHash> = block
                     .transactions
@@ -1061,15 +1091,30 @@ async fn backfill_to_lib(
                     .map(|tx| tx.mantle_tx.hash())
                     .collect();
 
+                let inscriptions = extract_inscriptions(&block.transactions, channel_id);
+                // Log every block with slot and id, plus inscriptions if any
+                let payload_strs: Vec<String> = inscriptions
+                    .iter()
+                    .map(|i| String::from_utf8_lossy(&i.payload).to_string())
+                    .collect();
+                eprintln!(
+                    "[SEQ] Backfill LIB block: slot={} id={:?} txs={} inscriptions={} payloads={:?}",
+                    slot,
+                    block_id,
+                    block.transactions.len(),
+                    inscriptions.len(),
+                    payload_strs
+                );
+
                 finalized_txs.extend(our_txs.iter().copied());
 
-                let inscriptions = extract_inscriptions(&block.transactions, channel_id);
-
-                // Use current state lib to avoid premature finalization
                 let current_lib = state.lib();
                 state.process_block(block_id, parent_id, current_lib, our_txs, inscriptions);
             }
-            debug!("Backfilled {} finalized blocks", to - from);
+            eprintln!(
+                "[SEQ] Backfill LIB done: {} channel txs found",
+                finalized_txs.len()
+            );
         }
         Err(e) => {
             warn!("Failed to backfill finalized blocks: {e}");
@@ -1155,6 +1200,18 @@ fn enqueue_resubmit(
         return;
     }
 
+    // Log what we're resubmitting with payloads
+    for (id, tx) in &pending {
+        for op in &tx.mantle_tx.ops {
+            if let Op::ChannelInscribe(inscribe) = op {
+                eprintln!(
+                    "[SEQ] Resubmitting: tx={id:?}, payload={:?}, parent={:?}",
+                    String::from_utf8_lossy(&inscribe.inscription),
+                    inscribe.parent,
+                );
+            }
+        }
+    }
     debug!("Resubmitting {} pending inscription(s)", pending.len());
 
     let client = http_client.clone();

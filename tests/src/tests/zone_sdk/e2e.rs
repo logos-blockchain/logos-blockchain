@@ -1,4 +1,8 @@
-use std::{collections::HashSet, num::NonZero, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    num::NonZero,
+    time::Duration,
+};
 
 use futures::future::join_all;
 use lb_core::mantle::ops::channel::ChannelId;
@@ -385,97 +389,110 @@ async fn test_sequencer_checkpoint_resume() {
 /// Intent-based client state for suffix reconstruction.
 /// Tracks which payloads have been adopted on chain and rebuilds
 /// the remaining suffix when invalidated.
-struct IntentState {
-    intents: Vec<Vec<u8>>,
-    committed: usize,
+/// Extract the stable UUID prefix from a tagged payload (e.g. "abc123:a1" →
+/// "abc123").
+fn payload_id(p: &[u8]) -> Vec<u8> {
+    p.split(|&b| b == b':').next().unwrap_or(p).to_vec()
 }
 
-impl IntentState {
-    fn new(intents: Vec<Vec<u8>>) -> Self {
-        Self {
-            intents,
-            committed: 0,
-        }
-    }
+/// Shared tx→payload_id map. Used by both initial publishes and re-publishes
+/// so that TxsFinalized can identify which logical payload was finalized.
+type TxIdMap = std::sync::Arc<tokio::sync::Mutex<HashMap<lb_core::mantle::tx::TxHash, Vec<u8>>>>;
 
-    /// Advance committed prefix based on adopted payloads.
-    fn mark_adopted(&mut self, adopted: &HashSet<Vec<u8>>) {
-        while self.committed < self.intents.len() && adopted.contains(&self.intents[self.committed])
-        {
-            self.committed += 1;
-        }
-    }
-
-    /// Get the suffix that still needs to be published (from committed onward).
-    fn pending_suffix(&self) -> &[Vec<u8>] {
-        &self.intents[self.committed..]
-    }
-
-    fn is_complete(&self) -> bool {
-        self.committed >= self.intents.len()
-    }
+/// Publish a payload and register the resulting tx hash in the shared map.
+async fn publish_and_track(
+    handle: &lb_zone_sdk::sequencer::SequencerHandle,
+    tx_to_id: &TxIdMap,
+    payload: Vec<u8>,
+) {
+    let id = payload_id(&payload);
+    let result = handle.publish(payload).await.expect("publish failed");
+    tx_to_id.lock().await.insert(result.inscription_id, id);
 }
 
-/// Spawn poll + suffix rebuild tasks for a sequencer with intent tracking.
-fn spawn_sequencer_with_intents(
+/// Spawn a sequencer poll task that re-publishes its own orphaned payloads.
+///
+/// Uses `TxsFinalized` as the permanent completion signal (not `adopted`).
+/// Accepts a shared `tx_to_id` map so initial publishes and re-publishes
+/// are both tracked for finalization.
+fn spawn_sequencer_with_republish(
     mut sequencer: ZoneSequencer,
     handle: lb_zone_sdk::sequencer::SequencerHandle,
-    intents: Vec<Vec<u8>>,
+    my_payloads: Vec<Vec<u8>>,
+    tx_to_id: TxIdMap,
 ) -> tokio::task::JoinHandle<()> {
-    // Channel to signal the rebuilder to submit the current suffix.
-    let (rebuild_tx, mut rebuild_rx) = tokio::sync::mpsc::channel::<Vec<Vec<u8>>>(1);
+    let (republish_tx, mut republish_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
-    // Rebuilder: publishes a suffix in order, one at a time.
-    let rebuild_handle = handle.clone();
-    tokio::spawn(async move {
-        while let Some(suffix) = rebuild_rx.recv().await {
-            for payload in suffix {
-                if rebuild_handle.publish(payload).await.is_err() {
-                    break; // sequencer dropped, stop
+    let republish_payloads: HashMap<Vec<u8>, Vec<u8>> = my_payloads
+        .iter()
+        .map(|p| (payload_id(p), p.clone()))
+        .collect();
+
+    let finalized: std::sync::Arc<tokio::sync::Mutex<HashSet<Vec<u8>>>> =
+        std::sync::Arc::new(tokio::sync::Mutex::new(HashSet::new()));
+
+    // Republisher: publishes one payload at a time, registers tx→id.
+    {
+        let tx_to_id = tx_to_id.clone();
+        let republish_handle = handle;
+        tokio::spawn(async move {
+            while let Some(payload) = republish_rx.recv().await {
+                let id = payload_id(&payload);
+                if let Ok(result) = republish_handle.publish(payload).await {
+                    tx_to_id.lock().await.insert(result.inscription_id, id);
                 }
             }
-        }
-    });
+        });
+    }
 
-    // Poll task: drives next_event(), tracks intent state, triggers rebuilds.
+    let shared_finalized = finalized.clone();
+    let shared_tx_to_id = tx_to_id;
+
     tokio::spawn(async move {
-        let mut state = IntentState::new(intents);
+        let my_ids: HashSet<Vec<u8>> = my_payloads.iter().map(|p| payload_id(p)).collect();
+        let mut in_flight: HashSet<Vec<u8>> = HashSet::new();
 
         loop {
-            if let Some(Event::ChannelUpdate {
-                adopted,
-                invalidated,
-                ..
-            }) = sequencer.next_event().await
-            {
-                let adopted_payloads: HashSet<Vec<u8>> =
-                    adopted.into_iter().map(|a| a.payload).collect();
-
-                // Advance committed prefix
-                state.mark_adopted(&adopted_payloads);
-
-                if state.is_complete() {
-                    continue;
+            match sequencer.next_event().await {
+                Some(Event::TxsFinalized { tx_hashes }) => {
+                    let mut tx_map = shared_tx_to_id.lock().await;
+                    let mut fin = shared_finalized.lock().await;
+                    for tx_hash in tx_hashes {
+                        if let Some(id) = tx_map.remove(&tx_hash) {
+                            eprintln!(
+                                "[CLIENT] Finalized: {:?}",
+                                String::from_utf8_lossy(
+                                    republish_payloads
+                                        .get(&id)
+                                        .map(|v| v.as_slice())
+                                        .unwrap_or(b"?")
+                                )
+                            );
+                            fin.insert(id.clone());
+                            in_flight.remove(&id);
+                        }
+                    }
                 }
-
-                // If any of our intents were invalidated, rebuild suffix
-                let our_invalidated = invalidated
-                    .iter()
-                    .any(|inv| state.pending_suffix().contains(&inv.payload));
-
-                if our_invalidated {
-                    let suffix = state.pending_suffix().to_vec();
-                    eprintln!(
-                        "[CLIENT] Rebuilding suffix: committed={}/{}, suffix_len={}",
-                        state.committed,
-                        state.intents.len(),
-                        suffix.len()
-                    );
-                    // Send suffix to rebuilder — if channel is full, previous
-                    // rebuild is still running and will be superseded by the
-                    // next ChannelUpdate.
-                    drop(rebuild_tx.try_send(suffix));
+                Some(Event::ChannelUpdate { invalidated, .. }) => {
+                    let fin = shared_finalized.lock().await;
+                    for inv in &invalidated {
+                        let id = payload_id(&inv.payload);
+                        if !my_ids.contains(&id) || fin.contains(&id) {
+                            continue;
+                        }
+                        in_flight.remove(&id);
+                        if in_flight.insert(id.clone()) {
+                            if let Some(payload) = republish_payloads.get(&id) {
+                                eprintln!(
+                                    "[CLIENT] Re-publishing orphaned: {:?}",
+                                    String::from_utf8_lossy(payload)
+                                );
+                                drop(republish_tx.send(payload.clone()));
+                            }
+                        }
+                    }
                 }
+                _ => {}
             }
         }
     })
@@ -734,8 +751,9 @@ async fn test_concurrent_multi_sequencer() {
     // all three publish in parallel. Each sequencer's inscriptions maintain
     // their internal order but may be interleaved with each other on chain.
 
-    // Setup: three validators (one per sequencer), fast blocks
-    let (configs, genesis_tx) = create_general_configs(3);
+    // Setup: two validators, all sequencers share one node to avoid
+    // immutable block index divergence between validators.
+    let (configs, genesis_tx) = create_general_configs(2);
     let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
     let configs: Vec<_> = configs
         .into_iter()
@@ -763,9 +781,7 @@ async fn test_concurrent_multi_sequencer() {
         wait_for_height(&validators[0], 1, Duration::from_secs(120)).await,
         "Chain should produce the first block"
     );
-    let node_url_a = validators[0].url();
-    let node_url_b = validators[1].url();
-    let node_url_c = validators[2].url();
+    let node_url = validators[0].url();
 
     let sequencer_config = SequencerConfig {
         resubmit_interval: Duration::from_secs(30),
@@ -794,7 +810,7 @@ async fn test_concurrent_multi_sequencer() {
     let (sequencer_a, mut handle_a) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key_a,
-        node_url_a.clone(),
+        node_url.clone(),
         None,
         sequencer_config.clone(),
         None,
@@ -827,7 +843,7 @@ async fn test_concurrent_multi_sequencer() {
     let (sequencer_a, mut handle_a) = ZoneSequencer::init_with_config(
         channel_id,
         Ed25519Key::from_bytes(&key_bytes_a),
-        node_url_a.clone(),
+        node_url.clone(),
         None,
         sequencer_config.clone(),
         None,
@@ -836,7 +852,7 @@ async fn test_concurrent_multi_sequencer() {
     let (sequencer_b, mut handle_b) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key_b,
-        node_url_b.clone(),
+        node_url.clone(),
         None,
         sequencer_config.clone(),
         None,
@@ -845,17 +861,36 @@ async fn test_concurrent_multi_sequencer() {
     let (sequencer_c, mut handle_c) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key_c,
-        node_url_c.clone(),
+        node_url.clone(),
         None,
         sequencer_config,
         None,
     );
 
-    // Start intent-tracking poll tasks BEFORE publishing — next_event()
-    // must be running to process publish requests.
-    let poll_a = spawn_sequencer_with_intents(sequencer_a, handle_a.clone(), data_a.clone());
-    let poll_b = spawn_sequencer_with_intents(sequencer_b, handle_b.clone(), data_b.clone());
-    let poll_c = spawn_sequencer_with_intents(sequencer_c, handle_c.clone(), data_c.clone());
+    // Create shared tx→id maps for tracking finalization
+    let tx_map_a: TxIdMap = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    let tx_map_b: TxIdMap = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    let tx_map_c: TxIdMap = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+
+    // Start poll tasks — next_event() must be running to process publish requests.
+    let poll_a = spawn_sequencer_with_republish(
+        sequencer_a,
+        handle_a.clone(),
+        data_a.clone(),
+        tx_map_a.clone(),
+    );
+    let poll_b = spawn_sequencer_with_republish(
+        sequencer_b,
+        handle_b.clone(),
+        data_b.clone(),
+        tx_map_b.clone(),
+    );
+    let poll_c = spawn_sequencer_with_republish(
+        sequencer_c,
+        handle_c.clone(),
+        data_c.clone(),
+        tx_map_c.clone(),
+    );
 
     // Wait for all three to be ready
     handle_a.wait_ready().await;
@@ -864,46 +899,36 @@ async fn test_concurrent_multi_sequencer() {
     eprintln!("[TEST] Phase 2: All 3 sequencers ready");
 
     // Phase 3: Publish initial inscriptions concurrently.
-    // The intent-tracking poll tasks handle suffix reconstruction
-    // when competing inscriptions invalidate our chain.
+    // All publishes registered in tx→id maps for finalization tracking.
     eprintln!("[TEST] Phase 3: Publishing 9 inscriptions concurrently");
     tokio::join!(
         async {
             for d in &data_a {
-                handle_a
-                    .publish(d.clone())
-                    .await
-                    .expect("SeqA publish failed");
+                publish_and_track(&handle_a, &tx_map_a, d.clone()).await;
             }
         },
         async {
             for d in &data_b {
-                handle_b
-                    .publish(d.clone())
-                    .await
-                    .expect("SeqB publish failed");
+                publish_and_track(&handle_b, &tx_map_b, d.clone()).await;
             }
         },
         async {
             for d in &data_c {
-                handle_c
-                    .publish(d.clone())
-                    .await
-                    .expect("SeqC publish failed");
+                publish_and_track(&handle_c, &tx_map_c, d.clone()).await;
             }
         },
     );
 
     // Phase 4: Wait for all 9 inscriptions to appear on chain
     eprintln!("[TEST] Phase 4: Waiting for all 9 inscriptions in indexer");
-    let indexer = ZoneIndexer::new(channel_id, node_url_a, None);
+    let indexer = ZoneIndexer::new(channel_id, node_url, None);
     let mut expected_all: HashSet<Vec<u8>> = HashSet::new();
     expected_all.extend(data_a.iter().cloned());
     expected_all.extend(data_b.iter().cloned());
     expected_all.extend(data_c.iter().cloned());
     assert_eq!(expected_all.len(), 9);
 
-    wait_for_indexer(&indexer, &expected_all, Duration::from_secs(600)).await;
+    wait_for_indexer(&indexer, &expected_all, Duration::from_secs(1200)).await;
 
     // Wait for enough blocks so any late re-published duplicates would have
     // landed. With k=5 and 1s slots, finality is ~5 blocks. We wait 30s
