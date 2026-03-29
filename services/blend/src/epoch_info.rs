@@ -8,7 +8,10 @@ use core::{
 use async_trait::async_trait;
 use futures::Stream;
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use lb_chain_service::{
+    Error as ChainServiceError,
+    api::{ApiError, CryptarchiaServiceApi, CryptarchiaServiceData},
+};
 use lb_core::{crypto::ZkHash, proofs::leader_proof::LeaderPublic};
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::Fr;
@@ -48,11 +51,19 @@ pub trait PolInfoProvider<RuntimeServiceId> {
 
 const LOG_TARGET: &str = "blend::service::epoch";
 
+#[derive(Debug, thiserror::Error)]
+pub enum EpochError {
+    #[error("API error: {0}")]
+    ApiError(#[from] ApiError),
+    #[error("Chain service error: {0}")]
+    ChainServiceError(#[from] ChainServiceError),
+}
+
 /// A trait that provides the needed functionalities for the epoch stream to
 /// fetch the epoch state for a given slot.
 #[async_trait]
 pub trait ChainApi<RuntimeServiceId> {
-    async fn get_epoch_state_for_slot(&self, slot: Slot) -> EpochState;
+    async fn get_epoch_state_for_slot(&self, slot: Slot) -> Result<EpochState, EpochError>;
 }
 
 #[async_trait]
@@ -62,11 +73,8 @@ where
     Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
     RuntimeServiceId: Send + Sync,
 {
-    async fn get_epoch_state_for_slot(&self, slot: Slot) -> EpochState {
-        self.get_epoch_state(slot)
-            .await
-            .expect("Failed to get epoch state for slot.")
-            .expect("State for slot in current epoch should always be available")
+    async fn get_epoch_state_for_slot(&self, slot: Slot) -> Result<EpochState, EpochError> {
+        Ok(self.get_epoch_state(slot).await??)
     }
 }
 
@@ -271,10 +279,17 @@ where
         }
 
         tracing::debug!(target: LOG_TARGET, "Found epoch unseen before. Retrieving its state...");
-        let epoch_state = self
+        let epoch_state = match self
             .chain_service
             .get_epoch_state_for_slot(new_tick.slot)
-            .await;
+            .await
+        {
+            Ok(state) => state,
+            Err(e) => {
+                tracing::error!(target: LOG_TARGET, "Failed to get epoch state for slot: {e:?}.");
+                return None;
+            }
+        };
         tracing::debug!(target: LOG_TARGET, "Retrieved epoch state for unseen epoch: {:?}.", epoch_state);
 
         // This is true if epochs are shorter than transition periods. It's not likely
