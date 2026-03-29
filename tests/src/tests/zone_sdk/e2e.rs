@@ -475,7 +475,7 @@ fn spawn_sequencer_with_intents(
                     // Send suffix to rebuilder — if channel is full, previous
                     // rebuild is still running and will be superseded by the
                     // next ChannelUpdate.
-                    let _ = rebuild_tx.try_send(suffix);
+                    drop(rebuild_tx.try_send(suffix));
                 }
             }
         }

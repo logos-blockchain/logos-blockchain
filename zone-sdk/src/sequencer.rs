@@ -871,13 +871,12 @@ async fn handle_block_event(
         Some(old) if old != tip => s.detect_channel_update(old, tip),
         None => {
             // First event — check if the channel already has inscriptions.
-            // Also detect invalidated pending inscriptions: when multiple
-            // sequencers start simultaneously and publish with the same
-            // parent, only one wins on-chain. The others must be invalidated.
+            // Treat as a reorg from root: the LCM is finalized_msg, and
+            // any pending inscriptions chaining from it are orphaned.
             let channel_tip = s.channel_tip_at(tip);
             if channel_tip != MsgId::root() {
                 let adopted = s.collect_inscriptions_on_branch(tip);
-                let invalidated = s.collect_invalidated_pending(channel_tip, &adopted);
+                let invalidated = s.collect_pending_suffix(s.finalized_msg());
                 if !adopted.is_empty() || !invalidated.is_empty() {
                     Some(crate::state::ChannelUpdateInfo {
                         invalidated,

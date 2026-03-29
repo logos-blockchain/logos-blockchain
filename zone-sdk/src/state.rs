@@ -290,14 +290,14 @@ impl TxState {
         }
     }
 
-    /// Detect a channel reorg between old and new L1 tips.
+    /// Detect a channel update between old and new L1 tips.
     ///
-    /// Returns `None` if the new tip's channel state extends the old tip's
-    /// (no reorg — simple extension or no change).
+    /// - Extension: channel tip in new_tip extends from old_tip
+    ///   → report adopted inscriptions, no invalidation
+    /// - Reorg: channel tips diverged → find LCM, orphan entire pending
+    ///   suffix from LCM, report adopted from LCM to new tip
     ///
-    /// Returns `Some(ChannelUpdateInfo)` if the channel tip diverged,
-    /// containing the invalidated pending inscriptions and newly adopted
-    /// on-chain inscriptions.
+    /// Returns `None` if no channel state change.
     pub fn detect_channel_update(
         &self,
         old_tip: HeaderId,
@@ -306,42 +306,24 @@ impl TxState {
         let old_channel_tip = self.channel_tip_at(old_tip);
         let new_channel_tip = self.channel_tip_at(new_tip);
 
-        // Same channel tip — check for stale pending inscriptions anyway.
-        // Re-published inscriptions may target a consumed parent even when
-        // the channel tip hasn't changed (competing sequencer scenario).
         if old_channel_tip == new_channel_tip {
-            let new_branch = self.collect_inscriptions_on_branch(new_tip);
-            let invalidated = self.collect_invalidated_pending(new_channel_tip, &new_branch);
-            if invalidated.is_empty() {
-                return None;
-            }
-            return Some(ChannelUpdateInfo {
-                invalidated,
-                adopted: Vec::new(),
-                new_channel_tip,
-            });
+            return None;
         }
 
-        // Collect inscriptions on both branches (oldest first)
         let new_branch = self.collect_inscriptions_on_branch(new_tip);
         let old_branch = self.collect_inscriptions_on_branch(old_tip);
 
-        // Build the channel chain on the new branch as a set of this_msg IDs.
-        // Include finalized_msg as the implicit root.
+        // Build set of msg IDs on the new canonical channel chain.
         let new_chain: std::collections::HashSet<MsgId> = new_branch
             .iter()
             .map(|i| i.this_msg)
             .chain(std::iter::once(self.finalized_msg))
             .collect();
 
-        // Check extension: old_channel_tip must be an ancestor of
-        // new_channel_tip. With linear channel semantics, this means
-        // old_channel_tip appears as a this_msg in the new chain.
+        // Extension check: old channel tip is an ancestor of new channel tip.
         let extends = new_chain.contains(&old_channel_tip);
 
-        // Find the lowest common message (LCM) — the latest MsgId that
-        // exists in both the old and new channel chains. Walk old branch
-        // in reverse to find the most recent shared point.
+        // Find LCM — latest msg that exists on both channel chains.
         let lcm = old_branch
             .iter()
             .rev()
@@ -349,9 +331,7 @@ impl TxState {
             .map(|i| i.this_msg)
             .unwrap_or(self.finalized_msg);
 
-        // Adopted: inscriptions on the new branch that come after the LCM.
-        // Find the index of the first inscription whose parent is the LCM,
-        // then take everything from that point forward.
+        // Adopted: inscriptions on the new branch after the LCM.
         let adopted: Vec<InscriptionInfo> =
             if let Some(start_idx) = new_branch.iter().position(|i| i.parent_msg == lcm) {
                 new_branch[start_idx..].to_vec()
@@ -360,22 +340,50 @@ impl TxState {
             };
 
         if extends && adopted.is_empty() {
-            // No new inscriptions — tip changed but channel state is the same
             return None;
         }
 
-        // Invalidated: pending inscriptions whose parent is NOT on the new
-        // canonical channel chain.
-        // Always check — even on extensions, competing sequencers may have
-        // pending inscriptions targeting the same parent (e.g. root) that
-        // was just consumed by the on-chain inscription.
-        let invalidated = self.collect_invalidated_pending(lcm, &new_branch);
+        // Invalidated: on extension nothing is orphaned. On reorg, the
+        // entire pending suffix from LCM is orphaned.
+        let invalidated = if extends {
+            Vec::new()
+        } else {
+            self.collect_pending_suffix(lcm)
+        };
 
         Some(ChannelUpdateInfo {
             invalidated,
             adopted,
             new_channel_tip,
         })
+    }
+
+    /// Collect the pending inscription suffix that chains from `from_msg`.
+    /// Walks the pending txs following parent→child links transitively.
+    pub(crate) fn collect_pending_suffix(&self, from_msg: MsgId) -> Vec<InscriptionInfo> {
+        let mut suffix = Vec::new();
+        let mut frontier = vec![from_msg];
+
+        // BFS: find all pending inscriptions reachable from from_msg
+        while let Some(parent) = frontier.pop() {
+            for (tx_hash, signed_tx) in &self.pending {
+                for op in &signed_tx.mantle_tx.ops {
+                    if let lb_core::mantle::ops::Op::ChannelInscribe(inscribe) = op {
+                        if inscribe.parent == parent {
+                            suffix.push(InscriptionInfo {
+                                tx_hash: *tx_hash,
+                                parent_msg: inscribe.parent,
+                                this_msg: inscribe.id(),
+                                payload: inscribe.inscription.clone(),
+                            });
+                            frontier.push(inscribe.id());
+                        }
+                    }
+                }
+            }
+        }
+
+        suffix
     }
 
     /// Collect all inscriptions on a branch from the given block back to LIB,
@@ -407,78 +415,6 @@ impl TxState {
             .collect()
     }
 
-    /// Collect pending inscriptions that are invalidated by a channel update.
-    ///
-    /// A pending inscription is invalidated if its parent MsgId is NOT
-    /// reachable from the new canonical chain — including transitively
-    /// through other valid pending inscriptions. This ensures a chain like
-    /// a1→a2→a3 where only a1 is on-chain doesn't invalidate a2 and a3.
-    pub(crate) fn collect_invalidated_pending(
-        &self,
-        lcm: MsgId,
-        new_branch_inscriptions: &[InscriptionInfo],
-    ) -> Vec<InscriptionInfo> {
-        // Start with on-chain valid parents.
-        // A parent MsgId is "consumed" once an on-chain inscription claims it.
-        // Other pending inscriptions sharing the same parent are invalid
-        // (competing sequencer scenario). Check both lcm and finalized_msg.
-        let mut valid_parents: std::collections::HashSet<MsgId> = std::collections::HashSet::new();
-        let consumed: std::collections::HashSet<MsgId> = new_branch_inscriptions
-            .iter()
-            .map(|i| i.parent_msg)
-            .collect();
-        if !consumed.contains(&lcm) {
-            valid_parents.insert(lcm);
-        }
-        if !consumed.contains(&self.finalized_msg) {
-            valid_parents.insert(self.finalized_msg);
-        }
-        for insc in new_branch_inscriptions {
-            // Only add as valid parent if not already consumed by another
-            // on-chain inscription — prevents stale re-published inscriptions
-            // from being considered valid.
-            if !consumed.contains(&insc.this_msg) {
-                valid_parents.insert(insc.this_msg);
-            }
-        }
-
-        // Transitively add pending inscriptions whose parent is valid.
-        // a1 on-chain → a2 valid (parent=a1) → a3 valid (parent=a2).
-        loop {
-            let mut added = false;
-            for signed_tx in self.pending.values() {
-                for op in &signed_tx.mantle_tx.ops {
-                    if let lb_core::mantle::ops::Op::ChannelInscribe(inscribe) = op
-                        && valid_parents.contains(&inscribe.parent)
-                    {
-                        added |= valid_parents.insert(inscribe.id());
-                    }
-                }
-            }
-            if !added {
-                break;
-            }
-        }
-
-        let mut invalidated = Vec::new();
-
-        for (tx_hash, signed_tx) in &self.pending {
-            for op in &signed_tx.mantle_tx.ops {
-                if let lb_core::mantle::ops::Op::ChannelInscribe(inscribe) = op
-                    && !valid_parents.contains(&inscribe.parent)
-                {
-                    invalidated.push(InscriptionInfo {
-                        tx_hash: *tx_hash,
-                        parent_msg: inscribe.parent,
-                        this_msg: inscribe.id(),
-                        payload: inscribe.inscription.clone(),
-                    });
-                }
-            }
-        }
-
-        invalidated
-    }
 }
 
 #[cfg(test)]
