@@ -2,9 +2,47 @@ use std::collections::{BTreeMap, HashMap};
 
 use lb_core::{
     header::HeaderId,
-    mantle::{SignedMantleTx, tx::TxHash},
+    mantle::{SignedMantleTx, ops::channel::MsgId, tx::TxHash},
 };
 use rpds::HashTrieSetSync;
+
+/// Channel inscription observed in an L1 block.
+#[derive(Debug, Clone)]
+pub struct InscriptionInfo {
+    /// The transaction hash containing this inscription.
+    pub tx_hash: TxHash,
+    /// The parent message ID this inscription chains from.
+    pub parent_msg: MsgId,
+    /// The message ID of this inscription.
+    pub this_msg: MsgId,
+    /// The opaque inscription payload.
+    pub payload: Vec<u8>,
+}
+
+/// Result of channel update detection.
+///
+/// - `adopted`: newly canonical inscriptions since the last common message.
+/// - `invalidated`: local pending inscriptions whose parent is no longer
+///   canonical.
+/// - When `invalidated` is empty, this is an extension-only update.
+#[derive(Debug)]
+pub struct ChannelUpdateInfo {
+    /// Our pending inscriptions that are now invalid (parent taken).
+    pub invalidated: Vec<InscriptionInfo>,
+    /// New inscriptions that appeared on chain (from LCM to new tip).
+    pub adopted: Vec<InscriptionInfo>,
+    /// The new channel tip MsgId.
+    pub new_channel_tip: MsgId,
+}
+
+impl ChannelUpdateInfo {
+    /// Returns true if this update invalidated pending inscriptions,
+    /// meaning a competing inscription or L1 reorg broke our pending chain.
+    #[must_use]
+    pub fn is_conflict(&self) -> bool {
+        !self.invalidated.is_empty()
+    }
+}
 
 /// Transaction state tracker.
 pub struct TxState {
@@ -16,11 +54,15 @@ pub struct TxState {
     parent_map: HashMap<HeaderId, HeaderId>,
     /// Current LIB for pruning.
     current_lib: HeaderId,
+    /// Channel inscriptions per L1 block (unfinalized window only).
+    block_inscriptions: HashMap<HeaderId, Vec<InscriptionInfo>>,
+    /// Last finalized channel tip — used as parent when pending is empty.
+    finalized_msg: MsgId,
 }
 
 impl TxState {
     #[must_use]
-    pub fn new(lib: HeaderId) -> Self {
+    pub fn new(lib: HeaderId, finalized_msg: MsgId) -> Self {
         let mut block_states = BTreeMap::new();
         block_states.insert(lib, HashTrieSetSync::new_sync());
         Self {
@@ -28,7 +70,15 @@ impl TxState {
             block_states,
             parent_map: HashMap::new(),
             current_lib: lib,
+            block_inscriptions: HashMap::new(),
+            finalized_msg,
         }
+    }
+
+    /// Last finalized channel tip MsgId.
+    #[must_use]
+    pub const fn finalized_msg(&self) -> MsgId {
+        self.finalized_msg
     }
 
     /// Submit a transaction for tracking.
@@ -43,6 +93,7 @@ impl TxState {
         parent_id: HeaderId,
         lib: HeaderId,
         our_txs: impl IntoIterator<Item = TxHash>,
+        inscriptions: Vec<InscriptionInfo>,
     ) -> Vec<TxHash> {
         // Store parent relationship for pruning
         self.parent_map.insert(block_id, parent_id);
@@ -52,28 +103,41 @@ impl TxState {
         // where we receive a block whose parent we never saw), start with an empty set.
         // This is conservative: txs might show as "pending" when they should be "safe",
         // but they'll be correctly detected when seen in subsequent blocks.
+        let parent_safe_exists = self.block_states.contains_key(&parent_id);
         let mut safe_set = self
             .block_states
             .get(&parent_id)
             .cloned()
             .unwrap_or_default();
 
+        let mut added_to_safe = 0;
         for tx in our_txs {
             if self.pending.contains_key(&tx) {
                 safe_set = safe_set.insert(tx);
+                added_to_safe += 1;
             }
         }
-        self.block_states.insert(block_id, safe_set);
+        self.block_states.insert(block_id, safe_set.clone());
+        if added_to_safe > 0 || !parent_safe_exists {
+            eprintln!("[SEQ] Block {block_id:?}: added {added_to_safe} txs to safe set (total safe={}, parent_exists={parent_safe_exists})", safe_set.size());
+        }
+
+        // Store channel inscriptions for this block
+        if !inscriptions.is_empty() {
+            self.block_inscriptions.insert(block_id, inscriptions);
+        }
 
         let mut newly_finalized = Vec::new();
 
         // When lib advances: finalize txs and prune
         if lib != self.current_lib {
-            // Finalize txs in all blocks from new lib back to old lib (inclusive).
-            // We may not have state for all intermediate blocks if we missed events,
-            // so we skip blocks we don't know about.
+            eprintln!("[SEQ] LIB advanced: {:?} -> {:?}, pending={}", self.current_lib, lib, self.pending.len());
+            // Walk from new LIB back to old LIB via parent_map.
+            // Finalize pending txs found in safe sets along this path.
+            let mut walk_count = 0;
             let mut block_opt = Some(lib);
             while let Some(block) = block_opt {
+                walk_count += 1;
                 if let Some(block_safe) = self.block_states.get(&block) {
                     for tx_hash in block_safe.iter() {
                         if self.pending.remove(tx_hash).is_some() {
@@ -81,18 +145,22 @@ impl TxState {
                         }
                     }
                 }
-
                 if block == self.current_lib {
                     break;
                 }
-
                 block_opt = self.parent_map.get(&block).copied();
             }
+            eprintln!("[SEQ] Finalization walk: walked {walk_count} blocks, finalized {}", newly_finalized.len());
+
+            // Compute finalized_msg BEFORE pruning — walk from new LIB
+            // backwards to find the latest inscription in the finalized range.
+            self.finalized_msg = self.channel_tip_at(lib);
 
             // Prune ancestors of new lib (but not lib itself)
             let mut prune_cursor = self.parent_map.get(&lib).copied();
             while let Some(b) = prune_cursor {
                 self.block_states.remove(&b);
+                self.block_inscriptions.remove(&b);
                 prune_cursor = self.parent_map.remove(&b);
             }
 
@@ -139,6 +207,7 @@ impl TxState {
 
             for orphan in orphans {
                 self.block_states.remove(&orphan);
+                self.block_inscriptions.remove(&orphan);
                 self.parent_map.remove(&orphan);
             }
         }
@@ -156,10 +225,22 @@ impl TxState {
             .filter(move |(hash, _)| !safe.contains(hash))
     }
 
-    /// Number of pending transactions.
+    /// Number of pending transactions (all types).
     #[must_use]
     pub fn pending_count(&self) -> usize {
         self.pending.len()
+    }
+
+    /// Whether there are pending channel inscriptions (not counting set_keys
+    /// or other non-inscription ops).
+    #[must_use]
+    pub fn has_pending_inscriptions(&self) -> bool {
+        self.pending.values().any(|tx| {
+            tx.mantle_tx
+                .ops
+                .iter()
+                .any(|op| matches!(op, lb_core::mantle::ops::Op::ChannelInscribe(_)))
+        })
     }
 
     /// Check if we have state for a block.
@@ -177,6 +258,226 @@ impl TxState {
     /// All pending transactions (for checkpoint serialization).
     pub fn all_pending_txs(&self) -> impl Iterator<Item = (&TxHash, &SignedMantleTx)> {
         self.pending.iter()
+    }
+
+    /// Remove a pending transaction and return it.
+    pub fn remove_pending(&mut self, tx_hash: &TxHash) -> Option<SignedMantleTx> {
+        self.pending.remove(tx_hash)
+    }
+
+    /// Derive the channel tip MsgId at a given L1 block by walking backwards
+    /// through the block tree and finding the most recent inscription.
+    /// Returns `finalized_msg` if no inscriptions are found in the
+    /// unfinalized window.
+    #[must_use]
+    pub fn channel_tip_at(&self, block_id: HeaderId) -> MsgId {
+        let mut current = block_id;
+        loop {
+            if let Some(inscs) = self.block_inscriptions.get(&current) {
+                if let Some(last) = inscs.last() {
+                    return last.this_msg;
+                }
+            }
+
+            if current == self.current_lib {
+                return self.finalized_msg;
+            }
+
+            match self.parent_map.get(&current) {
+                Some(&parent) => current = parent,
+                None => return self.finalized_msg,
+            }
+        }
+    }
+
+    /// Detect a channel reorg between old and new L1 tips.
+    ///
+    /// Returns `None` if the new tip's channel state extends the old tip's
+    /// (no reorg — simple extension or no change).
+    ///
+    /// Returns `Some(ChannelUpdateInfo)` if the channel tip diverged,
+    /// containing the invalidated pending inscriptions and newly adopted
+    /// on-chain inscriptions.
+    pub fn detect_channel_update(
+        &self,
+        old_tip: HeaderId,
+        new_tip: HeaderId,
+    ) -> Option<ChannelUpdateInfo> {
+        let old_channel_tip = self.channel_tip_at(old_tip);
+        let new_channel_tip = self.channel_tip_at(new_tip);
+
+        // Same channel tip — check for stale pending inscriptions anyway.
+        // Re-published inscriptions may target a consumed parent even when
+        // the channel tip hasn't changed (competing sequencer scenario).
+        if old_channel_tip == new_channel_tip {
+            let new_branch = self.collect_inscriptions_on_branch(new_tip);
+            let invalidated = self.collect_invalidated_pending(new_channel_tip, &new_branch);
+            if invalidated.is_empty() {
+                return None;
+            }
+            return Some(ChannelUpdateInfo {
+                invalidated,
+                adopted: Vec::new(),
+                new_channel_tip,
+            });
+        }
+
+        // Collect inscriptions on both branches (oldest first)
+        let new_branch = self.collect_inscriptions_on_branch(new_tip);
+        let old_branch = self.collect_inscriptions_on_branch(old_tip);
+
+        // Build the channel chain on the new branch as a set of this_msg IDs.
+        // Include finalized_msg as the implicit root.
+        let new_chain: std::collections::HashSet<MsgId> = new_branch
+            .iter()
+            .map(|i| i.this_msg)
+            .chain(std::iter::once(self.finalized_msg))
+            .collect();
+
+        // Check extension: old_channel_tip must be an ancestor of
+        // new_channel_tip. With linear channel semantics, this means
+        // old_channel_tip appears as a this_msg in the new chain.
+        let extends = new_chain.contains(&old_channel_tip);
+
+        // Find the lowest common message (LCM) — the latest MsgId that
+        // exists in both the old and new channel chains. Walk old branch
+        // in reverse to find the most recent shared point.
+        let lcm = old_branch
+            .iter()
+            .rev()
+            .find(|i| new_chain.contains(&i.this_msg))
+            .map(|i| i.this_msg)
+            .unwrap_or(self.finalized_msg);
+
+        // Adopted: inscriptions on the new branch that come after the LCM.
+        // Find the index of the first inscription whose parent is the LCM,
+        // then take everything from that point forward.
+        let adopted: Vec<InscriptionInfo> =
+            if let Some(start_idx) = new_branch.iter().position(|i| i.parent_msg == lcm) {
+                new_branch[start_idx..].to_vec()
+            } else {
+                Vec::new()
+            };
+
+        if extends && adopted.is_empty() {
+            // No new inscriptions — tip changed but channel state is the same
+            return None;
+        }
+
+        // Invalidated: pending inscriptions whose parent is NOT on the new
+        // canonical channel chain.
+        // Always check — even on extensions, competing sequencers may have
+        // pending inscriptions targeting the same parent (e.g. root) that
+        // was just consumed by the on-chain inscription.
+        let invalidated = self.collect_invalidated_pending(lcm, &new_branch);
+
+        Some(ChannelUpdateInfo {
+            invalidated,
+            adopted,
+            new_channel_tip,
+        })
+    }
+
+    /// Collect all inscriptions on a branch from the given block back to LIB,
+    /// in oldest-first order.
+    pub fn collect_inscriptions_on_branch(&self, tip: HeaderId) -> Vec<InscriptionInfo> {
+        let mut blocks = Vec::new();
+        let mut current = tip;
+
+        loop {
+            blocks.push(current);
+            if current == self.current_lib {
+                break;
+            }
+            match self.parent_map.get(&current) {
+                Some(&parent) => current = parent,
+                None => break,
+            }
+        }
+
+        blocks.reverse();
+        blocks
+            .into_iter()
+            .flat_map(|block_id| {
+                self.block_inscriptions
+                    .get(&block_id)
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    /// Collect pending inscriptions that are invalidated by a channel update.
+    ///
+    /// A pending inscription is invalidated if its parent MsgId is NOT
+    /// reachable from the new canonical chain — including transitively
+    /// through other valid pending inscriptions. This ensures a chain like
+    /// a1→a2→a3 where only a1 is on-chain doesn't invalidate a2 and a3.
+    pub(crate) fn collect_invalidated_pending(
+        &self,
+        lcm: MsgId,
+        new_branch_inscriptions: &[InscriptionInfo],
+    ) -> Vec<InscriptionInfo> {
+        // Start with on-chain valid parents.
+        // A parent MsgId is "consumed" once an on-chain inscription claims it.
+        // Other pending inscriptions sharing the same parent are invalid
+        // (competing sequencer scenario). Check both lcm and finalized_msg.
+        let mut valid_parents: std::collections::HashSet<MsgId> = std::collections::HashSet::new();
+        let consumed: std::collections::HashSet<MsgId> = new_branch_inscriptions
+            .iter()
+            .map(|i| i.parent_msg)
+            .collect();
+        if !consumed.contains(&lcm) {
+            valid_parents.insert(lcm);
+        }
+        if !consumed.contains(&self.finalized_msg) {
+            valid_parents.insert(self.finalized_msg);
+        }
+        for insc in new_branch_inscriptions {
+            // Only add as valid parent if not already consumed by another
+            // on-chain inscription — prevents stale re-published inscriptions
+            // from being considered valid.
+            if !consumed.contains(&insc.this_msg) {
+                valid_parents.insert(insc.this_msg);
+            }
+        }
+
+        // Transitively add pending inscriptions whose parent is valid.
+        // a1 on-chain → a2 valid (parent=a1) → a3 valid (parent=a2).
+        loop {
+            let mut added = false;
+            for signed_tx in self.pending.values() {
+                for op in &signed_tx.mantle_tx.ops {
+                    if let lb_core::mantle::ops::Op::ChannelInscribe(inscribe) = op
+                        && valid_parents.contains(&inscribe.parent)
+                    {
+                        added |= valid_parents.insert(inscribe.id());
+                    }
+                }
+            }
+            if !added {
+                break;
+            }
+        }
+
+        let mut invalidated = Vec::new();
+
+        for (tx_hash, signed_tx) in &self.pending {
+            for op in &signed_tx.mantle_tx.ops {
+                if let lb_core::mantle::ops::Op::ChannelInscribe(inscribe) = op
+                    && !valid_parents.contains(&inscribe.parent)
+                {
+                    invalidated.push(InscriptionInfo {
+                        tx_hash: *tx_hash,
+                        parent_msg: inscribe.parent,
+                        this_msg: inscribe.id(),
+                        payload: inscribe.inscription.clone(),
+                    });
+                }
+            }
+        }
+
+        invalidated
     }
 }
 
@@ -207,7 +508,7 @@ mod tests {
     #[test]
     fn submit_and_query_pending() {
         let genesis = header_id(0);
-        let mut state = TxState::new(genesis);
+        let mut state = TxState::new(genesis, MsgId::root());
         let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
 
@@ -219,14 +520,14 @@ mod tests {
     fn block_includes_tx() {
         let genesis = header_id(0);
         let b1 = header_id(1);
-        let mut state = TxState::new(genesis);
+        let mut state = TxState::new(genesis, MsgId::root());
 
         let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
         state.submit(hash, tx);
 
         // Process block containing our tx, lib stays at genesis
-        state.process_block(b1, genesis, genesis, vec![hash]);
+        state.process_block(b1, genesis, genesis, vec![hash], vec![]);
 
         // Tx is still pending (not finalized yet, lib hasn't advanced)
         assert_eq!(state.pending_count(), 1);
@@ -240,18 +541,18 @@ mod tests {
         let genesis = header_id(0);
         let b1 = header_id(1);
         let b2 = header_id(2);
-        let mut state = TxState::new(genesis);
+        let mut state = TxState::new(genesis, MsgId::root());
 
         let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
         state.submit(hash, tx);
 
         // b1 with our tx
-        state.process_block(b1, genesis, genesis, vec![hash]);
+        state.process_block(b1, genesis, genesis, vec![hash], vec![]);
         assert_eq!(state.pending_count(), 1);
 
         // b2, lib advances to b1
-        let finalized = state.process_block(b2, b1, b1, vec![]);
+        let finalized = state.process_block(b2, b1, b1, vec![], vec![]);
         assert_eq!(finalized, vec![hash]);
         assert_eq!(state.pending_count(), 0);
     }
@@ -260,7 +561,7 @@ mod tests {
     fn pending_txs_excludes_safe() {
         let genesis = header_id(0);
         let b1 = header_id(1);
-        let mut state = TxState::new(genesis);
+        let mut state = TxState::new(genesis, MsgId::root());
 
         let tx1 = make_dummy_tx(1);
         let tx2 = make_dummy_tx(2);
@@ -271,7 +572,7 @@ mod tests {
         state.submit(hash2, tx2);
 
         // b1 contains only tx1
-        state.process_block(b1, genesis, genesis, vec![hash1]);
+        state.process_block(b1, genesis, genesis, vec![hash1], vec![]);
 
         // pending_txs at b1 should only return tx2
         let pending: Vec<_> = state.pending_txs(b1).map(|(h, _)| *h).collect();
@@ -286,20 +587,20 @@ mod tests {
         let genesis = header_id(0);
         let b1 = header_id(1);
         let b2 = header_id(2);
-        let mut state = TxState::new(genesis);
+        let mut state = TxState::new(genesis, MsgId::root());
 
         let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
         state.submit(hash, tx);
 
         // b1 has our tx
-        state.process_block(b1, genesis, genesis, vec![hash]);
+        state.process_block(b1, genesis, genesis, vec![hash], vec![]);
 
         // At b1 tip, tx is in safe set (not in pending_txs)
         assert!(state.pending_txs(b1).next().is_none());
 
         // b2 forks from genesis, no tx
-        state.process_block(b2, genesis, genesis, vec![]);
+        state.process_block(b2, genesis, genesis, vec![], vec![]);
 
         // At b2 tip, tx is back in pending_txs (different branch)
         assert!(state.pending_txs(b2).any(|(h, _)| *h == hash));
@@ -320,22 +621,22 @@ mod tests {
         let b1 = header_id(10);
         let b2 = header_id(11);
 
-        let mut state = TxState::new(genesis);
+        let mut state = TxState::new(genesis, MsgId::root());
 
         // Build main chain up to a1
-        state.process_block(a1, genesis, genesis, vec![]);
+        state.process_block(a1, genesis, genesis, vec![], vec![]);
 
         // Build fork from a1 (before lib advances past a1)
-        state.process_block(b1, a1, genesis, vec![]);
-        state.process_block(b2, b1, genesis, vec![]);
+        state.process_block(b1, a1, genesis, vec![], vec![]);
+        state.process_block(b2, b1, genesis, vec![], vec![]);
 
         // Verify fork blocks exist before lib advances
         assert!(state.block_states.contains_key(&b1));
         assert!(state.block_states.contains_key(&b2));
 
         // Continue main chain, lib advances to a3
-        state.process_block(a2, a1, genesis, vec![]);
-        state.process_block(a3, a2, a3, vec![]); // lib advances to a3
+        state.process_block(a2, a1, genesis, vec![], vec![]);
+        state.process_block(a3, a2, a3, vec![], vec![]); // lib advances to a3
 
         // After lib advances to a3:
         // - genesis, a1, a2 should be pruned (ancestors up to and including old lib)
@@ -360,9 +661,9 @@ mod tests {
         assert!(state.block_states.contains_key(&a3), "lib should exist");
 
         // Continue and verify pruning continues working
-        state.process_block(a4, a3, a3, vec![]);
-        state.process_block(a5, a4, a5, vec![]); // lib advances to a5
-        state.process_block(a6, a5, a5, vec![]);
+        state.process_block(a4, a3, a3, vec![], vec![]);
+        state.process_block(a5, a4, a5, vec![], vec![]); // lib advances to a5
+        state.process_block(a6, a5, a5, vec![], vec![]);
 
         assert!(
             !state.block_states.contains_key(&a3),
@@ -383,7 +684,7 @@ mod tests {
         let b1 = header_id(1);
         let b2 = header_id(2);
         let b3 = header_id(3);
-        let mut state = TxState::new(genesis);
+        let mut state = TxState::new(genesis, MsgId::root());
 
         let tx1 = make_dummy_tx(1);
         let tx2 = make_dummy_tx(2);
@@ -394,11 +695,11 @@ mod tests {
         state.submit(hash2, tx2);
 
         // b1 has tx1
-        state.process_block(b1, genesis, genesis, vec![hash1]);
+        state.process_block(b1, genesis, genesis, vec![hash1], vec![]);
         // b2 has tx2
-        state.process_block(b2, b1, genesis, vec![hash2]);
+        state.process_block(b2, b1, genesis, vec![hash2], vec![]);
         // b3, lib jumps from genesis to b2 (skipping b1)
-        let finalized = state.process_block(b3, b2, b2, vec![]);
+        let finalized = state.process_block(b3, b2, b2, vec![], vec![]);
 
         // Both tx1 (in b1) and tx2 (in b2) should be finalized
         assert!(finalized.contains(&hash1));

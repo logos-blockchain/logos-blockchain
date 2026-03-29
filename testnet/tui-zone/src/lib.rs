@@ -1,9 +1,9 @@
-use std::{fs, io::Write as _, path::Path};
+use std::{collections::HashSet, fs, io::Write as _, path::Path};
 
 use clap::Parser;
 use lb_core::mantle::ops::channel::ChannelId;
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
-use lb_zone_sdk::sequencer::{SequencerCheckpoint, ZoneSequencer};
+use lb_zone_sdk::sequencer::{Event, SequencerCheckpoint, ZoneSequencer};
 use reqwest::Url;
 
 #[derive(Parser, Debug)]
@@ -82,12 +82,37 @@ pub async fn run(args: InscribeArgs) {
     let (mut sequencer, handle) =
         ZoneSequencer::init(channel_id, signing_key, node_url, None, checkpoint);
 
-    // Drive the sequencer in the background
+    // Drive the sequencer in the background — handle reorgs by re-publishing
+    // invalidated inscriptions that weren't adopted on the new branch.
+    let reorg_handle = handle.clone();
     tokio::spawn(async move {
         loop {
-            sequencer.next_event().await;
+            if let Some(Event::ChannelUpdate {
+                invalidated,
+                adopted,
+                ..
+            }) = sequencer.next_event().await
+            {
+                let adopted_payloads: HashSet<Vec<u8>> =
+                    adopted.into_iter().map(|a| a.payload).collect();
+                for inv in invalidated {
+                    if !adopted_payloads.contains(&inv.payload) {
+                        let handle = reorg_handle.clone();
+                        let payload = inv.payload;
+                        tokio::spawn(async move {
+                            if let Err(e) = handle.publish(payload).await {
+                                eprintln!("  Failed to re-publish after reorg: {e}");
+                            }
+                        });
+                    }
+                }
+            }
         }
     });
+
+    // Wait for sequencer to be ready before accepting input
+    let mut input_handle = handle.clone();
+    input_handle.wait_ready().await;
 
     println!();
     println!("Type a message and press Enter to publish it as a zone block.");
@@ -115,7 +140,12 @@ pub async fn run(args: InscribeArgs) {
             break;
         }
 
-        match handle.publish(msg.as_bytes().to_vec()).await {
+        // Tag payload with a random ID so we can identify our inscriptions
+        // during reorg handling (avoids duplicate re-publishing).
+        let id: u64 = rand::random();
+        let tagged_payload = format!("{id:016x}:{msg}");
+
+        match handle.publish(tagged_payload.into_bytes()).await {
             Ok(result) => {
                 let tx_hash: [u8; 32] = result.inscription_id.into();
                 println!("  published: {}", hex::encode(tx_hash));
