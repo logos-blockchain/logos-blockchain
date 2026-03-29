@@ -527,8 +527,14 @@ async fn wait_for_indexer(
             .expect("next_messages should succeed");
 
         for msg in &result.messages {
+            let payload_str = String::from_utf8_lossy(&msg.data);
             if expected.contains(&msg.data) {
-                seen.insert(msg.data.clone());
+                let is_new = seen.insert(msg.data.clone());
+                if is_new {
+                    eprintln!("[INDEXER] Found payload: {payload_str}");
+                } else {
+                    eprintln!("[INDEXER] DUPLICATE payload: {payload_str}");
+                }
             }
         }
 
@@ -538,8 +544,14 @@ async fn wait_for_indexer(
             break;
         }
 
-        if !result.messages.is_empty() || !seen.is_empty() {
-            eprintln!("[INDEXER] Found {}/{} payloads, msgs_in_batch={}", seen.len(), expected.len(), result.messages.len());
+        if !seen.is_empty() {
+            // Log which payloads are still missing
+            let missing: Vec<String> = expected
+                .iter()
+                .filter(|p| !seen.contains(*p))
+                .map(|p| String::from_utf8_lossy(p).to_string())
+                .collect();
+            eprintln!("[INDEXER] {}/{} found, missing: {:?}", seen.len(), expected.len(), missing);
         }
 
         sleep(Duration::from_millis(500)).await;
@@ -676,8 +688,35 @@ async fn test_sequential_multi_sequencer() {
     expected_all.extend(phase3_data.iter().cloned());
     wait_for_indexer(&indexer, &expected_all, Duration::from_secs(360)).await;
 
-    // Verify all 9 inscriptions are on chain
-    assert_eq!(expected_all.len(), 9);
+    // Verify all 9 inscriptions are on chain in the expected order:
+    // a1, a2, a3 (SeqA phase1), b1, b2, b3 (SeqB phase2), a4, a5, a6 (SeqA phase3)
+    let expected_order: Vec<Vec<u8>> = phase1_data
+        .iter()
+        .chain(phase2_data.iter())
+        .chain(phase3_data.iter())
+        .cloned()
+        .collect();
+    let mut cursor = None;
+    let mut on_chain_order = Vec::new();
+    loop {
+        let result = indexer
+            .next_messages(cursor, 100)
+            .await
+            .expect("next_messages should succeed");
+        for msg in &result.messages {
+            if expected_all.contains(&msg.data) {
+                on_chain_order.push(msg.data.clone());
+            }
+        }
+        cursor = Some(result.cursor);
+        if result.messages.is_empty() {
+            break;
+        }
+    }
+    assert_eq!(
+        on_chain_order, expected_order,
+        "Inscriptions should appear in expected sequential order"
+    );
 
     // Clean up
     poll_a.abort();

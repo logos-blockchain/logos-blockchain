@@ -346,7 +346,24 @@ impl ZoneSequencer {
             );
             let mut tx_state = TxState::new(cp.lib, cp.last_msg_id);
             for (hash, tx) in cp.pending_txs {
-                tx_state.submit(hash, tx);
+                // Try to extract inscription metadata for lineage tracking
+                let mut is_inscription = false;
+                for op in &tx.mantle_tx.ops {
+                    if let Op::ChannelInscribe(inscribe) = op {
+                        tx_state.submit_inscription(
+                            hash,
+                            tx.clone(),
+                            inscribe.parent,
+                            inscribe.id(),
+                            inscribe.inscription.clone(),
+                        );
+                        is_inscription = true;
+                        break;
+                    }
+                }
+                if !is_inscription {
+                    tx_state.submit_other(hash, tx);
+                }
             }
             (Some(tx_state), cp.lib_slot, cp.last_msg_id)
         } else {
@@ -483,9 +500,14 @@ impl ZoneSequencer {
                 // Advance cursor
                 self.backfill_from = Some(Slot::from(batch_end + 1));
 
-                // Update last_msg_id from discovered inscriptions
+                // Update last_msg_id and finalized_msg from backfilled
+                // finalized inscriptions. These are ground truth from
+                // the finalized history.
                 if let Some(last) = inscriptions.last() {
                     self.last_msg_id = last.this_msg;
+                    if let Some(s) = self.state.as_mut() {
+                        s.set_finalized_msg(last.this_msg);
+                    }
                 }
 
                 if !inscriptions.is_empty() {
@@ -641,6 +663,7 @@ impl ZoneSequencer {
                             self.last_msg_id = update.new_channel_tip;
                             if let Some(s) = self.state.as_mut() {
                                 for inv in &update.invalidated {
+                                    eprintln!("[SEQ] Invalidated: tx={:?}, payload={:?}", inv.tx_hash, String::from_utf8_lossy(&inv.payload));
                                     s.remove_pending(&inv.tx_hash);
                                 }
                             }
@@ -737,15 +760,19 @@ impl ZoneSequencer {
 
         match request {
             ActorRequest::Publish { data, reply } => {
-                eprintln!(
-                    "[SEQ] Publishing with parent last_msg_id={:?}",
+                // Derive publish parent from state instead of trusting
+                // last_msg_id blindly — handles branch switches correctly.
+                let parent = if let Some(tip) = self.current_tip {
+                    s.publish_parent(tip)
+                } else {
                     self.last_msg_id
-                );
+                };
+                eprintln!("[SEQ] Publishing with parent={parent:?}");
                 let (signed_tx, new_msg_id) =
-                    create_inscribe_tx(self.channel_id, &self.signing_key, data, self.last_msg_id);
+                    create_inscribe_tx(self.channel_id, &self.signing_key, data.clone(), parent);
                 let id = signed_tx.mantle_tx.hash();
 
-                s.submit(id, signed_tx.clone());
+                s.submit_inscription(id, signed_tx.clone(), parent, new_msg_id, data);
                 self.last_msg_id = new_msg_id;
 
                 let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
@@ -758,7 +785,7 @@ impl ZoneSequencer {
             ActorRequest::SetKeys { keys, reply } => {
                 let signed_tx = create_set_keys_tx(self.channel_id, &self.signing_key, keys);
                 let id = signed_tx.mantle_tx.hash();
-                s.submit(id, signed_tx.clone());
+                s.submit_other(id, signed_tx.clone());
                 drop(reply.send(Ok(signed_tx)));
             }
         }
@@ -768,10 +795,7 @@ impl ZoneSequencer {
 fn build_checkpoint(state: &TxState, last_msg_id: MsgId, lib_slot: Slot) -> SequencerCheckpoint {
     SequencerCheckpoint {
         last_msg_id,
-        pending_txs: state
-            .all_pending_txs()
-            .map(|(h, tx)| (*h, tx.clone()))
-            .collect(),
+        pending_txs: state.all_pending_txs(),
         lib: state.lib(),
         lib_slot,
     }
@@ -858,6 +882,7 @@ async fn handle_block_event(
     // set may miss them due to gaps or reorgs in the block event stream.
     for tx_hash in lib_finalized {
         if s.remove_pending(&tx_hash).is_some() {
+            eprintln!("[SEQ] Backfill-finalized tx={tx_hash:?}");
             newly_finalized.push(tx_hash);
         }
     }
@@ -1120,10 +1145,7 @@ fn enqueue_resubmit(
     in_flight: &FuturesUnordered<BoxFuture<'static, InFlight>>,
     resubmit_active: &mut bool,
 ) {
-    let pending: Vec<(InscriptionId, SignedMantleTx)> = state
-        .pending_txs(tip)
-        .map(|(hash, tx)| (*hash, tx.clone()))
-        .collect();
+    let pending: Vec<(InscriptionId, SignedMantleTx)> = state.pending_txs(tip);
 
     if pending.is_empty() {
         return;
