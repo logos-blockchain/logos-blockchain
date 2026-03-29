@@ -839,7 +839,11 @@ async fn handle_block_event(
 
     // Backfill if needed (self-healing on every event)
     // 1. Backfill finalized blocks up to LIB (only when state's LIB is behind)
-    eprintln!("[SEQ] LIB check: event_lib={lib:?}, state_lib={:?}, equal={}", s.lib(), lib == s.lib());
+    eprintln!(
+        "[SEQ] LIB check: event_lib={lib:?}, state_lib={:?}, equal={}",
+        s.lib(),
+        lib == s.lib()
+    );
     let mut lib_finalized = Vec::new();
     if lib != s.lib() {
         let new_lib_slot = get_lib_slot(http_client, node_url, lib).await;

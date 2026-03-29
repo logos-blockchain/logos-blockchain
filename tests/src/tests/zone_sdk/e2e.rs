@@ -400,8 +400,7 @@ impl IntentState {
 
     /// Advance committed prefix based on adopted payloads.
     fn mark_adopted(&mut self, adopted: &HashSet<Vec<u8>>) {
-        while self.committed < self.intents.len()
-            && adopted.contains(&self.intents[self.committed])
+        while self.committed < self.intents.len() && adopted.contains(&self.intents[self.committed])
         {
             self.committed += 1;
         }
@@ -551,7 +550,12 @@ async fn wait_for_indexer(
                 .filter(|p| !seen.contains(*p))
                 .map(|p| String::from_utf8_lossy(p).to_string())
                 .collect();
-            eprintln!("[INDEXER] {}/{} found, missing: {:?}", seen.len(), expected.len(), missing);
+            eprintln!(
+                "[INDEXER] {}/{} found, missing: {:?}",
+                seen.len(),
+                expected.len(),
+                missing
+            );
         }
 
         sleep(Duration::from_millis(500)).await;

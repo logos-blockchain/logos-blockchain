@@ -165,7 +165,10 @@ impl TxState {
         }
         self.block_states.insert(block_id, safe_set.clone());
         if added_to_safe > 0 || !parent_safe_exists {
-            eprintln!("[SEQ] Block {block_id:?}: added {added_to_safe} txs to safe set (total safe={}, parent_exists={parent_safe_exists})", safe_set.size());
+            eprintln!(
+                "[SEQ] Block {block_id:?}: added {added_to_safe} txs to safe set (total safe={}, parent_exists={parent_safe_exists})",
+                safe_set.size()
+            );
         }
 
         // Store channel inscriptions for this block
@@ -177,7 +180,12 @@ impl TxState {
 
         // When lib advances: finalize txs and prune
         if lib != self.current_lib {
-            eprintln!("[SEQ] LIB advanced: {:?} -> {:?}, pending={}", self.current_lib, lib, self.pending.len());
+            eprintln!(
+                "[SEQ] LIB advanced: {:?} -> {:?}, pending={}",
+                self.current_lib,
+                lib,
+                self.pending.len()
+            );
             // Walk from new LIB back to old LIB via parent_map.
             // Finalize pending txs found in safe sets along this path.
             let mut walk_count = 0;
@@ -187,8 +195,13 @@ impl TxState {
                 if let Some(block_safe) = self.block_states.get(&block) {
                     for tx_hash in block_safe.iter() {
                         if let Some(removed) = self.pending.remove(tx_hash) {
-                            eprintln!("[SEQ] Safe-set finalized inscription tx={tx_hash:?}, payload={:?}", String::from_utf8_lossy(&removed.payload));
-                            if let Some(children) = self.pending_by_parent.get_mut(&removed.parent_msg) {
+                            eprintln!(
+                                "[SEQ] Safe-set finalized inscription tx={tx_hash:?}, payload={:?}",
+                                String::from_utf8_lossy(&removed.payload)
+                            );
+                            if let Some(children) =
+                                self.pending_by_parent.get_mut(&removed.parent_msg)
+                            {
                                 children.retain(|h| h != tx_hash);
                                 if children.is_empty() {
                                     self.pending_by_parent.remove(&removed.parent_msg);
@@ -206,7 +219,10 @@ impl TxState {
                 }
                 block_opt = self.parent_map.get(&block).copied();
             }
-            eprintln!("[SEQ] Finalization walk: walked {walk_count} blocks, finalized {}", newly_finalized.len());
+            eprintln!(
+                "[SEQ] Finalization walk: walked {walk_count} blocks, finalized {}",
+                newly_finalized.len()
+            );
 
             // Compute finalized_msg BEFORE pruning — walk from new LIB
             // backwards to find the latest inscription in the finalized range.
@@ -413,10 +429,10 @@ impl TxState {
 
     /// Detect a channel update between old and new L1 tips.
     ///
-    /// - Extension: channel tip in new_tip extends from old_tip
-    ///   → report adopted inscriptions, no invalidation
-    /// - Reorg: channel tips diverged → find LCM, orphan entire pending
-    ///   suffix from LCM, report adopted from LCM to new tip
+    /// - Extension: channel tip in new_tip extends from old_tip → report
+    ///   adopted inscriptions, no invalidation
+    /// - Reorg: channel tips diverged → find LCM, orphan entire pending suffix
+    ///   from LCM, report adopted from LCM to new tip
     ///
     /// Returns `None` if no channel state change.
     pub fn detect_channel_update(
@@ -568,7 +584,6 @@ impl TxState {
             })
             .collect()
     }
-
 }
 
 #[cfg(test)]
@@ -821,7 +836,11 @@ mod tests {
         let update = update.unwrap();
 
         // All 3 local pending inscriptions should be invalidated
-        assert_eq!(update.invalidated.len(), 3, "entire suffix should be invalidated");
+        assert_eq!(
+            update.invalidated.len(),
+            3,
+            "entire suffix should be invalidated"
+        );
         // Adopted should contain c1
         assert_eq!(update.adopted.len(), 1);
         assert_eq!(update.adopted[0].this_msg, c1_msg);
