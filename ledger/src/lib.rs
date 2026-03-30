@@ -660,7 +660,7 @@ mod tests {
 
         let result = ledger
             .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
-        assert_eq!(result, Err(LedgerError::InvalidStoragePrice))
+        assert_eq!(result, Err(LedgerError::InvalidStoragePrice));
     }
 
     #[test]
@@ -681,7 +681,7 @@ mod tests {
         // Pays 2925 fees = 2705 execution base fee + 0 execution tip + 220 storage
         let fees = tx.total_gas_cost::<MainnetGasConstants>();
         output_note.value = utxo.note.value - fees;
-        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk.clone()], 1, 1);
+        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk], 1, 1);
 
         let result = ledger
             .clone()
@@ -695,7 +695,7 @@ mod tests {
             .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
         // The transaction should be rejected because the price indicated for execution
         // doesn't cover the base fee that cost 27 050
-        assert_eq!(result, Err(LedgerError::InsufficientExecutionFee))
+        assert_eq!(result, Err(LedgerError::InsufficientExecutionFee));
     }
 
     #[test]
@@ -717,7 +717,13 @@ mod tests {
         // storage
         let fees = tx.total_gas_cost::<MainnetGasConstants>();
         output_note.value = utxo.note.value - fees;
-        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk.clone()], 1, 1);
+        let tx = create_tx(
+            vec![utxo.id()],
+            vec![output_note],
+            std::slice::from_ref(&sk),
+            1,
+            1,
+        );
 
         let result = ledger
             .clone()
@@ -736,9 +742,8 @@ mod tests {
         // storage
         let fees = tx.total_gas_cost::<MainnetGasConstants>();
         output_note.value = utxo.note.value - fees;
-        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk.clone()], 2, 1);
+        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk], 2, 1);
         let result = ledger
-            .clone()
             .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
         // The unwrap should succeed because the user pays at least the base fee of 2705
         let priority_fee_ledger = result.unwrap();
@@ -753,6 +758,6 @@ mod tests {
                 .mantle_ledger
                 .leaders
                 .get_pending_rewards()
-        )
+        );
     }
 }
