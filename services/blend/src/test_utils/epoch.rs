@@ -7,7 +7,7 @@ use lb_groth16::{Field as _, Fr};
 use lb_ledger::EpochState;
 use overwatch::overwatch::OverwatchHandle;
 
-use crate::epoch_info::{ChainApi, EpochError, PolEpochInfo, PolInfoProvider};
+use crate::epoch_info::{ChainApi, PolEpochInfo, PolInfoProvider};
 
 pub fn default_epoch_state() -> EpochState {
     use lb_ledger::UtxoTree;
@@ -27,8 +27,8 @@ pub struct TestChainService;
 
 #[async_trait]
 impl<RuntimeServiceId> ChainApi<RuntimeServiceId> for TestChainService {
-    async fn get_epoch_state_for_slot(&self, _slot: Slot) -> Result<EpochState, EpochError> {
-        Ok(default_epoch_state())
+    async fn get_epoch_state_for_slot(&self, _slot: Slot) -> Option<EpochState> {
+        Some(default_epoch_state())
     }
 }
 

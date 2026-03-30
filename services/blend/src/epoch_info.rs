@@ -63,7 +63,7 @@ pub enum EpochError {
 /// fetch the epoch state for a given slot.
 #[async_trait]
 pub trait ChainApi<RuntimeServiceId> {
-    async fn get_epoch_state_for_slot(&self, slot: Slot) -> Result<EpochState, EpochError>;
+    async fn get_epoch_state_for_slot(&self, slot: Slot) -> Option<EpochState>;
 }
 
 #[async_trait]
@@ -73,8 +73,18 @@ where
     Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
     RuntimeServiceId: Send + Sync,
 {
-    async fn get_epoch_state_for_slot(&self, slot: Slot) -> Result<EpochState, EpochError> {
-        Ok(self.get_epoch_state(slot).await??)
+    async fn get_epoch_state_for_slot(&self, slot: Slot) -> Option<EpochState> {
+        match self.get_epoch_state(slot).await {
+            Ok(Ok(val)) => Some(val),
+            Ok(Err(e)) => {
+                tracing::error!(target: LOG_TARGET, "Get epoch state error: {e:?}.");
+                None
+            }
+            Err(e) => {
+                tracing::error!(target: LOG_TARGET, "Get epoch state API error: {e:?}.");
+                None
+            }
+        }
     }
 }
 
@@ -279,16 +289,13 @@ where
         }
 
         tracing::debug!(target: LOG_TARGET, "Found epoch unseen before. Retrieving its state...");
-        let epoch_state = match self
+        let Some(epoch_state) = self
             .chain_service
             .get_epoch_state_for_slot(new_tick.slot)
             .await
-        {
-            Ok(state) => state,
-            Err(e) => {
-                tracing::error!(target: LOG_TARGET, "Failed to get epoch state for slot: {e:?}.");
-                return None;
-            }
+        else {
+            tracing::warn!(target: LOG_TARGET, "Failed to get epoch state for slot.  Skipping...");
+            return None;
         };
         tracing::debug!(target: LOG_TARGET, "Retrieved epoch state for unseen epoch: {:?}.", epoch_state);
 
