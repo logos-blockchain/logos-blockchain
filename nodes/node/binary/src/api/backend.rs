@@ -46,7 +46,9 @@ use super::handlers::{
 use crate::{
     WalletService,
     api::{
-        handlers::{leader_claim, post_activity, post_declaration, post_withdrawal},
+        handlers::{
+            leader_claim, mantle_channel, post_activity, post_declaration, post_withdrawal,
+        },
         openapi::ApiDoc,
     },
 };
@@ -183,6 +185,10 @@ where
 
         let app = Router::new()
             .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+            .route(
+                paths::MANTLE_CHANNEL,
+                routing::get(mantle_channel::<RuntimeServiceId>),
+            )
             .route(
                 paths::MANTLE_METRICS,
                 routing::get(mantle_metrics::<MempoolStorageAdapter, RuntimeServiceId>),

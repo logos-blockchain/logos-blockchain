@@ -1,3 +1,4 @@
+pub const MANTLE_CHANNEL: &str = "/mantle/channel/:id";
 pub const MANTLE_METRICS: &str = "/mantle/metrics";
 pub const MANTLE_STATUS: &str = "/mantle/status";
 pub const MANTLE_SDP_DECLARATIONS: &str = "/mantle/sdp/declarations";
