@@ -510,9 +510,8 @@ mod tests {
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
 
-    use crate::cryptarchia::tests::utxo_with_sk;
-
     use super::*;
+    use crate::cryptarchia::tests::utxo_with_sk;
 
     fn create_test_keys() -> (Ed25519Key, Ed25519PublicKey) {
         create_test_keys_with_seed(0)
