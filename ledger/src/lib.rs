@@ -280,14 +280,13 @@ impl LedgerState {
 
         // blend get 60% of block rewards while leaders get the 40% remaining + the
         // tips. Casting as Value truncate the floating points
-        let blend_reward = ((reward_numerator * BLEND_REWARD_SHARE_NUMERATOR
+        let blend_reward = (reward_numerator * BLEND_REWARD_SHARE_NUMERATOR
             / (reward_denominator * BLEND_REWARD_SHARE_DENOMINATOR))
-            + ((u128::from(total_fee_tip) * BLEND_REWARD_SHARE_NUMERATOR)
-                / BLEND_REWARD_SHARE_DENOMINATOR)) as Value;
-        let leader_reward = ((reward_numerator * LEADER_REWARD_SHARE_NUMERATOR
+            as Value;
+        let leader_reward = (reward_numerator * LEADER_REWARD_SHARE_NUMERATOR
             / (reward_denominator * LEADER_REWARD_SHARE_DENOMINATOR))
-            + ((u128::from(total_fee_tip) * LEADER_REWARD_SHARE_NUMERATOR)
-                / LEADER_REWARD_SHARE_DENOMINATOR)) as Value;
+            as Value
+            + total_fee_tip;
 
         self.mantle_ledger.leaders = self
             .mantle_ledger
