@@ -5,6 +5,7 @@ use lb_core::{
     },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_wallet::WalletBalance;
 use overwatch::{
     overwatch::OverwatchHandle,
     services::{
@@ -95,7 +96,7 @@ where
         &self,
         tip: Option<HeaderId>,
         pk: ZkPublicKey,
-    ) -> Result<TipResponse<Option<Value>>, WalletApiError> {
+    ) -> Result<TipResponse<Option<WalletBalance>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay

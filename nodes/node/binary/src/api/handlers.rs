@@ -603,7 +603,8 @@ pub mod wallet {
                 response: Some(balance),
             }) => WalletBalanceResponseBody {
                 tip,
-                balance,
+                balance: balance.balance,
+                notes: balance.notes,
                 address,
             }
             .into_response(),

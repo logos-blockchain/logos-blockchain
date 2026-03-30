@@ -15,7 +15,7 @@ use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo, Value,
+        AuthenticatedMantleTx, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
         gas::MainnetGasConstants,
         ops::{
             channel::{ChannelId, inscribe::InscriptionOp, set_keys::SetKeysOp},
@@ -45,7 +45,7 @@ use lb_services_utils::{
 };
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
 use lb_utxotree::MerklePath;
-use lb_wallet::{WalletBlock, WalletError};
+use lb_wallet::{WalletBalance, WalletBlock, WalletError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData},
@@ -112,7 +112,7 @@ pub enum WalletMsg {
     GetBalance {
         tip: Option<HeaderId>,
         pk: ZkPublicKey,
-        resp_tx: Sender<Result<TipResponse<Option<Value>>, WalletServiceError>>,
+        resp_tx: Sender<Result<TipResponse<Option<WalletBalance>>, WalletServiceError>>,
     },
     FundTx {
         tip: Option<HeaderId>,
@@ -483,7 +483,7 @@ where
     async fn handle_get_balance(
         tip: Option<HeaderId>,
         pk: ZkPublicKey,
-        resp_tx: Sender<Result<TipResponse<Option<u64>>, WalletServiceError>>,
+        resp_tx: Sender<Result<TipResponse<Option<WalletBalance>>, WalletServiceError>>,
         wallet: &Wallet,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {

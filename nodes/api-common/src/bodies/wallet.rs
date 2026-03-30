@@ -1,9 +1,14 @@
 pub mod balance {
+    use std::collections::HashMap;
+
     use axum::{
         http::StatusCode,
         response::{IntoResponse, Response},
     };
-    use lb_core::{header::HeaderId, mantle::Value};
+    use lb_core::{
+        header::HeaderId,
+        mantle::{NoteId, Value},
+    };
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use serde::{Deserialize, Serialize};
     use tracing::error;
@@ -12,6 +17,7 @@ pub mod balance {
     pub struct WalletBalanceResponseBody {
         pub tip: HeaderId,
         pub balance: Value,
+        pub notes: HashMap<NoteId, Value>,
         pub address: ZkPublicKey,
     }
 
