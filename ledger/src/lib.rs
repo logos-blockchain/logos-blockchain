@@ -484,7 +484,8 @@ impl LedgerState {
             }
         }
 
-        match balance.cmp(&tx.gas_cost::<Constants>().into()) {
+        let gas_cost = AuthenticatedMantleTx::gas_cost::<Constants>(&tx);
+        match balance.cmp(&gas_cost.into()) {
             Ordering::Less => return Err(LedgerError::InsufficientBalance),
             Ordering::Greater => return Err(LedgerError::UnbalancedTransaction),
             Ordering::Equal => {} // OK!
@@ -506,7 +507,6 @@ mod tests {
             },
             transfer::TransferOp,
         },
-        ledger::Tx as LedgerTx,
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;

@@ -183,13 +183,8 @@ impl<'a, E: LbcScenarioEnv> Submission<'a, E> {
         })
     }
 
-    fn get_gas_context(&self) -> MantleTxGasContext {
-        let ledger_state = E::ledger_state(self.ctx);
-        ledger_state.mantle_ledger().channels().into()
-    }
-
     async fn execute(mut self) -> Result<(), DynError> {
-        let gas_context = self.get_gas_context();
+        let gas_context = MantleTxGasContext::new(HashMap::new());
         while let Some(input) = self.plan.pop_front() {
             submit_wallet_transaction(self.ctx, &input, gas_context.clone()).await?;
             if !self.interval.is_zero() {

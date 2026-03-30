@@ -528,9 +528,8 @@ pub mod tests {
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
-            GasCost as _, MantleTx, Note, Op, OpProof::ZkSig, SignedMantleTx, Transaction as _,
+            MantleTx, Note, Op, OpProof::ZkSig, SignedMantleTx, Transaction as _,
             gas::MainnetGasConstants, ops::leader_claim::VoucherCm,
-            ledger::Tx as LedgerTx,
         },
         sdp::ServiceParameters,
     };

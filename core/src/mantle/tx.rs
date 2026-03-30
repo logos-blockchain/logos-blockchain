@@ -12,7 +12,6 @@ use crate::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasConstants, GasCost},
-        ledger::Tx as LedgerTx,
         ops::{
             Op, OpProof,
             channel::{ChannelId, ChannelKeyIndex},

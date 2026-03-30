@@ -8,7 +8,6 @@ use std::sync::Arc;
 pub use consensus_liveness::ConsensusLiveness;
 pub use fork_monitor::ClusterForkMonitor;
 pub use inscription::*;
-use lb_ledger::LedgerState;
 use testing_framework_core::scenario::{Application, RunContext};
 use tokio::sync::broadcast;
 
@@ -19,17 +18,9 @@ pub type BlockFeedSubscription = broadcast::Receiver<Arc<BlockRecord>>;
 /// Common environment bounds required by Nomos-specific workloads.
 pub trait LbcScenarioEnv:
     Application<Deployment = DeploymentPlan, NodeClient = NodeHttpClient>
-{
-    fn ledger_state(ctx: &RunContext<Self>) -> LedgerState
-    where
-        Self: Sized;
-}
+{}
 
-impl LbcScenarioEnv for LbcEnv {
-    fn ledger_state(_ctx: &RunContext<Self>) -> LedgerState {
-        unimplemented!("Ledger state access is not implemented yet")
-    }
-}
+impl LbcScenarioEnv for LbcEnv {}
 
 /// Extension trait for environments that expose block feed views.
 pub trait LbcBlockFeedEnv: LbcScenarioEnv + Sized {
