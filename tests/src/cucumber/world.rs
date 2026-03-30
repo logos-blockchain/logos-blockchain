@@ -18,8 +18,8 @@ use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
-    LbcEnv, LbcManualCluster, NodeHttpClient, ScenarioBuilder, ScenarioBuilderExt as _,
-    configs::wallet::WalletAccount, workloads,
+    LbcEnv, LbcK8sManualCluster, LbcManualCluster, NodeHttpClient, ScenarioBuilder,
+    ScenarioBuilderExt as _, configs::wallet::WalletAccount, workloads,
 };
 use testing_framework_core::scenario::{NodeControlCapability, Scenario, StartedNode};
 use tokio::task::JoinHandle;
@@ -139,6 +139,9 @@ pub struct CucumberWorld {
     /// information, which includes the started node instance and any relevant
     /// metadata.
     pub local_cluster: Option<LbcManualCluster>,
+    /// Manual: Optional k8s manual cluster instance for scenarios that use the
+    /// k8s deployer.
+    pub k8s_manual_cluster: Option<LbcK8sManualCluster>,
     /// Manual: List of nodes with their info.
     pub nodes_info: HashMap<String, NodeInfo>,
     /// Manual: List of genesis tokens allocated to wallets accounts.
@@ -260,6 +263,13 @@ impl Debug for CucumberWorld {
             .field("local_cluster", {
                 if self.local_cluster.is_some() {
                     &"Has LbcManualCluster"
+                } else {
+                    &"None"
+                }
+            })
+            .field("k8s_manual_cluster", {
+                if self.k8s_manual_cluster.is_some() {
+                    &"Has LbcK8sManualCluster"
                 } else {
                     &"None"
                 }
@@ -648,7 +658,7 @@ impl CucumberWorld {
     }
 
     fn ensure_local_node_binary(&self) -> Result<(), StepError> {
-        if host_node_binary_available() {
+        if host_node_binary_from_env_var_available() {
             return Ok(());
         }
 
@@ -664,7 +674,7 @@ impl CucumberWorld {
     /// Helper to resolve a node name to the actual started node name. This is
     /// useful for steps that refer to nodes by a logical name, and need to
     /// find the corresponding started node in the world.
-    pub fn resolve_node_name(&self, node_name: &str) -> Result<String, StepError> {
+    pub fn resolve_node_runtime_name(&self, node_name: &str) -> Result<String, StepError> {
         Ok(self
             .nodes_info
             .get(node_name)
@@ -674,6 +684,10 @@ impl CucumberWorld {
             .started_node
             .name
             .clone())
+    }
+
+    pub fn resolve_node_name(&self, node_name: &str) -> Result<String, StepError> {
+        self.resolve_node_runtime_name(node_name)
     }
 
     /// Helper to resolve a node http client to the actual started node name.
@@ -851,6 +865,13 @@ impl CucumberWorld {
                     &"None"
                 }
             })
+            .field("k8s_manual_cluster", {
+                if self.k8s_manual_cluster.is_some() {
+                    &"Has LbcK8sManualCluster"
+                } else {
+                    &"None"
+                }
+            })
             .field("nodes_info", &nodes_info_display(&self.nodes_info))
             .field("genesis_tokens", &format!("{:?}", self.genesis_tokens))
             .field("wallet_info", &wallet_info_display(&self.wallet_info))
@@ -902,7 +923,7 @@ impl CucumberWorld {
     }
 }
 
-fn host_node_binary_available() -> bool {
+fn host_node_binary_from_env_var_available() -> bool {
     env::var_os(LOGOS_BLOCKCHAIN_NODE_BIN)
         .map(PathBuf::from)
         .is_some_and(|path| path.is_file())

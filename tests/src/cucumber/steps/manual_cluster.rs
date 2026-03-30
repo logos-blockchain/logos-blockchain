@@ -1,0 +1,261 @@
+use std::{collections::HashMap, hash::BuildHasher, time::Duration};
+
+use lb_testing_framework::{
+    DeploymentBuilder, LbcEnv, NodeHttpClient, configs::wallet::WalletAccount,
+    internal::DeploymentPlan,
+};
+use testing_framework_core::scenario::{PeerSelection, StartNodeOptions, StartedNode};
+use tokio::time::{Instant, sleep};
+use tracing::warn;
+
+use crate::cucumber::{
+    error::{StepError, StepResult},
+    steps::TARGET,
+    world::{CucumberWorld, NodeInfo, WalletInfo, WalletType},
+};
+
+pub fn build_manual_cluster_deployment(
+    world: &mut CucumberWorld,
+    nodes_count: usize,
+) -> Result<DeploymentPlan, StepError> {
+    let mut config = lb_testing_framework::TopologyConfig::with_node_numbers(nodes_count)
+        .with_allow_multiple_genesis_tokens(true)
+        .with_allow_zero_value_genesis_tokens(true);
+
+    for genesis_token in &world.genesis_tokens {
+        let wallet_account = WalletAccount::deterministic(
+            genesis_token.account_index as u64,
+            genesis_token.token_amount,
+            true,
+        )?;
+
+        world
+            .wallet_accounts
+            .insert(genesis_token.account_index, wallet_account.clone());
+        for _ in 0..genesis_token.token_count {
+            config.wallet_config.accounts.push(wallet_account.clone());
+        }
+    }
+
+    let deployment =
+        DeploymentBuilder::new(config)
+            .build()
+            .map_err(|e| StepError::LogicalError {
+                message: format!("failed to build manual cluster: {e}"),
+            })?;
+
+    if let Some(genesis_tx) = deployment.config.genesis_tx.clone() {
+        world.genesis_block_utxos =
+            crate::cucumber::steps::manual_nodes::utils::genesis_block_utxos(&genesis_tx);
+    }
+
+    Ok(deployment)
+}
+
+pub async fn start_manual_node(
+    world: &CucumberWorld,
+    node_name: &str,
+    options: StartNodeOptions<LbcEnv>,
+) -> Result<StartedNode<LbcEnv>, StepError> {
+    if let Some(cluster) = world.local_cluster.as_ref() {
+        return Box::pin(cluster.start_node_with(node_name, options))
+            .await
+            .map_err(|e| StepError::LogicalError {
+                message: format!("failed to start node '{node_name}': {e}"),
+            });
+    }
+
+    if let Some(cluster) = world.k8s_manual_cluster.as_ref() {
+        return Box::pin(cluster.start_node_with(node_name, options))
+            .await
+            .map_err(|e| StepError::LogicalError {
+                message: format!("failed to start node '{node_name}': {e}"),
+            });
+    }
+
+    Err(StepError::LogicalError {
+        message: "No manual cluster available".into(),
+    })
+}
+
+pub async fn wait_manual_node_ready(world: &CucumberWorld, node_name: &str) -> StepResult {
+    if let Some(cluster) = world.local_cluster.as_ref() {
+        return cluster
+            .wait_node_ready(node_name)
+            .await
+            .map_err(|e| StepError::LogicalError {
+                message: format!("node '{node_name}' did not become ready: {e}"),
+            });
+    }
+
+    if let Some(cluster) = world.k8s_manual_cluster.as_ref() {
+        return cluster
+            .wait_node_ready(node_name)
+            .await
+            .map_err(|e| StepError::LogicalError {
+                message: format!("node '{node_name}' did not become ready: {e}"),
+            });
+    }
+
+    Err(StepError::LogicalError {
+        message: "No manual cluster available".into(),
+    })
+}
+
+pub fn manual_node_client(
+    world: &CucumberWorld,
+    node_name: &str,
+) -> Result<NodeHttpClient, StepError> {
+    if let Some(cluster) = world.local_cluster.as_ref() {
+        return cluster
+            .node_client(node_name)
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("missing client for node '{node_name}'"),
+            });
+    }
+
+    if let Some(cluster) = world.k8s_manual_cluster.as_ref() {
+        return cluster
+            .node_client(node_name)
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("missing client for node '{node_name}'"),
+            });
+    }
+
+    Err(StepError::LogicalError {
+        message: "No manual cluster available".into(),
+    })
+}
+
+pub fn stop_active_manual_cluster(world: &CucumberWorld) -> StepResult {
+    if let Some(cluster) = world.local_cluster.as_ref() {
+        cluster.stop_all();
+        return Ok(());
+    }
+
+    if let Some(cluster) = world.k8s_manual_cluster.as_ref() {
+        cluster.stop_all();
+        return Ok(());
+    }
+
+    Err(StepError::LogicalError {
+        message: "No manual cluster available".into(),
+    })
+}
+
+pub async fn assert_manual_node_has_peers(
+    world: &CucumberWorld,
+    node_name: &str,
+    min_peers: usize,
+    timeout_secs: u64,
+) -> StepResult {
+    let runtime_node_name = world
+        .resolve_node_runtime_name(node_name)
+        .unwrap_or_else(|_| node_name.to_owned());
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+
+    loop {
+        let client = manual_node_client(world, &runtime_node_name)?;
+        let network = client.network_info().await?;
+        if network.n_peers >= min_peers {
+            return Ok(());
+        }
+
+        if Instant::now() >= deadline {
+            return Err(StepError::StepFail {
+                message: format!(
+                    "node '{node_name}' did not reach {min_peers} peers in {timeout_secs}s \
+                    (peers={}, connections={}, pending={})",
+                    network.n_peers, network.n_connections, network.n_pending_connections
+                ),
+            });
+        }
+
+        warn!(
+            target: TARGET,
+            "waiting for node '{node_name}' to reach {min_peers} peers; current peers={} connections={} pending={}",
+            network.n_peers,
+            network.n_connections,
+            network.n_pending_connections
+        );
+        sleep(Duration::from_secs(1)).await;
+    }
+}
+
+pub fn build_user_wallets(
+    world: &CucumberWorld,
+    node_name: &str,
+    wallet_start_info: &[crate::cucumber::steps::manual_nodes::utils::WalletStartInfo],
+) -> Result<HashMap<String, WalletInfo>, StepError> {
+    let mut wallet_info = HashMap::new();
+    for wallet in wallet_start_info {
+        let wallet_account = match world.wallet_accounts.get(&wallet.account_index) {
+            Some(wallet_account) => wallet_account.clone(),
+            None => WalletAccount::deterministic(wallet.account_index as u64, 0, true).map_err(
+                |source| StepError::LogicalError {
+                    message: format!(
+                        "failed to derive deterministic wallet account for index {}: {source}",
+                        wallet.account_index,
+                    ),
+                },
+            )?,
+        };
+
+        wallet_info.insert(
+            wallet.wallet_name.clone(),
+            WalletInfo {
+                wallet_name: wallet.wallet_name.clone(),
+                node_name: node_name.to_owned(),
+                wallet_type: WalletType::User { wallet_account },
+            },
+        );
+    }
+
+    Ok(wallet_info)
+}
+
+pub fn insert_started_node_info<S: BuildHasher>(
+    world: &mut CucumberWorld,
+    logical_node_name: String,
+    started_node: StartedNode<LbcEnv>,
+    wallet_info: HashMap<String, WalletInfo, S>,
+) {
+    let wallet_info: HashMap<String, WalletInfo> = wallet_info.into_iter().collect();
+
+    world
+        .wallet_info
+        .extend(wallet_info.iter().map(|(k, v)| (k.clone(), v.clone())));
+
+    world.nodes_info.insert(
+        logical_node_name.clone(),
+        NodeInfo {
+            name: logical_node_name,
+            started_node,
+            run_config: None,
+            chain_info: HashMap::new(),
+            wallet_info,
+            runtime_dir: std::path::PathBuf::new(),
+        },
+    );
+}
+
+pub fn peer_selection_from_names(
+    world: &CucumberWorld,
+    initial_peers: &[String],
+) -> Result<PeerSelection, StepError> {
+    Ok(PeerSelection::Named(resolve_named_peers(
+        world,
+        initial_peers,
+    )))
+}
+
+pub fn resolve_named_peers(world: &CucumberWorld, initial_peers: &[String]) -> Vec<String> {
+    initial_peers
+        .iter()
+        .map(|peer| {
+            world
+                .resolve_node_runtime_name(peer)
+                .unwrap_or_else(|_| peer.clone())
+        })
+        .collect()
+}

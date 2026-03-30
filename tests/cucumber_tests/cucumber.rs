@@ -156,7 +156,7 @@ async fn main() {
         })
         // Runs Cucumber. Features sourced from a Parser are fed to a Runner, which
         // produces events handled by a Writer.
-        .run_and_exit(get_feature_path())
+        .run_and_exit(get_feature_path_for_deployer(deployer))
         .await;
 }
 
@@ -178,6 +178,16 @@ fn selected_deployer() -> DeployerKind {
     }
 
     DeployerKind::Local
+}
+
+fn get_feature_path_for_deployer(deployer: DeployerKind) -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let feature_path = match deployer {
+        DeployerKind::K8s => manifest_dir.join("cucumber_tests/features_k8s"),
+        DeployerKind::Local | DeployerKind::Compose => get_feature_path(),
+    };
+    println!("Feature path:      {}", feature_path.display());
+    feature_path
 }
 
 fn prepare_world_for_scenario(
