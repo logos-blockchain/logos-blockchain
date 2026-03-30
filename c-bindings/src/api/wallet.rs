@@ -40,7 +40,7 @@ use crate::{
 };
 
 /// ```rust
-///
+/// 
 /// Fetches the list of known addresses from the `LogosBlockchainNode`.
 ///
 /// # Parameters
@@ -66,7 +66,7 @@ use crate::{
 ///     Err(status) => eprintln!("Failed to fetch addresses: {:?}", status),
 /// }
 /// ```
-///
+/// 
 /// # Notes
 /// - This function utilizes the runtime's `block_on` method to execute the asynchronous operations in a blocking manner.
 /// - The returned public keys represent a set of addresses known to the Wallet API.
