@@ -531,11 +531,13 @@ mod tests {
         ops::{
             channel::{
                 ChannelId, MsgId, deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp,
+                withdraw::ChannelWithdrawOp,
             },
             transfer::TransferOp,
         },
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey};
+    use lb_core::proofs::channel_withdraw_proof::{ChannelWithdrawProof, WithdrawSignature};
     use num_bigint::BigUint;
 
     use super::*;
@@ -579,6 +581,7 @@ mod tests {
     enum Key {
         Ed25519(Ed25519Key),
         Zk(ZkKey),
+        Withdraw(ChannelWithdrawProof),
         None,
     }
 
@@ -604,6 +607,7 @@ mod tests {
                 Key::Zk(key) => OpProof::ZkSig(
                     ZkKey::multi_sign(std::slice::from_ref(key), tx_hash.as_ref()).unwrap(),
                 ),
+                Key::Withdraw(proof) => OpProof::ChannelWithdrawProof(proof.clone()),
                 Key::None => OpProof::NoProof,
             })
             .collect();
@@ -813,6 +817,209 @@ mod tests {
             deposit.amount,
         );
         assert_eq!(balance, Balance::from(0));
+    }
+
+    #[test]
+    fn test_channel_withdraw_operation() {
+        let test_config = config();
+        let (sk, utxo) = utxo_with_sk();
+        let mut ledger_state = LedgerState::from_utxos([utxo], &test_config);
+        let (signing_key, verifying_key) = create_test_keys();
+        let channel_id = ChannelId::from([9; 32]);
+
+        ledger_state = create_channel(
+            ledger_state,
+            &test_config,
+            channel_id,
+            &signing_key,
+            verifying_key,
+        );
+
+        // Deposit some funds into the channel
+        let deposit = DepositOp {
+            channel_id,
+            amount: 10,
+            metadata: vec![5, 6, 7, 8],
+        };
+        let deposit_ops = vec![
+            Op::ChannelDeposit(deposit.clone()),
+            Op::Transfer(TransferOp {
+                inputs: vec![utxo.id()],
+                outputs: vec![Note::new(
+                    utxo.note.value - deposit.amount,
+                    sk.to_public_key(),
+                )],
+            }),
+        ];
+        ledger_state = ledger_state
+            .try_apply_tx::<HeaderId, MainnetGasConstants>(
+                &test_config,
+                create_multi_signed_tx(deposit_ops, vec![&Key::None, &Key::Zk(sk)]),
+            )
+            .unwrap()
+            .0;
+
+        // Withdraw some funds from the channel
+        let withdraw = ChannelWithdrawOp {
+            channel_id,
+            amount: 6,
+        };
+        let recipient_sk = ZkKey::from(BigUint::from(99u8));
+        let recipient_pk = recipient_sk.to_public_key();
+        let transfer_op = TransferOp {
+            inputs: vec![],
+            outputs: vec![Note::new(withdraw.amount, recipient_pk)],
+        };
+        let withdraw_tx = MantleTx {
+            ops: vec![
+                Op::ChannelWithdraw(withdraw.clone()),
+                Op::Transfer(transfer_op.clone()),
+            ],
+            execution_gas_price: 0,
+            storage_gas_price: 0,
+        };
+        let withdraw_tx_hash = withdraw_tx.hash();
+        let withdraw_proof = ChannelWithdrawProof::new(vec![WithdrawSignature::new(
+            0,
+            signing_key.sign_payload(withdraw_tx_hash.as_signing_bytes().as_ref()),
+        )])
+        .unwrap();
+
+        let signed_tx = SignedMantleTx::new(
+            withdraw_tx,
+            vec![
+                OpProof::ChannelWithdrawProof(withdraw_proof),
+                OpProof::ZkSig(ZkKey::multi_sign(&[], withdraw_tx_hash.as_ref()).unwrap()),
+            ],
+        )
+        .unwrap();
+
+        let result =
+            ledger_state.try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, signed_tx);
+        assert!(result.is_ok());
+
+        let (new_state, tx_balance) = result.unwrap();
+        assert_eq!(tx_balance, 0);
+        let channel_balance = new_state
+            .mantle_ledger()
+            .channels()
+            .channels
+            .get(&channel_id)
+            .unwrap()
+            .balance;
+        assert_eq!(channel_balance, 4);
+        let output_utxo = transfer_op.utxo_by_index(0).unwrap();
+        assert_eq!(output_utxo.note.value, withdraw.amount);
+        assert_eq!(output_utxo.note.pk, recipient_sk.to_public_key());
+        assert!(new_state.latest_utxos().contains(&output_utxo.id()));
+    }
+
+    #[test]
+    fn test_channel_withdraw_invalid_helper_backed_proof_fails_on_apply() {
+        let test_config = config();
+        let (sk, utxo) = utxo_with_sk();
+        let mut ledger_state = LedgerState::from_utxos([utxo], &test_config);
+        let (signing_key, verifying_key) = create_test_keys();
+        let channel_id = ChannelId::from([10; 32]);
+
+        ledger_state = create_channel(
+            ledger_state,
+            &test_config,
+            channel_id,
+            &signing_key,
+            verifying_key,
+        );
+
+        // Deposit some funds into the channel
+        let deposit = DepositOp {
+            channel_id,
+            amount: 10,
+            metadata: vec![],
+        };
+        let deposit_ops = vec![
+            Op::ChannelDeposit(deposit.clone()),
+            Op::Transfer(TransferOp {
+                inputs: vec![utxo.id()],
+                outputs: vec![Note::new(
+                    utxo.note.value - deposit.amount,
+                    sk.to_public_key(),
+                )],
+            }),
+        ];
+        ledger_state = ledger_state
+            .try_apply_tx::<HeaderId, MainnetGasConstants>(
+                &test_config,
+                create_multi_signed_tx(deposit_ops, vec![&Key::None, &Key::Zk(sk)]),
+            )
+            .unwrap()
+            .0;
+        let channel_balance_after_deposit = ledger_state
+            .mantle_ledger()
+            .channels()
+            .channels
+            .get(&channel_id)
+            .unwrap()
+            .balance;
+
+        // Try to withdraw some funds from the channel, but with an invalid proof
+        let withdraw = ChannelWithdrawOp {
+            channel_id,
+            amount: 6,
+        };
+        let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
+        let recipient_sk = ZkKey::from(BigUint::from(100u8));
+        let recipient_pk = recipient_sk.to_public_key();
+        let transfer_op = TransferOp {
+            inputs: vec![],
+            outputs: vec![Note::new(withdraw.amount, recipient_pk)],
+        };
+        let withdraw_tx = MantleTx {
+            ops: vec![
+                Op::ChannelWithdraw(withdraw.clone()),
+                Op::Transfer(transfer_op.clone()),
+            ],
+            execution_gas_price: 0,
+            storage_gas_price: 0,
+        };
+        let withdraw_tx_hash = withdraw_tx.hash();
+        let invalid_proof = ChannelWithdrawProof::new(vec![WithdrawSignature::new(
+            0,
+            wrong_key.sign_payload(withdraw_tx_hash.as_signing_bytes().as_ref()),
+        )])
+        .unwrap();
+
+        let signed_tx = SignedMantleTx::new(
+            withdraw_tx,
+            vec![
+                OpProof::ChannelWithdrawProof(invalid_proof),
+                OpProof::ZkSig(ZkKey::multi_sign(&[], withdraw_tx_hash.as_ref()).unwrap()),
+            ],
+        )
+            .unwrap();
+
+        let result = ledger_state.clone()
+            .try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, signed_tx);
+        assert_eq!(
+            result,
+            Err(LedgerError::VerificationError(
+                VerificationError::ChannelWithdrawProofInvalidSignature {
+                    op_index: 0,
+                    signature_index: 0,
+                }
+            ))
+        );
+
+        let channel_balance_after_withdraw = ledger_state
+            .mantle_ledger()
+            .channels()
+            .channels
+            .get(&channel_id)
+            .unwrap()
+            .balance;
+        assert_eq!(channel_balance_after_deposit, 10);
+        assert_eq!(channel_balance_after_deposit, channel_balance_after_withdraw);
+        let recipient_utxo = transfer_op.utxo_by_index(0).unwrap();
+        assert!(!ledger_state.latest_utxos().contains(&recipient_utxo.id()));
     }
 
     #[test]

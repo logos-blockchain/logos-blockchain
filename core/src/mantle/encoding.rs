@@ -827,6 +827,8 @@ mod tests {
     use crate::{
         mantle::{Transaction as _, TxHash},
         sdp::blend::ActivityProof,
+        mantle::ops::channel::{ChannelId, withdraw::ChannelWithdrawOp},
+        proofs::channel_withdraw_proof::{ChannelWithdrawProof, WithdrawSignature},
     };
 
     fn dbg_test_vector(actual: &str, expected: &str) {
@@ -1592,5 +1594,35 @@ mod tests {
                 voucher_nf,
             ))
         );
+    }
+
+    #[test]
+    fn test_encode_decode_channel_withdraw_tx() {
+        let signing_key = Ed25519Key::from_bytes(&[21u8; 32]);
+        let mantle_tx = MantleTx {
+            ops: vec![Op::ChannelWithdraw(ChannelWithdrawOp {
+                channel_id: ChannelId::from([0xAB; 32]),
+                amount: 17,
+            })],
+            execution_gas_price: 100,
+            storage_gas_price: 50,
+        };
+        let tx_hash = mantle_tx.hash();
+        let proof = ChannelWithdrawProof::new(vec![WithdrawSignature::new(
+            0,
+            signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+        )])
+        .unwrap();
+        let signed_tx = SignedMantleTx::new(
+            mantle_tx,
+            vec![OpProof::ChannelWithdrawProof(proof)],
+        )
+        .unwrap();
+
+        let encoded = encode_signed_mantle_tx(&signed_tx);
+        let (remaining, decoded_tx) = decode_signed_mantle_tx(&encoded).unwrap();
+
+        assert!(remaining.is_empty());
+        assert_eq!(decoded_tx, signed_tx);
     }
 }

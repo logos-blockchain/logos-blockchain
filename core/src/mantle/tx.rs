@@ -559,7 +559,10 @@ mod tests {
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 
     use super::*;
-    use crate::mantle::ops::channel::inscribe::InscriptionOp;
+    use crate::{
+        mantle::ops::channel::inscribe::InscriptionOp,
+        proofs::channel_withdraw_proof::WithdrawSignature,
+    };
 
     fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
         MantleTx {
@@ -576,6 +579,71 @@ mod tests {
             parent: [0; 32].into(),
             signer: signing_key.public_key(),
         }
+    }
+
+    struct TestOperationVerificationHelper {
+        thresholds: HashMap<ChannelId, ChannelKeyIndex>,
+        keys: HashMap<(ChannelId, ChannelKeyIndex), Ed25519PublicKey>,
+    }
+
+    impl TestOperationVerificationHelper {
+        fn new(
+            thresholds: impl IntoIterator<Item = (ChannelId, ChannelKeyIndex)>,
+            keys: impl IntoIterator<Item = ((ChannelId, ChannelKeyIndex), Ed25519PublicKey)>,
+        ) -> Self {
+            Self {
+                thresholds: thresholds.into_iter().collect(),
+                keys: keys.into_iter().collect(),
+            }
+        }
+    }
+
+    impl OperationVerificationHelper for TestOperationVerificationHelper {
+        fn get_channel_withdraw_threshold(
+            &self,
+            channel_id: &ChannelId,
+        ) -> Result<ChannelKeyIndex, VerificationError> {
+            self.thresholds
+                .get(channel_id)
+                .copied()
+                .ok_or(VerificationError::ChannelNotFound {
+                    channel_id: *channel_id,
+                })
+        }
+
+        fn get_key_from_channel_at_index(
+            &self,
+            channel_id: &ChannelId,
+            key_index: &ChannelKeyIndex,
+        ) -> Result<Ed25519PublicKey, VerificationError> {
+            self.keys
+                .get(&(*channel_id, *key_index))
+                .copied()
+                .ok_or(VerificationError::KeyNotFound {
+                    channel_id: *channel_id,
+                    key_index: *key_index,
+                })
+        }
+    }
+
+    fn create_withdraw_tx(channel_id: ChannelId, signing_keys: &[&Ed25519Key]) -> SignedMantleTx {
+        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
+            channel_id,
+            amount: 5,
+        })]);
+        let tx_hash = mantle_tx.hash();
+        let signatures = signing_keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| {
+                WithdrawSignature::new(
+                    index as ChannelKeyIndex,
+                    key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+                )
+            })
+            .collect();
+        let proof = ChannelWithdrawProof::new(signatures).unwrap();
+        SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelWithdrawProof(proof)]).unwrap()
     }
 
     #[test]
@@ -800,5 +868,94 @@ mod tests {
                 proofs_count: 2
             })
         ));
+    }
+
+    #[test]
+    fn helper_backed_verification_accepts_valid_channel_withdraw() {
+        let channel_id = ChannelId::from([8u8; 32]);
+        let key0 = Ed25519Key::from_bytes(&[8; 32]);
+        let key1 = Ed25519Key::from_bytes(&[9; 32]);
+        let signed_tx = create_withdraw_tx(channel_id, &[&key0, &key1]);
+
+        let helper = TestOperationVerificationHelper::new(
+            [(channel_id, 2)],
+            [
+                ((channel_id, 0), key0.public_key()),
+                ((channel_id, 1), key1.public_key()),
+            ],
+        );
+
+        assert!(signed_tx.verify_ops_proofs_with_helper(&helper).is_ok());
+    }
+
+    #[test]
+    fn helper_backed_verification_rejects_missing_channel() {
+        let channel_id = ChannelId::from([10u8; 32]);
+        let key0 = Ed25519Key::from_bytes(&[0; 32]);
+        let signed_tx = create_withdraw_tx(channel_id, &[&key0]);
+
+        let helper = TestOperationVerificationHelper::new([], []);
+
+        let verification_result = signed_tx.verify_ops_proofs_with_helper(&helper);
+        assert_eq!(verification_result, Err(VerificationError::ChannelNotFound { channel_id }));
+    }
+
+    #[test]
+    fn helper_backed_verification_rejects_missing_key() {
+        let channel_id = ChannelId::from([10u8; 32]);
+        let key0 = Ed25519Key::from_bytes(&[0; 32]);
+        let key1 = Ed25519Key::from_bytes(&[1; 32]);
+        let signed_tx = create_withdraw_tx(channel_id, &[&key0, &key1]);
+
+        let helper = TestOperationVerificationHelper::new(
+            [(channel_id, 2)],
+            [((channel_id, 0), key0.public_key())],
+        );
+
+        let verification_result = signed_tx.verify_ops_proofs_with_helper(&helper);
+        assert_eq!(
+            verification_result, Err(VerificationError::KeyNotFound { channel_id, key_index: 1 })
+        );
+    }
+
+    #[test]
+    fn helper_backed_verification_rejects_not_enough_signatures() {
+        let channel_id = ChannelId::from([10u8; 32]);
+        let key0 = Ed25519Key::from_bytes(&[0; 32]);
+        let signed_tx = create_withdraw_tx(channel_id, &[&key0]);
+
+        let helper = TestOperationVerificationHelper::new(
+            [(channel_id, 2)],
+            [((channel_id, 0), key0.public_key())],
+        );
+
+        let verification_result = signed_tx.verify_ops_proofs_with_helper(&helper);
+        assert_eq!(
+            verification_result,
+            Err(VerificationError::ChannelWithdrawProofNotEnoughSignatures {
+                op_index: 0, actual: 1, required: 2
+            })
+        );
+    }
+
+    #[test]
+    fn helper_backed_verification_rejects_invalid_signature() {
+        let channel_id = ChannelId::from([10u8; 32]);
+        let expected_key = Ed25519Key::from_bytes(&[0; 32]);
+        let wrong_key = Ed25519Key::from_bytes(&[9; 32]);
+        let signed_tx = create_withdraw_tx(channel_id, &[&wrong_key]);
+
+        let helper = TestOperationVerificationHelper::new(
+            [(channel_id, 1)],
+            [((channel_id, 0), expected_key.public_key())],
+        );
+
+        let verification_result = signed_tx.verify_ops_proofs_with_helper(&helper);
+        assert_eq!(
+            verification_result,
+            Err(VerificationError::ChannelWithdrawProofInvalidSignature {
+                op_index: 0, signature_index: 0
+            })
+        );
     }
 }
