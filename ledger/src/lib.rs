@@ -23,6 +23,8 @@ use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Field as _, Fr};
 use mantle::LedgerState as MantleLedger;
 use thiserror::Error;
+use lb_core::mantle::VerificationError;
+use crate::mantle::helpers::MantleOperationVerificationHelper;
 
 const WINDOW_SIZE: usize = 120;
 
@@ -94,6 +96,8 @@ pub enum LedgerError<Id> {
     MissingTransferGenesis(),
     #[error("Unsupported operation")]
     UnsupportedOp,
+    #[error("Verification error: {0}")]
+    VerificationError(#[from] VerificationError),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -403,6 +407,9 @@ impl LedgerState {
         config: &Config,
         tx: impl AuthenticatedMantleTx,
     ) -> Result<(Self, Balance), LedgerError<Id>> {
+        let operation_verification_helper = MantleOperationVerificationHelper::new(&self.mantle_ledger);
+        tx.verify_ops_proofs_with_helper(&operation_verification_helper).map_err(LedgerError::VerificationError)?;
+
         let mut balance: Balance = 0;
         let tx_hash = tx.hash();
         let ops = tx.ops_with_proof().map(|(op, proof)| (op, Some(proof)));

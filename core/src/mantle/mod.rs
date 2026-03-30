@@ -19,7 +19,7 @@ use lb_groth16::Fr;
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
 use ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp};
-pub use tx::{MantleTx, SignedMantleTx, TxHash};
+pub use tx::{MantleTx, SignedMantleTx, TxHash, VerificationError};
 
 use crate::mantle::{gas::Gas, ops::transfer::TransferOp};
 
@@ -50,6 +50,10 @@ pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCost + StorageS
     fn mantle_tx(&self) -> &MantleTx;
 
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)>;
+
+    fn verify_ops_proofs_with_helper(
+        &self, helper: &impl tx::OperationVerificationHelper,
+    ) -> Result<(), VerificationError>;
 
     fn gas_cost<Constants: GasConstants>(&self) -> Gas;
 }
@@ -85,6 +89,13 @@ impl<T: AuthenticatedMantleTx> AuthenticatedMantleTx for &T {
 
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)> {
         T::ops_with_proof(self)
+    }
+
+    fn verify_ops_proofs_with_helper(
+        &self,
+        operation_verification_helper: &impl tx::OperationVerificationHelper,
+    ) -> Result<(), VerificationError> {
+        T::verify_ops_proofs_with_helper(self, operation_verification_helper)
     }
 
     fn gas_cost<Constants: GasConstants>(&self) -> Gas {

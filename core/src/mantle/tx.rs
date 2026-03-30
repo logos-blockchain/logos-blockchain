@@ -392,8 +392,9 @@ impl SignedMantleTx {
         Ok(())
     }
 
-    fn verify_ops_proofs_with_helper(
-        &self, operation_verification_helper: &impl OperationVerificationHelper,
+    pub fn verify_ops_proofs_with_helper(
+        &self,
+        operation_verification_helper: &impl OperationVerificationHelper,
     ) -> Result<(), VerificationError> {
         let tx_hash = self.hash();
         let tx_hash_bytes = tx_hash.as_signing_bytes();
@@ -490,6 +491,13 @@ impl AuthenticatedMantleTx for SignedMantleTx {
 
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)> {
         self.mantle_tx.ops.iter().zip(self.ops_proofs.iter())
+    }
+
+    fn verify_ops_proofs_with_helper(
+        &self,
+        operation_verification_helper: &impl OperationVerificationHelper,
+    ) -> Result<(), VerificationError> {
+        Self::verify_ops_proofs_with_helper(self, operation_verification_helper)
     }
 
     fn gas_cost<Constants: GasConstants>(&self) -> Gas {
