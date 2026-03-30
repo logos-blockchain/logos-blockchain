@@ -1,8 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    num::NonZero,
-    time::Duration,
-};
+use std::{collections::HashSet, num::NonZero, time::Duration};
 
 use futures::future::join_all;
 use lb_core::mantle::ops::channel::ChannelId;
@@ -402,119 +398,36 @@ async fn test_sequencer_checkpoint_resume() {
     poll_task.abort();
 }
 
-/// Helper: spawn a sequencer poll task with reorg handling.
-/// Intent-based client state for suffix reconstruction.
-/// Tracks which payloads have been adopted on chain and rebuilds
-/// the remaining suffix when invalidated.
-/// Extract the stable UUID prefix from a tagged payload (e.g. "abc123:a1" →
-/// "abc123").
-fn payload_id(p: &[u8]) -> Vec<u8> {
-    p.split(|&b| b == b':').next().unwrap_or(p).to_vec()
-}
-
-/// Shared `tx→payload_id` map. Used by both initial publishes and re-publishes
-/// so that `TxsFinalized` can identify which logical payload was finalized.
-type TxIdMap = std::sync::Arc<tokio::sync::Mutex<HashMap<lb_core::mantle::tx::TxHash, Vec<u8>>>>;
-
-/// Publish a payload and register the resulting tx hash in the shared map.
-async fn publish_and_track(
-    handle: &lb_zone_sdk::sequencer::SequencerHandle,
-    tx_to_id: &TxIdMap,
-    payload: Vec<u8>,
-) {
-    let id = payload_id(&payload);
-    let result = handle.publish(payload).await.expect("publish failed");
-    tx_to_id.lock().await.insert(result.inscription_id, id);
-}
-
-/// Spawn a sequencer poll task that re-publishes its own orphaned payloads.
+/// Spawn a sequencer poll task that re-publishes orphaned payloads.
 ///
-/// Uses `TxsFinalized` as the permanent completion signal (not `adopted`).
-/// Accepts a shared `tx_to_id` map so initial publishes and re-publishes
-/// are both tracked for finalization.
+/// `invalidated` only contains this sequencer's own pending inscriptions,
+/// so no ownership tracking is needed. We just check whether the payload
+/// was adopted on the new branch before re-publishing.
 fn spawn_sequencer_with_republish(
     mut sequencer: ZoneSequencer,
     handle: lb_zone_sdk::sequencer::SequencerHandle,
-    my_payloads: Vec<Vec<u8>>,
-    tx_to_id: TxIdMap,
 ) -> tokio::task::JoinHandle<()> {
-    let (republish_tx, mut republish_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-
-    let republish_payloads: HashMap<Vec<u8>, Vec<u8>> = my_payloads
-        .iter()
-        .map(|p| (payload_id(p), p.clone()))
-        .collect();
-
-    let finalized: std::sync::Arc<tokio::sync::Mutex<HashSet<Vec<u8>>>> =
-        std::sync::Arc::new(tokio::sync::Mutex::new(HashSet::new()));
-
-    // Republisher: publishes one payload at a time, registers tx→id.
-    {
-        let tx_to_id = TxIdMap::clone(&tx_to_id);
-        let republish_handle = handle;
-        tokio::spawn(async move {
-            while let Some(payload) = republish_rx.recv().await {
-                let id = payload_id(&payload);
-                if let Ok(result) = republish_handle.publish(payload).await {
-                    tx_to_id.lock().await.insert(result.inscription_id, id);
-                }
-            }
-        })
-    };
-
-    let shared_finalized = finalized;
-    let shared_tx_to_id = tx_to_id;
-
     tokio::spawn(async move {
-        let my_ids: HashSet<Vec<u8>> = my_payloads.iter().map(|p| payload_id(p)).collect();
-        let mut in_flight: HashSet<Vec<u8>> = HashSet::new();
-
         loop {
-            match sequencer.next_event().await {
-                Some(Event::TxsFinalized { tx_hashes }) => {
-                    let finalized_ids = {
-                        let mut tx_map = shared_tx_to_id.lock().await;
-                        tx_hashes
-                            .into_iter()
-                            .filter_map(|h| tx_map.remove(&h))
-                            .collect::<Vec<_>>()
-                    };
-                    {
-                        let mut fin = shared_finalized.lock().await;
-                        for id in &finalized_ids {
-                            fin.insert(id.clone());
-                        }
-                    }
-                    for id in finalized_ids {
+            if let Some(Event::ChannelUpdate {
+                invalidated,
+                adopted,
+                ..
+            }) = sequencer.next_event().await
+            {
+                let adopted_payloads: HashSet<Vec<u8>> =
+                    adopted.into_iter().map(|a| a.payload).collect();
+                for inv in invalidated {
+                    if !adopted_payloads.contains(&inv.payload) {
                         debug!(
-                            "Finalized: {:?}",
-                            String::from_utf8_lossy(
-                                republish_payloads.get(&id).map_or(b"?", Vec::as_slice)
-                            )
+                            "Re-publishing orphaned: {:?}",
+                            String::from_utf8_lossy(&inv.payload)
                         );
-                        in_flight.remove(&id);
-                    }
-                }
-                Some(Event::ChannelUpdate { invalidated, .. }) => {
-                    let finalized_ids = shared_finalized.lock().await.clone();
-                    for inv in &invalidated {
-                        let id = payload_id(&inv.payload);
-                        if !my_ids.contains(&id) || finalized_ids.contains(&id) {
-                            continue;
-                        }
-                        in_flight.remove(&id);
-                        if in_flight.insert(id.clone())
-                            && let Some(payload) = republish_payloads.get(&id)
-                        {
-                            debug!(
-                                "Re-publishing orphaned: {:?}",
-                                String::from_utf8_lossy(payload)
-                            );
-                            drop(republish_tx.send(payload.clone()));
+                        if let Err(e) = handle.publish(inv.payload).await {
+                            debug!("Failed to re-publish: {e}");
                         }
                     }
                 }
-                _ => {}
             }
         }
     })
@@ -891,30 +804,10 @@ async fn test_concurrent_multi_sequencer() {
         None,
     );
 
-    // Create shared tx→id maps for tracking finalization
-    let tx_map_a: TxIdMap = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-    let tx_map_b: TxIdMap = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-    let tx_map_c: TxIdMap = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-
     // Start poll tasks — next_event() must be running to process publish requests.
-    let poll_a = spawn_sequencer_with_republish(
-        sequencer_a,
-        handle_a.clone(),
-        data_a.clone(),
-        TxIdMap::clone(&tx_map_a),
-    );
-    let poll_b = spawn_sequencer_with_republish(
-        sequencer_b,
-        handle_b.clone(),
-        data_b.clone(),
-        TxIdMap::clone(&tx_map_b),
-    );
-    let poll_c = spawn_sequencer_with_republish(
-        sequencer_c,
-        handle_c.clone(),
-        data_c.clone(),
-        TxIdMap::clone(&tx_map_c),
-    );
+    let poll_a = spawn_sequencer_with_republish(sequencer_a, handle_a.clone());
+    let poll_b = spawn_sequencer_with_republish(sequencer_b, handle_b.clone());
+    let poll_c = spawn_sequencer_with_republish(sequencer_c, handle_c.clone());
 
     // Wait for all three to be ready
     handle_a.wait_ready().await;
@@ -923,22 +816,21 @@ async fn test_concurrent_multi_sequencer() {
     debug!("Phase 2: All 3 sequencers ready");
 
     // Phase 3: Publish initial inscriptions concurrently.
-    // All publishes registered in tx→id maps for finalization tracking.
     debug!("Phase 3: Publishing 9 inscriptions concurrently");
     tokio::join!(
         async {
             for d in &data_a {
-                publish_and_track(&handle_a, &tx_map_a, d.clone()).await;
+                handle_a.publish(d.clone()).await.expect("publish failed");
             }
         },
         async {
             for d in &data_b {
-                publish_and_track(&handle_b, &tx_map_b, d.clone()).await;
+                handle_b.publish(d.clone()).await.expect("publish failed");
             }
         },
         async {
             for d in &data_c {
-                publish_and_track(&handle_c, &tx_map_c, d.clone()).await;
+                handle_c.publish(d.clone()).await.expect("publish failed");
             }
         },
     );
