@@ -19,7 +19,7 @@ use lb_chain_service::ConsensusMsg;
 use lb_core::{
     block::Block,
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction},
+    mantle::{SignedMantleTx, Transaction, ops::channel::ChannelId},
 };
 use lb_http_api_common::{
     bodies::wallet::{
@@ -67,6 +67,25 @@ macro_rules! make_request_and_return_response {
             )),
         }
     }};
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_CHANNEL,
+    responses(
+        (status = 200, description = "Channel state"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn mantle_channel<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(id): Path<ChannelId>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    make_request_and_return_response!(mantle::mantle_channel::<RuntimeServiceId>(&handle, id))
 }
 
 #[utoipa::path(
