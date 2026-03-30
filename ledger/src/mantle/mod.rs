@@ -9,7 +9,7 @@ use lb_core::{
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo,
         ops::{
-            channel::{inscribe::InscriptionOp, set_keys::SetKeysOp},
+            channel::{deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp},
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
@@ -35,8 +35,6 @@ pub enum Error {
     Sdp(#[from] SdpLedgerError),
     #[error("Note not found: {0:?}")]
     NoteNotFound(NoteId),
-    #[error("Applying this transaction would cause a balance overflow")]
-    BalanceOverflow,
 }
 
 /// A state of the mantle ledger
@@ -179,14 +177,11 @@ impl LedgerState {
         Ok(self)
     }
 
-    pub fn try_apply_channel_deposit(
-        mut self,
-        op: &channel::DepositOp,
-    ) -> Result<(Self, Balance), Error> {
+    pub fn try_apply_channel_deposit(mut self, op: &DepositOp) -> Result<(Self, Balance), Error> {
         self.channels = self.channels.deposit(op).inspect_err(
             |err| error!(target: LOG_TARGET, %err, "Failed to apply the Channel Deposit message."),
         )?;
-        Ok((self, Balance::from(op.amount)))
+        Ok((self, -Balance::from(op.amount)))
     }
 
     pub fn try_apply_sdp_declaration(
