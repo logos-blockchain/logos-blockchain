@@ -18,7 +18,8 @@ pub type BlockFeedSubscription = broadcast::Receiver<Arc<BlockRecord>>;
 /// Common environment bounds required by Nomos-specific workloads.
 pub trait LbcScenarioEnv:
     Application<Deployment = DeploymentPlan, NodeClient = NodeHttpClient>
-{}
+{
+}
 
 impl LbcScenarioEnv for LbcEnv {}
 

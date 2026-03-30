@@ -528,8 +528,8 @@ pub mod tests {
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
-            MantleTx, Note, Op, OpProof::ZkSig, SignedMantleTx, Transaction as _,
-            gas::MainnetGasConstants, ops::leader_claim::VoucherCm,
+            AuthenticatedMantleTx, MantleTx, Note, Op, OpProof::ZkSig, SignedMantleTx,
+            Transaction as _, gas::MainnetGasConstants, ops::leader_claim::VoucherCm,
         },
         sdp::ServiceParameters,
     };
@@ -539,7 +539,7 @@ pub mod tests {
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
-    use lb_core::mantle::AuthenticatedMantleTx;
+
     use super::*;
     use crate::{
         Ledger,

@@ -21,8 +21,7 @@ pub use ops::{Op, OpProof};
 use ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp};
 pub use tx::{MantleTx, SignedMantleTx, TxHash};
 
-use crate::mantle::ops::transfer::TransferOp;
-use crate::mantle::gas::Gas;
+use crate::mantle::{gas::Gas, ops::transfer::TransferOp};
 
 pub const MAX_MANTLE_TXS: usize = 1024;
 

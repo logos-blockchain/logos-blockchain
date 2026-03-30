@@ -373,6 +373,7 @@ where
         }
     }
 
+    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn handle_wallet_message(
         msg: WalletMsg,
         state: &mut ServiceState<'_>,

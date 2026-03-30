@@ -3,8 +3,7 @@ use std::cmp::Ordering;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
 use super::{GasConstants, GasCost as _, MantleTx, Note, Op, Utxo};
-use crate::mantle::tx::MantleTxGasContext;
-use crate::mantle::ops::transfer::TransferOp;
+use crate::mantle::{ops::transfer::TransferOp, tx::MantleTxGasContext};
 
 #[derive(Debug, Clone)]
 pub struct MantleTxBuilder {

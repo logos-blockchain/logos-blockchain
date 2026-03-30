@@ -15,7 +15,7 @@ use crate::{
         ops::{
             Op, OpProof,
             channel::{ChannelId, ChannelKeyIndex},
-            transfer::TransferOp
+            transfer::TransferOp,
         },
     },
     proofs::leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},

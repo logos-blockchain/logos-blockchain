@@ -347,7 +347,7 @@ mod tests {
             Note, Op, TxHash,
             gas::MainnetGasConstants as Gas,
             ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
-            tx::MantleTxGasContext
+            tx::MantleTxGasContext,
         },
         sdp::{MinStake, ServiceParameters, ServiceType},
     };

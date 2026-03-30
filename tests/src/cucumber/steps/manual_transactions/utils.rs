@@ -43,8 +43,7 @@ impl Display for WalletStateType {
 
 use std::str::FromStr;
 
-use lb_core::mantle::OpProof;
-use lb_core::mantle::tx::MantleTxGasContext;
+use lb_core::mantle::{OpProof, tx::MantleTxGasContext};
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 
 use crate::cucumber::{

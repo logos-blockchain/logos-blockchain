@@ -9,8 +9,8 @@ use std::{
 
 use async_trait::async_trait;
 use lb_core::mantle::{
-    GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo,
-    tx_builder::MantleTxBuilder, tx::MantleTxGasContext,
+    GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo, tx::MantleTxGasContext,
+    tx_builder::MantleTxBuilder,
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use rand::{seq::SliceRandom as _, thread_rng};

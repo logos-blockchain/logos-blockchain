@@ -182,8 +182,9 @@ impl Channels {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use lb_key_management_system_keys::keys::Ed25519Key;
+
+    use super::*;
 
     fn test_public_key(seed: u8) -> PublicKey {
         Ed25519Key::from_bytes(&[seed; 32]).public_key()

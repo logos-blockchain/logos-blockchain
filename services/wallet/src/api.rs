@@ -267,7 +267,8 @@ mod tests {
             }
         });
 
-        let api = WalletApi::<DummyWallet, TestRuntimeServiceId>::new(OutboundRelay::new(msg_sender));
+        let api =
+            WalletApi::<DummyWallet, TestRuntimeServiceId>::new(OutboundRelay::new(msg_sender));
         let context = api
             .get_gas_context(Some(expected_block_id))
             .await
@@ -277,6 +278,9 @@ mod tests {
             context.withdraw_threshold(&expected_channel_id),
             Some(expected_threshold)
         );
-        assert_eq!(context.withdraw_threshold(&ChannelId::from([1u8; 32])), None);
+        assert_eq!(
+            context.withdraw_threshold(&ChannelId::from([1u8; 32])),
+            None
+        );
     }
 }
