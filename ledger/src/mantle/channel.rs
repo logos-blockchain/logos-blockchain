@@ -179,3 +179,48 @@ impl Channels {
         self.channels.get(channel_id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lb_key_management_system_keys::keys::Ed25519Key;
+
+    fn test_public_key(seed: u8) -> PublicKey {
+        Ed25519Key::from_bytes(&[seed; 32]).public_key()
+    }
+
+    #[test]
+    fn channels_to_gas_context_tracks_withdraw_thresholds() {
+        let first_id = ChannelId::from([1u8; 32]);
+        let second_id = ChannelId::from([2u8; 32]);
+        let missing_id = ChannelId::from([0u8; 32]);
+
+        let channels = Channels {
+            channels: rpds::HashTrieMapSync::new_sync()
+                .insert(
+                    first_id,
+                    ChannelState {
+                        tip: MsgId::root(),
+                        keys: vec![test_public_key(11)].into(),
+                        balance: 5,
+                        withdraw_threshold: 1,
+                    },
+                )
+                .insert(
+                    second_id,
+                    ChannelState {
+                        tip: MsgId::root(),
+                        keys: vec![test_public_key(22), test_public_key(23)].into(),
+                        balance: 9,
+                        withdraw_threshold: 2,
+                    },
+                ),
+        };
+
+        let gas_context = MantleTxGasContext::from(&channels);
+
+        assert_eq!(gas_context.withdraw_threshold(&first_id), Some(1));
+        assert_eq!(gas_context.withdraw_threshold(&second_id), Some(2));
+        assert_eq!(gas_context.withdraw_threshold(&missing_id), None);
+    }
+}
