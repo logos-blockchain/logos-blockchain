@@ -155,30 +155,12 @@ impl ZoneIndexer {
 
         let mut scan = ScanState::new(cursor, limit);
 
-        eprintln!(
-            "[INDEXER-SCAN] scanning slots {}..{}, node={}",
-            current_slot, lib_slot, self.node_url
-        );
         while current_slot <= lib_slot {
             let end_slot = (current_slot + BATCH_SIZE - 1).min(lib_slot);
             let blocks = self
                 .http_client
                 .get_blocks(self.node_url.clone(), current_slot, end_slot)
                 .await?;
-
-            // Log blocks found in this batch
-            if !blocks.is_empty() {
-                let slots: Vec<u64> = blocks.iter().map(|b| b.header.slot.into()).collect();
-                let ids: Vec<_> = blocks.iter().map(|b| b.header.id).collect();
-                eprintln!(
-                    "[INDEXER-SCAN] batch {}..{}: {} blocks, slots={:?}, ids={:?}",
-                    current_slot,
-                    end_slot,
-                    blocks.len(),
-                    slots,
-                    ids
-                );
-            }
 
             for block in blocks {
                 let block_slot: u64 = block.header.slot.into();
@@ -187,18 +169,10 @@ impl ZoneIndexer {
                     for op in &tx.mantle_tx.ops {
                         if let Op::ChannelInscribe(inscribe) = op
                             && inscribe.channel_id == self.channel_id
-                        {
-                            eprintln!(
-                                "[INDEXER-SCAN] slot={} block={:?} payload={:?}",
-                                block_slot,
-                                block.header.id,
-                                String::from_utf8_lossy(&inscribe.inscription)
-                            );
-                            if let Some(done) =
+                            && let Some(done) =
                                 scan.push_msg(block_slot, inscribe.id(), &inscribe.inscription)
-                            {
-                                return Ok(done);
-                            }
+                        {
+                            return Ok(done);
                         }
                     }
                 }

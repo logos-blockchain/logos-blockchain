@@ -149,27 +149,18 @@ impl TxState {
         // where we receive a block whose parent we never saw), start with an empty set.
         // This is conservative: txs might show as "pending" when they should be "safe",
         // but they'll be correctly detected when seen in subsequent blocks.
-        let parent_safe_exists = self.block_states.contains_key(&parent_id);
         let mut safe_set = self
             .block_states
             .get(&parent_id)
             .cloned()
             .unwrap_or_default();
 
-        let mut added_to_safe = 0;
         for tx in our_txs {
             if self.pending.contains_key(&tx) || self.pending_other.contains_key(&tx) {
                 safe_set = safe_set.insert(tx);
-                added_to_safe += 1;
             }
         }
-        self.block_states.insert(block_id, safe_set.clone());
-        if added_to_safe > 0 || !parent_safe_exists {
-            eprintln!(
-                "[SEQ] Block {block_id:?}: added {added_to_safe} txs to safe set (total safe={}, parent_exists={parent_safe_exists})",
-                safe_set.size()
-            );
-        }
+        self.block_states.insert(block_id, safe_set);
 
         // Store channel inscriptions for this block
         if !inscriptions.is_empty() {
@@ -184,13 +175,6 @@ impl TxState {
         // as proof of canonical finalization — it can include blocks
         // from orphaned branches in concurrent scenarios.
         if lib != self.current_lib {
-            eprintln!(
-                "[SEQ] LIB advanced: {:?} -> {:?}, pending={}",
-                self.current_lib,
-                lib,
-                self.pending.len()
-            );
-
             // Compute finalized_msg BEFORE pruning — walk from new LIB
             // backwards to find the latest inscription in the finalized range.
             self.finalized_msg = self.channel_tip_at(lib);

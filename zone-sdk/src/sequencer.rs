@@ -475,16 +475,6 @@ impl ZoneSequencer {
             return Some(event);
         }
 
-        eprintln!(
-            "[SEQ] next_event called, ready={}, stream={}, backfill={:?}-{:?}, resubmit_active={}, pending={}, tip={:?}",
-            self.is_ready(),
-            self.blocks_stream.is_some(),
-            self.backfill_from,
-            self.backfill_to,
-            self.resubmit_active,
-            self.state.as_ref().map_or(0, TxState::pending_count),
-            self.current_tip.is_some(),
-        );
         // Process incremental backfill — one batch per next_event() call.
         // This emits FinalizedInscriptions events for catch-up from checkpoint.
         if let (Some(from), Some(to)) = (self.backfill_from, self.backfill_to) {
@@ -582,9 +572,7 @@ impl ZoneSequencer {
                         let from: u64 = self.lib_slot.into();
                         let to: u64 = network_lib_slot.into();
                         if from < to {
-                            eprintln!(
-                                "[SEQ] Starting incremental backfill from slot {from} to {to}"
-                            );
+                            debug!("Starting incremental backfill from slot {from} to {to}");
                             self.backfill_from = Some(Slot::from(from + 1));
                             self.backfill_to = Some(network_lib_slot);
                             self.lib_slot = network_lib_slot;
@@ -607,13 +595,6 @@ impl ZoneSequencer {
             }
             maybe_event = stream.next() => {
                 if let Some(ref block_event) = maybe_event {
-                    eprintln!(
-                        "[SEQ] Block event: tip={:?}, old_tip={:?}, last_msg_id={:?}",
-                        block_event.tip,
-                        self.current_tip,
-                        self.last_msg_id,
-                    );
-
                     let result = handle_block_event(
                         block_event,
                         &mut self.state,
@@ -624,13 +605,6 @@ impl ZoneSequencer {
                         &self.node_url,
                     )
                     .await;
-
-                    eprintln!(
-                        "[SEQ] Block processed: last_msg_id={:?}, channel_update={}, finalized={}",
-                        self.last_msg_id,
-                        result.channel_update.is_some(),
-                        result.newly_finalized.len(),
-                    );
 
                     // Signal readiness only when:
                     // - first block event processed (channel discovery done)
@@ -652,8 +626,8 @@ impl ZoneSequencer {
                     // - Has pending, not invalidated: keep local head
                     //   (our pending chain still extends the on-chain tip)
                     if let Some(ref update) = result.channel_update {
-                        eprintln!(
-                            "[SEQ] ChannelUpdate: invalidated={}, adopted={}, new_tip={:?}",
+                        debug!(
+                            "ChannelUpdate: invalidated={}, adopted={}, new_tip={:?}",
                             update.invalidated.len(),
                             update.adopted.len(),
                             update.new_channel_tip,
@@ -670,8 +644,8 @@ impl ZoneSequencer {
                             self.last_msg_id = update.new_channel_tip;
                             if let Some(s) = self.state.as_mut() {
                                 for inv in &update.invalidated {
-                                    eprintln!(
-                                        "[SEQ] Invalidated: payload={:?}",
+                                    debug!(
+                                        "Invalidated: payload={:?}",
                                         String::from_utf8_lossy(&inv.payload)
                                     );
                                     s.remove_pending(&inv.tx_hash);
@@ -733,8 +707,6 @@ impl ZoneSequencer {
                 None
             }
             _ = self.resubmit_interval.tick(), if !self.resubmit_active && self.state.is_some() && self.current_tip.is_some() => {
-                let pending_count = self.state.as_ref().unwrap().pending_count();
-                eprintln!("[SEQ] Resubmit tick: pending={pending_count}, tip={:?}", self.current_tip);
                 enqueue_resubmit(
                     self.state.as_ref().unwrap(),
                     self.current_tip.unwrap(),
@@ -777,7 +749,7 @@ impl ZoneSequencer {
                 } else {
                     self.last_msg_id
                 };
-                eprintln!("[SEQ] Publishing with parent={parent:?}");
+                debug!(" Publishing with parent={parent:?}");
                 let (signed_tx, new_msg_id) =
                     create_inscribe_tx(self.channel_id, &self.signing_key, data.clone(), parent);
                 let id = signed_tx.mantle_tx.hash();
@@ -849,20 +821,9 @@ async fn handle_block_event(
 
     // Backfill if needed (self-healing on every event)
     // 1. Backfill finalized blocks up to LIB (only when state's LIB is behind)
-    eprintln!(
-        "[SEQ] LIB check: event_lib={lib:?}, state_lib={:?}, equal={}",
-        s.lib(),
-        lib == s.lib()
-    );
     let mut lib_finalized = Vec::new();
     if lib != s.lib() {
         let new_lib_slot = get_lib_slot(http_client, node_url, lib).await;
-        eprintln!(
-            "[SEQ] LIB slot check: old_lib_slot={:?}, new_lib_slot={:?}, advancing={}",
-            *lib_slot,
-            new_lib_slot,
-            *lib_slot < new_lib_slot
-        );
         if *lib_slot < new_lib_slot {
             lib_finalized = backfill_to_lib(
                 s,
@@ -915,7 +876,7 @@ async fn handle_block_event(
                     }
                 })
                 .unwrap_or_else(|| "non-inscription".to_owned());
-            eprintln!("[SEQ] Backfill-finalized: payload={payload_str:?}, tx={tx_hash:?}");
+            debug!(" Backfill-finalized: payload={payload_str:?}, tx={tx_hash:?}");
             newly_finalized.push(*tx_hash);
         }
     }
@@ -997,19 +958,15 @@ async fn backfill_batch(
     http_client: &CommonHttpClient,
     node_url: &Url,
 ) -> Vec<InscriptionInfo> {
-    eprintln!("[SEQ] Backfill batch: slots {from_slot} to {to_slot}");
-
     match http_client
         .get_blocks(node_url.clone(), from_slot, to_slot)
         .await
     {
         Ok(blocks) => {
-            eprintln!("[SEQ] Backfill got {} blocks", blocks.len());
             let mut batch_inscriptions = Vec::new();
             for block in blocks {
                 let block_id = block.header.id;
                 let parent_id = block.header.parent_block;
-                let slot: u64 = block.header.slot.into();
 
                 let our_txs: Vec<TxHash> = block
                     .transactions
@@ -1019,29 +976,11 @@ async fn backfill_batch(
                     .collect();
 
                 let inscriptions = extract_inscriptions(&block.transactions, channel_id);
-                if !inscriptions.is_empty() {
-                    eprintln!(
-                        "[SEQ] Backfill slot {}: found {} inscriptions, txs={}",
-                        slot,
-                        inscriptions.len(),
-                        our_txs.len(),
-                    );
-                    for insc in &inscriptions {
-                        eprintln!(
-                            "[SEQ]   inscription: parent={:?}, this={:?}",
-                            insc.parent_msg, insc.this_msg,
-                        );
-                    }
-                }
                 batch_inscriptions.extend(inscriptions.clone());
 
                 let current_lib = state.lib();
                 state.process_block(block_id, parent_id, current_lib, our_txs, inscriptions);
             }
-            eprintln!(
-                "[SEQ] Backfill batch done: {} inscriptions found",
-                batch_inscriptions.len()
-            );
             batch_inscriptions
         }
         Err(e) => {
@@ -1070,22 +1009,13 @@ async fn backfill_to_lib(
         return Vec::new();
     }
 
-    eprintln!(
-        "[SEQ] Backfill LIB: slots {}..{}, node={}",
-        from + 1,
-        to,
-        node_url
-    );
-
     let mut finalized_txs = Vec::new();
 
     match http_client.get_blocks(node_url.clone(), from + 1, to).await {
         Ok(blocks) => {
-            eprintln!("[SEQ] Backfill LIB: got {} blocks", blocks.len());
             for block in blocks {
                 let block_id = block.header.id;
                 let parent_id = block.header.parent_block;
-                let slot: u64 = block.header.slot.into();
 
                 let our_txs: Vec<TxHash> = block
                     .transactions
@@ -1095,29 +1025,11 @@ async fn backfill_to_lib(
                     .collect();
 
                 let inscriptions = extract_inscriptions(&block.transactions, channel_id);
-                // Log every block with slot and id, plus inscriptions if any
-                let payload_strs: Vec<String> = inscriptions
-                    .iter()
-                    .map(|i| String::from_utf8_lossy(&i.payload).to_string())
-                    .collect();
-                eprintln!(
-                    "[SEQ] Backfill LIB block: slot={} id={:?} txs={} inscriptions={} payloads={:?}",
-                    slot,
-                    block_id,
-                    block.transactions.len(),
-                    inscriptions.len(),
-                    payload_strs
-                );
-
                 finalized_txs.extend(our_txs.iter().copied());
 
                 let current_lib = state.lib();
                 state.process_block(block_id, parent_id, current_lib, our_txs, inscriptions);
             }
-            eprintln!(
-                "[SEQ] Backfill LIB done: {} channel txs found",
-                finalized_txs.len()
-            );
         }
         Err(e) => {
             warn!("Failed to backfill finalized blocks: {e}");
@@ -1203,18 +1115,6 @@ fn enqueue_resubmit(
         return;
     }
 
-    // Log what we're resubmitting with payloads
-    for (id, tx) in &pending {
-        for op in &tx.mantle_tx.ops {
-            if let Op::ChannelInscribe(inscribe) = op {
-                eprintln!(
-                    "[SEQ] Resubmitting: tx={id:?}, payload={:?}, parent={:?}",
-                    String::from_utf8_lossy(&inscribe.inscription),
-                    inscribe.parent,
-                );
-            }
-        }
-    }
     debug!("Resubmitting {} pending inscription(s)", pending.len());
 
     let client = http_client.clone();

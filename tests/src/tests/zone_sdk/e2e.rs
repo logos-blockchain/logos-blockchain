@@ -20,6 +20,21 @@ use logos_blockchain_tests::{
 use rand::{Rng as _, thread_rng};
 use serial_test::serial;
 use tokio::time::{sleep, timeout};
+use tracing::debug;
+
+/// Initialize tracing subscriber once for all tests.
+/// Controlled by `RUST_LOG` env var (e.g. `RUST_LOG=debug`).
+fn init_tracing() {
+    drop(
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+            )
+            .with_test_writer()
+            .try_init(),
+    );
+}
 
 fn channel_id_from_key(key: &Ed25519Key) -> ChannelId {
     ChannelId::from(key.public_key().to_bytes())
@@ -42,6 +57,7 @@ async fn wait_for_height(validator: &Validator, target_height: u64, duration: Du
 #[tokio::test]
 #[serial]
 async fn test_sequencer_publish_and_indexer_read() {
+    init_tracing();
     // Use custom config with faster block production for test reliability:
     // - slot_duration: 1s (faster slots)
     // - security_param (k): 5 (fewer blocks needed for LIB to advance)
@@ -204,6 +220,7 @@ async fn test_sequencer_publish_and_indexer_read() {
 #[tokio::test]
 #[serial]
 async fn test_sequencer_checkpoint_resume() {
+    init_tracing();
     // Setup network with faster block production
     let (configs, genesis_tx) = create_general_configs(2);
     let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
@@ -469,8 +486,8 @@ fn spawn_sequencer_with_republish(
                         }
                     }
                     for id in finalized_ids {
-                        eprintln!(
-                            "[CLIENT] Finalized: {:?}",
+                        debug!(
+                            "Finalized: {:?}",
                             String::from_utf8_lossy(
                                 republish_payloads.get(&id).map_or(b"?", Vec::as_slice)
                             )
@@ -489,8 +506,8 @@ fn spawn_sequencer_with_republish(
                         if in_flight.insert(id.clone())
                             && let Some(payload) = republish_payloads.get(&id)
                         {
-                            eprintln!(
-                                "[CLIENT] Re-publishing orphaned: {:?}",
+                            debug!(
+                                "Re-publishing orphaned: {:?}",
                                 String::from_utf8_lossy(payload)
                             );
                             drop(republish_tx.send(payload.clone()));
@@ -552,9 +569,9 @@ async fn wait_for_indexer(
             if expected.contains(&msg.data) {
                 let is_new = seen.insert(msg.data.clone());
                 if is_new {
-                    eprintln!("[INDEXER] Found payload: {payload_str}");
+                    debug!("Found payload: {payload_str}");
                 } else {
-                    eprintln!("[INDEXER] DUPLICATE payload: {payload_str}");
+                    debug!("DUPLICATE payload: {payload_str}");
                 }
             }
         }
@@ -572,8 +589,8 @@ async fn wait_for_indexer(
                 .filter(|p| !seen.contains(*p))
                 .map(|p| String::from_utf8_lossy(p).to_string())
                 .collect();
-            eprintln!(
-                "[INDEXER] {}/{} found, missing: {:?}",
+            debug!(
+                "{}/{} found, missing: {:?}",
                 seen.len(),
                 expected.len(),
                 missing
@@ -592,6 +609,7 @@ fn tag_payload(msg: &str) -> Vec<u8> {
 #[tokio::test]
 #[serial]
 async fn test_sequential_multi_sequencer() {
+    init_tracing();
     // Setup: two validators, fast blocks
     let (configs, genesis_tx) = create_general_configs(2);
     let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
@@ -751,6 +769,7 @@ async fn test_sequential_multi_sequencer() {
 #[tokio::test]
 #[serial]
 async fn test_concurrent_multi_sequencer() {
+    init_tracing();
     // Use case B — ad-hoc: three sequencers publish concurrently on the same
     // channel with set_keys authorization. SeqA creates the channel, then
     // all three publish in parallel. Each sequencer's inscriptions maintain
@@ -811,7 +830,7 @@ async fn test_concurrent_multi_sequencer() {
     let seq_c_pk = signing_key_c.public_key();
 
     // --- Phase 1: SeqA creates channel and authorizes all three via set_keys ---
-    eprintln!("[TEST] Phase 1: Starting SeqA for set_keys");
+    debug!("Phase 1: Starting SeqA for set_keys");
     let (sequencer_a, mut handle_a) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key_a,
@@ -823,7 +842,7 @@ async fn test_concurrent_multi_sequencer() {
     let poll_a = spawn_sequencer_poll(sequencer_a, handle_a.clone());
 
     handle_a.wait_ready().await;
-    eprintln!("[TEST] Phase 1: SeqA ready, submitting set_keys");
+    debug!("Phase 1: SeqA ready, submitting set_keys");
     let finalized = handle_a
         .set_keys(vec![admin_pk, seq_b_pk, seq_c_pk])
         .await
@@ -834,7 +853,7 @@ async fn test_concurrent_multi_sequencer() {
         .expect("set_keys finalization failed");
 
     // Stop SeqA — will restart concurrently with B and C
-    eprintln!("[TEST] Phase 1: set_keys finalized, stopping SeqA");
+    debug!("Phase 1: set_keys finalized, stopping SeqA");
     poll_a.abort();
     drop(handle_a);
 
@@ -844,7 +863,7 @@ async fn test_concurrent_multi_sequencer() {
     let data_c: Vec<Vec<u8>> = vec![tag_payload("c1"), tag_payload("c2"), tag_payload("c3")];
 
     // --- Phase 2: Start all three sequencers with intent tracking ---
-    eprintln!("[TEST] Phase 2: Starting 3 sequencers concurrently");
+    debug!("Phase 2: Starting 3 sequencers concurrently");
     let (sequencer_a, mut handle_a) = ZoneSequencer::init_with_config(
         channel_id,
         Ed25519Key::from_bytes(&key_bytes_a),
@@ -901,11 +920,11 @@ async fn test_concurrent_multi_sequencer() {
     handle_a.wait_ready().await;
     handle_b.wait_ready().await;
     handle_c.wait_ready().await;
-    eprintln!("[TEST] Phase 2: All 3 sequencers ready");
+    debug!("Phase 2: All 3 sequencers ready");
 
     // Phase 3: Publish initial inscriptions concurrently.
     // All publishes registered in tx→id maps for finalization tracking.
-    eprintln!("[TEST] Phase 3: Publishing 9 inscriptions concurrently");
+    debug!("Phase 3: Publishing 9 inscriptions concurrently");
     tokio::join!(
         async {
             for d in &data_a {
@@ -925,7 +944,7 @@ async fn test_concurrent_multi_sequencer() {
     );
 
     // Phase 4: Wait for all 9 inscriptions to appear on chain
-    eprintln!("[TEST] Phase 4: Waiting for all 9 inscriptions in indexer");
+    debug!("Phase 4: Waiting for all 9 inscriptions in indexer");
     let indexer = ZoneIndexer::new(channel_id, node_url, None);
     let mut expected_all: HashSet<Vec<u8>> = HashSet::new();
     expected_all.extend(data_a.iter().cloned());
