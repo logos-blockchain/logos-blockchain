@@ -281,6 +281,52 @@ impl TxState {
         !self.pending.is_empty()
     }
 
+    /// Collect pending inscriptions not valid on ANY active branch.
+    ///
+    /// A pending inscription is stale if it's not reachable from any
+    /// leaf tip's channel tip and not in any leaf's safe set. Only
+    /// safe to call when branches are resolved (e.g. on LIB advance).
+    #[must_use]
+    pub fn collect_stale_pending(&self) -> Vec<InscriptionInfo> {
+        if self.pending.is_empty() {
+            return Vec::new();
+        }
+
+        let all_parents: std::collections::HashSet<&HeaderId> = self.parent_map.values().collect();
+        let leaves: Vec<HeaderId> = self
+            .block_states
+            .keys()
+            .filter(|id| !all_parents.contains(id))
+            .copied()
+            .collect();
+
+        let mut valid_on_any: std::collections::HashSet<TxHash> = std::collections::HashSet::new();
+        for leaf in &leaves {
+            let channel_tip = self.channel_tip_at(*leaf);
+            for inv in self.collect_pending_suffix(channel_tip) {
+                valid_on_any.insert(inv.tx_hash);
+            }
+            if let Some(safe) = self.block_states.get(leaf) {
+                for hash in safe.iter() {
+                    if self.pending.contains_key(hash) {
+                        valid_on_any.insert(*hash);
+                    }
+                }
+            }
+        }
+
+        self.pending
+            .values()
+            .filter(|p| !valid_on_any.contains(&p.tx_hash))
+            .map(|p| InscriptionInfo {
+                tx_hash: p.tx_hash,
+                parent_msg: p.parent_msg,
+                this_msg: p.this_msg,
+                payload: p.payload.clone(),
+            })
+            .collect()
+    }
+
     /// Check if we have state for a block.
     #[must_use]
     pub fn has_block(&self, block_id: &HeaderId) -> bool {

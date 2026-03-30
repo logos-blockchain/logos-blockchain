@@ -79,33 +79,32 @@ pub async fn run(args: InscribeArgs) {
         println!("  Restored checkpoint from {}", args.checkpoint_path);
     }
 
-    let (mut sequencer, handle) =
-        ZoneSequencer::init(channel_id, signing_key, node_url, None, checkpoint);
+    let handle = ZoneSequencer::spawn(channel_id, signing_key, node_url, None, None, checkpoint);
 
-    // Drive the sequencer in the background — handle reorgs by re-publishing
-    // invalidated inscriptions that weren't adopted on the new branch.
+    // Handle reorgs by re-publishing invalidated inscriptions that
+    // weren't adopted on the new branch.
+    let mut events = handle.subscribe();
     let reorg_handle = handle.clone();
     tokio::spawn(async move {
         loop {
-            if let Some(Event::ChannelUpdate {
-                invalidated,
-                adopted,
-                ..
-            }) = sequencer.next_event().await
-            {
-                let adopted_payloads: HashSet<Vec<u8>> =
-                    adopted.into_iter().map(|a| a.payload).collect();
-                for inv in invalidated {
-                    if !adopted_payloads.contains(&inv.payload) {
-                        let handle = reorg_handle.clone();
-                        let payload = inv.payload;
-                        tokio::spawn(async move {
-                            if let Err(e) = handle.publish(payload).await {
-                                eprintln!("  Failed to re-publish after reorg: {e}");
-                            }
-                        });
+            match events.recv().await {
+                Ok(Event::ChannelUpdate {
+                    invalidated,
+                    adopted,
+                    ..
+                }) => {
+                    let adopted_payloads: HashSet<Vec<u8>> =
+                        adopted.into_iter().map(|a| a.payload).collect();
+                    for inv in invalidated {
+                        if !adopted_payloads.contains(&inv.payload)
+                            && let Err(e) = reorg_handle.publish(inv.payload).await
+                        {
+                            eprintln!("  Failed to re-publish after reorg: {e}");
+                        }
                     }
                 }
+                Ok(_) => {}
+                Err(_) => break,
             }
         }
     });

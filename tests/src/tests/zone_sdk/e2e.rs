@@ -398,46 +398,50 @@ async fn test_sequencer_checkpoint_resume() {
     poll_task.abort();
 }
 
-/// Spawn a sequencer poll task that re-publishes orphaned payloads.
+/// Subscribe to a sequencer's events and re-publish orphaned inscriptions.
 ///
-/// `invalidated` only contains this sequencer's own pending inscriptions,
-/// so no ownership tracking is needed. We just check whether the payload
-/// was adopted on the new branch before re-publishing.
-fn spawn_sequencer_with_republish(
-    mut sequencer: ZoneSequencer,
-    handle: lb_zone_sdk::sequencer::SequencerHandle,
+/// Uses `handle.subscribe()` — the intended usage pattern for client apps.
+/// The event loop must be driven separately (e.g. via `spawn_sequencer_poll`
+/// or `ZoneSequencer::spawn`).
+fn spawn_republish_handler(
+    handle: &lb_zone_sdk::sequencer::SequencerHandle,
 ) -> tokio::task::JoinHandle<()> {
+    let mut events = handle.subscribe();
+    let handle = handle.clone();
     tokio::spawn(async move {
         loop {
-            if let Some(Event::ChannelUpdate {
-                invalidated,
-                adopted,
-                ..
-            }) = sequencer.next_event().await
-            {
-                let adopted_payloads: HashSet<Vec<u8>> =
-                    adopted.into_iter().map(|a| a.payload).collect();
-                for inv in invalidated {
-                    if !adopted_payloads.contains(&inv.payload) {
-                        debug!(
-                            "Re-publishing orphaned: {:?}",
-                            String::from_utf8_lossy(&inv.payload)
-                        );
-                        if let Err(e) = handle.publish(inv.payload).await {
-                            debug!("Failed to re-publish: {e}");
+            match events.recv().await {
+                Ok(Event::ChannelUpdate {
+                    invalidated,
+                    adopted,
+                    ..
+                }) => {
+                    let adopted_payloads: HashSet<Vec<u8>> =
+                        adopted.into_iter().map(|a| a.payload).collect();
+                    for inv in invalidated {
+                        if !adopted_payloads.contains(&inv.payload) {
+                            debug!(
+                                "Re-publishing orphaned: {:?}",
+                                String::from_utf8_lossy(&inv.payload)
+                            );
+                            let h = handle.clone(); // TODO: remove spawn when publish is fire-and-forget
+                            tokio::spawn(async move {
+                                if let Err(e) = h.publish(inv.payload).await {
+                                    debug!("Failed to re-publish: {e}");
+                                }
+                            });
                         }
                     }
                 }
+                Ok(_) => {}
+                Err(_) => break,
             }
         }
     })
 }
 
-/// Simple poll task for sequencers without intent tracking (e.g. phase 1).
-fn spawn_sequencer_poll(
-    mut sequencer: ZoneSequencer,
-    _handle: lb_zone_sdk::sequencer::SequencerHandle,
-) -> tokio::task::JoinHandle<()> {
+/// Drive the sequencer event loop in the background.
+fn spawn_sequencer_poll(mut sequencer: ZoneSequencer) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             sequencer.next_event().await;
@@ -581,7 +585,7 @@ async fn test_sequential_multi_sequencer() {
         sequencer_config.clone(),
         None,
     );
-    let poll_a = spawn_sequencer_poll(sequencer_a, handle_a.clone());
+    let poll_a = spawn_sequencer_poll(sequencer_a);
 
     let phase1_data: Vec<Vec<u8>> = vec![tag_payload("a1"), tag_payload("a2"), tag_payload("a3")];
     publish_all(&mut handle_a, &phase1_data).await;
@@ -613,7 +617,7 @@ async fn test_sequential_multi_sequencer() {
         sequencer_config.clone(),
         None, // Fresh start — SeqB discovers channel tip from chain
     );
-    let poll_b = spawn_sequencer_poll(sequencer_b, handle_b.clone());
+    let poll_b = spawn_sequencer_poll(sequencer_b);
 
     let phase2_data: Vec<Vec<u8>> = vec![tag_payload("b1"), tag_payload("b2"), tag_payload("b3")];
     publish_all(&mut handle_b, &phase2_data).await;
@@ -636,7 +640,7 @@ async fn test_sequential_multi_sequencer() {
         sequencer_config,
         None, // Fresh start — discovers current channel tip
     );
-    let poll_a = spawn_sequencer_poll(sequencer_a, handle_a.clone());
+    let poll_a = spawn_sequencer_poll(sequencer_a);
 
     let phase3_data: Vec<Vec<u8>> = vec![tag_payload("a4"), tag_payload("a5"), tag_payload("a6")];
     publish_all(&mut handle_a, &phase3_data).await;
@@ -752,7 +756,7 @@ async fn test_concurrent_multi_sequencer() {
         sequencer_config.clone(),
         None,
     );
-    let poll_a = spawn_sequencer_poll(sequencer_a, handle_a.clone());
+    let poll_a = spawn_sequencer_poll(sequencer_a);
 
     handle_a.wait_ready().await;
     debug!("Phase 1: SeqA ready, submitting set_keys");
@@ -805,9 +809,18 @@ async fn test_concurrent_multi_sequencer() {
     );
 
     // Start poll tasks — next_event() must be running to process publish requests.
-    let poll_a = spawn_sequencer_with_republish(sequencer_a, handle_a.clone());
-    let poll_b = spawn_sequencer_with_republish(sequencer_b, handle_b.clone());
-    let poll_c = spawn_sequencer_with_republish(sequencer_c, handle_c.clone());
+    let poll_a = {
+        spawn_sequencer_poll(sequencer_a);
+        spawn_republish_handler(&handle_a)
+    };
+    let poll_b = {
+        spawn_sequencer_poll(sequencer_b);
+        spawn_republish_handler(&handle_b)
+    };
+    let poll_c = {
+        spawn_sequencer_poll(sequencer_c);
+        spawn_republish_handler(&handle_c)
+    };
 
     // Wait for all three to be ready
     handle_a.wait_ready().await;
@@ -884,4 +897,329 @@ async fn test_concurrent_multi_sequencer() {
     poll_a.abort();
     poll_b.abort();
     poll_c.abort();
+}
+
+/// Spawn a sequencer with a "smallest wins" conflict resolution policy.
+///
+/// When a competing inscription takes our parent:
+/// - If the adopted payload is lexicographically smaller → drop ours (correct
+///   order, the smaller one should come first).
+/// - If ours is smaller → re-publish (we should have gone first).
+///
+/// The result is that the on-chain sequence is always sorted.
+type DiscardedSet = std::sync::Arc<tokio::sync::Mutex<HashSet<Vec<u8>>>>;
+
+fn spawn_sequencer_sorted_policy(
+    sequencer: ZoneSequencer,
+    handle: lb_zone_sdk::sequencer::SequencerHandle,
+    discarded: DiscardedSet,
+) -> tokio::task::JoinHandle<()> {
+    let mut events = handle.subscribe();
+    spawn_sequencer_poll(sequencer);
+
+    tokio::spawn(async move {
+        let mut max_seen_on_chain: Option<Vec<u8>> = None;
+
+        loop {
+            match events.recv().await {
+                Ok(Event::ChannelUpdate {
+                    invalidated,
+                    adopted,
+                    ..
+                }) => {
+                    for a in &adopted {
+                        if max_seen_on_chain
+                            .as_ref()
+                            .is_none_or(|max| a.payload > *max)
+                        {
+                            max_seen_on_chain = Some(a.payload.clone());
+                        }
+                    }
+
+                    for inv in invalidated {
+                        // Re-publish if our payload is larger than the max
+                        // on chain — it correctly goes at the end in sorted
+                        // order. Drop if smaller — it lost its position and
+                        // can't be inserted earlier (channel is append-only).
+                        let should_republish = max_seen_on_chain
+                            .as_ref()
+                            .is_some_and(|max| inv.payload >= *max);
+
+                        if should_republish {
+                            debug!(
+                                "Sorted policy: re-publishing {:?} (larger than max {:?})",
+                                String::from_utf8_lossy(&inv.payload),
+                                max_seen_on_chain
+                                    .as_ref()
+                                    .map(|m| String::from_utf8_lossy(m).to_string()),
+                            );
+                            let h = handle.clone(); // TODO: remove spawn when publish is fire-and-forget
+                            tokio::spawn(async move {
+                                if let Err(e) = h.publish(inv.payload).await {
+                                    debug!("Failed to re-publish: {e}");
+                                }
+                            });
+                        } else {
+                            debug!(
+                                "Sorted policy: dropping {:?} (< max {:?})",
+                                String::from_utf8_lossy(&inv.payload),
+                                max_seen_on_chain
+                                    .as_ref()
+                                    .map(|m| String::from_utf8_lossy(m).to_string()),
+                            );
+                            discarded.lock().await.insert(inv.payload);
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+    })
+}
+
+#[tokio::test]
+#[serial]
+async fn test_sorted_conflict_resolution() {
+    init_tracing();
+    // Two sequencers publish interleaved sorted payloads concurrently.
+    // Custom policy: "smallest wins" — when a conflict occurs, the
+    // lexicographically smaller payload keeps its position; the larger
+    // one is dropped. The on-chain result must be sorted.
+
+    let (configs, genesis_tx) = create_general_configs(2);
+    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
+    let configs: Vec<_> = configs
+        .into_iter()
+        .map(|c| {
+            let mut config = create_validator_config(c, deployment_settings.clone());
+            config.deployment.time.slot_duration = Duration::from_secs(1);
+            config
+                .user
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period = Duration::ZERO;
+            config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
+            config
+        })
+        .collect();
+
+    let validators: Vec<Validator> = join_all(configs.into_iter().map(Validator::spawn))
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to spawn validators");
+
+    assert!(
+        wait_for_height(&validators[0], 1, Duration::from_secs(120)).await,
+        "Chain should produce the first block"
+    );
+    let node_url = validators[0].url();
+
+    let sequencer_config = SequencerConfig {
+        resubmit_interval: Duration::from_secs(3),
+        ..SequencerConfig::default()
+    };
+
+    // SeqA is the channel admin
+    let mut key_bytes_a = [0u8; 32];
+    thread_rng().fill(&mut key_bytes_a);
+    let signing_key_a = Ed25519Key::from_bytes(&key_bytes_a);
+    let admin_pk = signing_key_a.public_key();
+    let channel_id = channel_id_from_key(&signing_key_a);
+
+    let mut key_bytes_b = [0u8; 32];
+    thread_rng().fill(&mut key_bytes_b);
+    let signing_key_b = Ed25519Key::from_bytes(&key_bytes_b);
+    let seq_b_pk = signing_key_b.public_key();
+
+    // Phase 1: SeqA creates channel and authorizes SeqB
+    debug!("Phase 1: set_keys");
+    let (sequencer_a, mut handle_a) = ZoneSequencer::init_with_config(
+        channel_id,
+        signing_key_a,
+        node_url.clone(),
+        None,
+        sequencer_config.clone(),
+        None,
+    );
+    let poll_a = spawn_sequencer_poll(sequencer_a);
+
+    handle_a.wait_ready().await;
+    let finalized = handle_a
+        .set_keys(vec![admin_pk, seq_b_pk])
+        .await
+        .expect("set_keys should succeed");
+    timeout(Duration::from_secs(360), finalized)
+        .await
+        .expect("Timeout waiting for set_keys to finalize")
+        .expect("set_keys finalization failed");
+
+    poll_a.abort();
+    drop(handle_a);
+
+    // Phase 2: Both sequencers publish interleaved sorted payloads.
+    // All payloads are unique across both sets — no UUIDs needed.
+    // SeqA: "aa", "cc", "ee", "gg", "ii"
+    // SeqB: "bb", "dd", "ff", "hh", "jj"
+    debug!("Phase 2: Starting both sequencers with sorted policy");
+    let data_a: Vec<Vec<u8>> = ["aa", "cc", "ee", "gg", "ii"]
+        .iter()
+        .map(|s| s.as_bytes().to_vec())
+        .collect();
+    let data_b: Vec<Vec<u8>> = ["bb", "dd", "ff", "hh", "jj"]
+        .iter()
+        .map(|s| s.as_bytes().to_vec())
+        .collect();
+
+    let (sequencer_a, mut handle_a) = ZoneSequencer::init_with_config(
+        channel_id,
+        Ed25519Key::from_bytes(&key_bytes_a),
+        node_url.clone(),
+        None,
+        sequencer_config.clone(),
+        None,
+    );
+    let (sequencer_b, mut handle_b) = ZoneSequencer::init_with_config(
+        channel_id,
+        signing_key_b,
+        node_url.clone(),
+        None,
+        sequencer_config,
+        None,
+    );
+
+    let discarded: DiscardedSet = std::sync::Arc::new(tokio::sync::Mutex::new(HashSet::new()));
+    let poll_a = spawn_sequencer_sorted_policy(
+        sequencer_a,
+        handle_a.clone(),
+        DiscardedSet::clone(&discarded),
+    );
+    let poll_b = spawn_sequencer_sorted_policy(
+        sequencer_b,
+        handle_b.clone(),
+        DiscardedSet::clone(&discarded),
+    );
+
+    handle_a.wait_ready().await;
+    handle_b.wait_ready().await;
+    debug!("Phase 2: Both sequencers ready, publishing");
+
+    // Publish concurrently
+    tokio::join!(
+        async {
+            for d in &data_a {
+                handle_a.publish(d.clone()).await.expect("publish failed");
+            }
+        },
+        async {
+            for d in &data_b {
+                handle_b.publish(d.clone()).await.expect("publish failed");
+            }
+        },
+    );
+
+    // Phase 3: Poll indexer until we see all non-discarded payloads.
+    debug!("Phase 3: Polling indexer for finalized inscriptions");
+    let indexer = ZoneIndexer::new(channel_id, node_url, None);
+    let all_payloads: HashSet<Vec<u8>> = data_a.iter().chain(data_b.iter()).cloned().collect();
+    let mut on_chain: Vec<Vec<u8>> = Vec::new();
+    let mut cursor = None;
+    let start = std::time::Instant::now();
+
+    loop {
+        assert!(
+            start.elapsed() <= Duration::from_secs(600),
+            "Timeout waiting for inscriptions to finalize"
+        );
+
+        let expected_count = 10 - discarded.lock().await.len();
+        if on_chain.len() >= expected_count && expected_count > 0 {
+            break;
+        }
+
+        let result = indexer
+            .next_messages(cursor, 100)
+            .await
+            .expect("next_messages should succeed");
+        for msg in &result.messages {
+            if all_payloads.contains(&msg.data) && !on_chain.contains(&msg.data) {
+                on_chain.push(msg.data.clone());
+                debug!(
+                    "Indexer found: {:?} ({}/{})",
+                    String::from_utf8_lossy(&msg.data),
+                    on_chain.len(),
+                    expected_count,
+                );
+            }
+        }
+        cursor = Some(result.cursor);
+        sleep(Duration::from_millis(500)).await;
+    }
+
+    debug!(
+        "On-chain payloads: {:?}",
+        on_chain
+            .iter()
+            .map(|p| String::from_utf8_lossy(p).to_string())
+            .collect::<Vec<_>>()
+    );
+
+    // No duplicates
+    let unique: HashSet<&Vec<u8>> = on_chain.iter().collect();
+    assert_eq!(
+        unique.len(),
+        on_chain.len(),
+        "Duplicate inscriptions detected on chain"
+    );
+
+    // The key invariant: whatever survived on chain must be sorted.
+    let is_sorted = on_chain.windows(2).all(|w| w[0] <= w[1]);
+    assert!(
+        is_sorted,
+        "On-chain payloads must be sorted, got: {:?}",
+        on_chain
+            .iter()
+            .map(|p| String::from_utf8_lossy(p).to_string())
+            .collect::<Vec<_>>()
+    );
+
+    // At least some payloads should have survived
+    assert!(
+        !on_chain.is_empty(),
+        "At least some payloads should be on chain"
+    );
+
+    // Accounting: on-chain + discarded == total published
+    let discarded_set = discarded.lock().await;
+    debug!(
+        "{} on chain + {} discarded = {} (of 10 published)",
+        on_chain.len(),
+        discarded_set.len(),
+        on_chain.len() + discarded_set.len(),
+    );
+
+    // No overlap between on-chain and discarded
+    let on_chain_set: HashSet<Vec<u8>> = on_chain.iter().cloned().collect();
+    let overlap: Vec<_> = on_chain_set.intersection(&discarded_set).collect();
+    assert!(
+        overlap.is_empty(),
+        "Payload both on chain and discarded: {:?}",
+        overlap
+            .iter()
+            .map(|p| String::from_utf8_lossy(p))
+            .collect::<Vec<_>>()
+    );
+
+    assert_eq!(
+        on_chain.len() + discarded_set.len(),
+        10,
+        "on_chain + discarded must equal total published"
+    );
+    drop(discarded_set);
+
+    // Clean up
+    poll_a.abort();
+    poll_b.abort();
 }

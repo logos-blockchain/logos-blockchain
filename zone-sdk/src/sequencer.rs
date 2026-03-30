@@ -134,6 +134,23 @@ pub struct SequencerHandle {
 }
 
 impl SequencerHandle {
+    /// Subscribe to sequencer events.
+    ///
+    /// Use this with [`spawn`](ZoneSequencer::spawn) to react to events
+    /// without driving the event loop manually:
+    ///
+    /// ```ignore
+    /// let handle = ZoneSequencer::spawn(channel_id, key, url, None, None, None);
+    /// let mut events = handle.subscribe();
+    /// while let Ok(event) = events.recv().await {
+    ///     // handle event
+    /// }
+    /// ```
+    #[must_use]
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.event_tx.subscribe()
+    }
+
     /// Wait until the sequencer is connected and ready to accept requests.
     pub async fn wait_ready(&mut self) {
         while !*self.ready_rx.borrow_and_update() {
@@ -146,6 +163,9 @@ impl SequencerHandle {
     /// Publish an inscription to the zone's channel.
     ///
     /// Returns the inscription ID and a checkpoint for persistence.
+    ///
+    /// TODO: make fire-and-forget so clients can call from event handlers
+    /// without spawning a task. Currently goes through the actor loop.
     pub async fn publish(&self, data: Vec<u8>) -> Result<PublishResult, Error> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let request = ActorRequest::Publish {
@@ -872,7 +892,7 @@ async fn handle_block_event(
     // On first event (old_tip is None), check for existing inscriptions on
     // the channel — this handles clean start on an existing channel.
     // On subsequent events, detect channel update if tip changed.
-    let channel_update = match old_tip {
+    let mut channel_update = match old_tip {
         Some(old) if old != tip => s.detect_channel_update(old, tip),
         None => {
             // First event — check if the channel already has inscriptions.
@@ -896,9 +916,38 @@ async fn handle_block_event(
         _ => None, // tip unchanged
     };
 
+    // On LIB advance, catch stale pending not valid on any branch.
+    if !lib_finalized.is_empty() {
+        merge_stale_pending(s, tip, &mut channel_update);
+    }
+
     BlockEventResult {
         newly_finalized,
         channel_update,
+    }
+}
+
+fn merge_stale_pending(
+    s: &TxState,
+    tip: HeaderId,
+    channel_update: &mut Option<crate::state::ChannelUpdateInfo>,
+) {
+    let stale = s.collect_stale_pending();
+    if stale.is_empty() {
+        return;
+    }
+    if let Some(update) = channel_update {
+        let existing: std::collections::HashSet<TxHash> =
+            update.invalidated.iter().map(|i| i.tx_hash).collect();
+        update
+            .invalidated
+            .extend(stale.into_iter().filter(|i| !existing.contains(&i.tx_hash)));
+    } else {
+        *channel_update = Some(crate::state::ChannelUpdateInfo {
+            invalidated: stale,
+            adopted: Vec::new(),
+            new_channel_tip: s.channel_tip_at(tip),
+        });
     }
 }
 
