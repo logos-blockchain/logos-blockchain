@@ -268,7 +268,7 @@ async fn large_inscription_e2e() {
         let large_inscription = vec![0xAB; payload_size];
         let mantle_tx = create_inscription_transaction_with_id(
             ChannelId::from([1u8; 32]),
-            Some(large_inscription)
+            Some(large_inscription),
         );
         let tx_hash = mantle_tx.hash();
 

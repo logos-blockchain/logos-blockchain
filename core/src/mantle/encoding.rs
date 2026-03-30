@@ -818,6 +818,7 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+
     use ark_ff::Field as _;
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use num_bigint::BigUint;
@@ -912,8 +913,7 @@ mod tests {
 
         // DECODING
         let test_vector_bytes = hex::decode(test_vector).unwrap();
-        let (remaining, decoded_tx) =
-            decode_signed_mantle_tx(&test_vector_bytes).unwrap();
+        let (remaining, decoded_tx) = decode_signed_mantle_tx(&test_vector_bytes).unwrap();
         assert!(remaining.is_empty());
         assert_eq!(decoded_tx, signed_tx);
     }
@@ -963,8 +963,7 @@ mod tests {
 
         // DECODING
         let test_vector_bytes = hex::decode(test_vector).unwrap();
-        let (remaining, decoded_tx) =
-            decode_signed_mantle_tx(&test_vector_bytes).unwrap();
+        let (remaining, decoded_tx) = decode_signed_mantle_tx(&test_vector_bytes).unwrap();
         assert!(remaining.is_empty());
         assert_eq!(decoded_tx, signed_tx);
     }
@@ -1042,7 +1041,8 @@ mod tests {
                 let encoded = encode_signed_mantle_tx(&signed_tx);
 
                 let gas_context = MantleTxGasContext::new(HashMap::new());
-                let predicted_size = predict_signed_mantle_tx_size(&signed_tx.mantle_tx, &gas_context);
+                let predicted_size =
+                    predict_signed_mantle_tx_size(&signed_tx.mantle_tx, &gas_context);
                 assert_eq!(
                     predicted_size,
                     encoded.len(),

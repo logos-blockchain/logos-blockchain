@@ -10,7 +10,10 @@ use lb_core::{
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo,
         ops::{
-            channel::{deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp},
+            channel::{
+                deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp,
+                withdraw::ChannelWithdrawOp,
+            },
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
@@ -21,7 +24,7 @@ use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use lb_utxotree::MerklePath;
 use sdp::{Error as SdpLedgerError, locked_notes::LockedNotes};
 use tracing::error;
-use lb_core::mantle::ops::channel::withdraw::ChannelWithdrawOp;
+
 use crate::{Balance, Config, EpochState, UtxoTree};
 
 const LOG_TARGET: &str = "ledger::mantle";
@@ -185,7 +188,10 @@ impl LedgerState {
         Ok((self, -Balance::from(op.amount)))
     }
 
-    pub fn try_apply_channel_withdraw(mut self, op: &ChannelWithdrawOp) -> Result<(Self, Balance), Error> {
+    pub fn try_apply_channel_withdraw(
+        mut self,
+        op: &ChannelWithdrawOp,
+    ) -> Result<(Self, Balance), Error> {
         self.channels = self.channels.withdraw(op).inspect_err(
             |err| error!(target: LOG_TARGET, %err, "Failed to apply the Channel Withdraw message."),
         )?;

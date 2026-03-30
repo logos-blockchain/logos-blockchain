@@ -14,7 +14,8 @@ pub use cryptarchia::{EpochState, UtxoTree};
 use lb_core::{
     block::BlockNumber,
     mantle::{
-        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value, gas::GasConstants,
+        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value, VerificationError,
+        gas::GasConstants,
     },
     proofs::leader_proof,
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
@@ -23,7 +24,7 @@ use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Field as _, Fr};
 use mantle::LedgerState as MantleLedger;
 use thiserror::Error;
-use lb_core::mantle::VerificationError;
+
 use crate::mantle::helpers::MantleOperationVerificationHelper;
 
 const WINDOW_SIZE: usize = 120;
@@ -398,17 +399,20 @@ impl LedgerState {
         self.mantle_ledger.active_sessions()
     }
 
-    // Some of the ops' proofs are verified in `SignedMantleTx::verify_ops_proofs`, either fully or
-    // partially.
+    // Some of the ops' proofs are verified in `SignedMantleTx::verify_ops_proofs`,
+    // either fully or partially.
     // This probably benefits from some refactoring.
-    // For now, though, you should manually ensure that everything is correctly verified.
+    // For now, though, you should manually ensure that everything is correctly
+    // verified.
     fn try_apply_tx<Id, Constants: GasConstants>(
         mut self,
         config: &Config,
         tx: impl AuthenticatedMantleTx,
     ) -> Result<(Self, Balance), LedgerError<Id>> {
-        let operation_verification_helper = MantleOperationVerificationHelper::new(&self.mantle_ledger);
-        tx.verify_ops_proofs_with_helper(&operation_verification_helper).map_err(LedgerError::VerificationError)?;
+        let operation_verification_helper =
+            MantleOperationVerificationHelper::new(&self.mantle_ledger);
+        tx.verify_ops_proofs_with_helper(&operation_verification_helper)
+            .map_err(LedgerError::VerificationError)?;
 
         let mut balance: Balance = 0;
         let tx_hash = tx.hash();
@@ -439,7 +443,8 @@ impl LedgerState {
                 }
                 (Op::ChannelWithdraw(op), OpProof::ChannelWithdrawProof(_proof)) => {
                     let withdraw_balance;
-                    (self.mantle_ledger, withdraw_balance) = self.mantle_ledger.try_apply_channel_withdraw(op)?;
+                    (self.mantle_ledger, withdraw_balance) =
+                        self.mantle_ledger.try_apply_channel_withdraw(op)?;
                     assert!(
                         withdraw_balance >= 0,
                         "withdraw balance should be non-negative: {withdraw_balance}"
@@ -532,6 +537,7 @@ mod tests {
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
+
     use super::*;
     use crate::cryptarchia::tests::utxo_with_sk;
 

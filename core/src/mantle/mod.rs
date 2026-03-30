@@ -52,7 +52,8 @@ pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCost + StorageS
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)>;
 
     fn verify_ops_proofs_with_helper(
-        &self, helper: &impl tx::OperationVerificationHelper,
+        &self,
+        helper: &impl tx::OperationVerificationHelper,
     ) -> Result<(), VerificationError>;
 
     fn gas_cost<Constants: GasConstants>(&self) -> Gas;

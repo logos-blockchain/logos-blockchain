@@ -8,8 +8,7 @@ use lb_core::mantle::{
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use logos_blockchain_tests::{
     common::{
-        chain::scan_chain_until,
-        mantle_tx::create_inscription_transaction_with_id,
+        chain::scan_chain_until, mantle_tx::create_inscription_transaction_with_id,
         time::max_block_propagation_time,
     },
     nodes::validator::Validator,
@@ -46,8 +45,7 @@ async fn invalid_transactions_are_handled() {
         .expect("Invalid transaction should be accepted by mempool for later pruning");
     let invalid_tx_hashes = [invalid_hash];
 
-    let first_valid_tx =
-        create_inscription_transaction_with_id(ChannelId::from([1u8; 32]), None);
+    let first_valid_tx = create_inscription_transaction_with_id(ChannelId::from([1u8; 32]), None);
     let first_valid_hash = first_valid_tx.hash();
     client
         .post_transaction(validator_url.clone(), first_valid_tx)
@@ -70,8 +68,7 @@ async fn invalid_transactions_are_handled() {
     .await
     .expect("first transaction processing timed out");
 
-    let second_valid_tx =
-        create_inscription_transaction_with_id(ChannelId::from([2u8; 32]), None);
+    let second_valid_tx = create_inscription_transaction_with_id(ChannelId::from([2u8; 32]), None);
     let second_valid_hash = second_valid_tx.hash();
     client
         .post_transaction(validator_url.clone(), second_valid_tx)

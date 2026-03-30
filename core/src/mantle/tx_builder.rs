@@ -3,9 +3,11 @@ use std::{cmp::Ordering, collections::HashMap};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
 use super::{GasConstants, GasCost as _, MantleTx, Note, Op, Utxo};
-use crate::mantle::{ops::transfer::TransferOp, tx::MantleTxGasContext};
 use crate::{
-    mantle::ops::channel::withdraw::ChannelWithdrawOp,
+    mantle::{
+        ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
+        tx::MantleTxGasContext,
+    },
     proofs::channel_withdraw_proof::ChannelWithdrawProof,
 };
 

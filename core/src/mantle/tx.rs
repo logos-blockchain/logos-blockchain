@@ -241,7 +241,8 @@ impl From<SignedMantleTx> for MantleTx {
 
 // Deserializing here is dangerous, as it bypasses the verification without
 // confirmation.
-// TODO: Split entity into a system that allows for verification in different stages.
+// TODO: Split entity into a system that allows for verification in different
+// stages.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SignedMantleTx {
     pub mantle_tx: MantleTx,
@@ -318,10 +319,7 @@ impl SignedMantleTx {
     /// This enforces at construction time that:
     /// - `ChannelInscribe` operations have a valid Ed25519 signature from the
     ///   declared signer
-    pub fn new(
-        mantle_tx: MantleTx,
-        ops_proofs: Vec<OpProof>,
-    ) -> Result<Self, VerificationError> {
+    pub fn new(mantle_tx: MantleTx, ops_proofs: Vec<OpProof>) -> Result<Self, VerificationError> {
         let tx = Self {
             mantle_tx,
             ops_proofs,
@@ -386,7 +384,8 @@ impl SignedMantleTx {
                 }
                 // Other operations are checked by the ledger or don't require verification here
                 _ => {
-                    // TODO: If the op and proof don't match, we are silently delaying the error
+                    // TODO: If the op and proof don't match, we are silently
+                    // delaying the error
                     //  until tx execution.
                 }
             }
@@ -409,9 +408,14 @@ impl SignedMantleTx {
             .zip(self.ops_proofs.iter())
             .enumerate()
         {
+            #[expect(
+                clippy::single_match_else,
+                reason = "Clearer and follows the pattern of verify_ops_proofs."
+            )]
             match (op, proof) {
                 (
-                    Op::ChannelWithdraw(channel_withdraw_op), OpProof::ChannelWithdrawProof(proof),
+                    Op::ChannelWithdraw(channel_withdraw_op),
+                    OpProof::ChannelWithdrawProof(proof),
                 ) => {
                     verify_channel_withdraw(
                         channel_withdraw_op,
@@ -423,8 +427,8 @@ impl SignedMantleTx {
                 }
                 // Other operations don't require verification here
                 _ => {
-                    // TODO: If the op and proof don't match, we are silently delaying the error
-                    //  until tx execution.
+                    // TODO: If the op and proof don't match, we are silently
+                    //  delaying the error until tx execution.
                 }
             }
         }

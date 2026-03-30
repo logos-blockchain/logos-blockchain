@@ -6,7 +6,9 @@ pub mod sdp;
 mod serde_;
 pub mod transfer;
 
-use channel::{deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp, withdraw::ChannelWithdrawOp};
+use channel::{
+    deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp, withdraw::ChannelWithdrawOp,
+};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -26,7 +28,7 @@ use crate::{
         encoding::{decode_op, encode_op},
         ops::{
             internal::{OpDe, OpSer},
-            opcode::CHANNEL_DEPOSIT,
+            opcode::{CHANNEL_DEPOSIT, CHANNEL_WITHDRAW},
             transfer::TransferOp,
         },
     },
@@ -34,7 +36,6 @@ use crate::{
         channel_withdraw_proof::ChannelWithdrawProof, leader_claim_proof::Groth16LeaderClaimProof,
     },
 };
-use crate::mantle::ops::opcode::CHANNEL_WITHDRAW;
 
 /// Core set of supported Mantle operations.
 ///

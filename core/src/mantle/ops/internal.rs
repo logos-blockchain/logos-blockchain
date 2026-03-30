@@ -5,8 +5,8 @@ use super::{
     channel::{deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp},
     leader_claim::LeaderClaimOp,
     opcode::{
-        CHANNEL_DEPOSIT, INSCRIBE, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW,
-        SET_CHANNEL_KEYS, TRANSFER, CHANNEL_WITHDRAW,
+        CHANNEL_DEPOSIT, CHANNEL_WITHDRAW, INSCRIBE, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE,
+        SDP_WITHDRAW, SET_CHANNEL_KEYS, TRANSFER,
     },
     sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     serde_,

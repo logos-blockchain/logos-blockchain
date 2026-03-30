@@ -4,8 +4,7 @@ use lb_core::{
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp,
-                set_keys::SetKeysOp,
+                ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp, set_keys::SetKeysOp,
             },
         },
         tx::TxHash,
@@ -203,9 +202,5 @@ pub fn create_inscription_transaction_with_id(
     let tx_hash = mantle_tx.hash();
     let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
-    SignedMantleTx::new(
-        mantle_tx,
-        vec![OpProof::Ed25519Sig(signature)],
-    )
-    .unwrap()
+    SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(signature)]).unwrap()
 }
