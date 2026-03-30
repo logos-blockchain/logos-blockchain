@@ -827,8 +827,6 @@ mod tests {
     use crate::{
         mantle::{Transaction as _, TxHash},
         sdp::blend::ActivityProof,
-        mantle::ops::channel::{ChannelId, withdraw::ChannelWithdrawOp},
-        proofs::channel_withdraw_proof::{ChannelWithdrawProof, WithdrawSignature},
     };
 
     fn dbg_test_vector(actual: &str, expected: &str) {
@@ -1613,11 +1611,8 @@ mod tests {
             signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
         )])
         .unwrap();
-        let signed_tx = SignedMantleTx::new(
-            mantle_tx,
-            vec![OpProof::ChannelWithdrawProof(proof)],
-        )
-        .unwrap();
+        let signed_tx =
+            SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelWithdrawProof(proof)]).unwrap();
 
         let encoded = encode_signed_mantle_tx(&signed_tx);
         let (remaining, decoded_tx) = decode_signed_mantle_tx(&encoded).unwrap();

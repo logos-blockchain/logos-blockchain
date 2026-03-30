@@ -525,19 +525,21 @@ impl LedgerState {
 #[cfg(test)]
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
-    use lb_core::mantle::{
-        MantleTx, Note, SignedMantleTx, Transaction as _,
-        gas::MainnetGasConstants,
-        ops::{
-            channel::{
-                ChannelId, MsgId, deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp,
-                withdraw::ChannelWithdrawOp,
+    use lb_core::{
+        mantle::{
+            MantleTx, Note, SignedMantleTx, Transaction as _,
+            gas::MainnetGasConstants,
+            ops::{
+                channel::{
+                    ChannelId, MsgId, deposit::DepositOp, inscribe::InscriptionOp,
+                    set_keys::SetKeysOp, withdraw::ChannelWithdrawOp,
+                },
+                transfer::TransferOp,
             },
-            transfer::TransferOp,
         },
+        proofs::channel_withdraw_proof::{ChannelWithdrawProof, WithdrawSignature},
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey};
-    use lb_core::proofs::channel_withdraw_proof::{ChannelWithdrawProof, WithdrawSignature};
     use num_bigint::BigUint;
 
     use super::*;
@@ -581,6 +583,7 @@ mod tests {
     enum Key {
         Ed25519(Ed25519Key),
         Zk(ZkKey),
+        EmptyZk,
         Withdraw(ChannelWithdrawProof),
         None,
     }
@@ -607,6 +610,7 @@ mod tests {
                 Key::Zk(key) => OpProof::ZkSig(
                     ZkKey::multi_sign(std::slice::from_ref(key), tx_hash.as_ref()).unwrap(),
                 ),
+                Key::EmptyZk => OpProof::ZkSig(ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap()),
                 Key::Withdraw(proof) => OpProof::ChannelWithdrawProof(proof.clone()),
                 Key::None => OpProof::NoProof,
             })
@@ -885,14 +889,10 @@ mod tests {
         )])
         .unwrap();
 
-        let signed_tx = SignedMantleTx::new(
-            withdraw_tx,
-            vec![
-                OpProof::ChannelWithdrawProof(withdraw_proof),
-                OpProof::ZkSig(ZkKey::multi_sign(&[], withdraw_tx_hash.as_ref()).unwrap()),
-            ],
-        )
-        .unwrap();
+        let signed_tx = create_multi_signed_tx(
+            withdraw_tx.ops,
+            vec![&Key::Withdraw(withdraw_proof), &Key::EmptyZk],
+        );
 
         let result =
             ledger_state.try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, signed_tx);
@@ -975,7 +975,7 @@ mod tests {
         };
         let withdraw_tx = MantleTx {
             ops: vec![
-                Op::ChannelWithdraw(withdraw.clone()),
+                Op::ChannelWithdraw(withdraw),
                 Op::Transfer(transfer_op.clone()),
             ],
             execution_gas_price: 0,
@@ -988,16 +988,13 @@ mod tests {
         )])
         .unwrap();
 
-        let signed_tx = SignedMantleTx::new(
-            withdraw_tx,
-            vec![
-                OpProof::ChannelWithdrawProof(invalid_proof),
-                OpProof::ZkSig(ZkKey::multi_sign(&[], withdraw_tx_hash.as_ref()).unwrap()),
-            ],
-        )
-            .unwrap();
+        let signed_tx = create_multi_signed_tx(
+            withdraw_tx.ops,
+            vec![&Key::Withdraw(invalid_proof), &Key::EmptyZk],
+        );
 
-        let result = ledger_state.clone()
+        let result = ledger_state
+            .clone()
             .try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, signed_tx);
         assert_eq!(
             result,
@@ -1017,7 +1014,10 @@ mod tests {
             .unwrap()
             .balance;
         assert_eq!(channel_balance_after_deposit, 10);
-        assert_eq!(channel_balance_after_deposit, channel_balance_after_withdraw);
+        assert_eq!(
+            channel_balance_after_deposit,
+            channel_balance_after_withdraw
+        );
         let recipient_utxo = transfer_op.utxo_by_index(0).unwrap();
         assert!(!ledger_state.latest_utxos().contains(&recipient_utxo.id()));
     }

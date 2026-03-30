@@ -616,13 +616,12 @@ mod tests {
             channel_id: &ChannelId,
             key_index: &ChannelKeyIndex,
         ) -> Result<Ed25519PublicKey, VerificationError> {
-            self.keys
-                .get(&(*channel_id, *key_index))
-                .copied()
-                .ok_or(VerificationError::KeyNotFound {
+            self.keys.get(&(*channel_id, *key_index)).copied().ok_or(
+                VerificationError::KeyNotFound {
                     channel_id: *channel_id,
                     key_index: *key_index,
-                })
+                },
+            )
         }
     }
 
@@ -897,7 +896,10 @@ mod tests {
         let helper = TestOperationVerificationHelper::new([], []);
 
         let verification_result = signed_tx.verify_ops_proofs_with_helper(&helper);
-        assert_eq!(verification_result, Err(VerificationError::ChannelNotFound { channel_id }));
+        assert_eq!(
+            verification_result,
+            Err(VerificationError::ChannelNotFound { channel_id })
+        );
     }
 
     #[test]
@@ -914,7 +916,11 @@ mod tests {
 
         let verification_result = signed_tx.verify_ops_proofs_with_helper(&helper);
         assert_eq!(
-            verification_result, Err(VerificationError::KeyNotFound { channel_id, key_index: 1 })
+            verification_result,
+            Err(VerificationError::KeyNotFound {
+                channel_id,
+                key_index: 1
+            })
         );
     }
 
@@ -933,7 +939,9 @@ mod tests {
         assert_eq!(
             verification_result,
             Err(VerificationError::ChannelWithdrawProofNotEnoughSignatures {
-                op_index: 0, actual: 1, required: 2
+                op_index: 0,
+                actual: 1,
+                required: 2
             })
         );
     }
@@ -954,7 +962,8 @@ mod tests {
         assert_eq!(
             verification_result,
             Err(VerificationError::ChannelWithdrawProofInvalidSignature {
-                op_index: 0, signature_index: 0
+                op_index: 0,
+                signature_index: 0
             })
         );
     }
