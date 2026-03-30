@@ -10,7 +10,6 @@ pub use fork_monitor::ClusterForkMonitor;
 pub use inscription::*;
 use testing_framework_core::scenario::{Application, RunContext};
 use tokio::sync::broadcast;
-
 use crate::{BlockFeed, BlockRecord, NodeHttpClient, framework::LbcEnv, node::DeploymentPlan};
 
 pub type BlockFeedSubscription = broadcast::Receiver<Arc<BlockRecord>>;

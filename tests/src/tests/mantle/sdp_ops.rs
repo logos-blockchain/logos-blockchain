@@ -3,7 +3,7 @@ use std::{collections::HashSet, time::Duration};
 use lb_common_http_client::CommonHttpClient;
 use lb_core::{
     block::MAX_BLOCK_SIZE,
-    mantle::{Note, NoteId, Transaction as _, ops::channel::ChannelId, tx::verifiers::NoopHelper},
+    mantle::{Note, NoteId, Transaction as _, ops::channel::ChannelId},
     sdp::{Declaration, Locator, ServiceType, WithdrawMessage},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
@@ -268,8 +268,7 @@ async fn large_inscription_e2e() {
         let large_inscription = vec![0xAB; payload_size];
         let mantle_tx = create_inscription_transaction_with_id(
             ChannelId::from([1u8; 32]),
-            Some(large_inscription),
-            &NoopHelper,
+            Some(large_inscription)
         );
         let tx_hash = mantle_tx.hash();
 

@@ -9,12 +9,9 @@ use std::{
 
 use async_trait::async_trait;
 use lb_core::mantle::{
-    GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo, tx::MantleTxGasContext,
-    tx::OperationVerificationHelper,
-    tx_builder::MantleTxBuilder,
+    GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo, tx::MantleTxGasContext, tx_builder::MantleTxBuilder,
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
-use lb_ledger::mantle::helpers::MantleOperationVerificationHelper;
 use rand::{seq::SliceRandom as _, thread_rng};
 use testing_framework_core::scenario::{
     DynError, Expectation, RunContext, RunMetrics, Workload as ScenarioWorkload,
@@ -187,9 +184,8 @@ impl<'a, E: LbcScenarioEnv> Submission<'a, E> {
 
     async fn execute(mut self) -> Result<(), DynError> {
         let gas_context = MantleTxGasContext::new(HashMap::new());
-        let helper = MantleOperationVerificationHelper::new(ledger_state.mantle_ledger());
         while let Some(input) = self.plan.pop_front() {
-            submit_wallet_transaction(self.ctx, &input, gas_context.clone(), &helper).await?;
+            submit_wallet_transaction(self.ctx, &input, gas_context.clone()).await?;
             if !self.interval.is_zero() {
                 sleep(self.interval).await;
             }
@@ -202,9 +198,8 @@ async fn submit_wallet_transaction(
     ctx: &RunContext<impl LbcScenarioEnv>,
     input: &WalletInput,
     gas_context: MantleTxGasContext,
-    helper: &(impl OperationVerificationHelper + Sync),
 ) -> Result<(), DynError> {
-    let signed_tx = Arc::new(build_wallet_transaction(input, gas_context, helper)?);
+    let signed_tx = Arc::new(build_wallet_transaction(input, gas_context)?);
     submit_transaction_via_cluster(ctx, signed_tx).await
 }
 
@@ -272,7 +267,6 @@ fn cluster_client_exhausted_error() -> DynError {
 fn build_wallet_transaction(
     input: &WalletInput,
     gas_context: MantleTxGasContext,
-    helper: &impl OperationVerificationHelper,
 ) -> Result<SignedMantleTx, DynError> {
     let tx = MantleTxBuilder::new(gas_context)
         .add_ledger_input(input.utxo)
@@ -285,7 +279,7 @@ fn build_wallet_transaction(
     )
     .map_err(|err| format!("failed to sign transaction: {err}"))?;
 
-    SignedMantleTx::new(tx, vec![OpProof::ZkSig(signature)], helper)
+    SignedMantleTx::new(tx, vec![OpProof::ZkSig(signature)])
         .map_err(|err| format!("failed to build signed transaction: {err}").into())
 }
 

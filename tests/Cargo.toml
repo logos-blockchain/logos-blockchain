@@ -24,7 +24,7 @@ hex                              = { default-features = false, version = "0.4.3"
 lb-chain-broadcast-service       = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-common-http-client            = { workspace = true }
-lb-core                          = { workspace = true, features = ["testing"] }
+lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { features = ["serde"], workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }

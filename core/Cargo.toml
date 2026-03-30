@@ -53,4 +53,3 @@ name    = "mantle_tx_components"
 [features]
 default = []
 mock    = []
-testing = []

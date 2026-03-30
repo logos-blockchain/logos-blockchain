@@ -525,7 +525,6 @@ mod tests {
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
-    use lb_core::mantle::tx::verifiers::NoopHelper;
     use super::*;
     use crate::cryptarchia::tests::utxo_with_sk;
 
@@ -596,7 +595,7 @@ mod tests {
             })
             .collect();
 
-        SignedMantleTx::new(mantle_tx, ops_proofs, &NoopHelper)
+        SignedMantleTx::new(mantle_tx, ops_proofs)
             .expect("Test transaction should have valid signatures")
     }
 

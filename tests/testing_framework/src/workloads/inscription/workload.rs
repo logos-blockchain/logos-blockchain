@@ -13,10 +13,9 @@ use lb_core::mantle::{
         Op, OpProof,
         channel::{ChannelId, MsgId, inscribe::InscriptionOp},
     },
-    tx::{OperationVerificationHelper, TxHash},
+    tx::TxHash,
 };
-use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
-use lb_ledger::mantle::helpers::MantleOperationVerificationHelper;
+use lb_key_management_system_service::keys::Ed25519Key;
 use rand::{seq::SliceRandom as _, thread_rng};
 use testing_framework_core::scenario::{
     DynError, RunContext, RunMetrics, Workload as ScenarioWorkload,
@@ -241,10 +240,7 @@ impl<'a, E: LbcScenarioEnv + LbcBlockFeedEnv> InscriptionRunner<'a, E> {
         let Some(channel) = self.channels.get_mut(channel_idx) else {
             return Ok(());
         };
-        let ledger_state = E::ledger_state(self.ctx);
-        let helper = MantleOperationVerificationHelper::new(ledger_state.mantle_ledger());
-        let (tx, msg_id, tx_hash) =
-            build_inscription_transaction(channel, self.payload_bytes, &helper)?;
+        let (tx, msg_id, tx_hash) = build_inscription_transaction(channel, self.payload_bytes)?;
         submit_transaction_via_cluster(self.ctx, Arc::new(tx)).await?;
 
         channel.submitted += 1;
@@ -383,7 +379,6 @@ fn channel_id_from_signing_key(signing_key: &Ed25519Key) -> ChannelId {
 fn build_inscription_transaction(
     channel: &mut ChannelState,
     payload_bytes: usize,
-    helper: &impl OperationVerificationHelper,
 ) -> Result<(SignedMantleTx, MsgId, TxHash), DynError> {
     let op = InscriptionOp {
         channel_id: channel.channel_id,
@@ -404,7 +399,7 @@ fn build_inscription_transaction(
         .signing_key
         .sign_payload(tx_hash.as_signing_bytes().as_ref());
 
-    let signed_tx = SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(ed25519_signature)], helper)
+    let signed_tx = SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(ed25519_signature)])
         .map_err(|error| InscriptionWorkloadError::SignedTransactionBuild(error.to_string()))?;
 
     channel.next_nonce = channel.next_nonce.saturating_add(1);
