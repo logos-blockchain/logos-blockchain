@@ -651,11 +651,8 @@ where
 
     info!(
         target: LOG_TARGET,
-        session = current_membership_info.public.session,
-        members = current_membership_info.public.membership.size(),
-        local_node_index = current_membership_info.public.membership.local_index(),
-        quota = current_membership_info.public.poq_core_public_inputs.quota,
-        "Current membership is ready"
+        "The current membership is ready: {:?}",
+        current_membership_info.public
     );
 
     let current_public_info = PublicInfo {
@@ -673,14 +670,7 @@ where
         },
     };
 
-    trace!(
-        target: LOG_TARGET,
-        session = current_public_info.session.session_number,
-        members = current_public_info.session.membership.size(),
-        local_node_index = current_public_info.session.membership.local_index(),
-        quota = current_public_info.session.core_public_inputs.quota,
-        "Current public info initialized"
-    );
+    trace!(target: LOG_TARGET, "Current public info: {:?}", current_public_info);
 
     let crypto_processor = CoreCryptographicProcessor::<
         _,
@@ -707,15 +697,15 @@ where
     {
         tracing::trace!(
             target: LOG_TARGET,
-            session = current_membership_info.public.session,
-            "Found recovery state for current session"
+            "Found recovery state for session {:?}: {saved_state:?}",
+            current_membership_info.public.session
         );
         saved_state
     } else {
         tracing::trace!(
             target: LOG_TARGET,
-            session = current_membership_info.public.session,
-            "No recovery state found for current session; initializing a new one"
+            "No recovery state found for session {:?}. Initializing a new one.",
+            current_membership_info.public.session
         );
 
         ServiceState::with_session(
@@ -1620,8 +1610,8 @@ where
         multi_layer_decapsulation_output.into_components();
     tracing::trace!(
         target: LOG_TARGET,
-        layers = blending_tokens.len(),
-        "Batch-decapsulated received message"
+        "Batch-decapsulated {} layers from the received message.",
+        blending_tokens.len()
     );
 
     match decapsulated_message_type {
@@ -1637,8 +1627,7 @@ where
                         Ok(deserialized_network_message) => {
                             tracing::trace!(
                                 target: LOG_TARGET,
-                                message_bytes = deserialized_network_message.message.len(),
-                                "Fully decapsulated processed data message"
+                                "Fully decapsulated and deserialized processed data message: {deserialized_network_message:?}"
                             );
                             let processed_message =
                                 ProcessedMessage::from(deserialized_network_message);
@@ -1656,8 +1645,7 @@ where
         DecapsulatedMessageType::Incompleted(remaining_encapsulated_message) => {
             tracing::trace!(
                 target: LOG_TARGET,
-                message_id = ?remaining_encapsulated_message.id(),
-                "Processed encapsulated message"
+                "Processed encapsulated message: {remaining_encapsulated_message:?}"
             );
             let processed_message = ProcessedMessage::from(*remaining_encapsulated_message);
 
@@ -1765,10 +1753,7 @@ where
     join_all(message_futures).await;
     tracing::debug!(
         target: LOG_TARGET,
-        data_count,
-        processed_count,
-        cover_count,
-        "Sent messages at release window"
+        "Sent out {data_count} data, {processed_count} processed and {cover_count} cover messages at this release window."
     );
 
     state_updater.commit_changes()
@@ -1805,8 +1790,7 @@ async fn handle_release_round_for_old_session<
     join_all(futures).await;
     tracing::debug!(
         target: LOG_TARGET,
-        processed_count = num_futures,
-        "Sent old-session processed messages at release window"
+        "Sent out {num_futures} processed messages at this release window for the old session"
     );
 }
 

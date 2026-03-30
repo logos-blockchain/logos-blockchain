@@ -69,12 +69,7 @@ impl ProofsVerifier for RealProofsVerifier {
     type Error = Error;
 
     fn new(public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-        tracing::trace!(
-            session = public_inputs.session,
-            quota = public_inputs.core.quota,
-            message_quota = public_inputs.leader.message_quota,
-            "Generating new proof verifier"
-        );
+        tracing::trace!("Generating new proof verifier with public inputs: {public_inputs:?}");
         Self {
             current_inputs: public_inputs,
             previous_epoch_inputs: None,
@@ -88,9 +83,7 @@ impl ProofsVerifier for RealProofsVerifier {
             new_pol_inputs
         };
         tracing::trace!(
-            previous_message_quota = old_epoch_inputs.message_quota,
-            new_message_quota = new_pol_inputs.message_quota,
-            "Transitioning epochs for proof verifier"
+            "Transitioning epochs for proof verifier from: {old_epoch_inputs:?} to: {new_pol_inputs:?}"
         );
         self.previous_epoch_inputs = Some(old_epoch_inputs);
     }
@@ -113,12 +106,7 @@ impl ProofsVerifier for RealProofsVerifier {
         // Try with current input, and if it fails, try with the previous one, if any
         // (i.e., within the epoch transition period).
         tracing::trace!(
-            key_nullifier = ?proof.key_nullifier(),
-            session,
-            quota = core.quota,
-            message_quota = leader.message_quota,
-            signing_key = ?signing_key,
-            "Verifying proof of quota"
+            "Verifying proof of quota {proof:?} with session {session:?}, public core inputs: {core:?}, leader inputs: {leader:?} and signing key: {signing_key:?}."
         );
         let start = Instant::now();
         let proof_verification_result = proof
@@ -134,9 +122,7 @@ impl ProofsVerifier for RealProofsVerifier {
                     return Err(Error::ProofOfQuota(quota::Error::InvalidProof));
                 };
                 tracing::trace!(
-                    session,
-                    message_quota = previous_epoch_inputs.message_quota,
-                    "Verifying proof of quota with previous epoch leader inputs"
+                    "Verifying same proof of quota with previous epoch leader inputs: {previous_epoch_inputs:?}."
                 );
                 proof
                     .verify(&PublicInputs {

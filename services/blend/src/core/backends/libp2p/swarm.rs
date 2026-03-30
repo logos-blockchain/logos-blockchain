@@ -424,7 +424,7 @@ where
         msg: EncapsulatedMessageWithVerifiedPublicHeader,
         message_type: metrics::InboundMessageType,
     ) {
-        tracing::trace!(message_id = ?msg.id(), "received message from a peer");
+        tracing::trace!("Received message from a peer: {msg:?}");
 
         if self.incoming_message_sender.send(msg).is_err() {
             tracing::trace!(target: LOG_TARGET, "Failed to send incoming message to channel. No active listeners yet.");

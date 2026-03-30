@@ -595,8 +595,7 @@ where
     )]
     #[instrument(
         level = "debug",
-        skip(tx_selector, relays, ledger_state, ledger_config, proof, signing_key),
-        fields(parent = %parent, slot = ?slot)
+        skip(tx_selector, relays, ledger_state, ledger_config, proof, signing_key)
     )]
     async fn propose_block(
         parent: HeaderId,
@@ -662,9 +661,9 @@ where
                 }
                 Err(err) => {
                     tracing::debug!(
-                        tx_hash = ?tx_hash,
-                        error = %err,
-                        "failed to apply tx during block assembly"
+                        "failed to apply tx {:?} during block assembly: {:?}",
+                        tx_hash,
+                        err
                     );
                     invalid_tx_hashes.push(tx_hash);
                 }

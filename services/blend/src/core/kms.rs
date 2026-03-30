@@ -49,9 +49,7 @@ impl<RuntimeServiceId> KmsPoQAdapter<RuntimeServiceId>
     ) -> Self::CorePoQGenerator {
         tracing::trace!(
             target: LOG_TARGET,
-            ?key_id,
-            selector_count = core_path_and_selectors.len(),
-            "creating KMS-based PoQ generator"
+            "Creating KMS-based PoQ generator with key ID {key_id:?} and core path and selectors {core_path_and_selectors:?}"
         );
         PreloadKMSBackendCorePoQGenerator {
             core_path_and_selectors: *core_path_and_selectors,
@@ -82,9 +80,7 @@ where
     {
         tracing::trace!(
             target: LOG_TARGET,
-            key_index,
-            quota = public_inputs.core.quota,
-            "generating KMS-based PoQ"
+            "Generating KMS-based PoQ with public_inputs {public_inputs:?} and key_index {key_index:?}."
         );
 
         let kms_api = self.kms_api.clone();
