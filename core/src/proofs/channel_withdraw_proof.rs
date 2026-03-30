@@ -97,7 +97,7 @@ impl ChannelWithdrawProof {
         if unique_indices.len() != signatures.len() {
             return Err(Error::DuplicateIndices(unique_indices));
         }
-        let max_signatures_allowed = usize::from(ChannelKeyIndex::MAX);
+        let max_signatures_allowed = usize::from(ChannelKeyIndex::MAX) + 1;
         if signatures.len() > max_signatures_allowed {
             return Err(Error::TooManySignatures {
                 actual: signatures.len(),

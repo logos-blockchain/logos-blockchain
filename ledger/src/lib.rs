@@ -412,8 +412,7 @@ impl LedgerState {
 
         let mut balance: Balance = 0;
         let tx_hash = tx.hash();
-        let ops = tx.ops_with_proof().map(|(op, proof)| (op, Some(proof)));
-        for (op, proof) in ops {
+        for (op, proof) in tx.ops_with_proof() {
             match (op, proof) {
                 // The signature for channel ops can be verified before reaching this point,
                 // as you only need the signer's public key and tx hash
@@ -421,12 +420,12 @@ impl LedgerState {
                 (Op::ChannelInscribe(op), _) => {
                     self.mantle_ledger = self.mantle_ledger.try_apply_channel_inscription(op)?;
                 }
-                (Op::ChannelSetKeys(op), Some(OpProof::Ed25519Sig(sig))) => {
+                (Op::ChannelSetKeys(op), OpProof::Ed25519Sig(sig)) => {
                     self.mantle_ledger = self
                         .mantle_ledger
                         .try_apply_channel_set_keys(op, sig, &tx_hash)?;
                 }
-                (Op::ChannelDeposit(op), Some(OpProof::NoProof)) => {
+                (Op::ChannelDeposit(op), OpProof::NoProof) => {
                     let deposit_balance;
                     (self.mantle_ledger, deposit_balance) =
                         self.mantle_ledger.try_apply_channel_deposit(op)?;
@@ -438,7 +437,7 @@ impl LedgerState {
                         .checked_add(deposit_balance)
                         .ok_or(LedgerError::BalanceOverflow)?;
                 }
-                (Op::ChannelWithdraw(op), Some(OpProof::ChannelWithdrawProof(_proof))) => {
+                (Op::ChannelWithdraw(op), OpProof::ChannelWithdrawProof(_proof)) => {
                     let withdraw_balance;
                     (self.mantle_ledger, withdraw_balance) = self.mantle_ledger.try_apply_channel_withdraw(op)?;
                     assert!(
@@ -451,10 +450,10 @@ impl LedgerState {
                 }
                 (
                     Op::SDPDeclare(op),
-                    Some(OpProof::ZkAndEd25519Sigs {
+                    OpProof::ZkAndEd25519Sigs {
                         zk_sig,
                         ed25519_sig,
-                    }),
+                    },
                 ) => {
                     self.mantle_ledger = self.mantle_ledger.try_apply_sdp_declaration(
                         op,
@@ -465,17 +464,18 @@ impl LedgerState {
                         config,
                     )?;
                 }
-                (Op::SDPActive(op), Some(OpProof::ZkSig(sig))) => {
+                (Op::SDPActive(op), OpProof::ZkSig(sig)) => {
                     self.mantle_ledger = self
                         .mantle_ledger
                         .try_apply_sdp_active(op, sig, tx_hash, config)?;
                 }
-                (Op::SDPWithdraw(op), Some(OpProof::ZkSig(sig))) => {
+                (Op::SDPWithdraw(op), OpProof::ZkSig(sig)) => {
                     self.mantle_ledger = self
                         .mantle_ledger
                         .try_apply_sdp_withdraw(op, sig, tx_hash, config)?;
                 }
-                (Op::LeaderClaim(op), None) => {
+                // TODO: Double check the proof for LeaderClaim is correct
+                (Op::LeaderClaim(op), OpProof::PoC(_)) => {
                     // Correct derivation of the voucher nullifier and membership in the merkle tree
                     // can be verified outside of this function since public inputs are already
                     // available. Callers are expected to validate the proof
@@ -487,7 +487,7 @@ impl LedgerState {
                         .checked_add(leader_balance)
                         .ok_or(LedgerError::BalanceOverflow)?;
                 }
-                (Op::Transfer(op), Some(OpProof::ZkSig(sig))) => {
+                (Op::Transfer(op), OpProof::ZkSig(sig)) => {
                     let transfer_balance;
                     (self.cryptarchia_ledger, transfer_balance) =
                         self.cryptarchia_ledger.try_apply_transfer::<_, Constants>(

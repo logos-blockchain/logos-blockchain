@@ -385,7 +385,10 @@ impl SignedMantleTx {
                     }
                 }
                 // Other operations are checked by the ledger or don't require verification here
-                _ => {}
+                _ => {
+                    // TODO: If the op and proof don't match, we are silently delaying the error
+                    //  until tx execution.
+                }
             }
         }
 
@@ -419,7 +422,10 @@ impl SignedMantleTx {
                     )?;
                 }
                 // Other operations don't require verification here
-                _ => {}
+                _ => {
+                    // TODO: If the op and proof don't match, we are silently delaying the error
+                    //  until tx execution.
+                }
             }
         }
 

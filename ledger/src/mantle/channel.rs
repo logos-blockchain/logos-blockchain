@@ -162,7 +162,7 @@ impl Channels {
 
     pub fn deposit(mut self, op: &DepositOp) -> Result<Self, Error> {
         if let Some(channel) = self.channels.get_mut(&op.channel_id) {
-            channel
+            channel.balance = channel. Previously
                 .balance
                 .checked_add(op.amount)
                 .ok_or(Error::BalanceOverflow)?;
@@ -176,7 +176,7 @@ impl Channels {
 
     pub fn withdraw(mut self, op: &ChannelWithdrawOp) -> Result<Self, Error> {
         if let Some(channel) = self.channels.get_mut(&op.channel_id) {
-            channel
+            channel.balance = channel
                 .balance
                 .checked_sub(op.amount)
                 .ok_or(Error::InsufficientFunds)?;
