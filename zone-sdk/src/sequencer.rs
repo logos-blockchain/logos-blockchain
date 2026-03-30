@@ -463,11 +463,6 @@ impl ZoneSequencer {
     ///
     /// This processes block events, resubmission, and pending requests.
     /// The caller must call this in a loop to keep the sequencer running.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: split into smaller functions"
-    )]
-    #[expect(clippy::too_many_lines, reason = "TODO: split into smaller functions")]
     pub async fn next_event(&mut self) -> Option<Event> {
         // Return buffered event from previous call if any
         if let Some(event) = self.buffered_event.take() {
@@ -475,115 +470,15 @@ impl ZoneSequencer {
             return Some(event);
         }
 
-        // Process incremental backfill — one batch per next_event() call.
-        // This emits FinalizedInscriptions events for catch-up from checkpoint.
-        if let (Some(from), Some(to)) = (self.backfill_from, self.backfill_to) {
-            let from_u64: u64 = from.into();
-            let to_u64: u64 = to.into();
-            if from_u64 <= to_u64 {
-                let batch_end = (from_u64 + BACKFILL_BATCH_SIZE).min(to_u64);
-                let inscriptions = backfill_batch(
-                    self.state.as_mut().unwrap(),
-                    from_u64,
-                    batch_end,
-                    self.channel_id,
-                    &self.http_client,
-                    &self.node_url,
-                )
-                .await;
-
-                // Advance cursor
-                self.backfill_from = Some(Slot::from(batch_end + 1));
-
-                // Update last_msg_id and finalized_msg from backfilled
-                // finalized inscriptions. These are ground truth from
-                // the finalized history.
-                if let Some(last) = inscriptions.last() {
-                    self.last_msg_id = last.this_msg;
-                    if let Some(s) = self.state.as_mut() {
-                        s.set_finalized_msg(last.this_msg);
-                    }
-                }
-
-                if !inscriptions.is_empty() {
-                    let event = Event::FinalizedInscriptions { inscriptions };
-                    drop(self.event_tx.send(event.clone()));
-                    return Some(event);
-                }
-                // Empty batch — return and let next next_event() call
-                // process the next batch with the advanced cursor.
-                return None;
-            }
-            // from > to — backfill complete
-            self.backfill_from = None;
-            self.backfill_to = None;
+        // Process incremental backfill — one batch per call.
+        // Returns Some(Some(event)) or Some(None) while active, None when done.
+        if let Some(maybe_event) = self.process_incremental_backfill().await {
+            return maybe_event;
         }
 
-        // If no blocks stream, try to connect.
-        // Requests are not processed until connected — this ensures
-        // publish() cannot run before state is initialized and backfill
-        // has a chance to start.
-        if self.blocks_stream.is_none() {
-            // Initialize state from consensus info if needed
-            if self.state.is_none() {
-                match self.http_client.consensus_info(self.node_url.clone()).await {
-                    Ok(info) => {
-                        info!(
-                            "Sequencer connected: tip={:?}, lib={:?}",
-                            info.tip, info.lib
-                        );
-                        self.state = Some(TxState::new(info.lib, MsgId::root()));
-                        self.current_tip = Some(info.tip);
-                        // Do NOT update lib_slot here for fresh starts.
-                        // Keep it at genesis so the backfill check detects
-                        // the gap and catches up on existing inscriptions.
-                    }
-                    Err(e) => {
-                        warn!("Failed to fetch consensus info: {e}");
-                        tokio::time::sleep(self.config.reconnect_delay).await;
-                        return None;
-                    }
-                }
-            }
-
-            match self
-                .http_client
-                .get_blocks_stream(self.node_url.clone())
-                .await
-            {
-                Ok(stream) => {
-                    self.blocks_stream = Some(Box::pin(stream));
-                }
-                Err(e) => {
-                    warn!("Failed to connect to blocks stream: {e}");
-                    tokio::time::sleep(self.config.reconnect_delay).await;
-                    return None;
-                }
-            }
-
-            // Check if we need incremental backfill from checkpoint to
-            // current network LIB. Fetch the network's current consensus
-            // state to compare against our local lib_slot.
-            if self.state.is_some() && self.backfill_from.is_none() {
-                match self.http_client.consensus_info(self.node_url.clone()).await {
-                    Ok(info) => {
-                        let network_lib_slot =
-                            get_lib_slot(&self.http_client, &self.node_url, info.lib).await;
-                        let from: u64 = self.lib_slot.into();
-                        let to: u64 = network_lib_slot.into();
-                        if from < to {
-                            debug!("Starting incremental backfill from slot {from} to {to}");
-                            self.backfill_from = Some(Slot::from(from + 1));
-                            self.backfill_to = Some(network_lib_slot);
-                            self.lib_slot = network_lib_slot;
-                            return None;
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to fetch consensus info for backfill check: {e}");
-                    }
-                }
-            }
+        // Ensure we have a blocks stream (connects if needed).
+        if !self.ensure_connected().await {
+            return None;
         }
 
         let stream = self.blocks_stream.as_mut()?;
@@ -606,9 +501,8 @@ impl ZoneSequencer {
                     )
                     .await;
 
-                    // Signal readiness only when:
-                    // - first block event processed (channel discovery done)
-                    // - no pending startup backfill
+                    // Signal readiness after first block event when no
+                    // pending startup backfill remains.
                     if !self.is_ready()
                         && self.backfill_from.is_none()
                         && self.backfill_to.is_none()
@@ -616,85 +510,7 @@ impl ZoneSequencer {
                         let _ = self.ready_tx.send(true);
                     }
 
-                    // Handle channel update.
-                    // Update local publish head based on whether we have
-                    // pending inscriptions:
-                    // - No pending inscriptions: always follow on-chain tip
-                    //   (handles clean start on existing channel)
-                    // - Has pending, invalidated: rewind to on-chain tip
-                    //   and remove invalidated txs
-                    // - Has pending, not invalidated: keep local head
-                    //   (our pending chain still extends the on-chain tip)
-                    if let Some(ref update) = result.channel_update {
-                        debug!(
-                            "ChannelUpdate: invalidated={}, adopted={}, new_tip={:?}",
-                            update.invalidated.len(),
-                            update.adopted.len(),
-                            update.new_channel_tip,
-                        );
-                        let has_pending_inscriptions = self
-                            .state
-                            .as_ref()
-                            .is_some_and(TxState::has_pending_inscriptions);
-
-                        if !update.invalidated.is_empty() {
-                            // Conflict — rewind to canonical tip and remove
-                            // stale txs. The user decides whether to
-                            // re-publish the payloads.
-                            self.last_msg_id = update.new_channel_tip;
-                            if let Some(s) = self.state.as_mut() {
-                                for inv in &update.invalidated {
-                                    debug!(
-                                        "Invalidated: payload={:?}",
-                                        String::from_utf8_lossy(&inv.payload)
-                                    );
-                                    s.remove_pending(&inv.tx_hash);
-                                }
-                            }
-                        } else if !has_pending_inscriptions {
-                            // No pending chain — follow on-chain tip
-                            self.last_msg_id = update.new_channel_tip;
-                        }
-                        // Otherwise: extension with valid pending chain,
-                        // keep local publish head
-                    }
-
-                    // Emit both channel update and finalization events.
-                    // If both occur on the same block, return one now and
-                    // buffer the other for the next next_event() call.
-                    let channel_event = result.channel_update.map(|update| {
-                        Event::ChannelUpdate {
-                            invalidated: update.invalidated,
-                            adopted: update.adopted,
-                            new_channel_tip: update.new_channel_tip,
-                        }
-                    });
-
-                    let finalized_event = if result.newly_finalized.is_empty() {
-                        None
-                    } else {
-                        Some(Event::TxsFinalized {
-                            tx_hashes: result.newly_finalized,
-                        })
-                    };
-
-                    match (channel_event, finalized_event) {
-                        (Some(ce), Some(fe)) => {
-                            // Both events — return channel update, buffer finalization
-                            self.buffered_event = Some(fe);
-                            drop(self.event_tx.send(ce.clone()));
-                            Some(ce)
-                        }
-                        (Some(ce), None) => {
-                            drop(self.event_tx.send(ce.clone()));
-                            Some(ce)
-                        }
-                        (None, Some(fe)) => {
-                            drop(self.event_tx.send(fe.clone()));
-                            Some(fe)
-                        }
-                        (None, None) => None,
-                    }
+                    self.apply_block_result(result)
                 } else {
                     warn!("Blocks stream disconnected, will reconnect on next call");
                     self.blocks_stream = None;
@@ -717,6 +533,179 @@ impl ZoneSequencer {
                 );
                 None
             }
+        }
+    }
+
+    /// Process one batch of incremental backfill if active.
+    ///
+    /// Returns `Some(event)` while backfill is active (caller should return
+    /// the inner value), or `None` when backfill is complete/inactive.
+    async fn process_incremental_backfill(&mut self) -> Option<Option<Event>> {
+        let (Some(from), Some(to)) = (self.backfill_from, self.backfill_to) else {
+            return None;
+        };
+
+        let from_u64: u64 = from.into();
+        let to_u64: u64 = to.into();
+
+        if from_u64 > to_u64 {
+            self.backfill_from = None;
+            self.backfill_to = None;
+            return None;
+        }
+
+        let batch_end = (from_u64 + BACKFILL_BATCH_SIZE).min(to_u64);
+        let batch = fetch_and_process_blocks(
+            self.state.as_mut().unwrap(),
+            from_u64,
+            batch_end,
+            self.channel_id,
+            &self.http_client,
+            &self.node_url,
+        )
+        .await;
+
+        self.backfill_from = Some(Slot::from(batch_end + 1));
+
+        if let Some(last) = batch.inscriptions.last() {
+            self.last_msg_id = last.this_msg;
+            if let Some(s) = self.state.as_mut() {
+                s.set_finalized_msg(last.this_msg);
+            }
+        }
+
+        if batch.inscriptions.is_empty() {
+            return Some(None);
+        }
+
+        let event = Event::FinalizedInscriptions {
+            inscriptions: batch.inscriptions,
+        };
+        drop(self.event_tx.send(event.clone()));
+        Some(Some(event))
+    }
+
+    /// Ensure the blocks stream is connected. Returns `false` if not yet
+    /// ready (caller should return `None`).
+    async fn ensure_connected(&mut self) -> bool {
+        if self.blocks_stream.is_some() {
+            return true;
+        }
+
+        // Initialize state from consensus info if needed
+        if self.state.is_none() {
+            match self.http_client.consensus_info(self.node_url.clone()).await {
+                Ok(info) => {
+                    info!(
+                        "Sequencer connected: tip={:?}, lib={:?}",
+                        info.tip, info.lib
+                    );
+                    self.state = Some(TxState::new(info.lib, MsgId::root()));
+                    self.current_tip = Some(info.tip);
+                }
+                Err(e) => {
+                    warn!("Failed to fetch consensus info: {e}");
+                    tokio::time::sleep(self.config.reconnect_delay).await;
+                    return false;
+                }
+            }
+        }
+
+        match self
+            .http_client
+            .get_blocks_stream(self.node_url.clone())
+            .await
+        {
+            Ok(stream) => {
+                self.blocks_stream = Some(Box::pin(stream));
+            }
+            Err(e) => {
+                warn!("Failed to connect to blocks stream: {e}");
+                tokio::time::sleep(self.config.reconnect_delay).await;
+                return false;
+            }
+        }
+
+        // Check if we need incremental backfill from checkpoint to
+        // current network LIB.
+        if self.state.is_some() && self.backfill_from.is_none() {
+            match self.http_client.consensus_info(self.node_url.clone()).await {
+                Ok(info) => {
+                    let network_lib_slot =
+                        get_lib_slot(&self.http_client, &self.node_url, info.lib).await;
+                    let from: u64 = self.lib_slot.into();
+                    let to: u64 = network_lib_slot.into();
+                    if from < to {
+                        debug!("Starting incremental backfill from slot {from} to {to}");
+                        self.backfill_from = Some(Slot::from(from + 1));
+                        self.backfill_to = Some(network_lib_slot);
+                        self.lib_slot = network_lib_slot;
+                        return false;
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to fetch consensus info for backfill check: {e}");
+                }
+            }
+        }
+
+        true
+    }
+
+    /// Process a `BlockEventResult`: apply channel updates to local state
+    /// and emit events. Returns at most one event; a second is buffered.
+    fn apply_block_result(&mut self, result: BlockEventResult) -> Option<Event> {
+        // Apply channel update to local publish head
+        if let Some(ref update) = result.channel_update {
+            debug!(
+                "ChannelUpdate: invalidated={}, adopted={}, new_tip={:?}",
+                update.invalidated.len(),
+                update.adopted.len(),
+                update.new_channel_tip,
+            );
+            let has_pending = self
+                .state
+                .as_ref()
+                .is_some_and(TxState::has_pending_inscriptions);
+
+            if !update.invalidated.is_empty() {
+                self.last_msg_id = update.new_channel_tip;
+                if let Some(s) = self.state.as_mut() {
+                    for inv in &update.invalidated {
+                        debug!(
+                            "Invalidated: payload={:?}",
+                            String::from_utf8_lossy(&inv.payload)
+                        );
+                        s.remove_pending(&inv.tx_hash);
+                    }
+                }
+            } else if !has_pending {
+                self.last_msg_id = update.new_channel_tip;
+            }
+        }
+
+        // Build events
+        let channel_event = result.channel_update.map(|u| Event::ChannelUpdate {
+            invalidated: u.invalidated,
+            adopted: u.adopted,
+            new_channel_tip: u.new_channel_tip,
+        });
+        let finalized_event = (!result.newly_finalized.is_empty()).then_some(Event::TxsFinalized {
+            tx_hashes: result.newly_finalized,
+        });
+
+        // Emit one event now, buffer the other if both exist
+        match (channel_event, finalized_event) {
+            (Some(ce), Some(fe)) => {
+                self.buffered_event = Some(fe);
+                drop(self.event_tx.send(ce.clone()));
+                Some(ce)
+            }
+            (Some(e), None) | (None, Some(e)) => {
+                drop(self.event_tx.send(e.clone()));
+                Some(e)
+            }
+            (None, None) => None,
         }
     }
 
@@ -824,16 +813,13 @@ async fn handle_block_event(
     let mut lib_finalized = Vec::new();
     if lib != s.lib() {
         let new_lib_slot = get_lib_slot(http_client, node_url, lib).await;
-        if *lib_slot < new_lib_slot {
-            lib_finalized = backfill_to_lib(
-                s,
-                *lib_slot,
-                new_lib_slot,
-                channel_id,
-                http_client,
-                node_url,
-            )
-            .await;
+        let from: u64 = (*lib_slot).into();
+        let to: u64 = new_lib_slot.into();
+        if from < to {
+            lib_finalized =
+                fetch_and_process_blocks(s, from + 1, to, channel_id, http_client, node_url)
+                    .await
+                    .our_tx_hashes;
         }
         *lib_slot = new_lib_slot;
     }
@@ -944,30 +930,33 @@ async fn get_lib_slot(http_client: &CommonHttpClient, node_url: &Url, lib: Heade
     }
 }
 
-/// Backfill finalized blocks from current `lib_slot` to new `lib_slot`.
-///
-/// Uses `state.lib()` during replay to avoid premature finalization.
-/// The caller is responsible for triggering finalization after backfill
-/// completes.
-/// Process one batch of backfill blocks and return discovered inscriptions.
-async fn backfill_batch(
+/// Result of fetching and processing a slot range.
+struct FetchedBatch {
+    our_tx_hashes: Vec<TxHash>,
+    inscriptions: Vec<InscriptionInfo>,
+}
+
+/// Fetch blocks in a slot range, process them into state, and return
+/// discovered tx hashes and inscriptions.
+async fn fetch_and_process_blocks(
     state: &mut TxState,
     from_slot: u64,
     to_slot: u64,
     channel_id: ChannelId,
     http_client: &CommonHttpClient,
     node_url: &Url,
-) -> Vec<InscriptionInfo> {
+) -> FetchedBatch {
+    let mut result = FetchedBatch {
+        our_tx_hashes: Vec::new(),
+        inscriptions: Vec::new(),
+    };
+
     match http_client
         .get_blocks(node_url.clone(), from_slot, to_slot)
         .await
     {
         Ok(blocks) => {
-            let mut batch_inscriptions = Vec::new();
             for block in blocks {
-                let block_id = block.header.id;
-                let parent_id = block.header.parent_block;
-
                 let our_txs: Vec<TxHash> = block
                     .transactions
                     .iter()
@@ -976,67 +965,25 @@ async fn backfill_batch(
                     .collect();
 
                 let inscriptions = extract_inscriptions(&block.transactions, channel_id);
-                batch_inscriptions.extend(inscriptions.clone());
+                result.our_tx_hashes.extend(our_txs.iter().copied());
+                result.inscriptions.extend(inscriptions.clone());
 
                 let current_lib = state.lib();
-                state.process_block(block_id, parent_id, current_lib, our_txs, inscriptions);
-            }
-            batch_inscriptions
-        }
-        Err(e) => {
-            warn!("Failed to fetch backfill batch: {e}");
-            Vec::new()
-        }
-    }
-}
-
-/// Returns tx hashes of our channel's txs found in finalized blocks.
-///
-/// Uses `get_blocks` by slot range which returns only immutable
-/// (canonically finalized) blocks via `ScanImmutableBlockIds`.
-async fn backfill_to_lib(
-    state: &mut TxState,
-    from_slot: Slot,
-    to_slot: Slot,
-    channel_id: ChannelId,
-    http_client: &CommonHttpClient,
-    node_url: &Url,
-) -> Vec<TxHash> {
-    let from: u64 = from_slot.into();
-    let to: u64 = to_slot.into();
-
-    if from >= to {
-        return Vec::new();
-    }
-
-    let mut finalized_txs = Vec::new();
-
-    match http_client.get_blocks(node_url.clone(), from + 1, to).await {
-        Ok(blocks) => {
-            for block in blocks {
-                let block_id = block.header.id;
-                let parent_id = block.header.parent_block;
-
-                let our_txs: Vec<TxHash> = block
-                    .transactions
-                    .iter()
-                    .filter(|tx| matches_channel(tx, channel_id))
-                    .map(|tx| tx.mantle_tx.hash())
-                    .collect();
-
-                let inscriptions = extract_inscriptions(&block.transactions, channel_id);
-                finalized_txs.extend(our_txs.iter().copied());
-
-                let current_lib = state.lib();
-                state.process_block(block_id, parent_id, current_lib, our_txs, inscriptions);
+                state.process_block(
+                    block.header.id,
+                    block.header.parent_block,
+                    current_lib,
+                    our_txs,
+                    inscriptions,
+                );
             }
         }
         Err(e) => {
-            warn!("Failed to backfill finalized blocks: {e}");
+            warn!("Failed to fetch blocks (slots {from_slot}..{to_slot}): {e}");
         }
     }
 
-    finalized_txs
+    result
 }
 
 /// Backfill canonical chain backwards from a missing parent to LIB.
