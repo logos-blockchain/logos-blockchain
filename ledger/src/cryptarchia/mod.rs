@@ -720,6 +720,16 @@ pub mod tests {
         }
     }
 
+    impl LedgerState {
+        #[cfg(test)]
+        pub fn set_execution_base_fee(self, new_execution_fee: Gas) -> Self {
+            Self {
+                execution_base_fee: new_execution_fee,
+                ..self
+            }
+        }
+    }
+
     fn update_ledger(
         ledger: &mut Ledger<HeaderId>,
         parent: HeaderId,

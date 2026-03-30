@@ -200,6 +200,13 @@ mod tests {
 
     use super::*;
 
+    impl LeaderState {
+        #[cfg(test)]
+        pub fn get_pending_rewards(&self) -> Value {
+            self.pending_rewards
+        }
+    }
+
     #[test]
     fn test_reward_amounts() {
         let state = LeaderState::new();

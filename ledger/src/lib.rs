@@ -551,12 +551,18 @@ mod tests {
 
     type HeaderId = [u8; 32];
 
-    fn create_tx(inputs: Vec<NoteId>, outputs: Vec<Note>, sks: &[ZkKey]) -> SignedMantleTx {
+    fn create_tx(
+        inputs: Vec<NoteId>,
+        outputs: Vec<Note>,
+        sks: &[ZkKey],
+        execution_price: Gas,
+        storage_price: Gas,
+    ) -> SignedMantleTx {
         let transfer_op = TransferOp::new(inputs, outputs);
         let mantle_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op)],
-            execution_gas_price: 1,
-            storage_gas_price: 1,
+            execution_gas_price: execution_price,
+            storage_gas_price: storage_price,
         };
         SignedMantleTx {
             ops_proofs: vec![ZkSig(
@@ -593,10 +599,12 @@ mod tests {
             vec![utxo.id()],
             vec![output_note],
             std::slice::from_ref(&sk),
+            1,
+            1,
         );
         let fees = tx.total_gas_cost::<MainnetGasConstants>();
         output_note.value = utxo.note.value - fees;
-        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk]);
+        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk], 1, 1);
 
         // Create a dummy proof (using same structure as in cryptarchia tests)
 
@@ -629,5 +637,122 @@ mod tests {
         } else {
             panic!("first op must be a transfer")
         }
+    }
+
+    #[test]
+    fn test_storage_price_rejection() {
+        let utxo = utxo();
+        let config = config();
+        let ledger = LedgerState::from_utxos([utxo], &config);
+
+        let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(1u8).into()));
+        let sk = ZkKey::from(BigUint::from(0u8));
+        let tx = create_tx(
+            vec![utxo.id()],
+            vec![output_note],
+            std::slice::from_ref(&sk),
+            1,
+            0,
+        );
+        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        output_note.value = utxo.note.value - fees;
+        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk], 1, 0);
+
+        let result = ledger
+            .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
+        assert_eq!(result, Err(LedgerError::InvalidStoragePrice))
+    }
+
+    #[test]
+    fn test_base_fee_rejection() {
+        let utxo = utxo();
+        let config = config();
+        let mut ledger = LedgerState::from_utxos([utxo], &config);
+
+        let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(0u8).into()));
+        let sk = ZkKey::from(BigUint::from(0u8));
+        let tx = create_tx(
+            vec![utxo.id()],
+            vec![output_note],
+            std::slice::from_ref(&sk),
+            1,
+            1,
+        );
+        // Pays 2925 fees = 2705 execution base fee + 0 execution tip + 220 storage
+        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        output_note.value = utxo.note.value - fees;
+        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk.clone()], 1, 1);
+
+        let result = ledger
+            .clone()
+            .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
+        // The unwrap should succeed because the user pays at least the base fee of 2705
+        result.unwrap();
+
+        ledger.cryptarchia_ledger = ledger.cryptarchia_ledger.set_execution_base_fee(10);
+
+        let result = ledger
+            .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
+        // The transaction should be rejected because the price indicated for execution
+        // doesn't cover the base fee that cost 27 050
+        assert_eq!(result, Err(LedgerError::InsufficientExecutionFee))
+    }
+
+    #[test]
+    fn test_priority_fees_go_to_leader() {
+        let utxo = utxo();
+        let config = config();
+        let ledger = LedgerState::from_utxos([utxo], &config);
+
+        let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(0u8).into()));
+        let sk = ZkKey::from(BigUint::from(0u8));
+        let tx = create_tx(
+            vec![utxo.id()],
+            vec![output_note],
+            std::slice::from_ref(&sk),
+            1,
+            1,
+        );
+        // The tx ays 2925 fees = 2705 execution base fee + 0 execution tip + 220
+        // storage
+        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        output_note.value = utxo.note.value - fees;
+        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk.clone()], 1, 1);
+
+        let result = ledger
+            .clone()
+            .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
+        // The unwrap should succeed because the user pays at least the base fee of 2705
+        let no_priority_fee_ledger = result.unwrap();
+
+        let tx = create_tx(
+            vec![utxo.id()],
+            vec![output_note],
+            std::slice::from_ref(&sk),
+            2,
+            1,
+        );
+        // The tx ays 5630 fees = 2705 execution base fee + 2705 execution tip + 220
+        // storage
+        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        output_note.value = utxo.note.value - fees;
+        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk.clone()], 2, 1);
+        let result = ledger
+            .clone()
+            .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
+        // The unwrap should succeed because the user pays at least the base fee of 2705
+        let priority_fee_ledger = result.unwrap();
+
+        assert_eq!(
+            no_priority_fee_ledger
+                .mantle_ledger
+                .leaders
+                .get_pending_rewards()
+                + 2705,
+            priority_fee_ledger
+                .mantle_ledger
+                .leaders
+                .get_pending_rewards()
+        )
     }
 }
