@@ -25,7 +25,7 @@ reqwest                          = { features = ["json", "rustls-tls"], workspac
 serde                            = { features = ["derive"], workspace = true }
 serde_json                       = { workspace = true }
 thiserror                        = { workspace = true }
-tokio                            = { default-features = false, features = ["macros", "net", "rt-multi-thread", "signal", "sync"], version = "1" }
+tokio                            = { features = ["macros", "net", "rt-multi-thread", "signal", "sync"], workspace = true }
 tokio-util                       = { version = "0.7" }
 tower-http                       = { features = ["cors"], version = "0.6.8" }
 tracing                          = { workspace = true }

@@ -6,9 +6,7 @@
 use std::error::Error;
 
 use lb_cryptarchia_sync::ChainSyncError;
-use libp2p::{
-    PeerId, StreamProtocol, autonat, identify, identity, kad, kad::Mode, swarm::NetworkBehaviour,
-};
+use libp2p::{PeerId, StreamProtocol, autonat, identify, identity, kad, swarm::NetworkBehaviour};
 use rand::RngCore;
 use thiserror::Error;
 
@@ -84,13 +82,11 @@ impl<Rng: Clone + Send + RngCore + 'static> Behaviour<Rng> {
             identify_config.to_libp2p_config(public_key, &identify_protocol_name),
         );
 
-        let mut kademlia = kad::Behaviour::with_config(
+        let kademlia = kad::Behaviour::with_config(
             peer_id,
             kad::store::MemoryStore::new(peer_id),
             kademlia_config.to_libp2p_config(kad_protocol_name),
         );
-        // set kademlia to server mode
-        kademlia.set_mode(Some(Mode::Server));
 
         let autonat_server = autonat::v2::server::Behaviour::new(rng.clone());
         let nat = nat::Behaviour::new(rng, &nat_config);

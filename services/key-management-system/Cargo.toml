@@ -21,7 +21,7 @@ log                                = { workspace = true }
 overwatch                          = { workspace = true }
 serde                              = { features = ["derive"], workspace = true }
 thiserror                          = { default-features = false, version = "2" }
-tokio                              = { default-features = false, features = ["rt"], version = "1" }
+tokio                              = { features = ["rt"], workspace = true }
 tracing                            = { default-features = false, version = "0.1" }
 
 [dev-dependencies]

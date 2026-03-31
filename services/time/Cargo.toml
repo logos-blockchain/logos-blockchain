@@ -15,7 +15,7 @@ workspace = true
 [dependencies]
 async-trait           = "0.1"
 cfg_eval              = { optional = true, version = "0.1" }
-futures               = { default-features = false, version = "0.3" }
+futures               = { workspace = true }
 lb-cryptarchia-engine = { features = ["tokio"], workspace = true }
 lb-tracing            = { workspace = true }
 lb-utils              = { optional = true, workspace = true }
@@ -26,8 +26,8 @@ serde_with            = { optional = true, workspace = true }
 sntpc                 = { default-features = false, features = ["std", "tokio-socket"], optional = true, version = "0.5" }
 thiserror             = { default-features = false, optional = true, version = "2.0" }
 time                  = { default-features = false, features = ["std"], version = "0.3" }
-tokio                 = { default-features = false, version = "1" }
-tokio-stream          = { default-features = false, version = "0.1" }
+tokio                 = { workspace = true }
+tokio-stream          = { workspace = true }
 tracing               = { default-features = false, version = "0.1" }
 
 [dev-dependencies]

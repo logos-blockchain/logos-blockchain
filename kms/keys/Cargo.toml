@@ -28,7 +28,7 @@ rand_core                       = { default-features = false, version = "0.6.4" 
 serde                           = { default-features = false, features = ["derive"], version = "1" }
 subtle                          = { workspace = true }
 thiserror                       = { default-features = false, version = "2" }
-tokio                           = { default-features = false, features = ["rt"], version = "1" }
+tokio                           = { features = ["rt"], workspace = true }
 tracing                         = { default-features = false, version = "0.1" }
 x25519-dalek                    = { features = ["serde", "static_secrets", "zeroize"], workspace = true }
 zeroize                         = { workspace = true }

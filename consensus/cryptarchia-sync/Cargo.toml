@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 bytes                 = { features = ["serde"], workspace = true }
-futures               = { default-features = false, version = "0.3" }
+futures               = { workspace = true }
 lb-core               = { workspace = true }
 lb-cryptarchia-engine = { workspace = true }
 libp2p                = { optional = true, workspace = true }
@@ -23,7 +23,7 @@ rand                  = { workspace = true }
 serde                 = { workspace = true }
 serde_with            = { workspace = true }
 thiserror             = "1"
-tokio                 = { default-features = false, version = "1" }
+tokio                 = { workspace = true }
 tracing               = { default-features = false, version = "0.1" }
 
 [dev-dependencies]

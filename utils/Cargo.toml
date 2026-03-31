@@ -13,21 +13,25 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait = "0.1"
-blake2      = { default-features = false, optional = true, version = "0.10" }
-cipher      = { version = "0.4" }
-const-hex   = { default-features = false, version = "1" }
-humantime   = { optional = true, version = "2.1" }
-overwatch   = { workspace = true }
-rand        = { features = ["getrandom"], workspace = true }
-serde       = { features = ["derive"], optional = true, workspace = true }
-serde_with  = { optional = true, workspace = true }
-time        = { default-features = false, features = ["serde-human-readable"], optional = true, version = "0.3" }
+async-trait  = "0.1"
+blake2       = { default-features = false, optional = true, version = "0.10" }
+cipher       = { version = "0.4" }
+const-hex    = { default-features = false, version = "1" }
+futures      = { optional = true, workspace = true }
+humantime    = { optional = true, version = "2.1" }
+overwatch    = { workspace = true }
+rand         = { features = ["getrandom"], workspace = true }
+serde        = { features = ["derive"], optional = true, workspace = true }
+serde_with   = { optional = true, workspace = true }
+time         = { default-features = false, features = ["serde-human-readable"], optional = true, version = "0.3" }
+tokio        = { optional = true, workspace = true }
+tokio-stream = { optional = true, workspace = true }
 
 [features]
 rng   = ["dep:blake2"]
 serde = ["serde/alloc"]
 time  = ["dep:humantime", "dep:serde", "dep:serde_with", "dep:time"]
+tokio = ["dep:futures", "dep:tokio", "dep:tokio-stream"]
 types = []
 
 [dev-dependencies]

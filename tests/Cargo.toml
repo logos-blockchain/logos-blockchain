@@ -18,8 +18,8 @@ async-trait                      = "0.1"
 cucumber                         = { features = ["output-junit"], version = "=0.22.0" }
 derivative                       = "2.2.0"
 ed25519                          = "2.2.3"
-futures                          = { default-features = false, version = "0.3" }
-futures-util                     = { default-features = false, version = "0.3.31" }
+futures                          = { workspace = true }
+futures-util                     = { workspace = true }
 hex                              = { default-features = false, version = "0.4.3" }
 lb-chain-broadcast-service       = { workspace = true }
 lb-chain-service                 = { workspace = true }
@@ -53,7 +53,7 @@ testing-framework-core           = { workspace = true }
 testing-framework-runner-local   = { workspace = true }
 thiserror                        = { default-features = false, version = "2.0" }
 time                             = { default-features = false, version = "0.3" }
-tokio                            = "1"
+tokio                            = { workspace = true }
 tracing                          = { workspace = true }
 tracing-subscriber               = { features = ["env-filter", "fmt"], version = "0.3" }
 

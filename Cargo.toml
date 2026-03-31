@@ -163,6 +163,8 @@ cfg-if            = { default-features = false, version = "1.0.4" }
 divan             = { default-features = false, version = "0.1" }
 ed25519-dalek     = { default-features = false, version = "2" }
 fork_stream       = { default-features = false, version = "0.1.0" }
+futures           = { default-features = false, version = "0.3.32" }
+futures-util      = { default-features = false, version = "0.3.32" }
 hex               = { default-features = false, version = "0.4" }
 libp2p            = { default-features = false, version = "0.55" }
 libp2p-stream     = { default-features = false, version = "0.3.0-alpha" }
@@ -182,6 +184,7 @@ tempfile          = { default-features = false, version = "3" }
 thiserror         = { default-features = false, version = "2.0" }
 time              = { default-features = false, version = "0.3" }
 tokio             = { default-features = false, version = "1" }
+tokio-stream      = { default-features = false, version = "0.1.18" }
 tracing           = { default-features = false, version = "0.1" }
 utoipa            = { default-features = false, version = "4.0" }
 utoipa-swagger-ui = { default-features = false, version = "7.0" }

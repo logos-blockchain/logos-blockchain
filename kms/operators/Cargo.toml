@@ -20,7 +20,7 @@ lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { features = ["unsafe"], workspace = true }
 lb-poseidon2                  = { workspace = true }
 lb-utxotree                   = { workspace = true }
-tokio                         = { default-features = false, features = ["rt"], version = "1" }
+tokio                         = { features = ["rt"], workspace = true }
 tracing                       = { default-features = false, version = "0.1" }
 
 [features]

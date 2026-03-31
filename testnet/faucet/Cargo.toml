@@ -20,7 +20,7 @@ lb-key-management-system-keys = { workspace = true }
 lb-node                       = { workspace = true }
 reqwest                       = { workspace = true }
 serde_yaml                    = "0.9"
-tokio                         = { default-features = false, features = ["macros", "net", "rt-multi-thread"], version = "1" }
+tokio                         = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
 
 [lints]
 workspace = true
