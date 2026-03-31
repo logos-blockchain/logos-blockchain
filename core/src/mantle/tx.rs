@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::{collections::HashMap, sync::LazyLock};
 
 use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes, serde::serde_fr};
@@ -12,7 +12,11 @@ use crate::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasConstants, GasCost},
-        ops::{Op, OpProof, transfer::TransferOp},
+        ops::{
+            Op, OpProof,
+            channel::{ChannelId, ChannelKeyIndex},
+            transfer::TransferOp,
+        },
     },
     proofs::leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
 };
@@ -78,6 +82,25 @@ struct MantleTxDeSerImpl {
     pub ops: Vec<Op>,
     pub execution_gas_price: Gas,
     pub storage_gas_price: Gas,
+}
+
+#[derive(Debug, Clone)]
+pub struct MantleTxGasContext {
+    withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
+}
+
+impl MantleTxGasContext {
+    #[must_use]
+    pub const fn new(withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>) -> Self {
+        Self {
+            withdraw_thresholds,
+        }
+    }
+
+    #[must_use]
+    pub fn withdraw_threshold(&self, channel_id: &ChannelId) -> Option<ChannelKeyIndex> {
+        self.withdraw_thresholds.get(channel_id).copied()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -151,21 +174,22 @@ impl<'de> Deserialize<'de> for MantleTx {
 }
 
 impl GasCost for MantleTx {
-    fn gas_cost<Constants: GasConstants>(&self) -> Gas {
+    type Context = MantleTxGasContext;
+
+    fn gas_cost<Constants: GasConstants>(&self, context: &Self::Context) -> Gas {
         let execution_gas = self
             .ops
             .iter()
             .map(Op::execution_gas::<Constants>)
             .sum::<Gas>();
-        let storage_gas = self.signed_serialized_size();
-
+        let storage_gas = self.signed_serialized_size(context);
         execution_gas * self.execution_gas_price + storage_gas * self.storage_gas_price
     }
 }
 
 impl MantleTx {
     #[must_use]
-    pub fn signed_serialized_size(&self) -> u64 {
+    pub fn signed_serialized_size(&self, _context: &MantleTxGasContext) -> u64 {
         super::encoding::predict_signed_mantle_tx_size(self) as u64
     }
 
@@ -339,10 +363,16 @@ impl AuthenticatedMantleTx for SignedMantleTx {
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)> {
         self.mantle_tx.ops.iter().zip(self.ops_proofs.iter())
     }
+
+    fn gas_cost<Constants: GasConstants>(&self) -> Gas {
+        <Self as GasCost>::gas_cost::<Constants>(self, &())
+    }
 }
 
 impl GasCost for SignedMantleTx {
-    fn gas_cost<Constants: GasConstants>(&self) -> Gas {
+    type Context = ();
+
+    fn gas_cost<Constants: GasConstants>(&self, _context: &Self::Context) -> Gas {
         let execution_gas = self
             .mantle_tx
             .ops

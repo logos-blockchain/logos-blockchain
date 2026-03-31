@@ -13,6 +13,7 @@ use crate::{
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
             transfer::TransferOp,
         },
+        tx::MantleTxGasContext,
     },
 };
 
@@ -74,11 +75,11 @@ impl GenesisTx {
 
     #[cfg(feature = "mock")]
     #[must_use]
-    pub fn new_mocked() -> Self {
+    pub fn new_mocked(context: MantleTxGasContext) -> Self {
         use crate::mantle::tx_builder::MantleTxBuilder;
 
         Self(SignedMantleTx::new_unverified(
-            MantleTxBuilder::new().build(),
+            MantleTxBuilder::new(context).build(),
             vec![],
         ))
     }
@@ -116,7 +117,9 @@ impl Transaction for GenesisTx {
 }
 
 impl GasCost for GenesisTx {
-    fn gas_cost<Constants: GasConstants>(&self) -> Gas {
+    type Context = ();
+
+    fn gas_cost<Constants: GasConstants>(&self, _context: &Self::Context) -> Gas {
         // Genesis transactions have zero gas cost as per spec
         0
     }

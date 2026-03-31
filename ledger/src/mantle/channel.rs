@@ -3,9 +3,10 @@ use std::sync::Arc;
 use lb_core::mantle::{
     TxHash, Value,
     ops::channel::{
-        ChannelId, Ed25519PublicKey as PublicKey, MsgId, deposit::DepositOp,
+        ChannelId, ChannelKeyIndex, Ed25519PublicKey as PublicKey, MsgId, deposit::DepositOp,
         inscribe::InscriptionOp, set_keys::SetKeysOp,
     },
+    tx::MantleTxGasContext,
 };
 use lb_key_management_system_keys::keys::Ed25519Signature;
 #[cfg(feature = "serde")]
@@ -38,19 +39,30 @@ pub struct Channels {
     pub channels: rpds::HashTrieMapSync<ChannelId, ChannelState>,
 }
 
+impl From<&Channels> for MantleTxGasContext {
+    fn from(value: &Channels) -> Self {
+        let withdraw_thresholds = value
+            .channels
+            .iter()
+            .map(|(channel_id, channel)| (*channel_id, channel.withdraw_threshold))
+            .collect();
+        Self::new(withdraw_thresholds)
+    }
+}
+
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelState {
     pub tip: MsgId,
     // avoid cloning the keys every new message
-    pub keys: Arc<[PublicKey]>,
+    pub keys: Arc<[PublicKey]>, // keys.len() <= ChannelKeyIndex::MAX
     pub balance: Value,
     // Indicating how many accredited keys are required to withdraw
     // funds from the channel.
-    pub withdraw_threshold: u16,
+    pub withdraw_threshold: ChannelKeyIndex,
 }
 
-const DEFAULT_WITHDRAW_THRESHOLD: u16 = 1;
+const DEFAULT_WITHDRAW_THRESHOLD: ChannelKeyIndex = 1;
 
 impl Default for Channels {
     fn default() -> Self {
@@ -165,5 +177,51 @@ impl Channels {
     #[must_use]
     pub fn channel_state(&self, channel_id: &ChannelId) -> Option<&ChannelState> {
         self.channels.get(channel_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_key_management_system_keys::keys::Ed25519Key;
+
+    use super::*;
+
+    fn test_public_key(seed: u8) -> PublicKey {
+        Ed25519Key::from_bytes(&[seed; 32]).public_key()
+    }
+
+    #[test]
+    fn channels_to_gas_context_tracks_withdraw_thresholds() {
+        let first_id = ChannelId::from([1u8; 32]);
+        let second_id = ChannelId::from([2u8; 32]);
+        let missing_id = ChannelId::from([0u8; 32]);
+
+        let channels = Channels {
+            channels: rpds::HashTrieMapSync::new_sync()
+                .insert(
+                    first_id,
+                    ChannelState {
+                        tip: MsgId::root(),
+                        keys: vec![test_public_key(11)].into(),
+                        balance: 5,
+                        withdraw_threshold: 1,
+                    },
+                )
+                .insert(
+                    second_id,
+                    ChannelState {
+                        tip: MsgId::root(),
+                        keys: vec![test_public_key(22), test_public_key(23)].into(),
+                        balance: 9,
+                        withdraw_threshold: 2,
+                    },
+                ),
+        };
+
+        let gas_context = MantleTxGasContext::from(&channels);
+
+        assert_eq!(gas_context.withdraw_threshold(&first_id), Some(1));
+        assert_eq!(gas_context.withdraw_threshold(&second_id), Some(2));
+        assert_eq!(gas_context.withdraw_threshold(&missing_id), None);
     }
 }

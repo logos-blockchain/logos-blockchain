@@ -484,7 +484,8 @@ impl LedgerState {
             }
         }
 
-        match balance.cmp(&tx.gas_cost::<Constants>().into()) {
+        let gas_cost = AuthenticatedMantleTx::gas_cost::<Constants>(&tx);
+        match balance.cmp(&gas_cost.into()) {
             Ordering::Less => return Err(LedgerError::InsufficientBalance),
             Ordering::Greater => return Err(LedgerError::UnbalancedTransaction),
             Ordering::Equal => {} // OK!
@@ -498,7 +499,7 @@ impl LedgerState {
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
     use lb_core::mantle::{
-        GasCost as _, MantleTx, Note, SignedMantleTx, Transaction as _,
+        MantleTx, Note, SignedMantleTx, Transaction as _,
         gas::MainnetGasConstants,
         ops::{
             channel::{
@@ -628,7 +629,7 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
         );
-        let fees = tx.gas_cost::<MainnetGasConstants>();
+        let fees = AuthenticatedMantleTx::gas_cost::<MainnetGasConstants>(&tx);
         output_note.value = utxo.note.value - fees;
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk]);
 
