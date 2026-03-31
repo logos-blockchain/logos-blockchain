@@ -624,6 +624,25 @@ where
     })
     .expect("The current session info must be available.");
 
+    {
+        let membership_index = current_membership_info
+            .public
+            .membership
+            .local_index()
+            .unwrap();
+        let membership_public_key = current_membership_info
+            .public
+            .membership
+            .get_node_at(membership_index)
+            .unwrap()
+            .public_key;
+        assert_eq!(
+            membership_public_key,
+            blend_config.non_ephemeral_signing_key.public_key(),
+            "Node key does not match membership info"
+        );
+    };
+
     let (
         (
             LeaderInputsMinusQuota {
