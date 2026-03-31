@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use lb_core::{
     header::HeaderId,
-    mantle::{SignedMantleTx, tx::TxHash},
+    mantle::{SignedMantleTx, Transaction as _, tx::TxHash},
 };
 use rpds::HashTrieSetSync;
 
@@ -32,7 +32,8 @@ impl TxState {
     }
 
     /// Submit a transaction for tracking.
-    pub fn submit(&mut self, tx_hash: TxHash, signed_tx: SignedMantleTx) {
+    pub fn submit(&mut self, signed_tx: SignedMantleTx) {
+        let tx_hash = signed_tx.mantle_tx.hash();
         self.pending.insert(tx_hash, signed_tx);
     }
 
@@ -47,16 +48,13 @@ impl TxState {
         // Store parent relationship for pruning
         self.parent_map.insert(block_id, parent_id);
 
-        // Build cumulative safe set from parent.
-        // If parent state is missing (e.g., first event after subscribe is a snapshot
-        // where we receive a block whose parent we never saw), start with an empty set.
-        // This is conservative: txs might show as "pending" when they should be "safe",
-        // but they'll be correctly detected when seen in subsequent blocks.
+        // Build cumulative safe set from parent. The parent must have been
+        // processed before the child (enforced by backfill in the sequencer).
         let mut safe_set = self
             .block_states
             .get(&parent_id)
             .cloned()
-            .unwrap_or_default();
+            .expect("parent block must be processed before child");
 
         for tx in our_txs {
             if self.pending.contains_key(&tx) {
@@ -96,18 +94,19 @@ impl TxState {
                 prune_cursor = self.parent_map.remove(&b);
             }
 
-            // Rebuild the safe set at LIB to contain only still-pending tx
-            // hashes. This breaks the rpds sharing chain with pruned ancestors,
-            // preventing unbounded accumulation of finalized hashes in the
-            // persistent structure.
-            if let Some(lib_safe_set) = self.block_states.get(&lib) {
+            // Rebuild ALL safe sets to contain only still-pending tx hashes.
+            // This breaks rpds sharing chains with pruned ancestors across
+            // the entire block tree, not just at LIB. Without this, tip
+            // block states would retain references to finalized hashes via
+            // structural sharing, causing unbounded memory growth.
+            for safe_set in self.block_states.values_mut() {
                 let mut fresh = HashTrieSetSync::new_sync();
-                for hash in lib_safe_set.iter() {
+                for hash in safe_set.iter() {
                     if self.pending.contains_key(hash) {
                         fresh = fresh.insert(*hash);
                     }
                 }
-                self.block_states.insert(lib, fresh);
+                *safe_set = fresh;
             }
 
             self.prune_orphans(lib);
@@ -158,7 +157,7 @@ impl TxState {
 
     /// Number of pending transactions.
     #[must_use]
-    pub fn pending_count(&self) -> usize {
+    pub fn unfinalized_count(&self) -> usize {
         self.pending.len()
     }
 
@@ -209,10 +208,9 @@ mod tests {
         let genesis = header_id(0);
         let mut state = TxState::new(genesis);
         let tx = make_dummy_tx(1);
-        let hash = tx.mantle_tx.hash();
 
-        state.submit(hash, tx);
-        assert_eq!(state.pending_count(), 1);
+        state.submit(tx);
+        assert_eq!(state.unfinalized_count(), 1);
     }
 
     #[test]
@@ -223,13 +221,13 @@ mod tests {
 
         let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
-        state.submit(hash, tx);
+        state.submit(tx);
 
         // Process block containing our tx, lib stays at genesis
         state.process_block(b1, genesis, genesis, vec![hash]);
 
         // Tx is still pending (not finalized yet, lib hasn't advanced)
-        assert_eq!(state.pending_count(), 1);
+        assert_eq!(state.unfinalized_count(), 1);
 
         // But pending_txs at b1 excludes it (it's in the safe set)
         assert!(state.pending_txs(b1).next().is_none());
@@ -244,16 +242,16 @@ mod tests {
 
         let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
-        state.submit(hash, tx);
+        state.submit(tx);
 
         // b1 with our tx
         state.process_block(b1, genesis, genesis, vec![hash]);
-        assert_eq!(state.pending_count(), 1);
+        assert_eq!(state.unfinalized_count(), 1);
 
         // b2, lib advances to b1
         let finalized = state.process_block(b2, b1, b1, vec![]);
         assert_eq!(finalized, vec![hash]);
-        assert_eq!(state.pending_count(), 0);
+        assert_eq!(state.unfinalized_count(), 0);
     }
 
     #[test]
@@ -267,8 +265,8 @@ mod tests {
         let hash1 = tx1.mantle_tx.hash();
         let hash2 = tx2.mantle_tx.hash();
 
-        state.submit(hash1, tx1);
-        state.submit(hash2, tx2);
+        state.submit(tx1);
+        state.submit(tx2);
 
         // b1 contains only tx1
         state.process_block(b1, genesis, genesis, vec![hash1]);
@@ -290,7 +288,7 @@ mod tests {
 
         let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
-        state.submit(hash, tx);
+        state.submit(tx);
 
         // b1 has our tx
         state.process_block(b1, genesis, genesis, vec![hash]);
@@ -390,8 +388,8 @@ mod tests {
         let hash1 = tx1.mantle_tx.hash();
         let hash2 = tx2.mantle_tx.hash();
 
-        state.submit(hash1, tx1);
-        state.submit(hash2, tx2);
+        state.submit(tx1);
+        state.submit(tx2);
 
         // b1 has tx1
         state.process_block(b1, genesis, genesis, vec![hash1]);
@@ -404,6 +402,6 @@ mod tests {
         assert!(finalized.contains(&hash1));
         assert!(finalized.contains(&hash2));
         assert_eq!(finalized.len(), 2);
-        assert_eq!(state.pending_count(), 0);
+        assert_eq!(state.unfinalized_count(), 0);
     }
 }

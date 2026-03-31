@@ -185,7 +185,7 @@ async fn test_sequencer_publish_and_indexer_read() {
     let second_key = Ed25519Key::from_bytes(&key_bytes2);
     let second_pk = second_key.public_key();
 
-    let finalized = handle
+    let (_result, finalized) = handle
         .set_keys(vec![admin_pk, second_pk])
         .await
         .expect("set_keys should succeed");

@@ -92,7 +92,7 @@ enum ActorRequest {
     },
     SetKeys {
         keys: Vec<Ed25519PublicKey>,
-        reply: tokio::sync::oneshot::Sender<Result<SignedMantleTx, Error>>,
+        reply: tokio::sync::oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
     },
 }
 
@@ -155,18 +155,21 @@ impl SequencerHandle {
     /// (`keys[0]`). This overwrites the entire key list — include the admin
     /// key if it should remain authorized.
     ///
-    /// Returns a future that resolves when the transaction is finalized.
-    /// The first `.await` submits the transaction, the second `.await`
-    /// waits for finalization:
+    /// Returns the publish result (with checkpoint) and a future that
+    /// resolves when the transaction is finalized:
     ///
     /// ```ignore
-    /// let finalized = handle.set_keys(vec![admin_pk]).await?;
+    /// let (result, finalized) = handle.set_keys(vec![admin_pk]).await?;
+    /// save_checkpoint(&result.checkpoint);
     /// finalized.await?; // wait for finalization
     /// ```
     pub async fn set_keys(
         &self,
         keys: Vec<Ed25519PublicKey>,
-    ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
+    ) -> Result<(PublishResult, impl Future<Output = Result<(), Error>>), Error> {
+        // Subscribe BEFORE submitting to avoid missing finalization events.
+        let mut event_rx = self.event_tx.subscribe();
+
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let request = ActorRequest::SetKeys {
             keys,
@@ -180,15 +183,11 @@ impl SequencerHandle {
                 reason: "sequencer channel closed",
             })?;
 
-        let signed_tx = reply_rx.await.map_err(|_| Error::Unavailable {
+        let (signed_tx, publish_result) = reply_rx.await.map_err(|_| Error::Unavailable {
             reason: "sequencer dropped reply",
         })??;
 
         let tx_hash = signed_tx.mantle_tx.hash();
-
-        // Subscribe to events BEFORE posting to avoid a race where the tx
-        // finalizes between posting and subscribing.
-        let mut event_rx = self.event_tx.subscribe();
 
         info!("Submitted set_keys transaction {:?}", tx_hash);
 
@@ -201,7 +200,7 @@ impl SequencerHandle {
             warn!("Failed to post set_keys transaction: {e}");
         }
 
-        Ok(async move {
+        let finalized = async move {
             loop {
                 match event_rx.recv().await {
                     Ok(Event::TxsFinalized { ref tx_hashes }) if tx_hashes.contains(&tx_hash) => {
@@ -215,7 +214,9 @@ impl SequencerHandle {
                     }
                 }
             }
-        })
+        };
+
+        Ok((publish_result, finalized))
     }
 }
 
@@ -305,8 +306,8 @@ impl ZoneSequencer {
                 cp.lib_slot
             );
             let mut tx_state = TxState::new(cp.lib);
-            for (hash, tx) in cp.pending_txs {
-                tx_state.submit(hash, tx);
+            for (_hash, tx) in cp.pending_txs {
+                tx_state.submit(tx);
             }
             (Some(tx_state), cp.lib_slot, cp.last_msg_id)
         } else {
@@ -491,12 +492,7 @@ impl ZoneSequencer {
     fn handle_request(&mut self, request: ActorRequest) {
         let Some(s) = self.state.as_mut() else {
             match request {
-                ActorRequest::Publish { reply, .. } => {
-                    drop(reply.send(Err(Error::Unavailable {
-                        reason: "not initialized",
-                    })));
-                }
-                ActorRequest::SetKeys { reply, .. } => {
+                ActorRequest::Publish { reply, .. } | ActorRequest::SetKeys { reply, .. } => {
                     drop(reply.send(Err(Error::Unavailable {
                         reason: "not initialized",
                     })));
@@ -511,7 +507,7 @@ impl ZoneSequencer {
                     create_inscribe_tx(self.channel_id, &self.signing_key, data, self.last_msg_id);
                 let id = signed_tx.mantle_tx.hash();
 
-                s.submit(id, signed_tx.clone());
+                s.submit(signed_tx.clone());
                 self.last_msg_id = new_msg_id;
 
                 let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
@@ -523,9 +519,13 @@ impl ZoneSequencer {
             }
             ActorRequest::SetKeys { keys, reply } => {
                 let signed_tx = create_set_keys_tx(self.channel_id, &self.signing_key, keys);
-                let id = signed_tx.mantle_tx.hash();
-                s.submit(id, signed_tx.clone());
-                drop(reply.send(Ok(signed_tx)));
+                s.submit(signed_tx.clone());
+                let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
+                let result = PublishResult {
+                    inscription_id: signed_tx.mantle_tx.hash(),
+                    checkpoint,
+                };
+                drop(reply.send(Ok((signed_tx, result))));
             }
         }
     }
