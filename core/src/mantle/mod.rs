@@ -21,7 +21,7 @@ pub use ops::{Op, OpProof};
 use ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp};
 pub use tx::{MantleTx, SignedMantleTx, TxHash};
 
-use crate::mantle::ops::transfer::TransferOp;
+use crate::mantle::{gas::Gas, ops::transfer::TransferOp};
 
 pub const MAX_MANTLE_TXS: usize = 1024;
 
@@ -50,6 +50,12 @@ pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCost + StorageS
     fn mantle_tx(&self) -> &MantleTx;
 
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)>;
+
+    // Gas Cost functions with context already handled
+    fn total_gas_cost<Constants: GasConstants>(&self) -> Gas;
+    fn storage_gas_cost(&self) -> Gas;
+    fn execution_gas_consumption<Constants: GasConstants>(&self) -> Gas;
+    fn storage_gas_consumption(&self) -> Gas;
 }
 
 /// A genesis transaction as specified in
@@ -83,6 +89,22 @@ impl<T: AuthenticatedMantleTx> AuthenticatedMantleTx for &T {
 
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)> {
         T::ops_with_proof(self)
+    }
+
+    fn total_gas_cost<Constants: GasConstants>(&self) -> Gas {
+        <T as AuthenticatedMantleTx>::total_gas_cost::<Constants>(self)
+    }
+
+    fn storage_gas_cost(&self) -> Gas {
+        <T as AuthenticatedMantleTx>::storage_gas_cost(self)
+    }
+
+    fn execution_gas_consumption<Constants: GasConstants>(&self) -> Gas {
+        <T as AuthenticatedMantleTx>::execution_gas_consumption::<Constants>(self)
+    }
+
+    fn storage_gas_consumption(&self) -> Gas {
+        <T as AuthenticatedMantleTx>::storage_gas_consumption(self)
     }
 }
 

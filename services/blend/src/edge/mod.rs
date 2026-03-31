@@ -330,6 +330,7 @@ where
 /// # Panics
 /// - If the initial membership is not yielded immediately from the session
 ///   stream.
+#[expect(clippy::cognitive_complexity, reason = "TODO: Address this at some point.")]
 async fn run<Backend, NodeId, ProofsGenerator, ChainService, PolInfoProvider, RuntimeServiceId>(
     session_stream: UninitializedSessionEventStream<
         impl Stream<Item = MembershipInfo<NodeId>> + Unpin,

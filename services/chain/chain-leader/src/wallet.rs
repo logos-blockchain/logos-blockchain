@@ -32,7 +32,11 @@ where
     Wallet: WalletServiceData,
     RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<Wallet>,
 {
-    let tx_builder = MantleTxBuilder::new().push_op(Op::LeaderClaim(op));
+    let gas_context = wallet
+        .get_gas_context(Some(tip))
+        .await
+        .map_err(|error| LeaderWalletError::WalletApi(Box::new(error)))?;
+    let tx_builder = MantleTxBuilder::new(gas_context).push_op(Op::LeaderClaim(op));
     let funded_tx_builder = wallet
         .fund_tx(
             Some(tip),

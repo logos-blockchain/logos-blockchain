@@ -328,16 +328,17 @@ impl LedgerState {
             (self, balance) = self.try_apply_tx::<_, Constants>(config, &tx)?;
 
             // Check the transaction is balanced
-            match balance.cmp(&tx.total_gas_cost::<Constants>().into()) {
+            let total_gas_cost = AuthenticatedMantleTx::total_gas_cost::<Constants>(&tx);
+            match balance.cmp(&total_gas_cost.into()) {
                 Ordering::Less => return Err(LedgerError::InsufficientBalance),
                 Ordering::Greater => return Err(LedgerError::UnbalancedTransaction),
                 Ordering::Equal => {} // OK!
             }
 
             // Update the total of fee burned and tipped in the block
-            let tx_fee_burned = tx.execution_gas_consumption::<Constants>()
+            let tx_fee_burned = AuthenticatedMantleTx::execution_gas_consumption::<Constants>(&tx)
                 * self.cryptarchia_ledger.execution_base_fee()
-                + tx.storage_gas_cost();
+                + AuthenticatedMantleTx::storage_gas_cost(&tx);
 
             // Check that the transaction at least pays for the base fee
             if balance < tx_fee_burned.into() {
@@ -353,7 +354,8 @@ impl LedgerState {
             let tx_fee_tip = balance as Gas - tx_fee_burned;
             total_fee_burned += tx_fee_burned;
             total_fee_tip += tx_fee_tip;
-            total_block_execution_gas += &tx.execution_gas_consumption::<Constants>();
+            total_block_execution_gas +=
+                &AuthenticatedMantleTx::execution_gas_consumption::<Constants>(&tx);
 
             // Check that the block is not exceeding the Gas limit
             if total_block_execution_gas > EXECUTION_GAS_LIMIT {
@@ -559,7 +561,7 @@ impl LedgerState {
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
     use lb_core::mantle::{
-        GasCost as _, MantleTx, Note, SignedMantleTx, Transaction as _,
+        MantleTx, Note, SignedMantleTx, Transaction as _,
         gas::MainnetGasConstants,
         ops::{
             channel::{
@@ -697,7 +699,7 @@ mod tests {
             1,
             1,
         );
-        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
         output_note.value = utxo.note.value - fees;
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk], 1, 1);
 
@@ -1109,7 +1111,7 @@ mod tests {
             1,
             0,
         );
-        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
         output_note.value = utxo.note.value - fees;
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk], 1, 0);
 
@@ -1134,7 +1136,7 @@ mod tests {
             1,
         );
         // Pays 2925 fees = 2705 execution base fee + 0 execution tip + 220 storage
-        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
         output_note.value = utxo.note.value - fees;
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk], 1, 1);
 
@@ -1170,7 +1172,7 @@ mod tests {
         );
         // The tx ays 2925 fees = 2705 execution base fee + 0 execution tip + 220
         // storage
-        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
         output_note.value = utxo.note.value - fees;
         let tx = create_tx(
             vec![utxo.id()],
@@ -1195,7 +1197,7 @@ mod tests {
         );
         // The tx ays 5630 fees = 2705 execution base fee + 2705 execution tip + 220
         // storage
-        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
         output_note.value = utxo.note.value - fees;
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk], 2, 1);
         let result = ledger

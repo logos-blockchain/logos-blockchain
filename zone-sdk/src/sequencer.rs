@@ -269,6 +269,7 @@ impl ZoneSequencer {
     }
 }
 
+#[expect(clippy::cognitive_complexity, reason = "TODO: Address this at some point.")]
 async fn initialize_from_checkpoint(
     http_client: &CommonHttpClient,
     node_url: &Url,
@@ -589,6 +590,7 @@ fn handle_inflight(event: InFlight, resubmit_active: &mut bool) {
 /// Uses `state.lib()` during replay to avoid premature finalization.
 /// The caller is responsible for triggering finalization after backfill
 /// completes.
+#[expect(clippy::cognitive_complexity, reason = "TODO: Address this at some point.")]
 async fn backfill_to_lib(
     state: &mut TxState,
     from_slot: Slot,
@@ -640,6 +642,7 @@ async fn backfill_to_lib(
 /// Uses `state.lib()` during replay to avoid premature finalization.
 /// The caller is responsible for triggering finalization after backfill
 /// completes.
+#[expect(clippy::cognitive_complexity, reason = "TODO: Address this at some point.")]
 async fn backfill_canonical(
     state: &mut TxState,
     missing_parent: HeaderId,

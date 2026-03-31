@@ -493,6 +493,7 @@ where
     ObservationWindowProvider:
         IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
 {
+    #[expect(clippy::cognitive_complexity, reason = "TODO: Address this at some point.")]
     fn handle_event(
         &mut self,
         event: SwarmEvent<BlendBehaviourEvent<ProofsVerifier, ObservationWindowProvider>>,

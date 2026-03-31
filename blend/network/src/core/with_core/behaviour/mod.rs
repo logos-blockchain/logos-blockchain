@@ -959,6 +959,7 @@ where
             .map_err(|_| Error::InvalidMessage)
     }
 
+    #[expect(clippy::cognitive_complexity, reason = "TODO: Address this at some point.")]
     fn handle_received_serialized_encapsulated_message(
         &mut self,
         serialized_message: &[u8],
@@ -1069,6 +1070,7 @@ where
     >;
     type ToSwarm = Event;
 
+    #[expect(clippy::cognitive_complexity, reason = "TODO: Address this at some point.")]
     fn handle_established_inbound_connection(
         &mut self,
         connection_id: ConnectionId,
@@ -1113,6 +1115,7 @@ where
         })
     }
 
+    #[expect(clippy::cognitive_complexity, reason = "TODO: Address this at some point.")]
     fn handle_established_outbound_connection(
         &mut self,
         connection_id: ConnectionId,

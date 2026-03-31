@@ -24,6 +24,7 @@ use lb_core::{
             },
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
+        tx::MantleTxGasContext,
         tx_builder::MantleTxBuilder,
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
@@ -141,6 +142,10 @@ pub enum WalletMsg {
     GetKnownAddresses {
         resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
     },
+    GetGasContext {
+        block_id: Option<HeaderId>,
+        resp_tx: Sender<Result<MantleTxGasContext, WalletServiceError>>,
+    },
 }
 
 #[derive(Debug)]
@@ -171,7 +176,8 @@ impl WalletMsg {
             | Self::FundTx { tip, .. }
             | Self::SignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. }
-            | Self::GetClaimableVoucher { tip, .. } => *tip,
+            | Self::GetClaimableVoucher { tip, .. }
+            | Self::GetGasContext { block_id: tip, .. } => *tip,
             Self::GenerateNewVoucherSecret { .. } | Self::GetKnownAddresses { .. } => None,
         }
     }
@@ -367,6 +373,8 @@ where
         }
     }
 
+    #[expect(clippy::cognitive_complexity, reason = "TODO: Address this at some point.")]
+    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn handle_wallet_message(
         msg: WalletMsg,
         state: &mut ServiceState<'_>,
@@ -476,6 +484,9 @@ where
             }
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
+            }
+            WalletMsg::GetGasContext { block_id, resp_tx } => {
+                Self::get_gas_context(block_id, resp_tx, cryptarchia).await;
             }
         }
     }
@@ -952,6 +963,7 @@ where
         }
     }
 
+    #[expect(clippy::cognitive_complexity, reason = "TODO: Address this at some point.")]
     async fn handle_new_block(
         header_id: HeaderId,
         state: &mut ServiceState<'_>,
@@ -1091,6 +1103,37 @@ where
         let response: Vec<_> = wallet.known_keys().keys().copied().collect();
         if let Err(e) = tx.send(Ok(response)) {
             error!(err = ?e, "Failed to send known addresses response");
+        }
+    }
+
+    async fn get_gas_context(
+        block_id: Option<HeaderId>,
+        resp_tx: Sender<Result<MantleTxGasContext, WalletServiceError>>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    ) {
+        let block_id = match Self::msg_tip_or_latest(block_id, cryptarchia).await {
+            Ok(block_id) => block_id,
+            Err(error) => {
+                Self::send_err(resp_tx, error);
+                return;
+            }
+        };
+
+        let ledger_state = match cryptarchia.get_ledger_state(block_id).await {
+            Ok(Some(ledger_state)) => ledger_state,
+            Ok(None) => {
+                Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(block_id));
+                return;
+            }
+            Err(err) => {
+                Self::send_err(resp_tx, WalletServiceError::from(err));
+                return;
+            }
+        };
+
+        let gas_context = ledger_state.mantle_ledger().channels().into();
+        if let Err(e) = resp_tx.send(Ok(gas_context)) {
+            error!(err = ?e, "Failed to send gas context response");
         }
     }
 }

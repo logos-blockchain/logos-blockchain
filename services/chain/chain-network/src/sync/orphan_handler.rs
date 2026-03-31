@@ -120,6 +120,7 @@ where
         }
     }
 
+    #[expect(clippy::cognitive_complexity, reason = "TODO: Address this at some point.")]
     pub fn enqueue_orphan(
         &mut self,
         block_id: HeaderId,
@@ -253,6 +254,7 @@ where
 {
     type Item = NetAdapter::Block;
 
+    #[expect(clippy::cognitive_complexity, reason = "TODO: Address this at some point.")]
     #[expect(
         clippy::too_many_lines,
         reason = "state machine logic kept in one place for readability; refactor can follow separately"
