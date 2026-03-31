@@ -507,10 +507,6 @@ where
     clippy::too_many_arguments,
     reason = "Need to initialize many components."
 )]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "Singular fn with multiple branches to handle different events and futures."
-)]
 async fn initialize<
     NodeId,
     Backend,
@@ -810,10 +806,6 @@ where
 //
 // Returns the old session components when the node is no longer a core node.
 #[expect(clippy::too_many_arguments, reason = "categorize args")]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "Singular fn with multiple branches to handle different events and futures."
-)]
 async fn run_event_loop<
     NodeId,
     Backend,
@@ -1313,10 +1305,6 @@ enum HandleSessionEventOutput<
 /// the outermost layers addressed to this node are self-decapsulated so that
 /// blending tokens are collected immediately and only the remaining layers (or
 /// the fully unwrapped message) are scheduled for the next release round.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "Singular fn with multiple branches to handle different events and futures."
-)]
 async fn handle_serialized_local_data_message<
     NodeId,
     Rng,
@@ -1424,10 +1412,6 @@ where
 /// Decapsulation is first attempted with the current session's cryptographic
 /// processor. If that fails and an old session processor is available (during
 /// a session transition), the old session processor is tried as a fallback.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "Singular fn with multiple branches to handle different events and futures."
-)]
 fn handle_incoming_blend_message<
     NodeId,
     Rng,
@@ -1612,10 +1596,6 @@ where
 ///
 /// It returns the processed message if it has been scheduled, along with
 /// the blending tokens obtained from the decapsulation.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "Singular fn with multiple branches to handle different events and futures."
-)]
 fn schedule_decapsulated_incoming_message<BroadcastSettings>(
     multi_layer_decapsulation_output: MultiLayerDecapsulationOutput,
     scheduler: &mut impl ProcessedMessageScheduler<ProcessedMessage<BroadcastSettings>>,
@@ -1925,10 +1905,6 @@ where
 /// complete.
 ///
 /// Returns the updated public info and the new tracked epoch.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "Singular fn with multiple branches to handle different events and futures."
-)]
 async fn handle_clock_event<
     NodeId,
     ProofsGenerator,

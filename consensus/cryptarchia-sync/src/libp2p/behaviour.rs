@@ -431,10 +431,6 @@ impl NetworkBehaviour for Behaviour {
             .on_connection_handler_event(peer_id, conn_id, event);
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "Singular fn with multiple branches to handle different events and futures."
-    )]
     fn poll(
         &mut self,
         cx: &mut Context<'_>,

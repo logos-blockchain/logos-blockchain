@@ -330,10 +330,6 @@ where
 /// # Panics
 /// - If the initial membership is not yielded immediately from the session
 ///   stream.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "Singular fn with multiple branches to handle different events and futures."
-)]
 async fn run<Backend, NodeId, ProofsGenerator, ChainService, PolInfoProvider, RuntimeServiceId>(
     session_stream: UninitializedSessionEventStream<
         impl Stream<Item = MembershipInfo<NodeId>> + Unpin,

@@ -237,10 +237,6 @@ where
     type ConnectionHandler = Either<ConnectionHandler, DummyConnectionHandler>;
     type ToSwarm = Event;
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "Singular fn with multiple branches to handle different events and futures."
-    )]
     fn handle_established_inbound_connection(
         &mut self,
         connection_id: ConnectionId,

@@ -49,10 +49,6 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         }
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "Singular fn with multiple branches to handle different events and futures."
-    )]
     pub(super) fn broadcast_and_retry(
         &mut self,
         topic: Topic,

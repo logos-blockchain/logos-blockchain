@@ -367,10 +367,6 @@ where
         }
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "Singular fn with multiple branches to handle different events and futures."
-    )]
     async fn handle_wallet_message(
         msg: WalletMsg,
         state: &mut ServiceState<'_>,
@@ -955,10 +951,6 @@ where
         }
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "Singular fn with multiple branches to handle different events and futures."
-    )]
     async fn handle_new_block(
         header_id: HeaderId,
         state: &mut ServiceState<'_>,
