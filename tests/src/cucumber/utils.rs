@@ -84,6 +84,10 @@ pub fn shared_host_bin_path(binary_name: &str) -> PathBuf {
     cucumber_dir.join("../assets/stack/bin").join(binary_name)
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Singular fn with multiple branches to handle different events and futures."
+)]
 pub async fn track_progress<Fut>(operation: &str, interval: Duration, wait: Fut) -> StepResult
 where
     Fut: Future<Output = StepResult>,

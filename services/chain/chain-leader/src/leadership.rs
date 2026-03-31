@@ -25,6 +25,10 @@ use crate::{WinningPolInfo, kms::KmsAdapter};
 ///
 /// If the slot is not a winning one, it returns `None` and no consumer is
 /// notified.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Singular fn with multiple branches to handle different events and futures."
+)]
 pub async fn build_proof_for<Wallet, RuntimeServiceId>(
     utxos: &[UtxoWithKeyId],
     latest_tree: &UtxoTree,
@@ -231,6 +235,10 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
             .await;
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Singular fn with multiple branches to handle different events and futures."
+    )]
     async fn check_epoch_winning_utxos<RuntimeServiceId>(
         &mut self,
         utxos: &[UtxoWithKeyId],

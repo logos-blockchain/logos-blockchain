@@ -132,7 +132,7 @@ fn render_and_write_cfgsync(
         &hostnames,
         RegistrationServerRenderOptions {
             port: Some(cfgsync_port()),
-            artifacts_path: Some("cfgsync.artifacts.yaml".to_string()),
+            artifacts_path: Some("cfgsync.artifacts.yaml".to_owned()),
         },
         CfgsyncOutputPaths {
             config_path: &cfgsync_file,
@@ -144,9 +144,7 @@ fn render_and_write_cfgsync(
         source: source.into(),
     })?;
 
-    write_entropy_file(&cfgsync_file).map_err(|source| AssetsError::Cfgsync {
-        source: source.into(),
-    })?;
+    write_entropy_file(&cfgsync_file).map_err(|source| AssetsError::Cfgsync { source })?;
 
     Ok((cfgsync_file, rendered.config_yaml, rendered.artifacts_yaml))
 }

@@ -135,29 +135,29 @@ fn build_runtime_spec(
     testing_framework_runner_k8s::NodeRuntimeSpec {
         node_image: node_image.name,
         node_image_pull_policy,
-        fullname_override: K8S_FULLNAME_OVERRIDE.to_string(),
+        fullname_override: K8S_FULLNAME_OVERRIDE.to_owned(),
         layout,
         nodes: build_node_group("node", topology.nodes()),
         shared_service: Some(
             SharedServiceSpec::new(
-                "cfgsync".to_string(),
+                "cfgsync".to_owned(),
                 bootstrap_image.name,
                 bootstrap_image_pull_policy,
                 cfgsync_port(),
-                cfgsync_yaml.to_string(),
-                artifacts_yaml.to_string(),
+                cfgsync_yaml.to_owned(),
+                artifacts_yaml.to_owned(),
                 cfgsync_file,
                 scripts.run_cfgsync,
             )
             .with_env(BTreeMap::from([(
-                "CFG_SERVER_STORAGE_PATH".to_string(),
-                "/var/lib/cfgsync/deployment-settings.yaml".to_string(),
+                "CFG_SERVER_STORAGE_PATH".to_owned(),
+                "/var/lib/cfgsync/deployment-settings.yaml".to_owned(),
             )]))
-            .with_writable_mount_path("/var/lib/cfgsync".to_string())
+            .with_writable_mount_path("/var/lib/cfgsync".to_owned())
             .with_extra_files(vec![SharedServiceFileSpec::inline(
-                "cfgsync.entropy".to_string(),
-                "cfgsync.entropy".to_string(),
-                "nomos-testing-framework-cfgsync-entropy".to_string(),
+                "cfgsync.entropy".to_owned(),
+                "cfgsync.entropy".to_owned(),
+                "nomos-testing-framework-cfgsync-entropy".to_owned(),
             )]),
         ),
         node_start_script_file: scripts.run_node,
@@ -172,13 +172,13 @@ fn resolve_image_pull_policy(
     image: &super::image::ResolvedImage,
     fallback: Option<String>,
 ) -> String {
-    env::var(key)
-        .ok()
-        .or(fallback)
-        .unwrap_or_else(|| match image.local {
-            true => "Never".into(),
-            false => "IfNotPresent".into(),
-        })
+    env::var(key).ok().or(fallback).unwrap_or_else(|| {
+        if image.local {
+            "Never".into()
+        } else {
+            "IfNotPresent".into()
+        }
+    })
 }
 
 fn build_node_group(kind: &'static str, nodes: &[NodePlan]) -> NodeGroup {
@@ -193,7 +193,7 @@ fn build_node_group(kind: &'static str, nodes: &[NodePlan]) -> NodeGroup {
 
 fn build_node_values(kind: &'static str, index: usize, node: &NodePlan) -> NodeValues {
     let mut env = BTreeMap::new();
-    env.insert("CFG_HOST_KIND".into(), kind.to_string());
+    env.insert("CFG_HOST_KIND".into(), kind.to_owned());
     env.insert("CFG_HOST_IDENTIFIER".into(), format!("{kind}-{index}"));
     env.insert(
         "CFG_NETWORK_PORT".into(),

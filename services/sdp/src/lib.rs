@@ -301,6 +301,10 @@ where
         )))
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Singular fn with multiple branches to handle different events and futures."
+    )]
     async fn handle_post_declaration(
         &self,
         declaration: Box<DeclarationMessage>,
@@ -376,6 +380,10 @@ where
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Singular fn with multiple branches to handle different events and futures."
+    )]
     async fn handle_post_withdrawal(
         &mut self,
         declaration_id: DeclarationId,

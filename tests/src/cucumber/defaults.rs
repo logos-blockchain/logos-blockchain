@@ -86,7 +86,7 @@ fn resolve_host_log_dir(log_dir: Option<&PathBuf>) -> PathBuf {
                 set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
                 dir
             },
-            |dir| PathBuf::from(dir),
+            PathBuf::from,
         )
     })
 }

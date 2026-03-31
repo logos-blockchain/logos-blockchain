@@ -440,6 +440,10 @@ pub async fn wait_for_wallet_or_encumbered_state(
     clippy::too_many_arguments,
     reason = "This function is more readable with explicit arguments rather than packing them into structs or tuples."
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Singular fn with multiple branches to handle different events and futures."
+)]
 fn conditions_met(
     wallet_name: &str,
     wallet_node_name: &str,
@@ -564,6 +568,10 @@ fn get_last_known_height<'a>(
 #[expect(
     clippy::too_many_lines,
     reason = "This function is necessarily complex due to the logic of reconstructing wallet state from blocks and caching it for performance."
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Singular fn with multiple branches to handle different events and futures."
 )]
 async fn collect_wallet_utxos(
     world: &mut CucumberWorld,

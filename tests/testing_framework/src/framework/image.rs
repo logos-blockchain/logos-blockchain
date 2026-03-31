@@ -48,11 +48,11 @@ fn resolve_runner_image(key: &str, default_local_image: &str) -> ResolvedImage {
 
 fn resolved_local_image(name: &str) -> ResolvedImage {
     ResolvedImage {
-        name: name.to_string(),
+        name: name.to_owned(),
         local: true,
     }
 }
 
-fn resolved_remote_image(name: String) -> ResolvedImage {
+const fn resolved_remote_image(name: String) -> ResolvedImage {
     ResolvedImage { name, local: false }
 }

@@ -95,7 +95,7 @@ impl StaticNodeConfigProvider for LbcEnv {
 
         let yaml = Self::serialize_node_config(&config)?;
         Ok(Some(ArtifactSet::new(vec![ArtifactFile::new(
-            "/config.yaml".to_string(),
+            "/config.yaml".to_owned(),
             yaml,
         )])))
     }
