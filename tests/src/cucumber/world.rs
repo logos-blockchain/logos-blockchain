@@ -18,8 +18,8 @@ use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
-    LbcEnv, LbcManualCluster, NodeHttpClient, ScenarioBuilder, ScenarioBuilderExt as _,
-    configs::wallet::WalletAccount, workloads,
+    LbcEnv, LbcK8sManualCluster, LbcManualCluster, NodeHttpClient, ScenarioBuilder,
+    ScenarioBuilderExt as _, configs::wallet::WalletAccount, workloads,
 };
 use testing_framework_core::scenario::{NodeControlCapability, Scenario, StartedNode};
 use tokio::task::JoinHandle;
@@ -47,6 +47,19 @@ pub enum DeployerKind {
     #[default]
     Local,
     Compose,
+    K8s,
+}
+
+impl DeployerKind {
+    #[must_use]
+    pub const fn uses_host_log_dir(self) -> bool {
+        matches!(self, Self::Local | Self::K8s)
+    }
+
+    #[must_use]
+    pub const fn requires_local_node_binary(self) -> bool {
+        matches!(self, Self::Local)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -126,6 +139,9 @@ pub struct CucumberWorld {
     /// information, which includes the started node instance and any relevant
     /// metadata.
     pub local_cluster: Option<LbcManualCluster>,
+    /// Manual: Optional k8s manual cluster instance for scenarios that use the
+    /// k8s deployer.
+    pub k8s_manual_cluster: Option<LbcK8sManualCluster>,
     /// Manual: List of nodes with their info.
     pub nodes_info: HashMap<String, NodeInfo>,
     /// Manual: List of genesis tokens allocated to wallets accounts.
@@ -247,6 +263,13 @@ impl Debug for CucumberWorld {
             .field("local_cluster", {
                 if self.local_cluster.is_some() {
                     &"Has LbcManualCluster"
+                } else {
+                    &"None"
+                }
+            })
+            .field("k8s_manual_cluster", {
+                if self.k8s_manual_cluster.is_some() {
+                    &"Has LbcK8sManualCluster"
                 } else {
                     &"None"
                 }
@@ -553,57 +576,22 @@ impl CucumberWorld {
             .map_err(|source| StepError::ScenarioBuild { source })
     }
 
+    /// Build a scenario for k8s deployment based on the current world
+    /// configuration.
+    pub fn build_k8s_scenario(&self) -> Result<Scenario<LbcEnv>, StepError> {
+        let builder = self.make_builder_for_deployer(DeployerKind::K8s)?;
+        builder
+            .build()
+            .map_err(|source| StepError::ScenarioBuild { source })
+    }
+
     /// Perform preflight checks to ensure the world is properly configured for
     /// the expected deployer kind.
     pub fn preflight(&self, expected: DeployerKind) -> Result<(), StepError> {
-        let actual = self.deployer.ok_or(StepError::MissingDeployer)?;
-        if actual != expected {
-            return Err(StepError::DeployerMismatch { expected, actual });
-        }
+        self.ensure_expected_deployer(expected)?;
 
-        if expected == DeployerKind::Local {
-            let node_ok = env::var_os(LOGOS_BLOCKCHAIN_NODE_BIN)
-                .map(PathBuf::from)
-                .is_some_and(|p| p.is_file())
-                || shared_host_bin_path("logos-blockchain-node").is_file();
-
-            if !(node_ok) {
-                if let Some(default_exe_path) = {
-                    env::current_dir().map_or(None, |current_dir| {
-                        let debug_binary = current_dir.join(BIN_PATH_DEBUG);
-                        let release_binary = current_dir.join(BIN_PATH_RELEASE);
-                        if matches!(std::fs::exists(&debug_binary), Ok(true)) {
-                            Some(debug_binary)
-                        } else if matches!(std::fs::exists(&release_binary), Ok(true)) {
-                            Some(release_binary)
-                        } else {
-                            None
-                        }
-                    })
-                } {
-                    if env::var_os(LOGOS_BLOCKCHAIN_NODE_BIN).is_some() {
-                        warn!(
-                            target: TARGET,
-                            "'{LOGOS_BLOCKCHAIN_NODE_BIN:?}' does not point to a valid file, \
-                            Overriding '{LOGOS_BLOCKCHAIN_NODE_BIN}' to point to '{}'.",
-                            default_exe_path.display()
-                        );
-                    }
-                    set_default_env(
-                        LOGOS_BLOCKCHAIN_NODE_BIN,
-                        &default_exe_path.display().to_string(),
-                    );
-                    return Ok(());
-                }
-
-                return Err(StepError::Preflight {
-                    message: format!(
-                        "Missing Logos host binaries. Set {LOGOS_BLOCKCHAIN_NODE_BIN}, \
-                    or run `scripts/run/run-examples.sh host` to restore them into \
-                    `testing-framework/assets/stack/bin`."
-                    ),
-                });
-            }
+        if expected.requires_local_node_binary() {
+            self.ensure_local_node_binary()?;
         }
 
         Ok(())
@@ -617,10 +605,7 @@ impl CucumberWorld {
         &self,
         expected: DeployerKind,
     ) -> Result<ScenarioBuilderWith, StepError> {
-        let actual = self.deployer.ok_or(StepError::MissingDeployer)?;
-        if actual != expected {
-            return Err(StepError::DeployerMismatch { expected, actual });
-        }
+        self.ensure_expected_deployer(expected)?;
 
         let topology = self
             .spec
@@ -662,8 +647,34 @@ impl CucumberWorld {
         Ok(builder)
     }
 
-    /// Helper to resolve a node name to the actual started node name.
-    pub fn resolve_node_name(&self, node_name: &str) -> Result<String, StepError> {
+    fn ensure_expected_deployer(&self, expected: DeployerKind) -> Result<(), StepError> {
+        let actual = self.deployer.ok_or(StepError::MissingDeployer)?;
+
+        if actual != expected {
+            return Err(StepError::DeployerMismatch { expected, actual });
+        }
+
+        Ok(())
+    }
+
+    fn ensure_local_node_binary(&self) -> Result<(), StepError> {
+        if host_node_binary_from_env_var_available() {
+            return Ok(());
+        }
+
+        let default_binary = default_node_binary_path().ok_or_else(missing_node_binary_error)?;
+        warn_if_overriding_invalid_node_binary(&default_binary);
+        let default_binary_display = default_binary.display().to_string();
+
+        set_default_env(LOGOS_BLOCKCHAIN_NODE_BIN, &default_binary_display);
+
+        Ok(())
+    }
+
+    /// Helper to resolve a node name to the actual started node name. This is
+    /// useful for steps that refer to nodes by a logical name, and need to
+    /// find the corresponding started node in the world.
+    pub fn resolve_node_runtime_name(&self, node_name: &str) -> Result<String, StepError> {
         Ok(self
             .nodes_info
             .get(node_name)
@@ -673,6 +684,10 @@ impl CucumberWorld {
             .started_node
             .name
             .clone())
+    }
+
+    pub fn resolve_node_name(&self, node_name: &str) -> Result<String, StepError> {
+        self.resolve_node_runtime_name(node_name)
     }
 
     /// Helper to resolve a node http client to the actual started node name.
@@ -850,6 +865,13 @@ impl CucumberWorld {
                     &"None"
                 }
             })
+            .field("k8s_manual_cluster", {
+                if self.k8s_manual_cluster.is_some() {
+                    &"Has LbcK8sManualCluster"
+                } else {
+                    &"None"
+                }
+            })
             .field("nodes_info", &nodes_info_display(&self.nodes_info))
             .field("genesis_tokens", &format!("{:?}", self.genesis_tokens))
             .field("wallet_info", &wallet_info_display(&self.wallet_info))
@@ -898,6 +920,51 @@ impl CucumberWorld {
                 ),
             )
             .finish()
+    }
+}
+
+fn host_node_binary_from_env_var_available() -> bool {
+    env::var_os(LOGOS_BLOCKCHAIN_NODE_BIN)
+        .map(PathBuf::from)
+        .is_some_and(|path| path.is_file())
+        || shared_host_bin_path("logos-blockchain-node").is_file()
+}
+
+fn default_node_binary_path() -> Option<PathBuf> {
+    let current_dir = env::current_dir().ok()?;
+    let debug_binary = current_dir.join(BIN_PATH_DEBUG);
+    let release_binary = current_dir.join(BIN_PATH_RELEASE);
+
+    if matches!(std::fs::exists(&debug_binary), Ok(true)) {
+        return Some(debug_binary);
+    }
+
+    if matches!(std::fs::exists(&release_binary), Ok(true)) {
+        return Some(release_binary);
+    }
+
+    None
+}
+
+fn warn_if_overriding_invalid_node_binary(path: &Path) {
+    if env::var_os(LOGOS_BLOCKCHAIN_NODE_BIN).is_none() {
+        return;
+    }
+
+    warn!(
+        target: TARGET,
+        "'{LOGOS_BLOCKCHAIN_NODE_BIN:?}' does not point to a valid file, overriding it to '{}'.",
+        path.display()
+    );
+}
+
+fn missing_node_binary_error() -> StepError {
+    StepError::Preflight {
+        message: format!(
+            "Missing Logos host binaries. Set {LOGOS_BLOCKCHAIN_NODE_BIN}, \
+            or run `scripts/run/run-examples.sh host` to restore them into \
+            `testing-framework/assets/stack/bin`."
+        ),
     }
 }
 

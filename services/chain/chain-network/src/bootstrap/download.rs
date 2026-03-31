@@ -9,7 +9,7 @@ use std::{
 use futures::{Stream, StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
 use lb_cryptarchia_sync::HeaderId;
 use overwatch::DynError;
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::network::BoxedStream;
 
@@ -80,7 +80,7 @@ where
                 }
             },
             Poll::Ready(None) => {
-                info!("All downloads have been done");
+                debug!("All downloads have been done");
                 // Finish the Stream even if there are delays in progress.
                 Poll::Ready(None)
             }

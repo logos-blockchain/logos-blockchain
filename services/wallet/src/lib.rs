@@ -55,7 +55,7 @@ use tokio::{
     sync::{oneshot, oneshot::Sender},
     task::JoinError,
 };
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::states::{RecoveryState, ServiceState, Wallet};
 
@@ -378,7 +378,7 @@ where
         if let Err(err) =
             Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia).await
         {
-            error!(err=?err, "Failed backfilling wallet to message tip, will attempt to continue processing the message {msg:?}");
+            warn!(err=?err, "Failed backfilling wallet to message tip; continuing to process the message {msg:?}");
         }
 
         match msg {
@@ -544,7 +544,7 @@ where
         // For a new declaration, the note is still in the UTXOs (not yet locked).
         // We look it up from the UTXO set to get the public key for signing.
         let utxo_tree = ledger.latest_utxos();
-        info!(
+        debug!(
             "SDPDeclare: Looking for note_id={}, utxo_tree has {} UTXOs",
             hex::encode(declare_op.locked_note_id.as_bytes()),
             utxo_tree.size()
@@ -974,7 +974,7 @@ where
                 trace!(block_id=?wallet_block.id, "Applied block to wallet");
             }
             Err(WalletError::UnknownBlock(block_id)) => {
-                info!(block_id = ?block_id, "Missing block in wallet, backfilling");
+                debug!(block_id = ?block_id, "Missing block in wallet, backfilling");
                 if let Err(e) = Self::backfill_missing_blocks(
                     wallet_block.id,
                     state,
@@ -1055,7 +1055,7 @@ where
 
         for header_id in missing_headers.iter().rev().copied() {
             if state.wallet().has_processed_block(header_id) {
-                info!("skipping already processed block");
+                debug!("skipping already processed block");
                 continue;
             }
 

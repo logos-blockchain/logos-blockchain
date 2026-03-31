@@ -23,7 +23,7 @@ use lb_libp2p::{
 use rand::RngCore;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::StreamExt as _;
-use tracing::info;
+use tracing::debug;
 
 use super::{
     Libp2pConfig, Message,
@@ -146,7 +146,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 endpoint,
                 ..
             } => {
-                tracing::debug!("connected to peer:{peer_id}, connection_id:{connection_id:?}");
+                tracing::trace!("connected to peer:{peer_id}, connection_id:{connection_id:?}");
                 if endpoint.is_dialer() {
                     self.complete_connect(connection_id, peer_id);
                 }
@@ -160,7 +160,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 cause,
                 ..
             } => {
-                tracing::debug!(
+                tracing::trace!(
                     "connection closed from peer: {peer_id} {connection_id:?} due to {cause:?}"
                 );
 
@@ -189,7 +189,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
     fn handle_external_addr_confirmed(&mut self, address: &Multiaddr) {
         let local_peer_id = *self.swarm.swarm().local_peer_id();
         self.swarm.kademlia_add_address(local_peer_id, address);
-        info!("Added confirmed external address to Kademlia: {address}");
+        debug!(%address, "added confirmed external address to Kademlia");
     }
 
     fn remove_kademlia_address_for_dial(&mut self, peer_id: Option<PeerId>, dial_addr: &Multiaddr) {
@@ -200,7 +200,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
 
         let resolved_peer_id = peer_id.or(address_peer_id);
         let Some(peer_id) = resolved_peer_id else {
-            tracing::debug!(
+            tracing::trace!(
                 "Skipping Kademlia removal for failed dial; peer id unavailable: {}",
                 dial_addr
             );
@@ -313,6 +313,7 @@ mod tests {
     use lb_libp2p::{libp2p::swarm::DialError, protocol_name::StreamProtocol};
     use lb_utils::net::get_available_udp_port;
     use rand::rngs::OsRng;
+    use tracing::info;
     use tracing_subscriber::EnvFilter;
 
     use super::*;

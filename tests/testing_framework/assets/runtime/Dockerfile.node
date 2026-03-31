@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1
+# check=skip=SecretsUsedInArgOrEnv
+
+ARG LOGOS_CIRCUITS_VERSION
+
+FROM rust:1.94.0-slim-bookworm AS cfgsync-builder
+
+WORKDIR /nomos-testing
+COPY --from=nomos_testing . /nomos-testing
+
+RUN apt-get update && apt-get install -yq \
+    git gcc g++ clang libssl-dev pkg-config ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN cargo build --locked --release \
+    -p cfgsync-runtime \
+    --bin cfgsync-client
+
+FROM rust:1.94.0-slim-bookworm AS builder
+
+ARG LOGOS_CIRCUITS_VERSION
+
+WORKDIR /workspace
+COPY . .
+COPY --from=nomos_testing . /nomos-testing
+
+RUN apt-get update && apt-get install -yq \
+    git gcc g++ clang libssl-dev pkg-config ca-certificates curl unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN test -n "${LOGOS_CIRCUITS_VERSION}"
+RUN scripts/setup-logos-blockchain-circuits.sh "${LOGOS_CIRCUITS_VERSION}" /opt/circuits
+
+ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
+
+RUN cargo build --locked --release \
+    -p logos-blockchain-node \
+    --features testing \
+    --bin logos-blockchain-node
+
+FROM debian:bookworm-slim AS base
+
+RUN apt-get update && apt-get install -yq \
+    libstdc++6 libssl3 ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/circuits /opt/circuits
+COPY --from=builder /workspace/target/release/logos-blockchain-node /usr/bin/logos-blockchain-node
+COPY --from=cfgsync-builder /nomos-testing/target/release/cfgsync-client /usr/bin/cfgsync-client
+
+ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
+
+ENTRYPOINT ["/usr/bin/logos-blockchain-node"]

@@ -16,7 +16,7 @@ workspace = true
 async-stream               = { default-features = false, version = "0.3.6" }
 axum                       = { default-features = false, features = ["http2", "json", "tokio"], version = "0.8.7" }
 clap                       = { default-features = false, features = ["derive", "env", "std"], version = "4.5.13" }
-futures                    = { default-features = false, version = "0.3" }
+futures                    = { workspace = true }
 hex                        = { default-features = false, features = ["alloc"], version = "0.4" }
 lb-chain-broadcast-service = { workspace = true }
 lb-common-http-client      = { workspace = true }
@@ -29,7 +29,7 @@ serde                      = { workspace = true }
 serde_json                 = { workspace = true }
 thiserror                  = { workspace = true }
 tokio                      = { workspace = true }
-tokio-stream               = { default-features = false, version = "0.1" }
+tokio-stream               = { workspace = true }
 tokio-util                 = { default-features = false, version = "0.7" }
 tower-http                 = { features = ["cors"], version = "0.6.8" }
 url                        = { default-features = false, version = "2.5.4" }

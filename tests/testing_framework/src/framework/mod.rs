@@ -1,4 +1,9 @@
 mod block_feed;
+mod compose;
+mod constants;
+mod deployment_artifacts;
+mod image;
+mod k8s;
 pub mod local;
 
 use std::{
@@ -13,7 +18,7 @@ use lb_node::config::RunConfig;
 use reqwest::Url;
 use testing_framework_core::{
     scenario::{
-        Application, DynError, ExternalNodeSource, FeedRuntime, NodeClients,
+        Application, DynError, ExternalNodeSource, FeedRuntime, NodeAccess, NodeClients,
         ScenarioBuilder as CoreScenarioBuilder,
     },
     topology::{DeploymentProvider, DeploymentSeed, DynTopologyError},
@@ -39,8 +44,11 @@ pub type ScenarioBuilder = CoreScenarioBuilder<LbcEnv>;
 pub type ScenarioBuilderWith = ScenarioBuilder;
 
 pub type LbcLocalDeployer = ProcessDeployer<LbcEnv>;
+pub type LbcComposeDeployer = testing_framework_runner_compose::ComposeDeployer<LbcEnv>;
+pub type LbcK8sDeployer = testing_framework_runner_k8s::K8sDeployer<LbcEnv>;
 
 pub type LbcManualCluster = ManualCluster<LbcEnv>;
+pub type LbcK8sManualCluster = testing_framework_runner_k8s::ManualCluster<LbcEnv>;
 
 pub struct LbcEnv;
 
@@ -55,12 +63,26 @@ impl Application for LbcEnv {
     type FeedRuntime = BlockFeedRuntime;
 
     fn external_node_client(source: &ExternalNodeSource) -> Result<Self::NodeClient, DynError> {
-        let endpoint = Url::parse(&source.endpoint)?;
+        let endpoint = Url::parse(&source.endpoint())?;
         let basic_auth = external_basic_auth(&endpoint);
 
         Ok(NodeHttpClient::from_urls_with_basic_auth(
             endpoint, None, basic_auth,
         ))
+    }
+
+    fn build_node_client(access: &NodeAccess) -> Result<Self::NodeClient, DynError> {
+        let base_url = access.api_base_url()?;
+        let testing_url = access
+            .testing_port()
+            .map(|port| Url::parse(&format!("http://{}:{port}", access.host())))
+            .transpose()?;
+
+        Ok(NodeHttpClient::from_urls(base_url, testing_url))
+    }
+
+    fn node_readiness_path() -> &'static str {
+        lb_http_api_common::paths::CRYPTARCHIA_INFO
     }
 
     async fn prepare_feed(

@@ -18,8 +18,8 @@ async-trait                      = "0.1"
 cucumber                         = { features = ["output-junit"], version = "=0.22.0" }
 derivative                       = "2.2.0"
 ed25519                          = "2.2.3"
-futures                          = { default-features = false, version = "0.3" }
-futures-util                     = { default-features = false, version = "0.3.31" }
+futures                          = { workspace = true }
+futures-util                     = { workspace = true }
 hex                              = { default-features = false, version = "0.4.3" }
 lb-chain-broadcast-service       = { workspace = true }
 lb-chain-service                 = { workspace = true }
@@ -53,7 +53,7 @@ testing-framework-core           = { workspace = true }
 testing-framework-runner-local   = { workspace = true }
 thiserror                        = { default-features = false, version = "2.0" }
 time                             = { default-features = false, version = "0.3" }
-tokio                            = "1"
+tokio                            = { workspace = true }
 tracing                          = { workspace = true }
 tracing-subscriber               = { features = ["env-filter", "fmt"], version = "0.3" }
 
@@ -114,8 +114,18 @@ path              = "src/tests/testing_framework/fork_detector.rs"
 required-features = ["testing_framework"]
 
 [[test]]
+name              = "test_testing_framework_k8s_smoke"
+path              = "src/tests/testing_framework/k8s_smoke.rs"
+required-features = ["testing_framework"]
+
+[[test]]
 name              = "test_testing_framework_cucumber_smoke_local"
 path              = "cucumber_tests/stand_alone_tests/cucumber_smoke_local.rs"
+required-features = ["cucumber_stand_alone"]
+
+[[test]]
+name              = "test_testing_framework_cucumber_smoke_k8s"
+path              = "cucumber_tests/stand_alone_tests/cucumber_smoke_k8s.rs"
 required-features = ["cucumber_stand_alone"]
 
 [[test]]

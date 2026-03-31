@@ -21,7 +21,7 @@ pub(crate) mod common {
     }
 }
 
-pub static IS_DEBUG_TRACING: LazyLock<bool> = LazyLock::new(testing_framework_env::debug_tracing);
+pub static IS_DEBUG_TRACING: LazyLock<bool> = LazyLock::new(env::debug_tracing);
 pub const LOGOS_BLOCKCHAIN_LOG_LEVEL: &str = "LOGOS_BLOCKCHAIN_LOG_LEVEL";
 
 fn node_address_from_port(port: u16) -> Multiaddr {
@@ -29,12 +29,17 @@ fn node_address_from_port(port: u16) -> Multiaddr {
 }
 
 pub use framework::{
-    BlockFeed, BlockFeedSnapshot, BlockRecord, CoreBuilderExt, LbcEnv, LbcLocalDeployer,
-    LbcManualCluster, NodeHeadSnapshot, ScenarioBuilder, ScenarioBuilderExt,
+    BlockFeed, BlockFeedSnapshot, BlockRecord, CoreBuilderExt, LbcComposeDeployer, LbcEnv,
+    LbcK8sDeployer, LbcK8sManualCluster, LbcLocalDeployer, LbcManualCluster, NodeHeadSnapshot,
+    ScenarioBuilder, ScenarioBuilderExt,
 };
 // Required by reused node-test config modules importing from crate root.
 pub use node::configs::deployment::{DeploymentBuilder, TopologyConfig};
 pub use node::{NodeHttpClient, configs};
+pub use testing_framework_runner_compose::ComposeRunnerError;
+pub use testing_framework_runner_k8s::{
+    K8sRunnerError, ManualClusterError as K8sManualClusterError,
+};
 pub use workloads::{ClusterForkMonitor, ConsensusLiveness, inscription, transaction};
 
 /// Internal helpers for sibling workspace crates.

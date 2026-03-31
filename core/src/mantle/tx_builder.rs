@@ -139,7 +139,7 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn gas_cost<G: GasConstants>(&self) -> u64 {
         let build = self.clone().build();
-        build.gas_cost::<G>()
+        build.total_gas_cost::<G>()
     }
 
     #[must_use]
