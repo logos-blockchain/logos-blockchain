@@ -38,7 +38,8 @@ use crate::codec::{Error as WireError, Result};
 pub fn serialize<T: Serialize>(item: &T) -> Result<Bytes> {
     Ok(OPTIONS
         .serialize(&item)
-        .map_err(|e| WireError::Serialize(Box::new(e)))?.into())
+        .map_err(|e| WireError::Serialize(Box::new(e)))?
+        .into())
 }
 
 /// Get the serialized size of an object without actually serializing it
