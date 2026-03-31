@@ -113,7 +113,7 @@ pub async fn run(args: InscribeArgs) {
             break;
         }
 
-        match handle.publish(msg.as_bytes().to_vec()).await {
+        match handle.publish_message(msg.as_bytes().to_vec()).await {
             Ok(result) => {
                 let tx_hash: [u8; 32] = result.inscription_id.into();
                 println!("  published: {}", hex::encode(tx_hash));

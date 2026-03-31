@@ -5360,6 +5360,7 @@ dependencies = [
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",
+ "num-bigint",
  "reqwest",
  "rpds",
  "serde",
