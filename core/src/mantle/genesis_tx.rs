@@ -39,7 +39,7 @@ impl GenesisTx {
     pub fn from_tx(signed_mantle_tx: SignedMantleTx) -> Result<Self, Error> {
         let mantle_tx = &signed_mantle_tx.mantle_tx;
 
-        // Genesis transactions must have execution gas prices of 0 and storage gas of 1
+        // Genesis transactions must have execution gas prices of 0 and storage gas of 0
         if mantle_tx.execution_gas_price != 0 || mantle_tx.storage_gas_price != 0 {
             return Err(Error::InvalidGenesisGasPrice);
         }

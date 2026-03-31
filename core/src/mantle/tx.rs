@@ -153,9 +153,8 @@ impl<'de> Deserialize<'de> for MantleTx {
 impl GasCost for MantleTx {
     fn total_gas_cost<Constants: GasConstants>(&self) -> Gas {
         let execution_gas = self.execution_gas_consumption::<Constants>();
-        let storage_gas = self.storage_gas_consumption();
 
-        execution_gas * self.execution_gas_price + storage_gas * self.storage_gas_price
+        execution_gas * self.execution_gas_price + self.storage_gas_cost()
     }
 
     fn storage_gas_cost(&self) -> Gas {
