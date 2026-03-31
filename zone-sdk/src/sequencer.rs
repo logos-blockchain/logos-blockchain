@@ -111,7 +111,7 @@ enum ActorRequest {
     },
     SetKeys {
         keys: Vec<Ed25519PublicKey>,
-        reply: tokio::sync::oneshot::Sender<Result<SignedMantleTx, Error>>,
+        reply: tokio::sync::oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
     },
 }
 
@@ -140,7 +140,8 @@ impl SequencerHandle {
     /// without driving the event loop manually:
     ///
     /// ```ignore
-    /// let handle = ZoneSequencer::spawn(channel_id, key, url, None, None, None);
+    /// let (sequencer, handle) = ZoneSequencer::init(channel_id, key, url, None, None);
+    /// sequencer.spawn();
     /// let mut events = handle.subscribe();
     /// while let Ok(event) = events.recv().await {
     ///     // handle event
@@ -204,18 +205,21 @@ impl SequencerHandle {
     /// (`keys[0]`). This overwrites the entire key list — include the admin
     /// key if it should remain authorized.
     ///
-    /// Returns a future that resolves when the transaction is finalized.
-    /// The first `.await` submits the transaction, the second `.await`
-    /// waits for finalization:
+    /// Returns the publish result (with checkpoint) and a future that
+    /// resolves when the transaction is finalized:
     ///
     /// ```ignore
-    /// let finalized = handle.set_keys(vec![admin_pk]).await?;
+    /// let (result, finalized) = handle.set_keys(vec![admin_pk]).await?;
+    /// save_checkpoint(&result.checkpoint);
     /// finalized.await?; // wait for finalization
     /// ```
     pub async fn set_keys(
         &self,
         keys: Vec<Ed25519PublicKey>,
-    ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
+    ) -> Result<(PublishResult, impl Future<Output = Result<(), Error>>), Error> {
+        // Subscribe BEFORE submitting to avoid missing finalization events.
+        let mut event_rx = self.event_tx.subscribe();
+
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let request = ActorRequest::SetKeys {
             keys,
@@ -229,15 +233,11 @@ impl SequencerHandle {
                 reason: "sequencer channel closed",
             })?;
 
-        let signed_tx = reply_rx.await.map_err(|_| Error::Unavailable {
+        let (signed_tx, publish_result) = reply_rx.await.map_err(|_| Error::Unavailable {
             reason: "sequencer dropped reply",
         })??;
 
         let tx_hash = signed_tx.mantle_tx.hash();
-
-        // Subscribe to events BEFORE posting to avoid a race where the tx
-        // finalizes between posting and subscribing.
-        let mut event_rx = self.event_tx.subscribe();
 
         info!("Submitted set_keys transaction {:?}", tx_hash);
 
@@ -250,7 +250,7 @@ impl SequencerHandle {
             warn!("Failed to post set_keys transaction: {e}");
         }
 
-        Ok(async move {
+        let finalized = async move {
             loop {
                 match event_rx.recv().await {
                     Ok(Event::TxsFinalized { ref tx_hashes }) if tx_hashes.contains(&tx_hash) => {
@@ -264,7 +264,9 @@ impl SequencerHandle {
                     }
                 }
             }
-        })
+        };
+
+        Ok((publish_result, finalized))
     }
 }
 
@@ -365,13 +367,12 @@ impl ZoneSequencer {
                 cp.lib_slot
             );
             let mut tx_state = TxState::new(cp.lib, cp.last_msg_id);
-            for (hash, tx) in cp.pending_txs {
+            for (_hash, tx) in cp.pending_txs {
                 // Try to extract inscription metadata for lineage tracking
                 let mut is_inscription = false;
                 for op in &tx.mantle_tx.ops {
                     if let Op::ChannelInscribe(inscribe) = op {
                         tx_state.submit_inscription(
-                            hash,
                             tx.clone(),
                             inscribe.parent,
                             inscribe.id(),
@@ -382,7 +383,7 @@ impl ZoneSequencer {
                     }
                 }
                 if !is_inscription {
-                    tx_state.submit_other(hash, tx);
+                    tx_state.submit_other(tx);
                 }
             }
             (Some(tx_state), cp.lib_slot, cp.last_msg_id)
@@ -444,39 +445,22 @@ impl ZoneSequencer {
             .map(|s| build_checkpoint(s, self.last_msg_id, self.lib_slot))
     }
 
-    /// Spawn the sequencer in a background task and return a handle.
+    /// Spawn the event loop in a background task, consuming the sequencer.
     ///
-    /// This is a convenience wrapper around
-    /// [`init_with_config`](Self::init_with_config) for users who don't
-    /// need to drive the event loop manually.
+    /// Use after [`init`](Self::init) or
+    /// [`init_with_config`](Self::init_with_config):
     ///
     /// ```ignore
-    /// let handle = ZoneSequencer::spawn(channel_id, key, url, None, None, None);
+    /// let (sequencer, handle) = ZoneSequencer::init(channel_id, key, url, None, None);
+    /// sequencer.spawn();
     /// handle.publish(b"hello".to_vec()).await?;
     /// ```
-    #[must_use]
-    pub fn spawn(
-        channel_id: ChannelId,
-        signing_key: Ed25519Key,
-        node_url: Url,
-        auth: Option<BasicAuthCredentials>,
-        config: Option<SequencerConfig>,
-        checkpoint: Option<SequencerCheckpoint>,
-    ) -> SequencerHandle {
-        let (mut sequencer, handle) = Self::init_with_config(
-            channel_id,
-            signing_key,
-            node_url,
-            auth,
-            config.unwrap_or_default(),
-            checkpoint,
-        );
+    pub fn spawn(mut self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
-                sequencer.next_event().await;
+                self.next_event().await;
             }
-        });
-        handle
+        })
     }
 
     /// Drive the sequencer and return the next event.
@@ -651,8 +635,12 @@ impl ZoneSequencer {
         if self.state.is_some() && self.backfill_from.is_none() {
             match self.http_client.consensus_info(self.node_url.clone()).await {
                 Ok(info) => {
-                    let network_lib_slot =
-                        get_lib_slot(&self.http_client, &self.node_url, info.lib).await;
+                    let Ok(network_lib_slot) =
+                        get_lib_slot(&self.http_client, &self.node_url, info.lib).await
+                    else {
+                        warn!("Failed to get LIB slot for backfill check");
+                        return true;
+                    };
                     let from: u64 = self.lib_slot.into();
                     let to: u64 = network_lib_slot.into();
                     if from < to {
@@ -732,12 +720,7 @@ impl ZoneSequencer {
     fn handle_request(&mut self, request: ActorRequest) {
         if !self.is_ready() {
             match request {
-                ActorRequest::Publish { reply, .. } => {
-                    drop(reply.send(Err(Error::Unavailable {
-                        reason: "sequencer not yet ready",
-                    })));
-                }
-                ActorRequest::SetKeys { reply, .. } => {
+                ActorRequest::Publish { reply, .. } | ActorRequest::SetKeys { reply, .. } => {
                     drop(reply.send(Err(Error::Unavailable {
                         reason: "sequencer not yet ready",
                     })));
@@ -763,7 +746,7 @@ impl ZoneSequencer {
                     create_inscribe_tx(self.channel_id, &self.signing_key, data.clone(), parent);
                 let id = signed_tx.mantle_tx.hash();
 
-                s.submit_inscription(id, signed_tx.clone(), parent, new_msg_id, data);
+                s.submit_inscription(signed_tx.clone(), parent, new_msg_id, data);
                 self.last_msg_id = new_msg_id;
 
                 let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
@@ -775,9 +758,13 @@ impl ZoneSequencer {
             }
             ActorRequest::SetKeys { keys, reply } => {
                 let signed_tx = create_set_keys_tx(self.channel_id, &self.signing_key, keys);
-                let id = signed_tx.mantle_tx.hash();
-                s.submit_other(id, signed_tx.clone());
-                drop(reply.send(Ok(signed_tx)));
+                s.submit_other(signed_tx.clone());
+                let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
+                let result = PublishResult {
+                    inscription_id: signed_tx.mantle_tx.hash(),
+                    checkpoint,
+                };
+                drop(reply.send(Ok((signed_tx, result))));
             }
         }
     }
@@ -832,7 +819,13 @@ async fn handle_block_event(
     // 1. Backfill finalized blocks up to LIB (only when state's LIB is behind)
     let mut lib_finalized = Vec::new();
     if lib != s.lib() {
-        let new_lib_slot = get_lib_slot(http_client, node_url, lib).await;
+        let Ok(new_lib_slot) = get_lib_slot(http_client, node_url, lib).await else {
+            warn!("Failed to get LIB slot during backfill, skipping");
+            return BlockEventResult {
+                newly_finalized: Vec::new(),
+                channel_update: None,
+            };
+        };
         let from: u64 = (*lib_slot).into();
         let to: u64 = new_lib_slot.into();
         if from < to {
@@ -964,19 +957,15 @@ fn handle_inflight(event: InFlight, resubmit_active: &mut bool) {
     }
 }
 
-async fn get_lib_slot(http_client: &CommonHttpClient, node_url: &Url, lib: HeaderId) -> Slot {
-    // Try to get the block to find its slot
-    match http_client.get_block(node_url.clone(), lib).await {
-        Ok(Some(block)) => block.header().slot(),
-        Ok(None) => {
-            // Genesis case - slot 0
-            Slot::genesis()
-        }
-        Err(e) => {
-            warn!("Failed to get lib block slot: {e}, assuming slot 0");
-            Slot::genesis()
-        }
-    }
+async fn get_lib_slot(
+    http_client: &CommonHttpClient,
+    node_url: &Url,
+    lib: HeaderId,
+) -> Result<Slot, lb_common_http_client::Error> {
+    Ok(http_client
+        .get_block(node_url.clone(), lib)
+        .await?
+        .map_or(Slot::genesis(), |block| block.header().slot()))
 }
 
 /// Result of fetching and processing a slot range.

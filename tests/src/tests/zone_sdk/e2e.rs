@@ -104,7 +104,7 @@ async fn test_sequencer_publish_and_indexer_read() {
         resubmit_interval: Duration::from_secs(3),
         ..SequencerConfig::default()
     };
-    let (mut sequencer, mut handle) = ZoneSequencer::init_with_config(
+    let (sequencer, mut handle) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key,
         node_url.clone(),
@@ -113,26 +113,9 @@ async fn test_sequencer_publish_and_indexer_read() {
         None, // Fresh start, no checkpoint
     );
 
-    // Spawn a task to drive the sequencer — handle reorgs by re-publishing
-    let reorg_handle = handle.clone();
-    let poll_task = tokio::spawn(async move {
-        loop {
-            if let Some(Event::ChannelUpdate {
-                invalidated,
-                adopted,
-                ..
-            }) = sequencer.next_event().await
-            {
-                let adopted_payloads: HashSet<Vec<u8>> =
-                    adopted.into_iter().map(|a| a.payload).collect();
-                for inv in invalidated {
-                    if !adopted_payloads.contains(&inv.payload) {
-                        drop(reorg_handle.publish(inv.payload).await);
-                    }
-                }
-            }
-        }
-    });
+    // Spawn a task to drive the sequencer event loop
+    let poll_task = sequencer.spawn();
+    spawn_republish_handler(&handle);
 
     // Wait for sequencer to be ready, then publish inscriptions.
     // Each payload is tagged with a random ID for reorg deduplication.
@@ -198,7 +181,7 @@ async fn test_sequencer_publish_and_indexer_read() {
     let second_key = Ed25519Key::from_bytes(&key_bytes2);
     let second_pk = second_key.public_key();
 
-    let finalized = handle
+    let (_result, finalized) = handle
         .set_keys(vec![admin_pk, second_pk])
         .await
         .expect("set_keys should succeed");
@@ -262,7 +245,7 @@ async fn test_sequencer_checkpoint_resume() {
     };
 
     // Phase 1: Start fresh sequencer and publish messages
-    let (mut sequencer, mut handle) = ZoneSequencer::init_with_config(
+    let (sequencer, mut handle) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key.clone(),
         node_url.clone(),
@@ -272,25 +255,8 @@ async fn test_sequencer_checkpoint_resume() {
     );
 
     // Spawn polling task with reorg handling
-    let reorg_handle = handle.clone();
-    let poll_task = tokio::spawn(async move {
-        loop {
-            if let Some(Event::ChannelUpdate {
-                invalidated,
-                adopted,
-                ..
-            }) = sequencer.next_event().await
-            {
-                let adopted_payloads: HashSet<Vec<u8>> =
-                    adopted.into_iter().map(|a| a.payload).collect();
-                for inv in invalidated {
-                    if !adopted_payloads.contains(&inv.payload) {
-                        drop(reorg_handle.publish(inv.payload).await);
-                    }
-                }
-            }
-        }
-    });
+    let poll_task = sequencer.spawn();
+    spawn_republish_handler(&handle);
 
     let test_data_phase1: Vec<Vec<u8>> = vec![tag_payload("Message 1"), tag_payload("Message 2")];
 
@@ -315,7 +281,7 @@ async fn test_sequencer_checkpoint_resume() {
     drop(handle);
 
     // Phase 2: Resume with checkpoint and publish more messages
-    let (mut sequencer, mut handle) = ZoneSequencer::init_with_config(
+    let (sequencer, mut handle) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key,
         node_url.clone(),
@@ -324,25 +290,8 @@ async fn test_sequencer_checkpoint_resume() {
         Some(checkpoint), // Resume from checkpoint
     );
 
-    let reorg_handle = handle.clone();
-    let poll_task = tokio::spawn(async move {
-        loop {
-            if let Some(Event::ChannelUpdate {
-                invalidated,
-                adopted,
-                ..
-            }) = sequencer.next_event().await
-            {
-                let adopted_payloads: HashSet<Vec<u8>> =
-                    adopted.into_iter().map(|a| a.payload).collect();
-                for inv in invalidated {
-                    if !adopted_payloads.contains(&inv.payload) {
-                        drop(reorg_handle.publish(inv.payload).await);
-                    }
-                }
-            }
-        }
-    });
+    let poll_task = sequencer.spawn();
+    spawn_republish_handler(&handle);
 
     let test_data_phase2: Vec<Vec<u8>> = vec![tag_payload("Message 3"), tag_payload("Message 4")];
 
@@ -441,12 +390,8 @@ fn spawn_republish_handler(
 }
 
 /// Drive the sequencer event loop in the background.
-fn spawn_sequencer_poll(mut sequencer: ZoneSequencer) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            sequencer.next_event().await;
-        }
-    })
+fn spawn_sequencer_poll(sequencer: ZoneSequencer) -> tokio::task::JoinHandle<()> {
+    sequencer.spawn()
 }
 
 /// Helper: wait for readiness then publish all payloads.
@@ -595,7 +540,7 @@ async fn test_sequential_multi_sequencer() {
     wait_for_indexer(&indexer, &expected_phase1, Duration::from_secs(360)).await;
 
     // --- SeqA adds SeqB's key via set_keys ---
-    let finalized = handle_a
+    let (_result, finalized) = handle_a
         .set_keys(vec![admin_pk, seq_b_pk])
         .await
         .expect("set_keys should succeed");
@@ -760,7 +705,7 @@ async fn test_concurrent_multi_sequencer() {
 
     handle_a.wait_ready().await;
     debug!("Phase 1: SeqA ready, submitting set_keys");
-    let finalized = handle_a
+    let (_result, finalized) = handle_a
         .set_keys(vec![admin_pk, seq_b_pk, seq_c_pk])
         .await
         .expect("set_keys should succeed");
@@ -1047,7 +992,7 @@ async fn test_sorted_conflict_resolution() {
     let poll_a = spawn_sequencer_poll(sequencer_a);
 
     handle_a.wait_ready().await;
-    let finalized = handle_a
+    let (_result, finalized) = handle_a
         .set_keys(vec![admin_pk, seq_b_pk])
         .await
         .expect("set_keys should succeed");

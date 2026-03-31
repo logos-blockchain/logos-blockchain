@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use lb_core::{
     header::HeaderId,
-    mantle::{SignedMantleTx, ops::channel::MsgId, tx::TxHash},
+    mantle::{SignedMantleTx, Transaction as _, ops::channel::MsgId, tx::TxHash},
 };
 use rpds::HashTrieSetSync;
 
@@ -105,12 +105,12 @@ impl TxState {
     /// Submit an inscription tx for tracking with lineage metadata.
     pub fn submit_inscription(
         &mut self,
-        tx_hash: TxHash,
         signed_tx: SignedMantleTx,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Vec<u8>,
     ) {
+        let tx_hash = signed_tx.mantle_tx.hash();
         self.pending_by_parent
             .entry(parent_msg)
             .or_default()
@@ -128,7 +128,8 @@ impl TxState {
     }
 
     /// Submit a non-inscription tx for tracking (e.g. `set_keys`).
-    pub fn submit_other(&mut self, tx_hash: TxHash, signed_tx: SignedMantleTx) {
+    pub fn submit_other(&mut self, signed_tx: SignedMantleTx) {
+        let tx_hash = signed_tx.mantle_tx.hash();
         self.pending_other.insert(tx_hash, signed_tx);
     }
 
@@ -144,11 +145,11 @@ impl TxState {
         // Store parent relationship for pruning
         self.parent_map.insert(block_id, parent_id);
 
-        // Build cumulative safe set from parent.
-        // If parent state is missing (e.g., first event after subscribe is a snapshot
-        // where we receive a block whose parent we never saw), start with an empty set.
-        // This is conservative: txs might show as "pending" when they should be "safe",
-        // but they'll be correctly detected when seen in subsequent blocks.
+        // Build cumulative safe set from parent. Parent may be missing
+        // when blocks are processed from slot-range backfill and LIB has
+        // advanced between batches (pruning the parent). Starting with an
+        // empty set is conservative: txs show as "pending" until seen in
+        // a subsequent block with a known parent.
         let mut safe_set = self
             .block_states
             .get(&parent_id)
@@ -187,18 +188,22 @@ impl TxState {
                 prune_cursor = self.parent_map.remove(&b);
             }
 
-            // Rebuild the safe set at LIB to contain only still-pending tx
-            // hashes. This breaks the rpds sharing chain with pruned ancestors,
-            // preventing unbounded accumulation of finalized hashes in the
-            // persistent structure.
+            // Remove finalized tx hashes from all safe sets. Using remove
+            // (rather than rebuild) preserves rpds memory sharing between
+            // block states for non-finalized txs.
             if let Some(lib_safe_set) = self.block_states.get(&lib) {
-                let mut fresh = HashTrieSetSync::new_sync();
-                for hash in lib_safe_set.iter() {
-                    if self.pending.contains_key(hash) || self.pending_other.contains_key(hash) {
-                        fresh = fresh.insert(*hash);
+                let finalized_hashes: Vec<TxHash> = lib_safe_set
+                    .iter()
+                    .filter(|hash| {
+                        !self.pending.contains_key(hash) && !self.pending_other.contains_key(hash)
+                    })
+                    .copied()
+                    .collect();
+                for safe_set in self.block_states.values_mut() {
+                    for tx_hash in &finalized_hashes {
+                        *safe_set = safe_set.remove(tx_hash);
                     }
                 }
-                self.block_states.insert(lib, fresh);
             }
 
             self.prune_orphans(lib);
@@ -271,7 +276,7 @@ impl TxState {
 
     /// Number of pending transactions (all types).
     #[must_use]
-    pub fn pending_count(&self) -> usize {
+    pub fn unfinalized_count(&self) -> usize {
         self.pending.len() + self.pending_other.len()
     }
 
@@ -614,10 +619,9 @@ mod tests {
         let genesis = header_id(0);
         let mut state = TxState::new(genesis, MsgId::root());
         let tx = make_dummy_tx(1);
-        let hash = tx.mantle_tx.hash();
 
-        state.submit_other(hash, tx);
-        assert_eq!(state.pending_count(), 1);
+        state.submit_other(tx);
+        assert_eq!(state.unfinalized_count(), 1);
     }
 
     #[test]
@@ -628,13 +632,13 @@ mod tests {
 
         let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
-        state.submit_other(hash, tx);
+        state.submit_other(tx);
 
         // Process block containing our tx, lib stays at genesis
         state.process_block(b1, genesis, genesis, vec![hash], vec![]);
 
         // Tx is still pending (not finalized yet, lib hasn't advanced)
-        assert_eq!(state.pending_count(), 1);
+        assert_eq!(state.unfinalized_count(), 1);
 
         // But pending_txs at b1 excludes it (it's in the safe set)
         assert!(state.pending_txs(b1).is_empty());
@@ -649,25 +653,25 @@ mod tests {
 
         let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
-        state.submit_other(hash, tx);
+        state.submit_other(tx);
 
         // b1 with our tx
         state.process_block(b1, genesis, genesis, vec![hash], vec![]);
-        assert_eq!(state.pending_count(), 1);
+        assert_eq!(state.unfinalized_count(), 1);
 
         // b2, lib advances to b1 — process_block no longer removes from
         // pending (that's done by backfill ground truth)
         let finalized = state.process_block(b2, b1, b1, vec![], vec![]);
         assert!(finalized.is_empty(), "process_block should not finalize");
         assert_eq!(
-            state.pending_count(),
+            state.unfinalized_count(),
             1,
             "tx still in pending until backfill confirms"
         );
 
         // Simulate backfill confirming the tx
         assert!(state.remove_pending(&hash).is_some());
-        assert_eq!(state.pending_count(), 0);
+        assert_eq!(state.unfinalized_count(), 0);
     }
 
     #[test]
@@ -681,8 +685,8 @@ mod tests {
         let hash1 = tx1.mantle_tx.hash();
         let hash2 = tx2.mantle_tx.hash();
 
-        state.submit_other(hash1, tx1);
-        state.submit_other(hash2, tx2);
+        state.submit_other(tx1);
+        state.submit_other(tx2);
 
         // b1 contains only tx1
         state.process_block(b1, genesis, genesis, vec![hash1], vec![]);
@@ -704,7 +708,7 @@ mod tests {
 
         let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
-        state.submit_other(hash, tx);
+        state.submit_other(tx);
 
         // b1 has our tx
         state.process_block(b1, genesis, genesis, vec![hash], vec![]);
@@ -802,7 +806,7 @@ mod tests {
     ) -> TxHash {
         let tx = make_dummy_tx(data);
         let hash = tx.mantle_tx.hash();
-        state.submit_inscription(hash, tx, parent_msg, this_msg, vec![data]);
+        state.submit_inscription(tx, parent_msg, this_msg, vec![data]);
         hash
     }
 
@@ -968,8 +972,8 @@ mod tests {
         let hash1 = tx1.mantle_tx.hash();
         let hash2 = tx2.mantle_tx.hash();
 
-        state.submit_other(hash1, tx1);
-        state.submit_other(hash2, tx2);
+        state.submit_other(tx1);
+        state.submit_other(tx2);
 
         // b1 has tx1
         state.process_block(b1, genesis, genesis, vec![hash1], vec![]);
@@ -980,11 +984,15 @@ mod tests {
 
         // process_block no longer finalizes — backfill does that
         assert!(finalized.is_empty());
-        assert_eq!(state.pending_count(), 2, "txs still pending until backfill");
+        assert_eq!(
+            state.unfinalized_count(),
+            2,
+            "txs still pending until backfill"
+        );
 
         // Simulate backfill confirming both txs
         assert!(state.remove_pending(&hash1).is_some());
         assert!(state.remove_pending(&hash2).is_some());
-        assert_eq!(state.pending_count(), 0);
+        assert_eq!(state.unfinalized_count(), 0);
     }
 }

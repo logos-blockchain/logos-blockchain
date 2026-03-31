@@ -79,7 +79,9 @@ pub async fn run(args: InscribeArgs) {
         println!("  Restored checkpoint from {}", args.checkpoint_path);
     }
 
-    let handle = ZoneSequencer::spawn(channel_id, signing_key, node_url, None, None, checkpoint);
+    let (sequencer, handle) =
+        ZoneSequencer::init(channel_id, signing_key, node_url, None, checkpoint);
+    sequencer.spawn();
 
     // Handle reorgs by re-publishing invalidated inscriptions that
     // weren't adopted on the new branch.
