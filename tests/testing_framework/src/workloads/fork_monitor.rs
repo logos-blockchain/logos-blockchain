@@ -43,6 +43,8 @@ pub struct ClusterForkMonitor<E = LbcEnv> {
     worst_tip_gap: u64,
     /// Largest LIB-height spread observed inside one snapshot.
     worst_lib_gap: u64,
+    /// Cryptarchia security parameter used as the finalized-history window.
+    security_param: u64,
     /// Cluster-wide progress tracker for the best observed tip.
     tip_progress: ClusterProgressState,
     /// Per-node stall budget used when one node stops following the cluster.
@@ -251,6 +253,7 @@ impl<E> Default for ClusterForkMonitor<E> {
             longest_node_tip_stall: Duration::ZERO,
             worst_tip_gap: 0,
             worst_lib_gap: 0,
+            security_param: 0,
             tip_progress: ClusterProgressState::new(DEFAULT_TIP_STALL_THRESHOLD),
             node_tip_stall_threshold: DEFAULT_NODE_TIP_STALL_THRESHOLD,
             lib_progress: ClusterProgressState::new(DEFAULT_LIB_STALL_THRESHOLD),
@@ -345,6 +348,7 @@ where
 
         self.reset_capture_state();
         self.apply_thresholds(derive_thresholds(ctx));
+        self.security_param = u64::from(ctx.descriptors().config().security_param);
 
         Ok(())
     }
@@ -577,7 +581,11 @@ impl<E> ClusterForkMonitor<E> {
 
     /// Fails when distinct LIBs are proven incompatible by the ancestry graph.
     fn ensure_no_lib_divergence(&self, analysis: &SnapshotAnalysis<'_>) -> Result<(), DynError> {
-        if has_proven_lib_conflict(&analysis.lib_headers, &self.ancestry_edges) {
+        if has_proven_lib_conflict(
+            analysis.node_heads,
+            &self.ancestry_edges,
+            self.security_param,
+        ) {
             let details = ReportFormatter::new(analysis.node_heads, &self.ancestry_edges)
                 .lib_divergence_details(&analysis.lib_headers);
 
@@ -612,6 +620,12 @@ fn distinct_lib_headers(node_heads: &[NodeHeadSnapshot]) -> Vec<HeaderId> {
         .collect()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HeaderAtHeight {
+    header: HeaderId,
+    height: u64,
+}
+
 /// Computes the distance between the highest and lowest observed heights.
 const fn height_gap(max_height: Option<u64>, min_height: Option<u64>) -> u64 {
     match (max_height, min_height) {
@@ -621,10 +635,15 @@ const fn height_gap(max_height: Option<u64>, min_height: Option<u64>) -> u64 {
 }
 
 /// Returns true only when two LIBs are proven incompatible.
-fn has_proven_lib_conflict(libs: &[HeaderId], parent_edges: &HashMap<HeaderId, HeaderId>) -> bool {
+fn has_proven_lib_conflict(
+    node_heads: &[NodeHeadSnapshot],
+    parent_edges: &HashMap<HeaderId, HeaderId>,
+    security_param: u64,
+) -> bool {
+    let libs = distinct_libs_with_heights(node_heads);
     for i in 0..libs.len() {
         for j in (i + 1)..libs.len() {
-            if lib_pair_conflicts(libs[i], libs[j], parent_edges) {
+            if lib_pair_conflicts(libs[i], libs[j], parent_edges, security_param) {
                 return true;
             }
         }
@@ -633,79 +652,146 @@ fn has_proven_lib_conflict(libs: &[HeaderId], parent_edges: &HashMap<HeaderId, H
     false
 }
 
+/// Collects one representative height for each distinct LIB header.
+fn distinct_libs_with_heights(node_heads: &[NodeHeadSnapshot]) -> Vec<HeaderAtHeight> {
+    let mut libs = HashMap::new();
+    for head in node_heads {
+        let Some(height) = head.lib_height else {
+            continue;
+        };
+        libs.entry(head.lib).or_insert(height);
+    }
+
+    libs.into_iter()
+        .map(|(header, height)| HeaderAtHeight { header, height })
+        .collect()
+}
+
 /// Determines whether one LIB pair is provably forked.
 fn lib_pair_conflicts(
-    left: HeaderId,
-    right: HeaderId,
+    left: HeaderAtHeight,
+    right: HeaderAtHeight,
     parent_edges: &HashMap<HeaderId, HeaderId>,
+    security_param: u64,
 ) -> bool {
-    if left == right {
+    if left.header == right.header {
         return false;
     }
 
-    let left_on_right = path_reaches_target(right, left, parent_edges);
-    if left_on_right {
+    if left.height == right.height {
+        return left.height >= security_param;
+    }
+
+    let (higher, lower) = if left.height > right.height {
+        (left, right)
+    } else {
+        (right, left)
+    };
+
+    if higher.height < security_param || lower.height < security_param {
         return false;
     }
 
-    let right_on_left = path_reaches_target(left, right, parent_edges);
-    if right_on_left {
-        return false;
-    }
-
-    path_is_complete(right, parent_edges) && path_is_complete(left, parent_edges)
+    let depth = higher.height.saturating_sub(lower.height);
+    walk_ancestor_by_depth(higher.header, depth, parent_edges)
+        .is_some_and(|ancestor| ancestor != lower.header)
 }
 
-/// Checks whether following parent links from `start` eventually reaches
-/// `target`.
-fn path_reaches_target(
+fn walk_ancestor_by_depth(
     start: HeaderId,
-    target: HeaderId,
+    depth: u64,
     parent_edges: &HashMap<HeaderId, HeaderId>,
-) -> bool {
+) -> Option<HeaderId> {
     let mut cursor = start;
     let mut seen = HashSet::new();
 
-    loop {
-        if cursor == target {
-            return true;
-        }
-
+    for _ in 0..depth {
         if !seen.insert(cursor) {
-            return false;
+            return None;
         }
 
-        let Some(parent) = parent_edges.get(&cursor).copied() else {
-            return false;
-        };
-
+        let parent = parent_edges.get(&cursor).copied()?;
         if parent == cursor {
-            return false;
+            return None;
         }
 
         cursor = parent;
     }
+
+    Some(cursor)
 }
 
-/// Checks whether the ancestry path from `start` terminates cleanly at a known
-/// root.
-fn path_is_complete(start: HeaderId, parent_edges: &HashMap<HeaderId, HeaderId>) -> bool {
-    let mut cursor = start;
-    let mut seen = HashSet::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    loop {
-        if !seen.insert(cursor) {
-            return false;
-        }
+    fn h(byte: u8) -> HeaderId {
+        HeaderId::from([byte; 32])
+    }
 
-        let Some(parent) = parent_edges.get(&cursor).copied() else {
-            return false;
+    #[test]
+    fn lib_conflict_same_height_after_k() {
+        let left = HeaderAtHeight {
+            header: h(1),
+            height: 25,
+        };
+        let right = HeaderAtHeight {
+            header: h(2),
+            height: 25,
         };
 
-        if parent == cursor {
-            return true;
-        }
+        assert!(lib_pair_conflicts(left, right, &HashMap::new(), 20));
+    }
 
-        cursor = parent;
+    #[test]
+    fn lib_conflict_same_height_before_k_is_ignored() {
+        let left = HeaderAtHeight {
+            header: h(1),
+            height: 5,
+        };
+        let right = HeaderAtHeight {
+            header: h(2),
+            height: 5,
+        };
+
+        assert!(!lib_pair_conflicts(left, right, &HashMap::new(), 20));
+    }
+
+    #[test]
+    fn lib_conflict_when_higher_branch_does_not_reach_lower() {
+        let mut parents = HashMap::new();
+        parents.insert(h(3), h(4));
+        parents.insert(h(4), h(5));
+        parents.insert(h(5), h(6));
+
+        let higher = HeaderAtHeight {
+            header: h(3),
+            height: 30,
+        };
+        let lower = HeaderAtHeight {
+            header: h(9),
+            height: 27,
+        };
+
+        assert!(lib_pair_conflicts(higher, lower, &parents, 20));
+    }
+
+    #[test]
+    fn lib_conflict_not_reported_when_higher_reaches_lower() {
+        let mut parents = HashMap::new();
+        parents.insert(h(3), h(4));
+        parents.insert(h(4), h(5));
+        parents.insert(h(5), h(9));
+
+        let higher = HeaderAtHeight {
+            header: h(3),
+            height: 30,
+        };
+        let lower = HeaderAtHeight {
+            header: h(9),
+            height: 27,
+        };
+
+        assert!(!lib_pair_conflicts(higher, lower, &parents, 20));
     }
 }
