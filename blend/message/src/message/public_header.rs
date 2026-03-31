@@ -137,6 +137,11 @@ impl VerifiedPublicHeader {
         &self.proof_of_quota
     }
 
+    #[must_use]
+    pub const fn signing_key(&self) -> &Ed25519PublicKey {
+        &self.signing_pubkey
+    }
+
     pub const fn id(&self) -> MessageIdentifier {
         self.signing_pubkey
     }

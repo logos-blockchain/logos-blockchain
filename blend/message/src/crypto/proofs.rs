@@ -11,6 +11,7 @@ use lb_blend_proofs::{
     },
     selection::{self, ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
+use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -106,7 +107,8 @@ impl ProofsVerifier for RealProofsVerifier {
         // Try with current input, and if it fails, try with the previous one, if any
         // (i.e., within the epoch transition period).
         tracing::trace!(
-            "Verifying proof of quota {proof:?} with session {session:?}, public core inputs: {core:?}, leader inputs: {leader:?} and signing key: {signing_key:?}."
+            "Verifying proof of quota with key nullifier {:?}, signing key: {signing_key:?}, session {session:?}, public core inputs: {core:?} and leader inputs: {leader:?}.",
+            hex::encode(fr_to_bytes(&proof.key_nullifier()))
         );
         let start = Instant::now();
         let proof_verification_result = proof
@@ -140,7 +142,7 @@ impl ProofsVerifier for RealProofsVerifier {
             });
 
         tracing::trace!(
-            "Proof verification time: {} ms",
+            "Proof verification time: {} ms.",
             start.elapsed().as_millis()
         );
 
