@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
 use super::{GasConstants, GasCost as _, MantleTx, Note, Op, Utxo};
-use crate::mantle::ops::transfer::TransferOp;
+use crate::mantle::{NoteId, ops::transfer::TransferOp};
 
 #[derive(Debug, Clone)]
 pub struct MantleTxBuilder {
@@ -133,27 +133,7 @@ impl MantleTxBuilder {
             .map(|n| i128::from(n.value))
             .sum();
 
-        let op_sum: i128 = self
-            .mantle_tx
-            .ops
-            .iter()
-            .map(|op| match op {
-            Op::ChannelDeposit(deposit) => -i128::from(deposit.amount),
-            Op::ChannelInscribe(_)
-            | Op::ChannelSetKeys(_)
-            | Op::SDPDeclare(_)
-            | Op::SDPWithdraw(_)
-            | Op::SDPActive(_)
-            // Balances for Transfer operations have been already accounted for in the
-            // `ledger_inputs` and `pending_transfer`.
-            | Op::Transfer(_)
-            // TODO: LeaderClaim should have a positive balance but depends on leader_rewards
-            // https://www.notion.so/Anonymous-Leaders-Reward-Protocol-206261aa09df8120a49ffa49c71ba70d?source=copy_link#240261aa09df80de83eace3d556eddfc
-            | Op::LeaderClaim(_) => 0,
-        })
-            .sum();
-
-        in_sum - out_sum + op_sum
+        in_sum - out_sum
     }
 
     #[must_use]
@@ -165,6 +145,21 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn funding_delta<G: GasConstants>(&self) -> i128 {
         self.net_balance() - i128::from(self.gas_cost::<G>())
+    }
+
+    /// Returns all note IDs used as inputs in the transaction, including
+    /// - Transfer operations already in the transaction
+    /// - Additional transfer operations that will be added to the transaction
+    pub fn input_notes(&self) -> impl Iterator<Item = NoteId> {
+        self.mantle_tx
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Transfer(transfer) => Some(transfer.inputs.iter().copied()),
+                _ => None,
+            })
+            .flatten()
+            .chain(self.ledger_inputs().iter().map(Utxo::id))
     }
 
     #[must_use]

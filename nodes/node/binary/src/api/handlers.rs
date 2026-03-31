@@ -418,7 +418,9 @@ where
             handle.relay::<WalletService>().await?,
         );
 
-        let tx_builder = MantleTxBuilder::new().push_op(Op::ChannelDeposit(req.deposit));
+        let tx_builder = MantleTxBuilder::new()
+            .push_op(Op::ChannelDeposit(req.deposit))
+            .push_op(Op::Transfer(req.burn));
         let lb_wallet_service::TipResponse {
             tip,
             response: funded_tx_builder,
