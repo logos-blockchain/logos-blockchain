@@ -366,12 +366,12 @@ impl ZoneSequencer {
     /// sequencer.spawn();
     /// handle.publish(b"hello".to_vec()).await?;
     /// ```
-    pub fn spawn(mut self) {
+    pub fn spawn(mut self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
                 self.next_event().await;
             }
-        });
+        })
     }
 
     /// Drive the sequencer and return the next event.

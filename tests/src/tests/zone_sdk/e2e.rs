@@ -88,7 +88,7 @@ async fn test_sequencer_publish_and_indexer_read() {
         resubmit_interval: Duration::from_secs(3),
         ..SequencerConfig::default()
     };
-    let (mut sequencer, handle) = ZoneSequencer::init_with_config(
+    let (sequencer, handle) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key,
         node_url.clone(),
@@ -97,12 +97,7 @@ async fn test_sequencer_publish_and_indexer_read() {
         None, // Fresh start, no checkpoint
     );
 
-    // Spawn a task to drive the sequencer
-    let poll_task = tokio::spawn(async move {
-        loop {
-            sequencer.next_event().await;
-        }
-    });
+    let poll_task = sequencer.spawn();
 
     // Publish inscriptions (with retry until sequencer is initialized)
     let test_data: Vec<Vec<u8>> = vec![
@@ -248,7 +243,7 @@ async fn test_sequencer_checkpoint_resume() {
     };
 
     // Phase 1: Start fresh sequencer and publish messages
-    let (mut sequencer, handle) = ZoneSequencer::init_with_config(
+    let (sequencer, handle) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key.clone(),
         node_url.clone(),
@@ -257,12 +252,7 @@ async fn test_sequencer_checkpoint_resume() {
         None, // Fresh start
     );
 
-    // Spawn polling task
-    let poll_task = tokio::spawn(async move {
-        loop {
-            sequencer.next_event().await;
-        }
-    });
+    let poll_task = sequencer.spawn();
 
     let test_data_phase1: Vec<Vec<u8>> = vec![b"Message 1".to_vec(), b"Message 2".to_vec()];
 
@@ -299,7 +289,7 @@ async fn test_sequencer_checkpoint_resume() {
     drop(handle);
 
     // Phase 2: Resume with checkpoint and publish more messages
-    let (mut sequencer, handle) = ZoneSequencer::init_with_config(
+    let (sequencer, handle) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key,
         node_url.clone(),
@@ -308,11 +298,7 @@ async fn test_sequencer_checkpoint_resume() {
         Some(checkpoint), // Resume from checkpoint
     );
 
-    let poll_task = tokio::spawn(async move {
-        loop {
-            sequencer.next_event().await;
-        }
-    });
+    let poll_task = sequencer.spawn();
 
     let test_data_phase2: Vec<Vec<u8>> = vec![b"Message 3".to_vec(), b"Message 4".to_vec()];
 
