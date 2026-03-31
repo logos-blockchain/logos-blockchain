@@ -11,8 +11,6 @@ use lb_cryptarchia_engine::Epoch;
 use lb_utxotree::{DynamicMerkleTree, MerklePath};
 use rpds::{HashTrieMapSync, VectorSync};
 
-use crate::Balance;
-
 /// A leader state in the mantle ledger.
 ///
 /// NOTE: Most collection fields in this struct should use `rpds`
@@ -156,7 +154,7 @@ impl LeaderState {
     /// Any cryptographic proof of correct derivation of the voucher nullifier
     /// and membership proof in the merkle tree is expected to happen
     /// outside of this function.
-    pub fn claim(&self, op: &LeaderClaimOp) -> Result<(Self, Balance), Error> {
+    pub fn claim(&self, op: &LeaderClaimOp) -> Result<(Self, Value), Error> {
         if self.nfs.contains(&op.voucher_nullifier) {
             return Err(Error::DuplicatedVoucherNullifier);
         }
@@ -189,7 +187,7 @@ impl LeaderState {
                 claimable_voucher_indices: self.claimable_voucher_indices.clone(),
                 pending_vouchers: self.pending_vouchers.clone(),
             },
-            Balance::from(reward_amount),
+            reward_amount,
         ))
     }
 }
