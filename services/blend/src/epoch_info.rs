@@ -8,10 +8,7 @@ use core::{
 use async_trait::async_trait;
 use futures::Stream;
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
-use lb_chain_service::{
-    Error as ChainServiceError,
-    api::{ApiError, CryptarchiaServiceApi, CryptarchiaServiceData},
-};
+use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{crypto::ZkHash, proofs::leader_proof::LeaderPublic};
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::Fr;
@@ -50,14 +47,6 @@ pub trait PolInfoProvider<RuntimeServiceId> {
 }
 
 const LOG_TARGET: &str = "blend::service::epoch";
-
-#[derive(Debug, thiserror::Error)]
-pub enum EpochError {
-    #[error("API error: {0}")]
-    ApiError(#[from] ApiError),
-    #[error("Chain service error: {0}")]
-    ChainServiceError(#[from] ChainServiceError),
-}
 
 /// A trait that provides the needed functionalities for the epoch stream to
 /// fetch the epoch state for a given slot.
