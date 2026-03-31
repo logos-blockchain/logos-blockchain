@@ -356,39 +356,22 @@ impl ZoneSequencer {
             .map(|s| build_checkpoint(s, self.last_msg_id, self.lib_slot))
     }
 
-    /// Spawn the sequencer in a background task and return a handle.
+    /// Spawn the event loop in a background task, consuming the sequencer.
     ///
-    /// This is a convenience wrapper around
-    /// [`init_with_config`](Self::init_with_config) for users who don't
-    /// need to drive the event loop manually.
+    /// Use after [`init`](Self::init) or
+    /// [`init_with_config`](Self::init_with_config):
     ///
     /// ```ignore
-    /// let handle = ZoneSequencer::spawn(channel_id, key, url, None, None, None);
+    /// let (sequencer, handle) = ZoneSequencer::init(channel_id, key, url, None, None);
+    /// sequencer.spawn();
     /// handle.publish(b"hello".to_vec()).await?;
     /// ```
-    #[must_use]
-    pub fn spawn(
-        channel_id: ChannelId,
-        signing_key: Ed25519Key,
-        node_url: Url,
-        auth: Option<BasicAuthCredentials>,
-        config: Option<SequencerConfig>,
-        checkpoint: Option<SequencerCheckpoint>,
-    ) -> SequencerHandle {
-        let (mut sequencer, handle) = Self::init_with_config(
-            channel_id,
-            signing_key,
-            node_url,
-            auth,
-            config.unwrap_or_default(),
-            checkpoint,
-        );
+    pub fn spawn(mut self) {
         tokio::spawn(async move {
             loop {
-                sequencer.next_event().await;
+                self.next_event().await;
             }
         });
-        handle
     }
 
     /// Drive the sequencer and return the next event.
@@ -411,8 +394,14 @@ impl ZoneSequencer {
                         );
                         self.state = Some(TxState::new(info.lib));
                         self.current_tip = Some(info.tip);
-                        self.lib_slot =
-                            get_lib_slot(&self.http_client, &self.node_url, info.lib).await;
+                        match get_lib_slot(&self.http_client, &self.node_url, info.lib).await {
+                            Ok(slot) => self.lib_slot = slot,
+                            Err(e) => {
+                                warn!("Failed to get LIB slot: {e}");
+                                tokio::time::sleep(self.config.reconnect_delay).await;
+                                return None;
+                            }
+                        }
                     }
                     Err(e) => {
                         warn!("Failed to fetch consensus info: {e}");
@@ -570,7 +559,10 @@ async fn handle_block_event(
     // Backfill if needed (self-healing on every event)
     // 1. Backfill finalized blocks up to LIB (only when state's LIB is behind)
     if lib != s.lib() {
-        let new_lib_slot = get_lib_slot(http_client, node_url, lib).await;
+        let Ok(new_lib_slot) = get_lib_slot(http_client, node_url, lib).await else {
+            warn!("Failed to get LIB slot during backfill, skipping");
+            return Vec::new();
+        };
         if *lib_slot < new_lib_slot {
             backfill_to_lib(
                 s,
@@ -620,19 +612,15 @@ fn handle_inflight(event: InFlight, resubmit_active: &mut bool) {
     }
 }
 
-async fn get_lib_slot(http_client: &CommonHttpClient, node_url: &Url, lib: HeaderId) -> Slot {
-    // Try to get the block to find its slot
-    match http_client.get_block(node_url.clone(), lib).await {
-        Ok(Some(block)) => block.header().slot(),
-        Ok(None) => {
-            // Genesis case - slot 0
-            Slot::genesis()
-        }
-        Err(e) => {
-            warn!("Failed to get lib block slot: {e}, assuming slot 0");
-            Slot::genesis()
-        }
-    }
+async fn get_lib_slot(
+    http_client: &CommonHttpClient,
+    node_url: &Url,
+    lib: HeaderId,
+) -> Result<Slot, lb_common_http_client::Error> {
+    Ok(http_client
+        .get_block(node_url.clone(), lib)
+        .await?
+        .map_or(Slot::genesis(), |block| block.header().slot()))
 }
 
 /// Backfill finalized blocks from current `lib_slot` to new `lib_slot`.

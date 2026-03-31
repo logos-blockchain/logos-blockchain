@@ -79,15 +79,9 @@ pub async fn run(args: InscribeArgs) {
         println!("  Restored checkpoint from {}", args.checkpoint_path);
     }
 
-    let (mut sequencer, handle) =
+    let (sequencer, handle) =
         ZoneSequencer::init(channel_id, signing_key, node_url, None, checkpoint);
-
-    // Drive the sequencer in the background
-    tokio::spawn(async move {
-        loop {
-            sequencer.next_event().await;
-        }
-    });
+    sequencer.spawn();
 
     println!();
     println!("Type a message and press Enter to publish it as a zone block.");

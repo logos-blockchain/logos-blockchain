@@ -94,19 +94,13 @@ impl TxState {
                 prune_cursor = self.parent_map.remove(&b);
             }
 
-            // Rebuild ALL safe sets to contain only still-pending tx hashes.
-            // This breaks rpds sharing chains with pruned ancestors across
-            // the entire block tree, not just at LIB. Without this, tip
-            // block states would retain references to finalized hashes via
-            // structural sharing, causing unbounded memory growth.
+            // Remove finalized tx hashes from all safe sets. Using remove
+            // (rather than rebuild) preserves rpds memory sharing between
+            // block states for non-finalized txs.
             for safe_set in self.block_states.values_mut() {
-                let mut fresh = HashTrieSetSync::new_sync();
-                for hash in safe_set.iter() {
-                    if self.pending.contains_key(hash) {
-                        fresh = fresh.insert(*hash);
-                    }
+                for tx_hash in &newly_finalized {
+                    *safe_set = safe_set.remove(tx_hash);
                 }
-                *safe_set = fresh;
             }
 
             self.prune_orphans(lib);
