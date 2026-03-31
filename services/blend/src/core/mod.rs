@@ -625,21 +625,21 @@ where
     .expect("The current session info must be available.");
 
     {
-        let membership_index = current_membership_info
+        let node_membership_index = current_membership_info
             .public
             .membership
             .local_index()
-            .unwrap();
-        let membership_public_key = current_membership_info
+            .expect("First retrieved session for Blend core startup must include the node's local index in the membership set.");
+        let node_membership_public_key = current_membership_info
             .public
             .membership
-            .get_node_at(membership_index)
+            .get_node_at(node_membership_index)
             .unwrap()
             .public_key;
         assert_eq!(
-            membership_public_key,
+            node_membership_public_key,
             blend_config.non_ephemeral_signing_key.public_key(),
-            "Node key does not match membership info"
+            "Node key must match membership info"
         );
     };
 

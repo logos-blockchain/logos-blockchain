@@ -181,10 +181,10 @@ where
             .map(|(_, (proof, node_index))| {
                 (
                     proof,
-                    self
-                    .membership
-                    .get_node_at(node_index)
-                    .expect("Node at index should exist.").public_key
+                    self.membership
+                        .get_node_at(node_index)
+                        .expect("Node at index should exist.")
+                        .public_key,
                 )
             });
 
