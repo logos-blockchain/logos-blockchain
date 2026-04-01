@@ -15,9 +15,7 @@ use lb_blend_message::encap::{
     self, encapsulated::EncapsulatedMessage, validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
 use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
-use lb_blend_scheduling::{
-    deserialize_encapsulated_message, membership::Membership, serialize_encapsulated_message,
-};
+use lb_blend_scheduling::{membership::Membership, serialize_encapsulated_message};
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol,
     core::{Endpoint, transport::PortUse},
@@ -35,7 +33,10 @@ use crate::core::with_core::{
         },
         message_cache::MessageCache,
         old_session::OldSession,
-        utils::{handle_received_serialized_encapsulated_message, validate_and_forward_message},
+        utils::{
+            handle_received_serialized_encapsulated_message_and_update_cache,
+            validate_forward_message_and_update_cache,
+        },
     },
     error::{ReceiveError, SendError},
 };
@@ -823,7 +824,7 @@ where
         message: EncapsulatedMessage,
         excluded_peer: Option<PeerId>,
     ) -> Result<(), SendError> {
-        validate_and_forward_message(
+        validate_forward_message_and_update_cache(
             message,
             &self.poq_verifier,
             self.negotiated_peers
@@ -844,10 +845,6 @@ where
         )
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: Address this at some point."
-    )]
     fn handle_received_serialized_encapsulated_message(
         &mut self,
         serialized_message: &[u8],
@@ -872,7 +869,7 @@ where
             }
         }
 
-        if let Err(receive_error) = handle_received_serialized_encapsulated_message(
+        if let Err(receive_error) = handle_received_serialized_encapsulated_message_and_update_cache(
             serialized_message,
             &mut self.message_cache,
             (from_peer_id, from_connection_id),
@@ -922,10 +919,6 @@ where
     >;
     type ToSwarm = Event;
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: Address this at some point."
-    )]
     fn handle_established_inbound_connection(
         &mut self,
         connection_id: ConnectionId,
@@ -970,10 +963,6 @@ where
         })
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: Address this at some point."
-    )]
     fn handle_established_outbound_connection(
         &mut self,
         connection_id: ConnectionId,

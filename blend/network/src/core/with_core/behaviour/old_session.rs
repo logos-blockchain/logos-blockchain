@@ -7,7 +7,6 @@ use std::{
 use either::Either;
 use lb_blend_message::encap::{self, encapsulated::EncapsulatedMessage};
 use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
-use lb_blend_scheduling::deserialize_encapsulated_message;
 use libp2p::{
     PeerId,
     swarm::{ConnectionId, NotifyHandler, ToSwarm},
@@ -18,7 +17,10 @@ use crate::core::with_core::{
         Event,
         handler::FromBehaviour,
         message_cache::MessageCache,
-        utils::{handle_received_serialized_encapsulated_message, validate_and_forward_message},
+        utils::{
+            handle_received_serialized_encapsulated_message_and_update_cache,
+            validate_forward_message_and_update_cache,
+        },
     },
     error::{ReceiveError, SendError},
 };
@@ -44,7 +46,7 @@ where
         message: EncapsulatedMessage,
         except: PeerId,
     ) -> Result<(), SendError> {
-        validate_and_forward_message(
+        validate_forward_message_and_update_cache(
             message,
             &self.poq_verifier,
             self.negotiated_peers
@@ -81,7 +83,7 @@ where
             return Ok(false);
         }
 
-        handle_received_serialized_encapsulated_message(
+        handle_received_serialized_encapsulated_message_and_update_cache(
             serialized_message,
             &mut self.message_cache,
             (from_peer_id, from_connection_id),
@@ -150,12 +152,6 @@ impl<ProofsVerifier> OldSession<ProofsVerifier> {
             return true;
         }
         false
-    }
-
-    fn try_wake(&mut self) {
-        if let Some(waker) = self.waker.take() {
-            waker.wake();
-        }
     }
 
     pub fn poll(

@@ -49,10 +49,6 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         }
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: Address this at some point."
-    )]
     pub(super) fn broadcast_and_retry(
         &mut self,
         topic: Topic,
