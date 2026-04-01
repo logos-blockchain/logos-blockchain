@@ -15,7 +15,7 @@ use lb_blend_message::encap::{
     self, encapsulated::EncapsulatedMessage, validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
 use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
-use lb_blend_scheduling::{membership::Membership, serialize_encapsulated_message};
+use lb_blend_scheduling::membership::Membership;
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol,
     core::{Endpoint, transport::PortUse},
@@ -321,7 +321,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         message: &EncapsulatedMessageWithVerifiedPublicHeader,
         peer_id: PeerId,
     ) -> Result<(), SendError> {
-        let serialized_message = serialize_encapsulated_message(message);
+        let serialized_message = lb_blend_scheduling::serialize_encapsulated_message(message);
         self.force_send_serialized_message_to_peer(serialized_message, peer_id)
     }
 
