@@ -17,14 +17,13 @@ use std::{
 };
 
 use cucumber::{World as _, WriterExt as _, event::ScenarioFinished, writer, writer::Verbosity};
-use lb_testing_framework::release_reserved_port_block;
+use lb_testing_framework::{is_truthy_env, release_reserved_port_block};
 use logos_blockchain_tests::cucumber::{
     defaults::{
         ARTEFACTS, CUCUMBER_DEPLOYER_COMPOSE, CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL,
         create_scenario_output_dir, get_feature_path, get_retries, init_logging_defaults,
         init_tracing,
     },
-    utils::is_truthy_env,
     world::{CucumberWorld, DeployerKind},
 };
 

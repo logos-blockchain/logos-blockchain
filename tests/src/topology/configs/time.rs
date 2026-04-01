@@ -4,18 +4,19 @@ use std::{
 };
 
 use lb_node::config::time::serde as time;
+use lb_testing_framework::is_truthy_env;
 
 pub(crate) const DEFAULT_SLOT_TIME_IN_SECS: u64 = 1;
 pub(crate) const CONSENSUS_SLOT_TIME_VAR: &str = "CONSENSUS_SLOT_TIME";
-
+pub const USE_LOCAL_HOST_NTP_TIME_CONFIG: &str = "USE_LOCAL_HOST_NTP_TIME_CONFIG";
 pub type GeneralTimeConfig = time::Config;
 
 #[must_use]
-pub fn set_time_config(use_public_ntp: Option<bool>) -> GeneralTimeConfig {
-    if use_public_ntp == Some(true) {
-        default_public_time_config()
+pub fn set_time_config() -> GeneralTimeConfig {
+    if is_truthy_env(USE_LOCAL_HOST_NTP_TIME_CONFIG) {
+        local_host_ntp_time_config()
     } else {
-        local_host_time_config()
+        default_public_time_config()
     }
 }
 
@@ -34,7 +35,7 @@ fn default_public_time_config() -> GeneralTimeConfig {
 }
 
 #[must_use]
-fn local_host_time_config() -> GeneralTimeConfig {
+fn local_host_ntp_time_config() -> GeneralTimeConfig {
     assert!(
         is_local_ntp_server_running(),
         "Ensure a local NTP server is properly installed and configured\n\
@@ -46,6 +47,7 @@ fn local_host_time_config() -> GeneralTimeConfig {
             - Add a real public NTP server, e.g. `server time.google.com iburst`\n  \
             - Ensure only one 'pool' or 'server' line exit to avoid duplicates\n  \
             - Add 'bindaddress 127.0.0.1'\n  \
+            - Add 'allow 127.0.0.1'\n\
             - Add 'allow 127.0.0.1'\n\
           - Start/restart the NTP service\n  \
             - `sudo systemctl restart chrony`\n\

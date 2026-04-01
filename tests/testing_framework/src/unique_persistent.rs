@@ -4,6 +4,7 @@ use std::{
     io::Write as _,
     net::{TcpListener, UdpSocket},
     path::{Path, PathBuf},
+    process::Command,
     sync::{Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -227,7 +228,55 @@ fn read_pid_from_claim_file(path: &Path) -> Option<u32> {
 }
 
 fn is_pid_alive(pid: u32) -> bool {
-    Path::new("/proc").join(pid.to_string()).exists()
+    if pid == 0 {
+        return true;
+    }
+
+    #[cfg(unix)]
+    {
+        // `ps -p <pid> -o pid=` prints an empty line when the process is absent.
+        // Be conservative: if probing fails, treat PID as alive to avoid deleting a
+        // live claim.
+        let output = Command::new("ps")
+            .arg("-p")
+            .arg(pid.to_string())
+            .arg("-o")
+            .arg("pid=")
+            .output();
+
+        return match output {
+            Ok(out) if out.status.success() => {
+                !String::from_utf8_lossy(&out.stdout).trim().is_empty()
+            }
+            _ => true,
+        };
+    }
+
+    #[cfg(windows)]
+    {
+        // PowerShell exits 0 when the PID exists and 1 when it does not.
+        // Be conservative on probe errors to avoid deleting a live claim.
+        let status = Command::new("powershell")
+            .arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-Command")
+            .arg(format!(
+                "if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ exit 0 }} else {{ exit 1 }}"
+            ))
+            .status();
+
+        return match status {
+            Ok(s) if s.code() == Some(0) => true,
+            Ok(s) if s.code() == Some(1) => false,
+            _ => true,
+        };
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        // Unknown platform: fail closed and avoid stale-lock reaping.
+        true
+    }
 }
 
 fn try_reap_stale_claim_file(path: &Path) {

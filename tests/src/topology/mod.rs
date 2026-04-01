@@ -37,7 +37,6 @@ pub struct TopologyConfig {
     /// Override the SDP `lock_period` for this test topology.
     /// If None, uses the default from deployment settings (10).
     pub lock_period_override: Option<u64>,
-    pub use_public_ntp: Option<bool>,
 }
 
 impl TopologyConfig {
@@ -48,7 +47,6 @@ impl TopologyConfig {
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
             lock_period_override: None,
-            use_public_ntp: None,
         }
     }
 
@@ -59,18 +57,6 @@ impl TopologyConfig {
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
             lock_period_override: None,
-            use_public_ntp: None,
-        }
-    }
-
-    #[must_use]
-    pub fn two_validators_public_ntp() -> Self {
-        Self {
-            n_validators: 2,
-            network_params: NetworkParams::default(),
-            extra_genesis_notes: Vec::new(),
-            lock_period_override: None,
-            use_public_ntp: Some(true),
         }
     }
 
@@ -81,7 +67,6 @@ impl TopologyConfig {
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
             lock_period_override: None,
-            use_public_ntp: None,
         }
     }
 
@@ -94,12 +79,6 @@ impl TopologyConfig {
     #[must_use]
     pub const fn with_lock_period(mut self, lock_period: u64) -> Self {
         self.lock_period_override = Some(lock_period);
-        self
-    }
-
-    #[must_use]
-    pub const fn with_use_public_ntp(mut self, use_public_ntp: bool) -> Self {
-        self.use_public_ntp = Some(use_public_ntp);
         self
     }
 }
@@ -142,7 +121,7 @@ impl Topology {
         let blend_configs = create_blend_configs(&ids, &blend_ports);
         let api_configs = create_api_configs(&ids);
         let tracing_configs = create_tracing_configs(&ids);
-        let time_config = set_time_config(config.use_public_ntp);
+        let time_config = set_time_config();
 
         // Setup genesis TX with Blend service declarations.
         let base_transfer_op = genesis_tx.genesis_transfer().clone();

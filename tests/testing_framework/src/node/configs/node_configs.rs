@@ -76,7 +76,7 @@ pub fn create_general_configs_from_ids(
     let api_configs = api::create_api_configs(ids);
     let blend_configs = blend::create_blend_configs(ids, blend_ports);
     let tracing_configs = tracing::create_tracing_configs(ids);
-    let time_config = set_time_config(None);
+    let time_config = set_time_config();
 
     let providers: Vec<_> = blend_configs
         .iter()

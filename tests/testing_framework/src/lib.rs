@@ -57,3 +57,10 @@ pub mod prelude {
         ScenarioBuilderExt as _,
     };
 }
+
+#[must_use]
+pub fn is_truthy_env(key: &str) -> bool {
+    std::env::var(key)
+        .ok()
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+}

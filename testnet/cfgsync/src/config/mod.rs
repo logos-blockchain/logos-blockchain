@@ -131,7 +131,7 @@ pub fn create_node_configs(
         let tracing_config = update_tracing_identifier(tracing_settings.clone(), &host.identifier);
 
         // Time config
-        let time_config = set_time_config(Some(true));
+        let time_config = set_time_config();
 
         configured_hosts.insert(
             host.clone(),
