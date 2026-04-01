@@ -1,24 +1,18 @@
 use core::{
     mem::{self, swap},
     num::NonZeroUsize,
-    time::Duration,
 };
 use std::{
-    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
+    collections::{HashMap, VecDeque, hash_map::Entry},
     convert::Infallible,
     ops::RangeInclusive,
     task::{Context, Poll, Waker},
-    time::Instant,
 };
 
 use either::Either;
 use futures::Stream;
-use lb_blend_message::{
-    MessageIdentifier,
-    encap::{
-        self, encapsulated::EncapsulatedMessage,
-        validated::EncapsulatedMessageWithVerifiedPublicHeader,
-    },
+use lb_blend_message::encap::{
+    self, encapsulated::EncapsulatedMessage, validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
 use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
 use lb_blend_scheduling::{
@@ -39,19 +33,20 @@ use crate::core::with_core::{
         handler::{
             ConnectionHandler, FromBehaviour, ToBehaviour, conn_maintenance::ConnectionMonitor,
         },
+        message_cache::MessageCache,
         old_session::OldSession,
     },
-    error::Error,
+    error::SendError,
 };
 
 mod handler;
+mod message_cache;
 mod old_session;
 
 #[cfg(test)]
 mod tests;
 
 const LOG_TARGET: &str = "blend::network::core::core::behaviour";
-const SENSITIVITY_INTERVAL_FOR_DUPLICATES: Duration = Duration::from_secs(3);
 
 #[derive(Debug)]
 pub struct Config {
@@ -112,12 +107,10 @@ pub struct Behaviour<ProofsVerifier, ObservationWindowClockProvider> {
     events: VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     /// Waker that handles polling
     waker: Option<Waker>,
-    /// The session-bound storage keeping track, for each peer, what message
-    /// identifiers have been exchanged between them.
-    /// Sending a message with the same identifier more than once results in
-    /// the peer being flagged as malicious, and the connection dropped.
-    exchanged_message_identifiers: HashMap<PeerId, HashMap<MessageIdentifier, Instant>>,
-    message_cache: HashSet<MessageIdentifier>,
+    /// Cache of the messages that have been processed by this node, to avoid
+    /// processing the same message multiple times and being marked as malicious
+    /// by our peers.
+    message_cache: MessageCache,
     observation_window_clock_provider: ObservationWindowClockProvider,
     current_membership: Membership<PeerId>,
     /// The [minimum, maximum] peering degree of this node.
@@ -242,8 +235,8 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             negotiated_peers: HashMap::with_capacity(*config.peering_degree.end()),
             events: VecDeque::new(),
             waker: None,
-            exchanged_message_identifiers: HashMap::with_capacity(current_membership.size()),
             observation_window_clock_provider,
+            message_cache: MessageCache::new_with_peer_capacity(current_membership.size()),
             current_membership,
             peering_degree: config.peering_degree.clone(),
             connections_waiting_upgrade: HashMap::new(),
@@ -251,7 +244,6 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             protocol_name,
             minimum_network_size: config.minimum_network_size,
             old_session: None,
-            message_cache: HashSet::new(),
             poq_verifier,
         }
     }
@@ -277,7 +269,6 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
                 .into_iter()
                 .map(|(peer_id, details)| (peer_id, details.connection_id))
                 .collect(),
-            mem::take(&mut self.exchanged_message_identifiers),
             mem::take(&mut self.message_cache),
             old_verifier,
         ));
@@ -326,7 +317,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         &mut self,
         message: &EncapsulatedMessageWithVerifiedPublicHeader,
         peer_id: PeerId,
-    ) -> Result<(), Error> {
+    ) -> Result<(), SendError> {
         let serialized_message = serialize_encapsulated_message(message);
         self.force_send_serialized_message_to_peer(serialized_message, peer_id)
     }
@@ -339,11 +330,11 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         &mut self,
         serialized_message: Vec<u8>,
         peer_id: PeerId,
-    ) -> Result<(), Error> {
+    ) -> Result<(), SendError> {
         let Some(RemotePeerConnectionDetails { connection_id, .. }) =
             self.negotiated_peers.get(&peer_id)
         else {
-            return Err(Error::NoPeers);
+            return Err(SendError::NoPeers);
         };
         tracing::trace!(
             target: LOG_TARGET,
@@ -356,13 +347,6 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         });
         self.try_wake();
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub const fn exchanged_message_identifiers(
-        &self,
-    ) -> &HashMap<PeerId, HashMap<MessageIdentifier, Instant>> {
-        &self.exchanged_message_identifiers
     }
 
     pub const fn negotiated_peers(&self) -> &HashMap<PeerId, RemotePeerConnectionDetails> {
@@ -383,8 +367,12 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         &mut self,
         message: &EncapsulatedMessageWithVerifiedPublicHeader,
         excluded_peer: Option<PeerId>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), SendError> {
         let message_id = message.id();
+
+        if self.message_cache.is_message_processed(&message_id) {
+            return Err(SendError::MessageAlreadyProcessed);
+        }
 
         let serialized_message = serialize_encapsulated_message(message);
         let mut at_least_one_receiver = false;
@@ -398,36 +386,29 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             .iter()
             // Exclude the peer the message was received from.
             .filter(|(peer_id, _)| excluded_peer != Some(**peer_id))
-            // Exclude from the list of candidate peers any peer that is not in a healthy state.
-            .filter(|(_, peer_state)| peer_state.negotiated_state.is_healthy())
+            // Exclude from the list of candidates spammy peers.
+            .filter(|(_, peer_state)| !peer_state.negotiated_state.is_spammy())
             .for_each(|(peer_id, RemotePeerConnectionDetails { connection_id, .. })| {
-                if let Entry::Vacant(message_peer_entry) = self
-                    .exchanged_message_identifiers
-                    .entry(*peer_id)
-                    .or_default()
-                    .entry(message_id)
-                {
-                    tracing::trace!(
+                tracing::trace!(
                         target: LOG_TARGET,
                         "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message."
                     );
-                    message_peer_entry.insert(Instant::now());
-                    self.events.push_back(ToSwarm::NotifyHandler {
-                        peer_id: *peer_id,
-                        handler: NotifyHandler::One(*connection_id),
-                        event: Either::Left(FromBehaviour::Message(serialized_message.clone())),
-                    });
-                    at_least_one_receiver = true;
-                } else {
-                    tracing::trace!(target: LOG_TARGET, "Not sending message {message_id:?} to peer {peer_id:?} because we already exchanged this message with them.");
-                }
+                self.events.push_back(ToSwarm::NotifyHandler {
+                    peer_id: *peer_id,
+                    handler: NotifyHandler::One(*connection_id),
+                    event: Either::Left(FromBehaviour::Message(serialized_message.clone())),
+                });
+                at_least_one_receiver = true;
             });
 
         if at_least_one_receiver {
+            // Mark the message as processed only if we were able to send it to at least one
+            // of our peers.
+            self.message_cache.mark_message_as_processed(message_id);
             self.try_wake();
             Ok(())
         } else {
-            Err(Error::NoPeers)
+            Err(SendError::NoPeers)
         }
     }
 
@@ -786,51 +767,6 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         }
     }
 
-    /// Check if a message with a given ID has been exchanged with a peer
-    /// before. If not, the cache entry is updated. Otherwise an `Error` is
-    /// returned.
-    fn check_and_update_peer_message_cache(
-        &mut self,
-        message_id: &MessageIdentifier,
-        (peer_id, connection_id): (PeerId, ConnectionId),
-    ) -> Result<(), ()> {
-        let exchanged_message_identifiers = self
-            .exchanged_message_identifiers
-            .entry(peer_id)
-            .or_default();
-
-        match exchanged_message_identifiers.entry(*message_id) {
-            Entry::Vacant(vacant_message_entry) => {
-                vacant_message_entry.insert(Instant::now());
-                Ok(())
-            }
-            Entry::Occupied(occupied_message_entry) => {
-                let time_sent = occupied_message_entry.get();
-                // If the duplicate arrived within the sensitivity interval, it is
-                // likely due to a race condition (both peers forwarding the same
-                // message to each other). Simply ignore it.
-                if Instant::now().duration_since(*time_sent) <= SENSITIVITY_INTERVAL_FOR_DUPLICATES
-                {
-                    tracing::trace!(
-                        target: LOG_TARGET,
-                        "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged ({message_id:?}) but within the sensitivity window. Simply ignoring the message."
-                    );
-                    Ok(())
-                } else {
-                    tracing::debug!(
-                        target: LOG_TARGET,
-                        "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged ({message_id:?}). Marking it as spammy."
-                    );
-                    self.close_spammy_connection(
-                        (peer_id, connection_id),
-                        SpamReason::DuplicateMessage,
-                    );
-                    Err(())
-                }
-            }
-        }
-    }
-
     /// Return `True` if this peer has an established (negotiated or not)
     /// incoming connection with the specified peer, `False` otherwise.
     fn has_incoming_connection_with_peer(&self, remote_peer: &PeerId) -> bool {
@@ -914,7 +850,7 @@ where
     pub fn validate_and_publish_message(
         &mut self,
         message: EncapsulatedMessage,
-    ) -> Result<(), Error> {
+    ) -> Result<(), SendError> {
         let validated_message =
             self.validate_encapsulated_message_public_header_with_current_session(message)?;
         self.forward_validated_message_and_maybe_exclude(&validated_message, None)
@@ -936,7 +872,7 @@ where
         &mut self,
         message: EncapsulatedMessage,
         except: (PeerId, ConnectionId),
-    ) -> Result<(), Error> {
+    ) -> Result<(), SendError> {
         if let Some(old_session) = &mut self.old_session
             && old_session.is_negotiated(&except)
         {
@@ -953,12 +889,16 @@ where
     fn validate_encapsulated_message_public_header_with_current_session(
         &self,
         message: EncapsulatedMessage,
-    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
+    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, SendError> {
         message
             .verify_public_header(&self.poq_verifier)
-            .map_err(|_| Error::InvalidMessage)
+            .map_err(|_| SendError::InvalidMessage)
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: Address this at some point."
+    )]
     fn handle_received_serialized_encapsulated_message(
         &mut self,
         serialized_message: &[u8],
@@ -997,17 +937,22 @@ where
 
         let message_identifier = deserialized_encapsulated_message.id();
 
-        // Mark a core peer as malicious if it sends a duplicate message maliciously (i.e., if a message with the same identifier was already exchanged with them): https://www.notion.so/nomos-tech/Blend-Protocol-Version-1-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81fc86bdce264466efd3.
-        let Ok(()) = self.check_and_update_peer_message_cache(
-            &message_identifier,
-            (from_peer_id, from_connection_id),
-        ) else {
+        // Make sure this is the first copy of the message from the sender.
+        if !self
+            .message_cache
+            .mark_message_as_seen_from_peer(message_identifier, from_peer_id)
+        {
+            tracing::debug!(target: LOG_TARGET, "Neighbor {from_peer_id:?} on connection {from_connection_id:?} sent us a duplicate message ({message_identifier:?}). Marking it as spammy.");
+            self.close_spammy_connection(
+                (from_peer_id, from_connection_id),
+                SpamReason::DuplicateMessage,
+            );
             return;
-        };
+        }
 
         // Exit early if we've processed this message already and we know it's a valid
         // one, so no need to check it again to potentially mark the peer as malicious.
-        if self.message_cache.contains(&message_identifier) {
+        if self.message_cache.is_message_processed(&message_identifier) {
             tracing::trace!(target: LOG_TARGET, "Message with id {message_identifier:?} already processed previously. Dropping it.");
             return;
         }
@@ -1029,7 +974,8 @@ where
 
         // Notify the swarm about the received message, so that it can be further
         // processed by the core protocol module.
-        self.message_cache.insert(message_identifier);
+        self.message_cache
+            .mark_message_as_processed(message_identifier);
         self.events.push_back(ToSwarm::GenerateEvent(Event::Message(
             Box::new(validated_message),
             (from_peer_id, from_connection_id),
@@ -1069,6 +1015,10 @@ where
     >;
     type ToSwarm = Event;
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: Address this at some point."
+    )]
     fn handle_established_inbound_connection(
         &mut self,
         connection_id: ConnectionId,
@@ -1113,6 +1063,10 @@ where
         })
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: Address this at some point."
+    )]
     fn handle_established_outbound_connection(
         &mut self,
         connection_id: ConnectionId,
@@ -1202,7 +1156,7 @@ where
 
             if negotiated_connection_id == connection_id {
                 let negotiated_peer_details = peer_details_entry.remove();
-                self.exchanged_message_identifiers.remove(&peer_id);
+                self.message_cache.remove_peer_info(&peer_id);
                 self.events
                     .push_back(ToSwarm::GenerateEvent(Event::PeerDisconnected(
                         peer_id,

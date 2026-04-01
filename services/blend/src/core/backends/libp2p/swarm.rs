@@ -20,7 +20,7 @@ use lb_blend::{
                 ConnectionUpgradeFailureReason, Event as CoreToCoreEvent, IntervalStreamProvider,
                 NegotiatedPeerState,
             },
-            error::Error,
+            error::SendError,
         },
         with_edge::behaviour::Event as CoreToEdgeEvent,
     },
@@ -410,7 +410,7 @@ where
             // In this case it's ok not to log such error, since this function is only
             // called on FORWARDED messages, not on PUBLISHED ones, for which we want to
             // know if that is the issue.
-            if !matches!(e, Error::NoPeers) {
+            if !matches!(e, SendError::NoPeers) {
                 tracing::error!(target: LOG_TARGET, "Failed to forward message to blend network: {e:?}");
                 metrics::outbound_forward_err();
             }
@@ -493,6 +493,10 @@ where
     ObservationWindowProvider:
         IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
 {
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: Address this at some point."
+    )]
     fn handle_event(
         &mut self,
         event: SwarmEvent<BlendBehaviourEvent<ProofsVerifier, ObservationWindowProvider>>,

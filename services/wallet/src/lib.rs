@@ -972,6 +972,10 @@ where
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: Address this at some point."
+    )]
     async fn handle_new_block(
         header_id: HeaderId,
         state: &mut ServiceState<'_>,
