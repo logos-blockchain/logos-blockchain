@@ -1,3 +1,4 @@
+pub mod api;
 pub mod mempool;
 mod metrics;
 pub mod wallet;

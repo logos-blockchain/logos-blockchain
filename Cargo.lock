@@ -4375,6 +4375,7 @@ dependencies = [
  "cbindgen",
  "log",
  "logos-blockchain-api-service",
+ "logos-blockchain-blend-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
