@@ -7,7 +7,7 @@ pub enum SendError {
     /// The message being sent has an invalid public header.
     InvalidMessage,
     /// The message being sent is a duplicate of a previous sent message.
-    MessageAlreadyProcessed,
+    DuplicateMessage,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -16,5 +16,5 @@ pub enum ReceiveError {
     InvalidMessage,
     /// The message being received is a duplicate of a previous received
     /// message.
-    MessageAlreadySentByPeer(PeerId),
+    DuplicateMessageFromPeer(PeerId),
 }
