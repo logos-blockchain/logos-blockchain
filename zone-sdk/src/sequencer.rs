@@ -427,7 +427,7 @@ impl ZoneSequencer {
 
                     // Update channel tip from backfill/block inscriptions
                     if let Some(tip) = result.channel_tip {
-                                                self.last_msg_id = tip;
+                        self.last_msg_id = tip;
                     }
 
                     // Signal readiness after first block event processed
@@ -453,7 +453,7 @@ impl ZoneSequencer {
                 handle_inflight(inflight_result, &mut self.resubmit_active);
                 None
             }
-            _ = self.resubmit_interval.tick(), if !self.resubmit_active && self.state.is_some() && self.current_tip.is_some() => {
+            _ = self.resubmit_interval.tick(), if *self.ready_tx.borrow() && !self.resubmit_active => {
                 enqueue_resubmit(
                     self.state.as_ref().unwrap(),
                     self.current_tip.unwrap(),
@@ -650,14 +650,8 @@ async fn handle_block_event(
         .map(|tx| tx.mantle_tx.hash())
         .collect();
 
-    for tx in &event.block.transactions {
-        for op in &tx.mantle_tx.ops {
-            if let Op::ChannelInscribe(inscribe) = op
-                && inscribe.channel_id == channel_id
-            {
-                channel_tip = Some(inscribe.id());
-            }
-        }
+    if let Some(tip) = find_channel_tip(&event.block.transactions, channel_id) {
+        channel_tip = Some(tip);
     }
 
     let newly_finalized = s.process_block(block_id, parent_id, lib, our_txs);
@@ -735,15 +729,8 @@ async fn backfill_to_lib(
                     .map(|tx| tx.mantle_tx.hash())
                     .collect();
 
-                // Track latest inscription for channel tip discovery
-                for tx in &block.transactions {
-                    for op in &tx.mantle_tx.ops {
-                        if let Op::ChannelInscribe(inscribe) = op
-                            && inscribe.channel_id == channel_id
-                        {
-                            latest_msg_id = Some(inscribe.id());
-                        }
-                    }
+                if let Some(tip) = find_channel_tip(&block.transactions, channel_id) {
+                    latest_msg_id = Some(tip);
                 }
 
                 let current_lib = state.lib();
@@ -852,6 +839,41 @@ fn enqueue_resubmit(
         }
         InFlight::ResubmittedBatch { results }
     }));
+}
+
+/// Find the channel tip from unordered inscriptions in a block.
+///
+/// When a block contains multiple inscriptions for our channel, they form
+/// a chain. The tip is the inscription whose `id()` is not referenced as
+/// a `parent` by any other inscription in the same block.
+fn find_channel_tip(txs: &[SignedMantleTx], channel_id: ChannelId) -> Option<MsgId> {
+    let inscriptions: Vec<_> = txs
+        .iter()
+        .flat_map(|tx| &tx.mantle_tx.ops)
+        .filter_map(|op| {
+            if let Op::ChannelInscribe(inscribe) = op
+                && inscribe.channel_id == channel_id
+            {
+                Some(inscribe)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if inscriptions.is_empty() {
+        return None;
+    }
+
+    let parents: std::collections::HashSet<MsgId> = inscriptions.iter().map(|i| i.parent).collect();
+
+    // The tip is the inscription whose id is not any other inscription's parent.
+    inscriptions
+        .iter()
+        .find(|i| !parents.contains(&i.id()))
+        .map(|i| i.id())
+        // Fallback: if all are referenced (shouldn't happen), use last.
+        .or_else(|| inscriptions.last().map(|i| i.id()))
 }
 
 fn matches_channel(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
