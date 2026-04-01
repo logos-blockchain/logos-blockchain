@@ -105,7 +105,7 @@ async fn invalid_public_header_message_publish() {
         dialing_swarm
             .behaviour_mut()
             .validate_and_publish_message(invalid_signature_message.into_inner().into()),
-        Err(SendError::InvalidMessage)
+        Err(SendError::InvalidPublicHeader)
     );
 }
 

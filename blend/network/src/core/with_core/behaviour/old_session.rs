@@ -15,8 +15,10 @@ use libp2p::{
 
 use crate::core::with_core::{
     behaviour::{
-        Event, handler::FromBehaviour, message_cache::MessageCache,
-        utils::validate_and_forward_message,
+        Event,
+        handler::FromBehaviour,
+        message_cache::MessageCache,
+        utils::{handle_received_serialized_encapsulated_message, validate_and_forward_message},
     },
     error::{ReceiveError, SendError},
 };
@@ -44,22 +46,14 @@ where
     ) -> Result<(), SendError> {
         validate_and_forward_message(
             message,
-            |message_to_validate| {
-                message_to_validate
-                    .verify_public_header(&self.poq_verifier)
-                    .map_err(|_| ())
-            },
+            &self.poq_verifier,
             self.negotiated_peers
                 .iter()
                 // Exclude the peer the message was received from.
                 .filter(|(peer_id, _)| except != **peer_id),
             &mut self.events,
             &mut self.message_cache,
-            || {
-                if let Some(waker) = self.waker.take() {
-                    waker.wake();
-                }
-            },
+            self.waker.take(),
         )
     }
 
@@ -87,43 +81,15 @@ where
             return Ok(false);
         }
 
-        // Deserialize the message.
-        let deserialized_encapsulated_message =
-            deserialize_encapsulated_message(serialized_message)
-                .map_err(|_| ReceiveError::InvalidMessage)?;
-
-        // Add the message to the set of exchanged message identifiers with the sender,
-        // returning `Err` if the message was already sent by this peer previously.
-        if !self
-            .message_cache
-            .mark_message_as_seen_from_peer(&deserialized_encapsulated_message, from_peer_id)
-        {
-            return Err(ReceiveError::DuplicateMessageFromPeer(from_peer_id));
-        }
-
-        // Exit early if we've received this message already and we know it's a valid
-        // one.
-        if self
-            .message_cache
-            .is_message_processed(&deserialized_encapsulated_message)
-        {
-            return Ok(true);
-        }
-
-        // Verify the message public header
-        let validated_message = deserialized_encapsulated_message
-            .verify_public_header(&self.poq_verifier)
-            .map_err(|_| ReceiveError::InvalidMessage)?;
-
-        // Notify the swarm about the received message, so that it can be further
-        // processed by the core protocol module.
-        self.message_cache
-            .mark_message_as_processed(&validated_message);
-        self.events.push_back(ToSwarm::GenerateEvent(Event::Message(
-            Box::new(validated_message),
+        handle_received_serialized_encapsulated_message(
+            serialized_message,
+            &mut self.message_cache,
             (from_peer_id, from_connection_id),
-        )));
-        self.try_wake();
+            &self.poq_verifier,
+            &mut self.events,
+            self.waker.take(),
+        )?;
+
         Ok(true)
     }
 }

@@ -35,9 +35,9 @@ use crate::core::with_core::{
         },
         message_cache::MessageCache,
         old_session::OldSession,
-        utils::validate_and_forward_message,
+        utils::{handle_received_serialized_encapsulated_message, validate_and_forward_message},
     },
-    error::SendError,
+    error::{ReceiveError, SendError},
 };
 
 mod handler;
@@ -825,11 +825,7 @@ where
     ) -> Result<(), SendError> {
         validate_and_forward_message(
             message,
-            |message_to_validate| {
-                message_to_validate
-                    .verify_public_header(&self.poq_verifier)
-                    .map_err(|_| ())
-            },
+            &self.poq_verifier,
             self.negotiated_peers
                 .iter()
                 // Exclude the peer the message was received from.
@@ -844,11 +840,7 @@ where
                 ),
             &mut self.events,
             &mut self.message_cache,
-            || {
-                if let Some(waker) = self.waker.take() {
-                    waker.wake();
-                }
-            },
+            self.waker.take(),
         )
     }
 
@@ -880,63 +872,22 @@ where
             }
         }
 
-        // Mark a peer as malicious if it sends a un-deserializable message: https://www.notion.so/nomos-tech/Blend-Protocol-Version-1-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df8172927bebb75d8b988e.
-        let Ok(deserialized_encapsulated_message) =
-            deserialize_encapsulated_message(serialized_message)
-        else {
-            tracing::debug!(target: LOG_TARGET, "Failed to deserialize encapsulated message.");
-            self.close_spammy_connection(
-                (from_peer_id, from_connection_id),
-                SpamReason::UndeserializableMessage,
-            );
-            return;
-        };
-
-        // Make sure this is the first copy of the message from the sender.
-        if !self
-            .message_cache
-            .mark_message_as_seen_from_peer(&deserialized_encapsulated_message, from_peer_id)
-        {
-            tracing::debug!(target: LOG_TARGET, "Neighbor {from_peer_id:?} on connection {from_connection_id:?} sent us a duplicate message ({:?}). Marking it as spammy.", deserialized_encapsulated_message.id());
-            self.close_spammy_connection(
-                (from_peer_id, from_connection_id),
-                SpamReason::DuplicateMessage,
-            );
-            return;
-        }
-
-        // Exit early if we've received this message already and we know it's a valid
-        // one, so no need to check it again to potentially mark the peer as malicious.
-        if self
-            .message_cache
-            .is_message_processed(&deserialized_encapsulated_message)
-        {
-            tracing::trace!(target: LOG_TARGET, "Message with id {:?} already processed previously. Dropping it.", deserialized_encapsulated_message.id());
-            return;
-        }
-
-        // Verify the message public header, or else mark the peer as malicious: https://www.notion.so/nomos-tech/Blend-Protocol-Version-1-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81859cebf5e3d2a5cd8f.
-        let Ok(validated_message) =
-            deserialized_encapsulated_message.verify_public_header(&self.poq_verifier)
-        else {
-            tracing::debug!(target: LOG_TARGET, "Neighbor sent us a message with an invalid public header. SKIPPING MARKING IT AS SPAMMY.");
-            // TODO: Re-enable once Blend is fixed.
-            // self.close_spammy_connection(
-            //     (from_peer_id, from_connection_id),
-            //     SpamReason::InvalidPublicHeader,
-            // );
-            return;
-        };
-
-        // Notify the swarm about the received message, so that it can be further
-        // processed by the core protocol module.
-        self.message_cache
-            .mark_message_as_processed(&validated_message);
-        self.events.push_back(ToSwarm::GenerateEvent(Event::Message(
-            Box::new(validated_message),
+        if let Err(receive_error) = handle_received_serialized_encapsulated_message(
+            serialized_message,
+            &mut self.message_cache,
             (from_peer_id, from_connection_id),
-        )));
-        self.try_wake();
+            &self.poq_verifier,
+            &mut self.events,
+            self.waker.take(),
+        ) {
+            tracing::debug!(target: LOG_TARGET, "Error when handling received message: {receive_error:?}");
+            let spam_reason = match receive_error {
+                ReceiveError::DuplicateMessageFromPeer(_) => SpamReason::DuplicateMessage,
+                ReceiveError::InvalidPublicHeader => SpamReason::InvalidPublicHeader,
+                ReceiveError::UndeserializableMessage => SpamReason::UndeserializableMessage,
+            };
+            self.close_spammy_connection((from_peer_id, from_connection_id), spam_reason);
+        }
     }
 
     /// Instruct both current and past session proof verifier (if present) of a
