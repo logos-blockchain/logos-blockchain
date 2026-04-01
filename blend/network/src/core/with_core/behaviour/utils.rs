@@ -22,13 +22,13 @@ pub fn validate_and_forward_message<'session, ValidateMessageFn, PeerConnections
     peer_connections: PeerConnections,
     events_queue: &'session mut VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     message_cache: &'session mut MessageCache,
-    mut wake_fn: WakeFn,
+    wake_fn: WakeFn,
 ) -> Result<(), SendError>
 where
     ValidateMessageFn:
         FnOnce(EncapsulatedMessage) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, ()>,
     PeerConnections: Iterator<Item = (&'session PeerId, &'session ConnectionId)>,
-    WakeFn: FnMut(),
+    WakeFn: FnOnce(),
 {
     if message_cache.is_message_forwarded(&message) {
         return Err(SendError::DuplicateMessage);
