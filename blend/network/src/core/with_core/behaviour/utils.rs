@@ -14,7 +14,13 @@ use crate::core::with_core::{
     error::{ReceiveError, SendError},
 };
 
-pub fn validate_and_forward_message<'session, Verifier, PeerConnections>(
+/// Validates and forwards a message to the given peer connections, if it hasn't
+/// been forwarded already.
+///
+/// The message cache is also updated accordingly to mark the sent message as
+/// processed if it was sent to at least one peer, or to ignore it if it has
+/// already been forwarded before.
+pub fn validate_forward_message_and_update_cache<'session, Verifier, PeerConnections>(
     message: EncapsulatedMessage,
     verifier: &Verifier,
     peer_connections: PeerConnections,
@@ -58,7 +64,16 @@ where
     }
 }
 
-pub fn handle_received_serialized_encapsulated_message<Verifier>(
+/// Validates a received message, and notifies the swarm about it if it hasn't
+/// been processed already.
+///
+/// The message cache is updated accordingly to mark the message as processed if
+/// it is valid and hasn't been processed before, or to ignore it if it has
+/// already been processed before. If the message is a duplicate of a previously
+/// received message from the same peer, it is also ignored and an error is
+/// returned to avoid processing the same message multiple times from the same
+/// peer, which could be a sign of a malicious peer.
+pub fn handle_received_serialized_encapsulated_message_and_update_cache<Verifier>(
     serialized_message: &[u8],
     message_cache: &mut MessageCache,
     sender: (PeerId, ConnectionId),
