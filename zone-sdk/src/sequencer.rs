@@ -488,19 +488,10 @@ impl ZoneSequencer {
                     );
                     self.state = Some(TxState::new(info.lib));
                     self.current_tip = Some(info.tip);
-                    match get_lib_slot(&self.http_client, &self.node_url, info.lib).await {
-                        Ok(_) => {
-                            // Do NOT update lib_slot here for fresh starts.
-                            // Keep it at genesis so the backfill check in
-                            // handle_block_event detects the gap and catches
-                            // up on existing channel inscriptions.
-                        }
-                        Err(e) => {
-                            warn!("Failed to get LIB slot: {e}");
-                            tokio::time::sleep(self.config.reconnect_delay).await;
-                            return false;
-                        }
-                    }
+                    // Do NOT update lib_slot here for fresh starts.
+                    // Keep it at genesis so the backfill check in
+                    // handle_block_event detects the gap and catches
+                    // up on existing channel inscriptions.
                 }
                 Err(e) => {
                     warn!("Failed to fetch consensus info: {e}");
@@ -622,13 +613,7 @@ async fn handle_block_event(
     // 1. Backfill finalized blocks up to LIB (only when state's LIB is behind)
     let mut channel_tip = None;
     if lib != s.lib() {
-        let Ok(new_lib_slot) = get_lib_slot(http_client, node_url, lib).await else {
-            warn!("Failed to get LIB slot during backfill, skipping");
-            return BlockEventResult {
-                newly_finalized: Vec::new(),
-                channel_tip: None,
-            };
-        };
+        let new_lib_slot = event.lib_slot;
         if *lib_slot < new_lib_slot
             && let Some(tip) = backfill_to_lib(
                 s,
@@ -683,17 +668,6 @@ fn handle_inflight(event: InFlight, resubmit_active: &mut bool) {
             *resubmit_active = false;
         }
     }
-}
-
-async fn get_lib_slot(
-    http_client: &CommonHttpClient,
-    node_url: &Url,
-    lib: HeaderId,
-) -> Result<Slot, lb_common_http_client::Error> {
-    Ok(http_client
-        .get_block(node_url.clone(), lib)
-        .await?
-        .map_or(Slot::genesis(), |block| block.header().slot()))
 }
 
 /// Backfill finalized blocks from current `lib_slot` to new `lib_slot`.

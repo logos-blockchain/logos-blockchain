@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use futures::{Stream, stream};
-use lb_common_http_client::{BlockInfo, CommonHttpClient, Error, Slot};
+use lb_common_http_client::{BlockInfo, CommonHttpClient, CryptarchiaInfo, Error, Slot};
 use lb_core::{
     block::Block,
     header::HeaderId,
@@ -12,7 +12,7 @@ use crate::{Deposit, ZoneBlock, ZoneMessage};
 
 #[async_trait]
 pub trait Node {
-    async fn lib_slot(&self) -> Result<Slot, Error>;
+    async fn consensus_info(&self) -> Result<CryptarchiaInfo, Error>;
 
     async fn lib_stream(&self) -> Result<impl Stream<Item = BlockInfo>, Error>;
 
@@ -45,19 +45,8 @@ impl NodeHttpClient {
 
 #[async_trait]
 impl Node for NodeHttpClient {
-    // TODO(node-api): expose `lib_slot` in /cryptarchia/info so indexer
-    // doesn't need two calls (`consensus_info` + `get_block(lib)`).
-    async fn lib_slot(&self) -> Result<Slot, Error> {
-        let info = self.client.consensus_info(self.base_url.clone()).await?;
-        Ok(self
-            .client
-            .get_block(self.base_url.clone(), info.lib)
-            .await?
-            .map_or(
-                // Genesis block isn't stored as a regular block
-                Slot::genesis(),
-                |block| block.header().slot(),
-            ))
+    async fn consensus_info(&self) -> Result<CryptarchiaInfo, Error> {
+        self.client.consensus_info(self.base_url.clone()).await
     }
 
     async fn lib_stream(&self) -> Result<impl Stream<Item = BlockInfo>, Error> {

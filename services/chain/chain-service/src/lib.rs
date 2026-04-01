@@ -30,8 +30,8 @@ use lb_core::{
     },
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType},
 };
-pub use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_cryptarchia_engine::{PrunedBlocks, ReorgedBlocks};
+use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks};
+pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 use lb_cryptarchia_sync::{GetTipResponse, ProviderResponse};
 pub use lb_ledger::EpochState;
 use lb_ledger::LedgerState;
@@ -79,7 +79,7 @@ pub enum Error {
     #[error("Missing parent while applying block {parent}, {info:?}")]
     ParentMissing {
         parent: HeaderId,
-        info: CryptarchiaInfo,
+        info: Box<CryptarchiaInfo>,
     },
     #[error("Block from future slot({block_slot:?}): current_slot:{current_slot:?}")]
     FutureBlock {
@@ -159,10 +159,11 @@ pub enum ConsensusMsg<Tx> {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CryptarchiaInfo {
     pub lib: HeaderId,
+    pub lib_slot: Slot,
     pub tip: HeaderId,
     pub slot: Slot,
     pub height: u64,
-    pub mode: lb_cryptarchia_engine::State,
+    pub mode: State,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -192,8 +193,10 @@ pub struct ProcessedBlockEvent {
     pub block_id: HeaderId,
     /// The current canonical tip after processing this block.
     pub tip: HeaderId,
+    pub tip_slot: Slot,
     /// The current Last Irreversible Block after processing this block.
     pub lib: HeaderId,
+    pub lib_slot: Slot,
 }
 
 impl PrunedBlocksInfo {
@@ -221,7 +224,7 @@ impl Cryptarchia {
         lib_ledger_state: LedgerState,
         genesis_id: HeaderId,
         ledger_config: lb_ledger::Config,
-        state: lb_cryptarchia_engine::State,
+        state: State,
         lib_slot: Slot,
         lib_length: u64,
     ) -> Self {
@@ -240,15 +243,13 @@ impl Cryptarchia {
 
     #[must_use]
     pub fn info(&self) -> CryptarchiaInfo {
-        let tip_branch = self
-            .consensus
-            .branches()
-            .get(&self.tip())
-            .expect("tip branch not available");
+        let tip_branch = self.tip_branch();
+        let lib_branch = self.lib_branch();
 
         CryptarchiaInfo {
-            lib: self.lib(),
-            tip: self.tip(),
+            lib: lib_branch.id(),
+            lib_slot: lib_branch.slot(),
+            tip: tip_branch.id(),
             slot: tip_branch.slot(),
             height: tip_branch.length(),
             mode: *self.consensus.state(),
@@ -261,8 +262,18 @@ impl Cryptarchia {
     }
 
     #[must_use]
+    pub const fn tip_branch(&self) -> &Branch<HeaderId> {
+        self.consensus.tip_branch()
+    }
+
+    #[must_use]
     pub const fn lib(&self) -> HeaderId {
         self.consensus.lib()
+    }
+
+    #[must_use]
+    pub fn lib_branch(&self) -> &Branch<HeaderId> {
+        self.consensus.lib_branch()
     }
 
     /// Try to apply a block to the chain.
@@ -300,7 +311,7 @@ impl Cryptarchia {
             .map_err(|err| match err {
                 lb_ledger::LedgerError::ParentNotFound(parent) => Error::ParentMissing {
                     parent,
-                    info: self.info(),
+                    info: Box::new(self.info()),
                 },
                 err => Error::Ledger(err),
             })?;
@@ -311,7 +322,7 @@ impl Cryptarchia {
             .map_err(|err| match err {
                 lb_cryptarchia_engine::Error::ParentMissing(parent) => Error::ParentMissing {
                     parent,
-                    info: self.info(),
+                    info: Box::new(self.info()),
                 },
                 err => Error::Consensus(err),
             })?;
@@ -383,7 +394,7 @@ impl Cryptarchia {
         self.consensus.state().is_bootstrapping()
     }
 
-    const fn state(&self) -> &lb_cryptarchia_engine::State {
+    const fn state(&self) -> &State {
         self.consensus.state()
     }
 
@@ -952,10 +963,16 @@ where
         )
         .await?;
 
-        let processed_block_event = ProcessedBlockEvent {
-            block_id: header.id(),
-            tip: cryptarchia.tip(),
-            lib: cryptarchia.lib(),
+        let processed_block_event = {
+            let tip = cryptarchia.tip_branch();
+            let lib = cryptarchia.lib_branch();
+            ProcessedBlockEvent {
+                block_id: header.id(),
+                tip: tip.id(),
+                tip_slot: tip.slot(),
+                lib: lib.id(),
+                lib_slot: lib.slot(),
+            }
         };
         if let Err(e) = new_block_subscription_sender.send(processed_block_event) {
             error!("Could not notify new block to services {e}");
@@ -1127,16 +1144,21 @@ where
         let blocks = blocks.into_iter().skip(1);
 
         // Stream the already applied state.
-        let init_tip = cryptarchia.tip();
-        let init_event = ProcessedBlockEvent {
-            block_id: init_tip,
-            tip: init_tip,
-            lib: cryptarchia.lib(),
+        let init_tip = cryptarchia.tip_branch();
+        let init_event = {
+            let lib = cryptarchia.lib_branch();
+            ProcessedBlockEvent {
+                block_id: init_tip.id(),
+                tip: init_tip.id(),
+                tip_slot: init_tip.slot(),
+                lib: lib.id(),
+                lib_slot: lib.slot(),
+            }
         };
         if let Err(e) = self.new_block_subscription_sender.send(init_event) {
             error!("Could not notify new block to services {e}");
         }
-        Self::broadcast_session_updates_for_block(&cryptarchia, &init_tip, relays, None).await;
+        Self::broadcast_session_updates_for_block(&cryptarchia, &init_tip.id(), relays, None).await;
 
         let mut pruned_blocks = PrunedBlocks::new();
         for block in blocks {
