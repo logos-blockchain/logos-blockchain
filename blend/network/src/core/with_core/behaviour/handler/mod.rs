@@ -155,7 +155,10 @@ where
         SubstreamProtocol::new(ReadyUpgrade::new(self.protocol_name.clone()), ())
     }
 
-    #[expect(clippy::cognitive_complexity, reason = "TODO: Address this at some point.")]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: Address this at some point."
+    )]
     #[expect(deprecated, reason = "Self::OutboundOpenInfo is deprecated")]
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     fn poll(
@@ -328,7 +331,10 @@ where
         }
     }
 
-    #[expect(clippy::cognitive_complexity, reason = "TODO: Address this at some point.")]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: Address this at some point."
+    )]
     #[expect(
         deprecated,
         reason = "Self::InboundOpenInfo and Self::OutboundOpenInfo are deprecated"

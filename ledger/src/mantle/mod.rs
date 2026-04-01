@@ -1,4 +1,5 @@
 pub mod channel;
+pub mod helpers;
 pub mod leader;
 pub mod sdp;
 
@@ -9,7 +10,10 @@ use lb_core::{
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo,
         ops::{
-            channel::{deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp},
+            channel::{
+                deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp,
+                withdraw::ChannelWithdrawOp,
+            },
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
@@ -182,6 +186,16 @@ impl LedgerState {
             |err| error!(target: LOG_TARGET, %err, "Failed to apply the Channel Deposit message."),
         )?;
         Ok((self, -Balance::from(op.amount)))
+    }
+
+    pub fn try_apply_channel_withdraw(
+        mut self,
+        op: &ChannelWithdrawOp,
+    ) -> Result<(Self, Balance), Error> {
+        self.channels = self.channels.withdraw(op).inspect_err(
+            |err| error!(target: LOG_TARGET, %err, "Failed to apply the Channel Withdraw message."),
+        )?;
+        Ok((self, Balance::from(op.amount)))
     }
 
     pub fn try_apply_sdp_declaration(

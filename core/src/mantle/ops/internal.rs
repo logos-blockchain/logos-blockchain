@@ -5,13 +5,14 @@ use super::{
     channel::{deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp},
     leader_claim::LeaderClaimOp,
     opcode::{
-        CHANNEL_DEPOSIT, INSCRIBE, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW,
-        SET_CHANNEL_KEYS, TRANSFER,
+        CHANNEL_DEPOSIT, CHANNEL_WITHDRAW, INSCRIBE, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE,
+        SDP_WITHDRAW, SET_CHANNEL_KEYS, TRANSFER,
     },
     sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     serde_,
     transfer::TransferOp,
 };
+use crate::mantle::ops::channel::withdraw::ChannelWithdrawOp;
 
 /// Core set of supported Mantle operations and their serialization behaviour.
 #[derive(Serialize)]
@@ -32,6 +33,12 @@ pub enum OpSer<'a> {
             serialize_with = "serde_::serialize_op_variant::<{CHANNEL_DEPOSIT}, DepositOp, _>"
         )]
         &'a DepositOp,
+    ),
+    ChannelWithdraw(
+        #[serde(
+            serialize_with = "serde_::serialize_op_variant::<{CHANNEL_WITHDRAW}, ChannelWithdrawOp, _>"
+        )]
+        &'a ChannelWithdrawOp,
     ),
     SDPDeclare(
         #[serde(serialize_with = "serde_::serialize_op_variant::<{SDP_DECLARE}, SDPDeclareOp, _>")]
@@ -65,6 +72,7 @@ impl<'a> From<&'a Op> for OpSer<'a> {
             Op::ChannelInscribe(op) => OpSer::ChannelInscribe(op),
             Op::ChannelSetKeys(op) => OpSer::ChannelSetKeys(op),
             Op::ChannelDeposit(op) => OpSer::ChannelDeposit(op),
+            Op::ChannelWithdraw(op) => OpSer::ChannelWithdraw(op),
             Op::SDPDeclare(op) => OpSer::SDPDeclare(op),
             Op::SDPWithdraw(op) => OpSer::SDPWithdraw(op),
             Op::SDPActive(op) => OpSer::SDPActive(op),
@@ -95,6 +103,12 @@ pub enum OpDe {
             deserialize_with = "serde_::deserialize_op_variant::<{CHANNEL_DEPOSIT}, DepositOp, _>"
         )]
         DepositOp,
+    ),
+    ChannelWithdraw(
+        #[serde(
+            deserialize_with = "serde_::deserialize_op_variant::<{CHANNEL_WITHDRAW}, ChannelWithdrawOp, _>"
+        )]
+        ChannelWithdrawOp,
     ),
     SDPDeclare(
         #[serde(
@@ -132,6 +146,7 @@ impl From<OpDe> for Op {
             OpDe::ChannelInscribe(inscribe) => Self::ChannelInscribe(inscribe),
             OpDe::ChannelSetKeys(channel_set_keys) => Self::ChannelSetKeys(channel_set_keys),
             OpDe::ChannelDeposit(channel_deposit) => Self::ChannelDeposit(channel_deposit),
+            OpDe::ChannelWithdraw(channel_withdraw) => Self::ChannelWithdraw(channel_withdraw),
             OpDe::SDPDeclare(sdp_declare) => Self::SDPDeclare(sdp_declare),
             OpDe::SDPWithdraw(sdp_withdraw) => Self::SDPWithdraw(sdp_withdraw),
             OpDe::SDPActive(sdp_active) => Self::SDPActive(sdp_active),

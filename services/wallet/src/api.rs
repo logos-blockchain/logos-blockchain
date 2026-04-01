@@ -26,7 +26,7 @@ pub enum WalletApiError {
     #[error("Failed to relay message with wallet:{relay_error:?}, msg={msg:?}")]
     RelaySend {
         relay_error: RelayError,
-        msg: WalletMsg,
+        msg: Box<WalletMsg>,
     },
     #[error("Failed to recv message from wallet: {0}")]
     RelayRecv(#[from] RecvError),
@@ -36,6 +36,7 @@ pub enum WalletApiError {
 
 impl From<(RelayError, WalletMsg)> for WalletApiError {
     fn from((relay_error, msg): (RelayError, WalletMsg)) -> Self {
+        let msg = Box::new(msg);
         Self::RelaySend { relay_error, msg }
     }
 }

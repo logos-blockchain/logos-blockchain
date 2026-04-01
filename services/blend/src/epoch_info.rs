@@ -249,7 +249,10 @@ where
     ChainService: ChainApi<RuntimeServiceId> + Sync,
     RuntimeServiceId: Sync,
 {
-    #[expect(clippy::cognitive_complexity, reason = "TODO: Address this at some point.")]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: Address this at some point."
+    )]
     pub async fn tick(&mut self, new_tick: SlotTick) -> Option<EpochEvent> {
         // We try to validate the new tick, else we restore the last valid one that we
         // had.

@@ -4,7 +4,7 @@ use lb_core::mantle::{
     TxHash, Value,
     ops::channel::{
         ChannelId, ChannelKeyIndex, Ed25519PublicKey as PublicKey, MsgId, deposit::DepositOp,
-        inscribe::InscriptionOp, set_keys::SetKeysOp,
+        inscribe::InscriptionOp, set_keys::SetKeysOp, withdraw::ChannelWithdrawOp,
     },
     tx::MantleTxGasContext,
 };
@@ -31,6 +31,10 @@ pub enum Error {
     EmptyKeys { channel_id: ChannelId },
     #[error("Channel {channel_id:?} not found")]
     ChannelNotFound { channel_id: ChannelId },
+    #[error("Insufficient funds")]
+    InsufficientFunds,
+    #[error("Balance overflow")]
+    BalanceOverflow,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -158,7 +162,24 @@ impl Channels {
 
     pub fn deposit(mut self, op: &DepositOp) -> Result<Self, Error> {
         if let Some(channel) = self.channels.get_mut(&op.channel_id) {
-            channel.balance += op.amount;
+            channel.balance = channel
+                .balance
+                .checked_add(op.amount)
+                .ok_or(Error::BalanceOverflow)?;
+            Ok(self)
+        } else {
+            Err(Error::ChannelNotFound {
+                channel_id: op.channel_id,
+            })
+        }
+    }
+
+    pub fn withdraw(mut self, op: &ChannelWithdrawOp) -> Result<Self, Error> {
+        if let Some(channel) = self.channels.get_mut(&op.channel_id) {
+            channel.balance = channel
+                .balance
+                .checked_sub(op.amount)
+                .ok_or(Error::InsufficientFunds)?;
             Ok(self)
         } else {
             Err(Error::ChannelNotFound {
@@ -188,6 +209,23 @@ mod tests {
 
     fn test_public_key(seed: u8) -> PublicKey {
         Ed25519Key::from_bytes(&[seed; 32]).public_key()
+    }
+
+    impl Channels {
+        #[must_use]
+        pub fn with_balance(channel_id: ChannelId, balance: Value) -> Self {
+            Self {
+                channels: rpds::HashTrieMapSync::new_sync().insert(
+                    channel_id,
+                    ChannelState {
+                        tip: MsgId::root(),
+                        keys: vec![test_public_key(7)].into(),
+                        balance,
+                        withdraw_threshold: 1,
+                    },
+                ),
+            }
+        }
     }
 
     #[test]
@@ -223,5 +261,59 @@ mod tests {
         assert_eq!(gas_context.withdraw_threshold(&first_id), Some(1));
         assert_eq!(gas_context.withdraw_threshold(&second_id), Some(2));
         assert_eq!(gas_context.withdraw_threshold(&missing_id), None);
+    }
+
+    #[test]
+    fn deposit_increases_channel_balance() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        let channels = Channels::with_balance(channel_id, 10);
+
+        let updated = channels
+            .deposit(&DepositOp {
+                channel_id,
+                amount: 6,
+                metadata: vec![],
+            })
+            .expect("deposit should succeed");
+
+        assert_eq!(updated.channel_state(&channel_id).unwrap().balance, 16);
+    }
+
+    #[test]
+    fn withdraw_decreases_channel_balance() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        let channels = Channels::with_balance(channel_id, 10);
+
+        let updated = channels
+            .withdraw(&ChannelWithdrawOp {
+                channel_id,
+                amount: 6,
+            })
+            .expect("withdraw should succeed");
+
+        assert_eq!(updated.channel_state(&channel_id).unwrap().balance, 4);
+    }
+
+    #[test]
+    fn withdraw_fails_with_insufficient_funds() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        let channels = Channels::with_balance(channel_id, 3);
+
+        let result = channels.withdraw(&ChannelWithdrawOp {
+            channel_id,
+            amount: 6,
+        });
+
+        assert!(matches!(result, Err(Error::InsufficientFunds)));
+    }
+
+    #[test]
+    fn withdraw_fails_for_missing_channel() {
+        let result = Channels::new().withdraw(&ChannelWithdrawOp {
+            channel_id: ChannelId::from([0u8; 32]),
+            amount: 1,
+        });
+
+        assert!(matches!(result, Err(Error::ChannelNotFound { .. })));
     }
 }

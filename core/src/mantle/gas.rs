@@ -43,6 +43,9 @@ pub trait GasConstants {
     /// Verify the deposit signature.
     const CHANNEL_DEPOSIT: Gas;
 
+    /// Verify the withdrawal signature.
+    const CHANNEL_WITHDRAW: Gas;
+
     /// Verify the proof of ownership.
     const SDP_DECLARE: Gas;
 
@@ -63,6 +66,7 @@ impl GasConstants for MainnetGasConstants {
     const CHANNEL_INSCRIBE: Gas = 22;
     const CHANNEL_SET_KEYS: Gas = 22;
     const CHANNEL_DEPOSIT: Gas = 0;
+    const CHANNEL_WITHDRAW: Gas = 22;
     const SDP_DECLARE: Gas = 2727;
     const SDP_WITHDRAW: Gas = 2705;
     const SDP_ACTIVE: Gas = 2705;

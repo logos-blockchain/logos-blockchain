@@ -81,7 +81,7 @@ pub enum Error {
     #[error("Failed to create valid block during proposal: {0}")]
     BlockCreation(#[from] BlockError),
     #[error("Wallet API error: {0}")]
-    Wallet(#[from] WalletApiError),
+    Wallet(#[from] Box<WalletApiError>),
     #[error("Leader wallet error: {0}")]
     LeaderWallet(#[from] LeaderWalletError),
     #[error("Mempool error: {0}")]
@@ -92,6 +92,12 @@ pub enum Error {
     NoClaimableVoucher,
     #[error("Ledger state not found for {0:?}")]
     LedgerStateNotFound(HeaderId),
+}
+
+impl From<WalletApiError> for Error {
+    fn from(error: WalletApiError) -> Self {
+        Self::Wallet(Box::new(error))
+    }
 }
 
 #[derive(Debug)]
@@ -700,7 +706,10 @@ where
 
     /// Apply our own proposed block to the chain and publish it to the blend
     /// network.
-    #[expect(clippy::cognitive_complexity, reason = "TODO: Address this at some point.")]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: Address this at some point."
+    )]
     async fn apply_and_publish_block_proposal(
         block: Block<Mempool::Item>,
         chain_network_api: &ChainNetworkServiceApi<ChainNetwork, RuntimeServiceId>,
