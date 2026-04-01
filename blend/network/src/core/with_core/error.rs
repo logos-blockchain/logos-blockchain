@@ -1,7 +1,20 @@
+use libp2p::PeerId;
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Error {
+pub enum SendError {
     /// There were no peers to send a message to.
     NoPeers,
+    /// The message being sent has an invalid public header.
     InvalidMessage,
-    MessageAlreadyExchanged,
+    /// The message being sent is a duplicate of a previous sent message.
+    MessageAlreadyProcessed,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ReceiveError {
+    /// The message being received has an invalid public header.
+    InvalidMessage,
+    /// The message being received is a duplicate of a previous received
+    /// message.
+    MessageAlreadySentByPeer(PeerId),
 }

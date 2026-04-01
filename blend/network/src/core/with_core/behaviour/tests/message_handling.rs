@@ -15,7 +15,7 @@ use crate::core::{
             Event, NegotiatedPeerState, SpamReason,
             tests::utils::{BehaviourBuilder, SwarmExt as _, new_nodes_with_empty_address},
         },
-        error::Error,
+        error::SendError,
     },
 };
 
@@ -59,14 +59,17 @@ async fn message_sending_and_reception() {
         }
     }
 
-    assert_eq!(
+    assert!(
         dialing_swarm
             .behaviour()
-            .exchanged_message_identifiers
-            .get(listening_swarm.local_peer_id())
-            .unwrap()
-            .keys()
-            .copied()
+            .message_cache
+            .is_message_processed(&test_message_id)
+    );
+    assert_eq!(
+        listening_swarm
+            .behaviour()
+            .message_cache
+            .messages_from_peer(dialing_swarm.local_peer_id())
             .collect::<HashSet<_>>(),
         vec![test_message_id].into_iter().collect::<HashSet<_>>()
     );
@@ -82,7 +85,7 @@ async fn invalid_public_header_message_publish() {
         dialing_swarm
             .behaviour_mut()
             .validate_and_publish_message(invalid_signature_message.into_inner().into()),
-        Err(Error::InvalidMessage)
+        Err(SendError::InvalidMessage)
     );
 }
 
@@ -268,16 +271,11 @@ async fn duplicate_message_within_sensitivity_interval_is_not_spam() {
             .negotiated_state,
         NegotiatedPeerState::Healthy
     );
-    assert_eq!(
+    assert!(
         dialing_swarm
             .behaviour()
-            .exchanged_message_identifiers
-            .get(listening_swarm.local_peer_id())
-            .unwrap()
-            .keys()
-            .next()
-            .unwrap(),
-        &test_message.id()
+            .message_cache
+            .is_message_processed(&test_message.id())
     );
     assert_eq!(
         listening_swarm
@@ -291,13 +289,11 @@ async fn duplicate_message_within_sensitivity_interval_is_not_spam() {
     assert_eq!(
         listening_swarm
             .behaviour()
-            .exchanged_message_identifiers
-            .get(dialing_swarm.local_peer_id())
-            .unwrap()
-            .keys()
+            .message_cache
+            .messages_from_peer(dialing_swarm.local_peer_id())
             .next()
             .unwrap(),
-        &test_message.id()
+        test_message.id()
     );
 }
 
