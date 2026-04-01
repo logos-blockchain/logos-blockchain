@@ -35,6 +35,7 @@ use crate::core::with_core::{
         },
         message_cache::MessageCache,
         old_session::OldSession,
+        utils::validate_and_forward_message,
     },
     error::SendError,
 };
@@ -42,6 +43,7 @@ use crate::core::with_core::{
 mod handler;
 mod message_cache;
 mod old_session;
+mod utils;
 
 #[cfg(test)]
 mod tests;
@@ -351,65 +353,6 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
 
     pub const fn negotiated_peers(&self) -> &HashMap<PeerId, RemotePeerConnectionDetails> {
         &self.negotiated_peers
-    }
-
-    /// Forwards a message to all connected and healthy peers except the
-    /// excluded peer.
-    ///
-    /// For each potential recipient, a uniqueness check is performed to avoid
-    /// sending a duplicate message to a peer and be marked as malicious by
-    /// them.
-    ///
-    /// Returns [`Error::NoPeers`] if there are no connected peers
-    /// that support the blend protocol or that have not yet received the
-    /// message.
-    fn forward_validated_message_and_maybe_exclude(
-        &mut self,
-        message: &EncapsulatedMessageWithVerifiedPublicHeader,
-        excluded_peer: Option<PeerId>,
-    ) -> Result<(), SendError> {
-        let message_id = message.id();
-
-        if self.message_cache.is_message_processed(&message_id) {
-            return Err(SendError::MessageAlreadyProcessed);
-        }
-
-        let serialized_message = serialize_encapsulated_message(message);
-        let mut at_least_one_receiver = false;
-        tracing::trace!(
-            target: LOG_TARGET,
-            "Forwarding message with id {:?}. Negotiated peers: {:?}. Excluded peer: {excluded_peer:?}",
-            hex::encode(message_id),
-            self.negotiated_peers()
-        );
-        self.negotiated_peers
-            .iter()
-            // Exclude the peer the message was received from.
-            .filter(|(peer_id, _)| excluded_peer != Some(**peer_id))
-            // Exclude from the list of candidates spammy peers.
-            .filter(|(_, peer_state)| !peer_state.negotiated_state.is_spammy())
-            .for_each(|(peer_id, RemotePeerConnectionDetails { connection_id, .. })| {
-                tracing::trace!(
-                        target: LOG_TARGET,
-                        "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message."
-                    );
-                self.events.push_back(ToSwarm::NotifyHandler {
-                    peer_id: *peer_id,
-                    handler: NotifyHandler::One(*connection_id),
-                    event: Either::Left(FromBehaviour::Message(serialized_message.clone())),
-                });
-                at_least_one_receiver = true;
-            });
-
-        if at_least_one_receiver {
-            // Mark the message as processed only if we were able to send it to at least one
-            // of our peers.
-            self.message_cache.mark_message_as_processed(message_id);
-            self.try_wake();
-            Ok(())
-        } else {
-            Err(SendError::NoPeers)
-        }
     }
 
     fn try_wake(&mut self) {
@@ -851,9 +794,41 @@ where
         &mut self,
         message: EncapsulatedMessage,
     ) -> Result<(), SendError> {
-        let validated_message =
-            self.validate_encapsulated_message_public_header_with_current_session(message)?;
-        self.forward_validated_message_and_maybe_exclude(&validated_message, None)
+        self.validate_and_forward_maybe_exclude(message, None)
+    }
+
+    fn validate_and_forward_maybe_exclude(
+        &mut self,
+        message: EncapsulatedMessage,
+        excluded_peer: Option<PeerId>,
+    ) -> Result<(), SendError> {
+        validate_and_forward_message(
+            message,
+            |message_to_validate| {
+                message_to_validate
+                    .verify_public_header(&self.poq_verifier)
+                    .map_err(|_| ())
+            },
+            self.negotiated_peers
+                .iter()
+                // Exclude the peer the message was received from.
+                .filter(|(peer_id, _)| excluded_peer != Some(**peer_id))
+                // Exclude from the list of candidates spammy peers.
+                .filter(|(_, peer_state)| !peer_state.negotiated_state.is_spammy())
+                // Take only the connection ID which the inner function requires.
+                .map(
+                    |(peer_id, RemotePeerConnectionDetails { connection_id, .. })| {
+                        (peer_id, connection_id)
+                    },
+                ),
+            &mut self.events,
+            &mut self.message_cache,
+            || {
+                if let Some(waker) = self.waker.take() {
+                    waker.wake();
+                }
+            },
+        )
     }
 
     /// Forwards a message to all healthy connections except the [`except`]
@@ -879,20 +854,7 @@ where
             return old_session.validate_and_forward_message(message, except.0);
         }
 
-        let validated_message =
-            self.validate_encapsulated_message_public_header_with_current_session(message)?;
-        self.forward_validated_message_and_maybe_exclude(&validated_message, Some(except.0))
-    }
-
-    // Try to validate an encapsulated public header with the current session
-    // verifier.
-    fn validate_encapsulated_message_public_header_with_current_session(
-        &self,
-        message: EncapsulatedMessage,
-    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, SendError> {
-        message
-            .verify_public_header(&self.poq_verifier)
-            .map_err(|_| SendError::InvalidMessage)
+        self.validate_and_forward_maybe_exclude(message, Some(except.0))
     }
 
     #[expect(
@@ -935,14 +897,12 @@ where
             return;
         };
 
-        let message_identifier = deserialized_encapsulated_message.id();
-
         // Make sure this is the first copy of the message from the sender.
         if !self
             .message_cache
-            .mark_message_as_seen_from_peer(message_identifier, from_peer_id)
+            .mark_message_as_seen_from_peer(&deserialized_encapsulated_message, from_peer_id)
         {
-            tracing::debug!(target: LOG_TARGET, "Neighbor {from_peer_id:?} on connection {from_connection_id:?} sent us a duplicate message ({message_identifier:?}). Marking it as spammy.");
+            tracing::debug!(target: LOG_TARGET, "Neighbor {from_peer_id:?} on connection {from_connection_id:?} sent us a duplicate message ({:?}). Marking it as spammy.", deserialized_encapsulated_message.id());
             self.close_spammy_connection(
                 (from_peer_id, from_connection_id),
                 SpamReason::DuplicateMessage,
@@ -950,18 +910,19 @@ where
             return;
         }
 
-        // Exit early if we've processed this message already and we know it's a valid
+        // Exit early if we've received this message already and we know it's a valid
         // one, so no need to check it again to potentially mark the peer as malicious.
-        if self.message_cache.is_message_processed(&message_identifier) {
-            tracing::trace!(target: LOG_TARGET, "Message with id {message_identifier:?} already processed previously. Dropping it.");
+        if self
+            .message_cache
+            .is_message_processed(&deserialized_encapsulated_message)
+        {
+            tracing::trace!(target: LOG_TARGET, "Message with id {:?} already processed previously. Dropping it.", deserialized_encapsulated_message.id());
             return;
         }
 
         // Verify the message public header, or else mark the peer as malicious: https://www.notion.so/nomos-tech/Blend-Protocol-Version-1-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81859cebf5e3d2a5cd8f.
-        let Ok(validated_message) = self
-            .validate_encapsulated_message_public_header_with_current_session(
-                deserialized_encapsulated_message,
-            )
+        let Ok(validated_message) =
+            deserialized_encapsulated_message.verify_public_header(&self.poq_verifier)
         else {
             tracing::debug!(target: LOG_TARGET, "Neighbor sent us a message with an invalid public header. SKIPPING MARKING IT AS SPAMMY.");
             // TODO: Re-enable once Blend is fixed.
@@ -975,7 +936,7 @@ where
         // Notify the swarm about the received message, so that it can be further
         // processed by the core protocol module.
         self.message_cache
-            .mark_message_as_processed(message_identifier);
+            .mark_message_as_processed(&validated_message);
         self.events.push_back(ToSwarm::GenerateEvent(Event::Message(
             Box::new(validated_message),
             (from_peer_id, from_connection_id),

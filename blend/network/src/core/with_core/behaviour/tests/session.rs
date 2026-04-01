@@ -77,6 +77,14 @@ async fn publish_message() {
             }
         }
     }
+
+    // We cannot send the same message again because it's already processed.
+    assert_eq!(
+        dialer
+            .behaviour_mut()
+            .validate_and_publish_message(test_message.clone().into()),
+        Err(SendError::DuplicateMessage)
+    );
 }
 
 #[test(tokio::test)]
