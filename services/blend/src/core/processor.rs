@@ -146,6 +146,11 @@ where
         &self,
         message: EncapsulatedMessageWithVerifiedPublicHeader,
     ) -> Result<MultiLayerDecapsulationOutput, InnerError> {
+        tracing::trace!(
+            "Attempt at batch-decapsulating message with PoQ nullifier and key: ({:?}, {:?})",
+            message.public_header().signing_key(),
+            message.public_header().proof_of_quota().key_nullifier()
+        );
         let mut decapsulation_output = self.0.decapsulate_message(message)?;
 
         let mut collected_blending_tokens = Vec::new();

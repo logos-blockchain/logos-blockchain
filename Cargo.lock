@@ -4240,6 +4240,7 @@ version = "0.2.1"
 dependencies = [
  "blake2",
  "derivative",
+ "hex",
  "itertools 0.14.0",
  "logos-blockchain-blend-crypto",
  "logos-blockchain-blend-proofs",

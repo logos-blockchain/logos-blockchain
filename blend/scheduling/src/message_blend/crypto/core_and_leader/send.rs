@@ -9,6 +9,7 @@ use lb_blend_proofs::quota::inputs::prove::{
     private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
 };
 use lb_cryptarchia_engine::Epoch;
+use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::X25519PrivateKey;
 
 use crate::{
@@ -174,8 +175,8 @@ where
             })
             // Map retrieved indices to the nodes' public keys.
             .enumerate()
-            .inspect(|(layer, (_, node_index))| {
-                tracing::trace!("Encapsulating layer {layer:?} of message type {payload_type:?} for node at index {node_index:?}. Local node index: {:?}", self.membership.local_index());
+            .inspect(|(layer, (proof, node_index))| {
+                tracing::debug!("Encapsulating layer {layer:?} of message type {payload_type:?} for node at index {node_index:?} with proof with public key and key nullifier: ({:?}, {:?}). Local node index: {:?}", proof.ephemeral_signing_key.public_key(), hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), self.membership.local_index());
             })
             .map(|(_, (proof, node_index))| {
                 (
