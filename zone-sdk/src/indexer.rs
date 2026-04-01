@@ -144,8 +144,8 @@ fn should_skip(message: &ZoneMessage, slot: Slot, skip_until: &mut Option<(MsgId
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use lb_common_http_client::{BlockInfo, CryptarchiaInfo};
-    use lb_core::header::HeaderId;
+    use lb_common_http_client::{ApiBlock, BlockInfo, CryptarchiaInfo, ProcessedBlockEvent};
+    use lb_core::{block::Block, header::HeaderId, mantle::SignedMantleTx};
 
     use super::*;
     use crate::{Deposit, ZoneBlock};
@@ -347,10 +347,34 @@ mod tests {
             })
         }
 
+        async fn block_stream(
+            &self,
+        ) -> Result<
+            impl Stream<Item = ProcessedBlockEvent> + Send + 'static,
+            lb_common_http_client::Error,
+        > {
+            Ok(futures::stream::empty())
+        }
+
         async fn lib_stream(
             &self,
-        ) -> Result<impl Stream<Item = BlockInfo>, lb_common_http_client::Error> {
+        ) -> Result<impl Stream<Item = BlockInfo> + Send, lb_common_http_client::Error> {
             Ok(futures::stream::empty())
+        }
+
+        async fn block(
+            &self,
+            _id: HeaderId,
+        ) -> Result<Option<Block<SignedMantleTx>>, lb_common_http_client::Error> {
+            Ok(None)
+        }
+
+        async fn blocks(
+            &self,
+            _slot_from: Slot,
+            _slot_to: Slot,
+        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
+            Ok(Vec::new())
         }
 
         async fn zone_messages_in_block(
@@ -373,6 +397,13 @@ mod tests {
                     .filter(move |(_, slot)| *slot >= slot_from && *slot <= slot_to)
                     .cloned(),
             ))
+        }
+
+        async fn post_transaction(
+            &self,
+            _tx: SignedMantleTx,
+        ) -> Result<(), lb_common_http_client::Error> {
+            unimplemented!()
         }
     }
 }

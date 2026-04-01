@@ -1,10 +1,12 @@
 use async_trait::async_trait;
 use futures::{Stream, stream};
-use lb_common_http_client::{BlockInfo, CommonHttpClient, CryptarchiaInfo, Error, Slot};
+use lb_common_http_client::{
+    ApiBlock, BlockInfo, CommonHttpClient, CryptarchiaInfo, Error, ProcessedBlockEvent, Slot,
+};
 use lb_core::{
     block::Block,
     header::HeaderId,
-    mantle::{Op, ops::channel::ChannelId},
+    mantle::{Op, SignedMantleTx, ops::channel::ChannelId},
 };
 use reqwest::Url;
 
@@ -14,7 +16,15 @@ use crate::{Deposit, ZoneBlock, ZoneMessage};
 pub trait Node {
     async fn consensus_info(&self) -> Result<CryptarchiaInfo, Error>;
 
-    async fn lib_stream(&self) -> Result<impl Stream<Item = BlockInfo>, Error>;
+    async fn block_stream(
+        &self,
+    ) -> Result<impl Stream<Item = ProcessedBlockEvent> + Send + 'static, Error>;
+
+    async fn lib_stream(&self) -> Result<impl Stream<Item = BlockInfo> + Send, Error>;
+
+    async fn block(&self, id: HeaderId) -> Result<Option<Block<SignedMantleTx>>, Error>;
+
+    async fn blocks(&self, slot_from: Slot, slot_to: Slot) -> Result<Vec<ApiBlock>, Error>;
 
     async fn zone_messages_in_block(
         &self,
@@ -28,6 +38,8 @@ pub trait Node {
         slot_to: Slot,
         channel_id: ChannelId,
     ) -> Result<impl Stream<Item = (ZoneMessage, Slot)>, Error>;
+
+    async fn post_transaction(&self, tx: SignedMantleTx) -> Result<(), Error>;
 }
 
 #[derive(Clone)]
@@ -49,8 +61,28 @@ impl Node for NodeHttpClient {
         self.client.consensus_info(self.base_url.clone()).await
     }
 
-    async fn lib_stream(&self) -> Result<impl Stream<Item = BlockInfo>, Error> {
+    async fn block_stream(
+        &self,
+    ) -> Result<impl Stream<Item = ProcessedBlockEvent> + Send + 'static, Error> {
+        self.client.get_blocks_stream(self.base_url.clone()).await
+    }
+
+    async fn lib_stream(&self) -> Result<impl Stream<Item = BlockInfo> + Send, Error> {
         self.client.get_lib_stream(self.base_url.clone()).await
+    }
+
+    async fn block(&self, id: HeaderId) -> Result<Option<Block<SignedMantleTx>>, Error> {
+        self.client.get_block(self.base_url.clone(), id).await
+    }
+
+    async fn blocks(&self, slot_from: Slot, slot_to: Slot) -> Result<Vec<ApiBlock>, Error> {
+        self.client
+            .get_blocks(
+                self.base_url.clone(),
+                slot_from.into_inner(),
+                slot_to.into_inner(),
+            )
+            .await
     }
 
     async fn zone_messages_in_block(
@@ -96,6 +128,12 @@ impl Node for NodeHttpClient {
                 .filter_map(move |op| op_to_zone_message(&op, channel_id))
                 .map(move |msg| (msg, slot))
         })))
+    }
+
+    async fn post_transaction(&self, tx: SignedMantleTx) -> Result<(), Error> {
+        self.client
+            .post_transaction(self.base_url.clone(), tx)
+            .await
     }
 }
 

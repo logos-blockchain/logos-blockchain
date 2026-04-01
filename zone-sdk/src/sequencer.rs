@@ -1,7 +1,7 @@
 use std::{pin::Pin, time::Duration};
 
 use futures::{StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
-use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient, ProcessedBlockEvent, Slot};
+use lb_common_http_client::{ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -16,11 +16,10 @@ use lb_core::{
     },
 };
 use lb_key_management_system_service::keys::Ed25519Key;
-use reqwest::Url;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, warn};
 
-use crate::state::TxState;
+use crate::{adapter, state::TxState};
 
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -106,15 +105,17 @@ enum InFlight {
 ///
 /// This is cheaply cloneable and can be shared across tasks.
 #[derive(Clone)]
-pub struct SequencerHandle {
+pub struct SequencerHandle<Node> {
     request_tx: mpsc::Sender<ActorRequest>,
-    node_url: Url,
-    http_client: CommonHttpClient,
+    node: Node,
     event_tx: broadcast::Sender<Event>,
     ready_rx: tokio::sync::watch::Receiver<bool>,
 }
 
-impl SequencerHandle {
+impl<Node> SequencerHandle<Node>
+where
+    Node: adapter::Node + Sync,
+{
     /// Wait until the sequencer is connected and ready to accept requests.
     pub async fn wait_ready(&mut self) {
         while !*self.ready_rx.borrow_and_update() {
@@ -148,11 +149,7 @@ impl SequencerHandle {
         info!("Created inscription {:?}", result.inscription_id);
 
         // Post to network (best effort, will be resubmitted if needed)
-        if let Err(e) = self
-            .http_client
-            .post_transaction(self.node_url.clone(), signed_tx)
-            .await
-        {
+        if let Err(e) = self.node.post_transaction(signed_tx).await {
             warn!("Failed to post transaction: {e}");
         }
 
@@ -202,11 +199,7 @@ impl SequencerHandle {
         info!("Submitted set_keys transaction {:?}", tx_hash);
 
         // Post to network (best effort, will be resubmitted if needed)
-        if let Err(e) = self
-            .http_client
-            .post_transaction(self.node_url.clone(), signed_tx)
-            .await
-        {
+        if let Err(e) = self.node.post_transaction(signed_tx).await {
             warn!("Failed to post set_keys transaction: {e}");
         }
 
@@ -235,12 +228,11 @@ impl SequencerHandle {
 /// The caller drives execution by calling [`next_event`](Self::next_event) in a
 /// loop. Publish and admin operations are submitted via the [`SequencerHandle`]
 /// which can be used from any task.
-pub struct ZoneSequencer {
+pub struct ZoneSequencer<Node> {
     // Config
     channel_id: ChannelId,
     signing_key: Ed25519Key,
-    node_url: Url,
-    http_client: CommonHttpClient,
+    node: Node,
     config: SequencerConfig,
 
     // Actor channel for receiving requests from other tasks
@@ -269,7 +261,10 @@ pub struct ZoneSequencer {
     ready_tx: tokio::sync::watch::Sender<bool>,
 }
 
-impl ZoneSequencer {
+impl<Node> ZoneSequencer<Node>
+where
+    Node: adapter::Node + Clone + Send + Sync + 'static,
+{
     /// Create a new sequencer with default configuration.
     ///
     /// Returns the sequencer (to drive via [`next_event`](Self::next_event))
@@ -281,15 +276,13 @@ impl ZoneSequencer {
     pub fn init(
         channel_id: ChannelId,
         signing_key: Ed25519Key,
-        node_url: Url,
-        auth: Option<BasicAuthCredentials>,
+        node: Node,
         checkpoint: Option<SequencerCheckpoint>,
-    ) -> (Self, SequencerHandle) {
+    ) -> (Self, SequencerHandle<Node>) {
         Self::init_with_config(
             channel_id,
             signing_key,
-            node_url,
-            auth,
+            node,
             SequencerConfig::default(),
             checkpoint,
         )
@@ -303,12 +296,10 @@ impl ZoneSequencer {
     pub fn init_with_config(
         channel_id: ChannelId,
         signing_key: Ed25519Key,
-        node_url: Url,
-        auth: Option<BasicAuthCredentials>,
+        node: Node,
         config: SequencerConfig,
         checkpoint: Option<SequencerCheckpoint>,
-    ) -> (Self, SequencerHandle) {
-        let http_client = CommonHttpClient::new(auth);
+    ) -> (Self, SequencerHandle<Node>) {
         let (request_tx, request_rx) = mpsc::channel(config.publish_channel_capacity);
 
         let (state, lib_slot, last_msg_id) = if let Some(cp) = checkpoint {
@@ -334,8 +325,7 @@ impl ZoneSequencer {
 
         let handle = SequencerHandle {
             request_tx,
-            node_url: node_url.clone(),
-            http_client: http_client.clone(),
+            node: node.clone(),
             event_tx: event_tx.clone(),
             ready_rx,
         };
@@ -343,8 +333,7 @@ impl ZoneSequencer {
         let sequencer = Self {
             channel_id,
             signing_key,
-            node_url,
-            http_client,
+            node,
             config,
             request_rx,
             state,
@@ -420,8 +409,7 @@ impl ZoneSequencer {
                         &mut self.current_tip,
                         &mut self.lib_slot,
                         self.channel_id,
-                        &self.http_client,
-                        &self.node_url,
+                        &self.node
                     )
                     .await;
 
@@ -466,8 +454,7 @@ impl ZoneSequencer {
                 enqueue_resubmit(
                     self.state.as_ref().unwrap(),
                     self.current_tip.unwrap(),
-                    &self.http_client,
-                    &self.node_url,
+                    &self.node,
                     &self.in_flight,
                     &mut self.resubmit_active,
                 );
@@ -480,7 +467,7 @@ impl ZoneSequencer {
     /// ready (caller should return `None`).
     async fn ensure_connected(&mut self) -> bool {
         if self.state.is_none() {
-            match self.http_client.consensus_info(self.node_url.clone()).await {
+            match self.node.consensus_info().await {
                 Ok(info) => {
                     info!(
                         "Sequencer connected: tip={:?}, lib={:?}",
@@ -501,11 +488,7 @@ impl ZoneSequencer {
             }
         }
 
-        match self
-            .http_client
-            .get_blocks_stream(self.node_url.clone())
-            .await
-        {
+        match self.node.block_stream().await {
             Ok(stream) => {
                 self.blocks_stream = Some(Box::pin(stream));
                 true
@@ -583,15 +566,17 @@ struct BlockEventResult {
 }
 
 /// Process a block event.
-async fn handle_block_event(
+async fn handle_block_event<Node>(
     event: &ProcessedBlockEvent,
     state: &mut Option<TxState>,
     current_tip: &mut Option<HeaderId>,
     lib_slot: &mut Slot,
     channel_id: ChannelId,
-    http_client: &CommonHttpClient,
-    node_url: &Url,
-) -> BlockEventResult {
+    node: &Node,
+) -> BlockEventResult
+where
+    Node: adapter::Node + Sync,
+{
     let block_id = event.block.header.id;
     let parent_id = event.block.header.parent_block;
     let tip = event.tip;
@@ -615,15 +600,7 @@ async fn handle_block_event(
     if lib != s.lib() {
         let new_lib_slot = event.lib_slot;
         if *lib_slot < new_lib_slot
-            && let Some(tip) = backfill_to_lib(
-                s,
-                *lib_slot,
-                new_lib_slot,
-                channel_id,
-                http_client,
-                node_url,
-            )
-            .await
+            && let Some(tip) = backfill_to_lib(s, *lib_slot, new_lib_slot, channel_id, node).await
         {
             channel_tip = Some(tip);
         }
@@ -632,7 +609,7 @@ async fn handle_block_event(
 
     // 2. Backfill canonical chain if parent is missing
     if !s.has_block(&parent_id) && parent_id != s.lib() {
-        backfill_canonical(s, parent_id, channel_id, http_client, node_url).await;
+        backfill_canonical(s, parent_id, channel_id, node).await;
     }
 
     // Extract tx hashes and latest inscription for our channel
@@ -676,30 +653,29 @@ fn handle_inflight(event: InFlight, resubmit_active: &mut bool) {
 /// The caller is responsible for triggering finalization after backfill
 /// completes.
 /// Returns the latest channel inscription `MsgId` found during backfill.
-async fn backfill_to_lib(
+async fn backfill_to_lib<Node>(
     state: &mut TxState,
     from_slot: Slot,
     to_slot: Slot,
     channel_id: ChannelId,
-    http_client: &CommonHttpClient,
-    node_url: &Url,
-) -> Option<MsgId> {
-    let from: u64 = from_slot.into();
-    let to: u64 = to_slot.into();
-
-    if from >= to {
+    node: &Node,
+) -> Option<MsgId>
+where
+    Node: adapter::Node + Sync,
+{
+    if from_slot >= to_slot {
         return None;
     }
 
     debug!(
-        "Backfilling finalized blocks from slot {} to {}",
-        from + 1,
-        to
+        "Backfilling finalized blocks from {:?} to {:?}",
+        from_slot + 1,
+        to_slot
     );
 
     let mut latest_msg_id = None;
 
-    match http_client.get_blocks(node_url.clone(), from + 1, to).await {
+    match node.blocks(from_slot + 1, to_slot).await {
         Ok(blocks) => {
             for block in blocks {
                 let block_id = block.header.id;
@@ -719,7 +695,10 @@ async fn backfill_to_lib(
                 let current_lib = state.lib();
                 state.process_block(block_id, parent_id, current_lib, our_txs);
             }
-            debug!("Backfilled {} finalized blocks", to - from);
+            debug!(
+                "Backfilled {} finalized blocks",
+                to_slot.into_inner() - from_slot.into_inner()
+            );
         }
         Err(e) => {
             warn!("Failed to backfill finalized blocks: {e}");
@@ -734,13 +713,14 @@ async fn backfill_to_lib(
 /// Uses `state.lib()` during replay to avoid premature finalization.
 /// The caller is responsible for triggering finalization after backfill
 /// completes.
-async fn backfill_canonical(
+async fn backfill_canonical<Node>(
     state: &mut TxState,
     missing_parent: HeaderId,
     channel_id: ChannelId,
-    http_client: &CommonHttpClient,
-    node_url: &Url,
-) {
+    node: &Node,
+) where
+    Node: adapter::Node + Sync,
+{
     debug!("Backfilling canonical chain from {:?}", missing_parent);
 
     let mut blocks_to_process = Vec::new();
@@ -749,7 +729,7 @@ async fn backfill_canonical(
 
     // Walk backwards until we find a known block or reach lib
     while !state.has_block(&current) && current != lib {
-        match http_client.get_block(node_url.clone(), current).await {
+        match node.block(current).await {
             Ok(Some(block)) => {
                 let parent = block.header().parent_block();
                 blocks_to_process.push(block);
@@ -788,14 +768,15 @@ async fn backfill_canonical(
     debug!("Canonical backfill complete");
 }
 
-fn enqueue_resubmit(
+fn enqueue_resubmit<Node>(
     state: &TxState,
     tip: HeaderId,
-    http_client: &CommonHttpClient,
-    node_url: &Url,
+    node: &Node,
     in_flight: &FuturesUnordered<BoxFuture<'static, InFlight>>,
     resubmit_active: &mut bool,
-) {
+) where
+    Node: adapter::Node + Clone + Send + Sync + 'static,
+{
     let pending: Vec<(InscriptionId, SignedMantleTx)> = state
         .pending_txs(tip)
         .map(|(hash, tx)| (*hash, tx.clone()))
@@ -807,17 +788,13 @@ fn enqueue_resubmit(
 
     debug!("Resubmitting {} pending inscription(s)", pending.len());
 
-    let client = http_client.clone();
-    let url = node_url.clone();
+    let node = node.clone();
     *resubmit_active = true;
 
     in_flight.push(Box::pin(async move {
         let mut results = Vec::with_capacity(pending.len());
         for (id, tx) in pending {
-            let result = client
-                .post_transaction(url.clone(), tx)
-                .await
-                .map_err(|e| e.to_string());
+            let result = node.post_transaction(tx).await.map_err(|e| e.to_string());
             results.push((id, result));
         }
         InFlight::ResubmittedBatch { results }
