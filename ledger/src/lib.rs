@@ -399,11 +399,34 @@ impl LedgerState {
         self.mantle_ledger.active_sessions()
     }
 
-    // Some of the ops' proofs are verified in `SignedMantleTx::verify_ops_proofs`,
-    // either fully or partially.
-    // This probably benefits from some refactoring.
-    // For now, though, you should manually ensure that everything is correctly
-    // verified.
+    /// Applies a transaction to the ledger state, returning the updated state
+    /// and the net balance change.
+    ///
+    /// # Prerequisites
+    ///
+    /// A transaction must not be applied unless all required proofs have been
+    /// fully verified.
+    ///
+    /// Proof verification is currently split across multiple paths depending on
+    /// the operation:
+    /// - `SignedMantleTx::verify_ops_proofs`: Invoked during construction
+    ///   (`SignedMantleTx::new`, e.g. on deserialization). Handles:
+    ///   `ChannelInscribe`, `LeaderClaim`.
+    /// - `SignedMantleTx::verify_ops_proofs_with_helper`: Invoked here before
+    ///   applying the transaction. Handles: `ChannelWithdraw`.
+    /// - Additional validation: Performed by the ledger or implicitly satisfied
+    ///   by certain operations.
+    ///
+    /// This fragmented design means verification may be:
+    /// - Distributed across different stages, and
+    /// - Potentially duplicated or missed if assumptions about prior
+    ///   verification are incorrect.
+    ///
+    /// Callers are responsible for ensuring that all required proofs have been
+    /// verified before applying the transaction.
+    ///
+    /// TODO: A refactor into a typed state model to enforce verification at
+    /// compile is planned.
     fn try_apply_tx<Id, Constants: GasConstants>(
         mut self,
         config: &Config,
