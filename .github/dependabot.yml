@@ -1,0 +1,40 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 10
+    groups:
+      rust:
+        patterns:
+          - "*"
+
+  - package-ecosystem: bun
+    directory: "/testnet/l2-sequencer-archival-demo/webapp"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 10
+    groups:
+      bun:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 10
+    groups:
+      github-actions:
+        patterns:
+          - "*"
