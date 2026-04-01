@@ -111,9 +111,19 @@ pub struct SequencerHandle {
     node_url: Url,
     http_client: CommonHttpClient,
     event_tx: broadcast::Sender<Event>,
+    ready_rx: tokio::sync::watch::Receiver<bool>,
 }
 
 impl SequencerHandle {
+    /// Wait until the sequencer is connected and ready to accept requests.
+    pub async fn wait_ready(&mut self) {
+        while !*self.ready_rx.borrow_and_update() {
+            if self.ready_rx.changed().await.is_err() {
+                return; // sequencer dropped
+            }
+        }
+    }
+
     /// Publish an inscription to the zone's channel.
     ///
     /// Returns the inscription ID and a checkpoint for persistence.
@@ -254,6 +264,9 @@ pub struct ZoneSequencer {
 
     // Broadcast channel for events — handles subscribe to receive events
     event_tx: broadcast::Sender<Event>,
+
+    // Readiness signal — set to true after first block event processed
+    ready_tx: tokio::sync::watch::Sender<bool>,
 }
 
 impl ZoneSequencer {
@@ -317,12 +330,14 @@ impl ZoneSequencer {
 
         let resubmit_interval = tokio::time::interval(config.resubmit_interval);
         let (event_tx, _) = broadcast::channel(256);
+        let (ready_tx, ready_rx) = tokio::sync::watch::channel(false);
 
         let handle = SequencerHandle {
             request_tx,
             node_url: node_url.clone(),
             http_client: http_client.clone(),
             event_tx: event_tx.clone(),
+            ready_rx,
         };
 
         let sequencer = Self {
@@ -341,6 +356,7 @@ impl ZoneSequencer {
             resubmit_active: false,
             in_flight: FuturesUnordered::new(),
             event_tx,
+            ready_tx,
         };
 
         (sequencer, handle)
@@ -354,6 +370,12 @@ impl ZoneSequencer {
         self.state
             .as_ref()
             .map(|s| build_checkpoint(s, self.last_msg_id, self.lib_slot))
+    }
+
+    /// Whether the sequencer is connected and ready to accept requests.
+    #[must_use]
+    pub fn is_ready(&self) -> bool {
+        *self.ready_tx.borrow()
     }
 
     /// Spawn the event loop in a background task, consuming the sequencer.
@@ -379,52 +401,8 @@ impl ZoneSequencer {
     /// This processes block events, resubmission, and pending requests.
     /// The caller must call this in a loop to keep the sequencer running.
     pub async fn next_event(&mut self) -> Option<Event> {
-        // If no blocks stream, try to connect.
-        // Requests are not processed until connected — this ensures
-        // publish() cannot run before state is initialized and backfill
-        // has a chance to start.
-        if self.blocks_stream.is_none() {
-            // Initialize state from consensus info if needed
-            if self.state.is_none() {
-                match self.http_client.consensus_info(self.node_url.clone()).await {
-                    Ok(info) => {
-                        info!(
-                            "Sequencer connected: tip={:?}, lib={:?}",
-                            info.tip, info.lib
-                        );
-                        self.state = Some(TxState::new(info.lib));
-                        self.current_tip = Some(info.tip);
-                        match get_lib_slot(&self.http_client, &self.node_url, info.lib).await {
-                            Ok(slot) => self.lib_slot = slot,
-                            Err(e) => {
-                                warn!("Failed to get LIB slot: {e}");
-                                tokio::time::sleep(self.config.reconnect_delay).await;
-                                return None;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to fetch consensus info: {e}");
-                        tokio::time::sleep(self.config.reconnect_delay).await;
-                        return None;
-                    }
-                }
-            }
-
-            match self
-                .http_client
-                .get_blocks_stream(self.node_url.clone())
-                .await
-            {
-                Ok(stream) => {
-                    self.blocks_stream = Some(Box::pin(stream));
-                }
-                Err(e) => {
-                    warn!("Failed to connect to blocks stream: {e}");
-                    tokio::time::sleep(self.config.reconnect_delay).await;
-                    return None;
-                }
-            }
+        if self.blocks_stream.is_none() && !self.ensure_connected().await {
+            return None;
         }
 
         let stream = self.blocks_stream.as_mut()?;
@@ -436,7 +414,7 @@ impl ZoneSequencer {
             }
             maybe_event = stream.next() => {
                 if let Some(ref block_event) = maybe_event {
-                    let newly_finalized = handle_block_event(
+                    let result = handle_block_event(
                         block_event,
                         &mut self.state,
                         &mut self.current_tip,
@@ -447,16 +425,27 @@ impl ZoneSequencer {
                     )
                     .await;
 
-                    if newly_finalized.is_empty() {
+                    // Update channel tip from backfill/block inscriptions
+                    if let Some(tip) = result.channel_tip {
+                                                self.last_msg_id = tip;
+                    }
+
+                    // Signal readiness after first block event processed
+                    if !self.is_ready() {
+                        let _ = self.ready_tx.send(true);
+                    }
+
+                    if result.newly_finalized.is_empty() {
                         None
                     } else {
-                        let event = Event::TxsFinalized { tx_hashes: newly_finalized };
+                        let event = Event::TxsFinalized { tx_hashes: result.newly_finalized };
                         drop(self.event_tx.send(event.clone()));
                         Some(event)
                     }
                 } else {
                     warn!("Blocks stream disconnected, will reconnect on next call");
                     self.blocks_stream = None;
+                    let _ = self.ready_tx.send(false);
                     None
                 }
             }
@@ -478,17 +467,71 @@ impl ZoneSequencer {
         }
     }
 
+    /// Ensure the blocks stream is connected. Returns `false` if not yet
+    /// ready (caller should return `None`).
+    async fn ensure_connected(&mut self) -> bool {
+        if self.state.is_none() {
+            match self.http_client.consensus_info(self.node_url.clone()).await {
+                Ok(info) => {
+                    info!(
+                        "Sequencer connected: tip={:?}, lib={:?}",
+                        info.tip, info.lib
+                    );
+                    self.state = Some(TxState::new(info.lib));
+                    self.current_tip = Some(info.tip);
+                    match get_lib_slot(&self.http_client, &self.node_url, info.lib).await {
+                        Ok(_) => {
+                            // Do NOT update lib_slot here for fresh starts.
+                            // Keep it at genesis so the backfill check in
+                            // handle_block_event detects the gap and catches
+                            // up on existing channel inscriptions.
+                        }
+                        Err(e) => {
+                            warn!("Failed to get LIB slot: {e}");
+                            tokio::time::sleep(self.config.reconnect_delay).await;
+                            return false;
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to fetch consensus info: {e}");
+                    tokio::time::sleep(self.config.reconnect_delay).await;
+                    return false;
+                }
+            }
+        }
+
+        match self
+            .http_client
+            .get_blocks_stream(self.node_url.clone())
+            .await
+        {
+            Ok(stream) => {
+                self.blocks_stream = Some(Box::pin(stream));
+                true
+            }
+            Err(e) => {
+                warn!("Failed to connect to blocks stream: {e}");
+                tokio::time::sleep(self.config.reconnect_delay).await;
+                false
+            }
+        }
+    }
+
     fn handle_request(&mut self, request: ActorRequest) {
-        let Some(s) = self.state.as_mut() else {
+        if !self.is_ready() {
             match request {
                 ActorRequest::Publish { reply, .. } | ActorRequest::SetKeys { reply, .. } => {
                     drop(reply.send(Err(Error::Unavailable {
-                        reason: "not initialized",
+                        reason: "sequencer not yet ready",
                     })));
                 }
             }
             return;
-        };
+        }
+
+        // Safe to unwrap — is_ready() guarantees state is initialized
+        let s = self.state.as_mut().unwrap();
 
         match request {
             ActorRequest::Publish { data, reply } => {
@@ -532,7 +575,14 @@ fn build_checkpoint(state: &TxState, last_msg_id: MsgId, lib_slot: Slot) -> Sequ
     }
 }
 
-/// Process a block event. Returns newly finalized tx hashes.
+/// Result of processing a block event.
+struct BlockEventResult {
+    newly_finalized: Vec<TxHash>,
+    /// Latest channel inscription `MsgId` seen during backfill/processing.
+    channel_tip: Option<MsgId>,
+}
+
+/// Process a block event.
 async fn handle_block_event(
     event: &ProcessedBlockEvent,
     state: &mut Option<TxState>,
@@ -541,7 +591,7 @@ async fn handle_block_event(
     channel_id: ChannelId,
     http_client: &CommonHttpClient,
     node_url: &Url,
-) -> Vec<TxHash> {
+) -> BlockEventResult {
     let block_id = event.block.header.id;
     let parent_id = event.block.header.parent_block;
     let tip = event.tip;
@@ -553,18 +603,25 @@ async fn handle_block_event(
     }
 
     let Some(s) = state.as_mut() else {
-        return Vec::new();
+        return BlockEventResult {
+            newly_finalized: Vec::new(),
+            channel_tip: None,
+        };
     };
 
     // Backfill if needed (self-healing on every event)
     // 1. Backfill finalized blocks up to LIB (only when state's LIB is behind)
+    let mut channel_tip = None;
     if lib != s.lib() {
         let Ok(new_lib_slot) = get_lib_slot(http_client, node_url, lib).await else {
             warn!("Failed to get LIB slot during backfill, skipping");
-            return Vec::new();
+            return BlockEventResult {
+                newly_finalized: Vec::new(),
+                channel_tip: None,
+            };
         };
-        if *lib_slot < new_lib_slot {
-            backfill_to_lib(
+        if *lib_slot < new_lib_slot
+            && let Some(tip) = backfill_to_lib(
                 s,
                 *lib_slot,
                 new_lib_slot,
@@ -572,7 +629,9 @@ async fn handle_block_event(
                 http_client,
                 node_url,
             )
-            .await;
+            .await
+        {
+            channel_tip = Some(tip);
         }
         *lib_slot = new_lib_slot;
     }
@@ -582,7 +641,7 @@ async fn handle_block_event(
         backfill_canonical(s, parent_id, channel_id, http_client, node_url).await;
     }
 
-    // Extract tx hashes for our channel
+    // Extract tx hashes and latest inscription for our channel
     let our_txs: Vec<TxHash> = event
         .block
         .transactions
@@ -591,12 +650,23 @@ async fn handle_block_event(
         .map(|tx| tx.mantle_tx.hash())
         .collect();
 
-    // Process the actual event block with real lib (triggers finalization if lib
-    // advanced)
+    for tx in &event.block.transactions {
+        for op in &tx.mantle_tx.ops {
+            if let Op::ChannelInscribe(inscribe) = op
+                && inscribe.channel_id == channel_id
+            {
+                channel_tip = Some(inscribe.id());
+            }
+        }
+    }
+
     let newly_finalized = s.process_block(block_id, parent_id, lib, our_txs);
     *current_tip = Some(tip);
 
-    newly_finalized
+    BlockEventResult {
+        newly_finalized,
+        channel_tip,
+    }
 }
 
 fn handle_inflight(event: InFlight, resubmit_active: &mut bool) {
@@ -628,6 +698,7 @@ async fn get_lib_slot(
 /// Uses `state.lib()` during replay to avoid premature finalization.
 /// The caller is responsible for triggering finalization after backfill
 /// completes.
+/// Returns the latest channel inscription `MsgId` found during backfill.
 async fn backfill_to_lib(
     state: &mut TxState,
     from_slot: Slot,
@@ -635,12 +706,12 @@ async fn backfill_to_lib(
     channel_id: ChannelId,
     http_client: &CommonHttpClient,
     node_url: &Url,
-) {
+) -> Option<MsgId> {
     let from: u64 = from_slot.into();
     let to: u64 = to_slot.into();
 
     if from >= to {
-        return; // No-op
+        return None;
     }
 
     debug!(
@@ -648,6 +719,8 @@ async fn backfill_to_lib(
         from + 1,
         to
     );
+
+    let mut latest_msg_id = None;
 
     match http_client.get_blocks(node_url.clone(), from + 1, to).await {
         Ok(blocks) => {
@@ -662,7 +735,17 @@ async fn backfill_to_lib(
                     .map(|tx| tx.mantle_tx.hash())
                     .collect();
 
-                // Use current state lib to avoid premature finalization
+                // Track latest inscription for channel tip discovery
+                for tx in &block.transactions {
+                    for op in &tx.mantle_tx.ops {
+                        if let Op::ChannelInscribe(inscribe) = op
+                            && inscribe.channel_id == channel_id
+                        {
+                            latest_msg_id = Some(inscribe.id());
+                        }
+                    }
+                }
+
                 let current_lib = state.lib();
                 state.process_block(block_id, parent_id, current_lib, our_txs);
             }
@@ -672,6 +755,8 @@ async fn backfill_to_lib(
             warn!("Failed to backfill finalized blocks: {e}");
         }
     }
+
+    latest_msg_id
 }
 
 /// Backfill canonical chain backwards from a missing parent to LIB.

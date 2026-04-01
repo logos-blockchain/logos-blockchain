@@ -48,13 +48,14 @@ impl TxState {
         // Store parent relationship for pruning
         self.parent_map.insert(block_id, parent_id);
 
-        // Build cumulative safe set from parent. The parent must have been
-        // processed before the child (enforced by backfill in the sequencer).
+        // Build cumulative safe set from parent. Parent may be missing
+        // during slot-range backfill when blocks reference parents outside
+        // the range. Starting with empty is conservative but safe.
         let mut safe_set = self
             .block_states
             .get(&parent_id)
             .cloned()
-            .expect("parent block must be processed before child");
+            .unwrap_or_default();
 
         for tx in our_txs {
             if self.pending.contains_key(&tx) {
