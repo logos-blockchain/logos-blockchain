@@ -425,8 +425,12 @@ impl ZoneSequencer {
                     )
                     .await;
 
-                    // Update channel tip from backfill/block inscriptions
-                    if let Some(tip) = result.channel_tip {
+                    // Update channel tip from backfill/block inscriptions.
+                    // Only when starting from root — checkpoint resume already
+                    // has correct last_msg_id which may be ahead of finalized.
+                    if let Some(tip) = result.channel_tip
+                        && self.last_msg_id == MsgId::root()
+                    {
                         self.last_msg_id = tip;
                     }
 

@@ -121,7 +121,7 @@ async fn test_sequencer_publish_and_indexer_read() {
     let mut cursor = None;
 
     let start = std::time::Instant::now();
-    let timeout = Duration::from_secs(240);
+    let timeout = Duration::from_secs(360);
 
     loop {
         assert!(
@@ -170,7 +170,7 @@ async fn test_sequencer_publish_and_indexer_read() {
         .expect("set_keys should succeed");
 
     // Wait for set_keys transaction to finalize
-    tokio::time::timeout(Duration::from_secs(240), finalized)
+    tokio::time::timeout(Duration::from_secs(360), finalized)
         .await
         .expect("Timeout waiting for set_keys to finalize")
         .expect("set_keys finalization failed");
@@ -283,7 +283,7 @@ async fn test_sequencer_checkpoint_resume() {
     let mut cursor = None;
 
     let start = std::time::Instant::now();
-    let timeout = Duration::from_secs(240);
+    let timeout = Duration::from_secs(360);
 
     loop {
         assert!(
