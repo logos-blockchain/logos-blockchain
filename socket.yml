@@ -1,0 +1,15 @@
+version: 2
+
+triggerPaths:
+  - "**/package.json"
+  - "**/package-lock.json"
+  - "**/pnpm-lock.yaml"
+  - "**/bun.lock"
+  - "**/bun.lockb"
+  - "**/Cargo.toml"
+  - "**/Cargo.lock"
+  - "**/pyproject.toml"
+  - "**/requirements*.txt"
+  - "**/poetry.lock"
+  - "**/go.mod"
+  - "**/go.sum"
