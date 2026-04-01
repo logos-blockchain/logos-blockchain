@@ -109,9 +109,9 @@ pub struct Behaviour<ProofsVerifier, ObservationWindowClockProvider> {
     events: VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     /// Waker that handles polling
     waker: Option<Waker>,
-    /// Cache of the messages that have been processed by this node, to avoid
-    /// processing the same message multiple times and being marked as malicious
-    /// by our peers.
+    /// Cache of the messages that have been processed/forwarded by this node,
+    /// to avoid processing the same message multiple times and being marked
+    /// as malicious by our peers.
     message_cache: MessageCache,
     observation_window_clock_provider: ObservationWindowClockProvider,
     current_membership: Membership<PeerId>,
@@ -794,41 +794,7 @@ where
         &mut self,
         message: EncapsulatedMessage,
     ) -> Result<(), SendError> {
-        self.validate_and_forward_maybe_exclude(message, None)
-    }
-
-    fn validate_and_forward_maybe_exclude(
-        &mut self,
-        message: EncapsulatedMessage,
-        excluded_peer: Option<PeerId>,
-    ) -> Result<(), SendError> {
-        validate_and_forward_message(
-            message,
-            |message_to_validate| {
-                message_to_validate
-                    .verify_public_header(&self.poq_verifier)
-                    .map_err(|_| ())
-            },
-            self.negotiated_peers
-                .iter()
-                // Exclude the peer the message was received from.
-                .filter(|(peer_id, _)| excluded_peer != Some(**peer_id))
-                // Exclude from the list of candidates spammy peers.
-                .filter(|(_, peer_state)| !peer_state.negotiated_state.is_spammy())
-                // Take only the connection ID which the inner function requires.
-                .map(
-                    |(peer_id, RemotePeerConnectionDetails { connection_id, .. })| {
-                        (peer_id, connection_id)
-                    },
-                ),
-            &mut self.events,
-            &mut self.message_cache,
-            || {
-                if let Some(waker) = self.waker.take() {
-                    waker.wake();
-                }
-            },
-        )
+        self.validate_and_forward_maybe_excluding(message, None)
     }
 
     /// Forwards a message to all healthy connections except the [`except`]
@@ -854,7 +820,41 @@ where
             return old_session.validate_and_forward_message(message, except.0);
         }
 
-        self.validate_and_forward_maybe_exclude(message, Some(except.0))
+        self.validate_and_forward_maybe_excluding(message, Some(except.0))
+    }
+
+    fn validate_and_forward_maybe_excluding(
+        &mut self,
+        message: EncapsulatedMessage,
+        excluded_peer: Option<PeerId>,
+    ) -> Result<(), SendError> {
+        validate_and_forward_message(
+            message,
+            |message_to_validate| {
+                message_to_validate
+                    .verify_public_header(&self.poq_verifier)
+                    .map_err(|_| ())
+            },
+            self.negotiated_peers
+                .iter()
+                // Exclude the peer the message was received from.
+                .filter(|(peer_id, _)| excluded_peer != Some(**peer_id))
+                // Exclude from the list of candidates spammy peers.
+                .filter(|(_, peer_state)| !peer_state.negotiated_state.is_spammy())
+                // Take only the connection ID, which the inner function requires.
+                .map(
+                    |(peer_id, RemotePeerConnectionDetails { connection_id, .. })| {
+                        (peer_id, connection_id)
+                    },
+                ),
+            &mut self.events,
+            &mut self.message_cache,
+            || {
+                if let Some(waker) = self.waker.take() {
+                    waker.wake();
+                }
+            },
+        )
     }
 
     #[expect(

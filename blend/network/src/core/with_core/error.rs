@@ -11,7 +11,7 @@ pub enum SendError {
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ReceiveError {
+pub(crate) enum ReceiveError {
     /// The message being received has an invalid public header.
     InvalidMessage,
     /// The message being received is a duplicate of a previous received
