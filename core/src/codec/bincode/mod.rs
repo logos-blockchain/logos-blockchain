@@ -42,7 +42,7 @@ pub fn serialize<T: Serialize>(item: &T) -> Result<Bytes> {
         .serialized_size(item)
         .map_err(|e| WireError::Serialize(Box::new(e)))?;
 
-    if size > ONE_GB_MEMORY_WARNING_THRESHOLD {
+    if size > ONE_GB_MEMORY_WARNING_THRESHOLD as u64 {
         tracing::warn!("Large serialization detected: {size} bytes. This may impact memory usage.");
     }
 

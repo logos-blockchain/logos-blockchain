@@ -2,8 +2,10 @@ use std::{collections::HashSet, time::Duration};
 
 use lb_common_http_client::CommonHttpClient;
 use lb_core::{
-    block::MAX_BLOCK_SIZE,
-    mantle::{Note, NoteId, Transaction as _, ops::channel::ChannelId},
+    mantle::{
+        Note, NoteId, Transaction as _, encoding::MAX_ENCODE_DECODE_INSCRIPTION_SIZE,
+        ops::channel::ChannelId,
+    },
     sdp::{Declaration, Locator, ServiceType, WithdrawMessage},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
@@ -250,8 +252,13 @@ async fn sdp_declaration_restoration_e2e() {
 async fn large_inscription_e2e() {
     // The largest payload must leave room for transaction encoding overhead
     // (signatures, headers, etc.) to fit within MAX_BLOCK_SIZE.
-    let max_payload = MAX_BLOCK_SIZE * 7 / 8;
-    for payload_size in [32 * 1024, 128 * 1024, MAX_BLOCK_SIZE / 2, max_payload] {
+    let max_payload = MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize;
+    for payload_size in [
+        max_payload / 256,
+        max_payload / 64,
+        max_payload / 2,
+        max_payload,
+    ] {
         let topology = Topology::spawn(TopologyConfig::two_validators()).await;
         topology.wait_network_ready().await;
 
