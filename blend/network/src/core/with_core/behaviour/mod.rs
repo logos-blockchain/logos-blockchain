@@ -785,11 +785,6 @@ where
     ///
     /// Before the message is propagated, its public header is validated to
     /// make sure the receiving peer won't mark us as malicious.
-    ///
-    /// If the message is successfully validated with the old session verifier,
-    /// it is published using the old session.
-    /// Otherwise, it is validated with the current session verifier, and
-    /// if valid, published using the current session.
     pub fn validate_and_publish_message(
         &mut self,
         message: EncapsulatedMessage,
@@ -879,7 +874,7 @@ where
                     }
                 }
                 Err(e) => {
-                    tracing::trace!(target: LOG_TARGET, "Failed to handle message from the old session: {e:?}");
+                    tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old session: {e:?}");
                     return;
                 }
             }

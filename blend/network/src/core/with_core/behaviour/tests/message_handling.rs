@@ -274,7 +274,7 @@ async fn duplicate_message_received_from_different_peers() {
         .unwrap();
 
     // Verify that the message is bubbled up to the swarm only once
-    let mut expected_messages = 1u8;
+    let mut received_message_count = 0u8;
     loop {
         select! {
             () = sleep(Duration::from_secs(5)) => {
@@ -284,12 +284,12 @@ async fn duplicate_message_received_from_different_peers() {
             _ = dialing_swarm_2.select_next_some() => {}
             listening_event = listening_swarm.select_next_some() => {
                 if let SwarmEvent::Behaviour(Event::Message(..)) = listening_event {
-                    expected_messages = expected_messages.checked_sub(1).unwrap();
+                    received_message_count += 1;
                 }
             }
         }
     }
-    assert_eq!(expected_messages, 0);
+    assert_eq!(received_message_count, 1);
 }
 
 #[ignore = "TODO: enable this logic after investigating session/epoch transition issues. Test disabled because we currently have some session rotation 'front-running' since we self-apply locally produced blocks, which can lead some nodes to start generating proofs from a future session."]
