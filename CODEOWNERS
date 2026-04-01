@@ -1,0 +1,18 @@
+# Dependency and automation governance
+.github/dependabot.yml @tamlut-modnys
+.github/workflows/** @tamlut-modnys
+**/package.json @tamlut-modnys
+**/package-lock.json @tamlut-modnys
+**/pnpm-lock.yaml @tamlut-modnys
+**/yarn.lock @tamlut-modnys
+**/bun.lock @tamlut-modnys
+**/bun.lockb @tamlut-modnys
+**/requirements.txt @tamlut-modnys
+**/requirements.in @tamlut-modnys
+**/pyproject.toml @tamlut-modnys
+**/poetry.lock @tamlut-modnys
+**/uv.lock @tamlut-modnys
+**/go.mod @tamlut-modnys
+**/go.sum @tamlut-modnys
+**/Cargo.toml @tamlut-modnys
+**/Cargo.lock @tamlut-modnys
