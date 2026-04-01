@@ -43,6 +43,7 @@ where
 
     let mut at_least_one_receiver = false;
     peer_connections.for_each(|(peer_id, connection_id)| {
+        tracing::trace!("Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message.");
         events_queue.push_back(ToSwarm::NotifyHandler {
             peer_id: *peer_id,
             handler: NotifyHandler::One(*connection_id),

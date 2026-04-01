@@ -824,6 +824,12 @@ where
         message: EncapsulatedMessage,
         excluded_peer: Option<PeerId>,
     ) -> Result<(), SendError> {
+        tracing::trace!(
+            "Forwarding message with id {:?} to current session peers. Negotiated peers: {:?}. Excluded peer: {excluded_peer:?}",
+            hex::encode(message.id()),
+            self.negotiated_peers()
+        );
+
         validate_forward_message_and_update_cache(
             message,
             &self.poq_verifier,
@@ -877,7 +883,7 @@ where
             &mut self.events,
             self.waker.take(),
         ) {
-            tracing::debug!(target: LOG_TARGET, "Error when handling received message: {receive_error:?}");
+            tracing::debug!(target: LOG_TARGET, "Failed to handle message from the current session: {receive_error:?}");
             let spam_reason = match receive_error {
                 ReceiveError::DuplicateMessageFromPeer(_) => SpamReason::DuplicateMessage,
                 ReceiveError::InvalidPublicHeader => SpamReason::InvalidPublicHeader,

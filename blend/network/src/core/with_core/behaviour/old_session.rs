@@ -46,6 +46,12 @@ where
         message: EncapsulatedMessage,
         except: PeerId,
     ) -> Result<(), SendError> {
+        tracing::trace!(
+            "Forwarding message with id {:?} to old session peers. Negotiated peers: {:?}. Excluded peer: {except:?}",
+            hex::encode(message.id()),
+            self.negotiated_peers
+        );
+
         validate_forward_message_and_update_cache(
             message,
             &self.poq_verifier,
