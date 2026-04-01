@@ -1,3 +1,5 @@
+use core::fmt::{self, Debug, Formatter};
+
 use lb_blend::message::encap::encapsulated::EncapsulatedMessage;
 use serde::{Deserialize, Serialize};
 
@@ -14,10 +16,22 @@ pub enum ServiceMessage<BroadcastSettings> {
 /// To eventually broadcast the message to the network service,
 /// [`BroadcastSettings`] must be included in the [`NetworkMessage`].
 /// [`BroadcastSettings`] is a generic type defined by [`NetworkAdapter`].
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct NetworkMessage<BroadcastSettings> {
     pub message: Vec<u8>,
     pub broadcast_settings: BroadcastSettings,
+}
+
+impl<BroadcastSettings> Debug for NetworkMessage<BroadcastSettings>
+where
+    BroadcastSettings: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NetworkMessage")
+            .field("message", &format_args!("{} bytes", self.message.len()))
+            .field("broadcast_settings", &self.broadcast_settings)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
