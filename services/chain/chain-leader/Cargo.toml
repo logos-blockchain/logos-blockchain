@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 async-trait                      = "0.1"
-futures                          = { default-features = false, version = "0.3" }
+futures                          = { workspace = true }
 lb-blend-service                 = { workspace = true }
 lb-chain-network-service         = { workspace = true }
 lb-chain-service                 = { workspace = true }
@@ -33,7 +33,7 @@ overwatch                        = { workspace = true }
 rand                             = { workspace = true }
 serde                            = { workspace = true }
 thiserror                        = "1.0"
-tokio                            = { default-features = false, version = "1" }
+tokio                            = { workspace = true }
 tracing                          = { workspace = true }
 tracing-futures                  = { default-features = false, version = "0.2" }
 

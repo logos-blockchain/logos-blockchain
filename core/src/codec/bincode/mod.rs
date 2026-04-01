@@ -29,7 +29,7 @@ pub static OPTIONS: LazyLock<BincodeOptions> = LazyLock::new(|| {
 });
 
 // Serialization functions
-use bytes::{BufMut as _, Bytes, BytesMut};
+use bytes::Bytes;
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::codec::{Error as WireError, Result};
@@ -42,19 +42,14 @@ pub fn serialize<T: Serialize>(item: &T) -> Result<Bytes> {
         .serialized_size(item)
         .map_err(|e| WireError::Serialize(Box::new(e)))?;
 
-    let buf = BytesMut::with_capacity(size as usize);
-
-    let mut writer = buf.writer();
-    bincode::serialize_into(&mut writer, item).map_err(|e| WireError::Serialize(Box::new(e)))?;
-
-    let buf = writer.into_inner();
-    let size = buf.len();
-
     if size > ONE_GB_MEMORY_WARNING_THRESHOLD {
         tracing::warn!("Large serialization detected: {size} bytes. This may impact memory usage.");
     }
 
-    Ok(buf.freeze())
+    Ok(OPTIONS
+        .serialize(&item)
+        .map_err(|e| WireError::Serialize(Box::new(e)))?
+        .into())
 }
 
 /// Get the serialized size of an object without actually serializing it

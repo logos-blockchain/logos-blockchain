@@ -1,6 +1,6 @@
 use cucumber::{then, when};
-use lb_testing_framework::LbcLocalDeployer;
-use testing_framework_core::scenario::Deployer as _;
+use lb_testing_framework::{LbcK8sDeployer, LbcLocalDeployer};
+use testing_framework_core::scenario::{Application, Deployer, Scenario};
 
 use crate::cucumber::{
     error::{StepError, StepResult},
@@ -9,36 +9,14 @@ use crate::cucumber::{
 
 #[when(expr = "run scenario")]
 async fn run_scenario(world: &mut CucumberWorld) -> StepResult {
-    let deployer = world.deployer.ok_or(StepError::MissingDeployer)?;
-    world.run.result = Some(match deployer {
-        DeployerKind::Local => {
-            let mut scenario = world.build_local_scenario()?;
-            let deployer = LbcLocalDeployer::default();
-            let result = async {
-                let runner =
-                    deployer
-                        .deploy(&scenario)
-                        .await
-                        .map_err(|e| StepError::RunFailed {
-                            message: format!("local deploy failed: {e}"),
-                        })?;
-                runner
-                    .run(&mut scenario)
-                    .await
-                    .map_err(|e| StepError::RunFailed {
-                        message: format!("scenario run failed: {e}"),
-                    })?;
-                Ok::<(), StepError>(())
-            }
-            .await;
+    let deployer = selected_deployer(world)?;
+    let result = match deployer {
+        DeployerKind::Local => run_local_scenario(world).await,
+        DeployerKind::Compose => unsupported_compose_run(),
+        DeployerKind::K8s => run_k8s_scenario(world).await,
+    };
 
-            result.map_err(|e| e.to_string())
-        }
-        DeployerKind::Compose => Err(StepError::UnsupportedDeployer {
-            value: "compose".to_owned(),
-        })
-        .map_err(|e| e.to_string()),
-    });
+    world.run.result = Some(result.map_err(|error| error.to_string()));
 
     Ok(())
 }
@@ -52,4 +30,63 @@ fn scenario_should_succeed(world: &mut CucumberWorld) -> StepResult {
             message: "scenario was not run".to_owned(),
         }),
     }
+}
+
+fn selected_deployer(world: &CucumberWorld) -> Result<DeployerKind, StepError> {
+    world.deployer.ok_or(StepError::MissingDeployer)
+}
+
+async fn run_local_scenario(world: &CucumberWorld) -> StepResult {
+    let mut scenario = world.build_local_scenario()?;
+
+    deploy_and_run(
+        &LbcLocalDeployer::default(),
+        &mut scenario,
+        "local deploy failed",
+    )
+    .await
+}
+
+async fn run_k8s_scenario(world: &CucumberWorld) -> StepResult {
+    let mut scenario = world.build_k8s_scenario()?;
+
+    deploy_and_run(
+        &LbcK8sDeployer::default(),
+        &mut scenario,
+        "k8s deploy failed",
+    )
+    .await
+}
+
+fn unsupported_compose_run() -> StepResult {
+    Err(StepError::UnsupportedDeployer {
+        value: "compose".to_owned(),
+    })
+}
+
+async fn deploy_and_run<D, E>(
+    deployer: &D,
+    scenario: &mut Scenario<E>,
+    deploy_error_message: &'static str,
+) -> StepResult
+where
+    D: Deployer<E>,
+    D::Error: std::fmt::Display,
+    E: Application,
+{
+    let runner = deployer
+        .deploy(scenario)
+        .await
+        .map_err(|error| StepError::RunFailed {
+            message: format!("{deploy_error_message}: {error}"),
+        })?;
+
+    runner
+        .run(scenario)
+        .await
+        .map_err(|error| StepError::RunFailed {
+            message: format!("scenario run failed: {error}"),
+        })?;
+
+    Ok(())
 }

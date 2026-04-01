@@ -567,6 +567,10 @@ pub(crate) fn start_nodes_order_respecting_dependencies(
     clippy::too_many_lines,
     reason = "Covers startup, optional snapshot seeding, wallet wiring, and readiness in one path"
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Singular fn with multiple branches to handle different events and futures."
+)]
 pub async fn start_node(
     world: &mut CucumberWorld,
     step: &str,
@@ -988,6 +992,10 @@ async fn verify_online(
     }
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Singular fn with multiple branches to handle different events and futures."
+)]
 async fn verify_reponsive_and_network_ready(
     client: &NodeHttpClient,
     node_name: &str,
@@ -1400,6 +1408,10 @@ pub fn create_snapshots_all_nodes(
 /// Fetches and logs the consensus info of all nodes, for debugging purposes.
 /// Does not require the nodes to be aligned or have any specific state, and is
 /// resilient to some nodes being offline or unresponsive.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Singular fn with multiple branches to handle different events and futures."
+)]
 pub(crate) async fn get_cryptarchia_info_all_nodes(world: &CucumberWorld, step: &str) {
     let mut node_names = world.nodes_info.keys().cloned().collect::<Vec<_>>();
     node_names.sort();

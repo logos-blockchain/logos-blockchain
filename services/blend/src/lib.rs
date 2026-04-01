@@ -19,7 +19,7 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::{
     core::{
@@ -193,7 +193,8 @@ where
 
         info!(
             target: LOG_TARGET,
-            "The current membership is ready: {membership:?}.",
+            members = membership.size(),
+            "current membership is ready",
         );
 
         let mut instance = Instance::<CoreService, EdgeService, RuntimeServiceId>::new(
@@ -212,7 +213,7 @@ where
         loop {
             tokio::select! {
                 Some(session_event) = remaining_session_stream.next() => {
-                    info!(target: LOG_TARGET, "Received a new session event: {session_event:?}");
+                    debug!(target: LOG_TARGET, ?session_event, "received session event");
                     instance = instance.handle_session_event(session_event, overwatch_handle, minimal_network_size).await?;
                 },
                 Some(message) = inbound_relay.next() => {

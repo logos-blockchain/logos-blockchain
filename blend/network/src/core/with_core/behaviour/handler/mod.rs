@@ -215,7 +215,10 @@ where
                 .poll_unpin(cx)
             {
                 Poll::Ready(Ok((stream, msg))) => {
-                    tracing::debug!(target: LOG_TARGET, "Received message from inbound stream. Notifying behaviour...");
+                    tracing::trace!(
+                        target: LOG_TARGET,
+                        "Received message from inbound stream; notifying behaviour"
+                    );
 
                     // Record the message to the monitor.
                     self.monitor.record_message();
@@ -258,7 +261,7 @@ where
                 // If the substream is idle, and if it's time to send a message, send it.
                 Some(OutboundSubstreamState::Idle(stream)) => {
                     if let Some(msg) = self.outbound_msgs.pop_front() {
-                        tracing::debug!(target: LOG_TARGET, "Sending message to outbound stream.");
+                        tracing::trace!(target: LOG_TARGET, "Sending message to outbound stream");
                         self.outbound_substream = Some(OutboundSubstreamState::PendingSend(
                             send_msg(stream, msg).boxed(),
                         ));
@@ -272,7 +275,7 @@ where
                 Some(OutboundSubstreamState::PendingSend(mut msg_send_fut)) => {
                     match msg_send_fut.poll_unpin(cx) {
                         Poll::Ready(Ok(stream)) => {
-                            tracing::debug!(target: LOG_TARGET, "Message sent to outbound stream");
+                            tracing::trace!(target: LOG_TARGET, "Message sent to outbound stream");
                             self.outbound_substream = Some(OutboundSubstreamState::Idle(stream));
                         }
                         Poll::Ready(Err(e)) => {
@@ -291,13 +294,16 @@ where
                     }
                 }
                 Some(OutboundSubstreamState::Dropped) => {
-                    tracing::debug!(target: LOG_TARGET, "Outbound substream has been dropped proactively");
+                    tracing::trace!(target: LOG_TARGET, "Outbound substream dropped proactively");
                     self.outbound_substream = Some(OutboundSubstreamState::Dropped);
                     return Poll::Pending;
                 }
                 // If there is no outbound substream, request to open a new one.
                 None => {
-                    tracing::debug!(target: LOG_TARGET, "Outbound substream is not initialized yet. Requesting the swarm to open one.");
+                    tracing::trace!(
+                        target: LOG_TARGET,
+                        "Outbound substream not initialized yet; requesting swarm to open one"
+                    );
                     self.outbound_substream = Some(OutboundSubstreamState::PendingOpenSubstream);
                     return Poll::Ready(ConnectionHandlerEvent::OutboundSubstreamRequest {
                         protocol: SubstreamProtocol::new(
@@ -339,7 +345,7 @@ where
                 protocol: stream,
                 ..
             }) => {
-                tracing::debug!(target: LOG_TARGET, "FullyNegotiatedInbound: Creating inbound substream");
+                tracing::trace!(target: LOG_TARGET, "Fully negotiated inbound; creating inbound substream");
                 self.inbound_substream =
                     Some(InboundSubstreamState::PendingRecv(recv_msg(stream).boxed()));
                 self.pending_events_to_behaviour
@@ -350,7 +356,7 @@ where
                 protocol: stream,
                 ..
             }) => {
-                tracing::debug!(target: LOG_TARGET, "FullyNegotiatedOutbound: Creating outbound substream");
+                tracing::trace!(target: LOG_TARGET, "Fully negotiated outbound; creating outbound substream");
                 self.outbound_substream = Some(OutboundSubstreamState::Idle(stream));
                 self.pending_events_to_behaviour
                     .push_back(ToBehaviour::FullyNegotiatedOutbound);
@@ -364,7 +370,7 @@ where
                 VALUE_DIAL_UPGRADE_ERROR
             }
             event => {
-                tracing::debug!(target: LOG_TARGET, "Ignoring connection event: {:?}", event);
+                tracing::trace!(target: LOG_TARGET, ?event, "Ignoring connection event");
                 VALUE_IGNORED
             }
         };

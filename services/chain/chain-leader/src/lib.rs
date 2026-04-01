@@ -66,7 +66,7 @@ pub(crate) type WinningPolInfo = (LeaderPrivate, LeaderPublic, Epoch);
 
 const SERVICE_ID: &str = "ChainLeader";
 
-pub(crate) const LOG_TARGET: &str = "chain-leader::service";
+pub(crate) const LOG_TARGET: &str = "chain_leader::service";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -595,7 +595,7 @@ where
     )]
     #[instrument(
         level = "debug",
-        skip(tx_selector, relays, ledger_state, ledger_config)
+        skip(tx_selector, relays, ledger_state, ledger_config, proof, signing_key)
     )]
     async fn propose_block(
         parent: HeaderId,

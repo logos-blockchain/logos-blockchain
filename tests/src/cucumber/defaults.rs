@@ -27,6 +27,7 @@ const SNAPSHOTS_DIR_REL: &str = "cucumber_tests/temp/cucumber_artefacts/snapshot
 pub const SNAPSHOT_STATE_SUBDIRS: [&str; 2] = ["db", "recovery"];
 pub const CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: &str = "CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL";
 pub const CUCUMBER_DEPLOYER_COMPOSE: &str = "CUCUMBER_DEPLOYER_COMPOSE";
+pub const CUCUMBER_DEPLOYER_K8S: &str = "CUCUMBER_DEPLOYER_K8S";
 
 /// Set an environment variable to a default value if it is not already set.
 pub fn set_default_env(key: &str, value: &str) {
@@ -68,38 +69,36 @@ pub fn init_logging_defaults() {
 }
 
 pub fn init_node_log_dir_defaults(deployer: &DeployerKind, log_dir: Option<&PathBuf>) {
-    let host_dir = match deployer {
-        DeployerKind::Local => log_dir.as_ref().map_or_else(
-            || {
-                std::env::var_os(LOGOS_BLOCKCHAIN_LOG_DIR).map_or_else(
-                    || {
-                        let dir = PathBuf::from(SCENARIO_OUTPUT_DIR_REL).join(ARTEFACTS);
-                        set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
-                        dir
-                    },
-                    |dir| {
-                        let dir = dir.to_string_lossy().as_ref().to_owned();
-                        PathBuf::from(dir)
-                    },
-                )
-            },
-            |dir| {
-                // set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
-                PathBuf::from(dir)
-            },
-        ),
-        DeployerKind::Compose => std::env::var_os(LOGOS_BLOCKCHAIN_LOG_DIR).map_or_else(
-            || {
-                set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, CONTAINER_NODE_LOG_DIR);
-                PathBuf::from(CONTAINER_NODE_LOG_DIR)
-            },
-            |dir| {
-                let dir = dir.to_string_lossy().as_ref().to_owned();
-                PathBuf::from(dir)
-            },
-        ),
+    let host_dir = if deployer.uses_host_log_dir() {
+        resolve_host_log_dir(log_dir)
+    } else {
+        resolve_compose_log_dir()
     };
+
     fs::create_dir_all(&host_dir).expect("should succeed");
+}
+
+fn resolve_host_log_dir(log_dir: Option<&PathBuf>) -> PathBuf {
+    log_dir.cloned().unwrap_or_else(|| {
+        std::env::var_os(LOGOS_BLOCKCHAIN_LOG_DIR).map_or_else(
+            || {
+                let dir = PathBuf::from(SCENARIO_OUTPUT_DIR_REL).join(ARTEFACTS);
+                set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
+                dir
+            },
+            PathBuf::from,
+        )
+    })
+}
+
+fn resolve_compose_log_dir() -> PathBuf {
+    std::env::var_os(LOGOS_BLOCKCHAIN_LOG_DIR).map_or_else(
+        || {
+            set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, CONTAINER_NODE_LOG_DIR);
+            PathBuf::from(CONTAINER_NODE_LOG_DIR)
+        },
+        PathBuf::from,
+    )
 }
 
 pub fn init_tracing() {

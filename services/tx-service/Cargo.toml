@@ -21,7 +21,7 @@ workspace = true
 
 [dependencies]
 async-trait        = "0.1"
-futures            = { default-features = false, version = "0.3" }
+futures            = { workspace = true }
 lb-core            = { workspace = true }
 lb-network-service = { workspace = true }
 lb-services-utils  = { workspace = true }
@@ -32,8 +32,8 @@ rand               = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { default-features = false, optional = true, version = "1" }
 thiserror          = "1.0"
-tokio              = { default-features = false, version = "1" }
-tokio-stream       = { default-features = false, version = "0.1" }
+tokio              = { workspace = true }
+tokio-stream       = { workspace = true }
 tracing            = { workspace = true }
 utoipa             = { optional = true, workspace = true }
 
@@ -43,7 +43,6 @@ lb-utils                    = { workspace = true }
 logos-blockchain-tx-service = { features = ["mock", "rocksdb-backend"], path = "." }
 overwatch-derive            = { workspace = true }
 tempfile                    = "3"
-tokio                       = { default-features = false, version = "1" }
 
 [features]
 default         = []

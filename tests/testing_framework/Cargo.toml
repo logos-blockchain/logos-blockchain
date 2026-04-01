@@ -12,23 +12,28 @@ version.workspace    = true
 workspace = true
 
 [dependencies]
-anyhow                         = "1"
-async-trait                    = { workspace = true }
-futures                        = { default-features = false, version = "0.3" }
-hex                            = { workspace = true }
-num-bigint                     = { default-features = false, version = "0.4" }
-rand                           = { workspace = true }
-reqwest                        = { features = ["json"], workspace = true }
-serde                          = { workspace = true }
-serde_json                     = { workspace = true }
-serde_yaml                     = { workspace = true }
-testing-framework-core         = { workspace = true }
-testing-framework-env          = { workspace = true }
-testing-framework-runner-local = { workspace = true }
-thiserror                      = { workspace = true }
-time                           = { workspace = true }
-tokio                          = { features = ["macros", "process", "rt-multi-thread", "time"], workspace = true }
-tracing                        = { workspace = true }
+anyhow                           = "1"
+async-trait                      = { workspace = true }
+cfgsync-adapter                  = { workspace = true }
+cfgsync-artifacts                = { workspace = true }
+futures                          = { default-features = false, version = "0.3" }
+hex                              = { workspace = true }
+num-bigint                       = { default-features = false, version = "0.4" }
+rand                             = { workspace = true }
+reqwest                          = { features = ["json"], workspace = true }
+serde                            = { workspace = true }
+serde_json                       = { workspace = true }
+serde_yaml                       = { workspace = true }
+tempfile                         = { workspace = true }
+testing-framework-core           = { workspace = true }
+testing-framework-runner-compose = { workspace = true }
+testing-framework-runner-k8s     = { workspace = true }
+testing-framework-runner-local   = { workspace = true }
+thiserror                        = { workspace = true }
+time                             = { workspace = true }
+tokio                            = { features = ["macros", "process", "rt-multi-thread", "time"], workspace = true }
+tracing                          = { workspace = true }
+uuid                             = { workspace = true }
 
 common-http-client               = { workspace = true }
 lb-blend-service                 = { workspace = true }
@@ -50,7 +55,6 @@ lb-utils                         = { workspace = true }
 
 [package.metadata.cargo-machete]
 ignored = [
-  "hex",
   "lb-blend-service",
   "lb-chain-leader-service",
   "lb-chain-network-service",

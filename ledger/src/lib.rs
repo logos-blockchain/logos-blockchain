@@ -14,7 +14,8 @@ pub use cryptarchia::{EpochState, UtxoTree};
 use lb_core::{
     block::BlockNumber,
     mantle::{
-        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value, gas::GasConstants,
+        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value,
+        gas::{Gas, GasConstants},
     },
     proofs::leader_proof,
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
@@ -58,6 +59,7 @@ const LEADER_REWARD_SHARE_DENOMINATOR: u128 = 10;
 const BLEND_REWARD_SHARE_NUMERATOR: u128 = 6;
 
 const BLEND_REWARD_SHARE_DENOMINATOR: u128 = 10;
+const EXECUTION_GAS_LIMIT: Gas = 3_193_360;
 
 // While individual notes are constrained to be `u64`, intermediate calculations
 // may overflow, so we use `i128` to avoid that and to easily represent negative
@@ -92,6 +94,12 @@ pub enum LedgerError<Id> {
     MissingTransferGenesis(),
     #[error("Unsupported operation")]
     UnsupportedOp,
+    #[error("Fees don't cover the minimal execution base fee cost")]
+    InsufficientExecutionFee,
+    #[error("The execution gas of the block ({gas:?}) exceeds the maximum limit ({limit:?}")]
+    TooMuchExecutionGas { gas: Gas, limit: Gas },
+    #[error("Storage fees aren't equal to the storage fee of the current epoch")]
+    InvalidStoragePrice,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -245,12 +253,17 @@ impl LedgerState {
         })
     }
 
-    /// For each block received, rewards are calculated based on the actual
     /// total estimated stake and on the average of fees consumed per block over
     /// the last `BLOCK_REWARD_WINDOW_SIZE` blocks. See the block rewards
     /// specification: <https://www.notion.so/nomos-tech/v1-1-Block-Rewards-Specification-326261aa09df80579edddaf092057b3d>
-    fn compute_block_rewards(mut self) -> Self {
+    fn compute_block_rewards(mut self, total_fee_burned: Gas, total_fee_tip: Gas) -> Self {
         let window_index = self.block_number as usize % WINDOW_SIZE;
+
+        // First update the fee burned in the block
+        self.cryptarchia_ledger
+            .update_fee_window(window_index, total_fee_burned);
+
+        // Then compute the amount of the block rewards
 
         // compute A_t'
         let sum_fees = self.cryptarchia_ledger.get_summed_fees();
@@ -265,14 +278,15 @@ impl LedgerState {
                 * u128::from(self.cryptarchia_ledger.get_fee_from_index(window_index));
         let reward_denominator = INFLATION_DENOMINATOR * A_SCALE;
 
-        // blend get 60% of rewards while leaders get the 40% remaining.
-        // Casting as Value truncate the floating points
+        // blend get 60% of block rewards while leaders get the 40% remaining + the
+        // tips. Casting as Value truncate the floating points
         let blend_reward = (reward_numerator * BLEND_REWARD_SHARE_NUMERATOR
             / (reward_denominator * BLEND_REWARD_SHARE_DENOMINATOR))
             as Value;
         let leader_reward = (reward_numerator * LEADER_REWARD_SHARE_NUMERATOR
             / (reward_denominator * LEADER_REWARD_SHARE_DENOMINATOR))
-            as Value;
+            as Value
+            + total_fee_tip;
 
         self.mantle_ledger.leaders = self
             .mantle_ledger
@@ -284,19 +298,73 @@ impl LedgerState {
         self
     }
 
+    /// For each block received, execution base fees and average execution
+    /// consumption are updated based on the total execution gas consumed in the
+    /// block and the smoothed average consumption. This function update the
+    /// `average_execution_gas` and the `execution_base_fee` stored in the
+    /// cryptarchia ledger. See the specification <https://www.notion.so/nomos-tech/v1-2-Execution-Market-Specification-326261aa09df8022b1cfcfe968bdb5e1>
+    fn update_execution_market(self, block_execution_gas_consumed: Gas) -> Self {
+        Self {
+            cryptarchia_ledger: self
+                .cryptarchia_ledger
+                .update_execution_market(block_execution_gas_consumed),
+            ..self
+        }
+    }
+
     /// Apply the contents of an update to the ledger state.
     pub fn try_apply_contents<Id, Constants: GasConstants>(
         mut self,
         config: &Config,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx>,
     ) -> Result<Self, LedgerError<Id>> {
+        let mut total_block_execution_gas: Gas = 0;
+        let mut total_fee_burned: Gas = 0;
+        let mut total_fee_tip: Gas = 0;
         for tx in txs {
             let balance;
             (self, balance) = self.try_apply_tx::<_, Constants>(config, &tx)?;
-            self.cryptarchia_ledger
-                .update_fee_window(self.block_number as usize % WINDOW_SIZE, balance as u64);
+
+            // Check the transaction is balanced
+            match balance.cmp(&tx.total_gas_cost::<Constants>().into()) {
+                Ordering::Less => return Err(LedgerError::InsufficientBalance),
+                Ordering::Greater => return Err(LedgerError::UnbalancedTransaction),
+                Ordering::Equal => {} // OK!
+            }
+
+            // Update the total of fee burned and tipped in the block
+            let tx_fee_burned = tx.execution_gas_consumption::<Constants>()
+                * self.cryptarchia_ledger.execution_base_fee()
+                + tx.storage_gas_cost();
+
+            // Check that the transaction at least pays for the base fee
+            if balance < tx_fee_burned.into() {
+                return Err(LedgerError::InsufficientExecutionFee);
+            }
+
+            // Check that the transaction pays the correct storage fees
+            // TODO: remove the storage price from the Mantle Transaction and wallet should
+            // pull the price from ledger to get the fees to pay
+            if tx.mantle_tx().storage_gas_price != *self.cryptarchia_ledger.storage_gas_price() {
+                return Err(LedgerError::InvalidStoragePrice);
+            }
+            let tx_fee_tip = balance as Gas - tx_fee_burned;
+            total_fee_burned += tx_fee_burned;
+            total_fee_tip += tx_fee_tip;
+            total_block_execution_gas += &tx.execution_gas_consumption::<Constants>();
+
+            // Check that the block is not exceeding the Gas limit
+            if total_block_execution_gas > EXECUTION_GAS_LIMIT {
+                return Err(LedgerError::TooMuchExecutionGas {
+                    gas: total_block_execution_gas,
+                    limit: EXECUTION_GAS_LIMIT,
+                });
+            }
         }
-        self = self.compute_block_rewards();
+        // Compute Block rewards and give tips
+        self = self.compute_block_rewards(total_fee_burned, total_fee_tip);
+        // Update Execution market state
+        self = self.update_execution_market(total_block_execution_gas);
         Ok(self)
     }
 
@@ -465,13 +533,6 @@ impl LedgerState {
                 }
             }
         }
-
-        match balance.cmp(&tx.gas_cost::<Constants>().into()) {
-            Ordering::Less => return Err(LedgerError::InsufficientBalance),
-            Ordering::Greater => return Err(LedgerError::UnbalancedTransaction),
-            Ordering::Equal => {} // OK!
-        }
-
         Ok((self, balance))
     }
 }
@@ -500,12 +561,18 @@ mod tests {
 
     type HeaderId = [u8; 32];
 
-    fn create_tx(inputs: Vec<NoteId>, outputs: Vec<Note>, sks: &[ZkKey]) -> SignedMantleTx {
+    fn create_tx(
+        inputs: Vec<NoteId>,
+        outputs: Vec<Note>,
+        sks: &[ZkKey],
+        execution_price: Gas,
+        storage_price: Gas,
+    ) -> SignedMantleTx {
         let transfer_op = TransferOp::new(inputs, outputs);
         let mantle_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op)],
-            execution_gas_price: 1,
-            storage_gas_price: 1,
+            execution_gas_price: execution_price,
+            storage_gas_price: storage_price,
         };
         SignedMantleTx {
             ops_proofs: vec![ZkSig(
@@ -572,10 +639,12 @@ mod tests {
             vec![utxo.id()],
             vec![output_note],
             std::slice::from_ref(&sk),
+            1,
+            1,
         );
-        let fees = tx.gas_cost::<MainnetGasConstants>();
+        let fees = tx.total_gas_cost::<MainnetGasConstants>();
         output_note.value = utxo.note.value - fees;
-        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk]);
+        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk], 1, 1);
 
         // Create a dummy proof (using same structure as in cryptarchia tests)
 
@@ -890,5 +959,127 @@ mod tests {
     #[test]
     fn _test_sdp_withdraw_operation() {
         // This test has been disabled pending API updates
+    }
+
+    #[test]
+    fn test_storage_price_rejection() {
+        let utxo = utxo();
+        let config = config();
+        let ledger = LedgerState::from_utxos([utxo], &config);
+
+        let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(1u8).into()));
+        let sk = ZkKey::from(BigUint::from(0u8));
+        let tx = create_tx(
+            vec![utxo.id()],
+            vec![output_note],
+            std::slice::from_ref(&sk),
+            1,
+            0,
+        );
+        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        output_note.value = utxo.note.value - fees;
+        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk], 1, 0);
+
+        let result = ledger
+            .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
+        assert_eq!(result, Err(LedgerError::InvalidStoragePrice));
+    }
+
+    #[test]
+    fn test_base_fee_rejection() {
+        let utxo = utxo();
+        let config = config();
+        let mut ledger = LedgerState::from_utxos([utxo], &config);
+
+        let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(0u8).into()));
+        let sk = ZkKey::from(BigUint::from(0u8));
+        let tx = create_tx(
+            vec![utxo.id()],
+            vec![output_note],
+            std::slice::from_ref(&sk),
+            1,
+            1,
+        );
+        // Pays 2925 fees = 2705 execution base fee + 0 execution tip + 220 storage
+        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        output_note.value = utxo.note.value - fees;
+        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk], 1, 1);
+
+        let result = ledger
+            .clone()
+            .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
+        // The unwrap should succeed because the user pays at least the base fee of 2705
+        result.unwrap();
+
+        ledger.cryptarchia_ledger = ledger.cryptarchia_ledger.set_execution_base_fee(10);
+
+        let result = ledger
+            .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
+        // The transaction should be rejected because the price indicated for execution
+        // doesn't cover the base fee that cost 27 050
+        assert_eq!(result, Err(LedgerError::InsufficientExecutionFee));
+    }
+
+    #[test]
+    fn test_priority_fees_go_to_leader() {
+        let utxo = utxo();
+        let config = config();
+        let ledger = LedgerState::from_utxos([utxo], &config);
+
+        let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(0u8).into()));
+        let sk = ZkKey::from(BigUint::from(0u8));
+        let tx = create_tx(
+            vec![utxo.id()],
+            vec![output_note],
+            std::slice::from_ref(&sk),
+            1,
+            1,
+        );
+        // The tx ays 2925 fees = 2705 execution base fee + 0 execution tip + 220
+        // storage
+        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        output_note.value = utxo.note.value - fees;
+        let tx = create_tx(
+            vec![utxo.id()],
+            vec![output_note],
+            std::slice::from_ref(&sk),
+            1,
+            1,
+        );
+
+        let result = ledger
+            .clone()
+            .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
+        // The unwrap should succeed because the user pays at least the base fee of 2705
+        let no_priority_fee_ledger = result.unwrap();
+
+        let tx = create_tx(
+            vec![utxo.id()],
+            vec![output_note],
+            std::slice::from_ref(&sk),
+            2,
+            1,
+        );
+        // The tx ays 5630 fees = 2705 execution base fee + 2705 execution tip + 220
+        // storage
+        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        output_note.value = utxo.note.value - fees;
+        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk], 2, 1);
+        let result = ledger
+            .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
+        // The unwrap should succeed because the user pays at least the base fee of 2705
+        let priority_fee_ledger = result.unwrap();
+
+        assert_eq!(
+            no_priority_fee_ledger
+                .mantle_ledger
+                .leaders
+                .get_pending_rewards()
+                + 2705,
+            priority_fee_ledger
+                .mantle_ledger
+                .leaders
+                .get_pending_rewards()
+        );
     }
 }

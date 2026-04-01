@@ -126,7 +126,7 @@ where
     async fn new(settings: Self::Settings, network_relay: Relay<Libp2p, RuntimeServiceId>) -> Self {
         let relay = network_relay.clone();
         Self::subscribe(&relay, settings.topic.as_str()).await;
-        tracing::debug!("Starting up...");
+        tracing::trace!("Starting up...");
         // this wait seems to be helpful in some cases since we give the time
         // to the network to establish connections before we start sending messages
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -151,7 +151,7 @@ where
         Ok(Box::new(stream.filter_map(|message| match message {
             Ok(message) => NetworkMessage::from_bytes(&message.data).map_or_else(
                 |_| {
-                    tracing::debug!("unrecognized gossipsub message");
+                    tracing::trace!("unrecognized gossipsub message");
                     None
                 },
                 |msg| match msg {
