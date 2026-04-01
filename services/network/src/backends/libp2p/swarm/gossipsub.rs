@@ -32,11 +32,11 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 self.broadcast_and_retry(topic, message, 0);
             }
             PubSubCommand::Subscribe(topic) => {
-                tracing::debug!("subscribing to topic: {topic}");
+                tracing::trace!("subscribing to topic: {topic}");
                 log_error!(self.swarm.subscribe(&topic));
             }
             PubSubCommand::Unsubscribe(topic) => {
-                tracing::debug!("unsubscribing to topic: {topic}");
+                tracing::trace!("unsubscribing to topic: {topic}");
                 self.swarm.unsubscribe(&topic);
             }
             PubSubCommand::RetryBroadcast {
@@ -55,11 +55,11 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         message: Box<[u8]>,
         retry_count: usize,
     ) {
-        tracing::debug!("broadcasting message to topic: {topic}");
+        tracing::trace!("broadcasting message to topic: {topic}");
 
         match self.swarm.broadcast(&topic, message.to_vec()) {
             Ok(id) => {
-                tracing::debug!("Broadcasted message with id: {id} to topic: {topic}");
+                tracing::trace!("Broadcasted message with id: {id} to topic: {topic}");
                 // self-notification because libp2p doesn't do it
                 if self.swarm.is_subscribed(&topic) {
                     log_error!(self.pubsub_messages_tx.send(gossipsub::Message {
@@ -72,7 +72,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             }
             Err(gossipsub::PublishError::InsufficientPeers) if retry_count < MAX_RETRY => {
                 let wait = exp_backoff(retry_count);
-                tracing::debug!(
+                tracing::trace!(
                     "failed to broadcast message to topic due to insufficient peers, trying again in {wait:?}"
                 );
 

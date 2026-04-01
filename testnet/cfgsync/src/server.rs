@@ -9,7 +9,7 @@ use axum::{
     routing::{get, post},
 };
 use lb_node::config::TracingConfig;
-use lb_tests::nodes::create_validator_config;
+use lb_tests::nodes::create_validator_user_config;
 use reqwest::header::CONTENT_TYPE;
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -66,8 +66,8 @@ async fn init_node(
         |_| (StatusCode::INTERNAL_SERVER_ERROR, "Error receiving config").into_response(),
         |config_response| match config_response {
             RepoResponse::Config(response) => {
-                let (config, deployment_settings) = *response;
-                let config = create_validator_config(config, deployment_settings);
+                let (config, _) = *response;
+                let config = create_validator_user_config(config);
                 (StatusCode::OK, Json(config)).into_response()
             }
             RepoResponse::Timeout => (StatusCode::REQUEST_TIMEOUT).into_response(),

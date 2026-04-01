@@ -55,7 +55,7 @@ use crate::{
 
 const SERVICE_ID: &str = "ChainNetwork";
 
-pub(crate) const LOG_TARGET: &str = "chain-network::service";
+pub(crate) const LOG_TARGET: &str = "chain_network::service";
 
 #[derive(Debug, Error)]
 pub enum Error {

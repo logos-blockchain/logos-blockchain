@@ -4,7 +4,7 @@ use std::{path::PathBuf, sync::LazyLock};
 
 use reqwest::Client;
 use tempfile::TempDir;
-pub use validator::{Pool, Validator, create_validator_config};
+pub use validator::{Pool, Validator, create_validator_config, create_validator_user_config};
 
 use crate::{BIN_PATH_DEBUG, BIN_PATH_RELEASE};
 

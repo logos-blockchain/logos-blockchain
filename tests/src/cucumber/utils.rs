@@ -64,6 +64,7 @@ pub fn parse_deployer(value: &str) -> Result<DeployerKind, StepError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "local" | "host" => Ok(DeployerKind::Local),
         "compose" | "docker" => Ok(DeployerKind::Compose),
+        "k8s" | "kubernetes" => Ok(DeployerKind::K8s),
         other => Err(StepError::UnsupportedDeployer {
             value: other.to_owned(),
         }),
@@ -76,6 +77,10 @@ pub fn shared_host_bin_path(binary_name: &str) -> PathBuf {
     cucumber_dir.join("../assets/stack/bin").join(binary_name)
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Singular fn with multiple branches to handle different events and futures."
+)]
 pub async fn track_progress<Fut>(operation: &str, interval: Duration, wait: Fut) -> StepResult
 where
     Fut: Future<Output = StepResult>,

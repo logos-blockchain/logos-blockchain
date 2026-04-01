@@ -92,6 +92,9 @@ resolver = "2"
 
 [workspace.dependencies]
 # Internal
+cfgsync-adapter                    = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "f731791" }
+cfgsync-artifacts                  = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "f731791" }
+cfgsync-core                       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "f731791" }
 common-http-client                 = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
 lb-api-service                     = { default-features = false, package = "logos-blockchain-api-service", path = "./services/api" }
 lb-blend                           = { default-features = false, package = "logos-blockchain-blend", path = "./blend/core" }
@@ -150,9 +153,10 @@ lb-witness-generator               = { default-features = false, package = "logo
 lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
 lb-zone-sdk                        = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
 lb_network                         = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
-testing-framework-core             = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "tagged_ref_05" }
-testing-framework-env              = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "tagged_ref_05" }
-testing-framework-runner-local     = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "tagged_ref_05" }
+testing-framework-core             = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "f731791" }
+testing-framework-runner-compose   = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "f731791" }
+testing-framework-runner-k8s       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "f731791" }
+testing-framework-runner-local     = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "f731791" }
 
 # External
 async-trait       = { default-features = false, version = "0.1" }
@@ -166,6 +170,7 @@ fork_stream       = { default-features = false, version = "0.1.0" }
 futures           = { default-features = false, version = "0.3.32" }
 futures-util      = { default-features = false, version = "0.3.32" }
 hex               = { default-features = false, version = "0.4" }
+kube              = { default-features = false, features = ["client", "rustls-tls"], version = "0.87" }
 libp2p            = { default-features = false, version = "0.55" }
 libp2p-stream     = { default-features = false, version = "0.3.0-alpha" }
 log               = { default-features = false, version = "0.4" }
@@ -188,6 +193,7 @@ tokio-stream      = { default-features = false, version = "0.1.18" }
 tracing           = { default-features = false, version = "0.1" }
 utoipa            = { default-features = false, version = "4.0" }
 utoipa-swagger-ui = { default-features = false, version = "7.0" }
+uuid              = { default-features = false, features = ["v4"], version = "1" }
 x25519-dalek      = { default-features = false, version = "2" }
 zeroize           = { default-features = false, version = "1" }
 
