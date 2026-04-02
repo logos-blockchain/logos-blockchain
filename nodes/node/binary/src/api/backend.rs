@@ -47,7 +47,7 @@ use crate::{
     WalletService,
     api::{
         handlers::{
-            channel_deposit, leader_claim, mantle_channel, post_activity, post_declaration,
+            channel, channel_deposit, leader_claim, post_activity, post_declaration,
             post_withdrawal,
         },
         openapi::ApiDoc,
@@ -187,10 +187,6 @@ where
         let app = Router::new()
             .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
             .route(
-                paths::CHANNEL,
-                routing::get(mantle_channel::<RuntimeServiceId>),
-            )
-            .route(
                 paths::MANTLE_METRICS,
                 routing::get(mantle_metrics::<MempoolStorageAdapter, RuntimeServiceId>),
             )
@@ -222,6 +218,7 @@ where
                 paths::MEMPOOL_ADD_TX,
                 routing::post(add_tx::<MempoolStorageAdapter, RuntimeServiceId>),
             )
+            .route(paths::CHANNEL, routing::get(channel::<RuntimeServiceId>))
             .route(
                 paths::CHANNEL_DEPOSIT,
                 routing::post(

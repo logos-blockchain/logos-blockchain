@@ -59,7 +59,7 @@ pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
     RuntimeServiceId,
 >;
 
-pub async fn mantle_channel<RuntimeServiceId>(
+pub async fn channel<RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     id: ChannelId,
 ) -> Result<ChannelState, super::DynError>

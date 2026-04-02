@@ -77,25 +77,6 @@ macro_rules! make_request_and_return_response {
 
 #[utoipa::path(
     get,
-    path = paths::CHANNEL,
-    responses(
-        (status = 200, description = "Channel state"),
-        (status = 500, description = "Internal server error", body = String),
-    )
-)]
-pub async fn mantle_channel<RuntimeServiceId>(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Path(id): Path<ChannelId>,
-) -> Response
-where
-    RuntimeServiceId:
-        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
-{
-    make_request_and_return_response!(mantle::mantle_channel::<RuntimeServiceId>(&handle, id))
-}
-
-#[utoipa::path(
-    get,
     path = paths::MANTLE_METRICS,
     responses(
         (status = 200, description = "Get the mempool metrics of the cl service", body = inline(schema::MempoolMetrics)),
@@ -383,6 +364,25 @@ where
         <SignedMantleTx as Transaction>::Hash,
         RuntimeServiceId,
     >(&handle, tx, Transaction::hash))
+}
+
+#[utoipa::path(
+    get,
+    path = paths::CHANNEL,
+    responses(
+        (status = 200, description = "Channel state"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn channel<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(id): Path<ChannelId>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    make_request_and_return_response!(mantle::channel::<RuntimeServiceId>(&handle, id))
 }
 
 #[utoipa::path(
