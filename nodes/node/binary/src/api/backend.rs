@@ -47,7 +47,8 @@ use crate::{
     WalletService,
     api::{
         handlers::{
-            channel_deposit, leader_claim, post_activity, post_declaration, post_withdrawal,
+            channel, channel_deposit, leader_claim, post_activity, post_declaration,
+            post_withdrawal,
         },
         openapi::ApiDoc,
     },
@@ -217,6 +218,7 @@ where
                 paths::MEMPOOL_ADD_TX,
                 routing::post(add_tx::<MempoolStorageAdapter, RuntimeServiceId>),
             )
+            .route(paths::CHANNEL, routing::get(channel::<RuntimeServiceId>))
             .route(
                 paths::CHANNEL_DEPOSIT,
                 routing::post(

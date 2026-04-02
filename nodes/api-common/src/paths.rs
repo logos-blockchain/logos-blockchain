@@ -7,6 +7,7 @@ pub const CRYPTARCHIA_LIB_STREAM: &str = "/cryptarchia/lib-stream";
 pub const NETWORK_INFO: &str = "/network/info";
 pub const STORAGE_BLOCK: &str = "/storage/block";
 pub const MEMPOOL_ADD_TX: &str = "/mempool/add/tx";
+pub const CHANNEL: &str = "/channel/:id";
 pub const CHANNEL_DEPOSIT: &str = "/channel/deposit";
 pub const SDP_POST_DECLARATION: &str = "/sdp/declaration";
 pub const SDP_POST_ACTIVITY: &str = "/sdp/activity";

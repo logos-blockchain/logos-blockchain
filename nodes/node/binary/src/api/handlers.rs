@@ -20,7 +20,8 @@ use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Transaction, gas::MainnetGasConstants, tx_builder::MantleTxBuilder,
+        Op, SignedMantleTx, Transaction, gas::MainnetGasConstants, ops::channel::ChannelId,
+        tx_builder::MantleTxBuilder,
     },
 };
 use lb_http_api_common::{
@@ -366,6 +367,25 @@ where
 }
 
 #[utoipa::path(
+    get,
+    path = paths::CHANNEL,
+    responses(
+        (status = 200, description = "Channel state"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn channel<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(id): Path<ChannelId>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    make_request_and_return_response!(mantle::channel::<RuntimeServiceId>(&handle, id))
+}
+
+#[utoipa::path(
     post,
     path = paths::CHANNEL_DEPOSIT,
     responses(
@@ -418,7 +438,8 @@ where
             handle.relay::<WalletService>().await?,
         );
 
-        let tx_builder = MantleTxBuilder::new()
+        let gas_context = wallet.get_gas_context(None).await?;
+        let tx_builder = MantleTxBuilder::new(gas_context)
             .push_op(Op::ChannelDeposit(req.deposit))
             .push_op(Op::Transfer(req.burn));
         let lb_wallet_service::TipResponse {
@@ -705,7 +726,8 @@ pub mod wallet {
                 response: Some(balance),
             }) => WalletBalanceResponseBody {
                 tip,
-                balance,
+                balance: balance.balance,
+                notes: balance.notes,
                 address,
             }
             .into_response(),

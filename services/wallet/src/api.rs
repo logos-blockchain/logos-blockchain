@@ -1,10 +1,12 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, SignedMantleTx, Value, ops::leader_claim::VoucherCm, tx_builder::MantleTxBuilder,
+        Note, SignedMantleTx, Value, ops::leader_claim::VoucherCm, tx::MantleTxGasContext,
+        tx_builder::MantleTxBuilder,
     },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_wallet::WalletBalance;
 use overwatch::{
     overwatch::OverwatchHandle,
     services::{
@@ -24,7 +26,7 @@ pub enum WalletApiError {
     #[error("Failed to relay message with wallet:{relay_error:?}, msg={msg:?}")]
     RelaySend {
         relay_error: RelayError,
-        msg: WalletMsg,
+        msg: Box<WalletMsg>,
     },
     #[error("Failed to recv message from wallet: {0}")]
     RelayRecv(#[from] RecvError),
@@ -34,6 +36,7 @@ pub enum WalletApiError {
 
 impl From<(RelayError, WalletMsg)> for WalletApiError {
     fn from((relay_error, msg): (RelayError, WalletMsg)) -> Self {
+        let msg = Box::new(msg);
         Self::RelaySend { relay_error, msg }
     }
 }
@@ -95,7 +98,7 @@ where
         &self,
         tip: Option<HeaderId>,
         pk: ZkPublicKey,
-    ) -> Result<TipResponse<Option<Value>>, WalletApiError> {
+    ) -> Result<TipResponse<Option<WalletBalance>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
@@ -127,6 +130,17 @@ where
         Ok(rx.await??)
     }
 
+    pub async fn get_gas_context(
+        &self,
+        block_id: Option<HeaderId>,
+    ) -> Result<MantleTxGasContext, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::GetGasContext { block_id, resp_tx })
+            .await?;
+        Ok(rx.await??)
+    }
+
     pub async fn transfer_funds(
         &self,
         tip: Option<HeaderId>,
@@ -135,8 +149,9 @@ where
         recipient_pk: ZkPublicKey,
         amount: Value,
     ) -> Result<TipResponse<SignedMantleTx>, WalletApiError> {
+        let context = self.get_gas_context(tip).await?;
         let mantle_tx_builder =
-            MantleTxBuilder::new().add_ledger_output(Note::new(amount, recipient_pk));
+            MantleTxBuilder::new(context).add_ledger_output(Note::new(amount, recipient_pk));
         let funded_tx_builder = self
             .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks)
             .await?;
@@ -191,5 +206,82 @@ where
             .send(WalletMsg::GetClaimableVoucher { tip, resp_tx })
             .await?;
         Ok(rx.await??)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fmt::{self, Display, Formatter};
+
+    use lb_core::mantle::ops::channel::{ChannelId, ChannelKeyIndex};
+    use overwatch::services::state::{NoOperator, NoState};
+    use tokio::sync::mpsc;
+
+    use super::*;
+
+    struct DummyWallet;
+
+    impl ServiceData for DummyWallet {
+        type Settings = WalletServiceSettings;
+        type State = NoState<Self::Settings>;
+        type StateOperator = NoOperator<Self::State>;
+        type Message = WalletMsg;
+    }
+
+    impl WalletServiceData for DummyWallet {
+        type Kms = ();
+        type Cryptarchia = ();
+        type Tx = ();
+        type Storage = ();
+    }
+
+    #[derive(Debug)]
+    struct TestRuntimeServiceId;
+
+    impl AsServiceId<DummyWallet> for TestRuntimeServiceId {
+        const SERVICE_ID: Self = Self;
+    }
+
+    impl Display for TestRuntimeServiceId {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            write!(f, "TestRuntimeServiceId")
+        }
+    }
+
+    #[tokio::test]
+    async fn get_gas_context_round_trips_through_wallet_api() {
+        let expected_block_id = HeaderId::from([7u8; 32]);
+        let expected_channel_id = ChannelId::from([9u8; 32]);
+        let expected_threshold: ChannelKeyIndex = 2;
+
+        let (msg_sender, mut msg_receiver) = mpsc::channel(1);
+        tokio::spawn(async move {
+            while let Some(msg) = msg_receiver.recv().await {
+                if let WalletMsg::GetGasContext { block_id, resp_tx } = msg {
+                    assert_eq!(block_id, Some(expected_block_id));
+                    let context = MantleTxGasContext::new(
+                        std::iter::once((expected_channel_id, expected_threshold)).collect(),
+                    );
+                    drop(resp_tx.send(Ok(context)));
+                    break;
+                }
+            }
+        });
+
+        let api =
+            WalletApi::<DummyWallet, TestRuntimeServiceId>::new(OutboundRelay::new(msg_sender));
+        let context = api
+            .get_gas_context(Some(expected_block_id))
+            .await
+            .expect("gas context should round-trip through the wallet API");
+
+        assert_eq!(
+            context.withdraw_threshold(&expected_channel_id),
+            Some(expected_threshold)
+        );
+        assert_eq!(
+            context.withdraw_threshold(&ChannelId::from([1u8; 32])),
+            None
+        );
     }
 }

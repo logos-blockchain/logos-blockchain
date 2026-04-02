@@ -3,6 +3,8 @@ use lb_poseidon2::Digest;
 use serde::{Deserialize, Serialize};
 
 use super::{OpProof, SignedMantleTx, ops::sdp::SDPDeclareOp};
+#[cfg(feature = "mock")]
+use crate::mantle::tx::MantleTxGasContext;
 use crate::{
     crypto::ZkHasher,
     mantle::{
@@ -74,11 +76,11 @@ impl GenesisTx {
 
     #[cfg(feature = "mock")]
     #[must_use]
-    pub fn new_mocked() -> Self {
+    pub fn new_mocked(context: MantleTxGasContext) -> Self {
         use crate::mantle::tx_builder::MantleTxBuilder;
 
         Self(SignedMantleTx::new_unverified(
-            MantleTxBuilder::new().build(),
+            MantleTxBuilder::new(context).build(),
             vec![],
         ))
     }
@@ -116,22 +118,24 @@ impl Transaction for GenesisTx {
 }
 
 impl GasCost for GenesisTx {
-    fn total_gas_cost<Constants: GasConstants>(&self) -> Gas {
+    type Context = ();
+
+    fn total_gas_cost<Constants: GasConstants>(&self, _context: &Self::Context) -> Gas {
         // Genesis transactions have zero gas cost as per spec
         0
     }
 
-    fn storage_gas_cost(&self) -> Gas {
+    fn storage_gas_cost(&self, _context: &Self::Context) -> Gas {
         // Genesis transactions have zero gas cost as per spec
         0
     }
 
-    fn execution_gas_consumption<Constants: GasConstants>(&self) -> Gas {
+    fn execution_gas_consumption<Constants: GasConstants>(&self, _context: &Self::Context) -> Gas {
         // Genesis transactions have zero gas cost as per spec
         0
     }
 
-    fn storage_gas_consumption(&self) -> Gas {
+    fn storage_gas_consumption(&self, _context: &Self::Context) -> Gas {
         // Genesis transactions have zero gas cost as per spec
         0
     }

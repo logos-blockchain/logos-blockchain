@@ -15,7 +15,7 @@ use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo, Value,
+        AuthenticatedMantleTx, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
         gas::MainnetGasConstants,
         ops::{
             channel::{ChannelId, inscribe::InscriptionOp, set_keys::SetKeysOp},
@@ -24,6 +24,7 @@ use lb_core::{
             },
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
+        tx::MantleTxGasContext,
         tx_builder::MantleTxBuilder,
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
@@ -45,7 +46,7 @@ use lb_services_utils::{
 };
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
 use lb_utxotree::MerklePath;
-use lb_wallet::{WalletBlock, WalletError};
+use lb_wallet::{WalletBalance, WalletBlock, WalletError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData},
@@ -105,6 +106,9 @@ pub enum WalletServiceError {
 
     #[error("blocking task failed: {0}")]
     TaskJoin(#[from] JoinError),
+
+    #[error("Failed to fetch Channel Withdraw proof for op index {0} from the TxBuilder")]
+    ChannelWithdrawProofNotFound(usize),
 }
 
 #[derive(Debug)]
@@ -112,7 +116,7 @@ pub enum WalletMsg {
     GetBalance {
         tip: Option<HeaderId>,
         pk: ZkPublicKey,
-        resp_tx: Sender<Result<TipResponse<Option<Value>>, WalletServiceError>>,
+        resp_tx: Sender<Result<TipResponse<Option<WalletBalance>>, WalletServiceError>>,
     },
     FundTx {
         tip: Option<HeaderId>,
@@ -140,6 +144,10 @@ pub enum WalletMsg {
     },
     GetKnownAddresses {
         resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
+    },
+    GetGasContext {
+        block_id: Option<HeaderId>,
+        resp_tx: Sender<Result<MantleTxGasContext, WalletServiceError>>,
     },
 }
 
@@ -171,7 +179,8 @@ impl WalletMsg {
             | Self::FundTx { tip, .. }
             | Self::SignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. }
-            | Self::GetClaimableVoucher { tip, .. } => *tip,
+            | Self::GetClaimableVoucher { tip, .. }
+            | Self::GetGasContext { block_id: tip, .. } => *tip,
             Self::GenerateNewVoucherSecret { .. } | Self::GetKnownAddresses { .. } => None,
         }
     }
@@ -367,6 +376,7 @@ where
         }
     }
 
+    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn handle_wallet_message(
         msg: WalletMsg,
         state: &mut ServiceState<'_>,
@@ -477,13 +487,16 @@ where
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
             }
+            WalletMsg::GetGasContext { block_id, resp_tx } => {
+                Self::get_gas_context(block_id, resp_tx, cryptarchia).await;
+            }
         }
     }
 
     async fn handle_get_balance(
         tip: Option<HeaderId>,
         pk: ZkPublicKey,
-        resp_tx: Sender<Result<TipResponse<Option<u64>>, WalletServiceError>>,
+        resp_tx: Sender<Result<TipResponse<Option<WalletBalance>>, WalletServiceError>>,
         wallet: &Wallet,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
@@ -508,7 +521,7 @@ where
         }
     }
 
-    async fn sign_insciption(
+    async fn sign_inscription(
         tx_hash: TxHash,
         inscribe_op: &InscriptionOp,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
@@ -673,19 +686,26 @@ where
             .map(|utxo| utxo.note.pk)
             .collect();
 
+        let mut channel_withdraw_proofs = tx_builder.channel_withdraw_proofs().clone();
         let mantle_tx = tx_builder.build();
         let tx_hash = mantle_tx.hash();
 
         let mut ops_proofs = Vec::new();
-        for op in &mantle_tx.ops {
+        for (i, op) in mantle_tx.ops.iter().enumerate() {
             let proof = match op {
                 Op::ChannelInscribe(inscribe_op) => {
-                    Self::sign_insciption(tx_hash, inscribe_op, kms).await?
+                    Self::sign_inscription(tx_hash, inscribe_op, kms).await?
                 }
                 Op::ChannelSetKeys(set_keys_op) => {
                     Self::sign_channel_set_key(tx_hash, set_keys_op, &ledger, kms).await?
                 }
                 Op::ChannelDeposit(_deposit_op) => OpProof::NoProof,
+                Op::ChannelWithdraw(_channel_withdraw_op) => {
+                    let proof = channel_withdraw_proofs
+                        .remove(&i)
+                        .ok_or(WalletServiceError::ChannelWithdrawProofNotFound(i))?;
+                    OpProof::ChannelWithdrawProof(proof)
+                }
                 Op::SDPDeclare(declare_op) => {
                     Self::sign_sdp_declare(tx_hash, declare_op, &ledger, kms).await?
                 }
@@ -1091,6 +1111,37 @@ where
         let response: Vec<_> = wallet.known_keys().keys().copied().collect();
         if let Err(e) = tx.send(Ok(response)) {
             error!(err = ?e, "Failed to send known addresses response");
+        }
+    }
+
+    async fn get_gas_context(
+        block_id: Option<HeaderId>,
+        resp_tx: Sender<Result<MantleTxGasContext, WalletServiceError>>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    ) {
+        let block_id = match Self::msg_tip_or_latest(block_id, cryptarchia).await {
+            Ok(block_id) => block_id,
+            Err(error) => {
+                Self::send_err(resp_tx, error);
+                return;
+            }
+        };
+
+        let ledger_state = match cryptarchia.get_ledger_state(block_id).await {
+            Ok(Some(ledger_state)) => ledger_state,
+            Ok(None) => {
+                Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(block_id));
+                return;
+            }
+            Err(err) => {
+                Self::send_err(resp_tx, WalletServiceError::from(err));
+                return;
+            }
+        };
+
+        let gas_context = ledger_state.mantle_ledger().channels().into();
+        if let Err(e) = resp_tx.send(Ok(gas_context)) {
+            error!(err = ?e, "Failed to send gas context response");
         }
     }
 }

@@ -1,28 +1,32 @@
 pub type Gas = crate::mantle::ledger::Value;
 
 pub trait GasCost {
+    type Context;
+
     /// Returns the gas cost of this operation.
-    fn total_gas_cost<Constants: GasConstants>(&self) -> Gas;
-    fn storage_gas_cost(&self) -> Gas;
-    fn execution_gas_consumption<Constants: GasConstants>(&self) -> Gas;
-    fn storage_gas_consumption(&self) -> Gas;
+    fn total_gas_cost<Constants: GasConstants>(&self, context: &Self::Context) -> Gas;
+    fn storage_gas_cost(&self, context: &Self::Context) -> Gas;
+    fn execution_gas_consumption<Constants: GasConstants>(&self, context: &Self::Context) -> Gas;
+    fn storage_gas_consumption(&self, context: &Self::Context) -> Gas;
 }
 
 impl<T: GasCost> GasCost for &T {
-    fn total_gas_cost<Constants: GasConstants>(&self) -> Gas {
-        T::total_gas_cost::<Constants>(self)
+    type Context = T::Context;
+
+    fn total_gas_cost<Constants: GasConstants>(&self, context: &Self::Context) -> Gas {
+        T::total_gas_cost::<Constants>(self, context)
     }
 
-    fn storage_gas_cost(&self) -> Gas {
-        T::storage_gas_cost(self)
+    fn storage_gas_cost(&self, context: &Self::Context) -> Gas {
+        T::storage_gas_cost(self, context)
     }
 
-    fn execution_gas_consumption<Constants: GasConstants>(&self) -> Gas {
-        T::execution_gas_consumption::<Constants>(self)
+    fn execution_gas_consumption<Constants: GasConstants>(&self, context: &Self::Context) -> Gas {
+        T::execution_gas_consumption::<Constants>(self, context)
     }
 
-    fn storage_gas_consumption(&self) -> Gas {
-        T::storage_gas_consumption(self)
+    fn storage_gas_consumption(&self, context: &Self::Context) -> Gas {
+        T::storage_gas_consumption(self, context)
     }
 }
 
@@ -38,6 +42,9 @@ pub trait GasConstants {
 
     /// Verify the deposit signature.
     const CHANNEL_DEPOSIT: Gas;
+
+    /// Verify the withdrawal signature.
+    const CHANNEL_WITHDRAW: Gas;
 
     /// Verify the proof of ownership.
     const SDP_DECLARE: Gas;
@@ -59,6 +66,7 @@ impl GasConstants for MainnetGasConstants {
     const CHANNEL_INSCRIBE: Gas = 22;
     const CHANNEL_SET_KEYS: Gas = 22;
     const CHANNEL_DEPOSIT: Gas = 0;
+    const CHANNEL_WITHDRAW: Gas = 22;
     const SDP_DECLARE: Gas = 2727;
     const SDP_WITHDRAW: Gas = 2705;
     const SDP_ACTIVE: Gas = 2705;

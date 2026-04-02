@@ -2,7 +2,7 @@ mod config;
 // The ledger is split into two modules:
 // - `cryptarchia`: the base functionalities needed by the Cryptarchia consensus
 //   algorithm, including a minimal UTxO model.
-// - `mantle_ops` : our extensions in the form of Mantle operations, e.g. SDP.
+// - `mantle_ops`: our extensions in the form of Mantle operations, e.g. SDP.
 pub mod cryptarchia;
 pub mod mantle;
 
@@ -14,7 +14,7 @@ pub use cryptarchia::{EpochState, UtxoTree};
 use lb_core::{
     block::BlockNumber,
     mantle::{
-        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value,
+        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value, VerificationError,
         gas::{Gas, GasConstants},
     },
     proofs::leader_proof,
@@ -24,6 +24,8 @@ use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Field as _, Fr};
 use mantle::LedgerState as MantleLedger;
 use thiserror::Error;
+
+use crate::mantle::helpers::MantleOperationVerificationHelper;
 
 const WINDOW_SIZE: usize = 120;
 
@@ -102,6 +104,8 @@ pub enum LedgerError<Id> {
     TooMuchExecutionGas { gas: Gas, limit: Gas },
     #[error("Storage fees aren't equal to the storage fee of the current epoch")]
     InvalidStoragePrice,
+    #[error("Verification error: {0}")]
+    VerificationError(#[from] VerificationError),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -328,16 +332,17 @@ impl LedgerState {
             (self, balance) = self.try_apply_tx::<_, Constants>(config, &tx)?;
 
             // Check the transaction is balanced
-            match balance.cmp(&tx.total_gas_cost::<Constants>().into()) {
+            let total_gas_cost = AuthenticatedMantleTx::total_gas_cost::<Constants>(&tx);
+            match balance.cmp(&total_gas_cost.into()) {
                 Ordering::Less => return Err(LedgerError::InsufficientBalance),
                 Ordering::Greater => return Err(LedgerError::UnbalancedTransaction),
                 Ordering::Equal => {} // OK!
             }
 
             // Update the total of fee burned and tipped in the block
-            let tx_fee_burned = tx.execution_gas_consumption::<Constants>()
+            let tx_fee_burned = AuthenticatedMantleTx::execution_gas_consumption::<Constants>(&tx)
                 * self.cryptarchia_ledger.execution_base_fee()
-                + tx.storage_gas_cost();
+                + AuthenticatedMantleTx::storage_gas_cost(&tx);
 
             // Check that the transaction at least pays for the base fee
             if balance < tx_fee_burned.into() {
@@ -353,7 +358,8 @@ impl LedgerState {
             let tx_fee_tip = balance as Gas - tx_fee_burned;
             total_fee_burned += tx_fee_burned;
             total_fee_tip += tx_fee_tip;
-            total_block_execution_gas += &tx.execution_gas_consumption::<Constants>();
+            total_block_execution_gas +=
+                &AuthenticatedMantleTx::execution_gas_consumption::<Constants>(&tx);
 
             // Check that the block is not exceeding the Gas limit
             if total_block_execution_gas > EXECUTION_GAS_LIMIT {
@@ -462,15 +468,47 @@ impl LedgerState {
         self.mantle_ledger.active_sessions()
     }
 
+    /// Applies a transaction to the ledger state, returning the updated state
+    /// and the net balance change.
+    ///
+    /// # Prerequisites
+    ///
+    /// A transaction must not be applied unless all required proofs have been
+    /// fully verified.
+    ///
+    /// Proof verification is currently split across multiple paths depending on
+    /// the operation:
+    /// - `SignedMantleTx::verify_ops_proofs`: Invoked during construction
+    ///   (`SignedMantleTx::new`, e.g. on deserialization). Handles:
+    ///   `ChannelInscribe`, `LeaderClaim`.
+    /// - `SignedMantleTx::verify_ops_proofs_with_helper`: Invoked here before
+    ///   applying the transaction. Handles: `ChannelWithdraw`.
+    /// - Additional validation: Performed by the ledger or implicitly satisfied
+    ///   by certain operations.
+    ///
+    /// This fragmented design means verification may be:
+    /// - Distributed across different stages, and
+    /// - Potentially duplicated or missed if assumptions about prior
+    ///   verification are incorrect.
+    ///
+    /// Callers are responsible for ensuring that all required proofs have been
+    /// verified before applying the transaction.
+    ///
+    /// TODO: A refactor into a typed state model to enforce verification at
+    /// compile is planned.
     fn try_apply_tx<Id, Constants: GasConstants>(
         mut self,
         config: &Config,
         tx: impl AuthenticatedMantleTx,
     ) -> Result<(Self, Balance), LedgerError<Id>> {
+        let operation_verification_helper =
+            MantleOperationVerificationHelper::new(&self.mantle_ledger);
+        tx.verify_ops_proofs_with_helper(&operation_verification_helper)
+            .map_err(LedgerError::VerificationError)?;
+
         let mut balance: Balance = 0;
         let tx_hash = tx.hash();
-        let ops = tx.ops_with_proof().map(|(op, proof)| (op, Some(proof)));
-        for (op, proof) in ops {
+        for (op, proof) in tx.ops_with_proof() {
             match (op, proof) {
                 // The signature for channel ops can be verified before reaching this point,
                 // as you only need the signer's public key and tx hash
@@ -478,12 +516,12 @@ impl LedgerState {
                 (Op::ChannelInscribe(op), _) => {
                     self.mantle_ledger = self.mantle_ledger.try_apply_channel_inscription(op)?;
                 }
-                (Op::ChannelSetKeys(op), Some(OpProof::Ed25519Sig(sig))) => {
+                (Op::ChannelSetKeys(op), OpProof::Ed25519Sig(sig)) => {
                     self.mantle_ledger = self
                         .mantle_ledger
                         .try_apply_channel_set_keys(op, sig, &tx_hash)?;
                 }
-                (Op::ChannelDeposit(op), Some(OpProof::NoProof)) => {
+                (Op::ChannelDeposit(op), OpProof::NoProof) => {
                     let deposit_amount;
                     (self.mantle_ledger, deposit_amount) =
                         self.mantle_ledger.try_apply_channel_deposit(op)?;
@@ -491,12 +529,20 @@ impl LedgerState {
                         .checked_sub(deposit_amount.into())
                         .ok_or(LedgerError::BalanceOverflow)?;
                 }
+                (Op::ChannelWithdraw(op), OpProof::ChannelWithdrawProof(_proof)) => {
+                    let withdraw_amount;
+                    (self.mantle_ledger, withdraw_amount) =
+                        self.mantle_ledger.try_apply_channel_withdraw(op)?;
+                    balance = balance
+                        .checked_add(withdraw_amount.into())
+                        .ok_or(LedgerError::BalanceOverflow)?;
+                }
                 (
                     Op::SDPDeclare(op),
-                    Some(OpProof::ZkAndEd25519Sigs {
+                    OpProof::ZkAndEd25519Sigs {
                         zk_sig,
                         ed25519_sig,
-                    }),
+                    },
                 ) => {
                     self.mantle_ledger = self.mantle_ledger.try_apply_sdp_declaration(
                         op,
@@ -507,17 +553,17 @@ impl LedgerState {
                         config,
                     )?;
                 }
-                (Op::SDPActive(op), Some(OpProof::ZkSig(sig))) => {
+                (Op::SDPActive(op), OpProof::ZkSig(sig)) => {
                     self.mantle_ledger = self
                         .mantle_ledger
                         .try_apply_sdp_active(op, sig, tx_hash, config)?;
                 }
-                (Op::SDPWithdraw(op), Some(OpProof::ZkSig(sig))) => {
+                (Op::SDPWithdraw(op), OpProof::ZkSig(sig)) => {
                     self.mantle_ledger = self
                         .mantle_ledger
                         .try_apply_sdp_withdraw(op, sig, tx_hash, config)?;
                 }
-                (Op::LeaderClaim(op), None) => {
+                (Op::LeaderClaim(op), OpProof::PoC(_)) => {
                     // Correct derivation of the voucher nullifier and membership in the merkle tree
                     // can be verified outside of this function since public inputs are already
                     // available. Callers are expected to validate the proof
@@ -528,7 +574,7 @@ impl LedgerState {
                         .checked_add(reward.into())
                         .ok_or(LedgerError::BalanceOverflow)?;
                 }
-                (Op::Transfer(op), Some(OpProof::ZkSig(sig))) => {
+                (Op::Transfer(op), OpProof::ZkSig(sig)) => {
                     let transfer_balance;
                     (self.cryptarchia_ledger, transfer_balance) =
                         self.cryptarchia_ledger.try_apply_transfer::<_, Constants>(
@@ -553,15 +599,19 @@ impl LedgerState {
 #[cfg(test)]
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
-    use lb_core::mantle::{
-        GasCost as _, MantleTx, Note, SignedMantleTx, Transaction as _,
-        gas::MainnetGasConstants,
-        ops::{
-            channel::{
-                ChannelId, MsgId, deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp,
+    use lb_core::{
+        mantle::{
+            MantleTx, Note, SignedMantleTx, Transaction as _,
+            gas::MainnetGasConstants,
+            ops::{
+                channel::{
+                    ChannelId, MsgId, deposit::DepositOp, inscribe::InscriptionOp,
+                    set_keys::SetKeysOp, withdraw::ChannelWithdrawOp,
+                },
+                transfer::TransferOp,
             },
-            transfer::TransferOp,
         },
+        proofs::channel_withdraw_proof::{ChannelWithdrawProof, WithdrawSignature},
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
@@ -613,6 +663,8 @@ mod tests {
     enum Key {
         Ed25519(Ed25519Key),
         Zk(ZkKey),
+        EmptyZk,
+        Withdraw(ChannelWithdrawProof),
         None,
     }
 
@@ -638,6 +690,8 @@ mod tests {
                 Key::Zk(key) => OpProof::ZkSig(
                     ZkKey::multi_sign(std::slice::from_ref(key), tx_hash.as_ref()).unwrap(),
                 ),
+                Key::EmptyZk => OpProof::ZkSig(ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap()),
+                Key::Withdraw(proof) => OpProof::ChannelWithdrawProof(proof.clone()),
                 Key::None => OpProof::NoProof,
             })
             .collect();
@@ -692,7 +746,7 @@ mod tests {
             1,
             1,
         );
-        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
         output_note.value = utxo.note.value - fees;
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk], 1, 1);
 
@@ -849,6 +903,205 @@ mod tests {
             deposit.amount,
         );
         assert_eq!(balance, Balance::from(0));
+    }
+
+    #[test]
+    fn test_channel_withdraw_operation() {
+        let test_config = config();
+        let (sk, utxo) = utxo_with_sk();
+        let mut ledger_state = LedgerState::from_utxos([utxo], &test_config);
+        let (signing_key, verifying_key) = create_test_keys();
+        let channel_id = ChannelId::from([9; 32]);
+
+        ledger_state = create_channel(
+            ledger_state,
+            &test_config,
+            channel_id,
+            &signing_key,
+            verifying_key,
+        );
+
+        // Deposit some funds into the channel
+        let deposit = DepositOp {
+            channel_id,
+            amount: 10,
+            metadata: vec![5, 6, 7, 8],
+        };
+        let deposit_ops = vec![
+            Op::ChannelDeposit(deposit.clone()),
+            Op::Transfer(TransferOp {
+                inputs: vec![utxo.id()],
+                outputs: vec![Note::new(
+                    utxo.note.value - deposit.amount,
+                    sk.to_public_key(),
+                )],
+            }),
+        ];
+        ledger_state = ledger_state
+            .try_apply_tx::<HeaderId, MainnetGasConstants>(
+                &test_config,
+                create_multi_signed_tx(deposit_ops, vec![&Key::None, &Key::Zk(sk)]),
+            )
+            .unwrap()
+            .0;
+
+        // Withdraw some funds from the channel
+        let withdraw = ChannelWithdrawOp {
+            channel_id,
+            amount: 6,
+        };
+        let recipient_sk = ZkKey::from(BigUint::from(99u8));
+        let recipient_pk = recipient_sk.to_public_key();
+        let transfer_op = TransferOp {
+            inputs: vec![],
+            outputs: vec![Note::new(withdraw.amount, recipient_pk)],
+        };
+        let withdraw_tx = MantleTx {
+            ops: vec![
+                Op::ChannelWithdraw(withdraw.clone()),
+                Op::Transfer(transfer_op.clone()),
+            ],
+            execution_gas_price: 0,
+            storage_gas_price: 0,
+        };
+        let withdraw_tx_hash = withdraw_tx.hash();
+        let withdraw_proof = ChannelWithdrawProof::new(vec![WithdrawSignature::new(
+            0,
+            signing_key.sign_payload(withdraw_tx_hash.as_signing_bytes().as_ref()),
+        )])
+        .unwrap();
+
+        let signed_tx = create_multi_signed_tx(
+            withdraw_tx.ops,
+            vec![&Key::Withdraw(withdraw_proof), &Key::EmptyZk],
+        );
+
+        let result =
+            ledger_state.try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, signed_tx);
+        assert!(result.is_ok());
+
+        let (new_state, tx_balance) = result.unwrap();
+        assert_eq!(tx_balance, 0);
+        let channel_balance = new_state
+            .mantle_ledger()
+            .channels()
+            .channels
+            .get(&channel_id)
+            .unwrap()
+            .balance;
+        assert_eq!(channel_balance, 4);
+        let output_utxo = transfer_op.utxo_by_index(0).unwrap();
+        assert_eq!(output_utxo.note.value, withdraw.amount);
+        assert_eq!(output_utxo.note.pk, recipient_sk.to_public_key());
+        assert!(new_state.latest_utxos().contains(&output_utxo.id()));
+    }
+
+    #[test]
+    fn test_channel_withdraw_invalid_helper_backed_proof_fails_on_apply() {
+        let test_config = config();
+        let (sk, utxo) = utxo_with_sk();
+        let mut ledger_state = LedgerState::from_utxos([utxo], &test_config);
+        let (signing_key, verifying_key) = create_test_keys();
+        let channel_id = ChannelId::from([10; 32]);
+
+        ledger_state = create_channel(
+            ledger_state,
+            &test_config,
+            channel_id,
+            &signing_key,
+            verifying_key,
+        );
+
+        // Deposit some funds into the channel
+        let deposit = DepositOp {
+            channel_id,
+            amount: 10,
+            metadata: vec![],
+        };
+        let deposit_ops = vec![
+            Op::ChannelDeposit(deposit.clone()),
+            Op::Transfer(TransferOp {
+                inputs: vec![utxo.id()],
+                outputs: vec![Note::new(
+                    utxo.note.value - deposit.amount,
+                    sk.to_public_key(),
+                )],
+            }),
+        ];
+        ledger_state = ledger_state
+            .try_apply_tx::<HeaderId, MainnetGasConstants>(
+                &test_config,
+                create_multi_signed_tx(deposit_ops, vec![&Key::None, &Key::Zk(sk)]),
+            )
+            .unwrap()
+            .0;
+        let channel_balance_after_deposit = ledger_state
+            .mantle_ledger()
+            .channels()
+            .channels
+            .get(&channel_id)
+            .unwrap()
+            .balance;
+
+        // Try to withdraw some funds from the channel, but with an invalid proof
+        let withdraw = ChannelWithdrawOp {
+            channel_id,
+            amount: 6,
+        };
+        let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
+        let recipient_sk = ZkKey::from(BigUint::from(100u8));
+        let recipient_pk = recipient_sk.to_public_key();
+        let transfer_op = TransferOp {
+            inputs: vec![],
+            outputs: vec![Note::new(withdraw.amount, recipient_pk)],
+        };
+        let withdraw_tx = MantleTx {
+            ops: vec![
+                Op::ChannelWithdraw(withdraw),
+                Op::Transfer(transfer_op.clone()),
+            ],
+            execution_gas_price: 0,
+            storage_gas_price: 0,
+        };
+        let withdraw_tx_hash = withdraw_tx.hash();
+        let invalid_proof = ChannelWithdrawProof::new(vec![WithdrawSignature::new(
+            0,
+            wrong_key.sign_payload(withdraw_tx_hash.as_signing_bytes().as_ref()),
+        )])
+        .unwrap();
+
+        let signed_tx = create_multi_signed_tx(
+            withdraw_tx.ops,
+            vec![&Key::Withdraw(invalid_proof), &Key::EmptyZk],
+        );
+
+        let result = ledger_state
+            .clone()
+            .try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, signed_tx);
+        assert_eq!(
+            result,
+            Err(LedgerError::VerificationError(
+                VerificationError::ChannelWithdrawProofInvalidSignature {
+                    op_index: 0,
+                    signature_index: 0,
+                }
+            ))
+        );
+
+        let channel_balance_after_withdraw = ledger_state
+            .mantle_ledger()
+            .channels()
+            .channels
+            .get(&channel_id)
+            .unwrap()
+            .balance;
+        assert_eq!(channel_balance_after_deposit, 10);
+        assert_eq!(
+            channel_balance_after_deposit,
+            channel_balance_after_withdraw
+        );
+        let recipient_utxo = transfer_op.utxo_by_index(0).unwrap();
+        assert!(!ledger_state.latest_utxos().contains(&recipient_utxo.id()));
     }
 
     #[test]
@@ -1104,7 +1357,7 @@ mod tests {
             1,
             0,
         );
-        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
         output_note.value = utxo.note.value - fees;
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk], 1, 0);
 
@@ -1129,7 +1382,7 @@ mod tests {
             1,
         );
         // Pays 2925 fees = 2705 execution base fee + 0 execution tip + 220 storage
-        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
         output_note.value = utxo.note.value - fees;
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk], 1, 1);
 
@@ -1165,7 +1418,7 @@ mod tests {
         );
         // The tx ays 2925 fees = 2705 execution base fee + 0 execution tip + 220
         // storage
-        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
         output_note.value = utxo.note.value - fees;
         let tx = create_tx(
             vec![utxo.id()],
@@ -1190,7 +1443,7 @@ mod tests {
         );
         // The tx ays 5630 fees = 2705 execution base fee + 2705 execution tip + 220
         // storage
-        let fees = tx.total_gas_cost::<MainnetGasConstants>();
+        let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
         output_note.value = utxo.note.value - fees;
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk], 2, 1);
         let result = ledger

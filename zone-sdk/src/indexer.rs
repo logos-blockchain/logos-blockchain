@@ -1,13 +1,9 @@
-use futures::{Stream, StreamExt as _};
-use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient};
-use lb_core::mantle::ops::{
-    Op,
-    channel::{ChannelId, MsgId},
-};
-use reqwest::Url;
+use futures::{Stream, StreamExt as _, future};
+use lb_common_http_client::Slot;
+use lb_core::mantle::ops::channel::{ChannelId, MsgId};
 use tracing::warn;
 
-use crate::ZoneBlock;
+use crate::{ZoneMessage, adapter};
 
 /// Indexer errors.
 #[derive(Debug, thiserror::Error)]
@@ -16,241 +12,295 @@ pub enum Error {
     Http(#[from] lb_common_http_client::Error),
 }
 
-/// Opaque cursor for pagination. Pass to `next_messages` to resume.
-///
-/// Serializable so that callers can persist it for crash recovery.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Cursor {
-    slot: u64,
-    last_id: Option<MsgId>,
-}
-
-/// Result of polling for messages.
-pub struct PollResult {
-    /// Messages found.
-    pub messages: Vec<ZoneBlock>,
-    /// Cursor to pass to the next `next_messages` call.
-    pub cursor: Cursor,
-}
-
 /// Zone indexer — reads finalized zone messages from a channel.
-pub struct ZoneIndexer {
+pub struct ZoneIndexer<Node> {
     channel_id: ChannelId,
-    node_url: Url,
-    http_client: CommonHttpClient,
+    node: Node,
 }
 
-const BATCH_SIZE: u64 = 100;
+const BATCH_SIZE: Slot = Slot::new(100);
 
-impl ZoneIndexer {
+impl<Node> ZoneIndexer<Node>
+where
+    Node: adapter::Node + Clone + Sync,
+{
     #[must_use]
-    pub fn new(channel_id: ChannelId, node_url: Url, auth: Option<BasicAuthCredentials>) -> Self {
-        Self {
-            channel_id,
-            node_url,
-            http_client: CommonHttpClient::new(auth),
-        }
+    pub const fn new(channel_id: ChannelId, node: Node) -> Self {
+        Self { channel_id, node }
     }
 
-    /// Subscribe to live zone messages as they finalize.
-    pub async fn follow(
-        &self,
-    ) -> Result<impl Stream<Item = ZoneBlock> + '_, lb_common_http_client::Error> {
-        let lib_stream = self
-            .http_client
-            .get_lib_stream(self.node_url.clone())
-            .await?;
+    /// Subscribe to live [`ZoneMessage`]s as they finalize.
+    pub async fn follow(&self) -> Result<impl Stream<Item = ZoneMessage> + '_, Error> {
+        let lib_stream = self.node.lib_stream().await?;
 
         let channel_id = self.channel_id;
         let stream = lib_stream.filter_map(move |block_info| {
-            let http_client = self.http_client.clone();
-            let node_url = self.node_url.clone();
             let header_id = block_info.header_id;
 
             async move {
-                let block = match http_client.get_block(node_url, header_id).await {
-                    Ok(Some(block)) => block,
-                    Ok(None) => {
-                        warn!("LIB block {header_id} not found");
-                        return None;
-                    }
+                let stream = match self
+                    .node
+                    .zone_messages_in_block(header_id, channel_id)
+                    .await
+                {
+                    Ok(stream) => stream,
                     Err(e) => {
                         warn!("Failed to fetch LIB block {header_id}: {e}");
+                        // TODO: return error to stream, and stop stream
                         return None;
                     }
                 };
 
-                let zone_blocks: Vec<ZoneBlock> = block
-                    .transactions()
-                    .flat_map(|tx| &tx.mantle_tx.ops)
-                    .filter_map(|op| match op {
-                        Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
-                            Some(ZoneBlock {
-                                id: inscribe.id(),
-                                data: inscribe.inscription.clone(),
-                            })
-                        }
-                        _ => None,
-                    })
-                    .collect();
-
-                Some(futures::stream::iter(zone_blocks))
+                Some(stream)
             }
         });
 
         Ok(stream.flatten())
     }
 
-    /// Fetch the LIB slot.
-    ///
-    /// TODO(node-api): expose `lib_slot` in /cryptarchia/info so indexer
-    /// doesn't need two calls (`consensus_info` + `get_block(lib)`).
-    async fn lib_slot(&self) -> Result<u64, Error> {
-        let info = self
-            .http_client
-            .consensus_info(self.node_url.clone())
-            .await?;
-
-        // Genesis block isn't stored as a regular block, so None here means slot 0.
-        Ok(self
-            .http_client
-            .get_block(self.node_url.clone(), info.lib)
-            .await?
-            .map_or(0, |block| block.header().slot().into()))
-    }
-
-    /// Poll for the next batch of messages.
-    ///
-    /// Returns up to `limit` messages and a cursor for the next call.
-    /// Pass `None` to start from the beginning, or pass the returned cursor
-    /// to continue where you left off.
+    /// Stream finalized [`ZoneMessage`]s from `last_zone_block` (excluded)
+    /// up to LIB.
     pub async fn next_messages(
         &self,
-        cursor: Option<Cursor>,
-        limit: usize,
-    ) -> Result<PollResult, Error> {
-        let lib_slot = self.lib_slot().await?;
+        last_zone_block: Option<(MsgId, Slot)>,
+    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + '_, Error> {
+        let lib_slot = self.node.lib_slot().await?;
+        let current_slot = last_zone_block
+            .as_ref()
+            .map_or_else(Slot::genesis, |(_, slot)| *slot);
+        let mut skip_until = last_zone_block;
 
-        let (cursor, mut current_slot) = cursor.map_or_else(
-            || (Cursor::default(), 0),
-            |c| {
-                let start = if c.last_id.is_some() {
-                    c.slot
-                } else {
-                    c.slot.saturating_add(1)
-                };
-                (c, start)
-            },
-        );
+        #[expect(
+            closure_returning_async_block,
+            reason = "Signature expected by `unfold`"
+        )]
+        let stream = futures::stream::unfold(current_slot, move |current_slot| async move {
+            if current_slot > lib_slot {
+                return None;
+            }
 
-        if current_slot > lib_slot || limit == 0 {
-            return Ok(PollResult {
-                messages: Vec::new(),
-                cursor: Cursor {
-                    slot: lib_slot,
-                    last_id: None,
-                },
-            });
-        }
+            let end_slot = (Slot::from(
+                current_slot
+                    .into_inner()
+                    .saturating_add(BATCH_SIZE.into_inner())
+                    .checked_sub(1)
+                    .expect("slot shouldn't overflow"),
+            ))
+            .min(lib_slot);
 
-        let mut scan = ScanState::new(cursor, limit);
-
-        while current_slot <= lib_slot {
-            let end_slot = (current_slot + BATCH_SIZE - 1).min(lib_slot);
-            let blocks = self
-                .http_client
-                .get_blocks(self.node_url.clone(), current_slot, end_slot)
-                .await?;
-
-            for block in blocks {
-                let block_slot: u64 = block.header.slot.into();
-
-                for tx in &block.transactions {
-                    for op in &tx.mantle_tx.ops {
-                        if let Op::ChannelInscribe(inscribe) = op
-                            && inscribe.channel_id == self.channel_id
-                            && let Some(done) =
-                                scan.push_msg(block_slot, inscribe.id(), &inscribe.inscription)
-                        {
-                            return Ok(done);
-                        }
-                    }
+            match self
+                .node
+                .zone_messages_in_blocks(current_slot, end_slot, self.channel_id)
+                .await
+            {
+                Ok(messages) => Some((messages, end_slot + 1)),
+                Err(e) => {
+                    warn!(
+                        ?current_slot, ?end_slot, err = ?e,
+                        "Failed to fetch zone messages from blocks",
+                    );
+                    // TODO: return error to stream
+                    None
                 }
             }
-
-            current_slot = end_slot + 1;
-        }
-
-        // Caught up to LIB.
-        Ok(PollResult {
-            messages: scan.out,
-            cursor: Cursor {
-                slot: lib_slot,
-                last_id: None,
-            },
         })
-    }
-}
-
-/// Internal state machine for cursor-based message scanning.
-struct ScanState {
-    cursor_slot: u64,
-    skip_until: Option<MsgId>,
-    out: Vec<ZoneBlock>,
-    limit: usize,
-}
-
-impl ScanState {
-    const fn new(cursor: Cursor, limit: usize) -> Self {
-        Self {
-            cursor_slot: cursor.slot,
-            skip_until: cursor.last_id,
-            out: Vec::new(),
-            limit,
-        }
-    }
-
-    /// Process a message. Returns `Some(PollResult)` if limit reached.
-    fn push_msg(&mut self, block_slot: u64, msg_id: MsgId, data: &[u8]) -> Option<PollResult> {
-        // Once we move past cursor slot, skipping is irrelevant.
-        debug_assert!(
-            block_slot >= self.cursor_slot,
-            "blocks must be scanned forward"
-        );
-        if block_slot > self.cursor_slot {
-            self.skip_until = None;
-        }
-
-        // Skip up to (and including) last_id.
-        if let Some(skip_id) = self.skip_until {
-            if msg_id == skip_id {
-                self.skip_until = None;
-            }
-            return None;
-        }
-
-        self.out.push(ZoneBlock {
-            id: msg_id,
-            data: data.to_vec(),
+        .flatten()
+        .skip_while(move |(message, slot)| {
+            future::ready(should_skip(message, *slot, &mut skip_until))
         });
 
-        if self.out.len() >= self.limit {
-            return Some(PollResult {
-                messages: std::mem::take(&mut self.out),
-                cursor: Cursor {
-                    slot: block_slot,
-                    last_id: Some(msg_id),
-                },
-            });
-        }
-
-        None
+        Ok(stream)
     }
+}
+
+/// Returns `true` if the message should be skipped.
+///
+/// `skip_until` is set to `None` once there is no need to skip anymore.
+/// (e.g., once the cursor message is found, or cursor slot has already passed)
+fn should_skip(message: &ZoneMessage, slot: Slot, skip_until: &mut Option<(MsgId, Slot)>) -> bool {
+    let Some((cursor_msg_id, cursor_msg_slot)) = *skip_until else {
+        return false;
+    };
+
+    // Passed the cursor slot — stop skipping.
+    if slot > cursor_msg_slot {
+        *skip_until = None;
+        return false;
+    }
+
+    match message {
+        ZoneMessage::Block(block) => {
+            if block.id == cursor_msg_id {
+                // Found the cursor message — stop skipping after this.
+                *skip_until = None;
+            }
+        }
+        // Deposits have no ID, so keep skipping.
+        ZoneMessage::Deposit(_) => {}
+    }
+    true
 }
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
+    use lb_common_http_client::BlockInfo;
+    use lb_core::header::HeaderId;
+
     use super::*;
+    use crate::{Deposit, ZoneBlock};
+
+    #[tokio::test]
+    async fn next_messages_empty() {
+        let indexer = indexer(Slot::new(1), Vec::new());
+
+        let stream = indexer.next_messages(None).await.unwrap();
+        futures::pin_mut!(stream);
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn next_messages_no_skip() {
+        let messages = vec![
+            (block_msg(1, &[1]), Slot::new(0)),
+            (deposit_msg(10, &[10]), Slot::new(0)),
+            (block_msg(2, &[2]), Slot::new(1)),
+        ];
+        let indexer = indexer(Slot::new(1), messages.clone());
+
+        let stream = indexer.next_messages(None).await.unwrap();
+        futures::pin_mut!(stream);
+        assert_eq!(stream.next().await.as_ref(), Some(&messages[0]));
+        assert_eq!(stream.next().await.as_ref(), Some(&messages[1]));
+        assert_eq!(stream.next().await.as_ref(), Some(&messages[2]));
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn next_messages_until_lib() {
+        let messages = vec![
+            (block_msg(1, &[1]), Slot::new(0)),
+            (deposit_msg(10, &[10]), Slot::new(1)),
+            (block_msg(2, &[2]), Slot::new(2)), // after LIB
+        ];
+        let indexer = indexer(Slot::new(1), messages.clone());
+
+        let stream = indexer.next_messages(None).await.unwrap();
+        futures::pin_mut!(stream);
+        assert_eq!(stream.next().await.as_ref(), Some(&messages[0]));
+        assert_eq!(stream.next().await.as_ref(), Some(&messages[1]));
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn next_messages_skip() {
+        let messages = vec![
+            (block_msg(1, &[1]), Slot::new(0)),
+            (deposit_msg(10, &[10]), Slot::new(0)),
+            (block_msg(2, &[2]), Slot::new(1)),
+            (deposit_msg(11, &[11]), Slot::new(2)),
+            (block_msg(3, &[3]), Slot::new(2)),
+        ];
+        let indexer = indexer(Slot::new(2), messages.clone());
+
+        // Skip until msg_id(2) in slot 1
+        let stream = indexer
+            .next_messages(Some((msg_id(2), 1.into())))
+            .await
+            .unwrap();
+        futures::pin_mut!(stream);
+        assert_eq!(stream.next().await.as_ref(), Some(&messages[3]));
+        assert_eq!(stream.next().await.as_ref(), Some(&messages[4]));
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn next_messages_skip_msg_not_found() {
+        let messages = vec![
+            (block_msg(1, &[1]), Slot::new(0)),
+            (deposit_msg(10, &[10]), Slot::new(0)),
+            (block_msg(2, &[2]), Slot::new(1)),
+            (deposit_msg(11, &[11]), Slot::new(2)),
+            (block_msg(4, &[4]), Slot::new(2)),
+        ];
+        let indexer = indexer(Slot::new(2), messages.clone());
+
+        // Skip until msg_id(3) in slot 1, but it doesn't exist.
+        // Then, all msgs after slot 1 must be returned.
+        let stream = indexer
+            .next_messages(Some((msg_id(3), 1.into())))
+            .await
+            .unwrap();
+        futures::pin_mut!(stream);
+        assert_eq!(stream.next().await.as_ref(), Some(&messages[3]));
+        assert_eq!(stream.next().await.as_ref(), Some(&messages[4]));
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn next_messages_skip_but_nothing_left() {
+        let messages = vec![
+            (block_msg(1, &[1]), Slot::new(0)),
+            (deposit_msg(10, &[10]), Slot::new(0)),
+            (block_msg(2, &[2]), Slot::new(1)),
+        ];
+        let indexer = indexer(Slot::new(2), messages.clone());
+
+        // Skip until msg_id(3) in slot 1, but it doesn't exist.
+        // Then, all msgs after slot 1 must be returned.
+        let stream = indexer
+            .next_messages(Some((msg_id(3), 1.into())))
+            .await
+            .unwrap();
+        futures::pin_mut!(stream);
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn next_messages_across_batches() {
+        let messages = vec![
+            (block_msg(1, &[1]), Slot::new(0)),
+            (deposit_msg(10, &[10]), BATCH_SIZE),
+            (
+                block_msg(2, &[2]),
+                BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
+            ),
+            (
+                block_msg(3, &[3]),
+                BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
+            ),
+            (
+                deposit_msg(11, &[11]),
+                BATCH_SIZE.into_inner().checked_mul(3).unwrap().into(),
+            ),
+            (
+                block_msg(4, &[4]),
+                BATCH_SIZE.into_inner().checked_mul(3).unwrap().into(),
+            ),
+            (
+                block_msg(5, &[5]),
+                BATCH_SIZE.into_inner().checked_mul(4).unwrap().into(),
+            ),
+        ];
+        let indexer = indexer(
+            BATCH_SIZE.into_inner().checked_mul(4).unwrap().into(),
+            messages.clone(),
+        );
+
+        let stream = indexer
+            .next_messages(Some((
+                msg_id(2),
+                BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
+            )))
+            .await
+            .unwrap();
+        futures::pin_mut!(stream);
+        assert_eq!(stream.next().await.as_ref(), Some(&messages[3]));
+        assert_eq!(stream.next().await.as_ref(), Some(&messages[4]));
+        assert_eq!(stream.next().await.as_ref(), Some(&messages[5]));
+        assert_eq!(stream.next().await.as_ref(), Some(&messages[6]));
+        assert!(stream.next().await.is_none());
+    }
 
     fn msg_id(n: u8) -> MsgId {
         let mut bytes = [0u8; 32];
@@ -258,73 +308,64 @@ mod tests {
         MsgId::from(bytes)
     }
 
-    #[test]
-    fn resume_within_slot_skip() {
-        // Cursor says: resume in slot 0 after msg_id(2)
-        let cursor = Cursor {
-            slot: 0,
-            last_id: Some(msg_id(2)),
-        };
-        let mut scan = ScanState::new(cursor, 10);
-
-        // Feed messages from slot 0
-        assert!(scan.push_msg(0, msg_id(1), &[1]).is_none()); // skipped
-        assert!(scan.push_msg(0, msg_id(2), &[2]).is_none()); // skipped (last_id itself)
-        assert!(scan.push_msg(0, msg_id(3), &[3]).is_none()); // collected
-
-        assert_eq!(scan.out.len(), 1);
-        assert_eq!(scan.out[0].id, msg_id(3));
+    fn block_msg(id: u8, data: &[u8]) -> ZoneMessage {
+        ZoneMessage::Block(ZoneBlock {
+            id: msg_id(id),
+            data: data.to_vec(),
+        })
     }
 
-    #[test]
-    fn resume_next_slot() {
-        // Cursor says: slot 0 is done, start at slot 1
-        let cursor = Cursor {
-            slot: 0,
-            last_id: None,
-        };
-        let mut scan = ScanState::new(cursor, 10);
-
-        // Feed messages from slot 1 (skip_until should be None, nothing to skip)
-        assert!(scan.push_msg(1, msg_id(1), &[1]).is_none());
-        assert!(scan.push_msg(1, msg_id(2), &[2]).is_none());
-
-        assert_eq!(scan.out.len(), 2);
+    fn deposit_msg(amount: u64, metadata: &[u8]) -> ZoneMessage {
+        ZoneMessage::Deposit(Deposit {
+            amount,
+            metadata: metadata.to_vec(),
+        })
     }
 
-    #[test]
-    fn limit_hit_mid_block() {
-        let cursor = Cursor::default();
-        let mut scan = ScanState::new(cursor, 2);
-
-        // Feed 3 messages, limit is 2
-        assert!(scan.push_msg(0, msg_id(1), &[1]).is_none());
-        let result = scan.push_msg(0, msg_id(2), &[2]);
-
-        assert!(result.is_some());
-        let poll = result.unwrap();
-        assert_eq!(poll.messages.len(), 2);
-        assert_eq!(poll.cursor.slot, 0);
-        assert_eq!(poll.cursor.last_id, Some(msg_id(2)));
+    fn indexer(lib_slot: Slot, messages: Vec<(ZoneMessage, Slot)>) -> ZoneIndexer<MockNode> {
+        let node = MockNode { lib_slot, messages };
+        ZoneIndexer::new(ChannelId::from([0u8; 32]), node)
     }
 
-    #[test]
-    fn skip_clears_when_leaving_cursor_slot() {
-        // Cursor points to non-existent msg in slot 0
-        let cursor = Cursor {
-            slot: 0,
-            last_id: Some(msg_id(99)),
-        };
-        let mut scan = ScanState::new(cursor, 10);
+    /// Mock node that returns preconfigured zone messages.
+    #[derive(Clone)]
+    struct MockNode {
+        lib_slot: Slot,
+        messages: Vec<(ZoneMessage, Slot)>,
+    }
 
-        // All messages in slot 0 are skipped (looking for msg_id(99))
-        assert!(scan.push_msg(0, msg_id(1), &[1]).is_none());
-        assert!(scan.push_msg(0, msg_id(2), &[2]).is_none());
-        assert_eq!(scan.out.len(), 0);
+    #[async_trait]
+    impl adapter::Node for MockNode {
+        async fn lib_slot(&self) -> Result<Slot, lb_common_http_client::Error> {
+            Ok(self.lib_slot)
+        }
 
-        // Moving to slot 1 clears skip_until
-        assert!(scan.push_msg(1, msg_id(3), &[3]).is_none());
-        assert_eq!(scan.out.len(), 1);
-        assert_eq!(scan.out[0].id, msg_id(3));
+        async fn lib_stream(
+            &self,
+        ) -> Result<impl Stream<Item = BlockInfo>, lb_common_http_client::Error> {
+            Ok(futures::stream::empty())
+        }
+
+        async fn zone_messages_in_block(
+            &self,
+            _id: HeaderId,
+            _channel_id: ChannelId,
+        ) -> Result<impl Stream<Item = ZoneMessage>, lb_common_http_client::Error> {
+            Ok(futures::stream::empty())
+        }
+
+        async fn zone_messages_in_blocks(
+            &self,
+            slot_from: Slot,
+            slot_to: Slot,
+            _channel_id: ChannelId,
+        ) -> Result<impl Stream<Item = (ZoneMessage, Slot)>, lb_common_http_client::Error> {
+            Ok(futures::stream::iter(
+                self.messages
+                    .iter()
+                    .filter(move |(_, slot)| *slot >= slot_from && *slot <= slot_to)
+                    .cloned(),
+            ))
+        }
     }
 }

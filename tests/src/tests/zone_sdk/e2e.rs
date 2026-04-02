@@ -1,9 +1,12 @@
 use std::{collections::HashSet, num::NonZero, time::Duration};
 
-use futures::future::join_all;
+use futures::{StreamExt as _, future::join_all};
+use lb_common_http_client::CommonHttpClient;
 use lb_core::mantle::ops::channel::ChannelId;
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_zone_sdk::{
+    ZoneMessage,
+    adapter::NodeHttpClient,
     indexer::ZoneIndexer,
     sequencer::{SequencerConfig, ZoneSequencer},
 };
@@ -113,12 +116,15 @@ async fn test_sequencer_publish_and_indexer_read() {
     // Poll indexer until all expected payloads are seen.
     // Messages need to be included in a block and then finalized (k=5
     // confirmations). With 1s slot time, this should be relatively fast.
-    let indexer = ZoneIndexer::new(channel_id, node_url, None);
+    let indexer = ZoneIndexer::new(
+        channel_id,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url),
+    );
 
     let expected: HashSet<Vec<u8>> = test_data.iter().cloned().collect();
     let mut seen: HashSet<Vec<u8>> = HashSet::new();
     let mut seen_ordered: Vec<Vec<u8>> = Vec::new();
-    let mut cursor = None;
+    let mut last_zone_block = None;
 
     let start = std::time::Instant::now();
     let timeout = Duration::from_secs(360);
@@ -129,19 +135,21 @@ async fn test_sequencer_publish_and_indexer_read() {
             "Timeout waiting for indexer to return all messages"
         );
 
-        let result = indexer
-            .next_messages(cursor, 100)
+        let stream = indexer
+            .next_messages(last_zone_block)
             .await
             .expect("next_messages should succeed");
+        futures::pin_mut!(stream);
 
-        for msg in &result.messages {
-            if expected.contains(&msg.data) && !seen.contains(&msg.data) {
-                seen.insert(msg.data.clone());
-                seen_ordered.push(msg.data.clone());
+        while let Some((msg, slot)) = stream.next().await {
+            if let ZoneMessage::Block(block) = msg {
+                if expected.contains(&block.data) && !seen.contains(&block.data) {
+                    seen.insert(block.data.clone());
+                    seen_ordered.push(block.data.clone());
+                }
+                last_zone_block = Some((block.id, slot));
             }
         }
-
-        cursor = Some(result.cursor);
 
         if seen == expected {
             break;
@@ -272,7 +280,10 @@ async fn test_sequencer_checkpoint_resume() {
     }
 
     // Verify all messages (from both phases) are indexed
-    let indexer = ZoneIndexer::new(channel_id, node_url, None);
+    let indexer = ZoneIndexer::new(
+        channel_id,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url),
+    );
 
     let all_test_data: Vec<Vec<u8>> = test_data_phase1
         .into_iter()
@@ -280,7 +291,7 @@ async fn test_sequencer_checkpoint_resume() {
         .collect();
     let expected: HashSet<Vec<u8>> = all_test_data.iter().cloned().collect();
     let mut seen: HashSet<Vec<u8>> = HashSet::new();
-    let mut cursor = None;
+    let mut last_zone_block = None;
 
     let start = std::time::Instant::now();
     let timeout = Duration::from_secs(360);
@@ -291,18 +302,20 @@ async fn test_sequencer_checkpoint_resume() {
             "Timeout waiting for indexer to return all messages"
         );
 
-        let result = indexer
-            .next_messages(cursor, 100)
+        let stream = indexer
+            .next_messages(last_zone_block)
             .await
             .expect("next_messages should succeed");
+        futures::pin_mut!(stream);
 
-        for msg in &result.messages {
-            if expected.contains(&msg.data) {
-                seen.insert(msg.data.clone());
+        while let Some((msg, slot)) = stream.next().await {
+            if let ZoneMessage::Block(block) = msg {
+                if expected.contains(&block.data) {
+                    seen.insert(block.data.clone());
+                }
+                last_zone_block = Some((block.id, slot));
             }
         }
-
-        cursor = Some(result.cursor);
 
         if seen == expected {
             break;
@@ -368,7 +381,10 @@ async fn test_sequencer_stale_checkpoint_resume() {
         resubmit_interval: Duration::from_secs(3),
         ..SequencerConfig::default()
     };
-    let indexer = ZoneIndexer::new(channel_id, node_url.clone(), None);
+    let indexer = ZoneIndexer::new(
+        channel_id,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
+    );
 
     // Phase 1: Publish and save checkpoint
     let (sequencer, mut handle) = ZoneSequencer::init_with_config(
@@ -393,23 +409,28 @@ async fn test_sequencer_stale_checkpoint_resume() {
     // Wait for phase 1 to finalize
     let expected: HashSet<Vec<u8>> = data_phase1.iter().cloned().collect();
     let mut seen: HashSet<Vec<u8>> = HashSet::new();
-    let mut cursor = None;
+    let mut last_zone_block = None;
     let start = std::time::Instant::now();
     loop {
         assert!(
             start.elapsed() <= Duration::from_secs(360),
             "Phase 1 finalization timeout"
         );
-        let result = indexer
-            .next_messages(cursor, 100)
+        let stream = indexer
+            .next_messages(last_zone_block)
             .await
             .expect("indexer error");
-        for msg in &result.messages {
-            if expected.contains(&msg.data) {
-                seen.insert(msg.data.clone());
+        futures::pin_mut!(stream);
+
+        while let Some((msg, slot)) = stream.next().await {
+            if let ZoneMessage::Block(block) = msg {
+                if expected.contains(&block.data) {
+                    seen.insert(block.data.clone());
+                }
+                last_zone_block = Some((block.id, slot));
             }
         }
-        cursor = Some(result.cursor);
+
         if seen == expected {
             break;
         }
@@ -445,16 +466,21 @@ async fn test_sequencer_stale_checkpoint_resume() {
             start.elapsed() <= Duration::from_secs(360),
             "Phase 2 finalization timeout"
         );
-        let result = indexer
-            .next_messages(cursor, 100)
+        let stream = indexer
+            .next_messages(last_zone_block)
             .await
             .expect("indexer error");
-        for msg in &result.messages {
-            if expected_all.contains(&msg.data) {
-                seen.insert(msg.data.clone());
+        futures::pin_mut!(stream);
+
+        while let Some((msg, slot)) = stream.next().await {
+            if let ZoneMessage::Block(block) = msg {
+                if expected_all.contains(&block.data) {
+                    seen.insert(block.data.clone());
+                }
+                last_zone_block = Some((block.id, slot));
             }
         }
-        cursor = Some(result.cursor);
+
         if seen == expected_all {
             break;
         }
@@ -489,16 +515,21 @@ async fn test_sequencer_stale_checkpoint_resume() {
             start.elapsed() <= Duration::from_secs(360),
             "Phase 3 finalization timeout"
         );
-        let result = indexer
-            .next_messages(cursor, 100)
+        let stream = indexer
+            .next_messages(last_zone_block)
             .await
             .expect("indexer error");
-        for msg in &result.messages {
-            if expected_all.contains(&msg.data) {
-                seen.insert(msg.data.clone());
+        futures::pin_mut!(stream);
+
+        while let Some((msg, slot)) = stream.next().await {
+            if let ZoneMessage::Block(block) = msg {
+                if expected_all.contains(&block.data) {
+                    seen.insert(block.data.clone());
+                }
+                last_zone_block = Some((block.id, slot));
             }
         }
-        cursor = Some(result.cursor);
+
         if seen == expected_all {
             break;
         }
@@ -508,21 +539,28 @@ async fn test_sequencer_stale_checkpoint_resume() {
     // Check no duplicates
     sleep(Duration::from_secs(30)).await;
     let mut all_payloads: Vec<Vec<u8>> = Vec::new();
-    cursor = None;
+    last_zone_block = None;
     loop {
-        let result = indexer
-            .next_messages(cursor, 100)
+        let stream = indexer
+            .next_messages(last_zone_block)
             .await
             .expect("indexer error");
-        for msg in &result.messages {
-            if expected_all.contains(&msg.data) {
-                all_payloads.push(msg.data.clone());
+        futures::pin_mut!(stream);
+
+        let mut msg_cnt = 0;
+        while let Some((msg, slot)) = stream.next().await {
+            msg_cnt += 1;
+            if let ZoneMessage::Block(block) = msg {
+                if expected_all.contains(&block.data) {
+                    all_payloads.push(block.data.clone());
+                }
+                last_zone_block = Some((block.id, slot));
             }
         }
-        if result.messages.is_empty() {
+
+        if msg_cnt == 0 {
             break;
         }
-        cursor = Some(result.cursor);
     }
 
     let unique: HashSet<&Vec<u8>> = all_payloads.iter().collect();
