@@ -6,10 +6,6 @@ use rand::RngCore;
 use crate::backends::libp2p::swarm::SwarmHandler;
 
 impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: Address this at some point."
-    )]
     pub(super) fn handle_identify_event(&mut self, event: identify::Event) {
         match event {
             identify::Event::Received { peer_id, info, .. } => {
