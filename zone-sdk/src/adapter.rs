@@ -1,7 +1,8 @@
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, stream};
 use lb_common_http_client::{BlockInfo, CommonHttpClient, Error, Slot};
 use lb_core::{
+    block::Block,
     header::HeaderId,
     mantle::{Op, ops::channel::ChannelId},
 };
@@ -19,14 +20,14 @@ pub trait Node {
         &self,
         id: HeaderId,
         channel_id: ChannelId,
-    ) -> Result<Vec<ZoneMessage>, Error>;
+    ) -> Result<impl Stream<Item = ZoneMessage>, Error>;
 
     async fn zone_messages_in_blocks(
         &self,
         slot_from: Slot,
         slot_to: Slot,
         channel_id: ChannelId,
-    ) -> Result<Vec<(ZoneMessage, Slot)>, Error>;
+    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)>, Error>;
 }
 
 #[derive(Clone)]
@@ -67,16 +68,19 @@ impl Node for NodeHttpClient {
         &self,
         id: HeaderId,
         channel_id: ChannelId,
-    ) -> Result<Vec<ZoneMessage>, Error> {
-        let Some(block) = self.client.get_block(self.base_url.clone(), id).await? else {
-            return Ok(Vec::new());
-        };
+    ) -> Result<impl Stream<Item = ZoneMessage>, Error> {
+        let transactions = self
+            .client
+            .get_block(self.base_url.clone(), id)
+            .await?
+            .map_or_else(|| Vec::with_capacity(0), Block::into_transactions);
 
-        Ok(block
-            .transactions()
-            .flat_map(|tx| &tx.mantle_tx.ops)
-            .filter_map(|op| op_to_zone_message(op, channel_id))
-            .collect())
+        Ok(stream::iter(
+            transactions
+                .into_iter()
+                .flat_map(|tx| tx.mantle_tx.ops)
+                .filter_map(move |op| op_to_zone_message(&op, channel_id)),
+        ))
     }
 
     async fn zone_messages_in_blocks(
@@ -84,7 +88,7 @@ impl Node for NodeHttpClient {
         slot_from: Slot,
         slot_to: Slot,
         channel_id: ChannelId,
-    ) -> Result<Vec<(ZoneMessage, Slot)>, Error> {
+    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)>, Error> {
         let blocks = self
             .client
             .get_blocks(
@@ -94,17 +98,15 @@ impl Node for NodeHttpClient {
             )
             .await?;
 
-        Ok(blocks
-            .iter()
-            .flat_map(|block| {
-                block
-                    .transactions
-                    .iter()
-                    .flat_map(|tx| &tx.mantle_tx.ops)
-                    .filter_map(|op| op_to_zone_message(op, channel_id))
-                    .map(|msg| (msg, block.header.slot))
-            })
-            .collect())
+        Ok(stream::iter(blocks.into_iter().flat_map(move |block| {
+            let slot = block.header.slot;
+            block
+                .transactions
+                .into_iter()
+                .flat_map(|tx| tx.mantle_tx.ops)
+                .filter_map(move |op| op_to_zone_message(&op, channel_id))
+                .map(move |msg| (msg, slot))
+        })))
     }
 }
 

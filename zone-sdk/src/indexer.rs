@@ -35,12 +35,15 @@ where
 
         let channel_id = self.channel_id;
         let stream = lib_stream.filter_map(move |block_info| {
-            let node = self.node.clone();
             let header_id = block_info.header_id;
 
             async move {
-                let messages = match node.zone_messages_in_block(header_id, channel_id).await {
-                    Ok(messages) => messages,
+                let stream = match self
+                    .node
+                    .zone_messages_in_block(header_id, channel_id)
+                    .await
+                {
+                    Ok(stream) => stream,
                     Err(e) => {
                         warn!("Failed to fetch LIB block {header_id}: {e}");
                         // TODO: return error to stream, and stop stream
@@ -48,7 +51,7 @@ where
                     }
                 };
 
-                Some(futures::stream::iter(messages))
+                Some(stream)
             }
         });
 
@@ -82,7 +85,7 @@ where
                 .zone_messages_in_blocks(current_slot, end_slot, self.channel_id)
                 .await
             {
-                Ok(messages) => Some((futures::stream::iter(messages), end_slot + 1)),
+                Ok(messages) => Some((messages, end_slot + 1)),
                 Err(e) => {
                     warn!(
                         ?current_slot, ?end_slot, err = ?e,
@@ -319,8 +322,8 @@ mod tests {
             &self,
             _id: HeaderId,
             _channel_id: ChannelId,
-        ) -> Result<Vec<ZoneMessage>, lb_common_http_client::Error> {
-            Ok(Vec::new())
+        ) -> Result<impl Stream<Item = ZoneMessage>, lb_common_http_client::Error> {
+            Ok(futures::stream::empty())
         }
 
         async fn zone_messages_in_blocks(
@@ -328,13 +331,12 @@ mod tests {
             slot_from: Slot,
             slot_to: Slot,
             _channel_id: ChannelId,
-        ) -> Result<Vec<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
+        ) -> Result<impl Stream<Item = (ZoneMessage, Slot)>, lb_common_http_client::Error> {
             Ok(self
                 .messages
                 .iter()
                 .filter(|(_, slot)| *slot >= slot_from && *slot <= slot_to)
-                .cloned()
-                .collect())
+                .cloned())
         }
     }
 }
