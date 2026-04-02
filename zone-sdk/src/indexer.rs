@@ -360,11 +360,12 @@ mod tests {
             slot_to: Slot,
             _channel_id: ChannelId,
         ) -> Result<impl Stream<Item = (ZoneMessage, Slot)>, lb_common_http_client::Error> {
-            Ok(self
-                .messages
-                .iter()
-                .filter(|(_, slot)| *slot >= slot_from && *slot <= slot_to)
-                .cloned())
+            Ok(futures::stream::iter(
+                self.messages
+                    .iter()
+                    .filter(move |(_, slot)| *slot >= slot_from && *slot <= slot_to)
+                    .cloned(),
+            ))
         }
     }
 }
