@@ -3,6 +3,7 @@ pub mod config;
 pub mod cryptarchia;
 pub mod lifecycle;
 pub(crate) mod memory;
+pub mod sdp;
 pub mod storage;
 mod subscriptions;
 pub(crate) mod types;
