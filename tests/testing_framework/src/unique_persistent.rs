@@ -126,7 +126,8 @@ impl TestPortAllocator {
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     // This block is currently claimed by another live process,
-                    // or a race occurred while reaping/claiming. Try the next block.
+                    // or a race occurred while reaping/claiming. Try the next
+                    // block.
                 }
                 Err(_) => {
                     return None;
