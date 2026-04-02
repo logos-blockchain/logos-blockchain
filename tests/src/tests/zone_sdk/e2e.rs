@@ -291,6 +291,7 @@ async fn test_sequencer_checkpoint_resume() {
         .collect();
     let expected: HashSet<Vec<u8>> = all_test_data.iter().cloned().collect();
     let mut seen: HashSet<Vec<u8>> = HashSet::new();
+    let mut seen_ordered: Vec<Vec<u8>> = Vec::new();
     let mut last_zone_block = None;
 
     let start = std::time::Instant::now();
@@ -310,8 +311,9 @@ async fn test_sequencer_checkpoint_resume() {
 
         while let Some((msg, slot)) = stream.next().await {
             if let ZoneMessage::Block(block) = msg {
-                if expected.contains(&block.data) {
+                if expected.contains(&block.data) && !seen.contains(&block.data) {
                     seen.insert(block.data.clone());
+                    seen_ordered.push(block.data.clone());
                 }
                 last_zone_block = Some((block.id, slot));
             }
@@ -324,10 +326,10 @@ async fn test_sequencer_checkpoint_resume() {
         sleep(Duration::from_millis(500)).await;
     }
 
+    // Verify ordering: messages should appear in published order
     assert_eq!(
-        seen.len(),
-        all_test_data.len(),
-        "All messages from both phases should be indexed"
+        seen_ordered, all_test_data,
+        "Messages should appear in the order they were published"
     );
 
     // Clean up
