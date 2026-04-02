@@ -507,8 +507,8 @@ fn decode_byte(input: &[u8]) -> IResult<&[u8], u8> {
 use lb_groth16::fr_to_bytes;
 
 use super::ops::opcode;
-use crate::block::MAX_BLOCK_SIZE;
 use crate::{
+    block::MAX_BLOCK_SIZE,
     mantle::{
         ops::channel::{ChannelKeyIndex, withdraw::ChannelWithdrawOp},
         tx::MantleTxGasContext,
@@ -926,9 +926,7 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
 
 #[cfg(test)]
 mod tests {
-    use std::panic;
-
-    use std::collections::HashMap;
+    use std::{collections::HashMap, panic};
 
     use ark_ff::Field as _;
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
