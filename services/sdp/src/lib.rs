@@ -32,6 +32,7 @@ use overwatch::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
+pub use crate::api::SdpServiceApi;
 use crate::{
     mempool::SdpMempoolAdapter,
     wallet::{SdpWalletAdapter, SdpWalletConfig},

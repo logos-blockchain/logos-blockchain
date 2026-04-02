@@ -41,12 +41,15 @@ where
 
     pub async fn from_overwatch_handle<RuntimeServiceId>(
         handle: &OverwatchHandle<RuntimeServiceId>,
-    ) -> Result<Self, Error>
+    ) -> Self
     where
         RuntimeServiceId: AsServiceId<SdpService> + Debug + Display + Sync,
     {
-        let relay = handle.relay::<SdpService>().await?;
-        Ok(Self::new(relay))
+        let relay = handle
+            .relay::<SdpService>()
+            .await
+            .expect("Relay should be available after the service is started.");
+        Self::new(relay)
     }
 
     pub async fn publish(&self, message: SdpMessage) -> Result<(), Error> {
