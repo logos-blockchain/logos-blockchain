@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+pub mod channel;
 pub mod wallet;
 
 /// A no-operation body for endpoints that do not require a request or response

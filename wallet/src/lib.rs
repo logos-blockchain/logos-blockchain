@@ -4,7 +4,7 @@ mod voucher;
 use std::{
     borrow::Borrow,
     cmp::Ordering,
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::Debug,
 };
 
@@ -94,7 +94,14 @@ impl WalletState {
         change_pk: ZkPublicKey,
         pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
     ) -> Result<MantleTxBuilder, WalletError> {
-        let mut utxos = self.utxos_owned_by_pks(pks);
+        // Get all UTXOs owned by the provided PKs, excluding any that are already being
+        // used as inputs in the tx builder.
+        let inputs = tx_builder.input_notes().collect::<HashSet<_>>();
+        let mut utxos = self
+            .utxos_owned_by_pks(pks)
+            .into_iter()
+            .filter(|utxo| !inputs.contains(&utxo.id()))
+            .collect::<Vec<_>>();
 
         // Consume large valued notes first to ensure we converge.
         utxos.sort_by_key(|utxo| -i128::from(utxo.note.value));
