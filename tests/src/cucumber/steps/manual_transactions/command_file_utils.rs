@@ -477,6 +477,10 @@ async fn wait_for_available_value(
     })
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Singular fn with multiple branches to handle different events and futures."
+)]
 pub async fn perform_manual_step_control(
     world: &mut CucumberWorld,
     step: &str,

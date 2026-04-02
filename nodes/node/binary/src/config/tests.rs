@@ -2,6 +2,7 @@ use std::path::Path;
 
 use clap::Parser as _;
 use lb_key_management_system_service::keys::ZkPublicKey;
+use tracing::Level;
 
 use crate::{
     UserConfig,
@@ -16,11 +17,13 @@ use crate::{
             serde::{Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues},
         },
         mempool::ServiceConfig as MempoolServiceConfig,
+        parse_log_filter_layer,
         sdp::serde::{Config as SdpConfig, RequiredValues as SdpRequiredValues},
         storage::{
             ServiceConfig as StorageServiceConfig,
             serde::{Config as StorageConfig, RocksDbSettings},
         },
+        tracing::serde::filter::{EnvConfig, Layer},
         wallet::{
             ServiceConfig as WalletServiceConfig,
             serde::{Config as WalletConfig, RequiredValues as WalletRequiredValues},
@@ -128,4 +131,68 @@ fn common_recovery_folder() {
             .db_path
             .starts_with(Path::new(STATE_PATH).join("db"))
     );
+}
+
+#[test]
+fn parse_log_filter_layer_parses_global_and_target_directives() {
+    let layer = parse_log_filter_layer("warn,logos_blockchain=debug,libp2p=info")
+        .expect("filter should parse");
+
+    let Layer::Env(EnvConfig { filters }) = layer else {
+        panic!("expected env filter layer");
+    };
+
+    assert_eq!(filters.get("*"), Some(&Level::WARN));
+    assert_eq!(filters.get("logos_blockchain"), Some(&Level::DEBUG));
+    assert_eq!(filters.get("libp2p"), Some(&Level::INFO));
+}
+
+#[test]
+fn parse_log_filter_layer_rejects_invalid_level() {
+    let error =
+        parse_log_filter_layer("logos_blockchain=debgu").expect_err("invalid level should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("Invalid log filter level provided: debgu")
+    );
+}
+
+#[test]
+fn parse_log_filter_layer_rejects_empty_directive() {
+    let error =
+        parse_log_filter_layer("logos_blockchain=").expect_err("empty directive should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("Invalid log filter directive: logos_blockchain=")
+    );
+}
+
+#[test]
+fn env_config_serializes_and_deserializes_typed_levels() {
+    let config = EnvConfig {
+        filters: [
+            ("*".to_owned(), Level::WARN),
+            ("logos_blockchain".to_owned(), Level::DEBUG),
+            ("libp2p".to_owned(), Level::INFO),
+        ]
+        .into_iter()
+        .collect(),
+    };
+
+    let json = serde_json::to_string(&config).expect("serialize env config");
+    let decoded: EnvConfig = serde_json::from_str(&json).expect("deserialize env config");
+
+    assert_eq!(decoded.filters, config.filters);
+}
+
+#[test]
+fn env_config_deserialization_rejects_invalid_level() {
+    let error = serde_json::from_str::<EnvConfig>(r#"{"filters":{"logos_blockchain":"debgu"}}"#)
+        .expect_err("invalid level should fail");
+
+    assert!(error.to_string().contains("invalid log level"));
 }

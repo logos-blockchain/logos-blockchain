@@ -1,9 +1,13 @@
-/// Usage: Set the environment variable `CUCUMBER_DEPLOYER_COMPOSE` to use the
-/// Compose deployer. Otherwise, the Local deployer is used by default.
+/// Usage: Set `CUCUMBER_DEPLOYER_K8S` or `CUCUMBER_DEPLOYER_COMPOSE` to choose
+/// the deployer. Otherwise, the Local deployer is used by default.
 ///
 /// Example using docker compose deployer:
 /// ```sh
 /// CUCUMBER_DEPLOYER_COMPOSE=1 cargo run -p runner-examples --bin cucumber_auto -- --name "Run auto deployer smoke scenario"
+/// ```
+/// Example using k8s deployer:
+/// ```sh
+/// CUCUMBER_DEPLOYER_K8S=1 cargo run -p runner-examples --bin cucumber_auto -- --name "Run auto deployer smoke scenario"
 /// ```
 /// Example using local deployer:
 /// ```sh
@@ -13,15 +17,16 @@ use std::io;
 use std::{
     collections::HashMap,
     fs::OpenOptions,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use cucumber::{World as _, WriterExt as _, event::ScenarioFinished, writer, writer::Verbosity};
 use logos_blockchain_tests::cucumber::{
     defaults::{
-        ARTEFACTS, CUCUMBER_DEPLOYER_COMPOSE, CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL,
-        create_scenario_output_dir, get_feature_path, get_retries, init_logging_defaults,
-        init_tracing,
+        ARTEFACTS, CUCUMBER_DEPLOYER_COMPOSE, CUCUMBER_DEPLOYER_K8S,
+        CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL, create_scenario_output_dir, get_feature_path,
+        get_retries, init_logging_defaults, init_tracing,
     },
     utils::is_truthy_env,
     world::{CucumberWorld, DeployerKind},
@@ -51,11 +56,7 @@ fn increment_attempts(
 async fn main() {
     println!("args: {:?}", std::env::args());
 
-    let deployer = if is_truthy_env(CUCUMBER_DEPLOYER_COMPOSE) {
-        DeployerKind::Compose
-    } else {
-        DeployerKind::Local
-    };
+    let deployer = selected_deployer();
     println!("Running with '{deployer:?}'");
 
     init_logging_defaults();
@@ -103,20 +104,14 @@ async fn main() {
                         "\nStarting - {}: {} ({}: {})\n",
                         scenario.keyword, scenario.name, feature.keyword, feature.name,
                     );
-                    world.set_deployer(deployer);
-                    if let Err(err) = world.preflight(deployer) {
-                        println!("Preflight failed for scenario '{}': {err}", scenario.name);
-                    }
-
-                    let run_attempt =
-                        increment_attempts(&scenario_attempts_clone, &feature.name, &scenario.name);
-                    let scenario_dir = output_dir_clone
-                        .join(ARTEFACTS)
-                        .join(&feature.name)
-                        .join(scenario.name.trim().replace(' ', "_"))
-                        .join(run_attempt);
-                    world.set_scenario_base_dir(&scenario_dir, &deployer);
-                    world.apply_deployment_config_override_path();
+                    prepare_world_for_scenario(
+                        world,
+                        deployer,
+                        &output_dir_clone,
+                        &scenario_attempts_clone,
+                        &feature.name,
+                        &scenario.name,
+                    );
                 }
             })
         });
@@ -161,6 +156,72 @@ async fn main() {
         })
         // Runs Cucumber. Features sourced from a Parser are fed to a Runner, which
         // produces events handled by a Writer.
-        .run_and_exit(get_feature_path())
+        .run_and_exit(get_feature_path_for_deployer(deployer))
         .await;
+}
+
+fn selected_deployer() -> DeployerKind {
+    // The k8s deployer uses the active Kubernetes client configuration on the
+    // machine running the test, so it targets the currently configured cluster
+    // and context rather than provisioning one itself. To use custom images,
+    // set `LOGOS_BLOCKCHAIN_K8S_NODE_IMAGE` for node pods and optionally
+    // `LOGOS_BLOCKCHAIN_K8S_BOOTSTRAP_IMAGE` for the cfgsync/bootstrap pod.
+    // If those are unset, the runner falls back to `LOGOS_BLOCKCHAIN_TESTNET_IMAGE`
+    // or the default local node and cfgsync images built by the runtime
+    // docker scripts under `tests/testing_framework/assets/runtime/scripts/docker`.
+    if is_truthy_env(CUCUMBER_DEPLOYER_K8S) {
+        return DeployerKind::K8s;
+    }
+
+    if is_truthy_env(CUCUMBER_DEPLOYER_COMPOSE) {
+        return DeployerKind::Compose;
+    }
+
+    DeployerKind::Local
+}
+
+fn get_feature_path_for_deployer(deployer: DeployerKind) -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let feature_path = match deployer {
+        DeployerKind::K8s => manifest_dir.join("cucumber_tests/features_k8s"),
+        DeployerKind::Local | DeployerKind::Compose => get_feature_path(),
+    };
+    println!("Feature path:      {}", feature_path.display());
+    feature_path
+}
+
+fn prepare_world_for_scenario(
+    world: &mut CucumberWorld,
+    deployer: DeployerKind,
+    output_dir: &Path,
+    scenario_attempts: &ScenarioAttempts,
+    feature_name: &str,
+    scenario_name: &str,
+) {
+    world.set_deployer(deployer);
+
+    if let Err(err) = world.preflight(deployer) {
+        println!("Preflight failed for scenario '{scenario_name}': {err}");
+    }
+
+    let scenario_dir =
+        scenario_output_dir(output_dir, scenario_attempts, feature_name, scenario_name);
+
+    world.set_scenario_base_dir(&scenario_dir, &deployer);
+    world.apply_deployment_config_override_path();
+}
+
+fn scenario_output_dir(
+    output_dir: &Path,
+    scenario_attempts: &ScenarioAttempts,
+    feature_name: &str,
+    scenario_name: &str,
+) -> PathBuf {
+    let run_attempt = increment_attempts(scenario_attempts, feature_name, scenario_name);
+
+    output_dir
+        .join(ARTEFACTS)
+        .join(feature_name)
+        .join(scenario_name.trim().replace(' ', "_"))
+        .join(run_attempt)
 }

@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 async-trait             = "0.1"
-futures                 = { default-features = false, version = "0.3" }
+futures                 = { workspace = true }
 lb-chain-service        = { workspace = true }
 lb-chain-service-common = { workspace = true }
 lb-core                 = { workspace = true }
@@ -31,8 +31,8 @@ rand                    = { default-features = false, version = "0.8" }
 serde                   = { default-features = false, version = "1" }
 serde_with              = { workspace = true }
 thiserror               = "1.0"
-tokio                   = { default-features = false, version = "1" }
-tokio-stream            = { default-features = false, version = "0.1" }
+tokio                   = { workspace = true }
+tokio-stream            = { workspace = true }
 tracing                 = { workspace = true }
 tracing-futures         = { default-features = false, version = "0.2" }
 

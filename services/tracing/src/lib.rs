@@ -7,7 +7,7 @@ use std::{
 };
 
 use lb_tracing::{
-    filter::envfilter::{EnvFilterConfig, create_envfilter_layer},
+    filter::envfilter::{EnvFilterConfig, create_envfilter_layer, default_envfilter_config},
     logging::{
         gelf::{GelfConfig, create_gelf_layer},
         local::{FileConfig, create_file_layer, create_writer_layer},
@@ -28,11 +28,22 @@ use serde::{Deserialize, Serialize};
 use tracing::{Level, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
-    filter::LevelFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _,
+    Layer as _, filter::LevelFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _,
 };
 
 #[cfg(feature = "profiling")]
 mod console;
+
+macro_rules! push_logger_layer {
+    ($layers:expr, $env_filter:expr, $layer:expr) => {{
+        let layer = $layer;
+        if let Some(filter) = $env_filter.clone() {
+            $layers.push(Box::new(layer.with_filter(filter)));
+        } else {
+            $layers.push(Box::new(layer));
+        }
+    }};
+}
 
 pub struct Tracing<RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -230,24 +241,29 @@ where
             .notifier()
             .get_updated_settings();
 
+        let env_filter = match effective_filter_settings(&config) {
+            FilterLayerSettings::EnvFilter(config) => Some(create_envfilter_layer(&config)?),
+            FilterLayerSettings::None => None,
+        };
+
         let mut logger_layers: Vec<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>> = vec![];
         let mut logger_guards: Vec<WorkerGuard> = vec![];
 
         if let Some(file_config) = config.logger.file {
             let (layer, guard) = create_file_layer(file_config);
-            logger_layers.push(Box::new(layer));
+            push_logger_layer!(logger_layers, env_filter, layer);
             logger_guards.push(guard);
         }
 
         if config.logger.stdout {
             let (layer, guard) = create_writer_layer(std::io::stdout());
-            logger_layers.push(Box::new(layer));
+            push_logger_layer!(logger_layers, env_filter, layer);
             logger_guards.push(guard);
         }
 
         if config.logger.stderr {
             let (layer, guard) = create_writer_layer(std::io::stderr());
-            logger_layers.push(Box::new(layer));
+            push_logger_layer!(logger_layers, env_filter, layer);
             logger_guards.push(guard);
         }
 
@@ -279,11 +295,6 @@ where
             other_layers.push(Box::new(tracing_layer));
         }
 
-        if let FilterLayerSettings::EnvFilter(config) = config.filter {
-            let filter_layer = create_envfilter_layer(config)?;
-            other_layers.push(Box::new(filter_layer));
-        }
-
         if let MetricsLayerSettings::Otlp(config) = config.metrics {
             let metrics_layer = create_otlp_metrics_layer(config)?;
             other_layers.push(Box::new(metrics_layer));
@@ -306,8 +317,10 @@ where
                 LevelFilter::from(config.level)
             };
 
-            layers.extend(logger_layers);
             layers.extend(other_layers);
+            // Filter and tracing layers must wrap logger sinks so target filters
+            // apply to file/stdout output as intended.
+            layers.extend(logger_layers);
 
             tracing_subscriber::registry()
                 .with(level_filter)
@@ -340,6 +353,16 @@ where
         // pending logs.
         std::future::pending::<()>().await;
         Ok(())
+    }
+}
+
+/// Resolves the configured filter settings, falling back to the shared
+/// default verbose filter policy when no explicit filter was provided.
+fn effective_filter_settings(config: &TracingSettings) -> FilterLayerSettings {
+    match &config.filter {
+        FilterLayerSettings::EnvFilter(filter) => FilterLayerSettings::EnvFilter(filter.clone()),
+        FilterLayerSettings::None => default_envfilter_config(config.level)
+            .map_or(FilterLayerSettings::None, FilterLayerSettings::EnvFilter),
     }
 }
 

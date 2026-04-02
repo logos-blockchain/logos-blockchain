@@ -27,7 +27,7 @@ lb-tracing = { workspace = true }
 serde = { features = ["alloc", "derive"], workspace = true }
 serde_json = { workspace = true }
 serde_with = { default-features = false, features = ["macros"], workspace = true }
-tokio = { default-features = false, features = ["time"], optional = true, version = "1" }
+tokio = { features = ["time"], optional = true, workspace = true }
 tracing = { default-features = false, workspace = true }
 
 [target.'cfg(not(windows))'.dependencies]

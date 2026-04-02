@@ -15,7 +15,7 @@ workspace = true
 [dependencies]
 async-trait                = "0.1"
 bytes                      = { workspace = true }
-futures                    = { default-features = false, version = "0.3" }
+futures                    = { workspace = true }
 lb-chain-broadcast-service = { workspace = true }
 lb-core                    = { workspace = true }
 lb-cryptarchia-engine      = { features = ["serde"], workspace = true }
@@ -34,7 +34,7 @@ serde                      = { workspace = true }
 serde_with                 = { workspace = true }
 strum                      = "0.27"
 thiserror                  = "1.0"
-tokio                      = { default-features = false, version = "1" }
+tokio                      = { workspace = true }
 tracing                    = { workspace = true }
 tracing-futures            = { default-features = false, features = ["std-future"], version = "0.2" }
 utoipa                     = { optional = true, workspace = true }

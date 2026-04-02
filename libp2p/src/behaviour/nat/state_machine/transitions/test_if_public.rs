@@ -1,4 +1,4 @@
-use tracing::info;
+use tracing::debug;
 
 use crate::behaviour::nat::state_machine::{
     Command, CommandTx, OnEvent, State, event::Event, states::TestIfPublic,
@@ -19,7 +19,7 @@ impl OnEvent for State<TestIfPublic> {
     fn on_event(self: Box<Self>, event: Event, command_tx: &CommandTx) -> Box<dyn OnEvent> {
         match event {
             Event::ExternalAddressConfirmed(addr) => {
-                info!(
+                debug!(
                     "State<TestIfPublic>: External address {addr} confirmed (was testing {}), promoting to Public.",
                     self.state.addr_to_test(),
                 );

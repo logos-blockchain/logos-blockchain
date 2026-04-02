@@ -23,7 +23,7 @@ instrumentation = []
 [dependencies]
 async-trait                = "0.1"
 bytes                      = { workspace = true }
-futures                    = { default-features = false, version = "0.3.31" }
+futures                    = { workspace = true }
 lb-chain-broadcast-service = { workspace = true }
 lb-chain-leader-service    = { workspace = true }
 lb-chain-service           = { features = ["libp2p"], workspace = true }
@@ -36,8 +36,8 @@ lb-tx-service              = { features = ["libp2p", "mock", "openapi"], workspa
 overwatch                  = { workspace = true }
 serde                      = { workspace = true }
 serde_json                 = { workspace = true }
-tokio                      = { default-features = false, features = ["net"], version = "1" }
-tokio-stream               = { default-features = false, version = "0.1" }
+tokio                      = { features = ["net"], workspace = true }
+tokio-stream               = { workspace = true }
 tracing                    = { default-features = false, version = "0.1" }
 
 # axum related dependencies

@@ -27,8 +27,8 @@ pub struct TestChainService;
 
 #[async_trait]
 impl<RuntimeServiceId> ChainApi<RuntimeServiceId> for TestChainService {
-    async fn get_epoch_state_for_slot(&self, _slot: Slot) -> EpochState {
-        default_epoch_state()
+    async fn get_epoch_state_for_slot(&self, _slot: Slot) -> Option<EpochState> {
+        Some(default_epoch_state())
     }
 }
 

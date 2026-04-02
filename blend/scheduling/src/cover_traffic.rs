@@ -5,7 +5,7 @@ use core::{
 };
 
 use futures::{Stream, StreamExt as _};
-use tracing::{debug, trace};
+use tracing::trace;
 
 use crate::message_scheduler::round_info::Round;
 
@@ -54,7 +54,7 @@ where
         let total_rounds = total_intervals
             .checked_mul(rounds_per_interval.get())
             .expect("Overflow when calculating total rounds per session.");
-        debug!(target: LOG_TARGET, "Creating new cover message scheduler with {total_rounds} total rounds.");
+        trace!(target: LOG_TARGET, "Creating new cover message scheduler with {total_rounds} total rounds.");
 
         assert!(
             message_count <= total_rounds,
@@ -163,7 +163,7 @@ impl<Rng, RoundClock> SessionCoverTraffic<Rng, RoundClock> {
             .unprocessed_data_messages
             .checked_add(1)
             .expect("Overflow when incrementing unprocessed data messages.");
-        debug!(target: LOG_TARGET, "New data message event registered. Unprocessed messages count: {}", self.unprocessed_data_messages);
+        trace!(target: LOG_TARGET, "New data message event registered. Unprocessed messages count: {}", self.unprocessed_data_messages);
     }
 }
 
@@ -183,10 +183,10 @@ where
 
         // If a new cover message is scheduled...
         if self.consume_round() {
-            debug!(target: LOG_TARGET, "Emitting new cover message for round {new_round}");
+            trace!(target: LOG_TARGET, "Emitting new cover message for round {new_round}");
             return Poll::Ready(Some(()));
         }
-        debug!(target: LOG_TARGET, "Not a pre-scheduled emission for round {new_round}.");
+        trace!(target: LOG_TARGET, "Not a pre-scheduled emission for round {new_round}.");
         // Awake to trigger a new round clock tick.
         cx.waker().wake_by_ref();
         Poll::Pending
