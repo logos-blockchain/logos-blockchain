@@ -30,6 +30,8 @@ pub enum Error {
     EmptyKeys { channel_id: ChannelId },
     #[error("Channel {channel_id:?} not found")]
     ChannelNotFound { channel_id: ChannelId },
+    #[error("Balance overflow")]
+    BalanceOverflow,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -136,7 +138,10 @@ impl Channels {
 
     pub fn deposit(mut self, op: &DepositOp) -> Result<Self, Error> {
         if let Some(channel) = self.channels.get_mut(&op.channel_id) {
-            channel.balance += op.amount;
+            channel.balance = channel
+                .balance
+                .checked_add(op.amount)
+                .ok_or(Error::BalanceOverflow)?;
             Ok(self)
         } else {
             Err(Error::ChannelNotFound {
