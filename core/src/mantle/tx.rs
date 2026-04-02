@@ -840,7 +840,7 @@ mod tests {
         let err_msg = deserialized.unwrap_err().to_string();
         assert_eq!(
             err_msg,
-            "Number of proofs (0) does not match number of operations (1)"
+            "The number of proofs (0) does not match the number of operations (1)"
         );
     }
 
