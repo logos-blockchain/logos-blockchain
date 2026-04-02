@@ -8,18 +8,39 @@ pub struct ValueResult<Type, Error> {
     pub error: Error,
 }
 
-impl<Type: Default, Error: Default> ValueResult<Type, Error> {
+impl<Type, Error> ValueResult<Type, Error>
+where
+    Error: Default,
+{
     pub fn from_value(value: Type) -> Self {
         Self {
             value,
             error: Error::default(),
         }
     }
+}
 
+impl<Type, Error> ValueResult<Type, Error>
+where
+    Type: Default,
+{
     pub fn from_error(error: Error) -> Self {
         Self {
             value: Type::default(),
             error,
+        }
+    }
+}
+
+impl<Type, Error> From<Result<Type, Error>> for ValueResult<Type, Error>
+where
+    Type: Default,
+    Error: Default,
+{
+    fn from(result: Result<Type, Error>) -> Self {
+        match result {
+            Ok(value) => Self::from_value(value),
+            Err(error) => Self::from_error(error),
         }
     }
 }
@@ -34,7 +55,10 @@ pub struct PointerResult<Type, Error> {
     pub error: Error,
 }
 
-impl<Type, Error: Default> PointerResult<Type, Error> {
+impl<Type, Error> PointerResult<Type, Error>
+where
+    Error: Default,
+{
     pub fn from_pointer(pointer: *mut Type) -> Self {
         Self {
             value: pointer,

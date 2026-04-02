@@ -3,7 +3,7 @@ use std::ffi::{CString, c_char};
 use lb_core::block::Block;
 use lb_node::{RocksBackend, RuntimeServiceId, SignedMantleTx};
 
-use crate::{LogosBlockchainNode, api::PointerResult, errors::OperationStatus};
+use crate::{LogosBlockchainNode, PointerResult, errors::OperationStatus};
 
 /// Gets blocks in a slot range as a JSON array string.
 ///
