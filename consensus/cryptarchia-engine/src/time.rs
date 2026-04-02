@@ -1,8 +1,4 @@
-use std::{
-    num::NonZero,
-    ops::{Add, Mul, Sub},
-    time::Duration,
-};
+use std::{num::NonZero, ops::Add, time::Duration};
 
 #[cfg(feature = "serde")]
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
@@ -120,14 +116,6 @@ impl From<Slot> for u64 {
     }
 }
 
-impl Add<Self> for Slot {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self(self.0 + rhs.0)
-    }
-}
-
 impl Add<u64> for Slot {
     type Output = Self;
 
@@ -141,22 +129,6 @@ impl Add<u32> for Epoch {
 
     fn add(self, rhs: u32) -> Self::Output {
         Self(self.0 + rhs)
-    }
-}
-
-impl Sub<u64> for Slot {
-    type Output = Self;
-
-    fn sub(self, rhs: u64) -> Self::Output {
-        Self(self.0 - rhs)
-    }
-}
-
-impl Mul<u64> for Slot {
-    type Output = Self;
-
-    fn mul(self, rhs: u64) -> Self::Output {
-        Self(self.0 * rhs)
     }
 }
 

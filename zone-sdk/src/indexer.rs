@@ -79,7 +79,15 @@ where
                 return None;
             }
 
-            let end_slot = (current_slot + BATCH_SIZE - 1).min(lib_slot);
+            let end_slot = (Slot::from(
+                current_slot
+                    .into_inner()
+                    .saturating_add(BATCH_SIZE.into_inner())
+                    .checked_sub(1)
+                    .expect("slot shouldn't overflow"),
+            ))
+            .min(lib_slot);
+
             match self
                 .node
                 .zone_messages_in_blocks(current_slot, end_slot, self.channel_id)
@@ -253,16 +261,37 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (deposit_msg(10, &[10]), BATCH_SIZE),
-            (block_msg(2, &[2]), BATCH_SIZE * 2),
-            (block_msg(3, &[3]), BATCH_SIZE * 2),
-            (deposit_msg(11, &[11]), BATCH_SIZE * 3),
-            (block_msg(4, &[4]), BATCH_SIZE * 3),
-            (block_msg(5, &[5]), BATCH_SIZE * 4),
+            (
+                block_msg(2, &[2]),
+                BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
+            ),
+            (
+                block_msg(3, &[3]),
+                BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
+            ),
+            (
+                deposit_msg(11, &[11]),
+                BATCH_SIZE.into_inner().checked_mul(3).unwrap().into(),
+            ),
+            (
+                block_msg(4, &[4]),
+                BATCH_SIZE.into_inner().checked_mul(3).unwrap().into(),
+            ),
+            (
+                block_msg(5, &[5]),
+                BATCH_SIZE.into_inner().checked_mul(4).unwrap().into(),
+            ),
         ];
-        let indexer = indexer(BATCH_SIZE * 4, messages.clone());
+        let indexer = indexer(
+            BATCH_SIZE.into_inner().checked_mul(4).unwrap().into(),
+            messages.clone(),
+        );
 
         let stream = indexer
-            .next_messages(Some((msg_id(2), BATCH_SIZE * 2)))
+            .next_messages(Some((
+                msg_id(2),
+                BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
+            )))
             .await
             .unwrap();
         futures::pin_mut!(stream);
