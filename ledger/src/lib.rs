@@ -563,7 +563,6 @@ impl LedgerState {
                         .mantle_ledger
                         .try_apply_sdp_withdraw(op, sig, tx_hash, config)?;
                 }
-                // TODO: Double check the proof for LeaderClaim is correct
                 (Op::LeaderClaim(op), OpProof::PoC(_)) => {
                     // Correct derivation of the voucher nullifier and membership in the merkle tree
                     // can be verified outside of this function since public inputs are already
