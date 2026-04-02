@@ -852,7 +852,8 @@ async fn handle_block_event(
     let inscriptions = extract_inscriptions(&event.block.transactions, channel_id);
 
     // Process the actual event block
-    let mut newly_finalized = s.process_block(block_id, parent_id, lib, our_txs, inscriptions);
+    s.process_block(block_id, parent_id, lib, our_txs, inscriptions);
+    let mut newly_finalized = Vec::new();
 
     // Finalize txs found in backfilled LIB blocks — this is ground truth
     // from the node. LIB blocks are truly final (can't be reorged), so

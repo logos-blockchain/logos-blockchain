@@ -133,7 +133,8 @@ impl TxState {
         self.pending_other.insert(tx_hash, signed_tx);
     }
 
-    /// Process a new block. Returns newly finalized tx hashes.
+    /// Process a new block. Finalization is handled by backfill ground
+    /// truth, not by the safe-set walk here.
     pub fn process_block(
         &mut self,
         block_id: HeaderId,
@@ -141,7 +142,7 @@ impl TxState {
         lib: HeaderId,
         our_txs: impl IntoIterator<Item = TxHash>,
         inscriptions: Vec<InscriptionInfo>,
-    ) -> Vec<TxHash> {
+    ) {
         // Store parent relationship for pruning
         self.parent_map.insert(block_id, parent_id);
 
@@ -209,9 +210,6 @@ impl TxState {
             self.prune_orphans(lib);
             self.current_lib = lib;
         }
-
-        // No finalization from safe set — caller uses backfill ground truth
-        Vec::new()
     }
 
     /// Remove orphaned blocks whose parent was pruned.
@@ -659,10 +657,9 @@ mod tests {
         state.process_block(b1, genesis, genesis, vec![hash], vec![]);
         assert_eq!(state.unfinalized_count(), 1);
 
-        // b2, lib advances to b1 — process_block no longer removes from
+        // b2, lib advances to b1 — process_block does not remove from
         // pending (that's done by backfill ground truth)
-        let finalized = state.process_block(b2, b1, b1, vec![], vec![]);
-        assert!(finalized.is_empty(), "process_block should not finalize");
+        state.process_block(b2, b1, b1, vec![], vec![]);
         assert_eq!(
             state.unfinalized_count(),
             1,
@@ -980,10 +977,7 @@ mod tests {
         // b2 has tx2
         state.process_block(b2, b1, genesis, vec![hash2], vec![]);
         // b3, lib jumps from genesis to b2 (skipping b1)
-        let finalized = state.process_block(b3, b2, b2, vec![], vec![]);
-
-        // process_block no longer finalizes — backfill does that
-        assert!(finalized.is_empty());
+        state.process_block(b3, b2, b2, vec![], vec![]);
         assert_eq!(
             state.unfinalized_count(),
             2,
