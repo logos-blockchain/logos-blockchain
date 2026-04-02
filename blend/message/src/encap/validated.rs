@@ -188,6 +188,11 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
         }
     }
 
+    #[must_use]
+    pub const fn public_header(&self) -> &VerifiedPublicHeader {
+        &self.validated_public_header
+    }
+
     #[cfg(any(feature = "unsafe-test-functions", test))]
     pub const fn public_header_mut(&mut self) -> &mut VerifiedPublicHeader {
         &mut self.validated_public_header

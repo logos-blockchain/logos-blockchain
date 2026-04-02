@@ -25,7 +25,7 @@ const NODE_ENTRYPOINT: &str = "/etc/logos/scripts/run_logos_node.sh";
 const GHCR_TESTNET_IMAGE: &str = "ghcr.io/logos-co/nomos:testnet";
 const DEFAULT_CFGSYNC_HOST: &str = "cfgsync";
 
-pub(super) fn normalized_cfgsync_port(port: u16) -> u16 {
+pub(super) const fn normalized_cfgsync_port(port: u16) -> u16 {
     if port == 0 {
         DEFAULT_CFGSYNC_PORT
     } else {
@@ -59,9 +59,13 @@ pub(super) fn build_node_descriptor(
 }
 
 pub(super) fn cfgsync_dir(cfgsync_path: &Path) -> Result<&Path, DynError> {
-    cfgsync_path
-        .parent()
-        .ok_or_else(|| anyhow!("cfgsync path {cfgsync_path:?} has no parent directory").into())
+    cfgsync_path.parent().ok_or_else(|| {
+        anyhow!(
+            "cfgsync path {} has no parent directory",
+            cfgsync_path.display()
+        )
+        .into()
+    })
 }
 
 pub(super) fn cfgsync_container_name() -> String {
@@ -78,25 +82,25 @@ pub(super) fn build_cfgsync_container_spec(
 ) -> DockerConfigServerSpec {
     let mut mounts = vec![DockerVolumeMount::read_only(
         testnet_dir.to_path_buf(),
-        "/etc/logos".to_string(),
+        "/etc/logos".to_owned(),
     )];
     let mut env = Vec::new();
 
     maybe_add_circuits_mount(&mut mounts, &mut env);
 
     DockerConfigServerSpec::new(
-        container_name.to_string(),
-        network.to_string(),
-        "cfgsync-server".to_string(),
-        image.to_string(),
+        container_name.to_owned(),
+        network.to_owned(),
+        "cfgsync-server".to_owned(),
+        image.to_owned(),
     )
     .with_platform(platform)
-    .with_network_alias("cfgsync".to_string())
-    .with_workdir("/etc/logos".to_string())
+    .with_network_alias("cfgsync".to_owned())
+    .with_workdir("/etc/logos".to_owned())
     .with_ports(vec![DockerPortBinding::tcp(port, port)])
     .with_mounts(mounts)
     .with_env(env)
-    .with_args(vec!["/etc/logos/cfgsync.yaml".to_string()])
+    .with_args(vec!["/etc/logos/cfgsync.yaml".to_owned()])
 }
 
 pub(super) fn resolve_node_image() -> (String, Option<String>) {
@@ -132,10 +136,7 @@ fn maybe_add_circuits_mount(mounts: &mut Vec<DockerVolumeMount>, env: &mut Vec<(
     }
 
     let resolved_host_path = host_path.canonicalize().unwrap_or(host_path);
-    env.push((
-        "LOGOS_BLOCKCHAIN_CIRCUITS".to_string(),
-        circuits_dir.clone(),
-    ));
+    env.push(("LOGOS_BLOCKCHAIN_CIRCUITS".to_owned(), circuits_dir.clone()));
 
     mounts.push(DockerVolumeMount::read_only(
         resolved_host_path,

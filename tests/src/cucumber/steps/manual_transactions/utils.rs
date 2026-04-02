@@ -43,7 +43,7 @@ impl Display for WalletStateType {
 
 use std::str::FromStr;
 
-use lb_core::mantle::OpProof;
+use lb_core::mantle::{OpProof, tx::MantleTxGasContext};
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 
 use crate::cucumber::{
@@ -83,7 +83,8 @@ pub async fn create_and_submit_transaction(
             ref wallet_account, ..
         } => {
             let wallet_state = wallet_state_from_utxos(available_utxos);
-            let mut tx_builder = MantleTxBuilder::new();
+            let empty_context = MantleTxGasContext::new(HashMap::new());
+            let mut tx_builder = MantleTxBuilder::new(empty_context);
             for (receiver_pk, value) in receivers {
                 tx_builder = tx_builder.add_ledger_output(Note::new(*value, *receiver_pk));
             }
@@ -440,6 +441,10 @@ pub async fn wait_for_wallet_or_encumbered_state(
     clippy::too_many_arguments,
     reason = "This function is more readable with explicit arguments rather than packing them into structs or tuples."
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Singular fn with multiple branches to handle different events and futures."
+)]
 fn conditions_met(
     wallet_name: &str,
     wallet_node_name: &str,
@@ -564,6 +569,10 @@ fn get_last_known_height<'a>(
 #[expect(
     clippy::too_many_lines,
     reason = "This function is necessarily complex due to the logic of reconstructing wallet state from blocks and caching it for performance."
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Singular fn with multiple branches to handle different events and futures."
 )]
 async fn collect_wallet_utxos(
     world: &mut CucumberWorld,

@@ -232,6 +232,7 @@ where
 {
     verify_last_reconstructed_public_header(public_header, private_header, payload)?;
     // Verify the proof of quota in the reconstructed public header
+    tracing::trace!("Verifying proof of quota of intermediate reconstructed public header.");
     public_header.verify_proof_of_quota(verifier)?;
     Ok(())
 }

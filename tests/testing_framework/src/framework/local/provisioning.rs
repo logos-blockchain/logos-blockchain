@@ -147,7 +147,7 @@ impl LocalDeployerEnv for LbcEnv {
         let deployment_yaml =
             serde_yaml::to_string(&config.deployment).map_err(io::Error::other)?;
 
-        build_node_launch_spec(dir, user_yaml, deployment_yaml)
+        Ok(build_node_launch_spec(dir, user_yaml, deployment_yaml))
     }
 
     fn node_endpoints(config: &<Self as Application>::NodeConfig) -> NodeEndpoints {
@@ -229,17 +229,13 @@ fn allocate_udp_port(label: &'static str) -> Result<u16, DynError> {
         })
 }
 
-fn build_node_launch_spec(
-    dir: &Path,
-    user_yaml: String,
-    deployment_yaml: String,
-) -> Result<LaunchSpec, DynError> {
+fn build_node_launch_spec(dir: &Path, user_yaml: String, deployment_yaml: String) -> LaunchSpec {
     let config_path = dir.join(USER_CONFIG_FILE);
     let deployment_path = dir.join(DEPLOYMENT_CONFIG_FILE);
     let time_backend =
         env::var("LOGOS_BLOCKCHAIN_TIME_BACKEND").unwrap_or_else(|_| "monotonic".to_owned());
 
-    Ok(LaunchSpec {
+    LaunchSpec {
         binary: BinaryResolver::resolve_path(&node_binary_config()),
         files: vec![
             launch_file(USER_CONFIG_FILE, user_yaml.into_bytes()),
@@ -254,7 +250,7 @@ fn build_node_launch_spec(
             "LOGOS_BLOCKCHAIN_TIME_BACKEND",
             time_backend,
         )],
-    })
+    }
 }
 
 fn launch_file(relative_path: &str, contents: Vec<u8>) -> LaunchFile {

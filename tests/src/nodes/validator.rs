@@ -516,6 +516,7 @@ pub fn create_validator_user_config(config: GeneralConfig) -> UserConfig {
     }
 }
 
+#[must_use]
 pub fn create_validator_config(
     config: GeneralConfig,
     deployment_config: DeploymentSettings,

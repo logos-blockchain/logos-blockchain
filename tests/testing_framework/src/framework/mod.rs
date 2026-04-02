@@ -63,7 +63,7 @@ impl Application for LbcEnv {
     type FeedRuntime = BlockFeedRuntime;
 
     fn external_node_client(source: &ExternalNodeSource) -> Result<Self::NodeClient, DynError> {
-        let endpoint = Url::parse(&source.endpoint())?;
+        let endpoint = Url::parse(source.endpoint())?;
         let basic_auth = external_basic_auth(&endpoint);
 
         Ok(NodeHttpClient::from_urls_with_basic_auth(

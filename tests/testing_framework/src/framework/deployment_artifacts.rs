@@ -21,7 +21,7 @@ use crate::{
 };
 
 #[derive(Debug, Error)]
-pub(crate) enum ArtifactError {
+pub enum ArtifactError {
     #[error("deployment plan is missing `genesis_tx`")]
     MissingGenesisTx,
     #[error("runtime hostname count ({hostnames}) does not match node count ({nodes})")]
@@ -35,7 +35,7 @@ pub(crate) enum ArtifactError {
     },
 }
 
-pub(crate) fn add_shared_deployment_file(
+pub fn add_shared_deployment_file(
     topology: &DeploymentPlan,
     hostnames: &[String],
     materialized: &mut MaterializedArtifacts,
@@ -48,7 +48,7 @@ pub(crate) fn add_shared_deployment_file(
 
     let mut shared = materialized.shared().clone();
     shared.files.push(ArtifactFile::new(
-        "/deployment.yaml".to_string(),
+        "/deployment.yaml".to_owned(),
         deployment_yaml,
     ));
 
@@ -132,7 +132,7 @@ fn blend_udp_port(node: &NodePlan, node_index: usize) -> Result<u16> {
             Protocol::Udp(port) => Some(port),
             _ => None,
         })
-        .ok_or(ArtifactError::MissingBlendPort { node_index }.into())
+        .ok_or_else(|| ArtifactError::MissingBlendPort { node_index }.into())
 }
 
 fn runtime_blend_locator(hostname: &str, port: u16) -> Locator {

@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 blake2                        = { workspace = true }
 derivative                    = { default-features = false, version = "2" }
+hex                           = { workspace = true }
 itertools                     = { default-features = false, version = "0.14" }
 lb-blend-crypto               = { workspace = true }
 lb-blend-proofs               = { workspace = true }

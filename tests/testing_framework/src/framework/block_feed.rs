@@ -44,8 +44,12 @@ pub struct NodeHeadSnapshot {
     pub node: String,
     /// Latest observed tip for this node.
     pub tip: HeaderId,
+    /// Latest observed tip height for this node, if known to the feed.
+    pub tip_height: Option<u64>,
     /// Latest observed LIB for this node.
     pub lib: HeaderId,
+    /// Latest observed LIB height for this node, if known to the feed.
+    pub lib_height: Option<u64>,
 }
 
 /// Read model exported by the feed for expectations.
@@ -238,7 +242,9 @@ impl BlockScanner {
                 NodeHeadSnapshot {
                     node: source_node.clone(),
                     tip: info.tip,
+                    tip_height: Some(info.height),
                     lib: info.lib,
+                    lib_height: self.heights.get(&info.lib).copied(),
                 },
             );
 
@@ -356,7 +362,16 @@ impl BlockScanner {
     }
 
     fn current_heads(&self) -> Vec<NodeHeadSnapshot> {
-        let mut heads = self.node_heads.values().cloned().collect::<Vec<_>>();
+        let mut heads = self
+            .node_heads
+            .values()
+            .cloned()
+            .map(|mut head| {
+                head.tip_height = self.heights.get(&head.tip).copied().or(head.tip_height);
+                head.lib_height = self.heights.get(&head.lib).copied();
+                head
+            })
+            .collect::<Vec<_>>();
         heads.sort_by(|left, right| left.node.cmp(&right.node));
         heads
     }

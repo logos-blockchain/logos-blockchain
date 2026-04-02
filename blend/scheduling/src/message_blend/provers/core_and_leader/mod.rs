@@ -166,6 +166,17 @@ where
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
         let proof = self.core_proofs_generator.get_next_proof().await?;
+        tracing::trace!(
+            target: LOG_TARGET,
+            epoch = ?self.core_proofs_generator.settings.epoch,
+            session = self.core_proofs_generator.settings.public_inputs.session,
+            quota = self.core_proofs_generator.settings.public_inputs.core.quota,
+            membership_size = self.core_proofs_generator.settings.membership_size,
+            local_node_index = ?self.core_proofs_generator.settings.local_node_index,
+            key_nullifier = ?proof.proof_of_quota.key_nullifier(),
+            signing_key = ?proof.ephemeral_signing_key.public_key(),
+            "generated core PoQ"
+        );
         Some(proof)
     }
 
@@ -174,6 +185,17 @@ where
             return None;
         };
         let proof = leader_proofs_generator.get_next_proof().await;
+        tracing::trace!(
+            target: LOG_TARGET,
+            epoch = ?leader_proofs_generator.settings.epoch,
+            session = leader_proofs_generator.settings.public_inputs.session,
+            quota = leader_proofs_generator.settings.public_inputs.core.quota,
+            membership_size = leader_proofs_generator.settings.membership_size,
+            local_node_index = ?leader_proofs_generator.settings.local_node_index,
+            key_nullifier = ?proof.proof_of_quota.key_nullifier(),
+            signing_key = ?proof.ephemeral_signing_key.public_key(),
+            "generated leadership PoQ"
+        );
         Some(proof)
     }
 }

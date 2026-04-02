@@ -591,7 +591,7 @@ impl CucumberWorld {
         self.ensure_expected_deployer(expected)?;
 
         if expected.requires_local_node_binary() {
-            self.ensure_local_node_binary()?;
+            Self::ensure_local_node_binary()?;
         }
 
         Ok(())
@@ -657,7 +657,7 @@ impl CucumberWorld {
         Ok(())
     }
 
-    fn ensure_local_node_binary(&self) -> Result<(), StepError> {
+    fn ensure_local_node_binary() -> Result<(), StepError> {
         if host_node_binary_from_env_var_available() {
             return Ok(());
         }

@@ -1,11 +1,24 @@
+pub mod deposit;
 pub mod inscribe;
 pub mod set_keys;
+pub mod withdraw;
+
+use std::fmt::{Display, Formatter};
 
 use crate::utils::serde_bytes_newtype;
+
+pub type ChannelKeyIndex = u16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct ChannelId([u8; 32]);
 serde_bytes_newtype!(ChannelId, 32);
+
+impl Display for ChannelId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let hex_string = hex::encode(self.0);
+        write!(f, "{hex_string}")
+    }
+}
 
 /// The id of the previous message in the channel
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
