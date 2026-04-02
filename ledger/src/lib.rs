@@ -522,27 +522,19 @@ impl LedgerState {
                         .try_apply_channel_set_keys(op, sig, &tx_hash)?;
                 }
                 (Op::ChannelDeposit(op), OpProof::NoProof) => {
-                    let deposit_balance;
-                    (self.mantle_ledger, deposit_balance) =
+                    let deposit_amount;
+                    (self.mantle_ledger, deposit_amount) =
                         self.mantle_ledger.try_apply_channel_deposit(op)?;
-                    assert!(
-                        deposit_balance <= 0,
-                        "deposit balance should be non-positive: {deposit_balance}"
-                    );
                     balance = balance
-                        .checked_add(deposit_balance)
+                        .checked_sub(deposit_amount.into())
                         .ok_or(LedgerError::BalanceOverflow)?;
                 }
                 (Op::ChannelWithdraw(op), OpProof::ChannelWithdrawProof(_proof)) => {
-                    let withdraw_balance;
-                    (self.mantle_ledger, withdraw_balance) =
+                    let withdraw_amount;
+                    (self.mantle_ledger, withdraw_amount) =
                         self.mantle_ledger.try_apply_channel_withdraw(op)?;
-                    assert!(
-                        withdraw_balance >= 0,
-                        "withdraw balance should be non-negative: {withdraw_balance}"
-                    );
                     balance = balance
-                        .checked_add(withdraw_balance)
+                        .checked_add(withdraw_amount)
                         .ok_or(LedgerError::BalanceOverflow)?;
                 }
                 (
@@ -577,11 +569,10 @@ impl LedgerState {
                     // can be verified outside of this function since public inputs are already
                     // available. Callers are expected to validate the proof
                     // before calling this function.
-                    let leader_balance;
-                    (self.mantle_ledger, leader_balance) =
-                        self.mantle_ledger.try_apply_leader_claim(op)?;
+                    let reward;
+                    (self.mantle_ledger, reward) = self.mantle_ledger.try_apply_leader_claim(op)?;
                     balance = balance
-                        .checked_add(leader_balance)
+                        .checked_add(reward.into())
                         .ok_or(LedgerError::BalanceOverflow)?;
                 }
                 (Op::Transfer(op), OpProof::ZkSig(sig)) => {
