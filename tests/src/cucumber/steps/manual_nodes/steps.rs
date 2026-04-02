@@ -2,9 +2,7 @@ use std::{collections::HashMap, time::Duration};
 
 use cucumber::{gherkin::Step, given, then, when};
 use lb_libp2p::{Multiaddr, PeerId};
-use lb_testing_framework::{
-    DeploymentBuilder, LbcLocalDeployer, TopologyConfig, configs::wallet::WalletAccount,
-};
+use lb_testing_framework::{DeploymentBuilder, LbcLocalDeployer, TopologyConfig};
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
@@ -12,14 +10,14 @@ use crate::cucumber::{
     error::{StepError, StepResult},
     steps::{
         TARGET,
+        manual_cluster::{build_manual_cluster_deployment, stop_active_manual_cluster},
         manual_nodes::{
             snapshots::{save_named_blockchain_snapshot, validate_snapshot_path_component},
             utils::{
-                NodesToStartUnordered, create_snapshots_all_nodes, genesis_block_utxos,
-                get_cryptarchia_info_all_nodes, nodes_converged, parse_genesis_wallet_tokens_row,
-                parse_url, parse_wallet_resources_table_row,
-                poll_all_nodes_and_update_consensus_cache, restart_node, start_node,
-                start_nodes_order_respecting_dependencies,
+                NodesToStartUnordered, create_snapshots_all_nodes, get_cryptarchia_info_all_nodes,
+                nodes_converged, parse_genesis_wallet_tokens_row, parse_url,
+                parse_wallet_resources_table_row, poll_all_nodes_and_update_consensus_cache,
+                restart_node, start_node, start_nodes_order_respecting_dependencies,
                 verify_genesis_wallet_resources_table_indexes,
                 verify_node_wallet_resources_table_indexes,
                 wait_for_all_nodes_to_be_synced_to_chain,
@@ -37,36 +35,9 @@ const PUBLIC_CRYPTARCHIA_ENDPOINT_PASSWORD: &str = "password";
 #[given(expr = "I have a cluster with capacity of {int} nodes")]
 #[when(expr = "I have a cluster with capacity of {int} nodes")]
 fn step_manual_cluster(world: &mut CucumberWorld, step: &Step, nodes_count: usize) -> StepResult {
-    let mut config = TopologyConfig::with_node_numbers(nodes_count)
-        .with_allow_multiple_genesis_tokens(true)
-        .with_allow_zero_value_genesis_tokens(true);
-
-    for genesis_token in &world.genesis_tokens {
-        let wallet_account = WalletAccount::deterministic(
-            genesis_token.account_index as u64,
-            genesis_token.token_amount,
-            true,
-        )?;
-        world
-            .wallet_accounts
-            .insert(genesis_token.account_index, wallet_account.clone());
-        for _ in 0..genesis_token.token_count {
-            config.wallet_config.accounts.push(wallet_account.clone());
-        }
-    }
-
-    let deployment = match DeploymentBuilder::new(config).build() {
-        Ok(deployment) => deployment,
-        Err(e) => {
-            warn!(target: TARGET, "Step '{step}' error: {e}");
-            return Err(StepError::LogicalError {
-                message: format!("failed to build manual cluster: {e}"),
-            });
-        }
-    };
-    if let Some(genesis_tx) = deployment.config.genesis_tx.clone() {
-        world.genesis_block_utxos = genesis_block_utxos(&genesis_tx);
-    }
+    let deployment = build_manual_cluster_deployment(world, nodes_count).inspect_err(|e| {
+        warn!(target: TARGET, "Step '{step}' error: {e}");
+    })?;
     let deployer = LbcLocalDeployer::new();
     let cluster = deployer.manual_cluster_from_descriptors(deployment);
     world.local_cluster = Some(cluster);
@@ -636,14 +607,7 @@ fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
         .map(|(node_name, info)| (node_name.clone(), info.started_node.name.clone()))
         .collect();
 
-    let cluster = world
-        .local_cluster
-        .as_ref()
-        .ok_or(StepError::LogicalError {
-            message: "No local cluster available".into(),
-        })?;
-
-    cluster.stop_all();
+    stop_active_manual_cluster(world)?;
 
     if let Some(snapshot_name) = world.blockchain_snapshot_name_on_stop.as_ref() {
         create_snapshots_all_nodes(world, snapshot_name)?;

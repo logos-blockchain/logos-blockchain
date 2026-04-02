@@ -282,7 +282,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             old_verifier,
         ));
 
-        tracing::info!(target: LOG_TARGET, "Started a new session by passing negotiated peers and exchanged message IDs to the old session. Now, no negotiated peers in the current session.");
+        tracing::debug!(target: LOG_TARGET, "Started a new session by passing negotiated peers and exchanged message IDs to the old session. Now, no negotiated peers in the current session.");
     }
 
     pub(crate) fn finish_session_transition(&mut self) {
@@ -345,7 +345,10 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         else {
             return Err(Error::NoPeers);
         };
-        tracing::debug!(target: LOG_TARGET, "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver already-serialized message.");
+        tracing::trace!(
+            target: LOG_TARGET,
+            "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver already-serialized message."
+        );
         self.events.push_back(ToSwarm::NotifyHandler {
             peer_id,
             handler: NotifyHandler::One(*connection_id),
@@ -385,7 +388,12 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
 
         let serialized_message = serialize_encapsulated_message(message);
         let mut at_least_one_receiver = false;
-        tracing::debug!(target: LOG_TARGET, "Forwarding message with id {:?}. Negotiated peers: {:?}. Excluded peer: {excluded_peer:?}", hex::encode(message_id), self.negotiated_peers());
+        tracing::trace!(
+            target: LOG_TARGET,
+            "Forwarding message with id {:?}. Negotiated peers: {:?}. Excluded peer: {excluded_peer:?}",
+            hex::encode(message_id),
+            self.negotiated_peers()
+        );
         self.negotiated_peers
             .iter()
             // Exclude the peer the message was received from.
@@ -399,7 +407,10 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
                     .or_default()
                     .entry(message_id)
                 {
-                    tracing::debug!(target: LOG_TARGET, "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message {message_id:?}.");
+                    tracing::trace!(
+                        target: LOG_TARGET,
+                        "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message."
+                    );
                     message_peer_entry.insert(Instant::now());
                     self.events.push_back(ToSwarm::NotifyHandler {
                         peer_id: *peer_id,
@@ -558,7 +569,10 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
             !self.negotiated_peers.contains_key(&peer_id),
             "We are assuming the peer is not connected to us."
         );
-        tracing::debug!(target: LOG_TARGET, "Connection {connection_id:?} with peer {peer_id:?} has been negotiated.");
+        tracing::trace!(
+            target: LOG_TARGET,
+            "Connection {connection_id:?} with peer {peer_id:?} has been negotiated."
+        );
         self.negotiated_peers.insert(
             peer_id,
             RemotePeerConnectionDetails {
@@ -696,7 +710,10 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         (peer_id, connection_id): (PeerId, ConnectionId),
         reason: SpamReason,
     ) {
-        tracing::debug!(target: LOG_TARGET, "Closing connection {connection_id:?} with spammy peer {peer_id:?} for reason {reason:?}.");
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Closing connection {connection_id:?} with spammy peer {peer_id:?} for reason {reason:?}."
+        );
         self.set_connection_to_spammy((peer_id, connection_id), reason);
         self.close_connection((peer_id, connection_id));
     }
@@ -723,7 +740,11 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         // We double check we are dealing with the expected connection.
         // This could be false if `connection_id` is from the old session.
         if peer_details.connection_id != connection_id {
-            tracing::debug!(target: LOG_TARGET, "Provided connection ID {connection_id:?} does not match the stored connection ID {:?} for peer {peer_id:?}. Ignoring state update.", peer_details.connection_id);
+            tracing::trace!(
+                target: LOG_TARGET,
+                "Provided connection ID {connection_id:?} does not match the stored connection ID {:?} for peer {peer_id:?}. Ignoring state update.",
+                peer_details.connection_id
+            );
             return Some(state);
         }
         Some(mem::replace(&mut peer_details.negotiated_state, state))
@@ -790,10 +811,16 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
                 // message to each other). Simply ignore it.
                 if Instant::now().duration_since(*time_sent) <= SENSITIVITY_INTERVAL_FOR_DUPLICATES
                 {
-                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged ({message_id:?}) but within the sensitivity window. Simply ignoring the message.");
+                    tracing::trace!(
+                        target: LOG_TARGET,
+                        "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged ({message_id:?}) but within the sensitivity window. Simply ignoring the message."
+                    );
                     Ok(())
                 } else {
-                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged ({message_id:?}). Marking it as spammy.");
+                    tracing::debug!(
+                        target: LOG_TARGET,
+                        "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged ({message_id:?}). Marking it as spammy."
+                    );
                     self.close_spammy_connection(
                         (peer_id, connection_id),
                         SpamReason::DuplicateMessage,
@@ -1070,7 +1097,10 @@ where
             tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer_id:?} because membership size is too small.");
             Either::Right(DummyConnectionHandler)
         } else if self.current_membership.contains(&peer_id) {
-            tracing::debug!(target: LOG_TARGET, "Upgrading inbound connection {connection_id:?} with core peer {peer_id:?}.");
+            tracing::trace!(
+                target: LOG_TARGET,
+                "Upgrading inbound connection {connection_id:?} with core peer {peer_id:?}."
+            );
             self.connections_waiting_upgrade
                 .insert((peer_id, connection_id), Endpoint::Dialer);
             Either::Left(ConnectionHandler::new(
@@ -1111,7 +1141,10 @@ where
             tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with peer {peer_id:?} because membership size is too small.");
             Either::Right(DummyConnectionHandler)
         } else if self.current_membership.contains(&peer_id) {
-            tracing::debug!(target: LOG_TARGET, "Upgrading outbound connection {connection_id:?} with core peer {peer_id:?}.");
+            tracing::trace!(
+                target: LOG_TARGET,
+                "Upgrading outbound connection {connection_id:?} with core peer {peer_id:?}."
+            );
             self.connections_waiting_upgrade
                 .insert((peer_id, connection_id), Endpoint::Listener);
             Either::Left(ConnectionHandler::new(
@@ -1217,13 +1250,19 @@ where
                     //     (peer_id, connection_id),
                     //     SpamReason::TooManyMessages,
                     // );
-                    tracing::debug!(target: LOG_TARGET, "Peer {peer_id:?} has been marked as spammy by its connection handler. NOT TAKING ANY ACTIONS ON THIS.");
+                    tracing::debug!(
+                        target: LOG_TARGET,
+                        "Peer {peer_id:?} has been marked as spammy by its connection handler. NOT TAKING ANY ACTIONS ON THIS."
+                    );
                 }
                 // TODO: Re-add logic once Blend observation window values calculation is fixed.
                 ToBehaviour::UnhealthyPeer => {
                     // self.handle_unhealthy_connection((peer_id,
                     // connection_id));
-                    tracing::debug!(target: LOG_TARGET, "Peer {peer_id:?} has been marked as unhealthy by its connection handler. NOT TAKING ANY ACTIONS ON THIS.");
+                    tracing::trace!(
+                        target: LOG_TARGET,
+                        "Peer {peer_id:?} has been marked as unhealthy by its connection handler. NOT TAKING ANY ACTIONS ON THIS."
+                    );
                 }
                 ToBehaviour::HealthyPeer => {
                     self.handle_healthy_connection((peer_id, connection_id));

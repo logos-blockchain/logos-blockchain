@@ -66,7 +66,7 @@ pub(crate) type WinningPolInfo = (LeaderPrivate, LeaderPublic, Epoch);
 
 const SERVICE_ID: &str = "ChainLeader";
 
-pub(crate) const LOG_TARGET: &str = "chain-leader::service";
+pub(crate) const LOG_TARGET: &str = "chain_leader::service";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -81,7 +81,7 @@ pub enum Error {
     #[error("Failed to create valid block during proposal: {0}")]
     BlockCreation(#[from] BlockError),
     #[error("Wallet API error: {0}")]
-    Wallet(#[from] WalletApiError),
+    Wallet(#[from] Box<WalletApiError>),
     #[error("Leader wallet error: {0}")]
     LeaderWallet(#[from] LeaderWalletError),
     #[error("Mempool error: {0}")]
@@ -92,6 +92,12 @@ pub enum Error {
     NoClaimableVoucher,
     #[error("Ledger state not found for {0:?}")]
     LedgerStateNotFound(HeaderId),
+}
+
+impl From<WalletApiError> for Error {
+    fn from(error: WalletApiError) -> Self {
+        Self::Wallet(Box::new(error))
+    }
 }
 
 #[derive(Debug)]
@@ -595,7 +601,7 @@ where
     )]
     #[instrument(
         level = "debug",
-        skip(tx_selector, relays, ledger_state, ledger_config)
+        skip(tx_selector, relays, ledger_state, ledger_config, proof, signing_key)
     )]
     async fn propose_block(
         parent: HeaderId,

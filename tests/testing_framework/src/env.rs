@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{path::PathBuf, str::FromStr};
 
 /// Parse environment variable as `T`.
 ///
@@ -48,4 +48,46 @@ pub fn env_flag(key: &str) -> bool {
         raw.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+#[must_use]
+pub fn debug_tracing() -> bool {
+    env_flag("LOGOS_BLOCKCHAIN_TESTS_TRACING")
+}
+
+#[must_use]
+pub fn nomos_cfgsync_port() -> Option<u16> {
+    env_opt("LOGOS_BLOCKCHAIN_CFGSYNC_PORT")
+}
+
+#[must_use]
+pub fn nomos_log_dir() -> Option<PathBuf> {
+    std::env::var("LOGOS_BLOCKCHAIN_LOG_DIR")
+        .ok()
+        .map(PathBuf::from)
+}
+
+#[must_use]
+pub fn nomos_log_level() -> Option<String> {
+    std::env::var("LOGOS_BLOCKCHAIN_LOG_LEVEL").ok()
+}
+
+#[must_use]
+pub fn nomos_testnet_image() -> Option<String> {
+    std::env::var("LOGOS_BLOCKCHAIN_TESTNET_IMAGE").ok()
+}
+
+#[must_use]
+pub fn nomos_testnet_image_pull_policy() -> Option<String> {
+    std::env::var("LOGOS_BLOCKCHAIN_TESTNET_IMAGE_PULL_POLICY").ok()
+}
+
+#[must_use]
+pub fn rust_log() -> Option<String> {
+    std::env::var("RUST_LOG").ok()
+}
+
+#[must_use]
+pub fn lb_time_service_backend() -> Option<String> {
+    std::env::var("LOGOS_BLOCKCHAIN_TIME_BACKEND").ok()
 }

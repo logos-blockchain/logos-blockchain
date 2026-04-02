@@ -141,12 +141,11 @@ async fn external_urls_inscription_workload() -> Result<(), Box<dyn std::error::
     }
 
     let mut scenario = builder
-        .with_external_only_sources()
-        .inscriptions_with(|inscriptions| {
-            inscriptions
-                .channels(inscription_channels)
-                .inscription_payload_bytes(inscription_payload_bytes)
-        })
+        .with_external_only()
+        .inscriptions()
+        .channels(inscription_channels)
+        .inscription_payload_bytes(inscription_payload_bytes)
+        .apply()
         .with_run_duration(run_duration)
         .build()?;
 

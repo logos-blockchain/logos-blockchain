@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 async-trait         = "0.1"
-futures             = { default-features = false, version = "0.3" }
+futures             = { workspace = true }
 lb-core             = { workspace = true }
 lb-cryptarchia-sync = { workspace = true }
 lb-libp2p           = { optional = true, workspace = true }
@@ -23,15 +23,14 @@ overwatch           = { workspace = true }
 rand                = { features = ["std"], optional = true, workspace = true }
 rand_chacha         = { default-features = false, optional = true, version = "0.3" }
 serde               = { features = ["derive"], workspace = true }
-tokio               = { default-features = false, features = ["macros", "sync"], version = "1" }
-tokio-stream        = { default-features = false, version = "0.1" }
+tokio               = { features = ["macros", "sync"], workspace = true }
+tokio-stream        = { workspace = true }
 tracing             = { workspace = true }
 utoipa              = { optional = true, workspace = true }
 
 [dev-dependencies]
 chrono             = { default-features = false, features = ["now"], version = "0.4" }
 lb-utils           = { workspace = true }
-tokio              = { default-features = false, version = "1" }
 tracing-subscriber = { default-features = false, features = ["env-filter", "fmt", "std"], version = "0.3" }
 
 [features]

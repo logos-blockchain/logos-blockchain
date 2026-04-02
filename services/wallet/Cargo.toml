@@ -12,11 +12,11 @@ version     = { workspace = true }
 [dependencies]
 async-trait = "0.1"
 bytes       = "1.0"
-futures     = { default-features = false, version = "0.3" }
+futures     = { workspace = true }
 hex         = "0.4"
 serde       = { features = ["derive"], workspace = true }
 thiserror   = "1.0"
-tokio       = { features = ["sync"], version = "1" }
+tokio       = { features = ["sync"], workspace = true }
 tracing     = { workspace = true }
 
 lb-chain-service                 = { workspace = true }

@@ -33,8 +33,9 @@ use tower_http::{
     cors::{Any, CorsLayer},
     limit::RequestBodyLimitLayer,
     timeout::TimeoutLayer,
-    trace::TraceLayer,
+    trace::{DefaultOnRequest, DefaultOnResponse, TraceLayer},
 };
+use tracing::Level as TracingLevel;
 use utoipa::OpenApi as _;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -45,7 +46,10 @@ use super::handlers::{
 use crate::{
     WalletService,
     api::{
-        handlers::{leader_claim, post_activity, post_declaration, post_withdrawal},
+        handlers::{
+            channel, channel_deposit, leader_claim, post_activity, post_declaration,
+            post_withdrawal,
+        },
         openapi::ApiDoc,
     },
 };
@@ -214,6 +218,13 @@ where
                 paths::MEMPOOL_ADD_TX,
                 routing::post(add_tx::<MempoolStorageAdapter, RuntimeServiceId>),
             )
+            .route(paths::CHANNEL, routing::get(channel::<RuntimeServiceId>))
+            .route(
+                paths::CHANNEL_DEPOSIT,
+                routing::post(
+                    channel_deposit::<WalletService, MempoolStorageAdapter, RuntimeServiceId>,
+                ),
+            )
             .route(
                 paths::SDP_POST_DECLARATION,
                 routing::post(
@@ -293,7 +304,11 @@ where
             .layer(ConcurrencyLimitLayer::new(
                 self.settings.max_concurrent_requests,
             ))
-            .layer(TraceLayer::new_for_http());
+            .layer(
+                TraceLayer::new_for_http()
+                    .on_request(DefaultOnRequest::new().level(TracingLevel::TRACE))
+                    .on_response(DefaultOnResponse::new().level(TracingLevel::TRACE)),
+            );
 
         let cors_layer = builder
             .allow_headers(vec![CONTENT_TYPE, USER_AGENT])
@@ -304,7 +319,11 @@ where
         #[cfg(feature = "profiling")]
         let app = {
             let pprof_routes = lb_http_api_common::pprof::create_pprof_router()
-                .layer(TraceLayer::new_for_http())
+                .layer(
+                    TraceLayer::new_for_http()
+                        .on_request(DefaultOnRequest::new().level(TracingLevel::TRACE))
+                        .on_response(DefaultOnResponse::new().level(TracingLevel::TRACE)),
+                )
                 .layer(cors_layer);
 
             app.merge(pprof_routes)

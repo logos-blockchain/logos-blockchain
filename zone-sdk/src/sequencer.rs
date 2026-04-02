@@ -300,8 +300,6 @@ pub struct ZoneSequencer {
     resubmit_active: bool,
     in_flight: FuturesUnordered<BoxFuture<'static, InFlight>>,
 
-    // Buffered events to deliver
-
     // Buffered event — when both ChannelUpdate and TxsFinalized occur on
     // the same block, one is returned immediately and the other is buffered.
     buffered_event: Option<Event>,

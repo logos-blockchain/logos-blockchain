@@ -18,8 +18,9 @@ use tower_http::{
     cors::{Any, CorsLayer},
     limit::RequestBodyLimitLayer,
     timeout::TimeoutLayer,
-    trace::TraceLayer,
+    trace::{DefaultOnRequest, DefaultOnResponse, TraceLayer},
 };
+use tracing::Level as TracingLevel;
 
 use crate::{
     api::{backend::AxumBackendSettings, testing::handlers::get_sdp_declarations},
@@ -89,7 +90,11 @@ where
             .layer(ConcurrencyLimitLayer::new(
                 self.settings.max_concurrent_requests,
             ))
-            .layer(TraceLayer::new_for_http())
+            .layer(
+                TraceLayer::new_for_http()
+                    .on_request(DefaultOnRequest::new().level(TracingLevel::TRACE))
+                    .on_response(DefaultOnResponse::new().level(TracingLevel::TRACE)),
+            )
             .layer(
                 builder
                     .allow_headers(vec![CONTENT_TYPE, USER_AGENT])

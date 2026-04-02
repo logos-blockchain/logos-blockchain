@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use lb_node::config::tracing::serde as tracing;
 
 use crate::IS_DEBUG_TRACING;
@@ -29,13 +31,10 @@ impl GeneralTracingConfig {
                     service_name: host_identifier.clone(),
                 }),
                 filter: tracing::filter::Layer::Env(tracing::filter::EnvConfig {
-                    // Allow events only from modules that matches the regex, if it matches -
-                    // use provided tracing level. Libp2p related crates
-                    // are very log intensive in debug mode.
-                    filters: [("logos-blockchain", "debug"), ("libp2p", "debug")]
-                        .into_iter()
-                        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-                        .collect(),
+                    filters: HashMap::from([
+                        ("logos_blockchain".to_owned(), tracing::Level::DEBUG),
+                        ("libp2p".to_owned(), tracing::Level::DEBUG),
+                    ]),
                 }),
                 metrics: tracing::metrics::Layer::Otlp(tracing::metrics::OtlpConfig {
                     endpoint: "http://127.0.0.1:9090/api/v1/otlp/v1/metrics"

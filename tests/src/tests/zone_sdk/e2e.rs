@@ -406,6 +406,7 @@ async fn publish_all(handle: &mut lb_zone_sdk::sequencer::SequencerHandle, paylo
 }
 
 /// Helper: wait for all expected payloads to appear in the indexer.
+#[expect(clippy::cognitive_complexity, reason = "test helper with polling loop")]
 async fn wait_for_indexer(
     indexer: &ZoneIndexer,
     expected: &HashSet<Vec<u8>>,
@@ -1167,4 +1168,220 @@ async fn test_sorted_conflict_resolution() {
     // Clean up
     poll_a.abort();
     poll_b.abort();
+}
+
+/// Test that resuming from a stale checkpoint works correctly.
+///
+/// Scenario: publish messages, save checkpoint, stop. Start fresh (no
+/// checkpoint), publish more, stop. Resume from OLD checkpoint. The
+/// stale pending txs should be reconciled — no duplicates on chain.
+#[tokio::test]
+#[serial]
+async fn test_sequencer_stale_checkpoint_resume() {
+    init_tracing();
+    let (configs, genesis_tx) = create_general_configs(2);
+    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
+    let configs: Vec<_> = configs
+        .into_iter()
+        .map(|c| {
+            let mut config = create_validator_config(c, deployment_settings.clone());
+            config.deployment.time.slot_duration = Duration::from_secs(1);
+            config
+                .user
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period = Duration::ZERO;
+            config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
+            config
+        })
+        .collect();
+
+    let validators: Vec<Validator> = join_all(configs.into_iter().map(Validator::spawn))
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to spawn validators");
+
+    assert!(
+        wait_for_height(&validators[0], 1, Duration::from_secs(120)).await,
+        "Chain should produce the first block"
+    );
+    let node_url = validators[0].url();
+
+    let mut key_bytes = [0u8; 32];
+    thread_rng().fill(&mut key_bytes);
+    let signing_key = Ed25519Key::from_bytes(&key_bytes);
+    let channel_id = channel_id_from_key(&signing_key);
+
+    let sequencer_config = SequencerConfig {
+        resubmit_interval: Duration::from_secs(3),
+        ..SequencerConfig::default()
+    };
+    let indexer = ZoneIndexer::new(channel_id, node_url.clone(), None);
+
+    // Phase 1: Publish and save checkpoint
+    let (sequencer, mut handle) = ZoneSequencer::init_with_config(
+        channel_id,
+        signing_key.clone(),
+        node_url.clone(),
+        None,
+        sequencer_config.clone(),
+        None,
+    );
+    let poll_task = sequencer.spawn();
+    handle.wait_ready().await;
+
+    let data_phase1: Vec<Vec<u8>> = vec![b"msg-1".to_vec(), b"msg-2".to_vec()];
+    let mut last_result = None;
+    for data in &data_phase1 {
+        let r = handle.publish(data.clone()).await.expect("publish failed");
+        last_result = Some(r);
+    }
+    let stale_checkpoint = last_result.unwrap().checkpoint;
+
+    // Wait for phase 1 to finalize
+    let expected: HashSet<Vec<u8>> = data_phase1.iter().cloned().collect();
+    let mut seen: HashSet<Vec<u8>> = HashSet::new();
+    let mut cursor = None;
+    let start = std::time::Instant::now();
+    loop {
+        assert!(
+            start.elapsed() <= Duration::from_secs(360),
+            "Phase 1 finalization timeout"
+        );
+        let result = indexer
+            .next_messages(cursor, 100)
+            .await
+            .expect("indexer error");
+        for msg in &result.messages {
+            if expected.contains(&msg.data) {
+                seen.insert(msg.data.clone());
+            }
+        }
+        cursor = Some(result.cursor);
+        if seen == expected {
+            break;
+        }
+        sleep(Duration::from_millis(500)).await;
+    }
+
+    poll_task.abort();
+    drop(handle);
+
+    // Phase 2: Start FRESH, publish more
+    let (sequencer, mut handle) = ZoneSequencer::init_with_config(
+        channel_id,
+        signing_key.clone(),
+        node_url.clone(),
+        None,
+        sequencer_config.clone(),
+        None, // Fresh — no checkpoint
+    );
+    let poll_task = sequencer.spawn();
+    handle.wait_ready().await;
+
+    let data_phase2: Vec<Vec<u8>> = vec![b"msg-3".to_vec(), b"msg-4".to_vec()];
+    for data in &data_phase2 {
+        handle.publish(data.clone()).await.expect("publish failed");
+    }
+
+    // Wait for phase 2 to finalize
+    let mut expected_all: HashSet<Vec<u8>> = expected;
+    expected_all.extend(data_phase2.iter().cloned());
+    let start = std::time::Instant::now();
+    loop {
+        assert!(
+            start.elapsed() <= Duration::from_secs(360),
+            "Phase 2 finalization timeout"
+        );
+        let result = indexer
+            .next_messages(cursor, 100)
+            .await
+            .expect("indexer error");
+        for msg in &result.messages {
+            if expected_all.contains(&msg.data) {
+                seen.insert(msg.data.clone());
+            }
+        }
+        cursor = Some(result.cursor);
+        if seen == expected_all {
+            break;
+        }
+        sleep(Duration::from_millis(500)).await;
+    }
+
+    poll_task.abort();
+    drop(handle);
+
+    // Phase 3: Resume from STALE checkpoint, publish more
+    let (sequencer, mut handle) = ZoneSequencer::init_with_config(
+        channel_id,
+        signing_key,
+        node_url,
+        None,
+        sequencer_config,
+        Some(stale_checkpoint), // Stale checkpoint from phase 1
+    );
+    let poll_task = sequencer.spawn();
+    handle.wait_ready().await;
+
+    let data_phase3: Vec<Vec<u8>> = vec![b"msg-5".to_vec()];
+    for data in &data_phase3 {
+        handle.publish(data.clone()).await.expect("publish failed");
+    }
+
+    // Verify all 5 messages appear, no duplicates
+    expected_all.extend(data_phase3.iter().cloned());
+    let start = std::time::Instant::now();
+    loop {
+        assert!(
+            start.elapsed() <= Duration::from_secs(360),
+            "Phase 3 finalization timeout"
+        );
+        let result = indexer
+            .next_messages(cursor, 100)
+            .await
+            .expect("indexer error");
+        for msg in &result.messages {
+            if expected_all.contains(&msg.data) {
+                seen.insert(msg.data.clone());
+            }
+        }
+        cursor = Some(result.cursor);
+        if seen == expected_all {
+            break;
+        }
+        sleep(Duration::from_millis(500)).await;
+    }
+
+    // Check no duplicates
+    sleep(Duration::from_secs(30)).await;
+    let mut all_payloads: Vec<Vec<u8>> = Vec::new();
+    cursor = None;
+    loop {
+        let result = indexer
+            .next_messages(cursor, 100)
+            .await
+            .expect("indexer error");
+        for msg in &result.messages {
+            if expected_all.contains(&msg.data) {
+                all_payloads.push(msg.data.clone());
+            }
+        }
+        if result.messages.is_empty() {
+            break;
+        }
+        cursor = Some(result.cursor);
+    }
+
+    let unique: HashSet<&Vec<u8>> = all_payloads.iter().collect();
+    assert_eq!(
+        unique.len(),
+        all_payloads.len(),
+        "No duplicate inscriptions"
+    );
+    assert_eq!(unique.len(), 5, "All 5 messages on chain");
+
+    poll_task.abort();
 }

@@ -1,21 +1,31 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::HashMap};
 
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
 use super::{GasConstants, GasCost as _, MantleTx, Note, Op, Utxo};
-use crate::mantle::ops::transfer::TransferOp;
+use crate::{
+    mantle::{
+        NoteId,
+        ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
+        tx::MantleTxGasContext,
+    },
+    proofs::channel_withdraw_proof::ChannelWithdrawProof,
+};
 
 #[derive(Debug, Clone)]
 pub struct MantleTxBuilder {
     mantle_tx: MantleTx,
     ledger_inputs: Vec<Utxo>,
     pending_transfer: TransferOp,
+    // Maps a Proof to its Op by the Op Index
+    channel_withdraw_proofs: HashMap<usize, ChannelWithdrawProof>,
+    context: MantleTxGasContext,
 }
 
 // TODO: refactor to support more than 32 inputs (more than a single transfer)
 impl MantleTxBuilder {
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new(context: MantleTxGasContext) -> Self {
         Self {
             mantle_tx: MantleTx {
                 ops: vec![],
@@ -24,6 +34,8 @@ impl MantleTxBuilder {
             },
             ledger_inputs: vec![],
             pending_transfer: TransferOp::new(vec![], vec![]),
+            channel_withdraw_proofs: HashMap::new(),
+            context,
         }
     }
 
@@ -36,6 +48,14 @@ impl MantleTxBuilder {
     pub fn extend_ops(mut self, ops: impl IntoIterator<Item = Op>) -> Self {
         self.mantle_tx.ops.extend(ops);
         self
+    }
+
+    #[must_use]
+    pub fn push_channel_withdraw(self, op: ChannelWithdrawOp, proof: ChannelWithdrawProof) -> Self {
+        let mut builder = self.push_op(Op::ChannelWithdraw(op));
+        let index = builder.mantle_tx.ops.len() - 1;
+        builder.channel_withdraw_proofs.insert(index, proof);
+        builder
     }
 
     #[must_use]
@@ -139,12 +159,27 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn gas_cost<G: GasConstants>(&self) -> u64 {
         let build = self.clone().build();
-        build.gas_cost::<G>()
+        build.total_gas_cost::<G>(&self.context)
     }
 
     #[must_use]
     pub fn funding_delta<G: GasConstants>(&self) -> i128 {
         self.net_balance() - i128::from(self.gas_cost::<G>())
+    }
+
+    /// Returns all note IDs used as inputs in the transaction, including
+    /// - Transfer operations already in the transaction
+    /// - Additional transfer operations that will be added to the transaction
+    pub fn input_notes(&self) -> impl Iterator<Item = NoteId> {
+        self.mantle_tx
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Transfer(transfer) => Some(transfer.inputs.iter().copied()),
+                _ => None,
+            })
+            .flatten()
+            .chain(self.ledger_inputs().iter().map(Utxo::id))
     }
 
     #[must_use]
@@ -153,14 +188,13 @@ impl MantleTxBuilder {
     }
 
     #[must_use]
+    pub const fn channel_withdraw_proofs(&self) -> &HashMap<usize, ChannelWithdrawProof> {
+        &self.channel_withdraw_proofs
+    }
+
+    #[must_use]
     pub fn build(mut self) -> MantleTx {
         self.mantle_tx.ops.push(Op::Transfer(self.pending_transfer));
         self.mantle_tx
-    }
-}
-
-impl Default for MantleTxBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }

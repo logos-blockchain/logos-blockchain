@@ -356,8 +356,11 @@ where
 
     info!(
         target: LOG_TARGET,
-        "The current membership is ready: {:?}",
-        current_membership_info
+        session = current_membership_info.session_number,
+        members = current_membership_info.membership.size(),
+        local_node_index = current_membership_info.membership.local_index(),
+        has_zk = current_membership_info.zk.is_some(),
+        "current membership is ready"
     );
 
     notify_ready();

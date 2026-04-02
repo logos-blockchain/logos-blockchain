@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 either                        = { default-features = false, version = "1.15.0" }
-futures                       = { default-features = false, version = "0.3.30" }
+futures                       = { workspace = true }
 futures-timer                 = { version = "3.0.3" }
 hex                           = { workspace = true }
 lb-blend-message              = { workspace = true }
@@ -35,8 +35,8 @@ libp2p              = { default-features = false, features = ["plaintext", "tcp"
 libp2p-stream       = { workspace = true }
 libp2p-swarm-test   = { default-features = false, features = ["tokio"], version = "0.5.0" }
 test-log            = { default-features = false, features = ["trace"], version = "0.2.18" }
-tokio               = { default-features = false, version = "1" }
-tokio-stream        = { default-features = false, version = "0.1" }
+tokio               = { workspace = true }
+tokio-stream        = { workspace = true }
 
 [features]
 unsafe-test-functions = []

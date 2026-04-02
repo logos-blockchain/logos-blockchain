@@ -15,7 +15,7 @@ workspace = true
 [dependencies]
 async-trait                      = "0.1"
 fork_stream                      = { workspace = true }
-futures                          = { default-features = false, version = "0.3" }
+futures                          = { workspace = true }
 hex                              = { workspace = true }
 lb-blend                         = { workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
@@ -40,8 +40,8 @@ rand                             = { workspace = true }
 serde                            = { workspace = true }
 serde_with                       = { workspace = true }
 thiserror                        = { default-features = false, version = "1" }
-tokio                            = { default-features = false, version = "1" }
-tokio-stream                     = { default-features = false, version = "0.1" }
+tokio                            = { workspace = true }
+tokio-stream                     = { workspace = true }
 tracing                          = { workspace = true }
 
 [dev-dependencies]
