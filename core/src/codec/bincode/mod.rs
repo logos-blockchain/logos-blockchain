@@ -34,18 +34,8 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use crate::codec::{Error as WireError, Result};
 
-const ONE_GB_MEMORY_WARNING_THRESHOLD: usize = 1024 * 1024 * 1024; // 1 GB
-
 /// Serialize an object directly into bytes
 pub fn serialize<T: Serialize>(item: &T) -> Result<Bytes> {
-    let size = OPTIONS
-        .serialized_size(item)
-        .map_err(|e| WireError::Serialize(Box::new(e)))?;
-
-    if size > ONE_GB_MEMORY_WARNING_THRESHOLD as u64 {
-        tracing::warn!("Large serialization detected: {size} bytes. This may impact memory usage.");
-    }
-
     Ok(OPTIONS
         .serialize(&item)
         .map_err(|e| WireError::Serialize(Box::new(e)))?
@@ -61,12 +51,6 @@ pub fn serialized_size<T: Serialize>(item: &T) -> Result<u64> {
 
 /// Deserialize an object directly from bytes
 pub fn deserialize<T: DeserializeOwned>(data: &[u8]) -> Result<T> {
-    if data.len() > ONE_GB_MEMORY_WARNING_THRESHOLD {
-        tracing::warn!(
-            "Large deserialization detected: {} bytes. This may impact memory usage.",
-            data.len()
-        );
-    }
     OPTIONS
         .deserialize(data)
         .map_err(|e| WireError::Deserialize(Box::new(e)))
