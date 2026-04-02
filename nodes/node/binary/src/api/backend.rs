@@ -187,7 +187,7 @@ where
         let app = Router::new()
             .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
             .route(
-                paths::MANTLE_CHANNEL,
+                paths::CHANNEL,
                 routing::get(mantle_channel::<RuntimeServiceId>),
             )
             .route(

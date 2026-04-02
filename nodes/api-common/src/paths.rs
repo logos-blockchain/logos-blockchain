@@ -1,4 +1,3 @@
-pub const MANTLE_CHANNEL: &str = "/mantle/channel/:id";
 pub const MANTLE_METRICS: &str = "/mantle/metrics";
 pub const MANTLE_STATUS: &str = "/mantle/status";
 pub const MANTLE_SDP_DECLARATIONS: &str = "/mantle/sdp/declarations";
@@ -8,6 +7,7 @@ pub const CRYPTARCHIA_LIB_STREAM: &str = "/cryptarchia/lib-stream";
 pub const NETWORK_INFO: &str = "/network/info";
 pub const STORAGE_BLOCK: &str = "/storage/block";
 pub const MEMPOOL_ADD_TX: &str = "/mempool/add/tx";
+pub const CHANNEL: &str = "/channel/:id";
 pub const CHANNEL_DEPOSIT: &str = "/channel/deposit";
 pub const SDP_POST_DECLARATION: &str = "/sdp/declaration";
 pub const SDP_POST_ACTIVITY: &str = "/sdp/activity";

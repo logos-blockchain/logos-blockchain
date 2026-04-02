@@ -77,7 +77,7 @@ macro_rules! make_request_and_return_response {
 
 #[utoipa::path(
     get,
-    path = paths::MANTLE_CHANNEL,
+    path = paths::CHANNEL,
     responses(
         (status = 200, description = "Channel state"),
         (status = 500, description = "Internal server error", body = String),
