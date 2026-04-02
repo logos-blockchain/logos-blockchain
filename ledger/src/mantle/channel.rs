@@ -124,7 +124,7 @@ impl Channels {
         Ok(self)
     }
 
-    // TODO: Replace with CHANNEL_CONFIG op
+    // TODO: Replace with CHANNEL_CONFIG op: https://github.com/logos-blockchain/logos-blockchain/issues/2461
     pub fn set_keys(
         mut self,
         channel_id: ChannelId,
@@ -152,6 +152,7 @@ impl Channels {
                     keys: op.keys.clone().into(),
                     balance: 0,
                     // TODO: Replace with `ChannelConfig.withdraw_threshold`
+                    // once this op is replaced with CHANNEL_CONFIG op: https://github.com/logos-blockchain/logos-blockchain/issues/2461
                     withdraw_threshold: DEFAULT_WITHDRAW_THRESHOLD,
                 },
             );
