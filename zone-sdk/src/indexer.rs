@@ -139,9 +139,8 @@ mod tests {
     use lb_common_http_client::BlockInfo;
     use lb_core::header::HeaderId;
 
-    use crate::{Deposit, ZoneBlock};
-
     use super::*;
+    use crate::{Deposit, ZoneBlock};
 
     #[tokio::test]
     async fn next_messages_empty() {
