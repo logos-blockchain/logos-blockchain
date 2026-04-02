@@ -534,7 +534,7 @@ impl LedgerState {
                     (self.mantle_ledger, withdraw_amount) =
                         self.mantle_ledger.try_apply_channel_withdraw(op)?;
                     balance = balance
-                        .checked_add(withdraw_amount)
+                        .checked_add(withdraw_amount.into())
                         .ok_or(LedgerError::BalanceOverflow)?;
                 }
                 (
