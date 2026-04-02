@@ -4,7 +4,7 @@ mod voucher;
 use std::{
     borrow::Borrow,
     cmp::Ordering,
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::Debug,
 };
 
@@ -94,7 +94,14 @@ impl WalletState {
         change_pk: ZkPublicKey,
         pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
     ) -> Result<MantleTxBuilder, WalletError> {
-        let mut utxos = self.utxos_owned_by_pks(pks);
+        // Get all UTXOs owned by the provided PKs, excluding any that are already being
+        // used as inputs in the tx builder.
+        let inputs = tx_builder.input_notes().collect::<HashSet<_>>();
+        let mut utxos = self
+            .utxos_owned_by_pks(pks)
+            .into_iter()
+            .filter(|utxo| !inputs.contains(&utxo.id()))
+            .collect::<Vec<_>>();
 
         // Consume large valued notes first to ensure we converge.
         utxos.sort_by_key(|utxo| -i128::from(utxo.note.value));
@@ -133,13 +140,17 @@ impl WalletState {
     }
 
     #[must_use]
-    pub fn balance(&self, pk: ZkPublicKey) -> Option<Value> {
-        let balance = self
-            .pk_index
-            .get(&pk)?
-            .iter()
-            .map(|id| self.utxos[id].note.value)
-            .sum();
+    pub fn balance(&self, pk: ZkPublicKey) -> Option<WalletBalance> {
+        let mut balance = WalletBalance {
+            balance: 0,
+            notes: HashMap::new(),
+        };
+
+        self.pk_index.get(&pk)?.iter().for_each(|id| {
+            let value = self.utxos[id].note.value;
+            balance.balance += value;
+            balance.notes.insert(*id, value);
+        });
 
         Some(balance)
     }
@@ -262,7 +273,11 @@ where
         Ok(())
     }
 
-    pub fn balance(&self, tip: HeaderId, pk: ZkPublicKey) -> Result<Option<Value>, WalletError> {
+    pub fn balance(
+        &self,
+        tip: HeaderId,
+        pk: ZkPublicKey,
+    ) -> Result<Option<WalletBalance>, WalletError> {
         Ok(self.wallet_state_at(tip)?.balance(pk))
     }
 
@@ -319,6 +334,12 @@ where
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalletBalance {
+    pub balance: Value,
+    pub notes: HashMap<NoteId, Value>,
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -333,6 +354,7 @@ mod tests {
             Note, Op, TxHash,
             gas::MainnetGasConstants as Gas,
             ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
+            tx::MantleTxGasContext,
         },
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
@@ -397,7 +419,10 @@ mod tests {
             genesis,
             &ledger,
         );
-        assert_eq!(wallet.balance(genesis, alice).unwrap(), Some(104));
+        assert_eq!(
+            wallet.balance(genesis, alice).unwrap().unwrap().balance,
+            104
+        );
         assert_eq!(wallet.balance(genesis, bob).unwrap(), None);
         assert_eq!(
             wallet.vouchers().get(&voucher_cm),
@@ -407,7 +432,7 @@ mod tests {
         let wallet =
             Wallet::<_, TestVoucherId>::from_lib([(bob, 2)], Vouchers::default(), genesis, &ledger);
         assert_eq!(wallet.balance(genesis, alice).unwrap(), None);
-        assert_eq!(wallet.balance(genesis, bob).unwrap(), Some(20));
+        assert_eq!(wallet.balance(genesis, bob).unwrap().unwrap().balance, 20);
 
         let wallet = Wallet::<_, TestVoucherId>::from_lib(
             [(alice, 1), (bob, 2)],
@@ -415,8 +440,11 @@ mod tests {
             genesis,
             &ledger,
         );
-        assert_eq!(wallet.balance(genesis, alice).unwrap(), Some(104));
-        assert_eq!(wallet.balance(genesis, bob).unwrap(), Some(20));
+        assert_eq!(
+            wallet.balance(genesis, alice).unwrap().unwrap().balance,
+            104
+        );
+        assert_eq!(wallet.balance(genesis, bob).unwrap().unwrap().balance, 20);
     }
 
     #[test]
@@ -468,24 +496,33 @@ mod tests {
         assert_eq!(wallet.balance(genesis, alice).unwrap(), None);
         assert_eq!(wallet.balance(genesis, bob).unwrap(), None);
 
-        assert_eq!(wallet.balance(block_1.id, alice).unwrap(), Some(104));
+        assert_eq!(
+            wallet.balance(block_1.id, alice).unwrap().unwrap().balance,
+            104
+        );
         assert_eq!(wallet.balance(block_1.id, bob).unwrap(), None);
 
-        assert_eq!(wallet.balance(block_2.id, alice).unwrap(), Some(84));
-        assert_eq!(wallet.balance(block_2.id, bob).unwrap(), Some(20));
+        assert_eq!(
+            wallet.balance(block_2.id, alice).unwrap().unwrap().balance,
+            84
+        );
+        assert_eq!(
+            wallet.balance(block_2.id, bob).unwrap().unwrap().balance,
+            20
+        );
     }
 
     #[test]
     fn test_fund_tx_with_change() {
         let alice = pk(1);
         let alice_utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
+        let ledger_state = LedgerState::from_utxos([alice_utxo], &ledger_config());
 
-        let wallet_state = WalletState::from_ledger(
-            &HashMap::from_iter([(alice, 1)]),
-            &LedgerState::from_utxos([alice_utxo], &ledger_config()),
-        );
+        let wallet_state =
+            WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
-        let tx_builder = MantleTxBuilder::new()
+        let context: MantleTxGasContext = ledger_state.mantle_ledger().channels().into();
+        let tx_builder = MantleTxBuilder::new(context)
             .set_execution_gas_price(1)
             .set_storage_gas_price(1);
 
@@ -519,21 +556,20 @@ mod tests {
     #[test]
     fn test_fund_tx_insufficient_funds() {
         let alice = pk(1);
-
-        let wallet_state = WalletState::from_ledger(
-            &HashMap::from_iter([(alice, 1)]),
-            &LedgerState::from_utxos(
-                [
-                    Utxo::new(tx_hash(0), 0, Note::new(100, alice)),
-                    Utxo::new(tx_hash(0), 1, Note::new(100, alice)),
-                    Utxo::new(tx_hash(0), 2, Note::new(100, alice)),
-                    Utxo::new(tx_hash(0), 3, Note::new(100, alice)),
-                ],
-                &ledger_config(),
-            ),
+        let ledger_state = LedgerState::from_utxos(
+            [
+                Utxo::new(tx_hash(0), 0, Note::new(100, alice)),
+                Utxo::new(tx_hash(0), 1, Note::new(100, alice)),
+                Utxo::new(tx_hash(0), 2, Note::new(100, alice)),
+                Utxo::new(tx_hash(0), 3, Note::new(100, alice)),
+            ],
+            &ledger_config(),
         );
 
-        let mut tx_builder = MantleTxBuilder::new()
+        let wallet_state =
+            WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
+        let context: MantleTxGasContext = ledger_state.mantle_ledger().channels().into();
+        let mut tx_builder = MantleTxBuilder::new(context)
             .set_execution_gas_price(1)
             .set_storage_gas_price(1);
 
@@ -560,13 +596,13 @@ mod tests {
     #[test]
     fn test_fund_tx_zero_funds() {
         let alice = pk(1);
+        let ledger_state = LedgerState::from_utxos([], &ledger_config());
 
-        let wallet_state = WalletState::from_ledger(
-            &HashMap::from_iter([(alice, 1)]),
-            &LedgerState::from_utxos([], &ledger_config()),
-        );
+        let wallet_state =
+            WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
-        let tx_builder = MantleTxBuilder::new()
+        let context: MantleTxGasContext = ledger_state.mantle_ledger().channels().into();
+        let tx_builder = MantleTxBuilder::new(context)
             .set_execution_gas_price(1)
             .set_storage_gas_price(1);
 
@@ -582,16 +618,16 @@ mod tests {
     fn test_fund_tx_respects_pk_list() {
         let alice = pk(1);
         let bob = pk(2);
-
-        let wallet_state = WalletState::from_ledger(
-            &HashMap::from_iter([(alice, 1), (bob, 2)]),
-            &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(1_000_000, bob))],
-                &ledger_config(),
-            ),
+        let ledger_state = LedgerState::from_utxos(
+            [Utxo::new(tx_hash(0), 0, Note::new(1_000_000, bob))],
+            &ledger_config(),
         );
 
-        let tx_builder = MantleTxBuilder::new()
+        let wallet_state =
+            WalletState::from_ledger(&HashMap::from_iter([(alice, 1), (bob, 2)]), &ledger_state);
+
+        let context: MantleTxGasContext = ledger_state.mantle_ledger().channels().into();
+        let tx_builder = MantleTxBuilder::new(context)
             .set_execution_gas_price(1)
             .set_storage_gas_price(1);
 
@@ -613,7 +649,8 @@ mod tests {
     fn test_fund_tx_unfundable_region() {
         let alice = pk(1);
 
-        let tx_builder = MantleTxBuilder::new()
+        let context = MantleTxGasContext::new(HashMap::new());
+        let tx_builder = MantleTxBuilder::new(context)
             .set_execution_gas_price(1)
             .set_storage_gas_price(1);
 

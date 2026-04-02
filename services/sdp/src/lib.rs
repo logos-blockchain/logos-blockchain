@@ -13,7 +13,8 @@ use futures::Stream;
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     block::BlockNumber,
-    mantle::{NoteId, SignedMantleTx, tx_builder::MantleTxBuilder},
+    header::HeaderId,
+    mantle::{NoteId, SignedMantleTx, tx::MantleTxGasContext, tx_builder::MantleTxBuilder},
     sdp::{
         ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator, ProviderId,
         ServiceType, WithdrawMessage,
@@ -182,8 +183,13 @@ where
                 SdpMessage::PostActivity { metadata, .. } => {
                     metrics::activity_posts_total();
 
-                    self.handle_post_activity(metadata, &wallet_adapter, &mempool_adapter)
-                        .await;
+                    self.handle_post_activity(
+                        metadata,
+                        &wallet_adapter,
+                        &mempool_adapter,
+                        &chain_api,
+                    )
+                    .await;
                 }
                 SdpMessage::PostDeclaration {
                     declaration,
@@ -196,14 +202,20 @@ where
                         &wallet_adapter,
                         &mempool_adapter,
                         reply_channel,
+                        &chain_api,
                     )
                     .await;
                 }
                 SdpMessage::PostWithdrawal { declaration_id } => {
                     metrics::withdrawals_total();
 
-                    self.handle_post_withdrawal(declaration_id, &wallet_adapter, &mempool_adapter)
-                        .await;
+                    self.handle_post_withdrawal(
+                        declaration_id,
+                        &wallet_adapter,
+                        &mempool_adapter,
+                        &chain_api,
+                    )
+                    .await;
                 }
             }
         }
@@ -307,8 +319,13 @@ where
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
         reply_channel: oneshot::Sender<Result<DeclarationId, DynError>>,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
     ) {
-        let tx_builder = MantleTxBuilder::new();
+        let Ok(gas_context) = self.get_gas_context(None, chain_api).await else {
+            tracing::error!("Failed to get gas context for declaration");
+            return;
+        };
+        let tx_builder = MantleTxBuilder::new(gas_context);
         let declaration_id = declaration.id();
 
         let signed_tx = match wallet_adapter
@@ -341,6 +358,7 @@ where
         metadata: ActivityMetadata,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
     ) {
         // Check if we have a declaration_id
         let Some(ref declaration) = self.current_declaration else {
@@ -354,7 +372,11 @@ where
             metadata,
         };
 
-        let tx_builder = MantleTxBuilder::new();
+        let Ok(gas_context) = self.get_gas_context(None, chain_api).await else {
+            tracing::error!("Failed to get gas context for activity");
+            return;
+        };
+        let tx_builder = MantleTxBuilder::new(gas_context);
 
         let signed_tx = match wallet_adapter
             .active_tx(tx_builder, active_message, &self.wallet_config)
@@ -381,6 +403,7 @@ where
         declaration_id: DeclarationId,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
     ) {
         if let Err(e) = self.validate_withdrawal(&declaration_id) {
             tracing::error!("{}", e);
@@ -395,7 +418,11 @@ where
             nonce: self.bump_nonce(),
         };
 
-        let tx_builder = MantleTxBuilder::new();
+        let Ok(gas_context) = self.get_gas_context(None, chain_api).await else {
+            tracing::error!("Failed to get gas context for withdrawal");
+            return;
+        };
+        let tx_builder = MantleTxBuilder::new(gas_context);
 
         let signed_tx = match wallet_adapter
             .withdraw_tx(tx_builder, withdraw_message, &self.wallet_config)
@@ -435,6 +462,31 @@ where
         }
 
         Ok(())
+    }
+
+    async fn block_id_or_tip(
+        &self,
+        block_id: Option<HeaderId>,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+    ) -> Result<HeaderId, DynError> {
+        if let Some(block_id) = block_id {
+            Ok(block_id)
+        } else {
+            let info = chain_api.info().await?;
+            Ok(info.tip)
+        }
+    }
+
+    async fn get_gas_context(
+        &self,
+        block_id: Option<HeaderId>,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+    ) -> Result<MantleTxGasContext, DynError> {
+        let block_id = self.block_id_or_tip(block_id, chain_api).await?;
+        let Some(ledger_state) = chain_api.get_ledger_state(block_id).await? else {
+            return Err(format!("Ledger state not found for block {block_id:?}").into());
+        };
+        Ok(ledger_state.mantle_ledger().channels().into())
     }
 
     /// Increments the nonce of the current declaration, and returns the

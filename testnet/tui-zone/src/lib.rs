@@ -79,7 +79,9 @@ pub async fn run(args: InscribeArgs) {
         println!("  Restored checkpoint from {}", args.checkpoint_path);
     }
 
-    let sequencer = ZoneSequencer::init(channel_id, signing_key, node_url, None, checkpoint);
+    let (sequencer, handle) =
+        ZoneSequencer::init(channel_id, signing_key, node_url, None, checkpoint);
+    sequencer.spawn();
 
     println!();
     println!("Type a message and press Enter to publish it as a zone block.");
@@ -107,7 +109,7 @@ pub async fn run(args: InscribeArgs) {
             break;
         }
 
-        match sequencer.publish(msg.as_bytes().to_vec()).await {
+        match handle.publish(msg.as_bytes().to_vec()).await {
             Ok(result) => {
                 let tx_hash: [u8; 32] = result.inscription_id.into();
                 println!("  published: {}", hex::encode(tx_hash));
