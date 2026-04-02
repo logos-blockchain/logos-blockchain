@@ -19,12 +19,17 @@ use lb_chain_service::ConsensusMsg;
 use lb_core::{
     block::Block,
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction},
+    mantle::{
+        Op, SignedMantleTx, Transaction, gas::MainnetGasConstants, tx_builder::MantleTxBuilder,
+    },
 };
 use lb_http_api_common::{
-    bodies::wallet::{
-        balance::WalletBalanceResponseBody,
-        transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+    bodies::{
+        channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
+        wallet::{
+            balance::WalletBalanceResponseBody,
+            transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+        },
     },
     paths,
 };
@@ -358,6 +363,103 @@ where
         <SignedMantleTx as Transaction>::Hash,
         RuntimeServiceId,
     >(&handle, tx, Transaction::hash))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::CHANNEL_DEPOSIT,
+    responses(
+        (status = 200, description = "Submit a channel deposit"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn channel_deposit<WalletService, StorageAdapter, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<ChannelDepositRequestBody>,
+) -> Response
+where
+    WalletService: WalletServiceData,
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+            RuntimeServiceId,
+            Item = SignedMantleTx,
+            Key = <SignedMantleTx as Transaction>::Hash,
+        > + Send
+        + Sync
+        + Clone
+        + 'static,
+    StorageAdapter::Error: Debug,
+    RuntimeServiceId: Debug
+        + Display
+        + Send
+        + Sync
+        + 'static
+        + AsServiceId<WalletService>
+        + AsServiceId<
+            TxMempoolService<
+                MempoolNetworkAdapter<
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    RuntimeServiceId,
+                >,
+                Mempool<
+                    HeaderId,
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+                StorageAdapter,
+                RuntimeServiceId,
+            >,
+        >,
+{
+    make_request_and_return_response!(async {
+        let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+            handle.relay::<WalletService>().await?,
+        );
+
+        let tx_builder = MantleTxBuilder::new()
+            .push_op(Op::ChannelDeposit(req.deposit))
+            .push_op(Op::Transfer(req.burn));
+        let lb_wallet_service::TipResponse {
+            tip,
+            response: funded_tx_builder,
+        } = wallet
+            .fund_tx(
+                None,
+                tx_builder,
+                req.change_public_key,
+                req.funding_public_keys,
+            )
+            .await?;
+
+        let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>();
+        if tx_fee > req.max_tx_fee {
+            return Err(overwatch::DynError::from(format!(
+                "tx_fee({tx_fee}) exceeds max_tx_fee({})",
+                req.max_tx_fee
+            )));
+        }
+
+        let signed_tx = wallet.sign_tx(Some(tip), funded_tx_builder).await?.response;
+        let tx_hash = signed_tx.hash();
+
+        mempool::add_tx::<
+            Libp2pNetworkBackend,
+            MempoolNetworkAdapter<
+                SignedMantleTx,
+                <SignedMantleTx as Transaction>::Hash,
+                RuntimeServiceId,
+            >,
+            StorageAdapter,
+            SignedMantleTx,
+            <SignedMantleTx as Transaction>::Hash,
+            RuntimeServiceId,
+        >(&handle, signed_tx, Transaction::hash)
+        .await?;
+
+        Ok(ChannelDepositResponseBody { hash: tx_hash })
+    })
 }
 
 #[utoipa::path(

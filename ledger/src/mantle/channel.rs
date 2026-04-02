@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use lb_core::mantle::{
-    TxHash,
+    TxHash, Value,
     ops::channel::{
-        ChannelId, Ed25519PublicKey as PublicKey, MsgId, inscribe::InscriptionOp,
-        set_keys::SetKeysOp,
+        ChannelId, Ed25519PublicKey as PublicKey, MsgId, deposit::DepositOp,
+        inscribe::InscriptionOp, set_keys::SetKeysOp,
     },
 };
 use lb_key_management_system_keys::keys::Ed25519Signature;
@@ -28,6 +28,10 @@ pub enum Error {
     InvalidSignature,
     #[error("Invalid keys for channel {channel_id:?}")]
     EmptyKeys { channel_id: ChannelId },
+    #[error("Channel {channel_id:?} not found")]
+    ChannelNotFound { channel_id: ChannelId },
+    #[error("Balance overflow")]
+    BalanceOverflow,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -42,6 +46,7 @@ pub struct ChannelState {
     pub tip: MsgId,
     // avoid cloning the keys every new message
     pub keys: Arc<[PublicKey]>,
+    pub balance: Value,
 }
 
 impl Default for Channels {
@@ -69,6 +74,7 @@ impl Channels {
             .unwrap_or_else(|| ChannelState {
                 tip: MsgId::root(),
                 keys: vec![*signer].into(),
+                balance: 0,
             });
 
         if *parent != channel.tip {
@@ -91,6 +97,7 @@ impl Channels {
             ChannelState {
                 tip: msg,
                 keys: Arc::clone(&channel.keys),
+                balance: channel.balance,
             },
         );
         Ok(self)
@@ -121,11 +128,26 @@ impl Channels {
                 ChannelState {
                     tip: MsgId::root(),
                     keys: op.keys.clone().into(),
+                    balance: 0,
                 },
             );
         }
 
         Ok(self)
+    }
+
+    pub fn deposit(mut self, op: &DepositOp) -> Result<Self, Error> {
+        if let Some(channel) = self.channels.get_mut(&op.channel_id) {
+            channel.balance = channel
+                .balance
+                .checked_add(op.amount)
+                .ok_or(Error::BalanceOverflow)?;
+            Ok(self)
+        } else {
+            Err(Error::ChannelNotFound {
+                channel_id: op.channel_id,
+            })
+        }
     }
 
     #[must_use]

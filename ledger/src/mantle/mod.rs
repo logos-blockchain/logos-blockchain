@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use lb_core::{
     crypto::ZkHash,
     mantle::{
-        GenesisTx, NoteId, TxHash, Utxo,
+        GenesisTx, NoteId, TxHash, Utxo, Value,
         ops::{
-            channel::{inscribe::InscriptionOp, set_keys::SetKeysOp},
+            channel::{deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp},
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
@@ -21,7 +21,7 @@ use lb_utxotree::MerklePath;
 use sdp::{Error as SdpLedgerError, locked_notes::LockedNotes};
 use tracing::error;
 
-use crate::{Balance, Config, EpochState, UtxoTree};
+use crate::{Config, EpochState, UtxoTree};
 
 const LOG_TARGET: &str = "ledger::mantle";
 
@@ -177,6 +177,13 @@ impl LedgerState {
         Ok(self)
     }
 
+    pub fn try_apply_channel_deposit(mut self, op: &DepositOp) -> Result<(Self, Value), Error> {
+        self.channels = self.channels.deposit(op).inspect_err(
+            |err| error!(target: LOG_TARGET, %err, "Failed to apply the Channel Deposit message."),
+        )?;
+        Ok((self, op.amount))
+    }
+
     pub fn try_apply_sdp_declaration(
         mut self,
         sdp_declare_op: &SDPDeclareOp,
@@ -250,15 +257,15 @@ impl LedgerState {
     pub fn try_apply_leader_claim(
         mut self,
         leader_claim_op: &LeaderClaimOp,
-    ) -> Result<(Self, Balance), Error> {
+    ) -> Result<(Self, Value), Error> {
         // Correct derivation of the voucher nullifier and membership in the merkle tree
         // can be verified outside of this function since public inputs are already
         // available. Callers are expected to validate the proof
         // before calling this function.
-        let leader_balance;
-        (self.leaders, leader_balance) = self.leaders.claim(leader_claim_op).inspect_err(
+        let reward;
+        (self.leaders, reward) = self.leaders.claim(leader_claim_op).inspect_err(
             |err| error!(target: LOG_TARGET, %err, "failed to apply leader claim message"),
         )?;
-        Ok((self, leader_balance))
+        Ok((self, reward))
     }
 }

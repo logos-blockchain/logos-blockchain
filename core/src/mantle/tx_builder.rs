@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
 use super::{GasConstants, GasCost as _, MantleTx, Note, Op, Utxo};
-use crate::mantle::ops::transfer::TransferOp;
+use crate::mantle::{NoteId, ops::transfer::TransferOp};
 
 #[derive(Debug, Clone)]
 pub struct MantleTxBuilder {
@@ -145,6 +145,21 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn funding_delta<G: GasConstants>(&self) -> i128 {
         self.net_balance() - i128::from(self.gas_cost::<G>())
+    }
+
+    /// Returns all note IDs used as inputs in the transaction, including
+    /// - Transfer operations already in the transaction
+    /// - Additional transfer operations that will be added to the transaction
+    pub fn input_notes(&self) -> impl Iterator<Item = NoteId> {
+        self.mantle_tx
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Transfer(transfer) => Some(transfer.inputs.iter().copied()),
+                _ => None,
+            })
+            .flatten()
+            .chain(self.ledger_inputs().iter().map(Utxo::id))
     }
 
     #[must_use]

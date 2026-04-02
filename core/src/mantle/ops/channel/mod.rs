@@ -1,3 +1,4 @@
+pub mod deposit;
 pub mod inscribe;
 pub mod set_keys;
 

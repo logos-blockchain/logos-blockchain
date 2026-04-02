@@ -685,6 +685,7 @@ where
                 Op::ChannelSetKeys(set_keys_op) => {
                     Self::sign_channel_set_key(tx_hash, set_keys_op, &ledger, kms).await?
                 }
+                Op::ChannelDeposit(_deposit_op) => OpProof::NoProof,
                 Op::SDPDeclare(declare_op) => {
                     Self::sign_sdp_declare(tx_hash, declare_op, &ledger, kms).await?
                 }
