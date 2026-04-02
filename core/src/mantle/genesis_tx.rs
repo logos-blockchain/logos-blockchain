@@ -3,6 +3,8 @@ use lb_poseidon2::Digest;
 use serde::{Deserialize, Serialize};
 
 use super::{OpProof, SignedMantleTx, ops::sdp::SDPDeclareOp};
+#[cfg(feature = "mock")]
+use crate::mantle::tx::MantleTxGasContext;
 use crate::{
     crypto::ZkHasher,
     mantle::{
@@ -13,7 +15,6 @@ use crate::{
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
             transfer::TransferOp,
         },
-        tx::MantleTxGasContext,
     },
 };
 
