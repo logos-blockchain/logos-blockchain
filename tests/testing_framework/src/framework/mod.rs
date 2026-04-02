@@ -168,6 +168,7 @@ pub fn apply_wallet_config_to_deployment(deployment: &mut DeploymentPlan, wallet
         &base_genesis_tx,
         &wallet_accounts,
         key_id_for_preload_backend,
+        deployment.config.test_context.as_deref(),
     );
     deployment.config.genesis_tx = Some(genesis_tx);
 

@@ -15,6 +15,11 @@ jobs:
   tests:
     name: Run end-to-end integration tests (including cucumber)
 
+    permissions:
+      contents: read
+      actions: write
+      checks: write
+
     # Only run if not a WIP or DO NOT MERGE PR
     if: >
       ${{
@@ -81,7 +86,7 @@ jobs:
 
       # Build release binary for logos-blockchain-node (so runtimes can be reduced)
       - name: Build binaries with required features
-        if: ${{ !cancelled() && steps.verify_local_ntp.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
@@ -92,7 +97,7 @@ jobs:
       # Run the main end-to-end integration tests using cargo-nextest for better performance and reliability
       - name: End-to-end integration tests
         id: end_to_end
-        if: ${{ !cancelled() && steps.verify_local_ntp.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 90
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
@@ -103,8 +108,8 @@ jobs:
           args: run --locked --jobs 3 --retries 2 -p logos-blockchain-tests --no-fail-fast
 
       - name: Upload integration tests results on failure
+        if: ${{ failure() && steps.end_to_end.conclusion == 'failure' }}
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
-        if: ${{ steps.end_to_end.outcome == 'failure' && steps.verify_local_ntp.outcome == 'success' }}
         with:
           name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
           include-hidden-files: true
@@ -119,7 +124,7 @@ jobs:
       - name: Run cucumber - @smoke_ci
         id: cucumber_smoke
         # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
-        if: ${{ !cancelled() && steps.verify_local_ntp.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60  # Safety net timeout - this needs to be adjusted as more tests are added
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
@@ -134,7 +139,7 @@ jobs:
 
       # On failure, upload cucumber logs and artifacts for debugging
       - name: Upload cucumber logs on failure
-        if: ${{ steps.cucumber_smoke.outcome == 'failure' && steps.verify_local_ntp.outcome == 'success' }}
+        if: ${{ failure() && steps.cucumber_smoke.conclusion == 'failure' }}
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
         with:
@@ -146,7 +151,7 @@ jobs:
       - name: Run cucumber - @cryptarchia_ci
         id: cucumber_cryptarchia
         # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
-        if: ${{ !cancelled() && steps.verify_local_ntp.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60  # Safety net timeout - this needs to be adjusted as more tests are added
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
@@ -161,7 +166,7 @@ jobs:
 
       # On failure, upload cucumber logs and artifacts for debugging
       - name: Upload cucumber logs on failure
-        if: ${{ steps.cucumber_cryptarchia.outcome == 'failure' && steps.verify_local_ntp.outcome == 'success' }}
+        if: ${{ failure() && steps.cucumber_cryptarchia.conclusion == 'failure' }}
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
         with:
@@ -173,7 +178,7 @@ jobs:
       - name: Run cucumber - @transactions_ci
         id: cucumber_transactions
         # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
-        if: ${{ !cancelled() && steps.verify_local_ntp.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60  # Safety net timeout - this needs to be adjusted as more tests are added
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
@@ -188,7 +193,7 @@ jobs:
 
       # On failure, upload cucumber logs and artifacts for debugging
       - name: Upload cucumber logs on failure
-        if: ${{ steps.cucumber_transactions.outcome == 'failure' && steps.verify_local_ntp.outcome == 'success' }}
+        if: ${{ failure() && steps.cucumber_transactions.conclusion == 'failure' }}
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
         with:
@@ -198,7 +203,7 @@ jobs:
 
       # Always upload JUnit test results for reporting, even if tests fail
       - name: Upload cucumber JUnit results
-        if: ${{ !cancelled() && steps.verify_local_ntp.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
         with:
@@ -208,7 +213,7 @@ jobs:
 
       # Always publish a test report for visibility, do not fail workflow if this step fails
       - name: Publish cucumber test report
-        if: ${{ !cancelled() && steps.verify_local_ntp.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
         continue-on-error: true
         uses: dorny/test-reporter@v1
         with:

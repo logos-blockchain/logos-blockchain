@@ -65,6 +65,6 @@ async fn happy_test(topology: &Topology) {
 #[tokio::test]
 #[serial]
 async fn two_nodes_happy() {
-    let topology = Topology::spawn(TopologyConfig::two_validators()).await;
+    let topology = Topology::spawn(TopologyConfig::two_validators(), Some("two_nodes_happy")).await;
     happy_test(&topology).await;
 }

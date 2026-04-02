@@ -16,7 +16,7 @@ use time::OffsetDateTime;
 #[ignore = "For local debugging"]
 #[tokio::test]
 async fn blend_devnet_setup() {
-    let (configs, genesis_tx) = create_general_configs(4);
+    let (configs, genesis_tx) = create_general_configs(4, Some("blend_devnet_setup"));
 
     let deployment_settings = {
         let mut devnet_settings =

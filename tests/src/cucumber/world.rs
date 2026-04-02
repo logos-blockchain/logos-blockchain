@@ -117,6 +117,9 @@ pub struct ConsensusLivenessSpec {
 pub struct CucumberWorld {
     /// The deployer kind that this scenario is configured for.
     pub deployer: Option<DeployerKind>,
+    /// The unique test context, helfull to guarantee unique genesis transaction
+    /// inscription.
+    pub test_context: Option<String>,
     /// Base directory for scenario artifacts like logs and generated configs.
     pub scenario_base_dir: PathBuf,
     /// Automated: Scenario specification
@@ -239,6 +242,7 @@ impl Debug for CucumberWorld {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CucumberWorld")
             .field("deployer", &format!("{:?}", self.deployer))
+            .field("test_context", &format!("{:?}", self.test_context))
             .field("scenario_base_dir", &self.scenario_base_dir)
             .field("spec", &format!("{:?}", self.spec))
             .field("run", &format!("{:?}", self.run))
@@ -457,6 +461,11 @@ impl CucumberWorld {
     /// Set the deployer kind for this scenario.
     pub const fn set_deployer(&mut self, deployer: DeployerKind) {
         self.deployer = Some(deployer);
+    }
+
+    /// Set the unique test context for this scenario.
+    pub fn set_test_context(&mut self, test_context: String) {
+        self.test_context = Some(test_context);
     }
 
     /// Set the directory where scenario artifacts should be stored.

@@ -62,7 +62,8 @@ fn step_manual_devnet_cluster(
 
     let config = TopologyConfig::with_node_numbers(nodes_count)
         .with_allow_multiple_genesis_tokens(true)
-        .with_allow_zero_value_genesis_tokens(true);
+        .with_allow_zero_value_genesis_tokens(true)
+        .with_test_context(world.test_context.clone());
 
     let deployment = match DeploymentBuilder::new(config).build() {
         Ok(deployment) => deployment,

@@ -15,7 +15,7 @@ use lb_core::{
 use lb_groth16::CompressedGroth16Proof;
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey, ZkPublicKey, ZkSignature};
 use lb_node::{SignedMantleTx, Transaction as _};
-use lb_testing_framework::owner_for_current_test;
+use lb_testing_framework::unique_test_context;
 use num_bigint::BigUint;
 
 pub const SHORT_PROLONGED_BOOTSTRAP_PERIOD: Duration = Duration::from_secs(1);
@@ -62,9 +62,9 @@ pub struct ServiceNote {
     pub output_index: usize,
 }
 
-fn inscription_for_current_test() -> InscriptionOp {
-    let owner = owner_for_current_test();
-    println!("Genesis transaction: {owner}");
+fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
+    let owner = unique_test_context(test_context);
+    println!("Genesis inscription: {owner}");
     InscriptionOp {
         channel_id: ChannelId::from([0; 32]),
         inscription: owner.into_bytes(),
@@ -74,8 +74,8 @@ fn inscription_for_current_test() -> InscriptionOp {
 }
 
 #[must_use]
-pub fn create_genesis_tx(utxos: &[Utxo]) -> GenesisTx {
-    let inscription = inscription_for_current_test();
+pub fn create_genesis_tx(utxos: &[Utxo], test_context: Option<&str>) -> GenesisTx {
+    let inscription = inscription_for_current_test(test_context);
 
     // Create transfer op with the utxos as outputs
     let outputs: Vec<Note> = utxos.iter().map(|u| u.note).collect();
@@ -105,6 +105,7 @@ pub fn create_genesis_tx(utxos: &[Utxo]) -> GenesisTx {
 pub fn create_consensus_configs(
     ids: &[[u8; 32]],
     prolonged_bootstrap_period: Duration,
+    test_context: Option<&str>,
 ) -> (Vec<GeneralConsensusConfig>, GenesisTx) {
     let mut regular_note_keys = Vec::new();
     let mut blend_notes = Vec::new();
@@ -116,7 +117,7 @@ pub fn create_consensus_configs(
         &mut blend_notes,
         &mut sdp_notes,
     );
-    let genesis_tx = create_genesis_tx(&utxos);
+    let genesis_tx = create_genesis_tx(&utxos, test_context);
 
     (
         regular_note_keys
@@ -222,8 +223,9 @@ fn create_utxos(
 pub fn create_genesis_tx_with_declarations(
     transfer_op: TransferOp,
     providers: Vec<ProviderInfo>,
+    test_context: Option<&str>,
 ) -> GenesisTx {
-    let inscription = inscription_for_current_test();
+    let inscription = inscription_for_current_test(test_context);
 
     let transfer_hash = transfer_op.hash();
 

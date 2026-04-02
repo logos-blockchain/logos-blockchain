@@ -51,6 +51,7 @@ pub struct TopologyConfig {
     node_config_overrides: HashMap<usize, RunConfig>,
     allow_multiple_genesis_tokens: bool,
     allow_zero_value_genesis_tokens: bool,
+    pub test_context: Option<String>,
 }
 
 impl TopologyConfig {
@@ -70,6 +71,12 @@ impl TopologyConfig {
     #[must_use]
     pub const fn with_allow_zero_value_genesis_tokens(mut self, allow_multiple: bool) -> Self {
         self.allow_zero_value_genesis_tokens = allow_multiple;
+        self
+    }
+
+    #[must_use]
+    pub fn with_test_context(mut self, test_context: Option<String>) -> Self {
+        self.test_context = test_context;
         self
     }
 
@@ -103,6 +110,7 @@ impl Default for TopologyConfig {
             node_config_overrides: HashMap::new(),
             allow_multiple_genesis_tokens: false,
             allow_zero_value_genesis_tokens: false,
+            test_context: None,
         }
     }
 }
@@ -163,6 +171,12 @@ impl DeploymentBuilder {
         self
     }
 
+    #[must_use]
+    pub fn with_test_context(mut self, test_context: &str) -> Self {
+        self.config.test_context = Some(test_context.to_owned());
+        self
+    }
+
     pub fn build(mut self) -> Result<DeploymentPlan, TopologyBuildError> {
         self.config.wallet_config.validate(
             self.config.allow_multiple_genesis_tokens,
@@ -182,6 +196,7 @@ impl DeploymentBuilder {
             &blend_ports,
             node_count,
             self.config.network_params.as_ref(),
+            self.config.test_context.as_deref(),
         );
 
         let wallet_accounts = self
@@ -197,6 +212,7 @@ impl DeploymentBuilder {
             &base_genesis_tx,
             &wallet_accounts,
             key_id_for_preload_backend,
+            self.config.test_context.as_deref(),
         );
 
         let nodes = build_node_plans(node_count, &ids, &node_configs)?;

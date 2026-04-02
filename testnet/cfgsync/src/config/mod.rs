@@ -90,7 +90,8 @@ pub fn create_node_configs(
 
     // Update genesis TX to contain Blend providers.
     let transfer_op = genesis_tx.genesis_transfer().clone();
-    let genesis_tx_with_declarations = create_genesis_tx_with_declarations(transfer_op, providers);
+    let genesis_tx_with_declarations =
+        create_genesis_tx_with_declarations(transfer_op, providers, None);
 
     // Set Blend keys in KMS of each node config.
     // Give faucet SK to all nodes so the faucet service can route to any node.

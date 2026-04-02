@@ -1,6 +1,7 @@
 use std::{
     fs,
     fs::OpenOptions,
+    hash::{Hash, Hasher},
     io::Write as _,
     net::{TcpListener, UdpSocket},
     path::{Path, PathBuf},
@@ -8,6 +9,8 @@ use std::{
     sync::{Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use lb_utils::net::{get_available_tcp_port, get_available_udp_port};
 
 /// Total size of one reserved block per test process.
 ///
@@ -28,7 +31,7 @@ static TEST_PORT_ALLOCATOR: OnceLock<Mutex<Option<TestPortAllocator>>> = OnceLoc
 
 static PROCESS_START_NONCE: OnceLock<String> = OnceLock::new();
 
-// A nonce that is unique to the current process and start time.
+// A nonce that is unique to the current process id and start time.
 fn process_start_nonce() -> &'static str {
     PROCESS_START_NONCE.get_or_init(|| {
         let started_at_ns = SystemTime::now()
@@ -40,60 +43,50 @@ fn process_start_nonce() -> &'static str {
     })
 }
 
-/// Returns a unique string keyed to the currently-running test start time,
-/// process id, thread/test name, optional nextest control parameters and
-/// optional GitHub runner name.
-#[must_use]
-pub fn owner_for_current_test() -> String {
+/// Returns a unique string keyed to the currently-running process start nonce
+/// optional test context and optional nextest control parameters.
+pub fn unique_test_context(test_context: Option<&str>) -> String {
     let current_thread = std::thread::current();
     let thread_name = current_thread.name().unwrap_or("genesis");
 
-    // Example test owner string:
-    //   "
-    //     nonce=18a1a082a644b828-000e545b, \
-    //     attempt=3c3c0f35-db4b-41d5-8668-7aafa89e55fb:logos-blockchain-tests::\
-    //     test_cli_restart$node_restart_w_init_peers, \
-    //     workspace_root=/home/pluto/Code/logos/logos-blockchain, \
-    //     thread=node_restart_w_init_peers, \
-    //     runner=none
-    //   "
+    let workspace_root = std::env::var("NEXTEST_WORKSPACE_ROOT")
+        .or_else(|_| std::env::var("GITHUB_WORKSPACE"))
+        .unwrap_or_else(|_| "none".to_owned());
+
+    let runner_name = std::env::var("RUNNER_NAME").unwrap_or_else(|_| "none".to_owned());
+
+    let attempt_id = std::env::var("NEXTEST_ATTEMPT_ID").unwrap_or_else(|_| "none".to_owned());
+
+    let test_entropy_raw = format!(
+        "thread={thread_name}, workspace_root={workspace_root}, runner={runner_name}, attempt={attempt_id}, context={test_context:?}",
+    );
+
     format!(
-        "nonce={}, attempt={}, workspace_root={}, thread={}, runner={}",
+        "process_start_nonce={}, test_entropy={}",
         process_start_nonce(),
-        // Nextest sets these vars per-test-run; they are empty (and harmless) under
-        // plain `cargo test`.
-        std::env::var("NEXTEST_ATTEMPT_ID").unwrap_or_else(|_| "none".to_owned()),
-        std::env::var("NEXTEST_WORKSPACE_ROOT").unwrap_or_else(|_| "none".to_owned()),
-        thread_name,
-        // Set by GitHub Actions on self-hosted runners; empty outside CI.
-        std::env::var("RUNNER_NAME").unwrap_or_else(|_| "none".to_owned()),
+        hash_str(&test_entropy_raw)
     )
 }
 
 #[derive(Debug)]
 struct TestPortAllocator {
-    /// The lock file that proves this process owns its port block.
+    // The lock file that proves this process owns its port block.
     claim_file: PathBuf,
-
-    /// Next TCP port candidate in this process's reserved block.
+    // Next TCP port candidate in this process's reserved block.
     tcp_next: u16,
-
-    /// Final TCP port in this process's reserved block.
+    // Final TCP port in this process's reserved block.
     tcp_end: u16,
-
-    /// Next UDP port candidate in this process's reserved block.
+    // Next UDP port candidate in this process's reserved block.
     udp_next: u16,
-
-    /// Final UDP port in this process's reserved block.
+    // Final UDP port in this process's reserved block.
     udp_end: u16,
 }
 
 impl TestPortAllocator {
     fn new() -> Option<Self> {
-        let handshake_dir = std::env::temp_dir().join("logos-e2e-port-blocks");
-        fs::create_dir_all(&handshake_dir).ok()?;
+        fs::create_dir_all(&handshake_dir()).ok()?;
 
-        let owner = owner_for_current_test();
+        let owner = format!("process_start_nonce={}", process_start_nonce());
 
         // Example block starts for PORT_BLOCK_SIZE=256:
         // 20000, 20256, 20512, ...
@@ -101,11 +94,11 @@ impl TestPortAllocator {
 
         for block_start in (PORT_RANGE_START..=max_block_start).step_by(PORT_BLOCK_SIZE as usize) {
             let block_end = block_start + PORT_BLOCK_SIZE - 1;
-            let claim_file = handshake_dir.join(format!("{block_start}.lock"));
+            let claim_file = handshake_dir().join(format!("{block_start}.lock"));
 
             // First try to reap an obviously stale lock from a dead pid.
             if claim_file.exists() {
-                try_reap_stale_claim_file(&claim_file);
+                try_reap_stale_port_claim_file(&claim_file);
             }
 
             // The existence of this file is the reservation.
@@ -115,7 +108,7 @@ impl TestPortAllocator {
                 .open(&claim_file)
             {
                 Ok(mut file) => {
-                    write_claim_metadata(&mut file, &owner, block_start, block_end).ok()?;
+                    write_port_claim_metadata(&mut file, &owner, block_start, block_end).ok()?;
 
                     let tcp_next = block_start;
                     let tcp_end = block_start + (PORT_BLOCK_SIZE / 2) - 1;
@@ -133,8 +126,7 @@ impl TestPortAllocator {
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     // This block is currently claimed by another live process,
-                    // or a race occurred while
-                    // reaping/claiming. Try the next block.
+                    // or a race occurred while reaping/claiming. Try the next block.
                 }
                 Err(_) => {
                     return None;
@@ -155,8 +147,8 @@ impl TestPortAllocator {
                 return Some(port);
             }
         }
-
-        None
+        // The persistent blocks may be exhausted, try global allocation (failsafe)
+        get_available_tcp_port()
     }
 
     /// Returns an available UDP port from this allocator's reserved block.
@@ -169,8 +161,8 @@ impl TestPortAllocator {
                 return Some(port);
             }
         }
-
-        None
+        // The persistent blocks may be exhausted, try global allocation (failsafe)
+        get_available_udp_port()
     }
 }
 
@@ -195,7 +187,7 @@ fn with_test_port_allocator<T>(f: impl FnOnce(&mut TestPortAllocator) -> Option<
     f(guard.as_mut().expect("allocator just initialized"))
 }
 
-fn write_claim_metadata(
+fn write_port_claim_metadata(
     file: &mut fs::File,
     owner: &str,
     block_start: u16,
@@ -245,9 +237,13 @@ fn is_pid_alive(pid: u32) -> bool {
             .output();
 
         return match output {
+            // process exists
             Ok(out) if out.status.success() => {
                 !String::from_utf8_lossy(&out.stdout).trim().is_empty()
             }
+            // process absent
+            Ok(out) if out.status.code() == Some(1) => false,
+            // probe failed -> conservative
             _ => true,
         };
     }
@@ -266,8 +262,11 @@ fn is_pid_alive(pid: u32) -> bool {
             .status();
 
         return match status {
+            // process exists
             Ok(s) if s.code() == Some(0) => true,
+            // process absent
             Ok(s) if s.code() == Some(1) => false,
+            // probe failed -> conservative
             _ => true,
         };
     }
@@ -279,7 +278,7 @@ fn is_pid_alive(pid: u32) -> bool {
     }
 }
 
-fn try_reap_stale_claim_file(path: &Path) {
+fn try_reap_stale_port_claim_file(path: &Path) {
     let Some(pid) = read_pid_from_claim_file(path) else {
         return;
     };
@@ -315,4 +314,25 @@ pub fn release_reserved_port_block() {
     // Taking the allocator out of the slot drops it here, which removes the
     // claim file via Drop.
     drop(guard.take());
+}
+
+fn handshake_dir() -> PathBuf {
+    std::env::temp_dir().join("logos-e2e-port-blocks")
+}
+
+/// Reaps all stale lock files in the port-blocks directory that belong to
+/// dead processes. Call this once at process startup.
+pub fn reap_all_stale_port_blocks() {
+    if let Ok(entries) = fs::read_dir(&handshake_dir()) {
+        for entry in entries.flatten() {
+            try_reap_stale_port_claim_file(&entry.path());
+        }
+    }
+}
+
+/// Create a short 8-byte hash from string
+pub fn hash_str(s: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut hasher);
+    format!("{:x}", hasher.finish())
 }

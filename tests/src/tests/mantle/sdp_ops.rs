@@ -44,7 +44,7 @@ async fn sdp_ops_e2e() {
             note_sk: note_sk.clone(),
         })
         .with_lock_period(3);
-    let topology = Topology::spawn(topology_config).await;
+    let topology = Topology::spawn(topology_config, Some("sdp_ops_e2e")).await;
 
     topology.wait_network_ready().await;
 
@@ -184,7 +184,11 @@ async fn sdp_ops_e2e() {
 #[tokio::test]
 #[serial]
 async fn sdp_declaration_restoration_e2e() {
-    let mut topology = Topology::spawn(TopologyConfig::two_validators()).await;
+    let mut topology = Topology::spawn(
+        TopologyConfig::two_validators(),
+        Some("sdp_declaration_restoration_e2e"),
+    )
+    .await;
     topology.wait_network_ready().await;
 
     let validator = &topology.validators()[0];
@@ -257,7 +261,11 @@ async fn large_inscription_e2e() {
         max_payload / 2,
         max_payload,
     ] {
-        let topology = Topology::spawn(TopologyConfig::two_validators()).await;
+        let topology = Topology::spawn(
+            TopologyConfig::two_validators(),
+            Some("large_inscription_e2e"),
+        )
+        .await;
         topology.wait_network_ready().await;
 
         let validator = &topology.validators()[0];

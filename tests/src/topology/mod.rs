@@ -101,7 +101,7 @@ pub struct Topology {
 }
 
 impl Topology {
-    pub async fn spawn(config: TopologyConfig) -> Self {
+    pub async fn spawn(config: TopologyConfig, test_context: Option<&str>) -> Self {
         let n_participants = config.n_validators;
 
         // we use the same random bytes for:
@@ -116,7 +116,7 @@ impl Topology {
         }
 
         let (consensus_configs, genesis_tx) =
-            create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+            create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD, test_context);
         let network_configs = create_network_configs(&ids, &config.network_params);
         let blend_configs = create_blend_configs(&ids, &blend_ports);
         let api_configs = create_api_configs(&ids);
@@ -146,7 +146,7 @@ impl Topology {
 
         // Update genesis TX to contain Blend providers.
         let genesis_tx_with_declarations =
-            create_genesis_tx_with_declarations(transfer_op, providers);
+            create_genesis_tx_with_declarations(transfer_op, providers, test_context);
         let updated_transfer_op = genesis_tx_with_declarations.genesis_transfer().clone();
         let injected_utxos: Vec<_> = updated_transfer_op
             .utxos()

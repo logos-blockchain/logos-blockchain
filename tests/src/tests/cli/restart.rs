@@ -11,7 +11,8 @@ use serial_test::serial;
 #[tokio::test]
 #[serial]
 async fn node_restart_w_init_peers() {
-    let topology = Topology::spawn(TopologyConfig::two_validators()).await;
+    let test_context = Some("node_restart_w_init_peers");
+    let topology = Topology::spawn(TopologyConfig::two_validators(), test_context).await;
     topology.wait_network_ready().await;
 
     let validator_1 = &topology.validators()[0];
@@ -50,7 +51,7 @@ async fn node_restart_w_init_peers() {
         });
 
     // Third node that bootstraps from node 1.
-    let (mut third_configs, _) = create_general_configs(1);
+    let (mut third_configs, _) = create_general_configs(1, test_context);
     let mut third_config = create_validator_config(
         third_configs.remove(0),
         validator_1.config().deployment.clone(),

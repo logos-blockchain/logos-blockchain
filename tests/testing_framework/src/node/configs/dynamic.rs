@@ -32,8 +32,9 @@ pub fn create_node_config_for_node(
     blend_port: u16,
     base_consensus: &GeneralConsensusConfig,
     time_config: &GeneralTimeConfig,
+    test_context: Option<&str>,
 ) -> Result<Config, DynamicConfigBuildError> {
-    let consensus_config = build_consensus_config_for_node(id, base_consensus)?;
+    let consensus_config = build_consensus_config_for_node(id, base_consensus, test_context)?;
 
     let blend_config = node_configs::blend::create_blend_configs(&[id], &[blend_port])
         .into_iter()
@@ -74,9 +75,13 @@ pub fn create_node_config_for_node(
 fn build_consensus_config_for_node(
     id: [u8; 32],
     base: &GeneralConsensusConfig,
+    test_context: Option<&str>,
 ) -> Result<GeneralConsensusConfig, DynamicConfigBuildError> {
-    let (mut configs, _) =
-        node_configs::consensus::create_consensus_configs(&[id], SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+    let (mut configs, _) = node_configs::consensus::create_consensus_configs(
+        &[id],
+        SHORT_PROLONGED_BOOTSTRAP_PERIOD,
+        test_context,
+    );
     let mut config = configs.pop().ok_or(DynamicConfigBuildError::Consensus)?;
     config.blend_note.clone_from(&base.blend_note);
 

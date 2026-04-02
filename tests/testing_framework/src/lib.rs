@@ -16,8 +16,8 @@ mod node;
 mod unique_persistent;
 pub mod workloads;
 pub use unique_persistent::{
-    get_reserved_available_tcp_port, get_reserved_available_udp_port, owner_for_current_test,
-    release_reserved_port_block,
+    get_reserved_available_tcp_port, get_reserved_available_udp_port, hash_str,
+    reap_all_stale_port_blocks, release_reserved_port_block, unique_test_context,
 };
 
 pub(crate) mod common {
