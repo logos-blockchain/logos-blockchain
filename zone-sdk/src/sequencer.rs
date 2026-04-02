@@ -850,39 +850,21 @@ fn enqueue_resubmit(
     }));
 }
 
-/// Find the channel tip from unordered inscriptions in a block.
-///
-/// When a block contains multiple inscriptions for our channel, they form
-/// a chain. The tip is the inscription whose `id()` is not referenced as
-/// a `parent` by any other inscription in the same block.
+/// Find the latest channel inscription in a block's transactions.
+/// Transactions are guaranteed to be in channel order by the node.
 fn find_channel_tip(txs: &[SignedMantleTx], channel_id: ChannelId) -> Option<MsgId> {
-    let inscriptions: Vec<_> = txs
-        .iter()
-        .flat_map(|tx| &tx.mantle_tx.ops)
-        .filter_map(|op| {
+    txs.iter()
+        .rev()
+        .flat_map(|tx| tx.mantle_tx.ops.iter().rev())
+        .find_map(|op| {
             if let Op::ChannelInscribe(inscribe) = op
                 && inscribe.channel_id == channel_id
             {
-                Some(inscribe)
+                Some(inscribe.id())
             } else {
                 None
             }
         })
-        .collect();
-
-    if inscriptions.is_empty() {
-        return None;
-    }
-
-    let parents: std::collections::HashSet<MsgId> = inscriptions.iter().map(|i| i.parent).collect();
-
-    // The tip is the inscription whose id is not any other inscription's parent.
-    inscriptions
-        .iter()
-        .find(|i| !parents.contains(&i.id()))
-        .map(|i| i.id())
-        // Fallback: if all are referenced (shouldn't happen), use last.
-        .or_else(|| inscriptions.last().map(|i| i.id()))
 }
 
 fn matches_channel(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
