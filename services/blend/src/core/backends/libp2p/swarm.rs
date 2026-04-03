@@ -9,9 +9,10 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_blend::{
-    message::encap::{
-        ProofsVerifier as ProofsVerifierTrait, encapsulated::EncapsulatedMessage,
-        validated::EncapsulatedMessageWithVerifiedPublicHeader,
+    message::encap::validated::{
+        EncapsulatedMessageWithVerifiedPublicHeader,
+        SessionBoundEncapsulatedMessageWithVerifiedHeader,
+        SessionBoundEncapsulatedMessageWithVerifiedSignature,
     },
     network::core::{
         NetworkBehaviourEvent,
@@ -24,14 +25,10 @@ use lb_blend::{
         },
         with_edge::behaviour::Event as CoreToEdgeEvent,
     },
-    proofs::quota::inputs::prove::public::LeaderInputs,
     scheduling::membership::Membership,
 };
 use lb_libp2p::{DialOpts, SwarmEvent};
-use libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmBuilder,
-    swarm::{ConnectionId, dial_opts::PeerCondition},
-};
+use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, swarm::dial_opts::PeerCondition};
 use rand::RngCore;
 use tokio::sync::{broadcast, mpsc};
 
@@ -51,11 +48,9 @@ use crate::{
 
 #[derive(Debug)]
 pub enum BlendSwarmMessage {
-    Publish(Box<EncapsulatedMessage>),
+    Publish(Box<SessionBoundEncapsulatedMessageWithVerifiedHeader>),
     StartNewSession(SessionInfo<PeerId>),
     CompleteSessionTransition,
-    StartNewEpoch(LeaderInputs),
-    CompleteEpochTransition,
 }
 
 pub struct DialAttempt {
@@ -83,15 +78,15 @@ impl DialAttempt {
     }
 }
 
-pub struct BlendSwarm<Rng, ProofsVerifier, ObservationWindowProvider>
+pub struct BlendSwarm<Rng, ObservationWindowProvider>
 where
-    ProofsVerifier: ProofsVerifierTrait + 'static,
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + 'static,
 {
-    swarm: Swarm<BlendBehaviour<ProofsVerifier, ObservationWindowProvider>>,
+    swarm: Swarm<BlendBehaviour<ObservationWindowProvider>>,
     swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage>,
-    incoming_message_sender: broadcast::Sender<EncapsulatedMessageWithVerifiedPublicHeader>,
+    incoming_message_sender:
+        broadcast::Sender<SessionBoundEncapsulatedMessageWithVerifiedSignature>,
     public_info: PublicInfo<PeerId>,
     rng: Rng,
     max_dial_attempts_per_connection: NonZeroU64,
@@ -104,15 +99,14 @@ pub struct SwarmParams<'config, Rng> {
     pub current_public_info: PublicInfo<PeerId>,
     pub rng: Rng,
     pub swarm_message_receiver: mpsc::Receiver<BlendSwarmMessage>,
-    pub incoming_message_sender: broadcast::Sender<EncapsulatedMessageWithVerifiedPublicHeader>,
+    pub incoming_message_sender:
+        broadcast::Sender<SessionBoundEncapsulatedMessageWithVerifiedSignature>,
     pub minimum_network_size: NonZeroUsize,
 }
 
-impl<Rng, ProofsVerifier, ObservationWindowProvider>
-    BlendSwarm<Rng, ProofsVerifier, ObservationWindowProvider>
+impl<Rng, ObservationWindowProvider> BlendSwarm<Rng, ObservationWindowProvider>
 where
     Rng: RngCore,
-    ProofsVerifier: ProofsVerifierTrait + Clone,
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + for<'c> From<(
             &'c BlendConfig<Libp2pBlendBackendSettings>,
@@ -136,8 +130,10 @@ where
             .with_behaviour(|_| {
                 BlendBehaviour::new(
                     config,
-                    current_public_info.session.membership.clone(),
-                    ProofsVerifier::new(current_public_info.clone().into()),
+                    (
+                        current_public_info.session.membership.clone(),
+                        current_public_info.session.session_number,
+                    ),
                 )
             })
             .expect("Blend Behaviour should be built")
@@ -172,11 +168,9 @@ where
     }
 }
 
-impl<Rng, ProofsVerifier, ObservationWindowProvider>
-    BlendSwarm<Rng, ProofsVerifier, ObservationWindowProvider>
+impl<Rng, ObservationWindowProvider> BlendSwarm<Rng, ObservationWindowProvider>
 where
     Rng: RngCore,
-    ProofsVerifier: ProofsVerifierTrait,
     ObservationWindowProvider:
         IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
 {
@@ -242,9 +236,9 @@ where
 
     fn handle_blend_core_behaviour_event(&mut self, blend_event: CoreToCoreEvent) {
         match blend_event {
-            lb_blend::network::core::with_core::behaviour::Event::Message(msg, conn) => {
+            lb_blend::network::core::with_core::behaviour::Event::Message(msg, peer) => {
                 // Forward message received from node to all other core nodes.
-                self.validate_and_forward_swarm_message((*msg).clone().into(), conn);
+                self.validate_and_forward_swarm_message(&msg, peer);
                 // Bubble up to service for decapsulation and delaying.
                 self.report_message_to_service(*msg, metrics::InboundMessageType::Core);
             }
@@ -289,10 +283,8 @@ where
     }
 }
 
-impl<Rng, ProofsVerifier, ObservationWindowProvider>
-    BlendSwarm<Rng, ProofsVerifier, ObservationWindowProvider>
+impl<Rng, ObservationWindowProvider> BlendSwarm<Rng, ObservationWindowProvider>
 where
-    ProofsVerifier: ProofsVerifierTrait,
     ObservationWindowProvider:
         IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
 {
@@ -379,13 +371,16 @@ where
         ))
     }
 
-    fn validate_and_publish_swarm_message(&mut self, msg: EncapsulatedMessage) {
+    fn validate_and_publish_swarm_message(
+        &mut self,
+        msg: &SessionBoundEncapsulatedMessageWithVerifiedSignature,
+    ) {
         if let Err(e) = self
             .swarm
             .behaviour_mut()
             .blend
             .with_core_mut()
-            .validate_and_publish_message(msg)
+            .publish_message_with_validated_signature(msg)
         {
             tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
             metrics::outbound_publish_err();
@@ -396,15 +391,15 @@ where
 
     fn validate_and_forward_swarm_message(
         &mut self,
-        msg: EncapsulatedMessage,
-        except: (PeerId, ConnectionId),
+        msg: &SessionBoundEncapsulatedMessageWithVerifiedSignature,
+        except: PeerId,
     ) {
         if let Err(e) = self
             .swarm
             .behaviour_mut()
             .blend
             .with_core_mut()
-            .validate_and_forward_message(msg, except)
+            .forward_message_with_validated_signature(msg, except)
         {
             // If we have a single connection, then we will always hit the `NoPeers` error.
             // In this case it's ok not to log such error, since this function is only
@@ -421,7 +416,7 @@ where
 
     fn report_message_to_service(
         &self,
-        msg: EncapsulatedMessageWithVerifiedPublicHeader,
+        msg: SessionBoundEncapsulatedMessageWithVerifiedSignature,
         message_type: metrics::InboundMessageType,
     ) {
         tracing::trace!("Received message from a peer: {msg:?}");
@@ -462,20 +457,23 @@ where
         match blend_event {
             lb_blend::network::core::with_edge::behaviour::Event::Message(msg) => {
                 // Forward message received from edge node to all the core nodes.
-                self.validate_and_publish_swarm_message(msg.clone().into());
+                self.validate_and_publish_swarm_message(&msg);
                 // Bubble up to service for decapsulation and delaying.
                 self.report_message_to_service(msg, metrics::InboundMessageType::Edge);
             }
         }
     }
 
-    fn handle_publish_swarm_message(&mut self, msg: EncapsulatedMessage) {
+    fn handle_publish_swarm_message(
+        &mut self,
+        msg: SessionBoundEncapsulatedMessageWithVerifiedHeader,
+    ) {
         if let Err(e) = self
             .swarm
             .behaviour_mut()
             .blend
             .with_core_mut()
-            .validate_and_publish_message(msg)
+            .publish_message_with_validated_header(msg)
         {
             tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
             metrics::outbound_publish_err();
@@ -485,18 +483,13 @@ where
     }
 }
 
-impl<Rng, ProofsVerifier, ObservationWindowProvider>
-    BlendSwarm<Rng, ProofsVerifier, ObservationWindowProvider>
+impl<Rng, ObservationWindowProvider> BlendSwarm<Rng, ObservationWindowProvider>
 where
     Rng: RngCore,
-    ProofsVerifier: ProofsVerifierTrait + Clone,
     ObservationWindowProvider:
         IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
 {
-    fn handle_event(
-        &mut self,
-        event: SwarmEvent<BlendBehaviourEvent<ProofsVerifier, ObservationWindowProvider>>,
-    ) {
+    fn handle_event(&mut self, event: SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) {
         match event {
             SwarmEvent::ConnectionEstablished { .. } | SwarmEvent::ConnectionClosed { .. } => {
                 let connected_count = self.swarm.connected_peers().count();
@@ -556,35 +549,23 @@ where
             }
             BlendSwarmMessage::StartNewSession(new_session_info) => {
                 self.public_info.session = new_session_info;
-                self.swarm.behaviour_mut().blend.start_new_session(
+                self.swarm.behaviour_mut().blend.start_new_session((
                     self.public_info.session.membership.clone(),
-                    ProofsVerifier::new(self.public_info.clone().into()),
-                );
+                    self.public_info.session.session_number,
+                ));
                 self.ongoing_dials.clear();
                 self.check_and_dial_new_peers_except(None);
             }
             BlendSwarmMessage::CompleteSessionTransition => {
                 self.swarm.behaviour_mut().blend.finish_session_transition();
             }
-            BlendSwarmMessage::StartNewEpoch(new_epoch_public) => {
-                self.public_info.epoch = new_epoch_public;
-                self.swarm
-                    .behaviour_mut()
-                    .blend
-                    .start_new_epoch(self.public_info.epoch);
-            }
-            BlendSwarmMessage::CompleteEpochTransition => {
-                self.swarm.behaviour_mut().blend.finish_epoch_transition();
-            }
         }
     }
 }
 
-impl<Rng, ProofsVerifier, ObservationWindowProvider>
-    BlendSwarm<Rng, ProofsVerifier, ObservationWindowProvider>
+impl<Rng, ObservationWindowProvider> BlendSwarm<Rng, ObservationWindowProvider>
 where
     Rng: RngCore,
-    ProofsVerifier: ProofsVerifierTrait,
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + 'static,
 {
@@ -594,18 +575,17 @@ where
         identity: &libp2p::identity::Keypair,
         behaviour_constructor: BehaviourConstructor,
         swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage>,
-        incoming_message_sender: broadcast::Sender<EncapsulatedMessageWithVerifiedPublicHeader>,
+        incoming_message_sender: broadcast::Sender<
+            SessionBoundEncapsulatedMessageWithVerifiedSignature,
+        >,
         current_public_info: PublicInfo<PeerId>,
         rng: Rng,
         max_dial_attempts_per_connection: NonZeroU64,
         minimum_network_size: NonZeroUsize,
     ) -> Self
     where
-        BehaviourConstructor: FnOnce(
-            PeerId,
-            Membership<PeerId>,
-        )
-            -> BlendBehaviour<ProofsVerifier, ObservationWindowProvider>,
+        BehaviourConstructor:
+            FnOnce(PeerId, Membership<PeerId>) -> BlendBehaviour<ObservationWindowProvider>,
     {
         use crate::test_utils::memory_test_swarm;
 
@@ -628,11 +608,9 @@ where
     }
 }
 
-impl<Rng, ProofsVerifier, ObservationWindowProvider>
-    BlendSwarm<Rng, ProofsVerifier, ObservationWindowProvider>
+impl<Rng, ObservationWindowProvider> BlendSwarm<Rng, ObservationWindowProvider>
 where
     Rng: RngCore,
-    ProofsVerifier: ProofsVerifierTrait + Clone,
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + 'static,
 {
@@ -651,8 +629,7 @@ where
         swarm_event_match_predicate: Predicate,
     ) -> bool
     where
-        Predicate:
-            Fn(&SwarmEvent<BlendBehaviourEvent<ProofsVerifier, ObservationWindowProvider>>) -> bool,
+        Predicate: Fn(&SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) -> bool,
     {
         tokio::select! {
             Some(msg) = self.swarm_messages_receiver.recv() => {
@@ -675,8 +652,7 @@ where
     #[cfg(test)]
     pub async fn poll_next_until<Predicate>(&mut self, swarm_event_match_predicate: Predicate)
     where
-        Predicate: Fn(&SwarmEvent<BlendBehaviourEvent<ProofsVerifier, ObservationWindowProvider>>) -> bool
-            + Copy,
+        Predicate: Fn(&SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) -> bool + Copy,
     {
         loop {
             if self.poll_next_and_match(swarm_event_match_predicate).await {
@@ -687,14 +663,12 @@ where
 }
 
 // We implement `Deref` so we are able to call swarm methods on our own swarm.
-impl<Rng, ProofsVerifier, ObservationWindowProvider> Deref
-    for BlendSwarm<Rng, ProofsVerifier, ObservationWindowProvider>
+impl<Rng, ObservationWindowProvider> Deref for BlendSwarm<Rng, ObservationWindowProvider>
 where
-    ProofsVerifier: ProofsVerifierTrait,
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + 'static,
 {
-    type Target = Swarm<BlendBehaviour<ProofsVerifier, ObservationWindowProvider>>;
+    type Target = Swarm<BlendBehaviour<ObservationWindowProvider>>;
 
     fn deref(&self) -> &Self::Target {
         &self.swarm
@@ -704,10 +678,9 @@ where
 #[cfg(test)]
 // We implement `DerefMut` only for tests, since we do not want to give people a
 // chance to bypass our API.
-impl<Rng, ProofsVerifier, ObservationWindowProvider> core::ops::DerefMut
-    for BlendSwarm<Rng, ProofsVerifier, ObservationWindowProvider>
+impl<Rng, ObservationWindowProvider> core::ops::DerefMut
+    for BlendSwarm<Rng, ObservationWindowProvider>
 where
-    ProofsVerifier: ProofsVerifierTrait,
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + 'static,
 {
