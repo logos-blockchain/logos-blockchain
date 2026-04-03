@@ -139,7 +139,7 @@ pub struct BlendService<
     PolInfoProvider,
     RuntimeServiceId,
 > where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
     Network: NetworkAdapter<RuntimeServiceId>,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -182,7 +182,7 @@ impl<
         RuntimeServiceId,
     >
 where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
     Network: NetworkAdapter<RuntimeServiceId>,
 {
     type Settings = StartingBlendConfig<Backend::Settings>;
@@ -224,7 +224,7 @@ impl<
         RuntimeServiceId,
     >
 where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Send + Sync,
     NodeId: Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Network: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash + Unpin> + Send + Sync,
     MembershipAdapter: membership::Adapter<NodeId = NodeId, Error: Send + Sync + 'static> + Send,
@@ -553,7 +553,7 @@ async fn initialize<
 )
 where
     NodeId: Clone + Debug + Eq + Hash + Send + 'static,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash + Unpin>,
     ChainService: ChainApi<RuntimeServiceId> + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<KmsAdapter::CorePoQGenerator>,
@@ -859,7 +859,7 @@ async fn run_event_loop<
 where
     NodeId: Clone + Eq + Hash + Send + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<
             RuntimeServiceId,
             BroadcastSettings: Serialize
@@ -1001,7 +1001,7 @@ async fn retire<
 ) where
     NodeId: Clone + Eq + Hash + Send + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<
             RuntimeServiceId,
             BroadcastSettings: Serialize
@@ -1093,7 +1093,7 @@ where
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     BroadcastSettings: Debug + Clone + Send + Sync + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
 {
     match event {
         SessionEvent::NewSession(MaybeEmptyCoreSessionInfo::NonEmpty(CoreSessionInfo {
@@ -1235,7 +1235,7 @@ async fn handle_session_transition_expired<Backend, NodeId, Rng, ProofsVerifier,
     blending_token_collector: OldSessionBlendingTokenCollector,
     sdp_relay: &OutboundRelay<SdpMessage>,
 ) where
-    Backend: BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, Rng, RuntimeServiceId>,
     NodeId: Eq + Hash + Clone + Send,
     ProofsVerifier: ProofsVerifierTrait,
 {
@@ -1696,7 +1696,7 @@ async fn handle_release_round<
 where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     NetAdapter: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash> + Sync,
@@ -1774,7 +1774,7 @@ async fn handle_release_round_for_old_session<
 ) where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash> + Sync,
 {
     let mut futures = build_futures_to_release_processed_messages(
@@ -1811,7 +1811,7 @@ fn build_futures_to_release_processed_messages<
 ) -> Vec<BoxFuture<'fut, ()>>
 where
     NodeId: Eq + Hash + 'static,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash> + Sync,
 {
     processed_messages_to_release
@@ -1932,7 +1932,7 @@ where
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     ChainService: ChainApi<RuntimeServiceId> + Sync,
-    Backend: BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, Rng, RuntimeServiceId>,
     RuntimeServiceId: Sync,
 {
     let Some(epoch_event) = epoch_handler.tick(slot_tick).await else {
@@ -2048,7 +2048,7 @@ async fn handle_new_secret_epoch_info<
     current_epoch: Epoch,
 ) -> Option<LeaderInputs>
 where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
