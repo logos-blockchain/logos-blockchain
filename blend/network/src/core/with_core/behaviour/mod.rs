@@ -12,8 +12,7 @@ use std::{
 use either::Either;
 use futures::Stream;
 use lb_blend_message::encap::validated::{
-    EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
-    SessionBoundEncapsulatedMessageWithVerifiedHeader,
+    EncapsulatedMessageWithVerifiedSignature, SessionBoundEncapsulatedMessageWithVerifiedHeader,
     SessionBoundEncapsulatedMessageWithVerifiedSignature,
 };
 use lb_blend_scheduling::membership::Membership;

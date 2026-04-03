@@ -7,7 +7,6 @@ use std::{
 use either::Either;
 use lb_blend_message::encap::validated::{
     EncapsulatedMessageWithVerifiedPublicHeader, SessionBoundEncapsulatedMessageWithVerifiedHeader,
-    SessionBoundEncapsulatedMessageWithVerifiedSignature,
 };
 use libp2p::{
     PeerId,
@@ -63,35 +62,6 @@ impl OldSession {
         forward_validated_message_and_update_cache(
             &(EncapsulatedMessageWithVerifiedPublicHeader::from(message).into()),
             self.negotiated_peers.iter(),
-            &mut self.events,
-            &mut self.message_cache,
-            self.waker.take(),
-        )
-    }
-
-    /// Validates the public header of an encapsulated message, and
-    /// if valid, forwards it to all negotiated peers minus the sender.
-    pub fn forward_message_with_validated_signature(
-        &mut self,
-        message: &SessionBoundEncapsulatedMessageWithVerifiedSignature,
-        except: PeerId,
-    ) -> Result<(), SendError> {
-        if message.session() != self.session_number {
-            return Err(SendError::InvalidSession);
-        }
-
-        tracing::trace!(
-            "Forwarding message with id {:?} to old session peers. Negotiated peers: {:?}. Excluded peer: {except:?}",
-            hex::encode(message.id()),
-            self.negotiated_peers
-        );
-
-        forward_validated_message_and_update_cache(
-            message.as_ref(),
-            self.negotiated_peers
-                .iter()
-                // Exclude the peer the message was received from.
-                .filter(|(peer_id, _)| except != **peer_id),
             &mut self.events,
             &mut self.message_cache,
             self.waker.take(),

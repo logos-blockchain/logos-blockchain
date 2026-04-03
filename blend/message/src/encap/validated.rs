@@ -108,6 +108,11 @@ impl SessionBoundEncapsulatedMessageWithVerifiedSignature {
         self.message.id()
     }
 
+    #[must_use]
+    pub fn into_components(self) -> (EncapsulatedMessageWithVerifiedSignature, u64) {
+        (self.message, self.session)
+    }
+
     pub fn verify_proof_of_quota<Verifier>(
         self,
         verifier: &Verifier,
@@ -344,6 +349,14 @@ pub struct SessionBoundEncapsulatedMessageWithVerifiedHeader {
 }
 
 impl SessionBoundEncapsulatedMessageWithVerifiedHeader {
+    #[must_use]
+    pub const fn from_components(
+        message: EncapsulatedMessageWithVerifiedPublicHeader,
+        session: u64,
+    ) -> Self {
+        Self { message, session }
+    }
+
     #[must_use]
     pub fn into_components(self) -> (EncapsulatedMessageWithVerifiedPublicHeader, u64) {
         (self.message, self.session)

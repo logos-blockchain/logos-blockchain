@@ -10,7 +10,6 @@ use std::{
 use futures::StreamExt as _;
 use lb_blend::{
     message::encap::validated::{
-        EncapsulatedMessageWithVerifiedPublicHeader,
         SessionBoundEncapsulatedMessageWithVerifiedHeader,
         SessionBoundEncapsulatedMessageWithVerifiedSignature,
     },
@@ -281,6 +280,126 @@ where
             }
         }
     }
+
+    fn handle_event(&mut self, event: SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) {
+        match event {
+            SwarmEvent::ConnectionEstablished { .. } | SwarmEvent::ConnectionClosed { .. } => {
+                let connected_count = self.swarm.connected_peers().count();
+                metrics::peers_connected(connected_count);
+            }
+            SwarmEvent::Behaviour(BlendBehaviourEvent::Blend(NetworkBehaviourEvent::WithCore(
+                e,
+            ))) => {
+                self.handle_blend_core_behaviour_event(e);
+            }
+            SwarmEvent::Behaviour(BlendBehaviourEvent::Blend(NetworkBehaviourEvent::WithEdge(
+                e,
+            ))) => {
+                self.handle_blend_edge_behaviour_event(e);
+            }
+            // In case we fail to dial a peer, we retry. If the maximum number of trials is reached,
+            // we re-evaluate the healthy connections and open a new one if needed, ignoring the
+            // peer that we just failed to dial.
+            SwarmEvent::OutgoingConnectionError {
+                peer_id,
+                connection_id,
+                error,
+            } => {
+                tracing::warn!(
+                    target: LOG_TARGET,
+                    "Dialing error for peer: {peer_id:?} on connection: {connection_id:?}. Error: {error:?}"
+                );
+                // We don't retry if `peer_id` is `None` or if we've achieved the maximum number
+                // of retries for this peer.
+                let Some(peer_id) = peer_id else {
+                    self.check_and_dial_new_peers_except(None);
+                    return;
+                };
+
+                match self.retry_dial(peer_id) {
+                    SessionDialAttempt::PreviousSession => {
+                        tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new session has cleared the map of pending dials. No retry will be performed.");
+                    }
+                    SessionDialAttempt::OngoingSession(Some(_)) => {
+                        self.check_and_dial_new_peers_except(Some(peer_id));
+                    }
+                    // Retry in progress.
+                    SessionDialAttempt::OngoingSession(None) => {}
+                }
+            }
+            _ => {
+                tracing::trace!(target: LOG_TARGET, "Received event from blend network that will be ignored.");
+                tracing::trace!(counter.ignored_event = 1);
+            }
+        }
+    }
+
+    fn handle_swarm_message(&mut self, msg: BlendSwarmMessage) {
+        match msg {
+            BlendSwarmMessage::Publish(msg) => {
+                self.handle_publish_swarm_message(*msg);
+            }
+            BlendSwarmMessage::StartNewSession(new_session_info) => {
+                self.public_info.session = new_session_info;
+                self.swarm.behaviour_mut().blend.start_new_session((
+                    self.public_info.session.membership.clone(),
+                    self.public_info.session.session_number,
+                ));
+                self.ongoing_dials.clear();
+                self.check_and_dial_new_peers_except(None);
+            }
+            BlendSwarmMessage::CompleteSessionTransition => {
+                self.swarm.behaviour_mut().blend.finish_session_transition();
+            }
+        }
+    }
+
+    pub(crate) async fn run(mut self) {
+        loop {
+            self.poll_next_internal().await;
+        }
+    }
+
+    async fn poll_next_internal(&mut self) {
+        self.poll_next_and_match(|_| false).await;
+    }
+
+    async fn poll_next_and_match<Predicate>(
+        &mut self,
+        swarm_event_match_predicate: Predicate,
+    ) -> bool
+    where
+        Predicate: Fn(&SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) -> bool,
+    {
+        tokio::select! {
+            Some(msg) = self.swarm_messages_receiver.recv() => {
+                self.handle_swarm_message(msg);
+                false
+            }
+            Some(event) = self.swarm.next() => {
+                let predicate_matched = swarm_event_match_predicate(&event);
+                self.handle_event(event);
+                predicate_matched
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub async fn poll_next(&mut self) {
+        self.poll_next_internal().await;
+    }
+
+    #[cfg(test)]
+    pub async fn poll_next_until<Predicate>(&mut self, swarm_event_match_predicate: Predicate)
+    where
+        Predicate: Fn(&SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) -> bool + Copy,
+    {
+        loop {
+            if self.poll_next_and_match(swarm_event_match_predicate).await {
+                break;
+            }
+        }
+    }
 }
 
 impl<Rng, ObservationWindowProvider> BlendSwarm<Rng, ObservationWindowProvider>
@@ -486,86 +605,6 @@ where
 impl<Rng, ObservationWindowProvider> BlendSwarm<Rng, ObservationWindowProvider>
 where
     Rng: RngCore,
-    ObservationWindowProvider:
-        IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
-{
-    fn handle_event(&mut self, event: SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) {
-        match event {
-            SwarmEvent::ConnectionEstablished { .. } | SwarmEvent::ConnectionClosed { .. } => {
-                let connected_count = self.swarm.connected_peers().count();
-                metrics::peers_connected(connected_count);
-            }
-            SwarmEvent::Behaviour(BlendBehaviourEvent::Blend(NetworkBehaviourEvent::WithCore(
-                e,
-            ))) => {
-                self.handle_blend_core_behaviour_event(e);
-            }
-            SwarmEvent::Behaviour(BlendBehaviourEvent::Blend(NetworkBehaviourEvent::WithEdge(
-                e,
-            ))) => {
-                self.handle_blend_edge_behaviour_event(e);
-            }
-            // In case we fail to dial a peer, we retry. If the maximum number of trials is reached,
-            // we re-evaluate the healthy connections and open a new one if needed, ignoring the
-            // peer that we just failed to dial.
-            SwarmEvent::OutgoingConnectionError {
-                peer_id,
-                connection_id,
-                error,
-            } => {
-                tracing::warn!(
-                    target: LOG_TARGET,
-                    "Dialing error for peer: {peer_id:?} on connection: {connection_id:?}. Error: {error:?}"
-                );
-                // We don't retry if `peer_id` is `None` or if we've achieved the maximum number
-                // of retries for this peer.
-                let Some(peer_id) = peer_id else {
-                    self.check_and_dial_new_peers_except(None);
-                    return;
-                };
-
-                match self.retry_dial(peer_id) {
-                    SessionDialAttempt::PreviousSession => {
-                        tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new session has cleared the map of pending dials. No retry will be performed.");
-                    }
-                    SessionDialAttempt::OngoingSession(Some(_)) => {
-                        self.check_and_dial_new_peers_except(Some(peer_id));
-                    }
-                    // Retry in progress.
-                    SessionDialAttempt::OngoingSession(None) => {}
-                }
-            }
-            _ => {
-                tracing::trace!(target: LOG_TARGET, "Received event from blend network that will be ignored.");
-                tracing::trace!(counter.ignored_event = 1);
-            }
-        }
-    }
-
-    fn handle_swarm_message(&mut self, msg: BlendSwarmMessage) {
-        match msg {
-            BlendSwarmMessage::Publish(msg) => {
-                self.handle_publish_swarm_message(*msg);
-            }
-            BlendSwarmMessage::StartNewSession(new_session_info) => {
-                self.public_info.session = new_session_info;
-                self.swarm.behaviour_mut().blend.start_new_session((
-                    self.public_info.session.membership.clone(),
-                    self.public_info.session.session_number,
-                ));
-                self.ongoing_dials.clear();
-                self.check_and_dial_new_peers_except(None);
-            }
-            BlendSwarmMessage::CompleteSessionTransition => {
-                self.swarm.behaviour_mut().blend.finish_session_transition();
-            }
-        }
-    }
-}
-
-impl<Rng, ObservationWindowProvider> BlendSwarm<Rng, ObservationWindowProvider>
-where
-    Rng: RngCore,
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + 'static,
 {
@@ -604,60 +643,6 @@ where
             ),
             swarm_messages_receiver,
             minimum_network_size,
-        }
-    }
-}
-
-impl<Rng, ObservationWindowProvider> BlendSwarm<Rng, ObservationWindowProvider>
-where
-    Rng: RngCore,
-    ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
-        + 'static,
-{
-    pub(crate) async fn run(mut self) {
-        loop {
-            self.poll_next_internal().await;
-        }
-    }
-
-    async fn poll_next_internal(&mut self) {
-        self.poll_next_and_match(|_| false).await;
-    }
-
-    async fn poll_next_and_match<Predicate>(
-        &mut self,
-        swarm_event_match_predicate: Predicate,
-    ) -> bool
-    where
-        Predicate: Fn(&SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) -> bool,
-    {
-        tokio::select! {
-            Some(msg) = self.swarm_messages_receiver.recv() => {
-                self.handle_swarm_message(msg);
-                false
-            }
-            Some(event) = self.swarm.next() => {
-                let predicate_matched = swarm_event_match_predicate(&event);
-                self.handle_event(event);
-                predicate_matched
-            }
-        }
-    }
-
-    #[cfg(test)]
-    pub async fn poll_next(&mut self) {
-        self.poll_next_internal().await;
-    }
-
-    #[cfg(test)]
-    pub async fn poll_next_until<Predicate>(&mut self, swarm_event_match_predicate: Predicate)
-    where
-        Predicate: Fn(&SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) -> bool + Copy,
-    {
-        loop {
-            if self.poll_next_and_match(swarm_event_match_predicate).await {
-                break;
-            }
         }
     }
 }
