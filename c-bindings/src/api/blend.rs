@@ -13,7 +13,7 @@ use crate::{
     result::ValueResult, return_error_if_null_pointer, unwrap_or_return_err,
 };
 
-const KEY_SIZE: usize = 32;
+pub const KEY_SIZE: usize = 32;
 
 #[repr(C)]
 #[derive(Default)]
