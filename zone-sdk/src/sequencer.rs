@@ -524,7 +524,7 @@ impl ZoneSequencer {
                 handle_inflight(inflight_result, &mut self.resubmit_active);
                 None
             }
-            _ = self.resubmit_interval.tick(), if !self.resubmit_active && self.state.is_some() && self.current_tip.is_some() => {
+            _ = self.resubmit_interval.tick(), if *self.ready_tx.borrow() && !self.resubmit_active => {
                 enqueue_resubmit(
                     self.state.as_ref().unwrap(),
                     self.current_tip.unwrap(),
@@ -1118,9 +1118,17 @@ fn enqueue_resubmit(
     }));
 }
 
-/// Extract channel inscription info from a block's transactions.
+/// Extract channel inscription info from a block's transactions, in
+/// parent→child chain order. Transactions in a block are not guaranteed
+/// to be in chain order, so we topologically sort by inscription lineage.
+/// Callers (e.g. `channel_tip_at`) rely on `last()` being the chain tail.
+///
+/// Panics if the inscriptions for the channel in a single block do not
+/// form a single linear chain — that would be a protocol-level invariant
+/// violation.
 fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<InscriptionInfo> {
-    txs.iter()
+    let items: Vec<InscriptionInfo> = txs
+        .iter()
         .flat_map(|tx| {
             tx.mantle_tx.ops.iter().filter_map(|op| {
                 if let Op::ChannelInscribe(inscribe) = op
@@ -1137,7 +1145,31 @@ fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<In
                 }
             })
         })
-        .collect()
+        .collect();
+
+    if items.len() <= 1 {
+        return items;
+    }
+
+    let this_msgs: std::collections::HashSet<MsgId> = items.iter().map(|i| i.this_msg).collect();
+    let by_parent: std::collections::HashMap<MsgId, &InscriptionInfo> =
+        items.iter().map(|i| (i.parent_msg, i)).collect();
+
+    // The chain root is the inscription whose parent is not produced
+    // within this same block.
+    let root = items
+        .iter()
+        .find(|i| !this_msgs.contains(&i.parent_msg))
+        .expect("inscriptions for a channel in a block must form a chain (no root found)");
+
+    let mut sorted = Vec::with_capacity(items.len());
+    sorted.push(root.clone());
+    let mut current = root.this_msg;
+    while let Some(next) = by_parent.get(&current).copied() {
+        sorted.push(next.clone());
+        current = next.this_msg;
+    }
+    sorted
 }
 
 fn matches_channel(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
