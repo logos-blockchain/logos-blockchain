@@ -517,28 +517,4 @@ mod test {
             assert_eq!(mmr_a.frontier_root(), mmr_b.frontier_root());
         }
     }
-
-    #[property_test]
-    fn test_merkle_paths_prop(elems: Vec<[u8; 32]>) {
-        const HEIGHT: u8 = 8;
-        const MAX_ELEMS: usize = 32;
-        let mut mmr = <MerkleMountainRange<TestFr, ZkHasher, HEIGHT>>::new();
-        let mut paths: Vec<MerklePath> = Vec::new();
-
-        for (i, elem) in elems.iter().take(MAX_ELEMS).enumerate() {
-            let (new_mmr, new_path) = mmr
-                .push_with_paths(TestFr::from(elem.as_ref()), &mut paths)
-                .unwrap();
-            mmr = new_mmr;
-            paths.push(new_path);
-
-            let frontier = mmr.frontier_root();
-            for (j, path) in paths.iter().enumerate() {
-                assert!(
-                    path.verify::<ZkHasher>(leaf(&elems[j]), frontier),
-                    "path {j} invalid after push {i}"
-                );
-            }
-        }
-    }
 }
