@@ -91,6 +91,11 @@ enum ActorRequest {
         reply: tokio::sync::oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
     },
     /// Build an unsigned tx for the given ops and an inscription
+    ///
+    /// Calling this multiple times without submitting the prepared txs via
+    /// `SubmitSignedTx` can cause parent msg ID conflicts, so ensure
+    /// prepared txs are submitted promptly. If additional prepares are
+    /// unavoidable, handle potential conflicts carefully.
     PrepareTx {
         ops: Vec<Op>,
         msg: Vec<u8>,
