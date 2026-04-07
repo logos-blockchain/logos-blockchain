@@ -250,20 +250,16 @@ pub unsafe extern "C" fn get_known_addresses(
 /// ```
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_known_addresses(addresses: KnownAddresses) -> OperationStatus {
-    if !addresses.addresses.is_null() {
-        let address_pointers = unsafe {
-            Box::from_raw(ptr::slice_from_raw_parts_mut(
-                addresses.addresses,
-                addresses.len,
-            ))
-        };
-        for ptr in address_pointers {
-            if !ptr.is_null() {
-                unsafe {
-                    drop(Box::from_raw(ptr.cast::<[u8; 32]>()));
-                }
-            }
-        }
+    return_error_if_null_pointer!("free_known_addresses", addresses.addresses);
+    let address_pointers = unsafe {
+        Box::from_raw(ptr::slice_from_raw_parts_mut(
+            addresses.addresses,
+            addresses.len,
+        ))
+    };
+    for address_pointer in address_pointers {
+        return_error_if_null_pointer!("free_known_addresses", address_pointer);
+        unsafe { drop(Box::from_raw(address_pointer.cast::<[u8; 32]>())) };
     }
     OperationStatus::Ok
 }
@@ -333,8 +329,8 @@ pub unsafe extern "C" fn get_balance(
     optional_tip: *const HeaderId,
 ) -> BalanceResult {
     return_error_if_null_pointer!("get_balance", node);
-    let node = unsafe { &*node };
     return_error_if_null_pointer!("get_balance", wallet_address);
+    let node = unsafe { &*node };
     let tip = if optional_tip.is_null() {
         unwrap_or_return_error!(get_cryptarchia_info_sync(node)).tip
     } else {
@@ -344,8 +340,8 @@ pub unsafe extern "C" fn get_balance(
     let wallet_address = unwrap_or_return_error!(
         fr_from_bytes(wallet_address_bytes)
             .map(ZkPublicKey::new)
-            .map_err(|e| {
-                log::error!("{e:?}");
+            .map_err(|error| {
+                log::error!("{error:?}");
                 OperationStatus::DynError
             })
     );

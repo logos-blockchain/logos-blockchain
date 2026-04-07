@@ -8,7 +8,7 @@ use lb_node::{
     generic_services::CryptarchiaService,
 };
 
-use crate::{LogosBlockchainNode, return_error_if_null_pointer};
+use crate::{LogosBlockchainNode, return_error_if_null_pointer, OperationStatus};
 
 #[repr(C)]
 pub struct Block(CString); // JSON representation of a block
@@ -107,9 +107,10 @@ fn per_block_wrapper<T: 'static>(callback: CCallback<T>) -> BoxedCallback<T> {
 pub unsafe extern "C" fn subscribe_to_new_blocks(
     node: *const LogosBlockchainNode,
     callback_per_block: CCallback<*const c_char>,
-) {
+) -> OperationStatus {
     return_error_if_null_pointer!("subscribe_to_new_blocks", node);
     let node = unsafe { &*node };
     let callback_per_block = per_block_wrapper(callback_per_block);
     subscribe_to_new_blocks_sync(node, callback_per_block);
+    OperationStatus::Ok
 }
