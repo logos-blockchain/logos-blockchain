@@ -387,8 +387,7 @@ async fn test_sequencer_stale_checkpoint_resume() {
     let (sequencer, mut handle) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key.clone(),
-        node_url.clone(),
-        None,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
         sequencer_config.clone(),
         None,
     );
@@ -441,8 +440,7 @@ async fn test_sequencer_stale_checkpoint_resume() {
     let (sequencer, mut handle) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key.clone(),
-        node_url.clone(),
-        None,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
         sequencer_config.clone(),
         None, // Fresh — no checkpoint
     );
@@ -491,8 +489,7 @@ async fn test_sequencer_stale_checkpoint_resume() {
     let (sequencer, mut handle) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key,
-        node_url,
-        None,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
         sequencer_config,
         Some(stale_checkpoint), // Stale checkpoint from phase 1
     );
