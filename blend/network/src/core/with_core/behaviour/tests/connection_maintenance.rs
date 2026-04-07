@@ -59,11 +59,13 @@ async fn detect_spammy_peer() {
                     SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, NegotiatedPeerState::Spammy(SpamReason::TooManyMessages))) => {
                         assert_eq!(peer_id, *dialing_swarm.local_peer_id());
                         assert!(listening_swarm.behaviour().negotiated_peers.is_empty());
+                        assert!(listening_swarm.behaviour().message_cache.messages_from_peer(dialing_swarm.local_peer_id()).count() == 2);
                         events_to_match -= 1;
                     }
                     SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } => {
                         assert_eq!(peer_id, *dialing_swarm.local_peer_id());
                         assert!(endpoint.is_listener());
+                        assert!(listening_swarm.behaviour().message_cache.messages_from_peer(dialing_swarm.local_peer_id()).count() == 0);
                         events_to_match -= 1;
                     }
                     _ => {}

@@ -111,7 +111,7 @@ impl WalletState {
                 .clone()
                 .extend_ledger_inputs(utxos[..=i].iter().copied());
 
-            let funding_delta = funded_tx_builder.funding_delta::<G>();
+            let funding_delta = funded_tx_builder.funding_delta::<G>()?;
 
             match funding_delta.cmp(&0) {
                 Ordering::Less => {
@@ -125,7 +125,7 @@ impl WalletState {
                     // We have enough balance, but we need to introduce a change note.
                     // The change note will slightly increase the storage cost of the tx so there is
                     // a chance that we will not be able to fund the tx with the change note.
-                    if let Some(tx_with_change) = funded_tx_builder.return_change::<G>(change_pk) {
+                    if let Some(tx_with_change) = funded_tx_builder.return_change::<G>(change_pk)? {
                         // We were able to fund the tx with change note added.
                         return Ok(tx_with_change);
                     }
@@ -523,17 +523,20 @@ mod tests {
 
         let context: MantleTxGasContext = ledger_state.mantle_ledger().channels().into();
         let tx_builder = MantleTxBuilder::new(context)
-            .set_execution_gas_price(1)
-            .set_storage_gas_price(1);
+            .set_execution_gas_price(1.into())
+            .set_storage_gas_price(1.into());
 
         // Fund the transaction
         let funded_tx_builder = wallet_state
             .fund_tx::<Gas>(&tx_builder, alice, [alice])
             .unwrap();
 
-        assert_eq!(2925, funded_tx_builder.gas_cost::<Gas>());
+        assert_eq!(
+            2925,
+            funded_tx_builder.gas_cost::<Gas>().unwrap().into_inner()
+        );
         assert_eq!(2925, funded_tx_builder.net_balance());
-        assert_eq!(0, funded_tx_builder.funding_delta::<Gas>());
+        assert_eq!(0, funded_tx_builder.funding_delta::<Gas>().unwrap());
 
         let funded_tx = funded_tx_builder.build();
 
@@ -570,8 +573,8 @@ mod tests {
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
         let context: MantleTxGasContext = ledger_state.mantle_ledger().channels().into();
         let mut tx_builder = MantleTxBuilder::new(context)
-            .set_execution_gas_price(1)
-            .set_storage_gas_price(1);
+            .set_execution_gas_price(1.into())
+            .set_storage_gas_price(1.into());
 
         // Add a costly inscription
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
@@ -603,8 +606,8 @@ mod tests {
 
         let context: MantleTxGasContext = ledger_state.mantle_ledger().channels().into();
         let tx_builder = MantleTxBuilder::new(context)
-            .set_execution_gas_price(1)
-            .set_storage_gas_price(1);
+            .set_execution_gas_price(1.into())
+            .set_storage_gas_price(1.into());
 
         // Fund the transaction
         let fund_attempt = wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice]);
@@ -628,8 +631,8 @@ mod tests {
 
         let context: MantleTxGasContext = ledger_state.mantle_ledger().channels().into();
         let tx_builder = MantleTxBuilder::new(context)
-            .set_execution_gas_price(1)
-            .set_storage_gas_price(1);
+            .set_execution_gas_price(1.into())
+            .set_storage_gas_price(1.into());
 
         // Attempt to fund the transaction with Alice's notes.
         let fund_attempt = wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice]);
@@ -651,8 +654,8 @@ mod tests {
 
         let context = MantleTxGasContext::new(HashMap::new());
         let tx_builder = MantleTxBuilder::new(context)
-            .set_execution_gas_price(1)
-            .set_storage_gas_price(1);
+            .set_execution_gas_price(1.into())
+            .set_storage_gas_price(1.into());
 
         // Determine gas cost without change note
         assert_eq!(
@@ -661,6 +664,8 @@ mod tests {
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
                 .gas_cost::<Gas>()
+                .unwrap()
+                .into_inner()
         );
 
         // We can fund the tx if the note value is exactly the gas cost without change
@@ -695,6 +700,8 @@ mod tests {
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
                 .with_dummy_change_note()
                 .gas_cost::<Gas>()
+                .unwrap()
+                .into_inner()
         );
 
         for value in 2886..=2925 {

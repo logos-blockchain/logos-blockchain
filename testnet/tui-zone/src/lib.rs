@@ -3,7 +3,11 @@ use std::{fs, io::Write as _, path::Path};
 use clap::Parser;
 use lb_core::mantle::ops::channel::ChannelId;
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
-use lb_zone_sdk::sequencer::{SequencerCheckpoint, ZoneSequencer};
+use lb_zone_sdk::{
+    CommonHttpClient,
+    adapter::NodeHttpClient,
+    sequencer::{SequencerCheckpoint, ZoneSequencer},
+};
 use reqwest::Url;
 
 #[derive(Parser, Debug)]
@@ -79,8 +83,8 @@ pub async fn run(args: InscribeArgs) {
         println!("  Restored checkpoint from {}", args.checkpoint_path);
     }
 
-    let (sequencer, handle) =
-        ZoneSequencer::init(channel_id, signing_key, node_url, None, checkpoint);
+    let node = NodeHttpClient::new(CommonHttpClient::new(None), node_url);
+    let (sequencer, handle) = ZoneSequencer::init(channel_id, signing_key, node, checkpoint);
     sequencer.spawn();
 
     println!();

@@ -74,8 +74,8 @@ pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
         input,
         MantleTx {
             ops,
-            execution_gas_price,
-            storage_gas_price,
+            execution_gas_price: execution_gas_price.into(),
+            storage_gas_price: storage_gas_price.into(),
         },
     ))
 }
@@ -868,8 +868,8 @@ fn encode_ops_proofs(proofs: &[OpProof], ops: &[Op]) -> Vec<u8> {
 pub fn encode_mantle_tx(tx: &MantleTx) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_ops(&tx.ops));
-    bytes.extend(encode_uint64(tx.execution_gas_price));
-    bytes.extend(encode_uint64(tx.storage_gas_price));
+    bytes.extend(encode_uint64(tx.execution_gas_price.into_inner()));
+    bytes.extend(encode_uint64(tx.storage_gas_price.into_inner()));
     bytes
 }
 
@@ -987,8 +987,8 @@ mod tests {
     fn test_decode_signed_mantle_tx_empty() {
         let mantle_tx = MantleTx {
             ops: vec![],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         let signed_tx = SignedMantleTx {
@@ -1029,8 +1029,8 @@ mod tests {
                 parent: MsgId::from([0xBB; 32]),
                 signer: signing_key.public_key(),
             })],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         let txhash = mantle_tx.hash();
@@ -1084,8 +1084,8 @@ mod tests {
                     keys: vec![signing_key.public_key()],
                 }),
             ],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         let txhash = mantle_tx.hash();
@@ -1130,8 +1130,8 @@ mod tests {
 
                 let mantle_tx = MantleTx {
                     ops: vec![Op::ChannelInscribe(inscribe_op)],
-                    execution_gas_price: 100,
-                    storage_gas_price: 50,
+                    execution_gas_price: 100.into(),
+                    storage_gas_price: 50.into(),
                 };
 
                 let txhash = mantle_tx.hash();
@@ -1177,8 +1177,8 @@ mod tests {
         // Create an empty MantleTx
         let original_tx = MantleTx {
             ops: vec![],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         // Encode
@@ -1204,8 +1204,8 @@ mod tests {
 
         let original_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op)],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         // Encode
@@ -1224,8 +1224,8 @@ mod tests {
         // Create a simple SignedMantleTx
         let mantle_tx = MantleTx {
             ops: vec![],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
         let original_tx = SignedMantleTx::new(mantle_tx, vec![]).unwrap();
 
@@ -1245,8 +1245,8 @@ mod tests {
         // Create an empty MantleTx
         let mantle_tx = MantleTx {
             ops: vec![],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         // Predict size
@@ -1273,8 +1273,8 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::ChannelInscribe(inscribe_op)],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         // Predict size
@@ -1308,8 +1308,8 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::ChannelSetKeys(set_keys_op)],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         // Predict size
@@ -1354,8 +1354,8 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::SDPDeclare(sdp_declare_op)],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         // Predict size
@@ -1390,8 +1390,8 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::SDPWithdraw(sdp_withdraw_op)],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         let txhash = mantle_tx.hash();
@@ -1436,8 +1436,8 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::SDPActive(sdp_active_op)],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         let gas_context = MantleTxGasContext::new(HashMap::new());
@@ -1495,8 +1495,8 @@ mod tests {
                 Op::ChannelSetKeys(set_keys_op),
                 Op::SDPActive(sdp_active_op),
             ],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         // Predict size
@@ -1539,8 +1539,8 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op)],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         // Predict size
@@ -1601,8 +1601,8 @@ mod tests {
                 Op::SDPDeclare(sdp_declare_op),
                 Op::Transfer(transfer_op),
             ],
-            execution_gas_price: 150,
-            storage_gas_price: 75,
+            execution_gas_price: 150.into(),
+            storage_gas_price: 75.into(),
         };
 
         // Predict size
@@ -1642,8 +1642,8 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::LeaderClaim(leader_claim_op.clone())],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         let empty_gas_context = MantleTxGasContext::new(HashMap::new());
@@ -1703,8 +1703,8 @@ mod tests {
                 channel_id: ChannelId::from([0xAB; 32]),
                 amount: 17,
             })],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
         let tx_hash = mantle_tx.hash();
         let proof = ChannelWithdrawProof::new(vec![WithdrawSignature::new(

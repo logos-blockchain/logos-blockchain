@@ -9,7 +9,7 @@ use crate::{
     crypto::ZkHasher,
     mantle::{
         MantleTx, Transaction, TransactionHasher, TxHash,
-        gas::{Gas, GasConstants, GasCost},
+        gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow},
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
@@ -42,7 +42,7 @@ impl GenesisTx {
         let mantle_tx = &signed_mantle_tx.mantle_tx;
 
         // Genesis transactions must have execution gas prices of 0 and storage gas of 0
-        if mantle_tx.execution_gas_price != 0 || mantle_tx.storage_gas_price != 0 {
+        if mantle_tx.execution_gas_price != 0.into() || mantle_tx.storage_gas_price != 0.into() {
             return Err(Error::InvalidGenesisGasPrice);
         }
 
@@ -117,27 +117,33 @@ impl Transaction for GenesisTx {
     }
 }
 
-impl GasCost for GenesisTx {
+impl GasCalculator for GenesisTx {
     type Context = ();
 
-    fn total_gas_cost<Constants: GasConstants>(&self, _context: &Self::Context) -> Gas {
+    fn total_gas_cost<Constants: GasConstants>(
+        &self,
+        _context: &Self::Context,
+    ) -> Result<GasCost, GasOverflow> {
         // Genesis transactions have zero gas cost as per spec
-        0
+        Ok(0.into())
     }
 
-    fn storage_gas_cost(&self, _context: &Self::Context) -> Gas {
+    fn storage_gas_cost(&self, _context: &Self::Context) -> Result<GasCost, GasOverflow> {
         // Genesis transactions have zero gas cost as per spec
-        0
+        Ok(0.into())
     }
 
-    fn execution_gas_consumption<Constants: GasConstants>(&self, _context: &Self::Context) -> Gas {
+    fn execution_gas_consumption<Constants: GasConstants>(
+        &self,
+        _context: &Self::Context,
+    ) -> Result<Gas, GasOverflow> {
         // Genesis transactions have zero gas cost as per spec
-        0
+        Ok(0.into())
     }
 
-    fn storage_gas_consumption(&self, _context: &Self::Context) -> Gas {
+    fn storage_gas_consumption(&self, _context: &Self::Context) -> Result<Gas, GasOverflow> {
         // Genesis transactions have zero gas cost as per spec
-        0
+        Ok(0.into())
     }
 }
 
@@ -241,8 +247,8 @@ mod tests {
         new_ops.append(&mut ops);
         let mantle_tx = MantleTx {
             ops: new_ops,
-            execution_gas_price: 0,
-            storage_gas_price: 0,
+            execution_gas_price: 0.into(),
+            storage_gas_price: 0.into(),
         };
         let mut new_op_proofs = vec![OpProof::ZkSig(
             ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap(),
@@ -417,19 +423,19 @@ mod tests {
         assert!(GenesisTx::from_tx(signed_mantle_tx.clone()).is_ok());
 
         // Test with non-zero execution gas price
-        signed_mantle_tx.mantle_tx.execution_gas_price = 1;
+        signed_mantle_tx.mantle_tx.execution_gas_price = 1.into();
         let result = GenesisTx::from_tx(signed_mantle_tx.clone());
         assert_eq!(result, Err(Error::InvalidGenesisGasPrice));
 
         // test with non-zero storage gas price
-        signed_mantle_tx.mantle_tx.storage_gas_price = 1;
-        signed_mantle_tx.mantle_tx.execution_gas_price = 0;
+        signed_mantle_tx.mantle_tx.storage_gas_price = 1.into();
+        signed_mantle_tx.mantle_tx.execution_gas_price = 0.into();
         let result = GenesisTx::from_tx(signed_mantle_tx.clone());
         assert_eq!(result, Err(Error::InvalidGenesisGasPrice));
 
         // test with both gas prices non-zero
-        signed_mantle_tx.mantle_tx.storage_gas_price = 1;
-        signed_mantle_tx.mantle_tx.execution_gas_price = 1;
+        signed_mantle_tx.mantle_tx.storage_gas_price = 1.into();
+        signed_mantle_tx.mantle_tx.execution_gas_price = 1.into();
         let result = GenesisTx::from_tx(signed_mantle_tx);
         assert_eq!(result, Err(Error::InvalidGenesisGasPrice));
     }

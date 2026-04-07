@@ -3,7 +3,9 @@ use std::fmt::{Debug, Display};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Value, gas::MainnetGasConstants, ops::leader_claim::LeaderClaimOp,
+        Op, SignedMantleTx,
+        gas::{GasCost, GasOverflow, MainnetGasConstants},
+        ops::leader_claim::LeaderClaimOp,
         tx_builder::MantleTxBuilder,
     },
 };
@@ -15,7 +17,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeaderWalletConfig {
     // Hard cap on the transaction fee for LEADER_CLAIM
-    pub max_tx_fee: Value,
+    pub max_tx_fee: GasCost,
 
     // The key to use for paying transaction fees for LEADER_CLAIM.
     // Change notes will be returned to this same funding pk.
@@ -48,7 +50,7 @@ where
         .map_err(|e| LeaderWalletError::WalletApi(Box::new(e)))?
         .response;
 
-    let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>();
+    let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>()?;
     if tx_fee > config.max_tx_fee {
         return Err(LeaderWalletError::TxFeeExceedsMaxFee {
             tx_fee,
@@ -68,5 +70,7 @@ pub enum LeaderWalletError {
     #[error(transparent)]
     WalletApi(#[from] Box<WalletApiError>),
     #[error("Transaction fee exceeded the configured max fee. tx_fee={tx_fee} > max_fee={max_fee}")]
-    TxFeeExceedsMaxFee { max_fee: Value, tx_fee: Value },
+    TxFeeExceedsMaxFee { max_fee: GasCost, tx_fee: GasCost },
+    #[error(transparent)]
+    GasOverflow(#[from] GasOverflow),
 }
