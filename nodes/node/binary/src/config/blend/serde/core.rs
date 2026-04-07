@@ -30,7 +30,7 @@ impl Default for BackendConfig {
     fn default() -> Self {
         Self {
             listening_address: "/ip4/0.0.0.0/udp/10000/quic-v1".parse().unwrap(),
-            core_peering_degree: 1..=3,
+            core_peering_degree: 2..=3,
             edge_node_connection_timeout: Duration::from_secs(1),
             max_edge_node_incoming_connections: 300,
             max_dial_attempts_per_peer: NonZeroU64::new(3).unwrap(),
