@@ -1049,8 +1049,8 @@ fn prepare_tx(
     // TODO: set realistic gas prices and fund tx
     let tx = MantleTx {
         ops,
-        storage_gas_price: 0,
-        execution_gas_price: 0,
+        storage_gas_price: 0.into(),
+        execution_gas_price: 0.into(),
     };
 
     let inscription_sig = signing_key.sign_payload(tx.hash().as_signing_bytes().as_ref());

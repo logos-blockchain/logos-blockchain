@@ -74,15 +74,25 @@ fn normalize_user_config_path(step: &str, raw_path: &str) -> Result<String, Step
         });
     }
 
-    let segments: Vec<&str> = path.split('.').map(str::trim).collect();
-    if segments.iter().any(|segment| segment.is_empty()) {
-        return Err(StepError::InvalidArgument {
-            message: format!("Step `{step}` error: user config path '{path}' has an empty segment"),
-        });
+    let mut normalized = String::with_capacity(path.len());
+    for segment in path.split('.').map(str::trim) {
+        if segment.is_empty() {
+            return Err(StepError::InvalidArgument {
+                message: format!(
+                    "Step `{step}` error: user config path '{path}' has an empty segment"
+                ),
+            });
+        }
+
+        if !normalized.is_empty() {
+            normalized.push('.');
+        }
+        normalized.push_str(segment);
     }
 
-    Ok(segments.join("."))
+    Ok(normalized)
 }
+
 
 fn parse_user_config_step_value(step: &str, raw_value: &str) -> Result<YamlValue, StepError> {
     let value = raw_value.trim();
