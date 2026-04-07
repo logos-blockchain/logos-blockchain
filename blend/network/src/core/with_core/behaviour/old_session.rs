@@ -52,6 +52,11 @@ impl OldSession {
         }
     }
 
+    /// Publish an encapsulated message with a validated public header to all
+    /// negotiated peers.
+    ///
+    /// If the specified session does not match the current session, it returns
+    /// an error without sending the message.
     pub(super) fn publish_message_with_validated_header(
         &mut self,
         message: EncapsulatedMessageWithVerifiedPublicHeader,
@@ -69,6 +74,11 @@ impl OldSession {
         )
     }
 
+    /// Forward an encapsulated message with a validated signature to all
+    /// negotiated peers, except the specified one.
+    ///
+    /// If the specified session does not match the current session, it returns
+    /// an error without sending the message.
     pub(super) fn forward_message_with_validated_signature(
         &mut self,
         message: &EncapsulatedMessageWithVerifiedSignature,

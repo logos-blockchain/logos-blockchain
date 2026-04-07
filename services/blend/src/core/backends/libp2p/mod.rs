@@ -102,7 +102,7 @@ where
             })
             .await
         {
-            tracing::error!(target: LOG_TARGET, "Failed to send publish message to BlendSwarm: {e}");
+            tracing::error!(target: LOG_TARGET, "Failed to send message to BlendSwarm: {e}");
         }
     }
 

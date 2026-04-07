@@ -131,6 +131,7 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 where
     ProofsVerifier: ProofsVerifierTrait,
 {
+    /// Validate the public header of an [`EncapsulatedMessage`].
     pub fn validate_message_header(
         &self,
         message: EncapsulatedMessage,
@@ -138,6 +139,7 @@ where
         message.verify_public_header(self.verifier())
     }
 
+    /// Validate the `PoQ` of an [`EncapsulatedMessageWithVerifiedSignature`].
     pub fn validate_message_poq(
         &self,
         message: EncapsulatedMessageWithVerifiedSignature,

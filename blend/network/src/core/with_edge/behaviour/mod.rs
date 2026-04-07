@@ -31,7 +31,7 @@ const LOG_TARGET: &str = "blend::network::core::edge::behaviour";
 
 #[derive(Debug)]
 pub enum Event {
-    /// A message received from one of the edge peers, after its public header
+    /// A message received from one of the edge peers, after its signature
     /// has been verified.
     Message(EncapsulatedMessageWithVerifiedSignature),
 }
@@ -146,7 +146,7 @@ impl Behaviour {
 
         let Ok(validated_message) = deserialized_encapsulated_message.verify_header_signature()
         else {
-            tracing::trace!(target: LOG_TARGET, "Failed to validate public header of received message. Ignoring...");
+            tracing::trace!(target: LOG_TARGET, "Failed to validate signature of received message. Ignoring...");
             return;
         };
 

@@ -106,6 +106,10 @@ impl MessageCache {
     }
 
     /// Check whether a message has already been forwarded by us.
+    ///
+    /// The function takes an `EncapsulatedMessage` as input, since we want to
+    /// check for duplicates before doing any expensive work validating the
+    /// message, since the message ID won't change before and after validation.
     pub fn is_message_forwarded(&self, message: &EncapsulatedMessage) -> bool {
         matches!(
             self.messages.get(&message.id()),

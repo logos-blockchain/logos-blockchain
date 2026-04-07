@@ -16,8 +16,8 @@ use crate::core::with_core::{
     error::{ReceiveError, SendError},
 };
 
-/// Validates and forwards a message to the given peer connections, if it hasn't
-/// been forwarded already.
+/// Forwards a message with a valid signature to the given peer connections, if
+/// it hasn't been forwarded already.
 ///
 /// The message cache is also updated accordingly to mark the sent message as
 /// processed if it was sent to at least one peer, or to ignore it if it has
@@ -45,6 +45,7 @@ where
 
     let mut at_least_one_receiver = false;
     peer_connections.for_each(|(peer_id, connection_id)| {
+        tracing::trace!("Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message.");
         events_queue.push_back(ToSwarm::NotifyHandler {
             peer_id: *peer_id,
             handler: NotifyHandler::One(*connection_id),
@@ -66,8 +67,8 @@ where
     }
 }
 
-/// Validates a received message, and notifies the swarm about it if it hasn't
-/// been processed already.
+/// Validates the signature of a received message, and notifies the swarm about
+/// it if it hasn't been processed already.
 ///
 /// The message cache is updated accordingly to mark the message as processed if
 /// it is valid and hasn't been processed before, or to ignore it if it has

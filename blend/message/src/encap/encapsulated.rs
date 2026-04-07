@@ -191,10 +191,11 @@ impl EncapsulatedPart {
             } => {
                 let decapsulated_payload =
                     self.payload.decapsulate(&mut key.cipher(domains::PAYLOAD));
-                verify_reconstructed_header_signature(
+                verify_intermediate_reconstructed_public_header(
                     &public_header,
                     &encapsulated_private_header,
                     &decapsulated_payload,
+                    verifier,
                 )?;
                 Ok(PartDecapsulationOutput::Incompleted {
                     encapsulated_part: Self {
@@ -212,7 +213,7 @@ impl EncapsulatedPart {
             } => {
                 let decapsulated_payload =
                     self.payload.decapsulate(&mut key.cipher(domains::PAYLOAD));
-                verify_reconstructed_header_signature(
+                verify_last_reconstructed_public_header(
                     &public_header,
                     &encapsulated_private_header,
                     &decapsulated_payload,
@@ -231,7 +232,35 @@ impl EncapsulatedPart {
     }
 }
 
-fn verify_reconstructed_header_signature(
+/// Verify the public header reconstructed when decapsulating all but the very
+/// last private header.
+///
+/// Verification includes everything that is verified in
+/// [`verify_last_reconstructed_public_header`], plus the `PoQ` of the
+/// reconstructed header.
+fn verify_intermediate_reconstructed_public_header<Verifier>(
+    public_header: &PublicHeader,
+    private_header: &EncapsulatedPrivateHeader,
+    payload: &EncapsulatedPayload,
+    verifier: &Verifier,
+) -> Result<(), Error>
+where
+    Verifier: ProofsVerifier,
+{
+    verify_last_reconstructed_public_header(public_header, private_header, payload)?;
+    // Verify the proof of quota in the reconstructed public header
+    tracing::trace!("Verifying proof of quota of intermediate reconstructed public header.");
+    public_header.verify_proof_of_quota(verifier)?;
+    Ok(())
+}
+
+/// Verify the public header reconstructed when decapsulating the last private
+/// header _only_.
+///
+/// Verification includes the signature over the private header and the
+/// decapsulated payload, using the verification key included in the outer
+/// public header.
+fn verify_last_reconstructed_public_header(
     public_header: &PublicHeader,
     private_header: &EncapsulatedPrivateHeader,
     payload: &EncapsulatedPayload,

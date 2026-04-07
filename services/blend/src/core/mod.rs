@@ -485,7 +485,9 @@ where
         // Before terminating the service, complete the old session during a single
         // session transition period.
         retire(
-            blend_messages,
+            // We don't need session numbers anymore since we know we are dealing with a single,
+            // past session.
+            blend_messages.map(|(message, _)| message),
             remaining_clock_stream,
             remaining_session_stream,
             &running_blend_config,
@@ -979,7 +981,7 @@ async fn retire<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    mut blend_messages: impl Stream<Item = (EncapsulatedMessageWithVerifiedSignature, u64)>
+    mut blend_messages: impl Stream<Item = EncapsulatedMessageWithVerifiedSignature>
     + Send
     + Unpin
     + 'static,
@@ -1030,7 +1032,7 @@ async fn retire<
     loop {
         tokio::select! {
             Some(incoming_message) = blend_messages.next() => {
-                handle_incoming_blend_message_from_old_session(incoming_message.0, &mut message_scheduler, &crypto_processor, &mut blending_token_collector);
+                handle_incoming_blend_message_from_old_session(incoming_message, &mut message_scheduler, &crypto_processor, &mut blending_token_collector);
             }
             Some(processed_messages_to_release) = message_scheduler.next() => {
                 handle_release_round_for_old_session(processed_messages_to_release, &mut rng, &backend, &network_adapter, crypto_processor.session()).await;
@@ -1416,12 +1418,11 @@ where
     state_updater.commit_changes()
 }
 
-/// Processes an incoming Blend message (with verified public header) received
+/// Processes an incoming Blend message (with verified signature) received
 /// from a core or edge peer.
 ///
-/// Decapsulation is first attempted with the current session's cryptographic
-/// processor. If that fails and an old session processor is available (during
-/// a session transition), the old session processor is tried as a fallback.
+/// Decapsulation is attempted with the current or old session's cryptographic
+/// processor depending on the session the message is coming from.
 fn handle_incoming_blend_message<
     NodeId,
     Rng,
@@ -1495,7 +1496,7 @@ where
     }
 }
 
-/// Validates the PoQ of a received message and attempts recursive
+/// Validates the `PoQ` of a received message and attempts recursive
 /// decapsulation. Returns `None` if validation or decapsulation fails (already
 /// logged).
 fn try_validate_and_decapsulate<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>(

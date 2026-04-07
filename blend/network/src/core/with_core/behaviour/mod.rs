@@ -88,10 +88,7 @@ impl RemotePeerConnectionDetails {
 /// A [`NetworkBehaviour`] that processes incoming Blend messages, and
 /// propagates messages from the Blend service to the rest of the Blend network.
 ///
-/// The public header and uniqueness of incoming messages is validated according to the [Blend v1 specification](https://www.notion.so/nomos-tech/Blend-Protocol-Version-1-215261aa09df81ae8857d71066a80084) before the message is propagated to the swarm and to the Blend service.
-/// The same checks are applied to messages received by the Blend service before
-/// they are propagated to the rest of the network, making sure no peer marks
-/// this node as malicious due to an invalid Blend message.
+/// The public header signature and uniqueness of incoming messages is validated according to the [Blend v1 specification](https://www.notion.so/nomos-tech/Blend-Protocol-Version-1-215261aa09df81ae8857d71066a80084) before the message is propagated to the swarm and to the Blend service.
 pub struct Behaviour<ObservationWindowClockProvider> {
     /// Tracks connections between this node and other core nodes.
     ///
@@ -183,7 +180,7 @@ struct ConnectionUpgradeFailure {
 #[derive(Debug)]
 pub enum Event {
     /// A message received from one of the core peers, after its public header
-    /// has been verified.
+    /// signature has been verified.
     Message {
         message: Box<EncapsulatedMessageWithVerifiedSignature>,
         sender: PeerId,
@@ -752,11 +749,8 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
             })
     }
 
-    /// Publish an already-encapsulated message to all connected peers
-    /// in the current session.
-    ///
-    /// Before the message is propagated, its public header is validated to
-    /// make sure the receiving peer won't mark us as malicious.
+    /// Publish an already-encapsulated and validated message to all connected
+    /// peers in the specified session.
     pub fn publish_message_with_validated_header(
         &mut self,
         message: EncapsulatedMessageWithVerifiedPublicHeader,
@@ -771,6 +765,8 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
         self.forward_maybe_excluding(&message.into(), None)
     }
 
+    /// Publish an already-encapsulated message with a valid public header
+    /// signature to all connected peers in the current session.
     pub fn publish_message_with_validated_signature_to_current_session(
         &mut self,
         message: &EncapsulatedMessageWithVerifiedSignature,
@@ -778,18 +774,17 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
         self.forward_maybe_excluding(message, None)
     }
 
-    /// Forwards a message to all healthy connections except the [`except`]
-    /// connection.
+    /// Forwards a message with a valid public header signature to all
+    /// non-spammy peers in the specified session, except the
+    /// [`except`] peer.
     ///
-    /// Before the message is forwarded, its public header is validated to
-    /// make sure the receiving peer won't mark us as malicious.
-    ///
-    /// If the [`except`] connection is part of the old session, the message is
-    /// forwarded to the connections in the old session.
-    /// Otherwise, it is forwarded to the connections in the current session.
+    /// If the session is the previous session, the message is forwarded to the
+    /// peers in the old session. Otherwise, it is forwarded to the peers in
+    /// the current session.
     ///
     /// Returns [`Error::NoPeers`] if there are no connected peers that support
-    /// the blend protocol.
+    /// the blend protocol, and [`Error::InvalidSession`] if the provided
+    /// session does not match neither the current session nor the old session.
     pub fn forward_message_with_validated_signature(
         &mut self,
         message: &EncapsulatedMessageWithVerifiedSignature,

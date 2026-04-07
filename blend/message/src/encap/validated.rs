@@ -22,6 +22,7 @@ use crate::{
 
 #[derive(Derivative, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[derivative(Debug)]
+/// An encapsulated message whose public header signature has been verified.
 pub struct EncapsulatedMessageWithVerifiedSignature {
     public_header_with_verified_signature: PublicHeaderWithVerifiedSignature,
     #[derivative(Debug = "ignore")] // too long
