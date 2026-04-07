@@ -4273,7 +4273,6 @@ dependencies = [
  "logos-blockchain-blend-proofs",
  "logos-blockchain-blend-scheduling",
  "logos-blockchain-core",
- "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-libp2p",
  "test-log",

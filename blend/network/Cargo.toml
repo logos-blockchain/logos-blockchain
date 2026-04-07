@@ -30,7 +30,6 @@ tracing                       = { workspace = true }
 async-trait         = { version = "0.1" }
 lb-blend-message    = { features = ["unsafe-test-functions"], workspace = true }
 lb-blend-scheduling = { features = ["unsafe-test-functions"], workspace = true }
-lb-groth16          = { default-features = false, workspace = true }
 libp2p              = { default-features = false, features = ["plaintext", "tcp", "yamux"], workspace = true }
 libp2p-stream       = { workspace = true }
 libp2p-swarm-test   = { default-features = false, features = ["tokio"], version = "0.5.0" }
