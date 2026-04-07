@@ -1,9 +1,4 @@
-use lb_core::{
-    mantle::NoteId,
-    sdp,
-    sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
-};
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_core::sdp::{self, DeclarationMessage};
 use lb_node::{RuntimeServiceId, generic_services::SdpService};
 use lb_sdp_service::SdpServiceApi;
 
