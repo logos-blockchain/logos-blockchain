@@ -84,8 +84,8 @@ pub fn create_genesis_tx(utxos: &[Utxo], test_context: Option<&str>) -> GenesisT
     // Create the mantle transaction
     let mantle_tx = MantleTx {
         ops: vec![Op::Transfer(transfer_op), Op::ChannelInscribe(inscription)],
-        execution_gas_price: 0,
-        storage_gas_price: 0,
+        execution_gas_price: 0.into(),
+        storage_gas_price: 0.into(),
     };
     let signed_mantle_tx = SignedMantleTx {
         mantle_tx,
@@ -249,8 +249,8 @@ pub fn create_genesis_tx_with_declarations(
 
     let mantle_tx = MantleTx {
         ops,
-        execution_gas_price: 0,
-        storage_gas_price: 0,
+        execution_gas_price: 0.into(),
+        storage_gas_price: 0.into(),
     };
 
     let mantle_tx_hash = mantle_tx.hash();

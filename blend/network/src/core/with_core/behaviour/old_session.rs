@@ -1,38 +1,37 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
+    collections::{HashMap, VecDeque, hash_map::Entry},
     convert::Infallible,
     task::{Context, Poll, Waker},
-    time::Instant,
 };
 
 use either::Either;
-use lb_blend_message::{
-    MessageIdentifier,
-    encap::{
-        self, encapsulated::EncapsulatedMessage,
-        validated::EncapsulatedMessageWithVerifiedPublicHeader,
-    },
-};
+use lb_blend_message::encap::{self, encapsulated::EncapsulatedMessage};
 use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
-use lb_blend_scheduling::{deserialize_encapsulated_message, serialize_encapsulated_message};
 use libp2p::{
     PeerId,
     swarm::{ConnectionId, NotifyHandler, ToSwarm},
 };
 
 use crate::core::with_core::{
-    behaviour::{Event, SENSITIVITY_INTERVAL_FOR_DUPLICATES, handler::FromBehaviour},
-    error::Error,
+    behaviour::{
+        Event,
+        handler::FromBehaviour,
+        message_cache::MessageCache,
+        utils::{
+            handle_received_serialized_encapsulated_message_and_update_cache,
+            validate_forward_message_and_update_cache,
+        },
+    },
+    error::{ReceiveError, SendError},
 };
 
 /// Defines behaviours for processing messages from the old session
 /// until the session transition period has passed.
 pub struct OldSession<ProofsVerifier> {
     negotiated_peers: HashMap<PeerId, ConnectionId>,
-    exchanged_message_identifiers: HashMap<PeerId, HashMap<MessageIdentifier, Instant>>,
     events: VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     waker: Option<Waker>,
-    message_cache: HashSet<MessageIdentifier>,
+    message_cache: MessageCache,
     poq_verifier: ProofsVerifier,
 }
 
@@ -46,47 +45,24 @@ where
         &mut self,
         message: EncapsulatedMessage,
         except: PeerId,
-    ) -> Result<(), Error> {
-        let validated_message = self.verify_encapsulated_message_public_header(message)?;
+    ) -> Result<(), SendError> {
+        tracing::trace!(
+            "Forwarding message with id {:?} to old session peers. Negotiated peers: {:?}. Excluded peer: {except:?}",
+            hex::encode(message.id()),
+            self.negotiated_peers
+        );
 
-        let message_id = validated_message.id();
-        let serialized_message = serialize_encapsulated_message(&validated_message);
-        let mut at_least_one_receiver = false;
-        self.negotiated_peers
-            .iter()
-            .filter(|(peer_id, _)| **peer_id != except)
-            .for_each(|(&peer_id, &connection_id)| {
-                if check_and_update_message_cache(
-                    &mut self.exchanged_message_identifiers,
-                    &message_id,
-                    peer_id,
-                )
-                .is_ok()
-                {
-                    self.events.push_back(ToSwarm::NotifyHandler {
-                        peer_id,
-                        handler: NotifyHandler::One(connection_id),
-                        event: Either::Left(FromBehaviour::Message(serialized_message.clone())),
-                    });
-                    at_least_one_receiver = true;
-                }
-            });
-
-        if at_least_one_receiver {
-            self.try_wake();
-            Ok(())
-        } else {
-            Err(Error::NoPeers)
-        }
-    }
-
-    fn verify_encapsulated_message_public_header(
-        &self,
-        message: EncapsulatedMessage,
-    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
-        message
-            .verify_public_header(&self.poq_verifier)
-            .map_err(|_| Error::InvalidMessage)
+        validate_forward_message_and_update_cache(
+            message,
+            &self.poq_verifier,
+            self.negotiated_peers
+                .iter()
+                // Exclude the peer the message was received from.
+                .filter(|(peer_id, _)| except != **peer_id),
+            &mut self.events,
+            &mut self.message_cache,
+            self.waker.take(),
+        )
     }
 
     pub(super) fn start_new_epoch(&mut self, new_pol_inputs: LeaderInputs) {
@@ -108,42 +84,20 @@ where
         &mut self,
         serialized_message: &[u8],
         (from_peer_id, from_connection_id): (PeerId, ConnectionId),
-    ) -> Result<bool, Error> {
+    ) -> Result<bool, ReceiveError> {
         if !self.is_negotiated(&(from_peer_id, from_connection_id)) {
             return Ok(false);
         }
 
-        // Deserialize the message.
-        let deserialized_encapsulated_message =
-            deserialize_encapsulated_message(serialized_message)
-                .map_err(|_| Error::InvalidMessage)?;
-
-        let message_identifier = deserialized_encapsulated_message.id();
-
-        // Add the message to the set of exchanged message identifiers with the sender,
-        // returning `Err` if the message was already sent by this peer previously.
-        check_and_update_message_cache(
-            &mut self.exchanged_message_identifiers,
-            &message_identifier,
-            from_peer_id,
+        handle_received_serialized_encapsulated_message_and_update_cache(
+            serialized_message,
+            &mut self.message_cache,
+            (from_peer_id, from_connection_id),
+            &self.poq_verifier,
+            &mut self.events,
+            self.waker.take(),
         )?;
 
-        if self.message_cache.contains(&message_identifier) {
-            return Ok(true);
-        }
-
-        // Verify the message public header
-        let validated_message =
-            self.verify_encapsulated_message_public_header(deserialized_encapsulated_message)?;
-
-        // Notify the swarm about the received message, so that it can be further
-        // processed by the core protocol module.
-        self.message_cache.insert(message_identifier);
-        self.events.push_back(ToSwarm::GenerateEvent(Event::Message(
-            Box::new(validated_message),
-            (from_peer_id, from_connection_id),
-        )));
-        self.try_wake();
         Ok(true)
     }
 }
@@ -152,16 +106,14 @@ impl<ProofsVerifier> OldSession<ProofsVerifier> {
     #[must_use]
     pub const fn new(
         negotiated_peers: HashMap<PeerId, ConnectionId>,
-        exchanged_message_identifiers: HashMap<PeerId, HashMap<MessageIdentifier, Instant>>,
-        message_cache: HashSet<MessageIdentifier>,
+        message_cache: MessageCache,
         poq_verifier: ProofsVerifier,
     ) -> Self {
         Self {
             negotiated_peers,
-            exchanged_message_identifiers,
+            message_cache,
             events: VecDeque::new(),
             waker: None,
-            message_cache,
             poq_verifier,
         }
     }
@@ -202,16 +154,10 @@ impl<ProofsVerifier> OldSession<ProofsVerifier> {
             && entry.get() == connection_id
         {
             entry.remove();
-            self.exchanged_message_identifiers.remove(peer_id);
+            self.message_cache.remove_peer_info(peer_id);
             return true;
         }
         false
-    }
-
-    fn try_wake(&mut self) {
-        if let Some(waker) = self.waker.take() {
-            waker.wake();
-        }
     }
 
     pub fn poll(
@@ -223,31 +169,6 @@ impl<ProofsVerifier> OldSession<ProofsVerifier> {
         } else {
             self.waker = Some(cx.waker().clone());
             Poll::Pending
-        }
-    }
-}
-
-fn check_and_update_message_cache(
-    exchanged_message_identifiers: &mut HashMap<PeerId, HashMap<MessageIdentifier, Instant>>,
-    message_id: &MessageIdentifier,
-    peer_id: PeerId,
-) -> Result<(), Error> {
-    match exchanged_message_identifiers
-        .entry(peer_id)
-        .or_default()
-        .entry(*message_id)
-    {
-        Entry::Vacant(vacant_message_entry) => {
-            vacant_message_entry.insert(Instant::now());
-            Ok(())
-        }
-        Entry::Occupied(occupied_message_entry) => {
-            let time_sent = occupied_message_entry.get();
-            if Instant::now().duration_since(*time_sent) <= SENSITIVITY_INTERVAL_FOR_DUPLICATES {
-                Ok(())
-            } else {
-                Err(Error::MessageAlreadyExchanged)
-            }
         }
     }
 }

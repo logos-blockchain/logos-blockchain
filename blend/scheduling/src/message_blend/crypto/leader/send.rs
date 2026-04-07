@@ -99,7 +99,7 @@ where
             })
             .enumerate()
             .inspect(|(layer, (_, node_index))| {
-                tracing::debug!("Encapsulating layer {layer:?} of data message for node at index {node_index:?}.");
+                tracing::trace!("Encapsulating layer {layer:?} of data message for node at index {node_index:?}.");
             })
             // Map retrieved indices to the nodes' public keys.
             .map(|(_, (proof, node_index))| {

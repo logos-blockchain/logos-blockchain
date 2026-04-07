@@ -15,7 +15,7 @@ use crate::{
     mantle::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
-        gas::{Gas, GasConstants, GasCost},
+        gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         ops::{
             Op, OpProof,
             channel::{ChannelId, ChannelKeyIndex, withdraw::ChannelWithdrawOp},
@@ -87,8 +87,8 @@ impl TxHash {
 #[derive(Serialize, Deserialize)]
 struct MantleTxDeSerImpl {
     pub ops: Vec<Op>,
-    pub execution_gas_price: Gas,
-    pub storage_gas_price: Gas,
+    pub execution_gas_price: GasPrice,
+    pub storage_gas_price: GasPrice,
 }
 
 #[derive(Debug, Clone)]
@@ -113,8 +113,8 @@ impl MantleTxGasContext {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MantleTx {
     pub ops: Vec<Op>,
-    pub execution_gas_price: Gas,
-    pub storage_gas_price: Gas,
+    pub execution_gas_price: GasPrice,
+    pub storage_gas_price: GasPrice,
 }
 
 impl From<MantleTxDeSerImpl> for MantleTx {
@@ -180,34 +180,45 @@ impl<'de> Deserialize<'de> for MantleTx {
     }
 }
 
-impl GasCost for MantleTx {
+impl GasCalculator for MantleTx {
     type Context = MantleTxGasContext;
 
-    fn total_gas_cost<Constants: GasConstants>(&self, context: &Self::Context) -> Gas {
+    fn total_gas_cost<Constants: GasConstants>(
+        &self,
+        context: &Self::Context,
+    ) -> Result<GasCost, GasOverflow> {
         let execution_gas = self.execution_gas_consumption::<Constants>(context);
+        let execution_gas_cost = GasCost::calculate(execution_gas?, self.execution_gas_price)?;
+        let storage_gas_cost = self.storage_gas_cost(context)?;
 
-        execution_gas * self.execution_gas_price + self.storage_gas_cost(context)
+        execution_gas_cost.checked_add(storage_gas_cost)
     }
 
-    fn storage_gas_cost(&self, context: &Self::Context) -> Gas {
-        self.storage_gas_consumption(context) * self.storage_gas_price
+    fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow> {
+        GasCost::calculate(
+            self.storage_gas_consumption(context)?,
+            self.storage_gas_price,
+        )
     }
 
-    fn execution_gas_consumption<Constants: GasConstants>(&self, _context: &Self::Context) -> Gas {
+    fn execution_gas_consumption<Constants: GasConstants>(
+        &self,
+        _context: &Self::Context,
+    ) -> Result<Gas, GasOverflow> {
         self.ops
             .iter()
             .map(Op::execution_gas::<Constants>)
-            .sum::<Gas>()
+            .try_fold(Gas::from(0), Gas::checked_add)
     }
 
-    fn storage_gas_consumption(&self, context: &Self::Context) -> Gas {
-        self.signed_serialized_size(context)
+    fn storage_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow> {
+        Ok(self.signed_serialized_size(context).into())
     }
 }
 
 impl MantleTx {
     #[must_use]
-    pub fn signed_serialized_size(&self, context: &<Self as GasCost>::Context) -> u64 {
+    pub fn signed_serialized_size(&self, context: &<Self as GasCalculator>::Context) -> u64 {
         super::encoding::predict_signed_mantle_tx_size(self, context) as u64
     }
 
@@ -514,20 +525,20 @@ impl AuthenticatedMantleTx for SignedMantleTx {
         self.mantle_tx.ops.iter().zip(self.ops_proofs.iter())
     }
 
-    fn total_gas_cost<Constants: GasConstants>(&self) -> Gas {
-        GasCost::total_gas_cost::<Constants>(&self, &())
+    fn total_gas_cost<Constants: GasConstants>(&self) -> Result<GasCost, GasOverflow> {
+        GasCalculator::total_gas_cost::<Constants>(&self, &())
     }
 
-    fn storage_gas_cost(&self) -> Gas {
-        GasCost::storage_gas_cost(&self, &())
+    fn storage_gas_cost(&self) -> Result<GasCost, GasOverflow> {
+        GasCalculator::storage_gas_cost(&self, &())
     }
 
-    fn execution_gas_consumption<Constants: GasConstants>(&self) -> Gas {
-        GasCost::execution_gas_consumption::<Constants>(&self, &())
+    fn execution_gas_consumption<Constants: GasConstants>(&self) -> Result<Gas, GasOverflow> {
+        GasCalculator::execution_gas_consumption::<Constants>(&self, &())
     }
 
-    fn storage_gas_consumption(&self) -> Gas {
-        GasCost::storage_gas_consumption(&self, &())
+    fn storage_gas_consumption(&self) -> Result<Gas, GasOverflow> {
+        GasCalculator::storage_gas_consumption(&self, &())
     }
 
     fn verify_ops_proofs_with_helper(
@@ -538,30 +549,39 @@ impl AuthenticatedMantleTx for SignedMantleTx {
     }
 }
 
-impl GasCost for SignedMantleTx {
+impl GasCalculator for SignedMantleTx {
     type Context = ();
 
-    fn total_gas_cost<Constants: GasConstants>(&self, context: &Self::Context) -> Gas {
-        let execution_gas = GasCost::execution_gas_consumption::<Constants>(&self, context);
-        let storage_gas = GasCost::storage_gas_consumption(&self, context);
-        execution_gas * self.mantle_tx.execution_gas_price + storage_gas
+    fn total_gas_cost<Constants: GasConstants>(
+        &self,
+        context: &Self::Context,
+    ) -> Result<GasCost, GasOverflow> {
+        let execution_gas = GasCalculator::execution_gas_consumption::<Constants>(&self, context)?;
+        let execution_gas_cost =
+            GasCost::calculate(execution_gas, self.mantle_tx.execution_gas_price)?;
+        let storage_gas_cost = GasCalculator::storage_gas_cost(self, context)?;
+
+        execution_gas_cost.checked_add(storage_gas_cost)
     }
 
-    fn storage_gas_cost(&self, context: &Self::Context) -> Gas {
-        let storage_gas = GasCost::storage_gas_consumption(&self, context);
-        storage_gas * self.mantle_tx.storage_gas_price
+    fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow> {
+        let storage_gas = GasCalculator::storage_gas_consumption(&self, context)?;
+        GasCost::calculate(storage_gas, self.mantle_tx.storage_gas_price)
     }
 
-    fn execution_gas_consumption<Constants: GasConstants>(&self, _context: &Self::Context) -> Gas {
+    fn execution_gas_consumption<Constants: GasConstants>(
+        &self,
+        _context: &Self::Context,
+    ) -> Result<Gas, GasOverflow> {
         self.mantle_tx
             .ops
             .iter()
             .map(Op::execution_gas::<Constants>)
-            .sum::<Gas>()
+            .try_fold(Gas::from(0), Gas::checked_add)
     }
 
-    fn storage_gas_consumption(&self, _context: &Self::Context) -> Gas {
-        self.gas_storage_size()
+    fn storage_gas_consumption(&self, _context: &Self::Context) -> Result<Gas, GasOverflow> {
+        Ok(self.gas_storage_size().into())
     }
 }
 
@@ -600,8 +620,8 @@ mod tests {
     fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
         MantleTx {
             ops,
-            execution_gas_price: 1,
-            storage_gas_price: 1,
+            execution_gas_price: 1.into(),
+            storage_gas_price: 1.into(),
         }
     }
 

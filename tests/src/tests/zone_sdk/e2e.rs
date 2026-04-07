@@ -95,8 +95,7 @@ async fn test_sequencer_publish_and_indexer_read() {
     let (sequencer, mut handle) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key,
-        node_url.clone(),
-        None,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
         sequencer_config,
         None, // Fresh start, no checkpoint
     );
@@ -111,7 +110,10 @@ async fn test_sequencer_publish_and_indexer_read() {
     ];
 
     for data in &test_data {
-        handle.publish(data.clone()).await.expect("publish failed");
+        handle
+            .publish_message(data.clone())
+            .await
+            .expect("publish failed");
     }
 
     // Poll indexer until all expected payloads are seen.
@@ -122,9 +124,7 @@ async fn test_sequencer_publish_and_indexer_read() {
         NodeHttpClient::new(CommonHttpClient::new(None), node_url),
     );
 
-    let expected: HashSet<Vec<u8>> = test_data.iter().cloned().collect();
-    let mut seen: HashSet<Vec<u8>> = HashSet::new();
-    let mut seen_ordered: Vec<Vec<u8>> = Vec::new();
+    let mut received: Vec<Vec<u8>> = Vec::new();
     let mut last_zone_block = None;
 
     let start = std::time::Instant::now();
@@ -144,27 +144,19 @@ async fn test_sequencer_publish_and_indexer_read() {
 
         while let Some((msg, slot)) = stream.next().await {
             if let ZoneMessage::Block(block) = msg {
-                if expected.contains(&block.data) && !seen.contains(&block.data) {
-                    seen.insert(block.data.clone());
-                    seen_ordered.push(block.data.clone());
-                }
+                received.push(block.data.clone());
                 last_zone_block = Some((block.id, slot));
             }
         }
 
-        if seen == expected {
+        if received.len() >= test_data.len() {
             break;
         }
 
         sleep(Duration::from_millis(500)).await;
     }
 
-    // Verify ordering: messages should appear in the order they were published
-    assert_eq!(seen_ordered.len(), test_data.len());
-
-    for (i, expected_data) in test_data.iter().enumerate() {
-        assert_eq!(&seen_ordered[i], expected_data);
-    }
+    assert_eq!(received, test_data, "Messages should match published order");
 
     // --- Test set_keys: update channel's accredited keys ---
     // Generate a second key and add it alongside the original admin key.
@@ -239,8 +231,7 @@ async fn test_sequencer_checkpoint_resume() {
     let (sequencer, mut handle) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key.clone(),
-        node_url.clone(),
-        None,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
         sequencer_config.clone(),
         None, // Fresh start
     );
@@ -252,7 +243,10 @@ async fn test_sequencer_checkpoint_resume() {
 
     let mut last_publish_result = None;
     for data in &test_data_phase1 {
-        let result = handle.publish(data.clone()).await.expect("publish failed");
+        let result = handle
+            .publish_message(data.clone())
+            .await
+            .expect("publish failed");
         last_publish_result = Some(result);
     }
 
@@ -266,8 +260,7 @@ async fn test_sequencer_checkpoint_resume() {
     let (sequencer, mut handle) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key,
-        node_url.clone(),
-        None,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
         sequencer_config,
         Some(checkpoint), // Resume from checkpoint
     );
@@ -277,7 +270,10 @@ async fn test_sequencer_checkpoint_resume() {
 
     let test_data_phase2: Vec<Vec<u8>> = vec![b"Message 3".to_vec(), b"Message 4".to_vec()];
     for data in &test_data_phase2 {
-        handle.publish(data.clone()).await.expect("publish failed");
+        handle
+            .publish_message(data.clone())
+            .await
+            .expect("publish failed");
     }
 
     // Verify all messages (from both phases) are indexed
@@ -290,8 +286,7 @@ async fn test_sequencer_checkpoint_resume() {
         .into_iter()
         .chain(test_data_phase2)
         .collect();
-    let expected: HashSet<Vec<u8>> = all_test_data.iter().cloned().collect();
-    let mut seen: HashSet<Vec<u8>> = HashSet::new();
+    let mut received: Vec<Vec<u8>> = Vec::new();
     let mut last_zone_block = None;
 
     let start = std::time::Instant::now();
@@ -311,14 +306,12 @@ async fn test_sequencer_checkpoint_resume() {
 
         while let Some((msg, slot)) = stream.next().await {
             if let ZoneMessage::Block(block) = msg {
-                if expected.contains(&block.data) {
-                    seen.insert(block.data.clone());
-                }
+                received.push(block.data.clone());
                 last_zone_block = Some((block.id, slot));
             }
         }
 
-        if seen == expected {
+        if received.len() >= all_test_data.len() {
             break;
         }
 
@@ -326,9 +319,8 @@ async fn test_sequencer_checkpoint_resume() {
     }
 
     assert_eq!(
-        seen.len(),
-        all_test_data.len(),
-        "All messages from both phases should be indexed"
+        received, all_test_data,
+        "Messages should match published order"
     );
 
     // Clean up
@@ -392,8 +384,7 @@ async fn test_sequencer_stale_checkpoint_resume() {
     let (sequencer, mut handle) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key.clone(),
-        node_url.clone(),
-        None,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
         sequencer_config.clone(),
         None,
     );
@@ -403,14 +394,16 @@ async fn test_sequencer_stale_checkpoint_resume() {
     let data_phase1: Vec<Vec<u8>> = vec![b"msg-1".to_vec(), b"msg-2".to_vec()];
     let mut last_result = None;
     for data in &data_phase1 {
-        let r = handle.publish(data.clone()).await.expect("publish failed");
+        let r = handle
+            .publish_message(data.clone())
+            .await
+            .expect("publish failed");
         last_result = Some(r);
     }
     let stale_checkpoint = last_result.unwrap().checkpoint;
 
     // Wait for phase 1 to finalize
-    let expected: HashSet<Vec<u8>> = data_phase1.iter().cloned().collect();
-    let mut seen: HashSet<Vec<u8>> = HashSet::new();
+    let mut received: Vec<Vec<u8>> = Vec::new();
     let mut last_zone_block = None;
     let start = std::time::Instant::now();
     loop {
@@ -426,18 +419,20 @@ async fn test_sequencer_stale_checkpoint_resume() {
 
         while let Some((msg, slot)) = stream.next().await {
             if let ZoneMessage::Block(block) = msg {
-                if expected.contains(&block.data) {
-                    seen.insert(block.data.clone());
-                }
+                received.push(block.data.clone());
                 last_zone_block = Some((block.id, slot));
             }
         }
 
-        if seen == expected {
+        if received.len() >= data_phase1.len() {
             break;
         }
         sleep(Duration::from_millis(500)).await;
     }
+    assert_eq!(
+        received, data_phase1,
+        "Phase 1 messages should match published order"
+    );
 
     poll_task.abort();
     drop(handle);
@@ -446,8 +441,7 @@ async fn test_sequencer_stale_checkpoint_resume() {
     let (sequencer, mut handle) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key.clone(),
-        node_url.clone(),
-        None,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
         sequencer_config.clone(),
         None, // Fresh — no checkpoint
     );
@@ -456,12 +450,18 @@ async fn test_sequencer_stale_checkpoint_resume() {
 
     let data_phase2: Vec<Vec<u8>> = vec![b"msg-3".to_vec(), b"msg-4".to_vec()];
     for data in &data_phase2 {
-        handle.publish(data.clone()).await.expect("publish failed");
+        handle
+            .publish_message(data.clone())
+            .await
+            .expect("publish failed");
     }
 
     // Wait for phase 2 to finalize
-    let mut expected_all: HashSet<Vec<u8>> = expected;
-    expected_all.extend(data_phase2.iter().cloned());
+    let mut expected_all: Vec<Vec<u8>> = data_phase1
+        .iter()
+        .cloned()
+        .chain(data_phase2.iter().cloned())
+        .collect();
     let start = std::time::Instant::now();
     loop {
         assert!(
@@ -476,18 +476,20 @@ async fn test_sequencer_stale_checkpoint_resume() {
 
         while let Some((msg, slot)) = stream.next().await {
             if let ZoneMessage::Block(block) = msg {
-                if expected_all.contains(&block.data) {
-                    seen.insert(block.data.clone());
-                }
+                received.push(block.data.clone());
                 last_zone_block = Some((block.id, slot));
             }
         }
 
-        if seen == expected_all {
+        if received.len() >= expected_all.len() {
             break;
         }
         sleep(Duration::from_millis(500)).await;
     }
+    assert_eq!(
+        received, expected_all,
+        "Phase 1+2 messages should match published order"
+    );
 
     poll_task.abort();
     drop(handle);
@@ -496,8 +498,7 @@ async fn test_sequencer_stale_checkpoint_resume() {
     let (sequencer, mut handle) = ZoneSequencer::init_with_config(
         channel_id,
         signing_key,
-        node_url,
-        None,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url),
         sequencer_config,
         Some(stale_checkpoint), // Stale checkpoint from phase 1
     );
@@ -506,7 +507,10 @@ async fn test_sequencer_stale_checkpoint_resume() {
 
     let data_phase3: Vec<Vec<u8>> = vec![b"msg-5".to_vec()];
     for data in &data_phase3 {
-        handle.publish(data.clone()).await.expect("publish failed");
+        handle
+            .publish_message(data.clone())
+            .await
+            .expect("publish failed");
     }
 
     // Verify all 5 messages appear, no duplicates
@@ -525,18 +529,20 @@ async fn test_sequencer_stale_checkpoint_resume() {
 
         while let Some((msg, slot)) = stream.next().await {
             if let ZoneMessage::Block(block) = msg {
-                if expected_all.contains(&block.data) {
-                    seen.insert(block.data.clone());
-                }
+                received.push(block.data.clone());
                 last_zone_block = Some((block.id, slot));
             }
         }
 
-        if seen == expected_all {
+        if received.len() >= expected_all.len() {
             break;
         }
         sleep(Duration::from_millis(500)).await;
     }
+    assert_eq!(
+        received, expected_all,
+        "Phase 1+2+3 messages should match published order"
+    );
 
     // Check no duplicates
     sleep(Duration::from_secs(30)).await;

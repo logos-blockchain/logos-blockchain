@@ -42,8 +42,10 @@ pub struct BlockWithChainState<Tx> {
     pub block: Block<Tx>,
     /// The current canonical tip after processing this block.
     pub tip: HeaderId,
+    pub tip_slot: Slot,
     /// The current Last Irreversible Block after processing this block.
     pub lib: HeaderId,
+    pub lib_slot: Slot,
 }
 
 pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
@@ -246,7 +248,9 @@ where
             Some(BlockWithChainState {
                 block,
                 tip: event.tip,
+                tip_slot: event.tip_slot,
                 lib: event.lib,
+                lib_slot: event.lib_slot,
             })
         }
     });

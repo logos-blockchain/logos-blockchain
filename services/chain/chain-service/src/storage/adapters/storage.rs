@@ -94,6 +94,7 @@ where
     async fn store_block(
         &self,
         header_id: HeaderId,
+        parent_id: HeaderId,
         block: Self::Block,
     ) -> Result<(), overwatch::DynError> {
         let block = block
@@ -101,11 +102,25 @@ where
             .map_err(|_| "Failed to convert block to storage format")?;
 
         self.storage_relay
-            .send(StorageMsg::store_block_request(header_id, block))
+            .send(StorageMsg::store_block_request(header_id, parent_id, block))
             .await
             .map_err(|_| "Failed to send store block request to storage relay")?;
 
         Ok(())
+    }
+
+    async fn get_block_parent(&self, header_id: &HeaderId) -> Option<HeaderId> {
+        let (sender, receiver) = oneshot::channel();
+
+        self.storage_relay
+            .send(StorageMsg::get_block_parent_request(*header_id, sender))
+            .await
+            .unwrap();
+
+        receiver.await.unwrap_or_else(|e| {
+            tracing::error!("Failed to receive block parent from storage relay: {e}");
+            None
+        })
     }
 
     async fn remove_block(
