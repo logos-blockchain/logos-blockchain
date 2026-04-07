@@ -12,7 +12,10 @@ use lb_blend::{
             ProofsVerifier as ProofsVerifierTrait,
             decapsulated::{DecapsulatedMessage, DecapsulationOutput},
             encapsulated::EncapsulatedMessage,
-            validated::EncapsulatedMessageWithVerifiedPublicHeader,
+            validated::{
+                EncapsulatedMessageWithVerifiedPublicHeader,
+                EncapsulatedMessageWithVerifiedSignature,
+            },
         },
         reward::BlendingToken,
     },
@@ -128,6 +131,20 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 where
     ProofsVerifier: ProofsVerifierTrait,
 {
+    pub fn validate_message_header(
+        &self,
+        message: EncapsulatedMessage,
+    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, InnerError> {
+        message.verify_public_header(self.verifier())
+    }
+
+    pub fn validate_message_poq(
+        &self,
+        message: EncapsulatedMessageWithVerifiedSignature,
+    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, InnerError> {
+        message.verify_proof_of_quota(self.verifier())
+    }
+
     /// Semantically similar to the underlying
     /// [`SessionCryptographicProcessor::decapsulate_message`], but it does not
     /// stop after decapsulating the outermost layer. It stops only when a layer
