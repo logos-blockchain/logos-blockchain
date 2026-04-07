@@ -12,7 +12,7 @@ use crate::{
         swarm::Command,
         tests::utils::{SwarmBuilder as EdgeSwarmBuilder, TestSwarm as EdgeTestSwarm},
     },
-    test_utils::{TestEncapsulatedMessage, crypto::MockProofsVerifier},
+    test_utils::TestEncapsulatedMessage,
 };
 
 #[test(tokio::test)]
@@ -22,18 +22,16 @@ async fn edge_message_propagation() {
         swarm: mut core_swarm_1,
         incoming_message_receiver: mut core_swarm_1_incoming_message_receiver,
         ..
-    } = CoreSwarmBuilder::new(identities.next().unwrap(), &nodes).build(|id, membership| {
-        BlendBehaviourBuilder::new(id, MockProofsVerifier, membership).build()
-    });
+    } = CoreSwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
     let (swarm_1_node, _) = core_swarm_1.listen_and_return_membership_entry(None).await;
 
     let CoreTestSwarm {
         swarm: mut core_swarm_2,
         incoming_message_receiver: mut core_swarm_2_incoming_message_receiver,
         ..
-    } = CoreSwarmBuilder::new(identities.next().unwrap(), &nodes).build(|id, membership| {
-        BlendBehaviourBuilder::new(id, MockProofsVerifier, membership).build()
-    });
+    } = CoreSwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
     let (swarm_2_node, _) = core_swarm_2.listen_and_return_membership_entry(None).await;
 
     // We connect swarm 2 to swarm 1.
@@ -67,11 +65,15 @@ async fn edge_message_propagation() {
 
     // Verify that both peers receive the message, even though the edge swarm is
     // connected to only one of them.
-    let swarm_1_received_message = core_swarm_1_incoming_message_receiver.recv().await.unwrap();
-    let swarm_2_received_message = core_swarm_2_incoming_message_receiver.recv().await.unwrap();
+    let (swarm_1_received_message, swarm_1_message_session) =
+        core_swarm_1_incoming_message_receiver.recv().await.unwrap();
+    let (swarm_2_received_message, swarm_2_message_session) =
+        core_swarm_2_incoming_message_receiver.recv().await.unwrap();
 
-    assert_eq!(swarm_1_received_message, message.clone());
-    assert_eq!(swarm_2_received_message, message.clone());
+    assert_eq!(swarm_1_received_message, message.clone().into());
+    assert_eq!(swarm_1_message_session, 1);
+    assert_eq!(swarm_2_received_message, message.clone().into());
+    assert_eq!(swarm_2_message_session, 1);
 }
 
 #[test(tokio::test)]
@@ -81,27 +83,24 @@ async fn replication_factor() {
         swarm: mut core_swarm_1,
         incoming_message_receiver: mut core_swarm_1_incoming_message_receiver,
         ..
-    } = CoreSwarmBuilder::new(identities.next().unwrap(), &nodes).build(|id, membership| {
-        BlendBehaviourBuilder::new(id, MockProofsVerifier, membership).build()
-    });
+    } = CoreSwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
     let (swarm_1_node, _) = core_swarm_1.listen_and_return_membership_entry(None).await;
 
     let CoreTestSwarm {
         swarm: mut core_swarm_2,
         incoming_message_receiver: mut core_swarm_2_incoming_message_receiver,
         ..
-    } = CoreSwarmBuilder::new(identities.next().unwrap(), &nodes).build(|id, membership| {
-        BlendBehaviourBuilder::new(id, MockProofsVerifier, membership).build()
-    });
+    } = CoreSwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
     let (swarm_2_node, _) = core_swarm_2.listen_and_return_membership_entry(None).await;
 
     let CoreTestSwarm {
         swarm: mut core_swarm_3,
         incoming_message_receiver: mut core_swarm_3_incoming_message_receiver,
         ..
-    } = CoreSwarmBuilder::new(identities.next().unwrap(), &nodes).build(|id, membership| {
-        BlendBehaviourBuilder::new(id, MockProofsVerifier, membership).build()
-    });
+    } = CoreSwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
     let (swarm_3_node, _) = core_swarm_3.listen_and_return_membership_entry(None).await;
 
     spawn(async move { core_swarm_1.run().await });
@@ -138,19 +137,19 @@ async fn replication_factor() {
                 break;
             }
             swarm_1_received_message = core_swarm_1_incoming_message_receiver.recv() => {
-                assert_eq!(swarm_1_received_message.unwrap(), message.clone());
+                assert_eq!(swarm_1_received_message.unwrap().0, message.clone().into());
                 assert!(!swarm_1_message_received);
                 received_messages += 1;
                 swarm_1_message_received = true;
             }
             swarm_2_received_message = core_swarm_2_incoming_message_receiver.recv() => {
-                assert_eq!(swarm_2_received_message.unwrap(), message.clone());
+                assert_eq!(swarm_2_received_message.unwrap().0, message.clone().into());
                 assert!(!swarm_2_message_received);
                 received_messages += 1;
                 swarm_2_message_received = true;
             }
             swarm_3_received_message = core_swarm_3_incoming_message_receiver.recv() => {
-                assert_eq!(swarm_3_received_message.unwrap(), message.clone());
+                assert_eq!(swarm_3_received_message.unwrap().0, message.clone().into());
                 assert!(!swarm_3_message_received);
                 received_messages += 1;
                 swarm_3_message_received = true;

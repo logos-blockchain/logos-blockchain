@@ -5,12 +5,9 @@ use libp2p::{Multiaddr, PeerId};
 use test_log::test;
 use tokio::{select, time::sleep};
 
-use crate::{
-    core::backends::libp2p::{
-        core_swarm_test_utils::{SwarmExt as _, new_nodes_with_empty_address, update_nodes},
-        tests::utils::{BlendBehaviourBuilder, SwarmBuilder, TestSwarm},
-    },
-    test_utils::crypto::MockProofsVerifier,
+use crate::core::backends::libp2p::{
+    core_swarm_test_utils::{SwarmExt as _, new_nodes_with_empty_address, update_nodes},
+    tests::utils::{BlendBehaviourBuilder, SwarmBuilder, TestSwarm},
 };
 
 #[test(tokio::test)]
@@ -19,9 +16,8 @@ async fn core_redial_same_peer() {
     let TestSwarm {
         swarm: mut dialing_swarm,
         ..
-    } = SwarmBuilder::new(identities.next().unwrap(), &peer_ids).build(|id, membership| {
-        BlendBehaviourBuilder::new(id, MockProofsVerifier, membership).build()
-    });
+    } = SwarmBuilder::new(identities.next().unwrap(), &peer_ids)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
 
     let random_peer_id = PeerId::random();
     let empty_multiaddr: Multiaddr = Protocol::Memory(0).into();
@@ -90,9 +86,8 @@ async fn core_redial_different_peer_after_redial_limit() {
     let TestSwarm {
         swarm: mut listening_swarm,
         ..
-    } = SwarmBuilder::new(identities.next().unwrap(), &nodes).build(|id, membership| {
-        BlendBehaviourBuilder::new(id, MockProofsVerifier, membership).build()
-    });
+    } = SwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
     let (listening_node, _) = listening_swarm
         .listen_and_return_membership_entry(None)
         .await;
@@ -102,9 +97,8 @@ async fn core_redial_different_peer_after_redial_limit() {
     let TestSwarm {
         swarm: mut dialing_swarm,
         ..
-    } = SwarmBuilder::new(identities.next().unwrap(), &nodes).build(|id, membership| {
-        BlendBehaviourBuilder::new(id, MockProofsVerifier, membership).build()
-    });
+    } = SwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
     let dialing_peer_id = *dialing_swarm.local_peer_id();
 
     // Dial a random peer on a random address, which should fail after the maximum

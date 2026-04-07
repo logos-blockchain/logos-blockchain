@@ -18,7 +18,7 @@ use crate::{
     edge::backends::libp2p::tests::utils::{
         SwarmBuilder as EdgeSwarmBuilder, TestSwarm as EdgeTestSwarm,
     },
-    test_utils::{TestEncapsulatedMessage, crypto::MockProofsVerifier},
+    test_utils::TestEncapsulatedMessage,
 };
 
 #[test(tokio::test)]
@@ -124,9 +124,8 @@ async fn edge_redial_different_peer_after_redial_limit() {
         swarm: mut core_swarm,
         incoming_message_receiver: mut core_swarm_incoming_message_receiver,
         ..
-    } = CoreSwarmBuilder::new(identities.next().unwrap(), &peer_ids).build(|id, membership| {
-        BlendBehaviourBuilder::new(id, MockProofsVerifier, membership).build()
-    });
+    } = CoreSwarmBuilder::new(identities.next().unwrap(), &peer_ids)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
     let (core_swarm_membership_entry, _) =
         core_swarm.listen_and_return_membership_entry(None).await;
 
@@ -155,6 +154,8 @@ async fn edge_redial_different_peer_after_redial_limit() {
 
     // Verify the message is anyway received by the core swarm after the maximum
     // number of dial attempts have been performed with the unreachable address.
-    let received_message = core_swarm_incoming_message_receiver.recv().await.unwrap();
-    assert_eq!(received_message, message.into_inner());
+    let (received_message, received_message_session) =
+        core_swarm_incoming_message_receiver.recv().await.unwrap();
+    assert_eq!(received_message, message.into_inner().into());
+    assert_eq!(received_message_session, 1);
 }
