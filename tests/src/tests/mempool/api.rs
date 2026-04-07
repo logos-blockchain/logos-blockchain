@@ -21,8 +21,8 @@ async fn test_post_mantle_tx() {
 
     let mantle_tx = MantleTx {
         ops: Vec::new(),
-        storage_gas_price: 0,
-        execution_gas_price: 0,
+        storage_gas_price: 0.into(),
+        execution_gas_price: 0.into(),
     };
 
     let signed_tx = SignedMantleTx {
