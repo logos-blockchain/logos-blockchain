@@ -93,7 +93,6 @@ fn normalize_user_config_path(step: &str, raw_path: &str) -> Result<String, Step
     Ok(normalized)
 }
 
-
 fn parse_user_config_step_value(step: &str, raw_value: &str) -> Result<YamlValue, StepError> {
     let value = raw_value.trim();
     serde_yaml::from_str::<YamlValue>(value).map_err(|source| StepError::InvalidArgument {
