@@ -1,4 +1,7 @@
-use lb_core::{mantle::Value, sdp::DeclarationId};
+use lb_core::{
+    mantle::{Value, gas::GasCost},
+    sdp::DeclarationId,
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 
@@ -14,12 +17,12 @@ pub struct Config {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct WalletConfig {
     #[serde(default = "default_max_tx_fee")]
-    pub max_tx_fee: Value,
+    pub max_tx_fee: GasCost,
     pub funding_pk: ZkPublicKey,
 }
 
-const fn default_max_tx_fee() -> Value {
-    Value::MAX
+const fn default_max_tx_fee() -> GasCost {
+    GasCost::new(Value::MAX)
 }
 
 pub struct RequiredValues {

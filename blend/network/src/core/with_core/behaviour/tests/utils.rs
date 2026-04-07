@@ -1,6 +1,6 @@
 use core::{num::NonZeroUsize, ops::RangeInclusive, time::Duration};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     iter::repeat_with,
 };
 
@@ -26,7 +26,7 @@ use tokio_stream::wrappers::IntervalStream;
 
 use crate::core::{
     tests::utils::{PROTOCOL_NAME, TestSwarm},
-    with_core::behaviour::{Behaviour, Event, IntervalStreamProvider},
+    with_core::behaviour::{Behaviour, Event, IntervalStreamProvider, message_cache::MessageCache},
 };
 
 #[derive(Clone)]
@@ -153,7 +153,6 @@ impl BehaviourBuilder {
             connections_waiting_upgrade: HashMap::new(),
             events: VecDeque::new(),
             waker: None,
-            exchanged_message_identifiers: HashMap::new(),
             observation_window_clock_provider: self
                 .provider
                 .unwrap_or_else(|| IntervalProviderBuilder::default().build()),
@@ -167,7 +166,7 @@ impl BehaviourBuilder {
                 .minimum_network_size
                 .unwrap_or_else(|| 1usize.try_into().unwrap()),
             old_session: None,
-            message_cache: HashSet::new(),
+            message_cache: MessageCache::new(),
             poq_verifier: ProofsVerifier::new(
                 self.poq_verification_inputs
                     .unwrap_or_else(|| default_poq_verification_inputs_for_session(0)),

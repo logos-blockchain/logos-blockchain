@@ -324,8 +324,8 @@ mod tests {
     fn create_tx(count: usize) -> Vec<MantleTx> {
         iter::repeat_with(|| MantleTx {
             ops: vec![],
-            execution_gas_price: 0,
-            storage_gas_price: 0,
+            execution_gas_price: 0.into(),
+            storage_gas_price: 0.into(),
         })
         .take(count)
         .collect()

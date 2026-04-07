@@ -57,8 +57,10 @@ pub struct ApiProcessedBlockEvent {
     pub block: Block<SignedMantleTx>,
     /// The current canonical tip after processing this block.
     pub tip: HeaderId,
+    pub tip_slot: Slot,
     /// The current Last Irreversible Block after processing this block.
     pub lib: HeaderId,
+    pub lib_slot: Slot,
 }
 
 impl From<BlockWithChainState<SignedMantleTx>> for ApiProcessedBlockEvent {
@@ -66,7 +68,9 @@ impl From<BlockWithChainState<SignedMantleTx>> for ApiProcessedBlockEvent {
         Self {
             block: value.block,
             tip: value.tip,
+            tip_slot: value.tip_slot,
             lib: value.lib,
+            lib_slot: value.lib_slot,
         }
     }
 }

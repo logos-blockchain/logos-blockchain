@@ -850,10 +850,12 @@ mod tests {
         }
 
         async fn store_block_only(&self, block: &Block<SignedMantleTx>, header_id: HeaderId) {
+            let parent_id = block.header().parent();
             let store_result: Result<_, _> = block.clone().try_into();
             self.storage_relay
                 .send(StorageMsg::store_block_request(
                     header_id,
+                    parent_id,
                     store_result.unwrap(),
                 ))
                 .await

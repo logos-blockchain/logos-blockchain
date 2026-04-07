@@ -167,8 +167,8 @@ impl Sequencer {
 
         let inscribe_tx = MantleTx {
             ops: vec![Op::ChannelInscribe(inscribe_op)],
-            storage_gas_price: 0,
-            execution_gas_price: 0,
+            storage_gas_price: 0.into(),
+            execution_gas_price: 0.into(),
         };
 
         let tx_hash = inscribe_tx.hash();
