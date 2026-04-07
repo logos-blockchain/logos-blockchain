@@ -11,18 +11,8 @@ use crate::{LogosBlockchainNode, OperationStatus};
 
 pub(crate) fn post_declaration_sync(
     node: &LogosBlockchainNode,
-    provider_id: ProviderId,
-    zk_id: ZkPublicKey,
-    locked_note_id: NoteId,
-    locators: Vec<Locator>,
+    declaration: DeclarationMessage,
 ) -> Result<sdp::DeclarationId, OperationStatus> {
-    let declaration = DeclarationMessage {
-        service_type: ServiceType::BlendNetwork,
-        locators,
-        provider_id,
-        zk_id,
-        locked_note_id,
-    };
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let api = SdpServiceApi::<SdpService<RuntimeServiceId>>::from_overwatch_handle(

@@ -2,7 +2,7 @@ use std::ffi::c_char;
 
 use lb_core::{
     mantle::NoteId,
-    sdp::{self, Locator, ProviderId},
+    sdp::{self, DeclarationMessage, Locator, ProviderId, ServiceType},
 };
 use lb_groth16::fr_from_bytes;
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -121,7 +121,15 @@ pub unsafe extern "C" fn blend_join_as_core_node(
     let locators = unwrap_or_return_err!(unsafe { parse_locators(locators, locators_len) });
 
     let node = unsafe { &*node };
-    post_declaration_sync(node, provider_id, zk_id, locked_note_id, locators)
+
+    let join_blend_as_core_node_message = DeclarationMessage {
+        service_type: ServiceType::BlendNetwork,
+        locators,
+        provider_id,
+        zk_id,
+        locked_note_id,
+    };
+    post_declaration_sync(node, join_blend_as_core_node_message)
         .map(DeclarationId::from)
         .into()
 }
