@@ -438,9 +438,6 @@ where
         let block_id = proposal.header().id();
 
         if !should_process_block(relays.cryptarchia(), block_id).await {
-            info!(
-                target: LOG_TARGET,
-                "Block {block_id:?} already processed, ignoring"            );
             return;
         }
 
@@ -582,14 +579,7 @@ where
     RuntimeServiceId: Send + Sync,
 {
     match cryptarchia.get_ledger_state(block_id).await {
-        Ok(Some(_)) => {
-            info!(
-                target: LOG_TARGET,
-                "Block {:?} already processed, ignoring",
-                block_id
-            );
-            false
-        }
+        Ok(Some(_)) => false,
         Ok(None) => {
             // block has not been processed
             true
@@ -621,11 +611,19 @@ where
     debug!("Received proposal with ID: {:?}", block.header().id());
 
     let (tip, reorged_txs) = cryptarchia.apply_block(block.clone()).await?;
+    let reorged_tx_count = reorged_txs.len();
+    let included_tx_count = block.transactions().len();
 
     // Remove included content from mempool if the block was applied to the honest
     // chain. Otherwise, we keep them in mempool, so they can be included to the
     // honest chain later when this node proposes blocks.
     if tip == block.header().id() {
+        debug!(
+            "Applied block {:?} to the canonical chain; included {} transactions and will reinsert {} reorged transactions",
+            block.header().id(),
+            included_tx_count,
+            reorged_tx_count
+        );
         mempool_adapter
             .remove_transactions(
                 &block
@@ -635,6 +633,13 @@ where
             )
             .await
             .unwrap_or_else(|e| error!("Could not mark transactions in block: {e}"));
+    } else {
+        debug!(
+            "Applied block {:?} off the canonical chain; keeping {} included transactions in mempool because the current tip is {:?}",
+            block.header().id(),
+            included_tx_count,
+            tip
+        );
     }
 
     // Re-insert reorged txs back into the mempool.

@@ -171,6 +171,10 @@ impl NtpStream {
             );
             return;
         }
+        tracing::debug!(
+            "Applying NTP clock update for slot {current_slot:?} with roundtrip {}us",
+            roundtrip.as_micros()
+        );
 
         let epoch_config = this.epoch_config;
         let base_period_length = this.base_period_length;

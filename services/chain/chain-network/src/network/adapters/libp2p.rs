@@ -125,6 +125,10 @@ where
 
     async fn new(settings: Self::Settings, network_relay: Relay<Libp2p, RuntimeServiceId>) -> Self {
         let relay = network_relay.clone();
+        tracing::debug!(
+            "Subscribing chain-network adapter to pubsub topic {}",
+            settings.topic
+        );
         Self::subscribe(&relay, settings.topic.as_str()).await;
         tracing::trace!("Starting up...");
         // this wait seems to be helpful in some cases since we give the time
@@ -190,6 +194,7 @@ where
 
     async fn request_tip(&self, peer: Self::PeerId) -> Result<GetTipResponse, DynError> {
         let started_at = Instant::now();
+        tracing::debug!("Requesting chain tip from peer {peer:?}");
         let (reply_sender, receiver) = oneshot::channel();
         if let Err((e, _)) = self
             .network_relay
@@ -217,6 +222,10 @@ where
         latest_immutable_block: HeaderId,
         additional_blocks: HashSet<HeaderId>,
     ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
+        let additional_blocks_len = additional_blocks.len();
+        tracing::debug!(
+            "Requesting blocks from peer {peer:?} for target block {target_block:?} from local tip {local_tip:?} with immutable block {latest_immutable_block:?} and {additional_blocks_len} additional blocks"
+        );
         let (reply_sender, receiver) = oneshot::channel();
         if let Err((e, _)) = self
             .network_relay
@@ -260,11 +269,18 @@ where
         // All peers we know about, including those that are not connected.
         let discovered_peers = Self::get_discovered_peers(&self.network_relay).await?;
 
-        let peers_to_request = choose_peers_to_request_download(
+        let peers_to_request: Vec<_> = choose_peers_to_request_download(
             &connected_peers,
             self.settings.max_connected_peers_to_try_download,
             &discovered_peers,
             self.settings.max_discovered_peers_to_try_download,
+        )
+        .collect();
+        tracing::debug!(
+            "Selecting peers for target block {target_block:?} from local tip {local_tip:?} with immutable block {latest_immutable_block:?}; selected_peers={peers_to_request:?}, connected={}, discovered={}, additional_blocks={}",
+            connected_peers.len(),
+            discovered_peers.len(),
+            additional_blocks.len()
         );
 
         let requests = peers_to_request

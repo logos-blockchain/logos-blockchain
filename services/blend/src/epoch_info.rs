@@ -290,7 +290,12 @@ where
             tracing::warn!(target: LOG_TARGET, "Failed to get epoch state for slot.  Skipping...");
             return None;
         };
-        tracing::debug!(target: LOG_TARGET, "Retrieved epoch state for unseen epoch: {:?}.", epoch_state);
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Retrieved epoch state for unseen epoch {:?} with total stake {}",
+            epoch_state.epoch(),
+            epoch_state.total_stake()
+        );
 
         // This is true if epochs are shorter than transition periods. It's not likely
         // to happen in production, but we must still account for this

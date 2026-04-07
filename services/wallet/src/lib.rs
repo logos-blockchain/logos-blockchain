@@ -1157,9 +1157,16 @@ where
                 error!(block_id = ?tip, err = %e, "Failed to fetch missing headers for backfill");
             })?;
 
+        if !missing_headers.is_empty() {
+            debug!(
+                "Backfilling wallet to tip {tip:?} with {} missing headers",
+                missing_headers.len()
+            );
+        }
+
         for header_id in missing_headers.iter().rev().copied() {
             if state.wallet().has_processed_block(header_id) {
-                debug!("skipping already processed block");
+                debug!("Skipping already processed wallet block {header_id:?}");
                 continue;
             }
 
