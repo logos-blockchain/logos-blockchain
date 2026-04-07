@@ -189,8 +189,8 @@ mod tests {
     fn make_dummy_tx(data: u8) -> SignedMantleTx {
         let mantle_tx = MantleTx {
             ops: vec![],
-            storage_gas_price: 0,
-            execution_gas_price: data.into(),
+            storage_gas_price: 0.into(),
+            execution_gas_price: u64::from(data).into(),
         };
         SignedMantleTx {
             ops_proofs: vec![],
