@@ -17,7 +17,9 @@ use crate::{
     encap::{
         ProofsVerifier,
         decapsulated::{PartDecapsulationOutput, PrivateHeaderDecapsulationOutput},
-        validated::EncapsulatedMessageWithVerifiedPublicHeader,
+        validated::{
+            EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
+        },
     },
     input::EncapsulationInput,
     message::{
@@ -55,6 +57,21 @@ impl EncapsulatedMessage {
     #[must_use]
     pub fn into_components(self) -> (PublicHeader, EncapsulatedPart) {
         (self.public_header, self.encapsulated_part)
+    }
+
+    /// Verify the message public header signature.
+    pub fn verify_header_signature(
+        self,
+    ) -> Result<EncapsulatedMessageWithVerifiedSignature, Error> {
+        let public_header_with_verified_signature =
+            self.public_header.verify_signature(&signing_body(
+                &self.encapsulated_part.private_header,
+                &self.encapsulated_part.payload,
+            ))?;
+        Ok(EncapsulatedMessageWithVerifiedSignature::from_components(
+            public_header_with_verified_signature,
+            self.encapsulated_part,
+        ))
     }
 
     /// Verify the message public header.
@@ -174,11 +191,10 @@ impl EncapsulatedPart {
             } => {
                 let decapsulated_payload =
                     self.payload.decapsulate(&mut key.cipher(domains::PAYLOAD));
-                verify_intermediate_reconstructed_public_header(
+                verify_reconstructed_header_signature(
                     &public_header,
                     &encapsulated_private_header,
                     &decapsulated_payload,
-                    verifier,
                 )?;
                 Ok(PartDecapsulationOutput::Incompleted {
                     encapsulated_part: Self {
@@ -196,7 +212,7 @@ impl EncapsulatedPart {
             } => {
                 let decapsulated_payload =
                     self.payload.decapsulate(&mut key.cipher(domains::PAYLOAD));
-                verify_last_reconstructed_public_header(
+                verify_reconstructed_header_signature(
                     &public_header,
                     &encapsulated_private_header,
                     &decapsulated_payload,
@@ -215,35 +231,7 @@ impl EncapsulatedPart {
     }
 }
 
-/// Verify the public header reconstructed when decapsulating all but the very
-/// last private header.
-///
-/// Verification includes everything that is verified in
-/// [`verify_last_reconstructed_public_header`], plus the `PoQ` of the
-/// reconstructed header.
-fn verify_intermediate_reconstructed_public_header<Verifier>(
-    public_header: &PublicHeader,
-    private_header: &EncapsulatedPrivateHeader,
-    payload: &EncapsulatedPayload,
-    verifier: &Verifier,
-) -> Result<(), Error>
-where
-    Verifier: ProofsVerifier,
-{
-    verify_last_reconstructed_public_header(public_header, private_header, payload)?;
-    // Verify the proof of quota in the reconstructed public header
-    tracing::trace!("Verifying proof of quota of intermediate reconstructed public header.");
-    public_header.verify_proof_of_quota(verifier)?;
-    Ok(())
-}
-
-/// Verify the public header reconstructed when decapsulating the last private
-/// header _only_.
-///
-/// Verification includes the signature over the private header and the
-/// decapsulated payload, using the verification key included in the outer
-/// public header.
-fn verify_last_reconstructed_public_header(
+fn verify_reconstructed_header_signature(
     public_header: &PublicHeader,
     private_header: &EncapsulatedPrivateHeader,
     payload: &EncapsulatedPayload,
