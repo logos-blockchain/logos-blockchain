@@ -15,7 +15,7 @@ use lb_core::{
         tx::TxHash,
     },
 };
-use lb_key_management_system_service::keys::Ed25519Key;
+use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, warn};
 
@@ -85,9 +85,27 @@ pub enum Event {
 }
 
 enum ActorRequest {
-    Publish {
+    /// Create/sign/submit a transaction with an inscription
+    PublishMessage {
         data: Vec<u8>,
         reply: tokio::sync::oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
+    },
+    /// Build an unsigned tx for the given ops and an inscription
+    ///
+    /// Calling this multiple times without submitting the prepared txs via
+    /// `SubmitSignedTx` can cause parent msg ID conflicts, so ensure
+    /// prepared txs are submitted promptly. If additional prepares are
+    /// unavoidable, handle potential conflicts carefully.
+    PrepareTx {
+        ops: Vec<Op>,
+        msg: Vec<u8>,
+        reply: tokio::sync::oneshot::Sender<Result<(MantleTx, MsgId, Ed25519Signature), Error>>,
+    },
+    /// Submit a signed tx associated with a msg ID
+    SubmitSignedTx {
+        tx: SignedMantleTx,
+        msg_id: MsgId,
+        reply: tokio::sync::oneshot::Sender<Result<PublishResult, Error>>,
     },
     SetKeys {
         keys: Vec<Ed25519PublicKey>,
@@ -125,12 +143,13 @@ where
         }
     }
 
-    /// Publish an inscription to the zone's channel.
+    /// Create/sign/submit a transaction with an inscription for the given
+    /// message to the zone's channel.
     ///
     /// Returns the inscription ID and a checkpoint for persistence.
-    pub async fn publish(&self, data: Vec<u8>) -> Result<PublishResult, Error> {
+    pub async fn publish_message(&self, data: Vec<u8>) -> Result<PublishResult, Error> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let request = ActorRequest::Publish {
+        let request = ActorRequest::PublishMessage {
             data,
             reply: reply_tx,
         };
@@ -150,6 +169,72 @@ where
 
         // Post to network (best effort, will be resubmitted if needed)
         if let Err(e) = self.node.post_transaction(signed_tx).await {
+            warn!("Failed to post transaction: {e}");
+        }
+
+        Ok(result)
+    }
+
+    /// Build a [`MantleTx`] for the given ops and an inscription message,
+    /// without submitting it.
+    ///
+    /// The returned [`MantleTx`] should be signed by all parties and submitted
+    /// via [`Self::submit_signed_tx`].
+    pub async fn prepare_tx(
+        &self,
+        ops: Vec<Op>,
+        data: Vec<u8>,
+    ) -> Result<(MantleTx, MsgId, Ed25519Signature), Error> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let request = ActorRequest::PrepareTx {
+            ops,
+            msg: data,
+            reply: reply_tx,
+        };
+
+        self.request_tx
+            .send(request)
+            .await
+            .map_err(|_| Error::Unavailable {
+                reason: "actor channel closed",
+            })?;
+
+        reply_rx.await.map_err(|_| Error::Unavailable {
+            reason: "actor dropped reply",
+        })?
+    }
+
+    /// Submit a [`SignedMantleTx`] that is associated with a [`MsgId`]
+    pub async fn submit_signed_tx(
+        &self,
+        tx: SignedMantleTx,
+        msg_id: MsgId,
+    ) -> Result<PublishResult, Error> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let request = ActorRequest::SubmitSignedTx {
+            tx: tx.clone(),
+            msg_id,
+            reply: reply_tx,
+        };
+
+        self.request_tx
+            .send(request)
+            .await
+            .map_err(|_| Error::Unavailable {
+                reason: "actor channel closed",
+            })?;
+
+        let result = reply_rx.await.map_err(|_| Error::Unavailable {
+            reason: "actor dropped reply",
+        })??;
+
+        info!(
+            "Submitted tx including inscription {:?}",
+            result.inscription_id
+        );
+
+        // Post to network (best effort, will be resubmitted if needed)
+        if let Err(e) = self.node.post_transaction(tx).await {
             warn!("Failed to post transaction: {e}");
         }
 
@@ -504,7 +589,18 @@ where
     fn handle_request(&mut self, request: ActorRequest) {
         if !self.is_ready() {
             match request {
-                ActorRequest::Publish { reply, .. } | ActorRequest::SetKeys { reply, .. } => {
+                ActorRequest::PublishMessage { reply, .. }
+                | ActorRequest::SetKeys { reply, .. } => {
+                    drop(reply.send(Err(Error::Unavailable {
+                        reason: "sequencer not yet ready",
+                    })));
+                }
+                ActorRequest::PrepareTx { reply, .. } => {
+                    drop(reply.send(Err(Error::Unavailable {
+                        reason: "sequencer not yet ready",
+                    })));
+                }
+                ActorRequest::SubmitSignedTx { reply, .. } => {
                     drop(reply.send(Err(Error::Unavailable {
                         reason: "sequencer not yet ready",
                     })));
@@ -517,20 +613,32 @@ where
         let s = self.state.as_mut().unwrap();
 
         match request {
-            ActorRequest::Publish { data, reply } => {
+            ActorRequest::PublishMessage { data, reply } => {
                 let (signed_tx, new_msg_id) =
                     create_inscribe_tx(self.channel_id, &self.signing_key, data, self.last_msg_id);
-                let id = signed_tx.mantle_tx.hash();
-
-                s.submit(signed_tx.clone());
-                self.last_msg_id = new_msg_id;
-
-                let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
-                let result = PublishResult {
-                    inscription_id: id,
-                    checkpoint,
-                };
+                let result = submit_signed_tx(
+                    s,
+                    signed_tx.clone(),
+                    new_msg_id,
+                    &mut self.last_msg_id,
+                    self.lib_slot,
+                );
                 drop(reply.send(Ok((signed_tx, result))));
+            }
+            ActorRequest::PrepareTx { ops, msg, reply } => {
+                let result = prepare_tx(
+                    ops,
+                    self.channel_id,
+                    &self.signing_key,
+                    msg,
+                    self.last_msg_id,
+                );
+                // do not update last_msg_id since tx is not submitted yet
+                drop(reply.send(Ok(result)));
+            }
+            ActorRequest::SubmitSignedTx { tx, msg_id, reply } => {
+                let result = submit_signed_tx(s, tx, msg_id, &mut self.last_msg_id, self.lib_slot);
+                drop(reply.send(Ok(result)));
             }
             ActorRequest::SetKeys { keys, reply } => {
                 let signed_tx = create_set_keys_tx(self.channel_id, &self.signing_key, keys);
@@ -543,6 +651,24 @@ where
                 drop(reply.send(Ok((signed_tx, result))));
             }
         }
+    }
+}
+
+fn submit_signed_tx(
+    state: &mut TxState,
+    tx: SignedMantleTx,
+    msg_id: MsgId,
+    last_msg_id: &mut MsgId,
+    lib_slot: Slot,
+) -> PublishResult {
+    let id = tx.mantle_tx.hash();
+    state.submit(tx);
+    *last_msg_id = msg_id;
+
+    let checkpoint = build_checkpoint(state, *last_msg_id, lib_slot);
+    PublishResult {
+        inscription_id: id,
+        checkpoint,
     }
 }
 
@@ -860,6 +986,7 @@ fn create_inscribe_tx(
     };
     let msg_id = inscribe_op.id();
 
+    // TODO: set realistic gas prices and fund tx
     let inscribe_tx = MantleTx {
         ops: vec![Op::ChannelInscribe(inscribe_op)],
         storage_gas_price: 0.into(),
@@ -887,6 +1014,7 @@ fn create_set_keys_tx(
         keys,
     };
 
+    // TODO: set realistic gas prices and fund tx
     let set_keys_tx = MantleTx {
         ops: vec![Op::ChannelSetKeys(set_keys_op)],
         storage_gas_price: 0.into(),
@@ -899,5 +1027,230 @@ fn create_set_keys_tx(
     SignedMantleTx {
         ops_proofs: vec![OpProof::Ed25519Sig(signature)],
         mantle_tx: set_keys_tx,
+    }
+}
+
+fn prepare_tx(
+    mut ops: Vec<Op>,
+    channel_id: ChannelId,
+    signing_key: &Ed25519Key,
+    inscription: Vec<u8>,
+    parent: MsgId,
+) -> (MantleTx, MsgId, Ed25519Signature) {
+    let inscription_op = InscriptionOp {
+        channel_id,
+        inscription,
+        parent,
+        signer: signing_key.public_key(),
+    };
+    let msg_id = inscription_op.id();
+    ops.push(Op::ChannelInscribe(inscription_op));
+
+    // TODO: set realistic gas prices and fund tx
+    let tx = MantleTx {
+        ops,
+        storage_gas_price: 0,
+        execution_gas_price: 0,
+    };
+
+    let inscription_sig = signing_key.sign_payload(tx.hash().as_signing_bytes().as_ref());
+
+    (tx, msg_id, inscription_sig)
+}
+
+#[cfg(test)]
+mod tests {
+    use async_trait::async_trait;
+    use futures::Stream;
+    use lb_common_http_client::{ApiBlock, ApiHeader, BlockInfo, CryptarchiaInfo, State};
+    use lb_core::{
+        block::Block,
+        header::ContentId,
+        mantle::{
+            Note, Utxo,
+            ops::{channel::deposit::DepositOp, transfer::TransferOp},
+        },
+        proofs::leader_proof::Groth16LeaderProof,
+    };
+    use lb_key_management_system_service::keys::ZkKey;
+    use num_bigint::BigUint;
+
+    use super::*;
+    use crate::ZoneMessage;
+
+    #[tokio::test]
+    async fn prepare_submit_deposit_and_inscription() {
+        // Init a sequencer
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let (node, mut posted_txs) = MockNode::new();
+        let (sequencer, mut handle) = ZoneSequencer::init(channel_id, sequencer_key, node, None);
+        let _join_handle = sequencer.spawn();
+        handle.wait_ready().await;
+
+        // Prepare a deposit op and a transfer op using a depositer's key.
+        // The transfer op burns the same amount of tokens as the deposit amount.
+        let depositer_key = ZkKey::zero();
+        let input_note = Utxo::new(
+            TxHash::from(BigUint::ZERO),
+            0,
+            Note::new(30, depositer_key.to_public_key()),
+        );
+        let deposit_op = DepositOp {
+            channel_id,
+            amount: 10,
+            metadata: "to Alice".into(),
+        };
+        let transfer_op = TransferOp {
+            inputs: vec![input_note.id()],
+            // a change note
+            outputs: vec![Note::new(
+                input_note.note.value - deposit_op.amount,
+                depositer_key.to_public_key(),
+            )],
+        };
+
+        // Prepare a `MantleTx` with two operations prepared and a inscribe op
+        // that presents the zone state transition corresponding to the operations.
+        let (tx, msg_id, inscription_sig) = handle
+            .prepare_tx(
+                vec![
+                    Op::ChannelDeposit(deposit_op.clone()),
+                    Op::Transfer(transfer_op.clone()),
+                ],
+                "Mint 10 to Alice".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(tx.ops.len(), 3);
+        assert_eq!(&tx.ops[0], &Op::ChannelDeposit(deposit_op));
+        assert_eq!(&tx.ops[1], &Op::Transfer(transfer_op));
+        assert!(matches!(&tx.ops[2], &Op::ChannelInscribe(_)));
+
+        // Sign the `MantleTx` with the depositer's key, and put the signature in the
+        // 2nd position of proofs since the transfer op is the 2nd op.
+        let transfer_sig = depositer_key.sign_payload(tx.hash().as_ref()).unwrap();
+        let signed_tx = SignedMantleTx::new(
+            tx,
+            vec![
+                OpProof::NoProof,
+                OpProof::ZkSig(transfer_sig),
+                OpProof::Ed25519Sig(inscription_sig),
+            ],
+        )
+        .unwrap();
+
+        // Submit the signed tx
+        let result = handle
+            .submit_signed_tx(signed_tx.clone(), msg_id)
+            .await
+            .unwrap();
+        assert_eq!(result.inscription_id, signed_tx.mantle_tx.hash());
+        assert_eq!(result.checkpoint.last_msg_id, msg_id);
+        assert_eq!(posted_txs.recv().await.unwrap(), signed_tx);
+    }
+
+    #[derive(Clone)]
+    struct MockNode {
+        posted_transactions_sender: mpsc::Sender<SignedMantleTx>,
+    }
+
+    impl MockNode {
+        fn new() -> (Self, mpsc::Receiver<SignedMantleTx>) {
+            let (tx, rx) = mpsc::channel(10);
+            (
+                Self {
+                    posted_transactions_sender: tx,
+                },
+                rx,
+            )
+        }
+    }
+
+    #[async_trait]
+    impl adapter::Node for MockNode {
+        async fn consensus_info(&self) -> Result<CryptarchiaInfo, lb_common_http_client::Error> {
+            Ok(CryptarchiaInfo {
+                lib: HeaderId::from([0; 32]),
+                lib_slot: Slot::genesis(),
+                tip: HeaderId::from([0; 32]),
+                slot: Slot::genesis(),
+                height: 0,
+                mode: State::Online,
+            })
+        }
+
+        async fn block_stream(
+            &self,
+        ) -> Result<
+            impl Stream<Item = ProcessedBlockEvent> + Send + 'static,
+            lb_common_http_client::Error,
+        > {
+            Ok(futures::stream::once(async {
+                ProcessedBlockEvent {
+                    block: ApiBlock {
+                        header: ApiHeader {
+                            id: HeaderId::from([1; 32]),
+                            parent_block: HeaderId::from([0; 32]),
+                            slot: 1.into(),
+                            block_root: ContentId::from([0; 32]),
+                            proof_of_leadership: Groth16LeaderProof::genesis(),
+                        },
+                        transactions: Vec::new(),
+                    },
+                    tip: HeaderId::from([1; 32]),
+                    tip_slot: 1.into(),
+                    lib: HeaderId::from([0; 32]),
+                    lib_slot: Slot::genesis(),
+                }
+            })
+            .chain(futures::stream::pending()))
+        }
+
+        async fn lib_stream(
+            &self,
+        ) -> Result<impl Stream<Item = BlockInfo> + Send, lb_common_http_client::Error> {
+            Ok(futures::stream::pending())
+        }
+
+        async fn block(
+            &self,
+            _id: HeaderId,
+        ) -> Result<Option<Block<SignedMantleTx>>, lb_common_http_client::Error> {
+            unimplemented!()
+        }
+
+        async fn blocks(
+            &self,
+            _slot_from: Slot,
+            _slot_to: Slot,
+        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
+            unimplemented!()
+        }
+
+        async fn zone_messages_in_block(
+            &self,
+            _id: HeaderId,
+            _channel_id: ChannelId,
+        ) -> Result<impl Stream<Item = ZoneMessage>, lb_common_http_client::Error> {
+            Ok(futures::stream::pending())
+        }
+
+        async fn zone_messages_in_blocks(
+            &self,
+            _slot_from: Slot,
+            _slot_to: Slot,
+            _channel_id: ChannelId,
+        ) -> Result<impl Stream<Item = (ZoneMessage, Slot)>, lb_common_http_client::Error> {
+            Ok(futures::stream::pending())
+        }
+
+        async fn post_transaction(
+            &self,
+            tx: SignedMantleTx,
+        ) -> Result<(), lb_common_http_client::Error> {
+            self.posted_transactions_sender.send(tx).await.unwrap();
+            Ok(())
+        }
     }
 }

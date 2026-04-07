@@ -109,7 +109,10 @@ async fn test_sequencer_publish_and_indexer_read() {
     ];
 
     for data in &test_data {
-        handle.publish(data.clone()).await.expect("publish failed");
+        handle
+            .publish_message(data.clone())
+            .await
+            .expect("publish failed");
     }
 
     // Poll indexer until all expected payloads are seen.
@@ -249,7 +252,10 @@ async fn test_sequencer_checkpoint_resume() {
 
     let mut last_publish_result = None;
     for data in &test_data_phase1 {
-        let result = handle.publish(data.clone()).await.expect("publish failed");
+        let result = handle
+            .publish_message(data.clone())
+            .await
+            .expect("publish failed");
         last_publish_result = Some(result);
     }
 
@@ -273,7 +279,10 @@ async fn test_sequencer_checkpoint_resume() {
 
     let test_data_phase2: Vec<Vec<u8>> = vec![b"Message 3".to_vec(), b"Message 4".to_vec()];
     for data in &test_data_phase2 {
-        handle.publish(data.clone()).await.expect("publish failed");
+        handle
+            .publish_message(data.clone())
+            .await
+            .expect("publish failed");
     }
 
     // Verify all messages (from both phases) are indexed
@@ -397,7 +406,10 @@ async fn test_sequencer_stale_checkpoint_resume() {
     let data_phase1: Vec<Vec<u8>> = vec![b"msg-1".to_vec(), b"msg-2".to_vec()];
     let mut last_result = None;
     for data in &data_phase1 {
-        let r = handle.publish(data.clone()).await.expect("publish failed");
+        let r = handle
+            .publish_message(data.clone())
+            .await
+            .expect("publish failed");
         last_result = Some(r);
     }
     let stale_checkpoint = last_result.unwrap().checkpoint;
@@ -449,7 +461,10 @@ async fn test_sequencer_stale_checkpoint_resume() {
 
     let data_phase2: Vec<Vec<u8>> = vec![b"msg-3".to_vec(), b"msg-4".to_vec()];
     for data in &data_phase2 {
-        handle.publish(data.clone()).await.expect("publish failed");
+        handle
+            .publish_message(data.clone())
+            .await
+            .expect("publish failed");
     }
 
     // Wait for phase 2 to finalize
@@ -498,7 +513,10 @@ async fn test_sequencer_stale_checkpoint_resume() {
 
     let data_phase3: Vec<Vec<u8>> = vec![b"msg-5".to_vec()];
     for data in &data_phase3 {
-        handle.publish(data.clone()).await.expect("publish failed");
+        handle
+            .publish_message(data.clone())
+            .await
+            .expect("publish failed");
     }
 
     // Verify all 5 messages appear, no duplicates
