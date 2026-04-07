@@ -594,11 +594,10 @@ async fn determine_best_node_for_sync<'a>(
         let Ok(this_info) = node.started_node.client.consensus_info().await else {
             continue;
         };
-        if let Some((_name, _client, best_info)) = best_node.clone() {
-            if this_info.height > best_info.height {
-                best_node = Some((node.name.clone(), &node.started_node.client, this_info));
-            }
-        } else {
+        if best_node
+            .as_ref()
+            .is_none_or(|(_name, _client, best_info)| this_info.height > best_info.height)
+        {
             best_node = Some((node.name.clone(), &node.started_node.client, this_info));
         }
     }
@@ -611,6 +610,8 @@ async fn determine_best_node_for_sync<'a>(
 }
 
 type WalletPkMap = HashMap<String, ZkPublicKey>;
+type WalletsByPk = HashMap<ZkPublicKey, Vec<String>>;
+
 type UtxoWalletMap = HashMap<String, HashMap<NoteId, Utxo>>;
 
 fn collect_multiple_sync_wallet_info(
@@ -661,18 +662,12 @@ async fn collect_multiple_wallets_utxos(
     let (best_node_name, best_node_client, best_consensus) =
         determine_best_node_for_sync(world, requests).await?;
     let (wallet_pks, mut owned_per_wallet) = collect_multiple_sync_wallet_info(requests)?;
+    let wallets_by_pk = build_wallets_by_pk(&wallet_pks);
 
     // Add genesis block UTXOs to each owned set, as they are not in the blocks
     // stream.
-    for utxo in &world.genesis_block_utxos {
-        for (wallet_name, wallet_pk) in &wallet_pks {
-            if utxo.note.pk == *wallet_pk {
-                owned_per_wallet
-                    .get_mut(wallet_name)
-                    .expect("wallet exists")
-                    .insert(utxo.id(), *utxo);
-            }
-        }
+    for &utxo in &world.genesis_block_utxos {
+        add_utxo_to_matching_wallets(&mut owned_per_wallet, &wallets_by_pk, utxo);
     }
 
     // Walk back from best tip until chain start or a cache hit that contains all
@@ -743,22 +738,7 @@ async fn collect_multiple_wallets_utxos(
         for tx in block.transactions() {
             for transfer in tx.mantle_tx.transfers() {
                 for utxo in transfer.utxos() {
-                    for (wallet_name, wallet_pk) in &wallet_pks {
-                        if utxo.note.pk == *wallet_pk {
-                            owned_per_wallet
-                                .get_mut(wallet_name)
-                                .expect("wallet exists")
-                                .insert(utxo.id(), utxo);
-                            if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
-                                info!(
-                                    target: TARGET,
-                                    "Found UTXO for `{wallet_name}`: value: {}, id: {:?}",
-                                    utxo.note.value,
-                                    utxo.id(),
-                                );
-                            }
-                        }
-                    }
+                    add_utxo_to_matching_wallets(&mut owned_per_wallet, &wallets_by_pk, utxo);
                 }
             }
 
@@ -801,6 +781,36 @@ async fn collect_multiple_wallets_utxos(
         .into_iter()
         .map(|(wallet_name, owned)| (wallet_name, owned.into_values().collect()))
         .collect())
+}
+
+fn build_wallets_by_pk(wallet_pks: &WalletPkMap) -> WalletsByPk {
+    let mut by_pk: WalletsByPk = HashMap::new();
+    for (wallet_name, pk) in wallet_pks {
+        by_pk.entry(*pk).or_default().push(wallet_name.clone());
+    }
+    by_pk
+}
+
+fn add_utxo_to_matching_wallets(
+    owned_per_wallet: &mut UtxoWalletMap,
+    wallets_by_pk: &WalletsByPk,
+    utxo: Utxo,
+) {
+    if let Some(wallets) = wallets_by_pk.get(&utxo.note.pk) {
+        for wallet_name in wallets {
+            if let Some(owned) = owned_per_wallet.get_mut(wallet_name) {
+                owned.insert(utxo.id(), utxo);
+                if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
+                    info!(
+                        target: TARGET,
+                        "Found UTXO for `{wallet_name}`: value: {}, id: {:?}",
+                        utxo.note.value,
+                        utxo.id(),
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[expect(
