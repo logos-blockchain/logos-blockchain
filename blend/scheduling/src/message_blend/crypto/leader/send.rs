@@ -13,10 +13,12 @@ use lb_cryptarchia_engine::Epoch;
 use crate::{
     membership::Membership,
     message_blend::{
-        crypto::EncapsulatedMessageWithVerifiedPublicHeader,
+        crypto::{
+            EncapsulatedMessageWithVerifiedPublicHeader,
+            serialize_encapsulated_message_with_verified_public_header,
+        },
         provers::{ProofsGeneratorSettings, leader::LeaderProofsGenerator},
     },
-    serialize_encapsulated_message,
 };
 
 /// [`SessionCryptographicProcessor`] is responsible for only wrapping data
@@ -135,7 +137,7 @@ where
         &mut self,
         payload: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        Ok(serialize_encapsulated_message(
+        Ok(serialize_encapsulated_message_with_verified_public_header(
             &self.encapsulate_data_payload(payload).await?,
         ))
     }

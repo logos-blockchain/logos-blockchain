@@ -31,6 +31,7 @@ pub struct SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerat
     /// The non-ephemeral encryption key (NEK) for decapsulating messages.
     non_ephemeral_encryption_key: X25519PrivateKey,
     membership: Membership<NodeId>,
+    session: u64,
     proofs_generator: ProofsGenerator,
     _phantom: PhantomData<CorePoQGenerator>,
 }
@@ -44,6 +45,10 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator>
 
     pub(super) const fn membership(&self) -> &Membership<NodeId> {
         &self.membership
+    }
+
+    pub const fn session(&self) -> u64 {
+        self.session
     }
 
     #[cfg(test)]
@@ -84,6 +89,7 @@ where
                 generator_settings,
                 core_proof_of_quota_generator,
             ),
+            session: public_info.session,
             _phantom: PhantomData,
         }
     }
