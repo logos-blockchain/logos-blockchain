@@ -579,14 +579,12 @@ fn encode_channel_withdraw_proof(proof: &ChannelWithdrawProof) -> Vec<u8> {
 pub fn encode_channel_inscribe(op: &InscriptionOp) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_hash32(op.channel_id.as_ref()));
-    if op.inscription.len() > MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize {
-        let msg = format!(
-            "Fatal error in 'encode_channel_inscribe' - {} inscription data clipped to {}",
-            op.inscription.len(),
-            MAX_ENCODE_DECODE_INSCRIPTION_SIZE
-        );
-        panic!("{msg}");
-    }
+    assert!(
+        op.inscription.len() <= MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize,
+        "Fatal error in 'encode_channel_inscribe' - {} inscription data clipped to {}",
+        op.inscription.len(),
+        MAX_ENCODE_DECODE_INSCRIPTION_SIZE
+    );
     bytes.extend(encode_uint32(op.inscription.len() as u32));
     bytes.extend(&op.inscription);
     bytes.extend(encode_hash32(op.parent.as_ref()));
@@ -595,14 +593,12 @@ pub fn encode_channel_inscribe(op: &InscriptionOp) -> Vec<u8> {
 }
 
 fn encode_channel_set_keys(op: &SetKeysOp) -> Vec<u8> {
-    if op.keys.len() > u8::MAX as usize {
-        let msg = format!(
-            "Fatal error in 'encode_channel_set_keys' - {} keys clipped to {}",
-            op.keys.len(),
-            u8::MAX
-        );
-        panic!("{msg}");
-    }
+    assert!(
+        u8::try_from(op.keys.len()).is_ok(),
+        "Fatal error in 'encode_channel_set_keys' - {} keys clipped to {}",
+        op.keys.len(),
+        u8::MAX
+    );
     let mut bytes = Vec::new();
     bytes.extend(encode_hash32(op.channel.as_ref()));
     bytes.extend(encode_byte(op.keys.len() as u8));
@@ -631,14 +627,12 @@ fn encode_channel_withdraw(op: &ChannelWithdrawOp) -> Vec<u8> {
 /// Encode SDP operations
 fn encode_locator(locator: &multiaddr::Multiaddr) -> Vec<u8> {
     let locator_bytes = locator.to_vec();
-    if locator_bytes.len() > LOCATOR_BYTES_SIZE_LIMIT {
-        let msg = format!(
-            "Fatal error in 'encode_locator' - {} locator bytes clipped to \
+    assert!(
+        locator_bytes.len() <= LOCATOR_BYTES_SIZE_LIMIT,
+        "Fatal error in 'encode_locator' - {} locator bytes clipped to \
             {LOCATOR_BYTES_SIZE_LIMIT}",
-            locator_bytes.len()
-        );
-        panic!("{msg}");
-    }
+        locator_bytes.len()
+    );
     let mut bytes = Vec::new();
     bytes.extend((locator_bytes.len() as u16).to_le_bytes());
     bytes.extend(locator_bytes);
@@ -646,14 +640,12 @@ fn encode_locator(locator: &multiaddr::Multiaddr) -> Vec<u8> {
 }
 
 fn encode_sdp_declare(op: &SDPDeclareOp) -> Vec<u8> {
-    if op.locators.len() > u8::MAX as usize {
-        let msg = format!(
-            "Fatal error in 'encode_sdp_declare' - {} locators clipped to {}",
-            op.locators.len(),
-            u8::MAX
-        );
-        panic!("{msg}");
-    }
+    assert!(
+        u8::try_from(op.locators.len()).is_ok(),
+        "Fatal error in 'encode_sdp_declare' - {} locators clipped to {}",
+        op.locators.len(),
+        u8::MAX
+    );
     let mut bytes = Vec::new();
     // ServiceType
     let service_type_byte = match op.service_type {
@@ -690,14 +682,12 @@ pub fn encode_sdp_active(op: &SDPActiveOp) -> Vec<u8> {
 
     // Metadata - convert ActivityMetadata to bytes
     let metadata_bytes = op.metadata.to_metadata_bytes();
-    if metadata_bytes.len() > MAX_ENCODE_DECODE_METADATA_SIZE as usize {
-        let msg = format!(
-            "Fatal error in 'encode_sdp_active' - {} metadata bytes clipped to {}",
-            metadata_bytes.len(),
-            MAX_ENCODE_DECODE_METADATA_SIZE
-        );
-        panic!("{msg}");
-    }
+    assert!(
+        metadata_bytes.len() <= MAX_ENCODE_DECODE_METADATA_SIZE as usize,
+        "Fatal error in 'encode_sdp_active' - {} metadata bytes clipped to {}",
+        metadata_bytes.len(),
+        MAX_ENCODE_DECODE_METADATA_SIZE
+    );
 
     bytes.extend(encode_uint32(metadata_bytes.len() as u32));
     bytes.extend(&metadata_bytes);
@@ -721,14 +711,12 @@ fn encode_note(note: &Note) -> Vec<u8> {
 }
 
 fn encode_inputs(inputs: &[NoteId]) -> Vec<u8> {
-    if inputs.len() > u8::MAX as usize {
-        let msg = format!(
-            "Fatal error in 'encode_inputs' - {} inputs clipped to {}",
-            inputs.len(),
-            u8::MAX
-        );
-        panic!("{msg}");
-    }
+    assert!(
+        u8::try_from(inputs.len()).is_ok(),
+        "Fatal error in 'encode_inputs' - {} inputs clipped to {}",
+        inputs.len(),
+        u8::MAX
+    );
     let mut bytes = Vec::new();
     bytes.extend(encode_byte(inputs.len() as u8));
     for input in inputs {
@@ -739,14 +727,12 @@ fn encode_inputs(inputs: &[NoteId]) -> Vec<u8> {
 
 fn encode_outputs(outputs: &[Note]) -> Vec<u8> {
     let mut bytes = Vec::new();
-    if outputs.len() > u8::MAX as usize {
-        let msg = format!(
-            "Fatal error in 'encode_outputs' - {} outputs clipped to {}",
-            outputs.len(),
-            u8::MAX
-        );
-        panic!("{msg}");
-    }
+    assert!(
+        u8::try_from(outputs.len()).is_ok(),
+        "Fatal error in 'encode_outputs' - {} outputs clipped to {}",
+        outputs.len(),
+        u8::MAX
+    );
     bytes.extend(encode_byte(outputs.len() as u8));
     for output in outputs {
         bytes.extend(encode_note(output));
@@ -808,14 +794,12 @@ pub fn encode_op(op: &Op) -> Vec<u8> {
 }
 
 fn encode_ops(ops: &[Op]) -> Vec<u8> {
-    if ops.len() > u8::MAX as usize {
-        let msg = format!(
-            "Fatal error in 'encode_ops' - {} ops clipped to {}",
-            ops.len(),
-            u8::MAX
-        );
-        panic!("{msg}");
-    }
+    assert!(
+        u8::try_from(ops.len()).is_ok(),
+        "Fatal error in 'encode_ops' - {} ops clipped to {}",
+        ops.len(),
+        u8::MAX
+    );
     let mut bytes = Vec::new();
     bytes.extend(encode_byte(ops.len() as u8));
     for op in ops {
