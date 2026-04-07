@@ -11,7 +11,9 @@ use lb_node::{
 };
 use tokio::runtime::Runtime;
 
-use crate::{LogosBlockchainNode, PointerResult, errors::OperationStatus};
+use crate::{
+    LogosBlockchainNode, PointerResult, errors::OperationStatus, return_error_if_null_pointer,
+};
 
 pub type InitializedLogosBlockchainNodeResult = PointerResult<LogosBlockchainNode, OperationStatus>;
 
@@ -154,11 +156,7 @@ fn get_deployment_config(
 /// - The pointer will not be used after this function returns
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn stop_node(node: *mut LogosBlockchainNode) -> OperationStatus {
-    if node.is_null() {
-        log::error!("Attempted to stop a null node pointer. This is a bug. Aborting.");
-        return OperationStatus::NullPointer;
-    }
-
+    return_error_if_null_pointer!("stop_node", node);
     let node = unsafe { Box::from_raw(node) };
     node.stop()
 }

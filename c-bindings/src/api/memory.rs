@@ -1,16 +1,18 @@
 use std::ffi::{CString, c_char};
 
+use crate::{OperationStatus, return_error_if_null_pointer};
+
 /// Frees memory allocated for a given pointer.
 ///
 /// # Arguments
 ///
 /// * `pointer` - A pointer to the memory to be freed.
-pub fn free<Type>(pointer: *mut Type) {
-    if !pointer.is_null() {
-        unsafe {
-            drop(Box::from_raw(pointer));
-        }
+pub fn free<Type>(pointer: *mut Type) -> OperationStatus {
+    if pointer.is_null() {
+        return OperationStatus::NullPointer;
     }
+    unsafe { drop(Box::from_raw(pointer)) };
+    OperationStatus::Ok
 }
 
 /// # Safety
@@ -18,10 +20,8 @@ pub fn free<Type>(pointer: *mut Type) {
 /// this is called with a type which doesn't come from a returned `CString` it
 /// will cause a segfault.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn free_cstring(block: *mut c_char) {
-    if block.is_null() {
-        log::error!("Trying to free a null 'Block' pointer. Exiting");
-        return;
-    }
+pub unsafe extern "C" fn free_cstring(block: *mut c_char) -> OperationStatus {
+    return_error_if_null_pointer!("free_cstring", block);
     drop(unsafe { CString::from_raw(block) });
+    OperationStatus::Ok
 }

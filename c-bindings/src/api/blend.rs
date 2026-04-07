@@ -10,7 +10,7 @@ use multiaddr::Multiaddr;
 
 use crate::{
     LogosBlockchainNode, api::sdp::post_declaration_sync, errors::OperationStatus,
-    result::ValueResult, return_error_if_null_pointer, unwrap_or_return_err,
+    result::ValueResult, return_error_if_null_pointer, unwrap_or_return_error,
 };
 
 pub const KEY_SIZE: usize = 32;
@@ -115,10 +115,10 @@ pub unsafe extern "C" fn blend_join_as_core_node(
         return_error_if_null_pointer!("blend_join_as_core_node", locators);
     }
 
-    let provider_id = unwrap_or_return_err!(unsafe { parse_provider_id(provider_id) });
-    let zk_id = unwrap_or_return_err!(unsafe { parse_zk_id(zk_id) });
-    let locked_note_id = unwrap_or_return_err!(unsafe { parse_locked_note_id(locked_note_id) });
-    let locators = unwrap_or_return_err!(unsafe { parse_locators(locators, locators_len) });
+    let provider_id = unwrap_or_return_error!(unsafe { parse_provider_id(provider_id) });
+    let zk_id = unwrap_or_return_error!(unsafe { parse_zk_id(zk_id) });
+    let locked_note_id = unwrap_or_return_error!(unsafe { parse_locked_note_id(locked_note_id) });
+    let locators = unwrap_or_return_error!(unsafe { parse_locators(locators, locators_len) });
 
     let node = unsafe { &*node };
 

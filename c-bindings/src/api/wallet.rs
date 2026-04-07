@@ -36,6 +36,7 @@ use crate::{
         types::value::Value,
     },
     errors::OperationStatus,
+    return_error_if_null_pointer, unwrap_or_return_error,
 };
 
 /// ```rust
@@ -173,32 +174,25 @@ impl Default for KnownAddresses {
 pub unsafe extern "C" fn get_known_addresses(
     node: *const LogosBlockchainNode,
 ) -> KnownAddressesResult {
-    if node.is_null() {
-        log::error!("[get_known_addresses] Received a null `node` pointer. Exiting.");
-        return KnownAddressesResult::from_error(OperationStatus::NullPointer);
-    }
+    return_error_if_null_pointer!("get_known_addresses", node);
 
     let node = unsafe { &*node };
+    let addresses = unwrap_or_return_error!(get_known_addresses_sync(node));
 
-    match get_known_addresses_sync(node) {
-        Ok(addresses) => {
-            let address_pointers: Vec<*mut u8> = addresses
-                .into_iter()
-                .map(|pk| {
-                    let bytes = fr_to_bytes(pk.as_fr());
-                    Box::into_raw(Box::new(bytes)).cast::<u8>()
-                })
-                .collect();
-            let len = address_pointers.len();
-            let addresses_ptr = Box::leak(address_pointers.into_boxed_slice()).as_mut_ptr();
+    let address_pointers: Vec<*mut u8> = addresses
+        .into_iter()
+        .map(|pk| {
+            let bytes = fr_to_bytes(pk.as_fr());
+            Box::into_raw(Box::new(bytes)).cast::<u8>()
+        })
+        .collect();
+    let len = address_pointers.len();
+    let addresses_ptr = Box::leak(address_pointers.into_boxed_slice()).as_mut_ptr();
 
-            KnownAddressesResult::from_value(KnownAddresses {
-                addresses: addresses_ptr,
-                len,
-            })
-        }
-        Err(status) => KnownAddressesResult::from_error(status),
-    }
+    KnownAddressesResult::from_value(KnownAddresses {
+        addresses: addresses_ptr,
+        len,
+    })
 }
 
 /// Frees the memory allocated for a [`KnownAddresses`] structure.
@@ -255,7 +249,7 @@ pub unsafe extern "C" fn get_known_addresses(
 /// }
 /// ```
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn free_known_addresses(addresses: KnownAddresses) {
+pub unsafe extern "C" fn free_known_addresses(addresses: KnownAddresses) -> OperationStatus {
     if !addresses.addresses.is_null() {
         let address_pointers = unsafe {
             Box::from_raw(ptr::slice_from_raw_parts_mut(
@@ -271,6 +265,7 @@ pub unsafe extern "C" fn free_known_addresses(addresses: KnownAddresses) {
             }
         }
     }
+    OperationStatus::Ok
 }
 
 /// Get the balance of a wallet address
@@ -337,32 +332,23 @@ pub unsafe extern "C" fn get_balance(
     wallet_address: *const u8,
     optional_tip: *const HeaderId,
 ) -> BalanceResult {
-    if node.is_null() {
-        log::error!("[get_balance] Received a null `node` pointer. Exiting.");
-        return BalanceResult::from_error(OperationStatus::NullPointer);
-    }
-    if wallet_address.is_null() {
-        log::error!("[get_balance] Received a null `wallet_address` pointer. Exiting.");
-        return BalanceResult::from_error(OperationStatus::NullPointer);
-    }
-
+    return_error_if_null_pointer!("get_balance", node);
     let node = unsafe { &*node };
+    return_error_if_null_pointer!("get_balance", wallet_address);
     let tip = if optional_tip.is_null() {
-        match get_cryptarchia_info_sync(node) {
-            Ok(cryptarchia_info) => cryptarchia_info.tip,
-            Err(error) => return BalanceResult::from_error(error),
-        }
+        unwrap_or_return_error!(get_cryptarchia_info_sync(node)).tip
     } else {
         lb_core::header::HeaderId::from(unsafe { *optional_tip })
     };
     let wallet_address_bytes = unsafe { std::slice::from_raw_parts(wallet_address, 32) };
-    let wallet_address = match fr_from_bytes(wallet_address_bytes) {
-        Ok(bytes) => ZkPublicKey::new(bytes),
-        Err(e) => {
-            log::error!("{e:?}");
-            return BalanceResult::from_error(OperationStatus::DynError);
-        }
-    };
+    let wallet_address = unwrap_or_return_error!(
+        fr_from_bytes(wallet_address_bytes)
+            .map(ZkPublicKey::new)
+            .map_err(|e| {
+                log::error!("{e:?}");
+                OperationStatus::DynError
+            })
+    );
 
     match get_balance_sync(node, tip, wallet_address) {
         Ok(Some(balance)) => BalanceResult::from_value(balance),
@@ -520,14 +506,8 @@ pub unsafe extern "C" fn transfer_funds(
     node: *const LogosBlockchainNode,
     arguments: *const TransferFundsArguments,
 ) -> TransferFundsResult {
-    if node.is_null() {
-        log::error!("[transfer_funds] Received a null `node` pointer. Exiting.");
-        return TransferFundsResult::from_error(OperationStatus::NullPointer);
-    }
-    if arguments.is_null() {
-        log::error!("[transfer_funds] Received a null `arguments` pointer. Exiting.");
-        return TransferFundsResult::from_error(OperationStatus::NullPointer);
-    }
+    return_error_if_null_pointer!("transfer_funds", node);
+    return_error_if_null_pointer!("transfer_funds", arguments);
     let arguments = unsafe { &*arguments };
     if let Err((error_message, status)) = unsafe { arguments.validate() } {
         log::error!("[transfer_funds] {error_message} Exiting.");
@@ -574,26 +554,20 @@ pub unsafe extern "C" fn transfer_funds(
     };
     let amount = Value::from(arguments.amount);
 
-    match transfer_funds_sync(
+    let transaction = unwrap_or_return_error!(transfer_funds_sync(
         node,
         tip,
         change_public_key,
         funding_public_keys,
         recipient_public_key,
         amount,
-    ) {
-        Ok(transaction) => {
-            let transaction_hash = transaction.hash().as_signing_bytes();
-            let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
-                log::error!(
-                    "[transfer_funds] Failed to convert transaction hash to array. Exiting."
-                );
-                return TransferFundsResult::from_error(OperationStatus::RuntimeError);
-            };
-            TransferFundsResult::from_value(transaction_hash_array)
-        }
-        Err(status) => TransferFundsResult::from_error(status),
-    }
+    ));
+    let transaction_hash = transaction.hash().as_signing_bytes();
+    let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
+        log::error!("[transfer_funds] Failed to convert transaction hash to array. Exiting.");
+        return TransferFundsResult::from_error(OperationStatus::RuntimeError);
+    };
+    TransferFundsResult::from_value(transaction_hash_array)
 }
 
 /// Frees the memory allocated for a [`Hash`] value.
@@ -602,6 +576,6 @@ pub unsafe extern "C" fn transfer_funds(
 ///
 /// - `pointer`: A pointer to the [`Hash`] to be freed.
 #[unsafe(no_mangle)]
-pub extern "C" fn free_transfer_funds(pointer: *mut Hash) {
-    free::<Hash>(pointer);
+pub extern "C" fn free_transfer_funds(pointer: *mut Hash) -> OperationStatus {
+    free::<Hash>(pointer)
 }

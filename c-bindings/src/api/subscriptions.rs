@@ -8,7 +8,7 @@ use lb_node::{
     generic_services::CryptarchiaService,
 };
 
-use crate::LogosBlockchainNode;
+use crate::{LogosBlockchainNode, return_error_if_null_pointer};
 
 #[repr(C)]
 pub struct Block(CString); // JSON representation of a block
@@ -89,15 +89,26 @@ fn per_block_wrapper<T: 'static>(callback: CCallback<T>) -> BoxedCallback<T> {
     })
 }
 
+/// Subscribes to new blocks on the blockchain and calls the provided callback
+/// for each new block.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
+/// - `callback_per_block`: A callback function that will be called with a
+///   pointer to a C string containing the JSON representation of each new
+///   block. The callback is declared as unsafe extern "C" and must be
+///   thread-safe.
+///
+///# Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn subscribe_to_new_blocks(
     node: *const LogosBlockchainNode,
     callback_per_block: CCallback<*const c_char>,
 ) {
-    if node.is_null() {
-        log::error!("Received a null `node` pointer. Exiting.");
-        return;
-    }
+    return_error_if_null_pointer!("subscribe_to_new_blocks", node);
     let node = unsafe { &*node };
     let callback_per_block = per_block_wrapper(callback_per_block);
     subscribe_to_new_blocks_sync(node, callback_per_block);

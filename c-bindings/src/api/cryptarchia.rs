@@ -1,6 +1,9 @@
 use lb_groth16::fr_from_bytes;
 
-use crate::{LogosBlockchainNode, api::free, errors::OperationStatus, result::PointerResult};
+use crate::{
+    LogosBlockchainNode, api::free, errors::OperationStatus, result::PointerResult,
+    return_error_if_null_pointer, unwrap_or_return_error,
+};
 
 #[repr(C)]
 pub enum State {
@@ -126,19 +129,10 @@ pub type CryptarchiaInfoResult = PointerResult<CryptarchiaInfo, OperationStatus>
 pub unsafe extern "C" fn get_cryptarchia_info(
     node: *const LogosBlockchainNode,
 ) -> CryptarchiaInfoResult {
-    if node.is_null() {
-        log::error!("[get_cryptarchia_info] Received a null `node` pointer. Exiting.");
-        return CryptarchiaInfoResult::from_error(OperationStatus::NullPointer);
-    }
-
+    return_error_if_null_pointer!("get_cryptarchia_info", node);
     let node = unsafe { &*node };
-    match get_cryptarchia_info_sync(node) {
-        Ok(cryptarchia_info) => {
-            let cryptarchia_info = CryptarchiaInfo::from(cryptarchia_info);
-            CryptarchiaInfoResult::from_value(cryptarchia_info)
-        }
-        Err(error) => CryptarchiaInfoResult::from_error(error),
-    }
+    let cryptarchia_info = unwrap_or_return_error!(get_cryptarchia_info_sync(node));
+    CryptarchiaInfoResult::from_value(CryptarchiaInfo::from(cryptarchia_info))
 }
 
 /// Frees the memory allocated for a [`CryptarchiaInfo`] struct.
@@ -147,6 +141,6 @@ pub unsafe extern "C" fn get_cryptarchia_info(
 ///
 /// - `pointer`: A pointer to the [`CryptarchiaInfo`] struct to be freed.
 #[unsafe(no_mangle)]
-pub extern "C" fn free_cryptarchia_info(pointer: *mut CryptarchiaInfo) {
-    free::<CryptarchiaInfo>(pointer);
+pub extern "C" fn free_cryptarchia_info(pointer: *mut CryptarchiaInfo) -> OperationStatus {
+    free::<CryptarchiaInfo>(pointer)
 }
