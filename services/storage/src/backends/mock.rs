@@ -118,6 +118,7 @@ impl StorageChainApi for MockStorage {
     async fn store_block(
         &mut self,
         _header_id: HeaderId,
+        _parent_id: HeaderId,
         _block: Self::Block,
     ) -> Result<(), Self::Error> {
         unimplemented!()
@@ -127,6 +128,13 @@ impl StorageChainApi for MockStorage {
         &mut self,
         _header_id: HeaderId,
     ) -> Result<Option<Self::Block>, Self::Error> {
+        unimplemented!()
+    }
+
+    async fn get_block_parent(
+        &mut self,
+        _header_id: HeaderId,
+    ) -> Result<Option<HeaderId>, Self::Error> {
         unimplemented!()
     }
 

@@ -34,8 +34,11 @@ pub trait StorageAdapter<RuntimeServiceId> {
     async fn store_block(
         &self,
         header_id: HeaderId,
+        parent_id: HeaderId,
         block: Self::Block,
     ) -> Result<(), overwatch::DynError>;
+
+    async fn get_block_parent(&self, header_id: &HeaderId) -> Option<HeaderId>;
 
     /// Remove a block from the storage layer.
     ///

@@ -950,7 +950,7 @@ where
 
         relays
             .storage_adapter()
-            .store_block(header.id(), block.clone())
+            .store_block(header.id(), header.parent(), block.clone())
             .await
             .map_err(|e| Error::Storage(format!("Failed to store block: {e}")))?;
 
@@ -1077,22 +1077,22 @@ where
         to: HeaderId,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
     ) -> Vec<HeaderId> {
-        // Traverse from `to` back to `from`, collecting only header IDs.
-        // Each block is loaded to discover its parent link but then dropped
-        // immediately, so peak memory is O(1 block) instead of O(N blocks).
+        // Traverse from `to` back to `from`, reading only the parent index
+        // (a lightweight 32-byte lookup) instead of deserializing full blocks.
         let mut ids = Vec::new();
         let mut current = to;
         while current != from {
-            let block = storage_adapter
-                .get_block(&current)
+            let parent = storage_adapter
+                .get_block_parent(&current)
                 .await
                 .unwrap_or_else(|| {
-                    panic!("Could not retrieve block {current} from storage during recovery")
+                    panic!(
+                        "Could not retrieve block parent for {current} from storage during recovery"
+                    )
                 });
-            let parent = block.header().parent();
             debug!(
                 target: LOG_TARGET, id = ?current, parent = ?parent,
-                "loaded block header from storage",
+                "loaded block parent from storage",
             );
             ids.push(current);
             current = parent;

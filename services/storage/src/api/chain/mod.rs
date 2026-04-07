@@ -25,6 +25,7 @@ pub trait StorageChainApi {
     async fn store_block(
         &mut self,
         header_id: HeaderId,
+        parent_id: HeaderId,
         block: Self::Block,
     ) -> Result<(), Self::Error>;
 
@@ -32,6 +33,11 @@ pub trait StorageChainApi {
         &mut self,
         header_id: HeaderId,
     ) -> Result<Option<Self::Block>, Self::Error>;
+
+    async fn get_block_parent(
+        &mut self,
+        header_id: HeaderId,
+    ) -> Result<Option<HeaderId>, Self::Error>;
 
     async fn store_immutable_block_ids(
         &mut self,
