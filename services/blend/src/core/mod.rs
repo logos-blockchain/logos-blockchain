@@ -1459,60 +1459,73 @@ where
     ProofsVerifier: ProofsVerifierTrait,
 {
     if session == cryptographic_processor.session() {
-        let Ok(validated_message) =
-            cryptographic_processor.validate_message_poq(validated_encapsulated_message)
-        else {
-            tracing::trace!(target: LOG_TARGET, "Received message for current session {session} failed PoQ validation. Ignoring...");
+        let Some(output) = try_validate_and_decapsulate(
+            validated_encapsulated_message,
+            cryptographic_processor,
+            session,
+        ) else {
             return current_recovery_checkpoint;
         };
-        match cryptographic_processor.decapsulate_message_recursive(validated_message) {
-            Ok(output) => {
-                return handle_decapsulated_incoming_message_from_current_session(
-                    output,
-                    scheduler,
-                    current_recovery_checkpoint,
-                    cryptographic_processor,
-                );
-            }
-            Err(e) => {
-                if matches!(e, MessageError::PrivateHeaderDeserializationFailed) {
-                    tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message with current session crypto processor due to deserialization error. This can happen when the message was intended for another node or when the message is malformed. Ignoring...");
-                } else {
-                    tracing::debug!(target: LOG_TARGET, "Failed to decapsulate received message with current session crypto processor: {e:?}.");
-                }
-                return current_recovery_checkpoint;
-            }
-        }
+        handle_decapsulated_incoming_message_from_current_session(
+            output,
+            scheduler,
+            current_recovery_checkpoint,
+            cryptographic_processor,
+        )
     } else if let Some(old_cryptographic_processor) = old_session_cryptographic_processor
         && session == old_cryptographic_processor.session()
     {
-        let Ok(validated_message) =
-            old_cryptographic_processor.validate_message_poq(validated_encapsulated_message)
-        else {
-            tracing::trace!(target: LOG_TARGET, "Received message for old session {session} failed PoQ validation. Ignoring...");
+        let Some(output) = try_validate_and_decapsulate(
+            validated_encapsulated_message,
+            old_cryptographic_processor,
+            session,
+        ) else {
             return current_recovery_checkpoint;
         };
-        match old_cryptographic_processor.decapsulate_message_recursive(validated_message) {
-            Ok(output) => {
-                return handle_decapsulated_incoming_message_from_old_session(
-                    output,
-                    old_session_scheduler.expect("Old session scheduler should be available when old session crypto processor is available"),
-                    current_recovery_checkpoint,
-                    old_cryptographic_processor,
-                );
+        handle_decapsulated_incoming_message_from_old_session(
+            output,
+            old_session_scheduler
+                .expect("Old session scheduler should be available when old session crypto processor is available"),
+            current_recovery_checkpoint,
+            old_cryptographic_processor,
+        )
+    } else {
+        tracing::debug!(target: LOG_TARGET, "Received message for session {session} that is not currently handled. Ignoring...");
+        current_recovery_checkpoint
+    }
+}
+
+/// Validates the PoQ of a received message and attempts recursive
+/// decapsulation. Returns `None` if validation or decapsulation fails (already
+/// logged).
+fn try_validate_and_decapsulate<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>(
+    message: EncapsulatedMessageWithVerifiedSignature,
+    processor: &CoreCryptographicProcessor<
+        NodeId,
+        CorePoQGenerator,
+        ProofsGenerator,
+        ProofsVerifier,
+    >,
+    session: u64,
+) -> Option<MultiLayerDecapsulationOutput>
+where
+    ProofsVerifier: ProofsVerifierTrait,
+{
+    let Ok(validated_message) = processor.validate_message_poq(message) else {
+        tracing::debug!(target: LOG_TARGET, "Received message for session {session} failed PoQ validation. Ignoring...");
+        return None;
+    };
+    match processor.decapsulate_message_recursive(validated_message) {
+        Ok(output) => Some(output),
+        Err(e) => {
+            if matches!(e, MessageError::PrivateHeaderDeserializationFailed) {
+                tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message for session {session} due to deserialization error. This can happen when the message was intended for another node or when the message is malformed. Ignoring...");
+            } else {
+                tracing::debug!(target: LOG_TARGET, "Failed to decapsulate received message for session {session}: {e:?}.");
             }
-            Err(e) => {
-                if matches!(e, MessageError::PrivateHeaderDeserializationFailed) {
-                    tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message with old session crypto processor due to deserialization error. This can happen when the message was intended for another node or when the message is malformed. Ignoring...");
-                } else {
-                    tracing::debug!(target: LOG_TARGET, "Failed to decapsulate received message with old session crypto processor: {e:?}.");
-                }
-                return current_recovery_checkpoint;
-            }
+            None
         }
     }
-    tracing::debug!(target: LOG_TARGET, "Received message for session {session} that is not currently handled. Ignoring...");
-    current_recovery_checkpoint
 }
 
 /// Same as [`handle_incoming_blend_message`] but only tries with

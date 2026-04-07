@@ -24,7 +24,7 @@ use crate::core::with_core::{
 /// already been forwarded before.
 pub fn forward_validated_message_and_update_cache<'session, PeerConnections>(
     message: &EncapsulatedMessageWithVerifiedSignature,
-    peer_connections: PeerConnections,
+    mut peer_connections: PeerConnections,
     events_queue: &'session mut VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     message_cache: &'session mut MessageCache,
     waker: Option<Waker>,
@@ -34,6 +34,11 @@ where
 {
     if message_cache.is_message_forwarded(&message.clone().into()) {
         return Err(SendError::DuplicateMessage);
+    }
+
+    // Check if iterator has any elements before serializing the message.
+    if peer_connections.by_ref().peekable().peek().is_none() {
+        return Err(SendError::NoPeers);
     }
 
     let serialized_message = serialize_encapsulated_message_with_verified_signature(message);
