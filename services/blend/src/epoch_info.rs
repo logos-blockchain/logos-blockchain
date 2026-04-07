@@ -292,9 +292,8 @@ where
         };
         tracing::debug!(
             target: LOG_TARGET,
-            "Retrieved epoch state for unseen epoch {:?} with total stake {}",
-            epoch_state.epoch(),
-            epoch_state.total_stake()
+            "Retrieved epoch state for unseen epoch {:?}",
+            epoch_state.epoch()
         );
 
         // This is true if epochs are shorter than transition periods. It's not likely
