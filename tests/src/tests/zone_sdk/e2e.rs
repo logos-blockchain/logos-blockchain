@@ -445,7 +445,7 @@ async fn test_sequencer_stale_checkpoint_resume() {
     }
 
     // Wait for phase 2 to finalize
-    let expected_all: Vec<Vec<u8>> = data_phase1
+    let mut expected_all: Vec<Vec<u8>> = data_phase1
         .iter()
         .cloned()
         .chain(data_phase2.iter().cloned())
@@ -515,18 +515,20 @@ async fn test_sequencer_stale_checkpoint_resume() {
 
         while let Some((msg, slot)) = stream.next().await {
             if let ZoneMessage::Block(block) = msg {
-                if expected_all.contains(&block.data) {
-                    seen.insert(block.data.clone());
-                }
+                received.push(block.data.clone());
                 last_zone_block = Some((block.id, slot));
             }
         }
 
-        if seen == expected_all {
+        if received.len() >= expected_all.len() {
             break;
         }
         sleep(Duration::from_millis(500)).await;
     }
+    assert_eq!(
+        received, expected_all,
+        "Phase 1+2+3 messages should match published order"
+    );
 
     // Check no duplicates
     sleep(Duration::from_secs(30)).await;
