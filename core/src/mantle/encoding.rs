@@ -9,7 +9,6 @@ use nom::{
     number::complete::{le_u16, le_u32, le_u64, u8 as decode_u8},
     sequence::pair,
 };
-use tracing::error;
 
 use crate::{
     mantle::{
@@ -45,7 +44,7 @@ use crate::{
 pub const MAX_ENCODE_DECODE_INSCRIPTION_SIZE: u32 = (MAX_BLOCK_SIZE * 7 / 8) as u32;
 // Maximum memory allocation size allowed for SDP activity metadata.
 // Protects against unbounded allocation in `decode_sdp_active`
-const MAX_DECODE_METADATA_SIZE: u32 = 234; // `ActiveMessage` has a fixed size of 234 bytes
+const MAX_ENCODE_DECODE_METADATA_SIZE: u32 = 234; // `ActiveMessage` has a fixed size of 234 bytes
 
 // Maximum byte size allowed for a locator in SDPDeclare operations.
 const LOCATOR_BYTES_SIZE_LIMIT: usize = 329usize;
@@ -252,7 +251,7 @@ fn decode_sdp_active(input: &[u8]) -> IResult<&[u8], SDPActiveOp> {
     let (input, metadata_len) = decode_uint32(input)?;
 
     // Validate metadata length to prevent unbounded memory allocation
-    if metadata_len > MAX_DECODE_METADATA_SIZE {
+    if metadata_len > MAX_ENCODE_DECODE_METADATA_SIZE {
         return Err(nom::Err::Error(Error::new(input, ErrorKind::TooLarge)));
     }
 
@@ -586,7 +585,6 @@ pub fn encode_channel_inscribe(op: &InscriptionOp) -> Vec<u8> {
             op.inscription.len(),
             MAX_ENCODE_DECODE_INSCRIPTION_SIZE
         );
-        error!("{msg}");
         panic!("{msg}");
     }
     bytes.extend(encode_uint32(op.inscription.len() as u32));
@@ -603,7 +601,6 @@ fn encode_channel_set_keys(op: &SetKeysOp) -> Vec<u8> {
             op.keys.len(),
             u8::MAX
         );
-        error!("{msg}");
         panic!("{msg}");
     }
     let mut bytes = Vec::new();
@@ -640,7 +637,6 @@ fn encode_locator(locator: &multiaddr::Multiaddr) -> Vec<u8> {
             {LOCATOR_BYTES_SIZE_LIMIT}",
             locator_bytes.len()
         );
-        error!("{msg}");
         panic!("{msg}");
     }
     let mut bytes = Vec::new();
@@ -656,7 +652,6 @@ fn encode_sdp_declare(op: &SDPDeclareOp) -> Vec<u8> {
             op.locators.len(),
             u8::MAX
         );
-        error!("{msg}");
         panic!("{msg}");
     }
     let mut bytes = Vec::new();
@@ -695,13 +690,12 @@ pub fn encode_sdp_active(op: &SDPActiveOp) -> Vec<u8> {
 
     // Metadata - convert ActivityMetadata to bytes
     let metadata_bytes = op.metadata.to_metadata_bytes();
-    if metadata_bytes.len() > MAX_DECODE_METADATA_SIZE as usize {
+    if metadata_bytes.len() > MAX_ENCODE_DECODE_METADATA_SIZE as usize {
         let msg = format!(
             "Fatal error in 'encode_sdp_active' - {} metadata bytes clipped to {}",
             metadata_bytes.len(),
-            MAX_DECODE_METADATA_SIZE
+            MAX_ENCODE_DECODE_METADATA_SIZE
         );
-        error!("{msg}");
         panic!("{msg}");
     }
 
@@ -733,7 +727,6 @@ fn encode_inputs(inputs: &[NoteId]) -> Vec<u8> {
             inputs.len(),
             u8::MAX
         );
-        error!("{msg}");
         panic!("{msg}");
     }
     let mut bytes = Vec::new();
@@ -752,7 +745,6 @@ fn encode_outputs(outputs: &[Note]) -> Vec<u8> {
             outputs.len(),
             u8::MAX
         );
-        error!("{msg}");
         panic!("{msg}");
     }
     bytes.extend(encode_byte(outputs.len() as u8));
@@ -822,7 +814,6 @@ fn encode_ops(ops: &[Op]) -> Vec<u8> {
             ops.len(),
             u8::MAX
         );
-        error!("{msg}");
         panic!("{msg}");
     }
     let mut bytes = Vec::new();
@@ -1795,7 +1786,7 @@ mod tests {
         malicious_input.extend_from_slice(&42u64.to_le_bytes());
 
         // Metadata length (u32) - exceeds MAX_METADATA_SIZE
-        let oversized_len = MAX_DECODE_METADATA_SIZE + 1;
+        let oversized_len = MAX_ENCODE_DECODE_METADATA_SIZE + 1;
         malicious_input.extend_from_slice(&oversized_len.to_le_bytes());
 
         // Try to decode - should fail with TooLarge error
@@ -1976,7 +1967,7 @@ mod tests {
         };
         assert_eq!(
             sdp_active_op.metadata.to_metadata_bytes().len(),
-            MAX_DECODE_METADATA_SIZE as usize,
+            MAX_ENCODE_DECODE_METADATA_SIZE as usize,
             "`ActiveMessage` has a fixed size of 234 bytes"
         );
     }
