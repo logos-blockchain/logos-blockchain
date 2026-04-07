@@ -29,6 +29,27 @@ use crate::{
 };
 
 // ==============================================================================
+// Memory Safety Limits
+// ==============================================================================
+// These limits are not designed to mimic system limits, but rather to prevent
+// unbounded memory usage from malicious inputs. They prevent memory
+// over-allocation attacks where untrusted input specifies allocation sizes.
+// Values are chosen to not limit normal operations while preventing excessive
+// memory usage (e.g., 68GB allocation). As an example, if the network currently
+// limits maximum transaction size to 1MiB, for memory safety limits we can
+// allow 4MiB.
+
+/// Maximum memory allocation size allowed for channel inscription data .
+/// Protects against unbounded allocation in `decode_channel_inscribe`
+pub const MAX_ENCODE_DECODE_INSCRIPTION_SIZE: u32 = (MAX_BLOCK_SIZE * 7 / 8) as u32;
+// Maximum memory allocation size allowed for SDP activity metadata.
+// Protects against unbounded allocation in `decode_sdp_active`
+const MAX_ENCODE_DECODE_METADATA_SIZE: u32 = 234; // `ActiveMessage` has a fixed size of 234 bytes
+
+// Maximum byte size allowed for a locator in SDPDeclare operations.
+const LOCATOR_BYTES_SIZE_LIMIT: usize = 329usize;
+
+// ==============================================================================
 // Top-Level Transaction Decoders
 // ==============================================================================
 
@@ -53,8 +74,8 @@ pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
         input,
         MantleTx {
             ops,
-            execution_gas_price,
-            storage_gas_price,
+            execution_gas_price: execution_gas_price.into(),
+            storage_gas_price: storage_gas_price.into(),
         },
     ))
 }
@@ -66,6 +87,7 @@ pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
 pub fn decode_ops(input: &[u8]) -> IResult<&[u8], Vec<Op>> {
     // Ops = OpCount *Op
     let (input, op_count) = decode_byte(input)?;
+
     count(decode_op, op_count as usize).parse(input)
 }
 
@@ -97,6 +119,12 @@ fn decode_channel_inscribe(input: &[u8]) -> IResult<&[u8], InscriptionOp> {
     // Signer = Ed25519PublicKey
     let (input, channel_id) = map(decode_hash32, ChannelId::from).parse(input)?;
     let (input, inscription_len) = decode_uint32(input)?;
+
+    // Validate inscription length to prevent unbounded memory allocation
+    if inscription_len > MAX_ENCODE_DECODE_INSCRIPTION_SIZE {
+        return Err(nom::Err::Error(Error::new(input, ErrorKind::TooLarge)));
+    }
+
     let (input, inscription) =
         map(take(inscription_len as usize), |b: &[u8]| b.to_vec()).parse(input)?;
     let (input, parent) = map(decode_hash32, MsgId::from).parse(input)?;
@@ -117,6 +145,7 @@ fn decode_channel_set_keys(input: &[u8]) -> IResult<&[u8], SetKeysOp> {
     // ChannelSetKeys = ChannelId KeyCount *Ed25519PublicKey
     let (input, channel) = map(decode_hash32, ChannelId::from).parse(input)?;
     let (input, key_count) = decode_byte(input)?;
+
     let (input, keys) = count(decode_ed25519_public_key, key_count as usize).parse(input)?;
 
     Ok((input, SetKeysOp { channel, keys }))
@@ -159,6 +188,7 @@ fn decode_sdp_declare(input: &[u8]) -> IResult<&[u8], SDPDeclareOp> {
         _ => return Err(nom::Err::Error(Error::new(input, ErrorKind::Fail))),
     };
     let (input, locator_count) = decode_byte(input)?;
+
     let (input, multiaddrs) = count(decode_locator, locator_count as usize).parse(input)?;
     let locators = multiaddrs.into_iter().map(Locator::new).collect();
     let (input, provider_key) = decode_ed25519_public_key(input)?;
@@ -178,8 +208,6 @@ fn decode_sdp_declare(input: &[u8]) -> IResult<&[u8], SDPDeclareOp> {
         },
     ))
 }
-
-const LOCATOR_BYTES_SIZE_LIMIT: usize = 329usize;
 
 fn decode_locator(input: &[u8]) -> IResult<&[u8], multiaddr::Multiaddr> {
     // Locator = 2Byte *BYTE
@@ -221,6 +249,12 @@ fn decode_sdp_active(input: &[u8]) -> IResult<&[u8], SDPActiveOp> {
     let (input, nonce) = decode_uint64(input)?;
 
     let (input, metadata_len) = decode_uint32(input)?;
+
+    // Validate metadata length to prevent unbounded memory allocation
+    if metadata_len > MAX_ENCODE_DECODE_METADATA_SIZE {
+        return Err(nom::Err::Error(Error::new(input, ErrorKind::TooLarge)));
+    }
+
     let (input, metadata_bytes) = take(metadata_len as usize).parse(input)?;
 
     let metadata = ActivityMetadata::from_metadata_bytes(metadata_bytes)
@@ -269,12 +303,14 @@ fn decode_note(input: &[u8]) -> IResult<&[u8], Note> {
 fn decode_inputs(input: &[u8]) -> IResult<&[u8], Vec<NoteId>> {
     // Inputs = InputCount *NoteId
     let (input, input_count) = decode_byte(input)?;
+
     count(map(decode_field_element, NoteId), input_count as usize).parse(input)
 }
 
 fn decode_outputs(input: &[u8]) -> IResult<&[u8], Vec<Note>> {
     // Outputs = OutputCount *Note
     let (input, output_count) = decode_byte(input)?;
+
     count(decode_note, output_count as usize).parse(input)
 }
 
@@ -471,6 +507,7 @@ use lb_groth16::fr_to_bytes;
 
 use super::ops::opcode;
 use crate::{
+    block::MAX_BLOCK_SIZE,
     mantle::{
         ops::channel::{ChannelKeyIndex, withdraw::ChannelWithdrawOp},
         tx::MantleTxGasContext,
@@ -542,6 +579,12 @@ fn encode_channel_withdraw_proof(proof: &ChannelWithdrawProof) -> Vec<u8> {
 pub fn encode_channel_inscribe(op: &InscriptionOp) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_hash32(op.channel_id.as_ref()));
+    assert!(
+        op.inscription.len() <= MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize,
+        "Fatal error in 'encode_channel_inscribe' - {} inscription data clipped to {}",
+        op.inscription.len(),
+        MAX_ENCODE_DECODE_INSCRIPTION_SIZE
+    );
     bytes.extend(encode_uint32(op.inscription.len() as u32));
     bytes.extend(&op.inscription);
     bytes.extend(encode_hash32(op.parent.as_ref()));
@@ -550,6 +593,12 @@ pub fn encode_channel_inscribe(op: &InscriptionOp) -> Vec<u8> {
 }
 
 fn encode_channel_set_keys(op: &SetKeysOp) -> Vec<u8> {
+    assert!(
+        u8::try_from(op.keys.len()).is_ok(),
+        "Fatal error in 'encode_channel_set_keys' - {} keys clipped to {}",
+        op.keys.len(),
+        u8::MAX
+    );
     let mut bytes = Vec::new();
     bytes.extend(encode_hash32(op.channel.as_ref()));
     bytes.extend(encode_byte(op.keys.len() as u8));
@@ -578,7 +627,12 @@ fn encode_channel_withdraw(op: &ChannelWithdrawOp) -> Vec<u8> {
 /// Encode SDP operations
 fn encode_locator(locator: &multiaddr::Multiaddr) -> Vec<u8> {
     let locator_bytes = locator.to_vec();
-    assert!(locator_bytes.len() <= LOCATOR_BYTES_SIZE_LIMIT);
+    assert!(
+        locator_bytes.len() <= LOCATOR_BYTES_SIZE_LIMIT,
+        "Fatal error in 'encode_locator' - {} locator bytes clipped to \
+            {LOCATOR_BYTES_SIZE_LIMIT}",
+        locator_bytes.len()
+    );
     let mut bytes = Vec::new();
     bytes.extend((locator_bytes.len() as u16).to_le_bytes());
     bytes.extend(locator_bytes);
@@ -586,6 +640,12 @@ fn encode_locator(locator: &multiaddr::Multiaddr) -> Vec<u8> {
 }
 
 fn encode_sdp_declare(op: &SDPDeclareOp) -> Vec<u8> {
+    assert!(
+        u8::try_from(op.locators.len()).is_ok(),
+        "Fatal error in 'encode_sdp_declare' - {} locators clipped to {}",
+        op.locators.len(),
+        u8::MAX
+    );
     let mut bytes = Vec::new();
     // ServiceType
     let service_type_byte = match op.service_type {
@@ -622,6 +682,12 @@ pub fn encode_sdp_active(op: &SDPActiveOp) -> Vec<u8> {
 
     // Metadata - convert ActivityMetadata to bytes
     let metadata_bytes = op.metadata.to_metadata_bytes();
+    assert!(
+        metadata_bytes.len() <= MAX_ENCODE_DECODE_METADATA_SIZE as usize,
+        "Fatal error in 'encode_sdp_active' - {} metadata bytes clipped to {}",
+        metadata_bytes.len(),
+        MAX_ENCODE_DECODE_METADATA_SIZE
+    );
 
     bytes.extend(encode_uint32(metadata_bytes.len() as u32));
     bytes.extend(&metadata_bytes);
@@ -645,6 +711,12 @@ fn encode_note(note: &Note) -> Vec<u8> {
 }
 
 fn encode_inputs(inputs: &[NoteId]) -> Vec<u8> {
+    assert!(
+        u8::try_from(inputs.len()).is_ok(),
+        "Fatal error in 'encode_inputs' - {} inputs clipped to {}",
+        inputs.len(),
+        u8::MAX
+    );
     let mut bytes = Vec::new();
     bytes.extend(encode_byte(inputs.len() as u8));
     for input in inputs {
@@ -655,6 +727,12 @@ fn encode_inputs(inputs: &[NoteId]) -> Vec<u8> {
 
 fn encode_outputs(outputs: &[Note]) -> Vec<u8> {
     let mut bytes = Vec::new();
+    assert!(
+        u8::try_from(outputs.len()).is_ok(),
+        "Fatal error in 'encode_outputs' - {} outputs clipped to {}",
+        outputs.len(),
+        u8::MAX
+    );
     bytes.extend(encode_byte(outputs.len() as u8));
     for output in outputs {
         bytes.extend(encode_note(output));
@@ -716,6 +794,12 @@ pub fn encode_op(op: &Op) -> Vec<u8> {
 }
 
 fn encode_ops(ops: &[Op]) -> Vec<u8> {
+    assert!(
+        u8::try_from(ops.len()).is_ok(),
+        "Fatal error in 'encode_ops' - {} ops clipped to {}",
+        ops.len(),
+        u8::MAX
+    );
     let mut bytes = Vec::new();
     bytes.extend(encode_byte(ops.len() as u8));
     for op in ops {
@@ -768,8 +852,8 @@ fn encode_ops_proofs(proofs: &[OpProof], ops: &[Op]) -> Vec<u8> {
 pub fn encode_mantle_tx(tx: &MantleTx) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_ops(&tx.ops));
-    bytes.extend(encode_uint64(tx.execution_gas_price));
-    bytes.extend(encode_uint64(tx.storage_gas_price));
+    bytes.extend(encode_uint64(tx.execution_gas_price.into_inner()));
+    bytes.extend(encode_uint64(tx.storage_gas_price.into_inner()));
     bytes
 }
 
@@ -817,9 +901,10 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, panic};
 
     use ark_ff::Field as _;
+    use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use num_bigint::BigUint;
 
@@ -886,8 +971,8 @@ mod tests {
     fn test_decode_signed_mantle_tx_empty() {
         let mantle_tx = MantleTx {
             ops: vec![],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         let signed_tx = SignedMantleTx {
@@ -928,8 +1013,8 @@ mod tests {
                 parent: MsgId::from([0xBB; 32]),
                 signer: signing_key.public_key(),
             })],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         let txhash = mantle_tx.hash();
@@ -983,8 +1068,8 @@ mod tests {
                     keys: vec![signing_key.public_key()],
                 }),
             ],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         let txhash = mantle_tx.hash();
@@ -1007,8 +1092,8 @@ mod tests {
     #[tokio::test]
     async fn test_large_payload_encoding_decoding() {
         // Test payload sizes from 512kB up to 2MiB in 512kB increments
-        const CHUNK_SIZE: usize = 512 * 1024;
-        const MAX_SIZE: usize = 2 * 1024 * 1024;
+        const MAX_SIZE: usize = MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize;
+        const CHUNK_SIZE: usize = MAX_SIZE / 10;
 
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
 
@@ -1029,8 +1114,8 @@ mod tests {
 
                 let mantle_tx = MantleTx {
                     ops: vec![Op::ChannelInscribe(inscribe_op)],
-                    execution_gas_price: 100,
-                    storage_gas_price: 50,
+                    execution_gas_price: 100.into(),
+                    storage_gas_price: 50.into(),
                 };
 
                 let txhash = mantle_tx.hash();
@@ -1076,8 +1161,8 @@ mod tests {
         // Create an empty MantleTx
         let original_tx = MantleTx {
             ops: vec![],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         // Encode
@@ -1103,8 +1188,8 @@ mod tests {
 
         let original_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op)],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         // Encode
@@ -1123,8 +1208,8 @@ mod tests {
         // Create a simple SignedMantleTx
         let mantle_tx = MantleTx {
             ops: vec![],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
         let original_tx = SignedMantleTx::new(mantle_tx, vec![]).unwrap();
 
@@ -1144,8 +1229,8 @@ mod tests {
         // Create an empty MantleTx
         let mantle_tx = MantleTx {
             ops: vec![],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         // Predict size
@@ -1172,8 +1257,8 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::ChannelInscribe(inscribe_op)],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         // Predict size
@@ -1207,8 +1292,8 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::ChannelSetKeys(set_keys_op)],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         // Predict size
@@ -1253,8 +1338,8 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::SDPDeclare(sdp_declare_op)],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         // Predict size
@@ -1289,8 +1374,8 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::SDPWithdraw(sdp_withdraw_op)],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         let txhash = mantle_tx.hash();
@@ -1335,8 +1420,8 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::SDPActive(sdp_active_op)],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         let gas_context = MantleTxGasContext::new(HashMap::new());
@@ -1394,8 +1479,8 @@ mod tests {
                 Op::ChannelSetKeys(set_keys_op),
                 Op::SDPActive(sdp_active_op),
             ],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         // Predict size
@@ -1438,8 +1523,8 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op)],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         // Predict size
@@ -1500,8 +1585,8 @@ mod tests {
                 Op::SDPDeclare(sdp_declare_op),
                 Op::Transfer(transfer_op),
             ],
-            execution_gas_price: 150,
-            storage_gas_price: 75,
+            execution_gas_price: 150.into(),
+            storage_gas_price: 75.into(),
         };
 
         // Predict size
@@ -1541,8 +1626,8 @@ mod tests {
 
         let mantle_tx = MantleTx {
             ops: vec![Op::LeaderClaim(leader_claim_op.clone())],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
 
         let empty_gas_context = MantleTxGasContext::new(HashMap::new());
@@ -1602,8 +1687,8 @@ mod tests {
                 channel_id: ChannelId::from([0xAB; 32]),
                 amount: 17,
             })],
-            execution_gas_price: 100,
-            storage_gas_price: 50,
+            execution_gas_price: 100.into(),
+            storage_gas_price: 50.into(),
         };
         let tx_hash = mantle_tx.hash();
         let proof = ChannelWithdrawProof::new(vec![WithdrawSignature::new(
@@ -1619,5 +1704,417 @@ mod tests {
 
         assert!(remaining.is_empty());
         assert_eq!(decoded_tx, signed_tx);
+    }
+
+    // ==============================================================================
+    // Security Tests - Memory Over-Allocation Protection
+    // ==============================================================================
+
+    #[test]
+    fn test_encode_reject_oversized_inscription() {
+        let oversized_inscription = vec![0xAB; MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize + 1];
+
+        let inscribe_op = InscriptionOp {
+            channel_id: ChannelId::from([0xAA; 32]),
+            inscription: oversized_inscription,
+            parent: MsgId::from([0xBB; 32]),
+            signer: Ed25519Key::from_bytes(&[1; 32]).public_key(),
+        };
+
+        let result = panic::catch_unwind(|| {
+            let _unused = encode_channel_inscribe(&inscribe_op);
+        });
+        assert!(
+            result.is_err(),
+            "Should reject encoding of oversized inscription"
+        );
+    }
+
+    #[test]
+    fn test_decode_reject_oversized_inscription() {
+        // Create a malicious input with inscription_len = MAX_INSCRIPTION_SIZE + 1
+        let mut malicious_input = Vec::new();
+
+        // ChannelId (32 bytes)
+        malicious_input.extend_from_slice(&[0x42; 32]);
+
+        // Inscription length (u32) - exceeds MAX_INSCRIPTION_SIZE
+        let oversized_len = MAX_ENCODE_DECODE_INSCRIPTION_SIZE + 1;
+        malicious_input.extend_from_slice(&oversized_len.to_le_bytes());
+
+        // We don't need to include the actual inscription data because
+        // the decoder should reject it before trying to read that much
+
+        // Try to decode - should fail with TooLarge error
+        let result = decode_channel_inscribe(&malicious_input);
+        assert!(result.is_err(), "Should reject oversized inscription");
+
+        // Verify it fails with the right error kind
+        match result {
+            Err(nom::Err::Error(e)) => {
+                assert_eq!(e.code, ErrorKind::TooLarge);
+            }
+            _ => panic!("Expected TooLarge error"),
+        }
+    }
+
+    #[test]
+    fn test_decode_reject_oversized_metadata() {
+        // Create a malicious input with metadata_len = MAX_METADATA_SIZE + 1
+        let mut malicious_input = Vec::new();
+
+        // DeclarationId (32 bytes)
+        malicious_input.extend_from_slice(&[0x42; 32]);
+
+        // Nonce (u64)
+        malicious_input.extend_from_slice(&42u64.to_le_bytes());
+
+        // Metadata length (u32) - exceeds MAX_METADATA_SIZE
+        let oversized_len = MAX_ENCODE_DECODE_METADATA_SIZE + 1;
+        malicious_input.extend_from_slice(&oversized_len.to_le_bytes());
+
+        // Try to decode - should fail with TooLarge error
+        let result = decode_sdp_active(&malicious_input);
+        assert!(result.is_err(), "Should reject oversized metadata");
+
+        // Verify it fails with the right error kind
+        match result {
+            Err(nom::Err::Error(e)) => {
+                assert_eq!(e.code, ErrorKind::TooLarge);
+            }
+            _ => panic!("Expected TooLarge error"),
+        }
+    }
+
+    #[test]
+    fn test_encode_reject_excessive_op_count() {
+        let ops = vec![
+            Op::ChannelSetKeys(SetKeysOp {
+                channel: ChannelId::from([0x22; 32]),
+                keys: vec![Ed25519Key::from_bytes(&[1; 32]).public_key()],
+            });
+            u8::MAX as usize + 1
+        ];
+
+        let result = panic::catch_unwind(|| {
+            encode_ops(&ops);
+        });
+        assert!(result.is_err(), "Should reject excessive output count");
+    }
+
+    #[test]
+    fn test_decode_accept_max_op_count() {
+        // Test that op_count = MAX_OP_COUNT is accepted
+        // (though it will fail later due to missing op data, which is fine for this
+        // test)
+        let valid_input = vec![u8::MAX];
+
+        // Should not fail with TooLarge error (will fail with incomplete data)
+        let result = decode_ops(&valid_input);
+        if let Err(nom::Err::Error(e)) = result {
+            assert_ne!(e.code, ErrorKind::TooLarge, "Should not reject at u8::MAX]");
+        }
+    }
+
+    #[test]
+    fn test_decode_accept_max_inscription_size() {
+        // Test that we can decode an inscription at exactly MAX_INSCRIPTION_SIZE
+        let mut valid_input = Vec::new();
+
+        // ChannelId (32 bytes)
+        valid_input.extend_from_slice(&[0x42; 32]);
+
+        // Inscription length (u32) - exactly MAX_INSCRIPTION_SIZE
+        valid_input.extend_from_slice(&MAX_ENCODE_DECODE_INSCRIPTION_SIZE.to_le_bytes());
+
+        // Inscription data (MAX_INSCRIPTION_SIZE bytes)
+        valid_input.extend_from_slice(&vec![0x01; MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize]);
+
+        // Parent MsgId (32 bytes)
+        valid_input.extend_from_slice(&[0x43; 32]);
+
+        // Signer Ed25519PublicKey (32 bytes)
+        let sk = Ed25519Key::from_bytes(&[0x44; 32]);
+        let pk = sk.public_key();
+        valid_input.extend_from_slice(&pk.to_bytes());
+
+        // Should succeed (though signature validation might fail later)
+        let result = decode_channel_inscribe(&valid_input);
+        assert!(
+            result.is_ok(),
+            "Should accept inscription at MAX_INSCRIPTION_SIZE: {result:?}",
+        );
+
+        let (_, inscription_op) = result.unwrap();
+        assert_eq!(
+            inscription_op.inscription.len(),
+            MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize
+        );
+    }
+
+    #[test]
+    fn test_decode_memory_safety_no_allocation_on_oversized_length() {
+        // This test verifies that we reject oversized lengths WITHOUT
+        // attempting to allocate the memory first
+
+        // Test with an astronomically large inscription_len
+        // (e.g., 4GB which would cause the original bug)
+        let huge_len = u32::MAX; // 4GB - 1
+
+        let mut malicious_input = Vec::new();
+        malicious_input.extend_from_slice(&[0x42; 32]); // ChannelId
+        malicious_input.extend_from_slice(&huge_len.to_le_bytes());
+
+        // This should fail immediately without trying to allocate 4GB
+        let result = decode_channel_inscribe(&malicious_input);
+        assert!(result.is_err(), "Should reject huge inscription length");
+
+        // Similar test for metadata
+        let mut malicious_input2 = Vec::new();
+        malicious_input2.extend_from_slice(&[0x42; 32]); // DeclarationId
+        malicious_input2.extend_from_slice(&42u64.to_le_bytes()); // Nonce
+        malicious_input2.extend_from_slice(&huge_len.to_le_bytes());
+
+        let result2 = decode_sdp_active(&malicious_input2);
+        assert!(result2.is_err(), "Should reject huge metadata length");
+    }
+
+    #[test]
+    fn test_encode_reject_excessive_key_count() {
+        let set_keys_op = SetKeysOp {
+            channel: ChannelId::from([0x22; 32]),
+            keys: vec![Ed25519Key::from_bytes(&[1; 32]).public_key(); u8::MAX as usize + 1],
+        };
+
+        // Should panic
+        let result = panic::catch_unwind(|| {
+            encode_channel_set_keys(&set_keys_op);
+        });
+        assert!(result.is_err(), "Should reject excessive output count");
+    }
+
+    #[test]
+    fn test_decode_accept_max_key_count() {
+        // Test that key_count = MAX_KEY_COUNT is accepted
+        let mut valid_input = Vec::new();
+
+        // ChannelId (32 bytes)
+        valid_input.extend_from_slice(&[0x42; 32]);
+
+        // KeyCount = MAX_KEY_COUNT
+        valid_input.push(u8::MAX);
+
+        // Add MAX_KEY_COUNT Ed25519 public keys (each 32 bytes)
+        for i in 0..u8::MAX {
+            let sk = Ed25519Key::from_bytes(&[i; 32]);
+            let pk = sk.public_key();
+            valid_input.extend_from_slice(&pk.to_bytes());
+        }
+
+        let result = decode_channel_set_keys(&valid_input);
+        assert!(result.is_ok(), "Should accept max key count: {result:?}");
+
+        let (_, set_keys_op) = result.unwrap();
+        assert_eq!(set_keys_op.keys.len(), u8::MAX as usize);
+    }
+
+    #[test]
+    fn test_encode_reject_excessive_sdp_declare() {
+        let locator: multiaddr::Multiaddr = "/dns4/example.com/tcp/443".parse().unwrap();
+        let sdp_declare_op = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locators: vec![Locator::new(locator); u8::MAX as usize + 1], // excessive locator count
+            provider_id: ProviderId(Ed25519Key::from_bytes(&[1; 32]).public_key()),
+            zk_id: ZkKey::zero().to_public_key(),
+            locked_note_id: NoteId(BigUint::from(111u64).into()),
+        };
+
+        // Should panic
+        let result = panic::catch_unwind(|| {
+            encode_sdp_declare(&sdp_declare_op);
+        });
+        assert!(result.is_err(), "Should reject excessive output count");
+    }
+
+    #[test]
+    fn test_encode_reject_excessive_sdp_active() {
+        let blend_proof = ActivityProof {
+            session: u64::MAX,
+            signing_key: Ed25519Key::from_bytes(&[1; 32]).public_key(),
+            proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0u8; 160]).into(),
+            proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0u8; 32]).into(),
+        };
+        let sdp_active_op = SDPActiveOp {
+            declaration_id: DeclarationId([0x33; 32]),
+            nonce: u64::MAX,
+            metadata: ActivityMetadata::Blend(Box::new(blend_proof)),
+        };
+        assert_eq!(
+            sdp_active_op.metadata.to_metadata_bytes().len(),
+            MAX_ENCODE_DECODE_METADATA_SIZE as usize,
+            "`ActiveMessage` has a fixed size of 234 bytes"
+        );
+    }
+
+    #[test]
+    fn test_encode_reject_excessive_input_count() {
+        let note_id = NoteId(BigUint::from(111u64).into());
+        let inputs = [note_id; u8::MAX as usize + 1];
+
+        // Should panic
+        let result = panic::catch_unwind(|| {
+            encode_inputs(&inputs);
+        });
+        assert!(result.is_err(), "Should reject excessive output count");
+    }
+
+    #[test]
+    fn test_encode_reject_excessive_output_count() {
+        let note = Note::new(1000, ZkPublicKey::from(BigUint::from(42u64)));
+        let outputs = [note; u8::MAX as usize + 1];
+
+        // Should panic
+        let result = panic::catch_unwind(|| {
+            encode_outputs(&outputs);
+        });
+        assert!(result.is_err(), "Should reject excessive output count");
+    }
+
+    #[test]
+    fn test_decode_reject_oversized_locator() {
+        // Create a malicious input with oversized locator
+        let mut malicious_input = Vec::new();
+
+        // ServiceType (1 byte)
+        malicious_input.push(0x00);
+
+        // LocatorCount (1 byte) - just 1 locator
+        malicious_input.push(1);
+
+        let oversized_len = (LOCATOR_BYTES_SIZE_LIMIT + 1) as u16;
+        malicious_input.extend_from_slice(&oversized_len.to_le_bytes());
+
+        // Add the oversized data
+        malicious_input.extend_from_slice(&vec![0x01; LOCATOR_BYTES_SIZE_LIMIT + 1]);
+
+        // ... rest of SDPDeclare fields ...
+
+        let result = decode_sdp_declare(&malicious_input);
+        if let Err(nom::Err::Error(ref e)) = result {
+            assert_eq!(
+                e.code,
+                ErrorKind::LengthValue,
+                "Should reject at `LOCATOR_BYTES_SIZE_LIMIT + 1`"
+            );
+        } else {
+            panic!("Should reject oversized locator");
+        }
+    }
+
+    #[test]
+    fn test_decode_accept_max_locator_size() {
+        // Create a malicious input with oversized locator
+        let mut malicious_input = Vec::new();
+
+        // ServiceType (1 byte)
+        malicious_input.push(0x00);
+
+        // LocatorCount (1 byte) - just 1 locator
+        malicious_input.push(1);
+
+        let oversized_len = (LOCATOR_BYTES_SIZE_LIMIT) as u16;
+        malicious_input.extend_from_slice(&oversized_len.to_le_bytes());
+
+        // Add the oversized data
+        malicious_input.extend_from_slice(&vec![0x01; LOCATOR_BYTES_SIZE_LIMIT]);
+
+        // ... rest of SDPDeclare fields ...
+
+        let result = decode_sdp_declare(&malicious_input);
+        if let Err(nom::Err::Error(ref e)) = result {
+            assert_ne!(
+                e.code,
+                ErrorKind::LengthValue,
+                "Should not reject at `LOCATOR_BYTES_SIZE_LIMIT`"
+            );
+        }
+        assert!(result.is_err(), "Should reject invalid declaration");
+    }
+
+    #[test]
+    fn test_encode_decode_max_inputs() {
+        let note_id = NoteId(BigUint::from(111u64).into());
+        let inputs = [note_id; u8::MAX as usize];
+
+        // Encode should succeed
+        let encoded = encode_inputs(&inputs);
+        assert!(
+            !encoded.is_empty(),
+            "Encoding max input count should produce some output"
+        );
+
+        // Decode should succeed and produce the same number of inputs
+        let result = decode_inputs(&encoded);
+        assert!(result.is_ok(), "Should decode max input count");
+        let (_, decoded_inputs) = result.unwrap();
+        assert_eq!(
+            decoded_inputs.len(),
+            u8::MAX as usize,
+            "Decoded input count should match max"
+        );
+    }
+
+    #[test]
+    fn test_encode_decode_max_outputs() {
+        let note = Note::new(1000, ZkPublicKey::from(BigUint::from(42u64)));
+        let outputs = [note; u8::MAX as usize];
+
+        // Encode should succeed
+        let encoded = encode_outputs(&outputs);
+        assert!(
+            !encoded.is_empty(),
+            "Encoding max output count should produce some output"
+        );
+
+        // Decode should succeed and produce the same number of outputs
+        let result = decode_outputs(&encoded);
+        assert!(result.is_ok(), "Should decode max output count");
+        let (_, decoded_outputs) = result.unwrap();
+        assert_eq!(
+            decoded_outputs.len(),
+            u8::MAX as usize,
+            "Decoded output count should match max"
+        );
+    }
+
+    #[test]
+    fn test_accept_max_input_output_counts() {
+        // Test that input_count = MAX_INPUT_COUNT works
+        let mut valid_input = Vec::new();
+        valid_input.push(u8::MAX);
+
+        // Add MAX_INPUT_COUNT field elements (each 32 bytes)
+        for _ in 0..u8::MAX {
+            valid_input.extend_from_slice(&[0x01; 32]);
+        }
+
+        let result = decode_inputs(&valid_input);
+        assert!(result.is_ok(), "Should accept max input count");
+        let (_, inputs) = result.unwrap();
+        assert_eq!(inputs.len(), u8::MAX as usize);
+
+        // Test that output_count = MAX_OUTPUT_COUNT works
+        let mut valid_output = u8::MAX.to_le_bytes().to_vec();
+
+        // Add MAX_OUTPUT_COUNT notes (each: 8 bytes value + 32 bytes key)
+        for _ in 0..u8::MAX {
+            valid_output.extend_from_slice(&42u64.to_le_bytes()); // value
+            valid_output.extend_from_slice(&[0x02; 32]); // public key
+        }
+
+        let result = decode_outputs(&valid_output);
+        assert!(result.is_ok(), "Should accept max output count");
+        let (_, outputs) = result.unwrap();
+        assert_eq!(outputs.len(), u8::MAX as usize);
     }
 }

@@ -2,10 +2,11 @@ use std::{cmp::Ordering, collections::HashMap};
 
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
-use super::{GasConstants, GasCost as _, MantleTx, Note, Op, Utxo};
+use super::{GasCalculator as _, GasConstants, MantleTx, Note, Op, Utxo};
 use crate::{
     mantle::{
         NoteId,
+        gas::{GasCost, GasOverflow, GasPrice},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
         tx::MantleTxGasContext,
     },
@@ -29,8 +30,8 @@ impl MantleTxBuilder {
         Self {
             mantle_tx: MantleTx {
                 ops: vec![],
-                execution_gas_price: 0,
-                storage_gas_price: 0,
+                execution_gas_price: 0.into(),
+                storage_gas_price: 0.into(),
             },
             ledger_inputs: vec![],
             pending_transfer: TransferOp::new(vec![], vec![]),
@@ -84,22 +85,24 @@ impl MantleTxBuilder {
     }
 
     #[must_use]
-    pub const fn set_execution_gas_price(mut self, price: u64) -> Self {
+    pub const fn set_execution_gas_price(mut self, price: GasPrice) -> Self {
         self.mantle_tx.execution_gas_price = price;
         self
     }
 
     #[must_use]
-    pub const fn set_storage_gas_price(mut self, price: u64) -> Self {
+    pub const fn set_storage_gas_price(mut self, price: GasPrice) -> Self {
         self.mantle_tx.storage_gas_price = price;
         self
     }
 
-    #[must_use]
-    pub fn return_change<G: GasConstants>(self, change_pk: ZkPublicKey) -> Option<Self> {
+    pub fn return_change<G: GasConstants>(
+        self,
+        change_pk: ZkPublicKey,
+    ) -> Result<Option<Self>, GasOverflow> {
         // Calculate the funding delta with a dummy change note to account for
         // the gas cost increase from adding the output
-        let delta_with_change = self.with_dummy_change_note().funding_delta::<G>();
+        let delta_with_change = self.with_dummy_change_note().funding_delta::<G>()?;
 
         match delta_with_change.cmp(&0) {
             Ordering::Less | Ordering::Equal => {
@@ -108,7 +111,7 @@ impl MantleTxBuilder {
 
                 // The increase in cost due to the change note means
                 // we have insufficient funds, need more UTXO's.
-                None
+                Ok(None)
             }
             Ordering::Greater => {
                 // We have enough balance to cover the increase in cost from the change
@@ -123,9 +126,9 @@ impl MantleTxBuilder {
                 });
 
                 // Now the net balance should exactly equal the gas cost.
-                assert_eq!(tx_with_change.funding_delta::<G>(), 0);
+                assert_eq!(tx_with_change.funding_delta::<G>().unwrap(), 0);
 
-                Some(tx_with_change)
+                Ok(Some(tx_with_change))
             }
         }
     }
@@ -156,15 +159,13 @@ impl MantleTxBuilder {
         in_sum - out_sum
     }
 
-    #[must_use]
-    pub fn gas_cost<G: GasConstants>(&self) -> u64 {
+    pub fn gas_cost<G: GasConstants>(&self) -> Result<GasCost, GasOverflow> {
         let build = self.clone().build();
         build.total_gas_cost::<G>(&self.context)
     }
 
-    #[must_use]
-    pub fn funding_delta<G: GasConstants>(&self) -> i128 {
-        self.net_balance() - i128::from(self.gas_cost::<G>())
+    pub fn funding_delta<G: GasConstants>(&self) -> Result<i128, GasOverflow> {
+        Ok(self.net_balance() - i128::from(self.gas_cost::<G>()?.into_inner()))
     }
 
     /// Returns all note IDs used as inputs in the transaction, including

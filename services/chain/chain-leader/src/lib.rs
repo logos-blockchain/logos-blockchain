@@ -375,26 +375,26 @@ where
             blend_broadcast_settings.clone(),
         );
 
-        // Wait for other service (except ChainLeader) to become ready, with timeout.
+        // Wait for other services to become ready, with timeout.
+        // (except Chain and ChainLeader)
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             Some(Duration::from_secs(60)),
             BlendService,
             TxMempoolService<_, _, _, _>,
             TimeService<_, _>,
-            CryptarchiaService,
             Wallet,
             PreloadKmsService<_>,
             // TODO: Remove once the need to broadcast directly bypassing Blend is gone.
             NetworkService<_, _>
         )
         .await?;
-        // Wait for ChainLeader service to become ready.
-        // No timeout since it becomes ready only after IBD is complete.
+        // Wait for Chain and ChainLeader services to become ready, without timeout
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             None,
-            ChainNetwork
+            CryptarchiaService, // becomes ready after recoverying blocks
+            ChainNetwork        // becomes ready after IBD
         )
         .await?;
 

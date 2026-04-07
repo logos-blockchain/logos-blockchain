@@ -14,7 +14,7 @@ use crate::core::{
                 default_poq_verification_inputs_for_session, new_nodes_with_empty_address,
             },
         },
-        error::Error,
+        error::SendError,
     },
 };
 
@@ -56,7 +56,7 @@ async fn publish_message() {
     let result = dialer
         .behaviour_mut()
         .validate_and_publish_message(test_message.clone().into());
-    assert_eq!(result, Err(Error::NoPeers));
+    assert_eq!(result, Err(SendError::NoPeers));
 
     // Establish a connection for the new session.
     dialer.connect_and_wait_for_upgrade(&mut listener).await;
@@ -77,6 +77,14 @@ async fn publish_message() {
             }
         }
     }
+
+    // We cannot send the same message again because it's already processed.
+    assert_eq!(
+        dialer
+            .behaviour_mut()
+            .validate_and_publish_message(test_message.clone().into()),
+        Err(SendError::DuplicateMessage)
+    );
 }
 
 #[test(tokio::test)]

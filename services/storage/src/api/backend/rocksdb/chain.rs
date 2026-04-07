@@ -21,6 +21,7 @@ use crate::{
 };
 
 const IMMUTABLE_BLOCK_PREFIX: &str = "immutable_block/slot/";
+const BLOCK_PARENT_PREFIX: &str = "block_parent/";
 
 #[async_trait]
 impl StorageChainApi for RocksBackend {
@@ -36,11 +37,24 @@ impl StorageChainApi for RocksBackend {
     async fn store_block(
         &mut self,
         header_id: HeaderId,
+        parent_id: HeaderId,
         block: Self::Block,
     ) -> Result<(), Self::Error> {
-        let header_id: [u8; 32] = header_id.into();
-        let key = Bytes::copy_from_slice(&header_id);
-        self.store(key, block).await.map_err(Into::into)
+        let header_bytes: [u8; 32] = header_id.into();
+        let block_key = Bytes::copy_from_slice(&header_bytes);
+        let parent_key = key_bytes(BLOCK_PARENT_PREFIX, header_bytes);
+        let parent_bytes: [u8; 32] = parent_id.into();
+        let parent_value = Bytes::copy_from_slice(&parent_bytes);
+
+        let db_transaction = self.txn(move |db| {
+            let mut batch = WriteBatch::default();
+            batch.put(block_key, block);
+            batch.put(parent_key, parent_value);
+            db.write(batch)?;
+            Ok(None)
+        });
+        drop(self.execute(db_transaction).await?);
+        Ok(())
     }
 
     async fn remove_block(
@@ -48,8 +62,33 @@ impl StorageChainApi for RocksBackend {
         header_id: HeaderId,
     ) -> Result<Option<Self::Block>, Self::Error> {
         let encoded_header_id: [u8; 32] = header_id.into();
-        let key = Bytes::copy_from_slice(&encoded_header_id);
-        self.remove(&key).await.map_err(Into::into)
+        let block_key = Bytes::copy_from_slice(&encoded_header_id);
+        let parent_key = key_bytes(BLOCK_PARENT_PREFIX, encoded_header_id);
+
+        // Load the block first so we can return it.
+        let val = self.load(&block_key).await?;
+
+        let db_transaction = self.txn(move |db| {
+            let mut batch = WriteBatch::default();
+            batch.delete(block_key);
+            batch.delete(parent_key);
+            db.write(batch)?;
+            Ok(None)
+        });
+        drop(self.execute(db_transaction).await?);
+        Ok(val)
+    }
+
+    async fn get_block_parent(
+        &mut self,
+        header_id: HeaderId,
+    ) -> Result<Option<HeaderId>, Self::Error> {
+        let header_bytes: [u8; 32] = header_id.into();
+        let key = key_bytes(BLOCK_PARENT_PREFIX, header_bytes);
+        self.load(&key)
+            .await?
+            .map(|bytes| bytes.as_ref().try_into().map_err(Into::into))
+            .transpose()
     }
 
     async fn store_immutable_block_ids(

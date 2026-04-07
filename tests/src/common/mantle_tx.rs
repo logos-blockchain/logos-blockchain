@@ -40,8 +40,8 @@ pub fn create_channel_inscribe_tx(
 
     let inscribe_tx = MantleTx {
         ops: vec![Op::ChannelInscribe(inscribe_op)],
-        storage_gas_price: 0,
-        execution_gas_price: 0,
+        storage_gas_price: 0.into(),
+        execution_gas_price: 0.into(),
     };
 
     let tx_hash = inscribe_tx.hash();
@@ -69,8 +69,8 @@ pub fn create_channel_set_keys_tx(
 
     let set_keys_tx = MantleTx {
         ops: vec![Op::ChannelSetKeys(set_keys_op)],
-        storage_gas_price: 0,
-        execution_gas_price: 0,
+        storage_gas_price: 0.into(),
+        execution_gas_price: 0.into(),
     };
 
     let tx_hash = set_keys_tx.hash();
@@ -109,8 +109,8 @@ pub fn create_sdp_declare_tx(
 
     let mantle_tx = MantleTx {
         ops: vec![Op::SDPDeclare(declaration.clone())],
-        execution_gas_price: 0,
-        storage_gas_price: 0,
+        execution_gas_price: 0.into(),
+        storage_gas_price: 0.into(),
     };
 
     let tx_hash = mantle_tx.hash();
@@ -141,8 +141,8 @@ pub fn create_sdp_active_tx(
 ) -> SignedMantleTx {
     let mantle_tx = MantleTx {
         ops: vec![Op::SDPActive(active.clone())],
-        execution_gas_price: 0,
-        storage_gas_price: 0,
+        execution_gas_price: 0.into(),
+        storage_gas_price: 0.into(),
     };
 
     let tx_hash = mantle_tx.hash();
@@ -162,8 +162,8 @@ pub fn create_sdp_withdraw_tx(
 ) -> SignedMantleTx {
     let mantle_tx = MantleTx {
         ops: vec![Op::SDPWithdraw(withdraw)],
-        execution_gas_price: 0,
-        storage_gas_price: 0,
+        execution_gas_price: 0.into(),
+        storage_gas_price: 0.into(),
     };
 
     let tx_hash = mantle_tx.hash();
@@ -195,8 +195,8 @@ pub fn create_inscription_transaction_with_id(
 
     let mantle_tx = MantleTx {
         ops: vec![Op::ChannelInscribe(inscription_op)],
-        storage_gas_price: 0,
-        execution_gas_price: 0,
+        storage_gas_price: 0.into(),
+        execution_gas_price: 0.into(),
     };
 
     let tx_hash = mantle_tx.hash();

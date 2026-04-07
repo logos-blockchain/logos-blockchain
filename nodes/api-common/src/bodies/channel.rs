@@ -1,7 +1,8 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        TxHash, Value,
+        TxHash,
+        gas::GasCost,
         ops::{channel::deposit::DepositOp, transfer::TransferOp},
     },
 };
@@ -15,7 +16,7 @@ pub struct ChannelDepositRequestBody {
     pub burn: TransferOp,
     pub change_public_key: ZkPublicKey,
     pub funding_public_keys: Vec<ZkPublicKey>,
-    pub max_tx_fee: Value,
+    pub max_tx_fee: GasCost,
 }
 
 #[derive(Serialize, Deserialize)]

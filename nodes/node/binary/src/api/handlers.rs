@@ -454,7 +454,7 @@ where
             )
             .await?;
 
-        let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>();
+        let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>()?;
         if tx_fee > req.max_tx_fee {
             return Err(overwatch::DynError::from(format!(
                 "tx_fee({tx_fee}) exceeds max_tx_fee({})",
