@@ -1129,16 +1129,6 @@ where
             self.state.lib_block_length,
         );
 
-        // Load blocks from LIB (exclusive) to tip (inclusive) from storage.
-        // These blocks will be applied to `cryptarchia` below.
-        info!(
-            target: LOG_TARGET, lib = ?lib_id, tip = ?self.state.tip,
-            "loading blocks from storage: (lib, tip]",
-        );
-        let blocks =
-            Self::get_blocks_in_range(lib_id, self.state.tip, relays.storage_adapter()).await;
-        info!(target: LOG_TARGET, "loaded {} blocks from storage: (lib, tip]", blocks.len());
-
         // Stream the already applied state.
         let init_tip = cryptarchia.tip();
         let init_event = ProcessedBlockEvent {
@@ -1150,6 +1140,16 @@ where
             error!("Could not notify new block to services {e}");
         }
         Self::broadcast_session_updates_for_block(&cryptarchia, &init_tip, relays, None).await;
+
+        // Load blocks from LIB (exclusive) to tip (inclusive) from storage.
+        // These blocks will be applied to `cryptarchia` below.
+        info!(
+            target: LOG_TARGET, lib = ?lib_id, tip = ?self.state.tip,
+            "loading blocks from storage: (lib, tip]",
+        );
+        let blocks =
+            Self::get_blocks_in_range(lib_id, self.state.tip, relays.storage_adapter()).await;
+        info!(target: LOG_TARGET, "loaded {} blocks from storage: (lib, tip]", blocks.len());
 
         let mut pruned_blocks = PrunedBlocks::new();
         let n_blocks = blocks.len();
