@@ -117,13 +117,10 @@ where
             .await
             .unwrap();
 
-        match receiver.await {
-            Ok(result) => result,
-            Err(_) => {
-                tracing::error!("Failed to receive block parent from storage relay");
-                None
-            }
-        }
+        receiver.await.unwrap_or_else(|e| {
+            tracing::error!("Failed to receive block parent from storage relay: {e}");
+            None
+        })
     }
 
     async fn remove_block(
