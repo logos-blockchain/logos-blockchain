@@ -1,7 +1,7 @@
 use std::{
     fs,
     fs::OpenOptions,
-    hash::{Hash, Hasher},
+    hash::{Hash as _, Hasher as _},
     io::Write as _,
     net::{TcpListener, UdpSocket},
     path::{Path, PathBuf},
@@ -45,6 +45,7 @@ fn process_start_nonce() -> &'static str {
 
 /// Returns a unique string keyed to the currently-running process start nonce
 /// optional test context and optional nextest control parameters.
+#[must_use]
 pub fn unique_test_context(test_context: Option<&str>) -> String {
     let current_thread = std::thread::current();
     let thread_name = current_thread.name().unwrap_or("genesis");
@@ -84,7 +85,7 @@ struct TestPortAllocator {
 
 impl TestPortAllocator {
     fn new() -> Option<Self> {
-        fs::create_dir_all(&handshake_dir()).ok()?;
+        fs::create_dir_all(handshake_dir()).ok()?;
 
         let owner = format!("process_start_nonce={}", process_start_nonce());
 
@@ -237,7 +238,7 @@ fn is_pid_alive(pid: u32) -> bool {
             .arg("pid=")
             .output();
 
-        return match output {
+        match output {
             // process exists
             Ok(out) if out.status.success() => {
                 !String::from_utf8_lossy(&out.stdout).trim().is_empty()
@@ -246,7 +247,7 @@ fn is_pid_alive(pid: u32) -> bool {
             Ok(out) if out.status.code() == Some(1) => false,
             // probe failed -> conservative
             _ => true,
-        };
+        }
     }
 
     #[cfg(windows)]
@@ -324,7 +325,7 @@ fn handshake_dir() -> PathBuf {
 /// Reaps all stale lock files in the port-blocks directory that belong to
 /// dead processes. Call this once at process startup.
 pub fn reap_all_stale_port_blocks() {
-    if let Ok(entries) = fs::read_dir(&handshake_dir()) {
+    if let Ok(entries) = fs::read_dir(handshake_dir()) {
         for entry in entries.flatten() {
             try_reap_stale_port_claim_file(&entry.path());
         }
@@ -332,6 +333,7 @@ pub fn reap_all_stale_port_blocks() {
 }
 
 /// Create a short 8-byte hash from string
+#[must_use]
 pub fn hash_str(s: &str) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     s.hash(&mut hasher);
