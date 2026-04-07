@@ -1051,7 +1051,7 @@ where
             .map_err(|e| Error::Storage(format!("Failed to store immutable block ids: {e}")))
     }
 
-    /// Retrieves the blocks in the range from `from` (exclusive) to `to`
+    /// Retrieves the block IDs in the range from `from` (exclusive) to `to`
     /// (inclusive) from the storage.
     /// This is implemented here, and not as a method of `StorageAdapter`, to
     /// simplify the panic and error message handling.
@@ -1069,40 +1069,37 @@ where
     ///
     /// # Returns
     ///
-    /// A vector of blocks in the range from `from` (exclusive) to `to`
-    /// (inclusive).
+    /// A vector of block IDs in the range from `from` (exclusive) to `to`
+    /// (inclusive), in lib-to-tip order.
     /// If no blocks are found, returns an empty vector.
-    /// If any of the [`HeaderId`]s are invalid, returns an error with the first
-    /// invalid header id.
-    async fn get_blocks_in_range(
+    async fn get_block_ids_in_range(
         from: HeaderId,
         to: HeaderId,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
-    ) -> Vec<Block<Tx>> {
-        // Due to the blocks traversal order, this yields `[to..from)` order
-        let blocks = futures::stream::unfold(to, async |header_id| {
-            if header_id == from {
-                // Don't load the `from` block since the range is exclusive of `from`.
-                None
-            } else {
-                let block = storage_adapter
-                    .get_block(&header_id)
-                    .await
-                    .unwrap_or_else(|| {
-                        panic!("Could not retrieve block {to} from storage during recovery")
-                    });
-                let parent_header_id = block.header().parent();
-                debug!(
-                    target: LOG_TARGET, id = ?header_id, parent = ?parent_header_id,
-                    "loaded block from storage",
-                );
-                Some((block, parent_header_id))
-            }
-        });
-
-        // To avoid confusion, the order is reversed so it fits the natural `(from..to]`
-        // order
-        blocks.collect::<Vec<_>>().await.into_iter().rev().collect()
+    ) -> Vec<HeaderId> {
+        // Traverse from `to` back to `from`, collecting only header IDs.
+        // Each block is loaded to discover its parent link but then dropped
+        // immediately, so peak memory is O(1 block) instead of O(N blocks).
+        let mut ids = Vec::new();
+        let mut current = to;
+        while current != from {
+            let block = storage_adapter
+                .get_block(&current)
+                .await
+                .unwrap_or_else(|| {
+                    panic!("Could not retrieve block {current} from storage during recovery")
+                });
+            let parent = block.header().parent();
+            debug!(
+                target: LOG_TARGET, id = ?current, parent = ?parent,
+                "loaded block header from storage",
+            );
+            ids.push(current);
+            current = parent;
+        }
+        // Reverse so the order is the natural `(from..to]`
+        ids.reverse();
+        ids
     }
 
     /// Initialize cryptarchia
@@ -1163,19 +1160,26 @@ where
         }
         Self::broadcast_session_updates_for_block(&cryptarchia, &init_tip.id(), relays, None).await;
 
-        // Load blocks from LIB (exclusive) to tip (inclusive) from storage.
-        // These blocks will be applied to `cryptarchia` below.
+        // Phase 1: Collect only block IDs from LIB to tip.
         info!(
             target: LOG_TARGET, lib = ?lib_id, tip = ?self.state.tip,
-            "loading blocks from storage: (lib, tip]",
+            "loading block IDs from storage: (lib, tip]",
         );
-        let blocks =
-            Self::get_blocks_in_range(lib_id, self.state.tip, relays.storage_adapter()).await;
-        info!(target: LOG_TARGET, "loaded {} blocks from storage: (lib, tip]", blocks.len());
+        let ids =
+            Self::get_block_ids_in_range(lib_id, self.state.tip, relays.storage_adapter()).await;
+        info!(target: LOG_TARGET, "collected {} block IDs from storage: (lib, tip]", ids.len());
 
+        // Phase 2: Load each block individually (lib→tip order) and apply it.
         let mut pruned_blocks = PrunedBlocks::new();
-        let n_blocks = blocks.len();
-        for (i, block) in blocks.into_iter().enumerate() {
+        let n_blocks = ids.len();
+        for (i, id) in ids.into_iter().enumerate() {
+            let block = relays
+                .storage_adapter()
+                .get_block(&id)
+                .await
+                .unwrap_or_else(|| {
+                    panic!("Could not retrieve block {id:?} from storage during initialization")
+                });
             match Self::process_block(
                 &mut cryptarchia,
                 block,
