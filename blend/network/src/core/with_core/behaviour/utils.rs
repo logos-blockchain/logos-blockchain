@@ -24,7 +24,7 @@ use crate::core::with_core::{
 /// already been forwarded before.
 pub fn forward_validated_message_and_update_cache<'session, PeerConnections>(
     message: &EncapsulatedMessageWithVerifiedSignature,
-    mut peer_connections: PeerConnections,
+    peer_connections: PeerConnections,
     events_queue: &'session mut VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     message_cache: &'session mut MessageCache,
     waker: Option<Waker>,
@@ -36,14 +36,13 @@ where
         return Err(SendError::DuplicateMessage);
     }
 
-    // Check if iterator has any elements before serializing the message.
-    if peer_connections.by_ref().peekable().peek().is_none() {
+    let mut peer_connections = peer_connections.peekable();
+    if peer_connections.peek().is_none() {
         return Err(SendError::NoPeers);
     }
 
     let serialized_message = serialize_encapsulated_message_with_verified_signature(message);
 
-    let mut at_least_one_receiver = false;
     peer_connections.for_each(|(peer_id, connection_id)| {
         tracing::trace!("Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message.");
         events_queue.push_back(ToSwarm::NotifyHandler {
@@ -51,20 +50,13 @@ where
             handler: NotifyHandler::One(*connection_id),
             event: Either::Left(FromBehaviour::Message(serialized_message.clone())),
         });
-        at_least_one_receiver = true;
     });
 
-    if at_least_one_receiver {
-        // Mark the message as processed only if we were able to send it to at least one
-        // of our peers.
-        message_cache.mark_message_as_forwarded(message);
-        if let Some(waker) = waker {
-            waker.wake();
-        }
-        Ok(())
-    } else {
-        Err(SendError::NoPeers)
+    message_cache.mark_message_as_forwarded(message);
+    if let Some(waker) = waker {
+        waker.wake();
     }
+    Ok(())
 }
 
 /// Validates the signature of a received message, and notifies the swarm about

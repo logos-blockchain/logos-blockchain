@@ -50,7 +50,7 @@ pub struct Behaviour {
     events: VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     /// Waker that handles polling
     waker: Option<Waker>,
-    current_session_info: Membership<PeerId>,
+    current_membership: Membership<PeerId>,
     // Timeout to close connection with an edge node if a message is not received on time.
     connection_timeout: Duration,
     upgraded_edge_peers: HashSet<(PeerId, ConnectionId)>,
@@ -69,7 +69,7 @@ impl Behaviour {
         Self {
             events: VecDeque::new(),
             waker: None,
-            current_session_info,
+            current_membership: current_session_info,
             connection_timeout: config.connection_timeout,
             upgraded_edge_peers: HashSet::with_capacity(config.max_incoming_connections),
             max_incoming_connections: config.max_incoming_connections,
@@ -79,7 +79,7 @@ impl Behaviour {
     }
 
     pub(crate) fn start_new_session(&mut self, new_session_info: Membership<PeerId>) {
-        self.current_session_info = new_session_info;
+        self.current_membership = new_session_info;
         // Close all the connections without waiting for the transition period,
         // so that edge nodes can retry with the new membership.
         let peers = mem::take(&mut self.upgraded_edge_peers);
@@ -133,7 +133,7 @@ impl Behaviour {
     }
 
     fn is_network_large_enough(&self) -> bool {
-        self.current_session_info.size() >= self.minimum_network_size.get()
+        self.current_membership.size() >= self.minimum_network_size.get()
     }
 
     fn handle_received_serialized_encapsulated_message(&mut self, serialized_message: &[u8]) {
@@ -179,7 +179,7 @@ impl NetworkBehaviour for Behaviour {
         Ok(if !self.is_network_large_enough() {
             tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer:?} because membership size is too small.");
             Either::Right(DummyConnectionHandler)
-        } else if self.current_session_info.contains(&peer) {
+        } else if self.current_membership.contains(&peer) {
             tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with core peer {peer:?}.");
             Either::Right(DummyConnectionHandler)
         } else {
