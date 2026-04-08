@@ -5259,7 +5259,6 @@ dependencies = [
  "serde_with",
  "time",
  "tokio",
- "tokio-stream",
 ]
 
 [[package]]
