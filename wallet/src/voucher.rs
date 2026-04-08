@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use lb_core::mantle::ops::leader_claim::{VoucherCm, VoucherNullifier};
+use lb_mmr::MerklePath;
 use serde::{Deserialize, Serialize};
 
 /// Holds voucher indices for
@@ -8,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// - looking up existing voucher IDs by commitment or nullifier
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Vouchers<Id> {
-    vouchers: HashMap<VoucherCm, Id>,
+    vouchers: HashMap<VoucherCm, (Id, Option<MerklePath>)>,
     voucher_nullifiers: HashMap<VoucherNullifier, VoucherCm>,
 }
 
@@ -18,7 +19,7 @@ impl<Id> Vouchers<Id> {
         let (vouchers, voucher_nullifiers) = vouchers.into_iter().fold(
             (HashMap::new(), HashMap::new()),
             |(mut vouchers, mut voucher_nullifiers), (cm, nf, id)| {
-                vouchers.insert(cm, id);
+                vouchers.insert(cm, (id, None));
                 voucher_nullifiers.insert(nf, cm);
                 (vouchers, voucher_nullifiers)
             },
@@ -28,13 +29,14 @@ impl<Id> Vouchers<Id> {
             voucher_nullifiers,
         }
     }
+
     pub(crate) fn insert(&mut self, cm: VoucherCm, nf: VoucherNullifier, id: Id) {
-        self.vouchers.insert(cm, id);
+        self.vouchers.insert(cm, (id, None));
         self.voucher_nullifiers.insert(nf, cm);
     }
 
     pub(crate) fn get(&self, cm: &VoucherCm) -> Option<&Id> {
-        self.vouchers.get(cm)
+        self.vouchers.get(cm).map(|(id, _)| id)
     }
 
     pub(crate) fn get_by_nullifier(&self, nf: &VoucherNullifier) -> Option<&Id> {
@@ -43,12 +45,29 @@ impl<Id> Vouchers<Id> {
 
     pub(crate) fn remove_by_nullifier(&mut self, nf: &VoucherNullifier) -> Option<Id> {
         let cm = self.voucher_nullifiers.remove(nf)?;
-        self.vouchers.remove(&cm)
+        self.vouchers.remove(&cm).map(|(id, _)| id)
     }
 
     pub(crate) fn commitments_and_nullifiers(
         &self,
     ) -> impl Iterator<Item = (&VoucherNullifier, &VoucherCm)> {
         self.voucher_nullifiers.iter()
+    }
+
+    pub(crate) fn set_path(&mut self, cm: &VoucherCm, path: MerklePath) {
+        if let Some((_, slot)) = self.vouchers.get_mut(cm) {
+            *slot = Some(path);
+        }
+    }
+
+    pub(crate) fn get_path(&self, cm: &VoucherCm) -> Option<&MerklePath> {
+        self.vouchers.get(cm).and_then(|(_, path)| path.as_ref())
+    }
+
+    /// Returns mutable references to all tracked paths for in-place updates.
+    pub(crate) fn paths_mut(&mut self) -> impl Iterator<Item = &mut MerklePath> {
+        self.vouchers
+            .values_mut()
+            .filter_map(|(_, path)| path.as_mut())
     }
 }

@@ -251,6 +251,24 @@ where
     }
 
     #[must_use]
+    pub fn has_voucher(&self, cm: &VoucherCm) -> bool {
+        self.known_vouchers.get(cm).is_some()
+    }
+
+    pub fn set_voucher_path(&mut self, cm: &VoucherCm, path: lb_mmr::MerklePath) {
+        self.known_vouchers.set_path(cm, path);
+    }
+
+    #[must_use]
+    pub fn get_voucher_path(&self, cm: &VoucherCm) -> Option<&lb_mmr::MerklePath> {
+        self.known_vouchers.get_path(cm)
+    }
+
+    pub fn voucher_paths_mut(&mut self) -> impl Iterator<Item = &mut lb_mmr::MerklePath> {
+        self.known_vouchers.paths_mut()
+    }
+
+    #[must_use]
     pub const fn vouchers(&self) -> &Vouchers<VoucherId> {
         &self.known_vouchers
     }
