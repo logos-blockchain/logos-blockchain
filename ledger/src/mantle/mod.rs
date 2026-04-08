@@ -6,7 +6,6 @@ pub mod sdp;
 use std::collections::HashMap;
 
 use lb_core::{
-    crypto::ZkHash,
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
         ops::{
@@ -21,8 +20,9 @@ use lb_core::{
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use lb_utxotree::MerklePath;
 use sdp::{Error as SdpLedgerError, locked_notes::LockedNotes};
+
+use leader::ClaimableVouchersUpdate;
 use tracing::error;
 
 use crate::{Config, EpochState, UtxoTree};
@@ -122,30 +122,23 @@ impl LedgerState {
     }
 
     #[must_use]
-    pub fn has_claimable_voucher(&self, voucher_cm: &VoucherCm) -> bool {
-        self.leaders.has_claimable_voucher(voucher_cm)
-    }
-
-    #[must_use]
     pub const fn claimable_vouchers_root(&self) -> RewardsRoot {
         self.leaders.claimable_vouchers_root()
     }
 
-    #[must_use]
-    pub fn voucher_merkle_path(&self, voucher_cm: VoucherCm) -> Option<MerklePath<ZkHash>> {
-        self.leaders.voucher_merkle_path(voucher_cm)
-    }
-
+    /// Apply a block header. On epoch transition, pending vouchers are flushed
+    /// into the MMR and a [`ClaimableVouchersUpdate`] is returned.
     pub fn try_apply_header(
         mut self,
         epoch_state: &EpochState,
         voucher: VoucherCm,
         config: &Config,
-    ) -> Result<(Self, Vec<Utxo>), Error> {
-        self.leaders = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
+    ) -> Result<(Self, Vec<Utxo>, Option<ClaimableVouchersUpdate>), Error> {
+        let (leaders, update) = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
+        self.leaders = leaders;
         let (new_sdp, reward_utxos) = self.sdp.try_apply_header(&config.sdp_config, epoch_state)?;
         self.sdp = new_sdp;
-        Ok((self, reward_utxos))
+        Ok((self, reward_utxos, update))
     }
 
     pub fn try_apply_channel_inscription(

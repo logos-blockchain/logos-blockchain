@@ -20,6 +20,7 @@ use lb_core::{
     proofs::leader_proof,
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
 };
+pub use mantle::leader::ClaimableVouchersUpdate;
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Field as _, Fr};
 use mantle::LedgerState as MantleLedger;
@@ -137,7 +138,7 @@ where
         slot: Slot,
         proof: &LeaderProof,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx>,
-    ) -> Result<(Id, LedgerState), LedgerError<Id>>
+    ) -> Result<(Id, LedgerState, Option<ClaimableVouchersUpdate>), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
         Constants: GasConstants,
@@ -147,12 +148,14 @@ where
             .get(&parent_id)
             .ok_or(LedgerError::ParentNotFound(parent_id))?;
 
-        let new_state =
-            parent_state
-                .clone()
-                .try_update::<_, _, Constants>(slot, proof, txs, &self.config)?;
+        let (new_state, update) = parent_state.clone().try_update::<_, _, Constants>(
+            slot,
+            proof,
+            txs,
+            &self.config,
+        )?;
 
-        Ok((id, new_state))
+        Ok((id, new_state, update))
     }
 
     /// Commits a new [`LedgerState`] created by [`Self::prepare_update`].
@@ -214,13 +217,16 @@ impl LedgerState {
         proof: &LeaderProof,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx>,
         config: &Config,
-    ) -> Result<Self, LedgerError<Id>>
+    ) -> Result<(Self, Option<ClaimableVouchersUpdate>), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
         Constants: GasConstants,
     {
-        self.try_apply_header(slot, proof, config)?
-            .try_apply_contents::<_, Constants>(config, txs)
+        let (state, vouchers_update) = self.try_apply_header(slot, proof, config)?;
+        Ok((
+            state.try_apply_contents::<_, Constants>(config, txs)?,
+            vouchers_update,
+        ))
     }
 
     /// Apply header-related changed to the ledger state. These include
@@ -231,32 +237,33 @@ impl LedgerState {
         slot: Slot,
         proof: &LeaderProof,
         config: &Config,
-    ) -> Result<Self, LedgerError<Id>>
+    ) -> Result<(Self, Option<ClaimableVouchersUpdate>), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
     {
         let mut cryptarchia_ledger = self
             .cryptarchia_ledger
             .try_apply_header::<LeaderProof, Id>(slot, proof, config)?;
-        let (mantle_ledger, reward_utxos) = self.mantle_ledger.try_apply_header(
-            cryptarchia_ledger.epoch_state(),
-            *proof.voucher_cm(),
-            config,
-        )?;
+        let (mantle_ledger, reward_utxos, vouchers_update) = self
+            .mantle_ledger
+            .try_apply_header(cryptarchia_ledger.epoch_state(), *proof.voucher_cm(), config)?;
 
         // Insert reward UTXOs into the cryptarchia ledger
         for utxo in reward_utxos {
             cryptarchia_ledger.utxos = cryptarchia_ledger.utxos.insert(utxo.id(), utxo).0;
         }
 
-        Ok(Self {
-            block_number: self
-                .block_number
-                .checked_add(1)
-                .expect("Logos blockchain lived long and prospered"),
-            cryptarchia_ledger,
-            mantle_ledger,
-        })
+        Ok((
+            Self {
+                block_number: self
+                    .block_number
+                    .checked_add(1)
+                    .expect("Logos blockchain lived long and prospered"),
+                cryptarchia_ledger,
+                mantle_ledger,
+            },
+            vouchers_update,
+        ))
     }
 
     /// total estimated stake and on the average of fees consumed per block over
@@ -776,7 +783,7 @@ mod tests {
         );
 
         let new_id = [1; 32];
-        let (_, state) = ledger
+        let (_, state, _) = ledger
             .prepare_update::<_, MainnetGasConstants>(
                 new_id,
                 genesis_id,
