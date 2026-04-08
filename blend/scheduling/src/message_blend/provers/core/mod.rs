@@ -59,8 +59,10 @@ where
 {
     fn new(settings: ProofsGeneratorSettings, proof_of_quota_generator: PoQGenerator) -> Self {
         Self {
-            proofs_stream: Box::pin(Buffered::new(
-                create_proof_stream(settings.public_inputs, proof_of_quota_generator.clone(), 0),
+            proofs_stream: Box::pin(create_proof_stream(
+                settings.public_inputs,
+                proof_of_quota_generator.clone(),
+                0,
                 settings.encapsulation_layers.get() as usize,
             )),
             proof_of_quota_generator,
@@ -109,12 +111,10 @@ where
             return;
         }
 
-        self.proofs_stream = Box::pin(Buffered::new(
-            create_proof_stream(
-                self.settings.public_inputs,
-                self.proof_of_quota_generator.clone(),
-                starting_key_index,
-            ),
+        self.proofs_stream = Box::pin(create_proof_stream(
+            self.settings.public_inputs,
+            self.proof_of_quota_generator.clone(),
+            starting_key_index,
             self.settings.encapsulation_layers.get() as usize,
         ));
     }
@@ -124,7 +124,8 @@ fn create_proof_stream<Generator>(
     public_inputs: PoQVerificationInputsMinusSigningKey,
     proof_of_quota_generator: Generator,
     starting_key_index: u64,
-) -> impl Stream<Item = BlendLayerProof>
+    buffer_size: usize,
+) -> impl Stream<Item = BlendLayerProof> + Send
 where
     Generator: CoreProofOfQuotaGenerator + Clone + Send + Sync + 'static,
 {
@@ -136,8 +137,9 @@ where
     tracing::trace!(target: LOG_TARGET, "Generating {proofs_to_generate} core quota proofs starting from index: {starting_key_index} with public inputs: {public_inputs:?}.");
 
     let quota = public_inputs.core.quota;
-    stream::iter(starting_key_index..quota)
-        .then(move |key_index| {
+    Buffered::new(
+        stream::iter(starting_key_index..quota)
+        .map(move |key_index| {
             let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
             let proof_of_quota_generator = proof_of_quota_generator.clone();
 
@@ -161,5 +163,7 @@ where
                     ephemeral_signing_key,
                 }
             }
-        })
+        }),
+        buffer_size,
+    )
 }

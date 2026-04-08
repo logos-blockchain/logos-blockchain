@@ -63,8 +63,9 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
         Self {
             settings,
             private_inputs: private_inputs.clone(),
-            proofs_stream: Box::pin(Buffered::new(
-                create_proof_stream(settings.public_inputs, private_inputs),
+            proofs_stream: Box::pin(create_proof_stream(
+                settings.public_inputs,
+                private_inputs,
                 settings.public_inputs.leader.message_quota as usize,
             )),
         }
@@ -102,8 +103,9 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
 
 impl RealLeaderProofsGenerator {
     fn generate_new_proofs_stream(&mut self) {
-        self.proofs_stream = Box::pin(Buffered::new(
-            create_proof_stream(self.settings.public_inputs, self.private_inputs.clone()),
+        self.proofs_stream = Box::pin(create_proof_stream(
+            self.settings.public_inputs,
+            self.private_inputs.clone(),
             self.settings.public_inputs.leader.message_quota as usize,
         ));
     }
@@ -116,12 +118,14 @@ impl RealLeaderProofsGenerator {
 fn create_proof_stream(
     public_inputs: PoQVerificationInputsMinusSigningKey,
     private_inputs: ProofOfLeadershipQuotaInputs,
-) -> impl Stream<Item = BlendLayerProof> {
+    buffer_size: usize,
+) -> impl Stream<Item = BlendLayerProof> + Send {
     let message_quota = public_inputs.leader.message_quota;
     tracing::debug!(target: LOG_TARGET, "Generating leadership quota proofs starting with public inputs: {public_inputs:?}.");
 
-    stream::iter(0u64..)
-        .then(move |current_index| {
+    Buffered::new(
+        stream::iter(0u64..)
+        .map(move |current_index| {
             // This represents the total number of encapsulations sent out for each message.
             // E.g., for a session with data message replication factor of `1`, we get
             // indices `0` to `2` that belong to the first copy encapsulation, and indices
@@ -163,5 +167,7 @@ fn create_proof_stream(
                 tracing::trace!(target: LOG_TARGET, "Generated leadership PoQ within the stream for message release index {message_release_index:?} with key nullifier {:?}  and public key {:?}.", hex::encode(fr_to_bytes(&leadership_proof.proof_of_quota.key_nullifier())), leadership_proof.ephemeral_signing_key.public_key());
                 leadership_proof
             }
-        })
+        }),
+        buffer_size,
+    )
 }
