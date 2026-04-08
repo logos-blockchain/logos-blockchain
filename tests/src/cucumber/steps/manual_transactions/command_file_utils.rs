@@ -127,13 +127,6 @@ async fn execute_non_stop_manual_command(
             transactions,
             value,
             cycles,
-        }
-        | ManualCommand::ContinuousFundingWallets {
-            coin_split_outputs,
-            coin_split_value,
-            transactions,
-            value,
-            cycles,
         } => {
             execute_continuous(
                 world,
@@ -335,11 +328,6 @@ async fn execute_continuous(
     let mut wallet_names = match command {
         ManualCommand::ContinuousUserWallets { .. } => world
             .all_user_wallets()
-            .iter()
-            .map(|w| w.wallet_name.clone())
-            .collect(),
-        ManualCommand::ContinuousFundingWallets { .. } => world
-            .all_funding_wallets()
             .iter()
             .map(|w| w.wallet_name.clone())
             .collect(),

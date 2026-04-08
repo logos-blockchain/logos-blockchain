@@ -133,9 +133,7 @@ pub async fn create_and_submit_transaction(
                     warn!(target: TARGET, "Step `{}` error: {e}", step);
                 })?;
 
-            let (_best_node_name, best_node_client, _best_consensus) =
-                determine_best_node(world).await?;
-
+            let (_, best_node_client, _) = sanitize_best_node_info(world, best_node_info).await?;
             world
                 .submit_transaction(&wallet, &signed_tx, best_node_client)
                 .await
@@ -198,10 +196,14 @@ pub async fn update_wallet_balance_all_user_wallets(
 pub async fn update_wallet_balance_all_funding_wallets(
     world: &mut CucumberWorld,
     step: &str,
-    best_node_info: Option<&BestNodeInfo>,
+    _best_node_info: Option<&BestNodeInfo>,
 ) -> Result<WalletUtxos, StepError> {
-    update_wallet_balance_multiple_wallets(world, step, world.all_funding_wallets(), best_node_info)
-        .await
+    let mut funding_wallet_utxos = WalletUtxos::new();
+    for wallet in world.all_funding_wallets() {
+        let utxos = update_wallet_balance(world, step, &wallet.wallet_name).await?;
+        funding_wallet_utxos.insert(wallet.wallet_name.clone(), utxos);
+    }
+    Ok(funding_wallet_utxos)
 }
 
 pub async fn update_wallet_balance_all_wallets(
@@ -209,10 +211,18 @@ pub async fn update_wallet_balance_all_wallets(
     step: &str,
     best_node_info: Option<&BestNodeInfo>,
 ) -> Result<WalletUtxos, StepError> {
-    let mut all_wallets = world.all_user_wallets();
-    let mut funding_wallets = world.all_funding_wallets();
-    all_wallets.append(&mut funding_wallets);
-    update_wallet_balance_multiple_wallets(world, step, all_wallets, best_node_info).await
+    let mut all_wallet_utxos = update_wallet_balance_multiple_wallets(
+        world,
+        step,
+        world.all_user_wallets(),
+        best_node_info,
+    )
+    .await?;
+    for wallet in world.all_funding_wallets() {
+        let utxos = update_wallet_balance(world, step, &wallet.wallet_name).await?;
+        all_wallet_utxos.insert(wallet.wallet_name.clone(), utxos);
+    }
+    Ok(all_wallet_utxos)
 }
 
 /// Struct to hold the best node information for querying UTXOs across multiple
@@ -221,8 +231,6 @@ pub async fn update_wallet_balance_all_wallets(
 pub struct BestNodeInfo {
     /// The name of the best node to query for UTXOs.
     pub node_name: String,
-    /// A reference to the HTTP client of the best node for making API calls.
-    pub consensus: CryptarchiaInfo,
 }
 
 pub async fn update_wallet_balance_multiple_wallets(
@@ -231,6 +239,17 @@ pub async fn update_wallet_balance_multiple_wallets(
     wallets: Vec<WalletInfo>,
     best_node_info: Option<&BestNodeInfo>,
 ) -> Result<WalletUtxos, StepError> {
+    for wallet in &wallets {
+        if wallet.is_funding_wallet() {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Funding wallet {} should be updated individually due to their strict \
+                    coupling with their node's state.",
+                    wallet.wallet_name
+                ),
+            });
+        }
+    }
     let requests: Vec<UtxosRequest> = wallets
         .iter()
         .filter_map(|wallet| {
@@ -664,10 +683,9 @@ struct UtxosRequest {
 
 /// Get the best node to use for all block queries.
 pub(crate) async fn get_best_node_info(world: &CucumberWorld) -> Result<BestNodeInfo, StepError> {
-    let (best_node_name, _best_node_client, best_consensus) = determine_best_node(world).await?;
+    let (best_node_name, _best_node_client, _best_consensus) = determine_best_node(world).await?;
     Ok(BestNodeInfo {
         node_name: best_node_name,
-        consensus: best_consensus,
     })
 }
 
@@ -677,14 +695,8 @@ pub(crate) async fn determine_best_node(
 ) -> Result<(String, &NodeHttpClient, CryptarchiaInfo), StepError> {
     let mut best_node: Option<(String, &NodeHttpClient, CryptarchiaInfo)> = None;
 
-    let user_wallet_nodes = world
-        .all_user_wallets()
-        .iter()
-        .map(|i| i.node_name.clone())
-        .collect::<Vec<_>>();
-
-    for wallet_node_name in &user_wallet_nodes {
-        let Some(node) = world.nodes_info.get(wallet_node_name) else {
+    for node_name in &world.all_node_names() {
+        let Some(node) = world.nodes_info.get(node_name) else {
             continue;
         };
         let Ok(this_info) = node.started_node.client.consensus_info().await else {

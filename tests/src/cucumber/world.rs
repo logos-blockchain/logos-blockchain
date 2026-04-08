@@ -727,6 +727,11 @@ impl CucumberWorld {
             .clone())
     }
 
+    /// Helper to retrieve all node names.
+    pub fn all_node_names(&self) -> Vec<String> {
+        self.nodes_info.keys().cloned().collect::<Vec<_>>()
+    }
+
     /// Helper to resolve all user wallet names to the actual wallet
     /// information.
     pub fn all_user_wallets(&self) -> Vec<WalletInfo> {
