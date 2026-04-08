@@ -9,18 +9,10 @@ use logos_blockchain_node::{
     get_services_to_start, run_node_from_config,
 };
 
-#[cfg(all(
-    feature = "jemalloc",
-    not(feature = "dhat-heap"),
-    not(target_env = "msvc")
-))]
-#[global_allocator]
-static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
-
 #[tokio::main]
 async fn main() -> Result<()> {
     #[cfg(feature = "dhat-heap")]
-    let _dhat_drop_guard = logos_blockchain_node::profiling::setup();
+    let _dhat_drop_guard = logos_blockchain_node::global_allocators::dhat_heap::setup();
 
     let cli_args = CliArgs::parse();
 

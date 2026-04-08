@@ -6,8 +6,7 @@ pub mod panic;
 #[cfg(feature = "config-gen")]
 pub mod init;
 
-#[cfg(feature = "dhat-heap")]
-pub mod profiling;
+pub mod global_allocators;
 
 use std::panic::set_hook;
 
