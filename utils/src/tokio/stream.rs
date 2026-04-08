@@ -3,64 +3,54 @@ use core::{
     task::{Context, Poll},
 };
 
-use futures::{Stream, StreamExt as _};
-use tokio::{sync::mpsc::channel, task::JoinHandle};
-use tokio_stream::wrappers::ReceiverStream;
+use futures::{Stream, StreamExt as _, stream::Buffered as BufferedStream, task::noop_waker_ref};
 
-/// A stream wrapper that buffers items from the wrapped stream in a background
-/// task before being polled.
+/// A stream wrapper that eagerly pre-polls the wrapped stream so that
+/// buffered futures begin executing before the first consumer poll.
 pub struct Buffered<WrappedStream>
 where
-    WrappedStream: Stream,
+    WrappedStream: Stream<Item: Future<Output: Unpin>>,
 {
-    task_handle: JoinHandle<()>,
-    stream: ReceiverStream<WrappedStream::Item>,
-}
-
-impl<WrappedStream> Drop for Buffered<WrappedStream>
-where
-    WrappedStream: Stream,
-{
-    fn drop(&mut self) {
-        self.task_handle.abort();
-    }
+    stream: Pin<Box<BufferedStream<WrappedStream>>>,
+    peeked: Option<<WrappedStream::Item as Future>::Output>,
 }
 
 impl<WrappedStream> Buffered<WrappedStream>
 where
-    WrappedStream: Stream<Item: Send> + Send + 'static,
+    WrappedStream: Stream<Item: Future<Output: Send + Unpin> + Send> + Send,
 {
     /// Creates a new `Buffered` stream that wraps the given `wrapped_stream`
-    /// and buffers up to `buffer_size` items in a background task and keep them
-    /// ready for consumption.
+    /// and buffers up to `buffer_size` futures, kicking off their computation
+    /// eagerly before the first consumer poll.
     pub fn new(wrapped_stream: WrappedStream, buffer_size: usize) -> Self {
-        let (item_sender, item_receiver) = channel(buffer_size);
+        let mut stream = Box::pin(wrapped_stream.buffered(buffer_size));
+        // Pre-poll once to kick off eager computation. `Poll::Pending` means
+        // futures are now in-flight with their wakers registered; `Poll::Ready`
+        // means an item arrived immediately and is saved so it isn't lost.
+        // A no-op waker is sufficient here: we only need to drive the internal
+        // buffer forward once; real wakers are registered on subsequent consumer polls.
+        let mut cx = Context::from_waker(noop_waker_ref());
+        let peeked = match stream.as_mut().poll_next(&mut cx) {
+            Poll::Ready(item) => item,
+            Poll::Pending => None,
+        };
 
-        let task_handle = tokio::spawn(async move {
-            futures::pin_mut!(wrapped_stream);
-
-            while let Some(item) = wrapped_stream.next().await {
-                if item_sender.send(item).await.is_err() {
-                    break;
-                }
-            }
-        });
-
-        Self {
-            task_handle,
-            stream: ReceiverStream::new(item_receiver),
-        }
+        Self { stream, peeked }
     }
 }
 
 impl<WrappedStream> Stream for Buffered<WrappedStream>
 where
-    WrappedStream: Stream<Item: Send> + Send + 'static,
+    WrappedStream: Stream<Item: Future<Output: Unpin> + Send> + Send,
 {
-    type Item = WrappedStream::Item;
+    type Item = <WrappedStream::Item as Future>::Output;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.stream.poll_next_unpin(cx)
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if let Some(item) = this.peeked.take() {
+            return Poll::Ready(Some(item));
+        }
+        this.stream.as_mut().poll_next(cx)
     }
 }
 
@@ -78,9 +68,14 @@ mod tests {
 
     use crate::tokio::stream::Buffered;
 
+    async fn async_id(n: usize) -> usize {
+        sleep(Duration::from_millis(n.try_into().unwrap())).await;
+        n
+    }
+
     #[tokio::test]
     async fn none_when_inner_stream_ends() {
-        let base = stream::iter(vec![1u8, 2, 3]);
+        let base = stream::iter(vec![async_id(1), async_id(2), async_id(3)]);
         let mut buffered = Buffered::new(base, 10);
 
         assert_eq!(buffered.next().await, Some(1));
@@ -104,26 +99,28 @@ mod tests {
                 produced.fetch_add(1, Ordering::SeqCst);
                 Some((state, state + 1))
             }
-        });
+        })
+        .map(async_id);
 
-        let buffer_size = 5;
-        let mut buffered = Buffered::new(base, buffer_size);
+        {
+            let buffer_size = 5;
+            let mut buffered = Buffered::new(base, buffer_size);
 
-        // Wait that the stream pre-buffers the elements without being polled.
-        sleep(Duration::from_millis(100)).await;
+            // Wait that the stream pre-buffers the elements without being polled.
+            sleep(Duration::from_millis(100)).await;
 
-        let count = produced.load(Ordering::SeqCst);
+            let count = produced.load(Ordering::SeqCst);
 
-        // The background task should have filled the buffer
-        assert!(
-            count >= buffer_size,
-            "Expected at least {buffer_size} prefetched items, got {count}",
-        );
-
-        // Now consume them and ensure they are immediately available
-        for expected in 0..buffer_size {
-            let item = buffered.next().await;
-            assert_eq!(item, Some(expected));
+            // The background task should have filled the buffer
+            assert!(
+                count >= buffer_size,
+                "Expected at least {buffer_size} prefetched items, got {count}",
+            );
+            // Now consume them and ensure they are immediately available
+            for expected in 0..buffer_size {
+                let item = buffered.next().await;
+                assert_eq!(item, Some(expected));
+            }
         }
     }
 }
