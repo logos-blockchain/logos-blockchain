@@ -280,6 +280,7 @@ impl Cryptarchia {
     }
 
     /// Try to apply a block to the chain.
+    #[expect(clippy::type_complexity, reason = "better to return tuple")]
     fn try_apply_block<Tx>(
         &mut self,
         block: &Block<Tx>,
@@ -1004,10 +1005,10 @@ where
             error!("Could not notify new block to services {e}");
         }
 
-        if let Some(update) = vouchers_update {
-            if let Err(e) = vouchers_update_sender.send(update) {
-                error!("Could not notify vouchers update to services: {e}");
-            }
+        if let Some(update) = vouchers_update
+            && let Err(e) = vouchers_update_sender.send(update)
+        {
+            error!("Could not notify vouchers update to services: {e}");
         }
 
         if prev_lib != new_lib {

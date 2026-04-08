@@ -264,10 +264,6 @@ where
         self.known_vouchers.get_path(cm)
     }
 
-    pub fn voucher_paths_mut(&mut self) -> impl Iterator<Item = &mut lb_mmr::MerklePath> {
-        self.known_vouchers.paths_mut()
-    }
-
     #[must_use]
     pub const fn vouchers(&self) -> &Vouchers<VoucherId> {
         &self.known_vouchers

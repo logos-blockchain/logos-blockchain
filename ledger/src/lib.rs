@@ -20,10 +20,10 @@ use lb_core::{
     proofs::leader_proof,
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
 };
-pub use mantle::leader::ClaimableVouchersUpdate;
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Field as _, Fr};
 use mantle::LedgerState as MantleLedger;
+pub use mantle::leader::ClaimableVouchersUpdate;
 use thiserror::Error;
 
 use crate::mantle::helpers::MantleOperationVerificationHelper;
@@ -148,12 +148,10 @@ where
             .get(&parent_id)
             .ok_or(LedgerError::ParentNotFound(parent_id))?;
 
-        let (new_state, update) = parent_state.clone().try_update::<_, _, Constants>(
-            slot,
-            proof,
-            txs,
-            &self.config,
-        )?;
+        let (new_state, update) =
+            parent_state
+                .clone()
+                .try_update::<_, _, Constants>(slot, proof, txs, &self.config)?;
 
         Ok((id, new_state, update))
     }
@@ -244,9 +242,11 @@ impl LedgerState {
         let mut cryptarchia_ledger = self
             .cryptarchia_ledger
             .try_apply_header::<LeaderProof, Id>(slot, proof, config)?;
-        let (mantle_ledger, reward_utxos, vouchers_update) = self
-            .mantle_ledger
-            .try_apply_header(cryptarchia_ledger.epoch_state(), *proof.voucher_cm(), config)?;
+        let (mantle_ledger, reward_utxos, vouchers_update) = self.mantle_ledger.try_apply_header(
+            cryptarchia_ledger.epoch_state(),
+            *proof.voucher_cm(),
+            config,
+        )?;
 
         // Insert reward UTXOs into the cryptarchia ledger
         for utxo in reward_utxos {

@@ -97,7 +97,7 @@ impl<'u> ServiceState<'u> {
         &self.wallet
     }
 
-    pub fn wallet_mut(&mut self) -> &mut Wallet {
+    pub const fn wallet_mut(&mut self) -> &mut Wallet {
         &mut self.wallet
     }
 

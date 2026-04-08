@@ -1,11 +1,11 @@
 use lb_core::{block::Block, header::HeaderId};
+use lb_ledger::ClaimableVouchersUpdate;
 use lb_network_service::message::ChainSyncEvent;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
 
 use crate::{ConsensusMsg, CryptarchiaInfo, LibUpdate, ProcessedBlockEvent};
-use lb_ledger::ClaimableVouchersUpdate;
 
 pub trait CryptarchiaServiceData:
     ServiceData<Message = ConsensusMsg<Self::Tx>> + Send + 'static

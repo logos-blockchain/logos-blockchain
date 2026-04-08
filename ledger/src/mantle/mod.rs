@@ -20,9 +20,8 @@ use lb_core::{
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use sdp::{Error as SdpLedgerError, locked_notes::LockedNotes};
-
 use leader::ClaimableVouchersUpdate;
+use sdp::{Error as SdpLedgerError, locked_notes::LockedNotes};
 use tracing::error;
 
 use crate::{Config, EpochState, UtxoTree};

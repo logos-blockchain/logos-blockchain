@@ -616,7 +616,7 @@ where
             NetworkAdapter::Backend,
             RuntimeServiceId,
         >,
-        mut ledger_state: LedgerState,
+        ledger_state: LedgerState,
         ledger_config: &lb_ledger::Config,
     ) -> Result<(Block<Mempool::Item>, bool), Error> {
         let txs_stream = relays
@@ -635,7 +635,7 @@ where
                 &0
             });
 
-        ledger_state = ledger_state
+        let (mut ledger_state, _) = ledger_state
             .clone()
             .try_apply_header::<Groth16LeaderProof, HeaderId>(slot, &proof, ledger_config)?;
 

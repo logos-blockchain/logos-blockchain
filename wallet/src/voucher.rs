@@ -60,13 +60,7 @@ impl<Id> Vouchers<Id> {
     }
 
     pub(crate) fn get_path(&self, cm: &VoucherCm) -> Option<&MerklePath> {
-        self.vouchers.get(cm).and_then(|(_, path)| path.as_ref())
-    }
-
-    /// Returns mutable references to all tracked paths for in-place updates.
-    pub(crate) fn paths_mut(&mut self) -> impl Iterator<Item = &mut MerklePath> {
-        self.vouchers
-            .values_mut()
-            .filter_map(|(_, path)| path.as_mut())
+        let (_, path) = self.vouchers.get(cm)?;
+        path.as_ref()
     }
 }

@@ -224,12 +224,8 @@ mod tests {
     #[test]
     fn test_reward_amounts() {
         let state = LeaderState::new();
-        let (state, _) = state
-            .try_apply_header(1.into(), Fr::ZERO.into())
-            .unwrap();
-        let (state, _) = state
-            .try_apply_header(1.into(), Fr::ONE.into())
-            .unwrap();
+        let (state, _) = state.try_apply_header(1.into(), Fr::ZERO.into()).unwrap();
+        let (state, _) = state.try_apply_header(1.into(), Fr::ONE.into()).unwrap();
         let (state, _) = state
             .try_apply_header(1.into(), Fr::from(2u64).into())
             .unwrap();
@@ -266,16 +262,12 @@ mod tests {
     #[test]
     fn test_epoch_transition() {
         let state = LeaderState::new();
-        let (state, update) = state
-            .try_apply_header(1.into(), Fr::ZERO.into())
-            .unwrap();
+        let (state, update) = state.try_apply_header(1.into(), Fr::ZERO.into()).unwrap();
         assert_eq!(state.epoch, 1.into());
         assert_eq!(state.n_claimable_vouchers, 0);
         // Epoch 0→1 transition occurs but with no pending vouchers
         assert!(update.unwrap().flushed_vouchers.is_empty());
-        let (state, update) = state
-            .try_apply_header(2.into(), Fr::ONE.into())
-            .unwrap();
+        let (state, update) = state.try_apply_header(2.into(), Fr::ONE.into()).unwrap();
         assert_eq!(state.epoch, 2.into());
         assert_eq!(state.n_claimable_vouchers, 1);
         assert_eq!(update.unwrap().flushed_vouchers.len(), 1);
@@ -309,7 +301,7 @@ mod tests {
         assert_eq!(state.n_claimable_vouchers, 4);
     }
 
-    /// Helper: replay push_with_paths from a [`ClaimableVouchersUpdate`],
+    /// Helper: replay `push_with_paths` from a [`ClaimableVouchersUpdate`],
     /// simulating what the wallet does. New paths are appended to `tracked`
     /// during replay so subsequent pushes keep them up-to-date, then
     /// drained and returned.
@@ -326,21 +318,15 @@ mod tests {
             tracked.push(path);
             cms.push(cm);
         }
-        cms.into_iter()
-            .zip(tracked.drain(n_tracked..))
-            .collect()
+        cms.into_iter().zip(tracked.drain(n_tracked..)).collect()
     }
 
     #[test]
     fn test_epoch_transition_paths_via_replay() {
         let state = LeaderState::new();
         // Epoch 1: add 3 vouchers
-        let (state, _) = state
-            .try_apply_header(1.into(), Fr::ZERO.into())
-            .unwrap();
-        let (state, _) = state
-            .try_apply_header(1.into(), Fr::ONE.into())
-            .unwrap();
+        let (state, _) = state.try_apply_header(1.into(), Fr::ZERO.into()).unwrap();
+        let (state, _) = state.try_apply_header(1.into(), Fr::ONE.into()).unwrap();
         let (state, _) = state
             .try_apply_header(1.into(), Fr::from(2u64).into())
             .unwrap();
@@ -372,12 +358,8 @@ mod tests {
     fn test_tracked_paths_updated_across_epochs() {
         let state = LeaderState::new();
         // Epoch 1: add 2 vouchers
-        let (state, _) = state
-            .try_apply_header(1.into(), Fr::ZERO.into())
-            .unwrap();
-        let (state, _) = state
-            .try_apply_header(1.into(), Fr::ONE.into())
-            .unwrap();
+        let (state, _) = state.try_apply_header(1.into(), Fr::ZERO.into()).unwrap();
+        let (state, _) = state.try_apply_header(1.into(), Fr::ONE.into()).unwrap();
 
         // Epoch 2: flush epoch 1 vouchers, replay to get paths
         let (state, update) = state

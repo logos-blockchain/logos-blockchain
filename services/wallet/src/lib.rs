@@ -39,12 +39,12 @@ use lb_key_management_system_service::{
     operators::zk::voucher::UnsafeVoucherOperator,
 };
 use lb_ledger::LedgerState;
+use lb_mmr::MerklePath;
 use lb_services_utils::{
     overwatch::{JsonFileBackend, RecoveryOperator, recovery::backends::FileBackendSettings},
     wait_until_services_are_ready,
 };
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
-use lb_mmr::MerklePath;
 use lb_wallet::{WalletBalance, WalletBlock, WalletError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -314,8 +314,7 @@ where
         let mut lib_receiver = cryptarchia_api.subscribe_lib_updates().await?;
 
         // Subscribe to claimable vouchers updates (epoch transitions)
-        let mut vouchers_update_receiver =
-            cryptarchia_api.subscribe_vouchers_updates().await?;
+        let mut vouchers_update_receiver = cryptarchia_api.subscribe_vouchers_updates().await?;
 
         // Initialize wallet from LIB and LIB LedgerState
         let lib = chain_info.lib;
@@ -939,6 +938,7 @@ where
     fn find_claimable_voucher(wallet: &Wallet) -> Option<VoucherCommitmentAndNullifier> {
         for (nf, cm) in wallet.voucher_commitments_and_nullifiers() {
             if wallet.get_voucher_path(cm).is_some() {
+                debug!(?cm, ?nf, "Found claimable voucher with merkle path");
                 return Some(VoucherCommitmentAndNullifier {
                     commitment: *cm,
                     nullifier: *nf,
