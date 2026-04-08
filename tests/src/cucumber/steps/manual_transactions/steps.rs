@@ -10,7 +10,7 @@ use crate::{
                 command_file_utils::perform_manual_step_control,
                 utils,
                 utils::{
-                    WalletStateType, create_and_submit_transaction,
+                    WalletStateType, create_and_submit_transaction, get_best_node_info,
                     wait_for_wallet_or_encumbered_state,
                 },
             },
@@ -37,11 +37,12 @@ async fn step_do_coin_split(
         warn!(target: TARGET, "Step `{}` error: {e}", step.value);
     })?;
     let receivers = vec![(self_pk, output_value); number_of_outputs];
-    let tx_hash_hex = create_and_submit_transaction(world, &step.value, &wallet_name, &receivers)
-        .await
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-        })?;
+    let tx_hash_hex =
+        create_and_submit_transaction(world, &step.value, &wallet_name, &receivers, None)
+            .await
+            .inspect_err(|e| {
+                warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+            })?;
 
     info!(
         target: TARGET,
@@ -236,12 +237,14 @@ async fn step_send_multiple_transactions_to_single_wallet(
 
     let receiver_wallet_pk = receiver_wallet.public_key()?;
 
+    let best_node_info = get_best_node_info(world).await?;
     for _ in 0..number_of_transactions {
         let tx_hash_hex = create_and_submit_transaction(
             world,
             &step.value,
             &sender_wallet_name,
             &[(receiver_wallet_pk, output_value)],
+            Some(&best_node_info),
         )
         .await
         .inspect_err(|e| {
@@ -283,7 +286,7 @@ async fn step_send_single_transaction_multiple_outputs_to_single_wallet(
 
     let receivers = vec![(receiver_wallet_pk, output_value); number_of_outputs];
     let tx_hash_hex =
-        create_and_submit_transaction(world, &step.value, &sender_wallet_name, &receivers)
+        create_and_submit_transaction(world, &step.value, &sender_wallet_name, &receivers, None)
             .await
             .inspect_err(|e| {
                 warn!(target: TARGET, "Step `{}` error: {e}", step.value);
@@ -319,7 +322,7 @@ async fn step_manual_control_transactions_no_time_out(
 #[given(expr = "I update all user wallets balances")]
 #[when(expr = "I update all user wallets balances")]
 async fn step_update_all_wallets_balances(world: &mut CucumberWorld, step: &Step) -> StepResult {
-    utils::update_wallet_balance_all_user_wallets(world, &step.value).await?;
+    utils::update_wallet_balance_all_user_wallets(world, &step.value, None).await?;
     Ok(())
 }
 

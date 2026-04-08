@@ -777,19 +777,11 @@ impl CucumberWorld {
         &self,
         wallet: &WalletInfo,
         signed_tx: &SignedMantleTx,
+        node_client: &NodeHttpClient,
     ) -> Result<(), StepError> {
-        let node = self
-            .nodes_info
-            .get(&wallet.node_name)
-            .ok_or(StepError::LogicalError {
-                message: format!(
-                    "Node '{}' for wallet '{}' not found",
-                    wallet.node_name, wallet.wallet_name
-                ),
-            })?;
         tokio::time::timeout(
             Duration::from_secs(10),
-            node.started_node.client.submit_transaction(signed_tx),
+            node_client.submit_transaction(signed_tx),
         )
         .await
         .map_err(|_| StepError::Timeout {
