@@ -1,5 +1,5 @@
 use core::{
-    mem::{self, swap},
+    mem::{self},
     num::NonZeroUsize,
 };
 use std::{
@@ -11,10 +11,9 @@ use std::{
 
 use either::Either;
 use futures::Stream;
-use lb_blend_message::encap::{
-    self, encapsulated::EncapsulatedMessage, validated::EncapsulatedMessageWithVerifiedPublicHeader,
+use lb_blend_message::encap::validated::{
+    EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
 };
-use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
 use lb_blend_scheduling::membership::Membership;
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol,
@@ -34,8 +33,8 @@ use crate::core::with_core::{
         message_cache::MessageCache,
         old_session::OldSession,
         utils::{
+            forward_validated_message_and_update_cache,
             handle_received_serialized_encapsulated_message_and_update_cache,
-            validate_forward_message_and_update_cache,
         },
     },
     error::{ReceiveError, SendError},
@@ -89,11 +88,8 @@ impl RemotePeerConnectionDetails {
 /// A [`NetworkBehaviour`] that processes incoming Blend messages, and
 /// propagates messages from the Blend service to the rest of the Blend network.
 ///
-/// The public header and uniqueness of incoming messages is validated according to the [Blend v1 specification](https://www.notion.so/nomos-tech/Blend-Protocol-Version-1-215261aa09df81ae8857d71066a80084) before the message is propagated to the swarm and to the Blend service.
-/// The same checks are applied to messages received by the Blend service before
-/// they are propagated to the rest of the network, making sure no peer marks
-/// this node as malicious due to an invalid Blend message.
-pub struct Behaviour<ProofsVerifier, ObservationWindowClockProvider> {
+/// The public header signature and uniqueness of incoming messages is validated according to the [Blend v1 specification](https://www.notion.so/nomos-tech/Blend-Protocol-Version-1-215261aa09df81ae8857d71066a80084) before the message is propagated to the swarm and to the Blend service.
+pub struct Behaviour<ObservationWindowClockProvider> {
     /// Tracks connections between this node and other core nodes.
     ///
     /// Only connections with other core nodes that are established before the
@@ -115,7 +111,7 @@ pub struct Behaviour<ProofsVerifier, ObservationWindowClockProvider> {
     /// as malicious by our peers.
     message_cache: MessageCache,
     observation_window_clock_provider: ObservationWindowClockProvider,
-    current_membership: Membership<PeerId>,
+    current_session_info: (Membership<PeerId>, u64),
     /// The [minimum, maximum] peering degree of this node.
     peering_degree: RangeInclusive<usize>,
     local_peer_id: PeerId,
@@ -124,11 +120,7 @@ pub struct Behaviour<ProofsVerifier, ObservationWindowClockProvider> {
     minimum_network_size: NonZeroUsize,
     /// States for processing messages from the old session
     /// before the transition period has passed.
-    old_session: Option<OldSession<ProofsVerifier>>,
-    /// Verifier of the incoming messages' `PoQ`s. This is updated once per
-    /// session, with the old one ending up in the old session until the
-    /// transition period has elapsed.
-    poq_verifier: ProofsVerifier,
+    old_session: Option<OldSession>,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -142,7 +134,7 @@ pub enum NegotiatedPeerState {
 pub enum SpamReason {
     UndeserializableMessage,
     DuplicateMessage,
-    InvalidPublicHeader,
+    InvalidHeaderSignature,
     TooManyMessages,
 }
 
@@ -188,11 +180,12 @@ struct ConnectionUpgradeFailure {
 #[derive(Debug)]
 pub enum Event {
     /// A message received from one of the core peers, after its public header
-    /// has been verified.
-    Message(
-        Box<EncapsulatedMessageWithVerifiedPublicHeader>,
-        (PeerId, ConnectionId),
-    ),
+    /// signature has been verified.
+    Message {
+        message: Box<EncapsulatedMessageWithVerifiedSignature>,
+        sender: PeerId,
+        session: u64,
+    },
     /// A peer on a given connection has been detected as unhealthy.
     UnhealthyPeer(PeerId),
     /// A peer on a given connection that was previously unhealthy has returned
@@ -222,50 +215,38 @@ pub enum Event {
     },
 }
 
-impl<ProofsVerifier, ObservationWindowClockProvider>
-    Behaviour<ProofsVerifier, ObservationWindowClockProvider>
-{
+impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     #[must_use]
     pub fn new(
         config: &Config,
         observation_window_clock_provider: ObservationWindowClockProvider,
-        current_membership: Membership<PeerId>,
+        session_info: (Membership<PeerId>, u64),
         local_peer_id: PeerId,
         protocol_name: StreamProtocol,
-        poq_verifier: ProofsVerifier,
     ) -> Self {
         Self {
             negotiated_peers: HashMap::with_capacity(*config.peering_degree.end()),
             events: VecDeque::new(),
             waker: None,
             observation_window_clock_provider,
-            message_cache: MessageCache::new_with_peer_capacity(current_membership.size()),
-            current_membership,
+            message_cache: MessageCache::new_with_peer_capacity(session_info.0.size()),
+            current_session_info: session_info,
             peering_degree: config.peering_degree.clone(),
             connections_waiting_upgrade: HashMap::new(),
             local_peer_id,
             protocol_name,
             minimum_network_size: config.minimum_network_size,
             old_session: None,
-            poq_verifier,
         }
     }
 
-    pub(crate) fn start_new_session(
-        &mut self,
-        new_membership: Membership<PeerId>,
-        new_verifier: ProofsVerifier,
-    ) {
+    pub(crate) fn start_new_session(&mut self, new_session_info: (Membership<PeerId>, u64)) {
+        let current_session_number = self.current_session_info.1;
+
         self.connections_waiting_upgrade.clear();
-        self.current_membership = new_membership;
+        self.current_session_info = new_session_info;
 
         self.stop_old_session();
-
-        let old_verifier = {
-            let mut new_verifier = new_verifier;
-            swap(&mut new_verifier, &mut self.poq_verifier);
-            new_verifier
-        };
 
         self.old_session = Some(OldSession::new(
             mem::take(&mut self.negotiated_peers)
@@ -273,7 +254,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
                 .map(|(peer_id, details)| (peer_id, details.connection_id))
                 .collect(),
             mem::take(&mut self.message_cache),
-            old_verifier,
+            current_session_number,
         ));
 
         tracing::debug!(target: LOG_TARGET, "Started a new session by passing negotiated peers and exchanged message IDs to the old session. Now, no negotiated peers in the current session.");
@@ -321,7 +302,10 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
         message: &EncapsulatedMessageWithVerifiedPublicHeader,
         peer_id: PeerId,
     ) -> Result<(), SendError> {
-        let serialized_message = lb_blend_scheduling::serialize_encapsulated_message(message);
+        let serialized_message =
+            lb_blend_scheduling::serialize_encapsulated_message_with_verified_public_header(
+                message,
+            );
         self.force_send_serialized_message_to_peer(serialized_message, peer_id)
     }
 
@@ -416,7 +400,7 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
     }
 
     fn is_network_large_enough(&self) -> bool {
-        self.current_membership.size() >= self.minimum_network_size.get()
+        self.current_session_info.0.size() >= self.minimum_network_size.get()
     }
 
     /// Handle a new negotiated connection.
@@ -764,64 +748,66 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
                 peer_id == remote_peer && remote_endpoint.is_listener()
             })
     }
-}
 
-/// Revert the direction of a connection and updates its ID with the provided
-/// one.
-fn update_connection_id_and_direction(
-    existing_connection: &mut RemotePeerConnectionDetails,
-    new_connection_id: ConnectionId,
-) {
-    existing_connection.role = existing_connection.role.reverse();
-    existing_connection.connection_id = new_connection_id;
-}
-
-impl<ProofsVerifier, ObservationWindowClockProvider>
-    Behaviour<ProofsVerifier, ObservationWindowClockProvider>
-where
-    ProofsVerifier: encap::ProofsVerifier,
-{
-    /// Publish an already-encapsulated message to all connected peers
-    /// in the current session.
-    ///
-    /// Before the message is propagated, its public header is validated to
-    /// make sure the receiving peer won't mark us as malicious.
-    pub fn validate_and_publish_message(
+    /// Publish an already-encapsulated and validated message to all connected
+    /// peers in the specified session.
+    pub fn publish_message_with_validated_header(
         &mut self,
-        message: EncapsulatedMessage,
+        message: EncapsulatedMessageWithVerifiedPublicHeader,
+        intended_session: u64,
     ) -> Result<(), SendError> {
-        self.validate_and_forward_maybe_excluding(message, None)
+        if self.current_session_info.1 != intended_session {
+            let Some(old_session) = &mut self.old_session else {
+                return Err(SendError::InvalidSession);
+            };
+            return old_session.publish_message_with_validated_header(message, intended_session);
+        }
+        self.forward_maybe_excluding(&message.into(), None)
     }
 
-    /// Forwards a message to all healthy connections except the [`except`]
-    /// connection.
+    /// Publish an already-encapsulated message with a valid public header
+    /// signature to all connected peers in the current session.
+    pub fn publish_message_with_validated_signature_to_current_session(
+        &mut self,
+        message: &EncapsulatedMessageWithVerifiedSignature,
+    ) -> Result<(), SendError> {
+        self.forward_maybe_excluding(message, None)
+    }
+
+    /// Forwards a message with a valid public header signature to all
+    /// non-spammy peers in the specified session, except the
+    /// [`except`] peer.
     ///
-    /// Before the message is forwarded, its public header is validated to
-    /// make sure the receiving peer won't mark us as malicious.
-    ///
-    /// If the [`except`] connection is part of the old session, the message is
-    /// forwarded to the connections in the old session.
-    /// Otherwise, it is forwarded to the connections in the current session.
+    /// If the session is the previous session, the message is forwarded to the
+    /// peers in the old session. Otherwise, it is forwarded to the peers in
+    /// the current session.
     ///
     /// Returns [`Error::NoPeers`] if there are no connected peers that support
-    /// the blend protocol.
-    pub fn validate_and_forward_message(
+    /// the blend protocol, and [`Error::InvalidSession`] if the provided
+    /// session does not match neither the current session nor the old session.
+    pub fn forward_message_with_validated_signature(
         &mut self,
-        message: EncapsulatedMessage,
-        except: (PeerId, ConnectionId),
+        message: &EncapsulatedMessageWithVerifiedSignature,
+        except: PeerId,
+        intended_session: u64,
     ) -> Result<(), SendError> {
-        if let Some(old_session) = &mut self.old_session
-            && old_session.is_negotiated(&except)
-        {
-            return old_session.validate_and_forward_message(message, except.0);
+        if self.current_session_info.1 != intended_session {
+            let Some(old_session) = &mut self.old_session else {
+                return Err(SendError::InvalidSession);
+            };
+            return old_session.forward_message_with_validated_signature(
+                message,
+                except,
+                intended_session,
+            );
         }
 
-        self.validate_and_forward_maybe_excluding(message, Some(except.0))
+        self.forward_maybe_excluding(message, Some(except))
     }
 
-    fn validate_and_forward_maybe_excluding(
+    fn forward_maybe_excluding(
         &mut self,
-        message: EncapsulatedMessage,
+        message: &EncapsulatedMessageWithVerifiedSignature,
         excluded_peer: Option<PeerId>,
     ) -> Result<(), SendError> {
         tracing::trace!(
@@ -830,9 +816,8 @@ where
             self.negotiated_peers()
         );
 
-        validate_forward_message_and_update_cache(
+        forward_validated_message_and_update_cache(
             message,
-            &self.poq_verifier,
             self.negotiated_peers
                 .iter()
                 // Exclude the peer the message was received from.
@@ -878,44 +863,34 @@ where
         if let Err(receive_error) = handle_received_serialized_encapsulated_message_and_update_cache(
             serialized_message,
             &mut self.message_cache,
-            (from_peer_id, from_connection_id),
-            &self.poq_verifier,
+            from_peer_id,
             &mut self.events,
             self.waker.take(),
+            self.current_session_info.1,
         ) {
             tracing::debug!(target: LOG_TARGET, "Failed to handle message from the current session: {receive_error:?}");
             let spam_reason = match receive_error {
                 ReceiveError::DuplicateMessageFromPeer(_) => SpamReason::DuplicateMessage,
-                ReceiveError::InvalidPublicHeader => SpamReason::InvalidPublicHeader,
+                ReceiveError::InvalidHeaderSignature => SpamReason::InvalidHeaderSignature,
                 ReceiveError::UndeserializableMessage => SpamReason::UndeserializableMessage,
             };
             self.close_spammy_connection((from_peer_id, from_connection_id), spam_reason);
         }
     }
-
-    /// Instruct both current and past session proof verifier (if present) of a
-    /// new epoch.
-    pub(crate) fn start_new_epoch(&mut self, new_pol_inputs: LeaderInputs) {
-        self.poq_verifier.start_epoch_transition(new_pol_inputs);
-        if let Some(old_session) = &mut self.old_session {
-            old_session.start_new_epoch(new_pol_inputs);
-        }
-    }
-
-    /// Instruct both current and past session proof verifier (if present) that
-    /// the epoch transition period is over.
-    pub(crate) fn finish_epoch_transition(&mut self) {
-        self.poq_verifier.complete_epoch_transition();
-        if let Some(old_session) = &mut self.old_session {
-            old_session.finish_epoch_transition();
-        }
-    }
 }
 
-impl<ProofsVerifier, ObservationWindowClockProvider> NetworkBehaviour
-    for Behaviour<ProofsVerifier, ObservationWindowClockProvider>
+/// Revert the direction of a connection and updates its ID with the provided
+/// one.
+fn update_connection_id_and_direction(
+    existing_connection: &mut RemotePeerConnectionDetails,
+    new_connection_id: ConnectionId,
+) {
+    existing_connection.role = existing_connection.role.reverse();
+    existing_connection.connection_id = new_connection_id;
+}
+
+impl<ObservationWindowClockProvider> NetworkBehaviour for Behaviour<ObservationWindowClockProvider>
 where
-    ProofsVerifier: encap::ProofsVerifier + 'static,
     ObservationWindowClockProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + 'static,
 {
@@ -952,7 +927,7 @@ where
         Ok(if !self.is_network_large_enough() {
             tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer_id:?} because membership size is too small.");
             Either::Right(DummyConnectionHandler)
-        } else if self.current_membership.contains(&peer_id) {
+        } else if self.current_session_info.0.contains(&peer_id) {
             tracing::trace!(
                 target: LOG_TARGET,
                 "Upgrading inbound connection {connection_id:?} with core peer {peer_id:?}."
@@ -996,7 +971,7 @@ where
         Ok(if !self.is_network_large_enough() {
             tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with peer {peer_id:?} because membership size is too small.");
             Either::Right(DummyConnectionHandler)
-        } else if self.current_membership.contains(&peer_id) {
+        } else if self.current_session_info.0.contains(&peer_id) {
             tracing::trace!(
                 target: LOG_TARGET,
                 "Upgrading outbound connection {connection_id:?} with core peer {peer_id:?}."

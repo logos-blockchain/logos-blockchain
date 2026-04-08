@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, hash_map::Entry};
 use lb_blend_message::{
     MessageIdentifier,
     encap::{
-        encapsulated::EncapsulatedMessage, validated::EncapsulatedMessageWithVerifiedPublicHeader,
+        encapsulated::EncapsulatedMessage, validated::EncapsulatedMessageWithVerifiedSignature,
     },
 };
 use libp2p::PeerId;
@@ -65,12 +65,12 @@ impl MessageCache {
     /// This means that we have received and validated the message, but we
     /// haven't forwarded it to our peers yet.
     ///
-    /// The function takes an `EncapsulatedMessageWithVerifiedPublicHeader` as
+    /// The function takes an `EncapsulatedMessageWithVerifiedSignature` as
     /// input, since we want to mark the message as processed only after
     /// validating it.
     pub fn mark_message_as_processed(
         &mut self,
-        message: &EncapsulatedMessageWithVerifiedPublicHeader,
+        message: &EncapsulatedMessageWithVerifiedSignature,
     ) {
         // Forwarded messages are also considered received (i.e. we ignore them if we
         // receive them later on), so we only mark the message as received if it
@@ -84,12 +84,12 @@ impl MessageCache {
     /// Mark a message as forwarded, meaning we won't allow the swarm to send
     /// any duplicates of it, nor process it if received from our peers.
     ///
-    /// The function takes an `EncapsulatedMessageWithVerifiedPublicHeader` as
+    /// The function takes an `EncapsulatedMessageWithVerifiedSignature` as
     /// input, since we want to mark the message as forwarded only after
     /// validating it.
     pub fn mark_message_as_forwarded(
         &mut self,
-        message: &EncapsulatedMessageWithVerifiedPublicHeader,
+        message: &EncapsulatedMessageWithVerifiedSignature,
     ) {
         self.messages.insert(message.id(), MessageStatus::Forwarded);
     }

@@ -28,4 +28,6 @@ pub enum Error {
     NoMoreProofOfQuotas,
     #[error("Attempted to generate a leadership proof without any secret PoL info provided.")]
     NoLeadershipInfoProvided,
+    #[error("Invalid shared secret")]
+    InvalidSharedSecret,
 }

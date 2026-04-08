@@ -482,7 +482,7 @@ where
         settings,
         new_membership_info.membership.clone(),
         new_public_inputs,
-        &current_epoch_private_info.poq_private_inputs,
+        current_epoch_private_info.poq_private_inputs.clone(),
         overwatch_handle,
         current_epoch_private_info.epoch,
     )?;
@@ -582,10 +582,10 @@ fn handle_new_secret_epoch_info<Backend, NodeId, ProofsGenerator, RuntimeService
         settings,
         current_membership,
         new_public_inputs,
-        &new_pol_epoch_info.poq_private_inputs,
+        new_pol_epoch_info.poq_private_inputs.clone(),
         overwatch_handle.clone(),
         new_pol_epoch_info.epoch,
     ).expect("Should not fail to re-create message handler on epoch rotation after private inputs are set.");
 
-    *current_epoch_info_and_message_handler = Some((*new_pol_epoch_info, new_handler));
+    *current_epoch_info_and_message_handler = Some((new_pol_epoch_info.clone(), new_handler));
 }

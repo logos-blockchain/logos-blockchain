@@ -73,6 +73,7 @@ cargo test -p logos-blockchain-circuits-prover -p logos-blockchain-circuits-veri
 ```bash
 cargo build -p logos-blockchain-node --release
 ```
+The `jemalloc` feature is automatically enabled by default to mitigate heap fragmentation.
 
 ### 3. Run a standalone node
 
@@ -214,6 +215,7 @@ Heap profiling can be run on release builds by using the `release-profiling` Car
 ```bash
     cargo build --profile release-profiling --features=dhat-heap
 ```
+If the `dhat-heap` feature is enabled, it replaces the memory allocator with `dhat` even if `jemalloc` is enabled by default.
 
 Run, then stop the node normally to capture the output, then read the generated `dhat-heap.json` file with 
 https://nnethercote.github.io/dh_view/dh_view.html or other.

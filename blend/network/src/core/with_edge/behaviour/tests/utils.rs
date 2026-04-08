@@ -2,17 +2,13 @@ use core::{num::NonZeroUsize, time::Duration};
 use std::collections::{HashSet, VecDeque};
 
 use async_trait::async_trait;
-use lb_blend_message::encap;
 use lb_blend_scheduling::membership::{Membership, Node};
 use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
 use libp2p::{Multiaddr, PeerId, Stream, Swarm};
 use libp2p_stream::Behaviour as StreamBehaviour;
 use libp2p_swarm_test::SwarmExt as _;
 
-use crate::core::{
-    tests::utils::{AlwaysTrueVerifier, PROTOCOL_NAME},
-    with_edge::behaviour::Behaviour,
-};
+use crate::core::{tests::utils::PROTOCOL_NAME, with_edge::behaviour::Behaviour};
 
 pub struct BehaviourBuilder {
     core_peer_ids: Vec<PeerId>,
@@ -46,7 +42,7 @@ impl BehaviourBuilder {
         self
     }
 
-    pub fn build(self) -> Behaviour<AlwaysTrueVerifier> {
+    pub fn build(self) -> Behaviour {
         let current_membership = Membership::new_without_local(
             self.core_peer_ids
                 .into_iter()
@@ -70,32 +66,18 @@ impl BehaviourBuilder {
             minimum_network_size: self
                 .minimum_network_size
                 .unwrap_or_else(|| 1usize.try_into().unwrap()),
-            current_session_poq_verifier: AlwaysTrueVerifier,
-            previous_session_poq_verifier: None,
         }
     }
 }
 
 #[async_trait]
-pub trait StreamBehaviourExt<ProofsVerifier>: libp2p_swarm_test::SwarmExt
-where
-    ProofsVerifier: encap::ProofsVerifier + 'static,
-{
-    async fn connect_and_upgrade_to_blend(
-        &mut self,
-        other: &mut Swarm<Behaviour<ProofsVerifier>>,
-    ) -> Stream;
+pub trait StreamBehaviourExt: libp2p_swarm_test::SwarmExt {
+    async fn connect_and_upgrade_to_blend(&mut self, other: &mut Swarm<Behaviour>) -> Stream;
 }
 
 #[async_trait]
-impl<ProofsVerifier> StreamBehaviourExt<ProofsVerifier> for Swarm<StreamBehaviour>
-where
-    ProofsVerifier: encap::ProofsVerifier + Send + 'static,
-{
-    async fn connect_and_upgrade_to_blend(
-        &mut self,
-        other: &mut Swarm<Behaviour<ProofsVerifier>>,
-    ) -> Stream {
+impl StreamBehaviourExt for Swarm<StreamBehaviour> {
+    async fn connect_and_upgrade_to_blend(&mut self, other: &mut Swarm<Behaviour>) -> Stream {
         // We connect and return the stream preventing it from being dropped so the
         // blend node does not close the connection with an EOF error.
         self.connect(other).await;

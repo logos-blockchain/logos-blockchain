@@ -31,6 +31,7 @@ pub struct SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerat
     /// The non-ephemeral encryption key (NEK) for decapsulating messages.
     non_ephemeral_encryption_key: X25519PrivateKey,
     membership: Membership<NodeId>,
+    session: u64,
     proofs_generator: ProofsGenerator,
     _phantom: PhantomData<CorePoQGenerator>,
 }
@@ -44,6 +45,10 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator>
 
     pub(super) const fn membership(&self) -> &Membership<NodeId> {
         &self.membership
+    }
+
+    pub const fn session(&self) -> u64 {
+        self.session
     }
 
     #[cfg(test)]
@@ -84,6 +89,7 @@ where
                 generator_settings,
                 core_proof_of_quota_generator,
             ),
+            session: public_info.session,
             _phantom: PhantomData,
         }
     }
@@ -191,12 +197,13 @@ where
         let inputs = proofs_and_signing_keys
             .into_iter()
             .map(|(proof, receiver_non_ephemeral_signing_key)| {
-                EncapsulationInput::new(
+                EncapsulationInput::try_new(
                     proof.ephemeral_signing_key,
                     &receiver_non_ephemeral_signing_key,
                     proof.proof_of_quota,
                     proof.proof_of_selection,
                 )
+                .expect("Layer proof signing key assumed not to be identity")
             })
             .collect::<Vec<_>>();
 
@@ -326,7 +333,7 @@ mod test {
             transaction_hash: ZkHash::ONE,
         };
 
-        processor.set_epoch_private(new_private_inputs, leader_inputs, Epoch::new(1));
+        processor.set_epoch_private(new_private_inputs.clone(), leader_inputs, Epoch::new(1));
 
         assert!(processor.proofs_generator.1 == Some(new_private_inputs));
     }

@@ -41,7 +41,7 @@ where
         settings: Settings<Backend, NodeId, RuntimeServiceId>,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
-        private_info: &ProofOfLeadershipQuotaInputs,
+        private_info: ProofOfLeadershipQuotaInputs,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         epoch: Epoch,
     ) -> Result<Self, Error>
@@ -69,7 +69,7 @@ where
         settings: Settings<Backend, NodeId, RuntimeServiceId>,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
-        private_info: &ProofOfLeadershipQuotaInputs,
+        private_info: ProofOfLeadershipQuotaInputs,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         epoch: Epoch,
     ) -> Self {

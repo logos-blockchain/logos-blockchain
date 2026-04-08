@@ -4,9 +4,8 @@ use futures::Stream;
 use lb_blend::{
     message::{
         crypto::proofs::PoQVerificationInputsMinusSigningKey,
-        encap::{
-            encapsulated::EncapsulatedMessage,
-            validated::EncapsulatedMessageWithVerifiedPublicHeader,
+        encap::validated::{
+            EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
         },
     },
     proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
@@ -122,7 +121,7 @@ pub type SessionStream<NodeId> =
 
 /// A trait for blend backends that send messages to the blend network.
 #[async_trait::async_trait]
-pub trait BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId> {
+pub trait BlendBackend<NodeId, Rng, RuntimeServiceId> {
     type Settings: Clone + Debug + Send + Sync + 'static;
 
     fn new(
@@ -133,17 +132,17 @@ pub trait BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId> {
     ) -> Self;
     fn shutdown(self);
     /// Publish a message to the blend network.
-    async fn publish(&self, msg: EncapsulatedMessage);
+    async fn publish(
+        &self,
+        msg: EncapsulatedMessageWithVerifiedPublicHeader,
+        intended_session: u64,
+    );
     /// Rotate session.
     async fn rotate_session(&mut self, new_session_info: SessionInfo<NodeId>);
     /// Complete the session transition.
     async fn complete_session_transition(&mut self);
-    /// Rotate the epoch for the ongoing session.
-    async fn rotate_epoch(&mut self, new_epoch_public_info: EpochInfo);
-    /// Complete the epoch transition.
-    async fn complete_epoch_transition(&mut self);
     /// Listen to messages received from the blend network.
     fn listen_to_incoming_messages(
         &mut self,
-    ) -> Pin<Box<dyn Stream<Item = EncapsulatedMessageWithVerifiedPublicHeader> + Send>>;
+    ) -> Pin<Box<dyn Stream<Item = (EncapsulatedMessageWithVerifiedSignature, u64)> + Send>>;
 }

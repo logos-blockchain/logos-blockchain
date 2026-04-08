@@ -29,9 +29,17 @@ impl PublicHeader {
         }
     }
 
-    pub fn verify_signature(&self, body: &[u8]) -> Result<(), Error> {
+    pub fn verify_signature(
+        &self,
+        body: &[u8],
+    ) -> Result<PublicHeaderWithVerifiedSignature, Error> {
         if self.signing_pubkey.verify(body, &self.signature).is_ok() {
-            Ok(())
+            Ok(PublicHeaderWithVerifiedSignature {
+                version: self.version,
+                signing_pubkey: self.signing_pubkey,
+                proof_of_quota: self.proof_of_quota,
+                signature: self.signature,
+            })
         } else {
             Err(Error::SignatureVerificationFailed)
         }
@@ -80,11 +88,97 @@ impl PublicHeader {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct PublicHeaderWithVerifiedSignature {
+    version: u8,
+    signing_pubkey: Ed25519PublicKey,
+    proof_of_quota: ProofOfQuota,
+    signature: Ed25519Signature,
+}
+
+impl From<PublicHeaderWithVerifiedSignature> for PublicHeader {
+    fn from(
+        PublicHeaderWithVerifiedSignature {
+            signing_pubkey,
+            proof_of_quota,
+            signature,
+            ..
+        }: PublicHeaderWithVerifiedSignature,
+    ) -> Self {
+        Self::new(signing_pubkey, &proof_of_quota, signature)
+    }
+}
+
+impl PublicHeaderWithVerifiedSignature {
+    pub const fn new(
+        proof_of_quota: ProofOfQuota,
+        signing_pubkey: Ed25519PublicKey,
+        signature: Ed25519Signature,
+    ) -> Self {
+        let (version, signing_pubkey, _, signature) =
+            PublicHeader::new(signing_pubkey, &proof_of_quota, signature).into_components();
+        Self {
+            version,
+            signing_pubkey,
+            proof_of_quota,
+            signature,
+        }
+    }
+
+    pub fn verify_proof_of_quota<Verifier>(
+        self,
+        verifier: &Verifier,
+    ) -> Result<VerifiedPublicHeader, Error>
+    where
+        Verifier: ProofsVerifier,
+    {
+        let verified_proof_of_quota = verifier
+            .verify_proof_of_quota(self.proof_of_quota, &self.signing_pubkey)
+            .map_err(|_| Error::ProofOfQuotaVerificationFailed(quota::Error::InvalidProof))?;
+        Ok(VerifiedPublicHeader::new(
+            verified_proof_of_quota,
+            self.signing_pubkey,
+            self.signature,
+        ))
+    }
+
+    pub const fn into_components(self) -> (u8, Ed25519PublicKey, ProofOfQuota, Ed25519Signature) {
+        (
+            self.version,
+            self.signing_pubkey,
+            self.proof_of_quota,
+            self.signature,
+        )
+    }
+
+    pub const fn id(&self) -> MessageIdentifier {
+        self.signing_pubkey
+    }
+
+    #[cfg(any(feature = "unsafe-test-functions", test))]
+    pub const fn signature_mut(&mut self) -> &mut Ed25519Signature {
+        &mut self.signature
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct VerifiedPublicHeader {
     version: u8,
     signing_pubkey: Ed25519PublicKey,
     proof_of_quota: VerifiedProofOfQuota,
     signature: Ed25519Signature,
+}
+
+impl From<VerifiedPublicHeader> for PublicHeaderWithVerifiedSignature {
+    fn from(
+        VerifiedPublicHeader {
+            proof_of_quota,
+            signature,
+            signing_pubkey,
+            ..
+        }: VerifiedPublicHeader,
+    ) -> Self {
+        Self::new(proof_of_quota.into_inner(), signing_pubkey, signature)
+    }
 }
 
 impl From<VerifiedPublicHeader> for PublicHeader {

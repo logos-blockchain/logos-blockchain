@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq as _;
-use x25519_dalek::StaticSecret;
+use x25519_dalek::{SharedSecret, StaticSecret};
 use zeroize::ZeroizeOnDrop;
 
 pub const X25519_SECRET_KEY_LENGTH: usize = 32;
@@ -10,8 +10,9 @@ pub struct X25519PrivateKey(StaticSecret);
 
 impl X25519PrivateKey {
     #[must_use]
-    pub fn derive_shared_key(&self, public_key: &X25519PublicKey) -> SharedKey {
-        SharedKey(self.0.diffie_hellman(&public_key.0).to_bytes())
+    pub fn derive_shared_key(&self, public_key: &X25519PublicKey) -> Option<SharedKey> {
+        let shared_key = self.0.diffie_hellman(&public_key.0);
+        shared_key.was_contributory().then(|| SharedKey(shared_key))
     }
 }
 
@@ -52,21 +53,19 @@ impl From<X25519PublicKey> for [u8; X25519_PUBLIC_KEY_LENGTH] {
     }
 }
 
-pub const X25519_SHARED_KEY_LENGTH: usize = 32;
-
-#[derive(Clone, ZeroizeOnDrop)]
-pub struct SharedKey([u8; X25519_SHARED_KEY_LENGTH]);
+#[derive(ZeroizeOnDrop)]
+pub struct SharedKey(SharedSecret);
 
 impl SharedKey {
     #[must_use]
-    pub const fn as_slice(&self) -> &[u8] {
-        &self.0
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0.as_bytes()[..]
     }
 }
 
 impl PartialEq for SharedKey {
     fn eq(&self, other: &Self) -> bool {
-        self.0.ct_eq(&other.0).into()
+        self.0.as_bytes().ct_eq(other.0.as_bytes()).into()
     }
 }
 

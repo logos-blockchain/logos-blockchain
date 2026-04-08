@@ -301,12 +301,13 @@ fn generate_inputs(cnt: usize) -> (Vec<EncapsulationInput>, Vec<X25519PrivateKey
     let inputs = recipient_signing_keys
         .iter()
         .map(|recipient_signing_key| {
-            EncapsulationInput::new(
+            EncapsulationInput::try_new(
                 UnsecuredEd25519Key::generate_with_blake_rng(),
                 &recipient_signing_key.public_key(),
                 VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
                 VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
             )
+            .unwrap()
         })
         .collect::<Vec<_>>();
     (

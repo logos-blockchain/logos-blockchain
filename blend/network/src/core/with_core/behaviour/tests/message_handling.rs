@@ -2,14 +2,13 @@ use core::time::Duration;
 use std::collections::HashSet;
 
 use futures::StreamExt as _;
-use lb_blend_message::encap::encapsulated::EncapsulatedMessage;
 use lb_libp2p::SwarmEvent;
 use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
 use tokio::{select, time::sleep};
 
 use crate::core::{
-    tests::utils::{AlwaysTrueVerifier, TestEncapsulatedMessage, TestSwarm},
+    tests::utils::{TestEncapsulatedMessage, TestSwarm},
     with_core::{
         behaviour::{
             Event, NegotiatedPeerState, SpamReason,
@@ -24,14 +23,10 @@ use crate::core::{
 async fn message_sending_and_reception() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
     let mut dialing_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id)
-            .with_membership(&nodes)
-            .build::<AlwaysTrueVerifier>()
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
     });
     let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id)
-            .with_membership(&nodes)
-            .build::<AlwaysTrueVerifier>()
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
     });
 
     listening_swarm.listen().with_memory_addr_external().await;
@@ -44,16 +39,18 @@ async fn message_sending_and_reception() {
     let test_message_id = test_message.id();
     dialing_swarm
         .behaviour_mut()
-        .validate_and_publish_message(test_message.clone().into())
+        .publish_message_with_validated_signature_to_current_session(
+            &test_message.as_ref().clone().into(),
+        )
         .unwrap();
 
     loop {
         select! {
             _ = dialing_swarm.select_next_some() => {}
             listening_event = listening_swarm.select_next_some() => {
-                if let SwarmEvent::Behaviour(Event::Message(encapsulated_message, (peer_id, _))) = listening_event {
-                    assert_eq!(peer_id, *dialing_swarm.local_peer_id());
-                    assert_eq!(*encapsulated_message, EncapsulatedMessage::from(test_message.clone()).verify_public_header(&AlwaysTrueVerifier).unwrap());
+                if let SwarmEvent::Behaviour(Event::Message { message, sender, .. }) = listening_event {
+                    assert_eq!(sender, *dialing_swarm.local_peer_id());
+                    assert_eq!(*message, test_message.clone().into_inner().into());
                     break;
                 }
             }
@@ -90,22 +87,10 @@ async fn message_sending_and_reception() {
     assert_eq!(
         dialing_swarm
             .behaviour_mut()
-            .validate_and_publish_message(test_message.clone().into()),
+            .publish_message_with_validated_signature_to_current_session(
+                &test_message.as_ref().clone().into()
+            ),
         Err(SendError::DuplicateMessage)
-    );
-}
-
-#[test(tokio::test)]
-async fn invalid_public_header_message_publish() {
-    let mut dialing_swarm =
-        TestSwarm::new_ephemeral(|id| BehaviourBuilder::new(id).build::<AlwaysTrueVerifier>());
-
-    let invalid_signature_message = TestEncapsulatedMessage::new_with_invalid_signature(b"data");
-    assert_eq!(
-        dialing_swarm
-            .behaviour_mut()
-            .validate_and_publish_message(invalid_signature_message.into_inner().into()),
-        Err(SendError::InvalidPublicHeader)
     );
 }
 
@@ -113,14 +98,10 @@ async fn invalid_public_header_message_publish() {
 async fn undeserializable_message_received() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
     let mut dialing_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id)
-            .with_membership(&nodes)
-            .build::<AlwaysTrueVerifier>()
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
     });
     let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id)
-            .with_membership(&nodes)
-            .build::<AlwaysTrueVerifier>()
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
     });
 
     listening_swarm.listen().with_memory_addr_external().await;
@@ -163,14 +144,10 @@ async fn undeserializable_message_received() {
 async fn duplicate_message_received_from_same_peer() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
     let mut dialing_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id)
-            .with_membership(&nodes)
-            .build::<AlwaysTrueVerifier>()
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
     });
     let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id)
-            .with_membership(&nodes)
-            .build::<AlwaysTrueVerifier>()
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
     });
 
     listening_swarm.listen().with_memory_addr_external().await;
@@ -181,7 +158,9 @@ async fn duplicate_message_received_from_same_peer() {
     let test_message = TestEncapsulatedMessage::new(b"msg");
     dialing_swarm
         .behaviour_mut()
-        .validate_and_publish_message(test_message.clone().into())
+        .publish_message_with_validated_signature_to_current_session(
+            &test_message.as_ref().clone().into(),
+        )
         .unwrap();
 
     // Poll both swarms until the first message is fully received by the listener.
@@ -193,7 +172,7 @@ async fn duplicate_message_received_from_same_peer() {
         select! {
             _ = dialing_swarm.select_next_some() => {}
             listening_event = listening_swarm.select_next_some() => {
-                if let SwarmEvent::Behaviour(Event::Message(..)) = listening_event {
+                if let SwarmEvent::Behaviour(Event::Message { .. }) = listening_event {
                     break;
                 }
             }
@@ -206,7 +185,7 @@ async fn duplicate_message_received_from_same_peer() {
     // This is a duplicate message, so the listener will mark the dialer as spammy.
     dialing_swarm
         .behaviour_mut()
-        .force_send_message_to_peer(&test_message, *listening_swarm.local_peer_id())
+        .force_send_message_to_peer(&test_message.into_inner(), *listening_swarm.local_peer_id())
         .unwrap();
 
     let mut events_to_match = 2u8;
@@ -239,20 +218,16 @@ async fn duplicate_message_received_from_same_peer() {
 async fn duplicate_message_received_from_different_peers() {
     let (mut identities, nodes) = new_nodes_with_empty_address(3);
     let mut dialing_swarm_1 = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id)
-            .with_membership(&nodes)
-            .build::<AlwaysTrueVerifier>()
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
     });
     let mut dialing_swarm_2 = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id)
-            .with_membership(&nodes)
-            .build::<AlwaysTrueVerifier>()
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
     });
     let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
             .with_peering_degree(1..=2)
-            .build::<AlwaysTrueVerifier>()
+            .build()
     });
 
     listening_swarm.listen().with_memory_addr_external().await;
@@ -266,11 +241,15 @@ async fn duplicate_message_received_from_different_peers() {
     let test_message = TestEncapsulatedMessage::new(b"msg");
     dialing_swarm_1
         .behaviour_mut()
-        .validate_and_publish_message(test_message.clone().into())
+        .publish_message_with_validated_signature_to_current_session(
+            &test_message.as_ref().clone().into(),
+        )
         .unwrap();
     dialing_swarm_2
         .behaviour_mut()
-        .validate_and_publish_message(test_message.clone().into())
+        .publish_message_with_validated_signature_to_current_session(
+            &test_message.as_ref().clone().into(),
+        )
         .unwrap();
 
     // Verify that the message is bubbled up to the swarm only once
@@ -283,7 +262,7 @@ async fn duplicate_message_received_from_different_peers() {
             _ = dialing_swarm_1.select_next_some() => {}
             _ = dialing_swarm_2.select_next_some() => {}
             listening_event = listening_swarm.select_next_some() => {
-                if let SwarmEvent::Behaviour(Event::Message(..)) = listening_event {
+                if let SwarmEvent::Behaviour(Event::Message { .. }) = listening_event {
                     received_message_count += 1;
                 }
             }
@@ -292,19 +271,14 @@ async fn duplicate_message_received_from_different_peers() {
     assert_eq!(received_message_count, 1);
 }
 
-#[ignore = "TODO: enable this logic after investigating session/epoch transition issues. Test disabled because we currently have some session rotation 'front-running' since we self-apply locally produced blocks, which can lead some nodes to start generating proofs from a future session."]
 #[test(tokio::test)]
-async fn invalid_public_header_message_received() {
+async fn invalid_signature_message_received() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
     let mut dialing_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id)
-            .with_membership(&nodes)
-            .build::<AlwaysTrueVerifier>()
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
     });
     let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id)
-            .with_membership(&nodes)
-            .build::<AlwaysTrueVerifier>()
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
     });
 
     listening_swarm.listen().with_memory_addr_external().await;
@@ -316,7 +290,7 @@ async fn invalid_public_header_message_received() {
     dialing_swarm
         .behaviour_mut()
         .force_send_message_to_peer(
-            &invalid_public_header_message,
+            &invalid_public_header_message.as_ref().clone(),
             *listening_swarm.local_peer_id(),
         )
         .unwrap();
@@ -329,7 +303,7 @@ async fn invalid_public_header_message_received() {
                 match listening_swarm_event {
                     SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, peer_state)) => {
                         assert_eq!(peer_id, *dialing_swarm.local_peer_id());
-                        assert_eq!(peer_state, NegotiatedPeerState::Spammy(SpamReason::InvalidPublicHeader));
+                        assert_eq!(peer_state, NegotiatedPeerState::Spammy(SpamReason::InvalidHeaderSignature));
                         events_to_match -= 1;
                     }
                     SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } => {

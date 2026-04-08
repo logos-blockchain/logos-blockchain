@@ -5,8 +5,9 @@ use std::{
 };
 
 use either::Either;
-use lb_blend_message::encap::{self, encapsulated::EncapsulatedMessage};
-use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
+use lb_blend_message::encap::validated::{
+    EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
+};
 use libp2p::{
     PeerId,
     swarm::{ConnectionId, NotifyHandler, ToSwarm},
@@ -18,8 +19,8 @@ use crate::core::with_core::{
         handler::FromBehaviour,
         message_cache::MessageCache,
         utils::{
+            forward_validated_message_and_update_cache,
             handle_received_serialized_encapsulated_message_and_update_cache,
-            validate_forward_message_and_update_cache,
         },
     },
     error::{ReceiveError, SendError},
@@ -27,50 +28,76 @@ use crate::core::with_core::{
 
 /// Defines behaviours for processing messages from the old session
 /// until the session transition period has passed.
-pub struct OldSession<ProofsVerifier> {
+pub struct OldSession {
     negotiated_peers: HashMap<PeerId, ConnectionId>,
     events: VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     waker: Option<Waker>,
     message_cache: MessageCache,
-    poq_verifier: ProofsVerifier,
+    session_number: u64,
 }
 
-impl<ProofsVerifier> OldSession<ProofsVerifier>
-where
-    ProofsVerifier: encap::ProofsVerifier,
-{
-    /// Validates the public header of an encapsulated message, and
-    /// if valid, forwards it to all negotiated peers minus the sender.
-    pub fn validate_and_forward_message(
-        &mut self,
-        message: EncapsulatedMessage,
-        except: PeerId,
-    ) -> Result<(), SendError> {
-        tracing::trace!(
-            "Forwarding message with id {:?} to old session peers. Negotiated peers: {:?}. Excluded peer: {except:?}",
-            hex::encode(message.id()),
-            self.negotiated_peers
-        );
+impl OldSession {
+    #[must_use]
+    pub const fn new(
+        negotiated_peers: HashMap<PeerId, ConnectionId>,
+        message_cache: MessageCache,
+        session_number: u64,
+    ) -> Self {
+        Self {
+            negotiated_peers,
+            message_cache,
+            events: VecDeque::new(),
+            waker: None,
+            session_number,
+        }
+    }
 
-        validate_forward_message_and_update_cache(
-            message,
-            &self.poq_verifier,
-            self.negotiated_peers
-                .iter()
-                // Exclude the peer the message was received from.
-                .filter(|(peer_id, _)| except != **peer_id),
+    /// Publish an encapsulated message with a validated public header to all
+    /// negotiated peers.
+    ///
+    /// If the specified session does not match the current session, it returns
+    /// an error without sending the message.
+    pub(super) fn publish_message_with_validated_header(
+        &mut self,
+        message: EncapsulatedMessageWithVerifiedPublicHeader,
+        intended_session: u64,
+    ) -> Result<(), SendError> {
+        if self.session_number != intended_session {
+            return Err(SendError::InvalidSession);
+        }
+        forward_validated_message_and_update_cache(
+            &(message.into()),
+            self.negotiated_peers.iter(),
             &mut self.events,
             &mut self.message_cache,
             self.waker.take(),
         )
     }
 
-    pub(super) fn start_new_epoch(&mut self, new_pol_inputs: LeaderInputs) {
-        self.poq_verifier.start_epoch_transition(new_pol_inputs);
-    }
-
-    pub(super) fn finish_epoch_transition(&mut self) {
-        self.poq_verifier.complete_epoch_transition();
+    /// Forward an encapsulated message with a validated signature to all
+    /// negotiated peers, except the specified one.
+    ///
+    /// If the specified session does not match the current session, it returns
+    /// an error without sending the message.
+    pub(super) fn forward_message_with_validated_signature(
+        &mut self,
+        message: &EncapsulatedMessageWithVerifiedSignature,
+        except: PeerId,
+        intended_session: u64,
+    ) -> Result<(), SendError> {
+        if self.session_number != intended_session {
+            return Err(SendError::InvalidSession);
+        }
+        forward_validated_message_and_update_cache(
+            message,
+            self.negotiated_peers
+                .iter()
+                // Exclude sender
+                .filter(|(peer_id, _)| **peer_id != except),
+            &mut self.events,
+            &mut self.message_cache,
+            self.waker.take(),
+        )
     }
 
     /// Handles a message received from a peer.
@@ -80,7 +107,7 @@ where
     /// - [`Ok(true)`] if the message was successfully processed and forwarded.
     /// - [`Err(Error)`] if the message is invalid or has already been
     ///   exchanged.
-    pub fn handle_received_serialized_encapsulated_message(
+    pub(super) fn handle_received_serialized_encapsulated_message(
         &mut self,
         serialized_message: &[u8],
         (from_peer_id, from_connection_id): (PeerId, ConnectionId),
@@ -92,30 +119,13 @@ where
         handle_received_serialized_encapsulated_message_and_update_cache(
             serialized_message,
             &mut self.message_cache,
-            (from_peer_id, from_connection_id),
-            &self.poq_verifier,
+            from_peer_id,
             &mut self.events,
             self.waker.take(),
+            self.session_number,
         )?;
 
         Ok(true)
-    }
-}
-
-impl<ProofsVerifier> OldSession<ProofsVerifier> {
-    #[must_use]
-    pub const fn new(
-        negotiated_peers: HashMap<PeerId, ConnectionId>,
-        message_cache: MessageCache,
-        poq_verifier: ProofsVerifier,
-    ) -> Self {
-        Self {
-            negotiated_peers,
-            message_cache,
-            events: VecDeque::new(),
-            waker: None,
-            poq_verifier,
-        }
     }
 
     /// Stops the old session by returning events to close all the substreams

@@ -57,12 +57,13 @@ fn generate_valid_inputs() -> Vec<EncapsulationInput> {
         .take(3)
         .map(|recipient_signing_key| {
             let recipient_signing_pubkey = recipient_signing_key.public_key();
-            EncapsulationInput::new(
+            EncapsulationInput::try_new(
                 UnsecuredEd25519Key::generate_with_blake_rng(),
                 &recipient_signing_pubkey,
                 VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
                 VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
             )
+            .unwrap()
         })
         .collect::<Vec<_>>()
 }

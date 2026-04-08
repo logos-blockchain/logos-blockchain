@@ -1,8 +1,4 @@
-use crate::{
-    LogosBlockchainNode,
-    api::{PointerResult, free},
-    errors::OperationStatus,
-};
+use crate::{LogosBlockchainNode, api::free, errors::OperationStatus, result::PointerResult};
 
 #[repr(C)]
 pub enum State {
