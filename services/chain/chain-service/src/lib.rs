@@ -115,6 +115,9 @@ pub enum ConsensusMsg<Tx> {
     LibSubscribe {
         sender: oneshot::Sender<broadcast::Receiver<LibUpdate>>,
     },
+    VouchersUpdateSubscribe {
+        sender: oneshot::Sender<broadcast::Receiver<lb_ledger::ClaimableVouchersUpdate>>,
+    },
     GetHeaders {
         from: Option<HeaderId>,
         to: Option<HeaderId>,
@@ -281,7 +284,14 @@ impl Cryptarchia {
         &mut self,
         block: &Block<Tx>,
         current_slot: Slot,
-    ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>), Error>
+    ) -> Result<
+        (
+            PrunedBlocks<HeaderId>,
+            ReorgedBlocks<HeaderId>,
+            Option<lb_ledger::ClaimableVouchersUpdate>,
+        ),
+        Error,
+    >
     where
         Tx: AuthenticatedMantleTx,
     {
@@ -299,7 +309,7 @@ impl Cryptarchia {
         }
 
         // A block number of this block if it's applied to the chain.
-        let (_, state) = self
+        let (_, state, vouchers_update) = self
             .ledger
             .prepare_update::<_, MainnetGasConstants>(
                 id,
@@ -334,7 +344,7 @@ impl Cryptarchia {
 
         metrics::emit_consensus_metrics(&self.consensus, &self.ledger);
         metrics::emit_block_imported_metric();
-        Ok((pruned_blocks, reorged_blocks))
+        Ok((pruned_blocks, reorged_blocks, vouchers_update))
     }
 
     fn epoch_state_for_slot(&self, slot: Slot) -> Result<EpochState, Error> {
@@ -474,6 +484,7 @@ where
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     new_block_subscription_sender: broadcast::Sender<ProcessedBlockEvent>,
     lib_subscription_sender: broadcast::Sender<LibUpdate>,
+    vouchers_update_sender: broadcast::Sender<lb_ledger::ClaimableVouchersUpdate>,
     state: <Self as ServiceData>::State,
 }
 
@@ -527,11 +538,13 @@ where
     ) -> Result<Self, DynError> {
         let (new_block_subscription_sender, _) = broadcast::channel(16);
         let (lib_subscription_sender, _) = broadcast::channel(16);
+        let (vouchers_update_sender, _) = broadcast::channel(16);
 
         Ok(Self {
             service_resources_handle,
             new_block_subscription_sender,
             lib_subscription_sender,
+            vouchers_update_sender,
             state: initial_state,
         })
     }
@@ -641,6 +654,7 @@ where
                                         &relays,
                                         &self.new_block_subscription_sender,
                                         &self.lib_subscription_sender,
+                                        &self.vouchers_update_sender,
                                         &self.service_resources_handle.state_updater,
                                     ).await {
                                     Ok((new_storage_blocks_to_remove, reorged_txs)) => {
@@ -666,7 +680,7 @@ where
                                 }
                             }
                             msg => {
-                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg);
+                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &self.vouchers_update_sender, &chain_online_notifier, msg);
                             }
                         }
                     }
@@ -761,6 +775,7 @@ where
         cryptarchia: &Cryptarchia,
         new_block_channel: &broadcast::Sender<ProcessedBlockEvent>,
         lib_channel: &broadcast::Sender<LibUpdate>,
+        vouchers_update_channel: &broadcast::Sender<lb_ledger::ClaimableVouchersUpdate>,
         chain_online_notifier: &ChainOnlineNotifier,
         msg: ConsensusMsg<Tx>,
     ) {
@@ -781,6 +796,13 @@ where
                 sender.send(lib_channel.subscribe()).unwrap_or_else(|_| {
                     error!("Could not subscribe to LIB updates channel");
                 });
+            }
+            ConsensusMsg::VouchersUpdateSubscribe { sender } => {
+                sender
+                    .send(vouchers_update_channel.subscribe())
+                    .unwrap_or_else(|_| {
+                        error!("Could not subscribe to vouchers update channel");
+                    });
             }
             ConsensusMsg::GetHeaders { from, to, tx } => {
                 // default to tip block if not present
@@ -870,6 +892,7 @@ where
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_subscription_sender: &broadcast::Sender<LibUpdate>,
+        vouchers_update_sender: &broadcast::Sender<lb_ledger::ClaimableVouchersUpdate>,
         state_updater: &StateUpdater<Option<CryptarchiaConsensusState>>,
     ) -> Result<(HashSet<HeaderId>, Vec<Tx>), Error> {
         let (pruned_blocks, reorged_txs) = Self::process_block(
@@ -879,6 +902,7 @@ where
             relays,
             new_block_subscription_sender,
             lib_subscription_sender,
+            vouchers_update_sender,
         )
         .await?;
 
@@ -919,7 +943,7 @@ where
     #[expect(clippy::allow_attributes_without_reason)]
     #[instrument(
         level = "debug",
-        skip(cryptarchia, block, relays, new_block_subscription_sender, lib_broadcaster),
+        skip(cryptarchia, block, relays, new_block_subscription_sender, lib_broadcaster, vouchers_update_sender),
         fields(block_id = %block.header().id(), tx_count = block.transactions().count(), current_slot = ?current_slot)
     )]
     async fn process_block(
@@ -929,6 +953,7 @@ where
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_broadcaster: &broadcast::Sender<LibUpdate>,
+        vouchers_update_sender: &broadcast::Sender<lb_ledger::ClaimableVouchersUpdate>,
     ) -> Result<(PrunedBlocks<HeaderId>, Vec<Tx>), Error> {
         debug!("Received proposal with ID: {:?}", block.header().id());
         let header = block.header();
@@ -942,7 +967,8 @@ where
             }
         };
 
-        let (pruned_blocks, reorged_blocks) = cryptarchia.try_apply_block(&block, current_slot)?;
+        let (pruned_blocks, reorged_blocks, vouchers_update) =
+            cryptarchia.try_apply_block(&block, current_slot)?;
         let new_lib = cryptarchia.lib();
 
         let tx_count = block.transactions().count();
@@ -976,6 +1002,12 @@ where
         };
         if let Err(e) = new_block_subscription_sender.send(processed_block_event) {
             error!("Could not notify new block to services {e}");
+        }
+
+        if let Some(update) = vouchers_update {
+            if let Err(e) = vouchers_update_sender.send(update) {
+                error!("Could not notify vouchers update to services: {e}");
+            }
         }
 
         if prev_lib != new_lib {
@@ -1187,6 +1219,7 @@ where
                 relays,
                 &self.new_block_subscription_sender,
                 &self.lib_subscription_sender,
+                &self.vouchers_update_sender,
             )
             .await
             {

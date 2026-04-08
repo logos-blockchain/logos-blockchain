@@ -5,6 +5,7 @@ use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
 
 use crate::{ConsensusMsg, CryptarchiaInfo, LibUpdate, ProcessedBlockEvent};
+use lb_ledger::ClaimableVouchersUpdate;
 
 pub trait CryptarchiaServiceData:
     ServiceData<Message = ConsensusMsg<Self::Tx>> + Send + 'static
@@ -112,6 +113,28 @@ where
 
         receiver.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving LibSubscribe"))
+        })
+    }
+
+    /// Subscribe to claimable vouchers updates (emitted on epoch transitions)
+    pub async fn subscribe_vouchers_updates(
+        &self,
+    ) -> Result<broadcast::Receiver<ClaimableVouchersUpdate>, ApiError> {
+        let (sender, receiver) = oneshot::channel();
+
+        self.relay
+            .send(ConsensusMsg::VouchersUpdateSubscribe { sender })
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!(
+                    "{relay_error} while sending VouchersUpdateSubscribe"
+                ))
+            })?;
+
+        receiver.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!(
+                "{relay_error} while receiving VouchersUpdateSubscribe"
+            ))
         })
     }
 
