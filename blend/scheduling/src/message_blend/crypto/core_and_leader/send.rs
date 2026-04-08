@@ -332,7 +332,7 @@ mod test {
             transaction_hash: ZkHash::ONE,
         };
 
-        processor.set_epoch_private(new_private_inputs, leader_inputs, Epoch::new(1));
+        processor.set_epoch_private(new_private_inputs.clone(), leader_inputs, Epoch::new(1));
 
         assert!(processor.proofs_generator.1 == Some(new_private_inputs));
     }

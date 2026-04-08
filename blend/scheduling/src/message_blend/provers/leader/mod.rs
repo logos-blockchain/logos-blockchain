@@ -62,7 +62,7 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
     ) -> Self {
         Self {
             settings,
-            private_inputs,
+            private_inputs: private_inputs.clone(),
             proofs_stream: Box::pin(Buffered::new(
                 create_proof_stream(settings.public_inputs, private_inputs),
                 settings.public_inputs.leader.message_quota as usize,
@@ -103,7 +103,7 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
 impl RealLeaderProofsGenerator {
     fn generate_new_proofs_stream(&mut self) {
         self.proofs_stream = Box::pin(Buffered::new(
-            create_proof_stream(self.settings.public_inputs, self.private_inputs),
+            create_proof_stream(self.settings.public_inputs, self.private_inputs.clone()),
             self.settings.public_inputs.leader.message_quota as usize,
         ));
     }
@@ -113,10 +113,6 @@ impl RealLeaderProofsGenerator {
     }
 }
 
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "Spawning an async task. Issues with lifetimes."
-)]
 fn create_proof_stream(
     public_inputs: PoQVerificationInputsMinusSigningKey,
     private_inputs: ProofOfLeadershipQuotaInputs,
@@ -138,6 +134,7 @@ fn create_proof_stream(
             // layer is out of scope for this component, and will be up to the
             // message scheduler.
             let message_release_index = current_index % message_quota;
+            let private_inputs = private_inputs.clone();
 
             async move {
                 let leadership_proof = spawn_blocking(move || {
