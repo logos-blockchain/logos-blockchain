@@ -14,7 +14,6 @@ pub struct Vouchers<Id> {
 }
 
 impl<Id> Vouchers<Id> {
-    #[cfg(test)]
     pub fn new(vouchers: impl IntoIterator<Item = (VoucherCm, VoucherNullifier, Id)>) -> Self {
         let (vouchers, voucher_nullifiers) = vouchers.into_iter().fold(
             (HashMap::new(), HashMap::new()),

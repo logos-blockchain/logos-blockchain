@@ -97,6 +97,10 @@ impl<'u> ServiceState<'u> {
         &self.wallet
     }
 
+    pub fn wallet_mut(&mut self) -> &mut Wallet {
+        &mut self.wallet
+    }
+
     fn update_state(&self) {
         self.updater.update(Some(RecoveryState {
             next_new_voucher_index: self.next_new_voucher_index,

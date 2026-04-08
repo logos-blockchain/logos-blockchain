@@ -29,7 +29,6 @@ use lb_core::{
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
 };
-use lb_groth16::Fr;
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::{KMSBackend, preload::PreloadKMSBackend},
@@ -45,7 +44,7 @@ use lb_services_utils::{
     wait_until_services_are_ready,
 };
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
-use lb_utxotree::MerklePath;
+use lb_mmr::MerklePath;
 use lb_wallet::{WalletBalance, WalletBlock, WalletError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -314,6 +313,10 @@ where
         // Subscribe to LIB updates for wallet state pruning
         let mut lib_receiver = cryptarchia_api.subscribe_lib_updates().await?;
 
+        // Subscribe to claimable vouchers updates (epoch transitions)
+        let mut vouchers_update_receiver =
+            cryptarchia_api.subscribe_vouchers_updates().await?;
+
         // Initialize wallet from LIB and LIB LedgerState
         let lib = chain_info.lib;
 
@@ -353,6 +356,9 @@ where
                 }
                 Ok(lib_update) = lib_receiver.recv() => {
                     Self::handle_lib_update(&lib_update, &storage_adapter, &mut state).await;
+                }
+                Ok(vouchers_update) = vouchers_update_receiver.recv() => {
+                    handle_vouchers_update(vouchers_update, state.wallet_mut());
                 }
             }
         }
@@ -643,7 +649,6 @@ where
     async fn sign_leader_claim(
         tx_hash: TxHash,
         leader_claim_op: &LeaderClaimOp,
-        ledger: &LedgerState,
         wallet: &Wallet,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<OpProof, WalletServiceError> {
@@ -656,10 +661,10 @@ where
             Self::derive_voucher_from_kms(kms, voucher_master_key_id.clone(), *voucher_index).await;
 
         let voucher_cm = VoucherCm::from_secret(voucher_secret);
-        let path = ledger
-            .mantle_ledger()
-            .voucher_merkle_path(voucher_cm)
-            .ok_or(WalletServiceError::VoucherMerklePathNotFound(voucher_cm))?;
+        let path = wallet
+            .get_voucher_path(&voucher_cm)
+            .ok_or(WalletServiceError::VoucherMerklePathNotFound(voucher_cm))?
+            .clone();
         let rewards_root = leader_claim_op.rewards_root;
 
         // TODO: This should happen in KMS
@@ -723,7 +728,7 @@ where
                     Self::sign_sdp_active(tx_hash, active_op, &ledger, kms).await?
                 }
                 Op::LeaderClaim(claim_op) => {
-                    Self::sign_leader_claim(tx_hash, claim_op, &ledger, wallet, kms).await?
+                    Self::sign_leader_claim(tx_hash, claim_op, wallet, kms).await?
                 }
                 Op::Transfer(_) => Self::sign_transfer(tx_hash, input_pks.clone(), kms).await?,
             };
@@ -787,7 +792,7 @@ where
 
     fn generate_poc(
         voucher_secret: VoucherSecret,
-        path: &MerklePath<Fr>,
+        path: &MerklePath,
         rewards_root: RewardsRoot,
         tx_hash: TxHash,
     ) -> Result<Groth16LeaderClaimProof, WalletServiceError> {
@@ -919,13 +924,7 @@ where
             }
         };
 
-        // Get the ledger state at the specified tip
-        let Ok(Some(ledger_state)) = cryptarchia.get_ledger_state(tip).await else {
-            Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(tip));
-            return;
-        };
-
-        let voucher = Self::find_claimable_voucher(wallet, &ledger_state);
+        let voucher = Self::find_claimable_voucher(wallet);
         if resp_tx
             .send(Ok(TipResponse {
                 tip,
@@ -937,12 +936,9 @@ where
         }
     }
 
-    fn find_claimable_voucher(
-        wallet: &Wallet,
-        ledger_state: &LedgerState,
-    ) -> Option<VoucherCommitmentAndNullifier> {
+    fn find_claimable_voucher(wallet: &Wallet) -> Option<VoucherCommitmentAndNullifier> {
         for (nf, cm) in wallet.voucher_commitments_and_nullifiers() {
-            if ledger_state.mantle_ledger().has_claimable_voucher(cm) {
+            if wallet.get_voucher_path(cm).is_some() {
                 return Some(VoucherCommitmentAndNullifier {
                     commitment: *cm,
                     nullifier: *nf,
@@ -1149,6 +1145,186 @@ where
         let gas_context = ledger_state.mantle_ledger().channels().into();
         if let Err(e) = resp_tx.send(Ok(gas_context)) {
             error!(err = ?e, "Failed to send gas context response");
+        }
+    }
+}
+
+fn handle_vouchers_update(update: lb_ledger::ClaimableVouchersUpdate, wallet: &mut Wallet) {
+    // Collect existing tracked paths and their commitments for in-place update
+    let (cms, mut paths): (Vec<VoucherCm>, Vec<MerklePath>) = wallet
+        .voucher_commitments_and_nullifiers()
+        .filter_map(|(_, cm)| wallet.get_voucher_path(cm).map(|path| (*cm, path.clone())))
+        .unzip();
+
+    let n_tracked = paths.len();
+    let n_flushed = update.flushed_vouchers.len();
+    let mut mmr = update.pre_flush_mmr;
+    let mut new_cms = Vec::new();
+    for &cm in &update.flushed_vouchers {
+        let (new_mmr, path) = mmr
+            .push_with_paths(cm, &mut paths)
+            .expect("MMR should not be full");
+        mmr = new_mmr;
+        paths.push(path);
+        new_cms.push(cm);
+    }
+
+    // Write back updated existing paths
+    for (cm, path) in cms.into_iter().zip(paths.drain(..n_tracked)) {
+        wallet.set_voucher_path(&cm, path);
+    }
+
+    // Store paths for newly flushed vouchers that belong to us
+    for (cm, path) in new_cms.into_iter().zip(paths) {
+        if wallet.has_voucher(&cm) {
+            wallet.set_voucher_path(&cm, path);
+        }
+    }
+
+    debug!(
+        flushed = n_flushed,
+        tracked = n_tracked,
+        "Applied claimable vouchers update"
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use lb_core::{
+        crypto::ZkHasher,
+        sdp::MinStake,
+    };
+    use lb_groth16::Fr;
+    use lb_ledger::{
+        Config,
+        mantle::{
+            leader::LeaderState,
+            sdp::{self, ServiceRewardsParameters, rewards::blend},
+        },
+    };
+    use lb_utils::math::NonNegativeRatio;
+    use lb_wallet::Vouchers;
+
+    use super::*;
+
+    #[test]
+    fn test_handle_vouchers_update() {
+        let (_, cm0, nf0) = voucher(0);
+        let (_, cm1, nf1) = voucher(1);
+        let (_, cm2, _) = voucher(2);
+
+        // Build a minimal wallet that tracks cm0 and cm1 (not cm2)
+        let mut wallet: Wallet = {
+            let pk = ZkPublicKey::from(Fr::from(1u64));
+            let pk_id = "pk1".to_owned();
+            Wallet::from_lib(
+                [(pk, pk_id.clone())],
+                Vouchers::new([(cm0, nf0, (pk_id.clone(), 0)), (cm1, nf1, (pk_id, 1))]),
+                HeaderId::from([0; 32]),
+                &LedgerState::from_utxos([], &config()),
+            )
+        };
+
+        // No paths initially
+        assert!(wallet.get_voucher_path(&cm0).is_none());
+        assert!(wallet.get_voucher_path(&cm1).is_none());
+
+        // Simulate epoch 1: add 3 vouchers via LeaderState
+        let mut leader = LeaderState::new();
+        (leader, _) = leader.try_apply_header(1.into(), cm0).unwrap();
+        (leader, _) = leader.try_apply_header(1.into(), cm1).unwrap();
+        (leader, _) = leader.try_apply_header(1.into(), cm2).unwrap();
+
+        // Epoch 2: flush pending vouchers
+        let (leader, update) = leader.try_apply_header(2.into(), cm2).unwrap();
+        let update = update.unwrap();
+        assert_eq!(update.flushed_vouchers.len(), 3);
+        let root = root_after_flush(&update);
+
+        handle_vouchers_update(update, &mut wallet);
+
+        // Paths should exist for owned vouchers only
+        assert!(wallet.get_voucher_path(&cm0).is_some());
+        assert!(wallet.get_voucher_path(&cm1).is_some());
+        assert!(wallet.get_voucher_path(&cm2).is_none());
+
+        // Paths should verify against the MMR root
+        for cm in [cm0, cm1] {
+            let path = wallet.get_voucher_path(&cm).unwrap();
+            let leaf_hash = *cm.as_ref();
+            assert!(
+                path.verify::<ZkHasher>(leaf_hash, root),
+                "path should verify after first epoch flush"
+            );
+        }
+
+        // Epoch 3: flush one more voucher, existing paths should be updated
+        let (_leader, update) = leader.try_apply_header(3.into(), cm0).unwrap();
+        let update = update.unwrap();
+        assert_eq!(update.flushed_vouchers.len(), 1);
+        let root = root_after_flush(&update);
+
+        handle_vouchers_update(update, &mut wallet);
+
+        // Paths should still verify against the updated root
+        for cm in [cm0, cm1] {
+            let path = wallet.get_voucher_path(&cm).unwrap();
+            let leaf_hash = *cm.as_ref();
+            assert!(
+                path.verify::<ZkHasher>(leaf_hash, root),
+                "path should verify after second epoch flush"
+            );
+        }
+    }
+
+    fn voucher(v: u64) -> (VoucherSecret, VoucherCm, VoucherNullifier) {
+        let secret = VoucherSecret(Fr::from(v));
+        let cm = VoucherCm::from_secret(secret);
+        let nf = VoucherNullifier::from_secret(secret);
+        (secret, cm, nf)
+    }
+
+    /// Replay pushes into an MMR to compute the root after flushing.
+    fn root_after_flush(update: &lb_ledger::ClaimableVouchersUpdate) -> Fr {
+        let mut mmr = update.pre_flush_mmr.clone();
+        for &cm in &update.flushed_vouchers {
+            mmr = mmr.push(cm).unwrap();
+        }
+        mmr.frontier_root()
+    }
+
+    fn config() -> Config {
+        Config {
+            epoch_config: lb_cryptarchia_engine::EpochConfig {
+                epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
+                epoch_period_nonce_buffer: 3.try_into().unwrap(),
+                epoch_period_nonce_stabilization: 4.try_into().unwrap(),
+            },
+            consensus_config: lb_cryptarchia_engine::Config::new(
+                10.try_into().unwrap(),
+                NonNegativeRatio::new(1, 2.try_into().unwrap()),
+                1.0.try_into().unwrap(),
+            ),
+            sdp_config: sdp::Config {
+                service_params: Arc::new(HashMap::new()),
+                service_rewards_params: ServiceRewardsParameters {
+                    blend: blend::RewardsParameters {
+                        rounds_per_session: 1.try_into().unwrap(),
+                        message_frequency_per_round: 1.0.try_into().unwrap(),
+                        num_blend_layers: 1.try_into().unwrap(),
+                        data_replication_factor: 0,
+                        minimum_network_size: 30.try_into().unwrap(),
+                        activity_threshold_sensitivity: 1,
+                    },
+                },
+                min_stake: MinStake {
+                    threshold: 0,
+                    timestamp: 0,
+                },
+            },
+            faucet_pk: None,
         }
     }
 }
