@@ -1161,7 +1161,7 @@ where
                 Ok(mut new_processor) => {
                     if let Some(current_secret_info) = current_secret_info {
                         new_processor.set_epoch_private(
-                            *current_secret_info,
+                            current_secret_info.clone(),
                             current_public_info.epoch,
                             current_epoch,
                         );
@@ -2160,7 +2160,7 @@ where
     };
 
     cryptographic_processor.set_epoch_private(
-        new_pol_info.poq_private_inputs,
+        new_pol_info.poq_private_inputs.clone(),
         new_leader_inputs,
         new_pol_info.epoch,
     );
