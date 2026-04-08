@@ -3,10 +3,10 @@ pub mod common;
 pub mod cucumber;
 pub mod nodes;
 pub mod topology;
-
 use std::{env, sync::LazyLock};
 
 use lb_libp2p::{Multiaddr, PeerId, multiaddr};
+pub use lb_testing_framework::{get_reserved_available_tcp_port, get_reserved_available_udp_port};
 
 /// Global flag indicating whether debug tracing configuration is enabled to
 /// send traces to local grafana stack.

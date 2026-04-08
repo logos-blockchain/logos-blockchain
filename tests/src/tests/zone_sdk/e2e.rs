@@ -44,7 +44,8 @@ async fn test_sequencer_publish_and_indexer_read() {
     // Use custom config with faster block production for test reliability:
     // - slot_duration: 1s (faster slots)
     // - security_param (k): 5 (fewer blocks needed for LIB to advance)
-    let (configs, genesis_tx) = create_general_configs(2);
+    let (configs, genesis_tx) =
+        create_general_configs(2, Some("test_sequencer_publish_and_indexer_read"));
     let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
     let configs: Vec<_> = configs
         .into_iter()
@@ -183,7 +184,7 @@ async fn test_sequencer_publish_and_indexer_read() {
 #[serial]
 async fn test_sequencer_checkpoint_resume() {
     // Setup network with faster block production
-    let (configs, genesis_tx) = create_general_configs(2);
+    let (configs, genesis_tx) = create_general_configs(2, Some("test_sequencer_checkpoint_resume"));
     let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
     let configs: Vec<_> = configs
         .into_iter()
@@ -334,7 +335,8 @@ async fn test_sequencer_checkpoint_resume() {
 #[tokio::test]
 #[serial]
 async fn test_sequencer_stale_checkpoint_resume() {
-    let (configs, genesis_tx) = create_general_configs(2);
+    let (configs, genesis_tx) =
+        create_general_configs(2, Some("test_sequencer_stale_checkpoint_resume"));
     let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
     let configs: Vec<_> = configs
         .into_iter()

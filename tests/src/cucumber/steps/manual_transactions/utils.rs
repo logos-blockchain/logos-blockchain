@@ -47,10 +47,11 @@ use lb_chain_service::CryptarchiaInfo;
 use lb_core::mantle::{OpProof, tx::MantleTxGasContext};
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_testing_framework::NodeHttpClient;
+use lb_testing_framework::is_truthy_env;
 
 use crate::cucumber::{
     defaults::CUCUMBER_VERBOSE_CONSOLE, steps::manual_transactions::faucet::FaucetTask,
-    utils::is_truthy_env, world::WalletType,
+    world::WalletType,
 };
 
 impl FromStr for WalletStateType {

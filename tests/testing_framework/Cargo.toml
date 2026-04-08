@@ -63,5 +63,6 @@ ignored = [
   "lb-groth16",
   "lb-ledger",
   "lb-time-service",
+  "lb-utils",
   "serde_json",
 ]

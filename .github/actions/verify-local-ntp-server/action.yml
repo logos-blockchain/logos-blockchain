@@ -1,0 +1,89 @@
+name: Verify Local NTP Server
+
+description: >
+  Verifies that a local NTP server on 127.0.0.1:123 is working as expected for
+  e2e tests. Does not install or configure anything. Fails with a clear message
+  so runner administrators can fix the host if needed.
+
+runs:
+  using: composite
+  steps:
+    - name: Verify localhost NTP server responds correctly
+      shell: bash
+      run: |
+        python3 - <<'PY'
+        import socket
+        import sys
+        import time
+
+        addr = ("127.0.0.1", 123)
+        req = bytearray(48)
+        req[0] = 0x1B  # LI=0, VN=3, Mode=3
+
+        deadline = time.time() + 5.0
+        last_err = None
+
+        while time.time() < deadline:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sock.bind(("127.0.0.1", 0))
+                sock.settimeout(0.5)
+                sock.sendto(req, addr)
+                data, peer = sock.recvfrom(48)
+
+                if len(data) < 48:
+                    last_err = f"short reply length {len(data)} from {peer}"
+                    time.sleep(0.2)
+                    continue
+
+                leap_version_mode = data[0]
+                stratum = data[1]
+                mode = leap_version_mode & 0b111
+
+                # Expect a server reply and a sane, synchronized stratum.
+                if mode != 4:
+                    last_err = f"unexpected NTP mode {mode} (expected 4=server)"
+                    time.sleep(0.2)
+                    continue
+
+                if not (1 <= stratum <= 15):
+                    last_err = (
+                        f"invalid stratum {stratum} "
+                        f"(expected 1..15; server is likely unsynchronized)"
+                    )
+                    time.sleep(0.2)
+                    continue
+
+                print(
+                    f"Local NTP OK on 127.0.0.1:123 "
+                    f"(mode={mode}, stratum={stratum})"
+                )
+                sys.exit(0)
+
+            except Exception as e:
+                last_err = str(e)
+            finally:
+                sock.close()
+
+            time.sleep(0.2)
+
+        print(
+            "Local NTP verification failed.\n"
+            "Expected a working NTP server on 127.0.0.1:123 that replies to a real "
+            "NTP request with:\n"
+            "  - a full 48-byte response\n"
+            "  - mode = 4 (server)\n"
+            "  - stratum in 1..15\n\n"
+            f"Last error: {last_err}\n\n"
+            "Runner administrators should provision the host accordingly.\n"
+            "Suggested host setup:\n"
+            "  Linux:\n"
+            "    - Install and configure chrony bound to 127.0.0.1\n"
+            "    - Ensure it serves localhost and reports a valid stratum\n"
+            "  macOS:\n"
+            "    - Install and configure a local NTP service on the host\n"
+            "    - Ensure 127.0.0.1:123 answers with a valid stratum\n",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+        PY

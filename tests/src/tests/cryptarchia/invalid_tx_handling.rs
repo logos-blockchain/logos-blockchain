@@ -23,7 +23,11 @@ use serial_test::serial;
 #[tokio::test]
 #[serial]
 async fn invalid_transactions_are_handled() {
-    let topology = Topology::spawn(TopologyConfig::two_validators()).await;
+    let topology = Topology::spawn(
+        TopologyConfig::two_validators(),
+        Some("invalid_transactions_are_handled"),
+    )
+    .await;
     let validator = &topology.validators()[0];
 
     let validator_url = Url::parse(

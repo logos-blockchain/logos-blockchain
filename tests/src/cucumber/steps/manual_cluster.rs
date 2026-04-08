@@ -20,7 +20,8 @@ pub fn build_manual_cluster_deployment(
 ) -> Result<DeploymentPlan, StepError> {
     let mut config = lb_testing_framework::TopologyConfig::with_node_numbers(nodes_count)
         .with_allow_multiple_genesis_tokens(true)
-        .with_allow_zero_value_genesis_tokens(true);
+        .with_allow_zero_value_genesis_tokens(true)
+        .with_test_context(world.test_context.clone());
 
     for genesis_token in &world.genesis_tokens {
         let wallet_account = WalletAccount::deterministic(

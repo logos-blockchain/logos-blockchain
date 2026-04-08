@@ -12,6 +12,7 @@ use crate::cucumber::{
         TARGET,
         manual_cluster::{build_manual_cluster_deployment, stop_active_manual_cluster},
         manual_nodes::{
+            config_override::set_user_config_override,
             snapshots::{save_named_blockchain_snapshot, validate_snapshot_path_component},
             utils::{
                 NodesToStartUnordered, create_snapshots_all_nodes, get_cryptarchia_info_all_nodes,
@@ -62,7 +63,8 @@ fn step_manual_devnet_cluster(
 
     let config = TopologyConfig::with_node_numbers(nodes_count)
         .with_allow_multiple_genesis_tokens(true)
-        .with_allow_zero_value_genesis_tokens(true);
+        .with_allow_zero_value_genesis_tokens(true)
+        .with_test_context(world.test_context.clone());
 
     let deployment = match DeploymentBuilder::new(config).build() {
         Ok(deployment) => deployment,
@@ -194,6 +196,21 @@ const fn step_we_use_ibd_peers(world: &mut CucumberWorld) {
 #[when(expr = "we join an external network")]
 const fn step_we_join_external_network(world: &mut CucumberWorld) {
     world.join_external_network = Some(true);
+}
+
+#[given(expr = "I have user config setting {string} as {string}")]
+#[when(expr = "I have user config setting {string} as {string}")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Required by cucumber expression"
+)]
+fn step_set_user_config_setting(
+    world: &mut CucumberWorld,
+    step: &Step,
+    setting_path: String,
+    setting_value: String,
+) -> StepResult {
+    set_user_config_override(world, &step.value, &setting_path, &setting_value)
 }
 
 #[given(expr = "I will create a blockchain snapshot {string} of all nodes when stopping")]

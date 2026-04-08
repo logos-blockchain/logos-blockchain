@@ -29,13 +29,6 @@ pub fn make_builder(topology: &TopologySpec) -> ScenarioBuilderWith {
     })
 }
 
-#[must_use]
-pub fn is_truthy_env(key: &str) -> bool {
-    env::var(key)
-        .ok()
-        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-}
-
 pub fn resolve_literal_or_env(value: &str, field_name: &str) -> Result<String, StepError> {
     let trimmed = value.trim();
     if let Some(raw_name) = trimmed

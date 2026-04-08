@@ -415,6 +415,7 @@ fn plan_local_node_config(
             blend_port,
             base_consensus,
             base_time,
+            descriptors.config.test_context.as_deref(),
         )
         .map_err(|source| -> DynError { source.into() })?;
 
