@@ -150,12 +150,13 @@ fn generate_valid_inputs(session: SessionNumber) -> Vec<EncapsulationInput> {
         .take(3)
         .map(|recipient_signing_key| {
             let proofs = session_based_mock_blend_proof(session);
-            EncapsulationInput::new(
+            EncapsulationInput::try_new(
                 UnsecuredEd25519Key::generate_with_blake_rng(),
                 &recipient_signing_key.public_key(),
                 proofs.proof_of_quota,
                 proofs.proof_of_selection,
             )
+            .unwrap()
         })
         .collect::<Vec<_>>()
 }

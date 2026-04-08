@@ -496,12 +496,13 @@ mod tests {
         recipient_signing_pubkey: &Ed25519PublicKey,
     ) -> EncapsulatedMessageWithVerifiedPublicHeader {
         let inputs = std::iter::repeat_with(|| {
-            EncapsulationInput::new(
+            EncapsulationInput::try_new(
                 UnsecuredEd25519Key::generate_with_blake_rng(),
                 recipient_signing_pubkey,
                 VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
                 VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
             )
+            .unwrap()
         })
         .take(3)
         .collect::<Vec<_>>();
