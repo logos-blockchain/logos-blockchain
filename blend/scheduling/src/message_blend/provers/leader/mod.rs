@@ -140,29 +140,36 @@ fn create_proof_stream(
             let message_release_index = current_index % message_quota;
             let private_inputs = private_inputs.clone();
 
+            // Spawn eagerly here (outside `async move`) so the blocking task starts as
+            // soon as the stream buffer slot is filled, not when the future is first polled.
+            // Without this, `spawn_blocking` would only be called when `FuturesOrdered`
+            // first polls the future — which only happens when the consumer polls the
+            // stream — causing avoidable latency when the consumer is idle.
+            let task = spawn_blocking(move || {
+                let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
+                let (proof_of_quota, secret_selection_randomness) = VerifiedProofOfQuota::new(
+                    &PublicInputs {
+                        signing_key: ephemeral_signing_key.public_key().into_inner(),
+                        core: public_inputs.core,
+                        leader: public_inputs.leader,
+                        session: public_inputs.session,
+                    },
+                    PrivateInputs::new_proof_of_leadership_quota_inputs(
+                        message_release_index,
+                        private_inputs,
+                    ),
+                )
+                .expect("Leadership PoQ proof creation should not fail.");
+                let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
+                BlendLayerProof {
+                    proof_of_quota,
+                    proof_of_selection,
+                    ephemeral_signing_key,
+                }
+            });
+
             async move {
-                let leadership_proof = spawn_blocking(move || {
-                    let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
-                    let (proof_of_quota, secret_selection_randomness) = VerifiedProofOfQuota::new(
-                        &PublicInputs {
-                            signing_key: ephemeral_signing_key.public_key().into_inner(),
-                            core: public_inputs.core,
-                            leader: public_inputs.leader,
-                            session: public_inputs.session,
-                        },
-                        PrivateInputs::new_proof_of_leadership_quota_inputs(
-                            message_release_index,
-                            private_inputs,
-                        ),
-                    )
-                    .expect("Leadership PoQ proof creation should not fail.");
-                    let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
-                    BlendLayerProof {
-                        proof_of_quota,
-                        proof_of_selection,
-                        ephemeral_signing_key,
-                    }
-                }).await.expect("Spawning task for leadership proof generation should not fail.");
+                let leadership_proof = task.await.expect("Spawning task for leadership proof generation should not fail.");
 
                 tracing::trace!(target: LOG_TARGET, "Generated leadership PoQ within the stream for message release index {message_release_index:?} with key nullifier {:?}  and public key {:?}.", hex::encode(fr_to_bytes(&leadership_proof.proof_of_quota.key_nullifier())), leadership_proof.ephemeral_signing_key.public_key());
                 leadership_proof

@@ -13,7 +13,7 @@ use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_utils::tokio::stream::Buffered;
-use tokio::time::Instant;
+use tokio::{task::spawn, time::Instant};
 
 use crate::message_blend::{
     CoreProofOfQuotaGenerator,
@@ -143,7 +143,12 @@ where
             let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
             let proof_of_quota_generator = proof_of_quota_generator.clone();
 
-            async move {
+            // Spawn eagerly here (outside `async move`) so the task starts as soon as the
+            // stream buffer slot is filled, not when the future is first polled.
+            // Without this, `generate_poq` would only begin when `FuturesOrdered` first
+            // polls the future — which only happens when the consumer polls the stream —
+            // causing avoidable latency when the consumer is idle.
+            let task = spawn(async move {
                 let (proof_of_quota, secret_selection_randomness) = proof_of_quota_generator
                     .generate_poq(
                         &PublicInputs {
@@ -162,7 +167,9 @@ where
                     proof_of_selection,
                     ephemeral_signing_key,
                 }
-            }
+            });
+
+            async move { task.await.expect("Core PoQ generation task should not fail.") }
         }),
         buffer_size,
     )
