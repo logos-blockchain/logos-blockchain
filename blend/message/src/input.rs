@@ -17,7 +17,7 @@ pub struct EncapsulationInput {
 
 #[derive(Debug, Clone)]
 pub enum Error {
-    InvalidSharedKey,
+    InvalidSharedSecret,
 }
 
 impl EncapsulationInput {
@@ -35,7 +35,7 @@ impl EncapsulationInput {
             .derive_x25519()
             .derive_shared_key(&blend_node_signing_key.derive_x25519())
         else {
-            return Err(Error::InvalidSharedKey);
+            return Err(Error::InvalidSharedSecret);
         };
         Ok(Self {
             ephemeral_signing_key,
