@@ -16,7 +16,7 @@ use lb_utils::tokio::stream::Buffered;
 use tokio::{task::spawn, time::Instant};
 
 use crate::message_blend::{
-    CoreProofOfQuotaGenerator,
+    CoreProofOfQuotaGenerator, buffer_size,
     provers::{BlendLayerProof, ProofsGeneratorSettings},
 };
 
@@ -63,7 +63,7 @@ where
                 settings.public_inputs,
                 proof_of_quota_generator.clone(),
                 0,
-                settings.encapsulation_layers.get() as usize,
+                buffer_size(settings.encapsulation_layers.get() as usize),
             )),
             proof_of_quota_generator,
             remaining_quota: settings.public_inputs.core.quota,
@@ -115,7 +115,7 @@ where
             self.settings.public_inputs,
             self.proof_of_quota_generator.clone(),
             starting_key_index,
-            self.settings.encapsulation_layers.get() as usize,
+            buffer_size(self.settings.encapsulation_layers.get() as usize),
         ));
     }
 }

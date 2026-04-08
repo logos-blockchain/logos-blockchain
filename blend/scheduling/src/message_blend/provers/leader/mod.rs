@@ -21,7 +21,10 @@ use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_utils::tokio::stream::Buffered;
 use tokio::{task::spawn_blocking, time::Instant};
 
-use crate::message_blend::provers::{BlendLayerProof, ProofsGeneratorSettings};
+use crate::message_blend::{
+    buffer_size,
+    provers::{BlendLayerProof, ProofsGeneratorSettings},
+};
 
 #[cfg(test)]
 mod tests;
@@ -66,7 +69,7 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
             proofs_stream: Box::pin(create_proof_stream(
                 settings.public_inputs,
                 private_inputs,
-                settings.public_inputs.leader.message_quota as usize,
+                buffer_size(settings.public_inputs.leader.message_quota as usize),
             )),
         }
     }
@@ -106,7 +109,7 @@ impl RealLeaderProofsGenerator {
         self.proofs_stream = Box::pin(create_proof_stream(
             self.settings.public_inputs,
             self.private_inputs.clone(),
-            self.settings.public_inputs.leader.message_quota as usize,
+            buffer_size(self.settings.public_inputs.leader.message_quota as usize),
         ));
     }
 
