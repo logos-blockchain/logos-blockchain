@@ -8,7 +8,7 @@ use lb_node::{
     generic_services::CryptarchiaService,
 };
 
-use crate::{LogosBlockchainNode, return_error_if_null_pointer, OperationStatus};
+use crate::{LogosBlockchainNode, OperationStatus, return_error_if_null_pointer};
 
 #[repr(C)]
 pub struct Block(CString); // JSON representation of a block
