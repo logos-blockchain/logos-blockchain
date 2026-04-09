@@ -13,7 +13,7 @@ pub async fn send_msg(mut stream: Stream, msg: Vec<u8>) -> io::Result<Stream> {
             format!(
                 "Message length is too big. Got {}, expected {}",
                 msg.len(),
-                size_of::<u16>()
+                u16::MAX as usize
             ),
         )
     })?;
