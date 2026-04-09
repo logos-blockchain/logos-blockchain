@@ -50,9 +50,10 @@ use crate::cucumber::{
             },
         },
         manual_transactions::{
+            best_node::get_best_node_info,
             command_file_parsing::{ManualCommand, take_next_command},
             utils,
-            utils::{BestNodeInfo, WalletStateType, get_best_node_info},
+            utils::{BestNodeInfo, WalletStateType},
         },
     },
     world::{CucumberWorld, WalletInfo},
@@ -353,8 +354,8 @@ async fn execute_continuous(
             }
         }
         info!(target: TARGET, "CONTINUOUS cycle {} B: Perform coin splits all wallets", cycle + 1);
-        let best_node_info = get_best_node_info(world).await?;
         for sender in &wallet_names {
+            let best_node_info = get_best_node_info(world, sender).await?;
             if let Err(e) = execute_coin_split(
                 world,
                 step,
@@ -395,8 +396,8 @@ async fn execute_continuous(
             "CONTINUOUS cycle {} D: Send transactions to peers all wallets",
             cycle + 1
         );
-        let best_node_info = get_best_node_info(world).await?;
         for sender in &wallet_names {
+            let best_node_info = get_best_node_info(world, sender).await?;
             let recipients = recipient_wallets(&wallet_names, sender)?;
             if let Err(e) = send_round_robin(
                 world,

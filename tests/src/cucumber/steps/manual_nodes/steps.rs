@@ -198,6 +198,57 @@ const fn step_we_join_external_network(world: &mut CucumberWorld) {
     world.join_external_network = Some(true);
 }
 
+#[given(expr = "we will have distinct node groups to query wallet balances:")]
+#[when(expr = "we will have distinct node groups to query wallet balances:")]
+fn step_define_node_groups(world: &mut CucumberWorld, step: &Step) -> Result<(), StepError> {
+    let table = step.table.as_ref().ok_or(StepError::LogicalError {
+        message: "Expected a data table".to_owned(),
+    })?;
+
+    if table.rows.is_empty() || table.rows[0].len() != 2 {
+        return Err(StepError::LogicalError {
+            message: "Expected table columns: | group_name | node_name |".to_owned(),
+        });
+    }
+
+    if table.rows[0][0].trim() != "group_name" || table.rows[0][1].trim() != "node_name" {
+        return Err(StepError::LogicalError {
+            message: "Expected table columns: | group_name | node_name |".to_owned(),
+        });
+    }
+
+    world.node_groups.clear();
+    world.node_to_group.clear();
+
+    for row in table.rows.iter().skip(1) {
+        if row.len() != 2 {
+            return Err(StepError::LogicalError {
+                message: "Each node-group row must have exactly two columns".to_owned(),
+            });
+        }
+
+        let group_name = row[0].trim().to_owned();
+        let node_name = row[1].trim().to_owned();
+
+        if let Some(existing_group) = world.node_to_group.get(&node_name) {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Node `{node_name}` appears in both group `{existing_group}` and `{group_name}`"
+                ),
+            });
+        }
+
+        world
+            .node_groups
+            .entry(group_name.clone())
+            .or_default()
+            .insert(node_name.clone());
+        world.node_to_group.insert(node_name, group_name);
+    }
+
+    Ok(())
+}
+
 #[given(expr = "I have user config setting {string} as {string}")]
 #[when(expr = "I have user config setting {string} as {string}")]
 #[expect(

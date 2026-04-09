@@ -7,10 +7,11 @@ use crate::{
         steps::{
             TARGET,
             manual_transactions::{
+                best_node::get_best_node_info,
                 command_file_utils::perform_manual_step_control,
                 utils,
                 utils::{
-                    WalletStateType, create_and_submit_transaction, get_best_node_info,
+                    WalletStateType, create_and_submit_transaction,
                     wait_for_wallet_or_encumbered_state,
                 },
             },
@@ -237,7 +238,7 @@ async fn step_send_multiple_transactions_to_single_wallet(
 
     let receiver_wallet_pk = receiver_wallet.public_key()?;
 
-    let best_node_info = get_best_node_info(world).await?;
+    let best_node_info = get_best_node_info(world, &sender_wallet_name).await?;
     for _ in 0..number_of_transactions {
         let tx_hash_hex = create_and_submit_transaction(
             world,

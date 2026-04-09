@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fmt::Display, num::NonZero, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Display,
+    num::NonZero,
+    time::Duration,
+};
 
 use hex::ToHex as _;
 use lb_core::{
@@ -43,13 +48,14 @@ impl Display for WalletStateType {
 
 use std::str::FromStr;
 
-use lb_chain_service::CryptarchiaInfo;
 use lb_core::mantle::{OpProof, tx::MantleTxGasContext};
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
-use lb_testing_framework::{NodeHttpClient, is_truthy_env};
+use lb_testing_framework::is_truthy_env;
 
+pub(crate) use crate::cucumber::steps::manual_transactions::best_node::BestNodeInfo;
 use crate::cucumber::{
-    defaults::CUCUMBER_VERBOSE_CONSOLE, steps::manual_transactions::faucet::FaucetTask,
+    defaults::CUCUMBER_VERBOSE_CONSOLE,
+    steps::manual_transactions::{best_node::sanitize_best_node_info, faucet::FaucetTask},
     world::WalletType,
 };
 
@@ -133,7 +139,8 @@ pub async fn create_and_submit_transaction(
                     warn!(target: TARGET, "Step `{}` error: {e}", step);
                 })?;
 
-            let (_, best_node_client, _) = sanitize_best_node_info(world, best_node_info).await?;
+            let (_, best_node_client, _) =
+                sanitize_best_node_info(world, &wallet.wallet_name, best_node_info).await?;
             world
                 .submit_transaction(&wallet, &signed_tx, best_node_client)
                 .await
@@ -225,14 +232,6 @@ pub async fn update_wallet_balance_all_wallets(
     Ok(all_wallet_utxos)
 }
 
-/// Struct to hold the best node information for querying UTXOs across multiple
-/// wallets, if needed.
-#[derive(Clone, Debug)]
-pub struct BestNodeInfo {
-    /// The name of the best node to query for UTXOs.
-    pub node_name: String,
-}
-
 pub async fn update_wallet_balance_multiple_wallets(
     world: &mut CucumberWorld,
     step: &str,
@@ -253,10 +252,16 @@ pub async fn update_wallet_balance_multiple_wallets(
     let requests: Vec<UtxosRequest> = wallets
         .iter()
         .filter_map(|wallet| {
+            let group_key = world
+                .node_to_group
+                .get(&wallet.node_name)
+                .cloned()
+                .unwrap_or_default();
             wallet
                 .public_key()
                 .map(|wallet_pk| UtxosRequest {
                     wallet_name: wallet.wallet_name.clone(),
+                    group_key,
                     wallet_pk,
                 })
                 .map_err(|e| {
@@ -267,18 +272,31 @@ pub async fn update_wallet_balance_multiple_wallets(
         })
         .collect();
 
-    let on_chain_utxos = collect_multiple_wallets_utxos(world, &requests, best_node_info)
-        .await
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step);
-        })?;
+    let mut requests_by_group: HashMap<String, Vec<UtxosRequest>> = HashMap::new();
+    for request in &requests {
+        requests_by_group
+            .entry(request.group_key.clone())
+            .or_default()
+            .push(request.clone());
+    }
+
+    let mut on_chain_utxos = WalletUtxos::new();
+    for grouped_requests in requests_by_group.into_values() {
+        let grouped_utxos =
+            collect_multiple_wallets_utxos(world, &grouped_requests, best_node_info)
+                .await
+                .inspect_err(|e| {
+                    warn!(target: TARGET, "Step `{}` error: {e}", step);
+                })?;
+        on_chain_utxos.extend(grouped_utxos);
+    }
     let available_utxos = requests
         .iter()
         .map(|UtxosRequest { wallet_name, .. }| {
             let wallet_on_chain_utxos =
                 on_chain_utxos.get(wallet_name).cloned().unwrap_or_default();
-            let available_utxos = get_available_utxos(world, wallet_name, wallet_on_chain_utxos);
-            (wallet_name.clone(), available_utxos)
+            let available = get_available_utxos(world, wallet_name, wallet_on_chain_utxos);
+            (wallet_name.clone(), available)
         })
         .collect();
 
@@ -676,45 +694,11 @@ fn get_last_known_height<'a>(
     )
 }
 
+#[derive(Clone)]
 struct UtxosRequest {
     wallet_name: String,
+    group_key: String,
     wallet_pk: ZkPublicKey,
-}
-
-/// Get the best node to use for all block queries.
-pub(crate) async fn get_best_node_info(world: &CucumberWorld) -> Result<BestNodeInfo, StepError> {
-    let (best_node_name, _best_node_client, _best_consensus) = determine_best_node(world).await?;
-    Ok(BestNodeInfo {
-        node_name: best_node_name,
-    })
-}
-
-/// Determine the best node to use for all block queries.
-pub(crate) async fn determine_best_node(
-    world: &CucumberWorld,
-) -> Result<(String, &NodeHttpClient, CryptarchiaInfo), StepError> {
-    let mut best_node: Option<(String, &NodeHttpClient, CryptarchiaInfo)> = None;
-
-    for node_name in &world.all_node_names() {
-        let Some(node) = world.nodes_info.get(node_name) else {
-            continue;
-        };
-        let Ok(this_info) = node.started_node.client.consensus_info().await else {
-            continue;
-        };
-        if best_node
-            .as_ref()
-            .is_none_or(|(_name, _client, best_info)| this_info.height > best_info.height)
-        {
-            best_node = Some((node.name.clone(), &node.started_node.client, this_info));
-        }
-    }
-    let Some((best_node_name, best_node_client, best_consensus)) = best_node else {
-        return Err(StepError::LogicalError {
-            message: "No available nodes to query for UTXOs".to_owned(),
-        });
-    };
-    Ok((best_node_name, best_node_client, best_consensus))
 }
 
 type WalletPkMap = HashMap<String, ZkPublicKey>;
@@ -732,6 +716,7 @@ fn collect_multiple_sync_wallet_info(
     for UtxosRequest {
         wallet_name,
         wallet_pk,
+        ..
     } in requests
     {
         let Some(existing_pk) = wallet_pks.get(wallet_name) else {
@@ -764,36 +749,88 @@ fn organize_wallets_by_pk(wallet_pks: &WalletPkMap) -> Result<WalletsByPk, StepE
     Ok(wallets_by_pk)
 }
 
-async fn sanitize_best_node_info<'a>(
-    world: &'a CucumberWorld,
-    best_node_info: Option<&'a BestNodeInfo>,
-) -> Result<(String, &'a NodeHttpClient, CryptarchiaInfo), StepError> {
-    if let Some(node) = best_node_info {
-        let Some(node_info) = world.nodes_info.get(&node.node_name) else {
-            return Err(StepError::LogicalError {
-                message: format!("Best node '{}' not found in world state", node.node_name),
-            });
-        };
-        let Ok(consensus) = node_info.started_node.client.consensus_info().await else {
-            return Err(StepError::LogicalError {
-                message: "No available nodes to query for UTXOs".to_owned(),
-            });
-        };
-        Ok((
-            node.node_name.clone(),
-            &node_info.started_node.client,
-            consensus,
-        ))
-    } else {
-        determine_best_node(world).await
+fn refresh_owned_per_wallet_from_cache(
+    world: &CucumberWorld,
+    header_id: &str,
+    wallet_pks: &WalletPkMap,
+    owned_per_wallet: &mut UtxoWalletMap,
+) {
+    if let Some(wallet_token_map) = world.wallet_tokens_per_block.get(header_id) {
+        for wallet_name in wallet_pks.keys() {
+            let wallet_owned = owned_per_wallet
+                .get_mut(wallet_name)
+                .expect("wallet exists");
+            update_wallet_owned(wallet_name, wallet_owned, wallet_token_map);
+        }
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "This function is necessarily complex due to the logic of reconstructing wallet state \
-    from blocks and caching it for performance."
-)]
+fn find_cached_header_ancestor_multi_wallets(
+    world: &CucumberWorld,
+    header_id: &str,
+    wallet_pks: &WalletPkMap,
+    node_name: &str,
+) -> Option<String> {
+    if let Some(wallet_token_map) = world.wallet_tokens_per_block.get(header_id)
+        && wallet_pks
+            .keys()
+            .all(|wallet_name| wallet_token_map.utxos_per_wallet.contains_key(wallet_name))
+    {
+        if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
+            info!(
+                target: TARGET,
+                "Common header '{header_id}' found for {} wallets on `{node_name}`",
+                wallet_pks.len(),
+            );
+        }
+
+        return Some(header_id.to_owned());
+    }
+    None
+}
+
+fn update_genesis_utxos_multi_wallets(
+    world: &CucumberWorld,
+    wallets_by_pk: &WalletsByPk,
+    owned_per_wallet: &mut UtxoWalletMap,
+) {
+    let utxo_note_pks = world
+        .genesis_block_utxos
+        .iter()
+        .map(|utxo| utxo.note.pk)
+        .collect::<HashSet<_>>();
+    for note_pk in &utxo_note_pks {
+        if let Some(wallet_name) = wallets_by_pk.get(note_pk)
+            && let Some(owned) = owned_per_wallet.get_mut(wallet_name)
+            && owned.is_empty()
+        {
+            for utxo in world
+                .genesis_block_utxos
+                .iter()
+                .filter(|u| u.note.pk == *note_pk)
+            {
+                owned.insert(utxo.id(), *utxo);
+            }
+        }
+    }
+}
+
+fn verify_request_group_key_is_consistent(requests: &[UtxosRequest]) -> Result<(), StepError> {
+    let expected_group_key = requests[0].group_key.as_str();
+    for request in requests {
+        if request.group_key != expected_group_key {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Mixed node groups in one UTXO batch: expected group '{}', found '{}' for wallet '{}'",
+                    expected_group_key, request.group_key, request.wallet_name
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 async fn collect_multiple_wallets_utxos(
     world: &mut CucumberWorld,
     requests: &[UtxosRequest],
@@ -803,20 +840,11 @@ async fn collect_multiple_wallets_utxos(
         return Ok(HashMap::new());
     }
 
+    verify_request_group_key_is_consistent(requests)?;
     let (best_node_name, best_node_client, best_consensus) =
-        sanitize_best_node_info(world, best_node_info).await?;
+        sanitize_best_node_info(world, &requests[0].wallet_name, best_node_info).await?;
     let (wallet_pks, mut owned_per_wallet) = collect_multiple_sync_wallet_info(requests)?;
     let wallets_by_pk = organize_wallets_by_pk(&wallet_pks)?;
-
-    // Add genesis block UTXOs to each owned set, as they are not in the blocks
-    // stream.
-    for &utxo in &world.genesis_block_utxos {
-        if let Some(wallet_name) = wallets_by_pk.get(&utxo.note.pk)
-            && let Some(owned) = owned_per_wallet.get_mut(wallet_name)
-        {
-            owned.insert(utxo.id(), utxo);
-        }
-    }
 
     // Walk back from best tip until chain start or a cache hit that contains all
     // wallets.
@@ -832,20 +860,15 @@ async fn collect_multiple_wallets_utxos(
 
         let header_id = block.header().id().to_string();
 
-        if let Some(wallet_token_map) = world.wallet_tokens_per_block.get(&header_id)
-            && wallet_pks
-                .keys()
-                .all(|wallet_name| wallet_token_map.utxos_per_wallet.contains_key(wallet_name))
-        {
-            for wallet_name in wallet_pks.keys() {
-                let wallet_owned = owned_per_wallet
-                    .get_mut(wallet_name)
-                    .expect("wallet exists");
-                wallet_owned.clear();
-                for utxo in &wallet_token_map.utxos_per_wallet[wallet_name] {
-                    wallet_owned.insert(utxo.id(), *utxo);
-                }
-            }
+        // Cache represents the post-state after evaluating this block.
+        refresh_owned_per_wallet_from_cache(world, &header_id, &wallet_pks, &mut owned_per_wallet);
+
+        if let Some(header_id) = find_cached_header_ancestor_multi_wallets(
+            world,
+            &header_id,
+            &wallet_pks,
+            &best_node_name,
+        ) {
             cached_ancestor_header_id = Some(header_id);
             break;
         }
@@ -855,6 +878,10 @@ async fn collect_multiple_wallets_utxos(
         current = parent;
     }
     tail_blocks.reverse();
+
+    // Add genesis block UTXOs to each owned empty set, as they are not in the
+    // blocks stream.
+    update_genesis_utxos_multi_wallets(world, &wallets_by_pk, &mut owned_per_wallet);
 
     // Replay uncached tail once and update all tracked wallets together.
     let (base_height, height_prefix) = get_last_known_height(
@@ -953,21 +980,67 @@ fn remove_spent_utxo(
     }
 }
 
+fn update_wallet_owned(
+    wallet_name: &str,
+    wallet_owned: &mut OwnedUtxos,
+    wallet_token_map: &WalletTokenMap,
+) {
+    if wallet_owned.is_empty()
+        && let Some(cached_utxos) = wallet_token_map.utxos_per_wallet.get(wallet_name)
+    {
+        for utxo in cached_utxos {
+            wallet_owned.insert(utxo.id(), *utxo);
+        }
+    }
+}
+
+fn refresh_owned_from_cache_single_wallet(
+    world: &CucumberWorld,
+    header_id: &str,
+    wallet_name: &str,
+    wallet_owned: &mut OwnedUtxos,
+) {
+    if let Some(wallet_token_map) = world.wallet_tokens_per_block.get(header_id)
+        && wallet_token_map.utxos_per_wallet.contains_key(wallet_name)
+    {
+        update_wallet_owned(wallet_name, wallet_owned, wallet_token_map);
+    }
+}
+
+fn find_cached_header_single_wallet(
+    world: &CucumberWorld,
+    header_id: &str,
+    wallet_name: &str,
+) -> Option<String> {
+    if let Some(wallet_token_map) = world.wallet_tokens_per_block.get(header_id)
+        && wallet_token_map.utxos_per_wallet.contains_key(wallet_name)
+    {
+        return Some(header_id.to_owned());
+    }
+    None
+}
+
+fn update_genesis_utxos_single_wallet(
+    world: &CucumberWorld,
+    wallet_pk: &ZkPublicKey,
+    wallet_owned: &mut OwnedUtxos,
+) {
+    if wallet_owned.is_empty() {
+        for utxo in &world.genesis_block_utxos {
+            if &utxo.note.pk == wallet_pk {
+                wallet_owned.insert(utxo.id(), *utxo);
+            }
+        }
+    }
+}
+
 async fn collect_wallet_utxos(
     world: &mut CucumberWorld,
     wallet_name: &str,
     wallet_node_name: &str,
     wallet_pk: ZkPublicKey,
 ) -> Result<Vec<Utxo>, StepError> {
-    let mut owned: OwnedUtxos = HashMap::new();
-
-    // Add genesis block UTXOs to the owned set, as they are not included in the
-    // blocks stream.
-    for utxo in &world.genesis_block_utxos {
-        if utxo.note.pk == wallet_pk {
-            owned.insert(utxo.id(), *utxo);
-        }
-    }
+    let mut wallet_owned: OwnedUtxos = HashMap::new();
 
     let node = world
         .nodes_info
@@ -991,16 +1064,10 @@ async fn collect_wallet_utxos(
 
         let header_id = block.header().id().to_string();
 
-        // If we have cached state for this wallet at this header, we can stop going
-        // further back. NOTE: cache represents the post-state after evaluating
-        // this block.
-        if let Some(wallet_token_map) = world.wallet_tokens_per_block.get(&header_id)
-            && wallet_token_map.utxos_per_wallet.contains_key(wallet_name)
-        {
-            owned.clear();
-            for utxo in &wallet_token_map.utxos_per_wallet[wallet_name] {
-                owned.insert(utxo.id(), *utxo);
-            }
+        // Cache represents the post-state after evaluating this block.
+        refresh_owned_from_cache_single_wallet(world, &header_id, wallet_name, &mut wallet_owned);
+
+        if let Some(header_id) = find_cached_header_single_wallet(world, &header_id, wallet_name) {
             cached_ancestor_header_id = Some(header_id);
             break;
         }
@@ -1010,6 +1077,10 @@ async fn collect_wallet_utxos(
         current = parent;
     }
     tail_blocks.reverse();
+
+    // Add genesis block UTXOs to the owned set, as they are not included in the
+    // blocks stream.
+    update_genesis_utxos_single_wallet(world, &wallet_pk, &mut wallet_owned);
 
     // Evaluate the tail blocks forward to reconstruct the wallet state at the tip.
     let (base_height, height_prefix) = get_last_known_height(
@@ -1043,7 +1114,7 @@ async fn collect_wallet_utxos(
             for transfer in tx.mantle_tx.transfers() {
                 for utxo in transfer.utxos() {
                     if utxo.note.pk == wallet_pk {
-                        add_new_utxo(&mut owned, utxo, wallet_name);
+                        add_new_utxo(&mut wallet_owned, utxo, wallet_name);
                     }
                 }
             }
@@ -1051,7 +1122,7 @@ async fn collect_wallet_utxos(
             // Spent outputs
             for transfer in tx.mantle_tx.transfers() {
                 for spent in &transfer.inputs {
-                    remove_spent_utxo(world, &mut owned, spent, wallet_name);
+                    remove_spent_utxo(world, &mut wallet_owned, spent, wallet_name);
                 }
             }
         }
@@ -1064,12 +1135,13 @@ async fn collect_wallet_utxos(
                 header_id: header_id.clone(),
                 utxos_per_wallet: HashMap::new(),
             });
-        entry
-            .utxos_per_wallet
-            .insert(wallet_name.to_owned(), owned.values().copied().collect());
+        entry.utxos_per_wallet.insert(
+            wallet_name.to_owned(),
+            wallet_owned.values().copied().collect(),
+        );
     }
 
-    Ok(owned.values().copied().collect())
+    Ok(wallet_owned.values().copied().collect())
 }
 
 fn wallet_state_from_utxos(utxos: Vec<Utxo>) -> lb_wallet::WalletState {

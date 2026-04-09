@@ -4,7 +4,7 @@ use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, configs::wallet::WalletAccount,
     internal::DeploymentPlan,
 };
-use testing_framework_core::scenario::{PeerSelection, StartNodeOptions, StartedNode};
+use testing_framework_core::scenario::{StartNodeOptions, StartedNode};
 use tokio::time::{Instant, sleep};
 use tracing::warn;
 
@@ -238,25 +238,4 @@ pub fn insert_started_node_info<S: BuildHasher>(
             runtime_dir: std::path::PathBuf::new(),
         },
     );
-}
-
-pub fn peer_selection_from_names(
-    world: &CucumberWorld,
-    initial_peers: &[String],
-) -> Result<PeerSelection, StepError> {
-    Ok(PeerSelection::Named(resolve_named_peers(
-        world,
-        initial_peers,
-    )))
-}
-
-pub fn resolve_named_peers(world: &CucumberWorld, initial_peers: &[String]) -> Vec<String> {
-    initial_peers
-        .iter()
-        .map(|peer| {
-            world
-                .resolve_node_runtime_name(peer)
-                .unwrap_or_else(|_| peer.clone())
-        })
-        .collect()
 }

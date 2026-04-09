@@ -746,9 +746,11 @@ pub async fn restart_node(world: &CucumberWorld, step: &str, node_name: &str) ->
         .ok_or(StepError::LogicalError {
             message: "No local cluster available".into(),
         })?;
-    let started_node_name = world.resolve_node_name(node_name).inspect_err(|e| {
-        warn!(target: TARGET, "Step `{step}` error: {e}");
-    })?;
+    let started_node_name = world
+        .resolve_node_runtime_name(node_name)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{step}` error: {e}");
+        })?;
 
     cluster
         .restart_node(&started_node_name)
@@ -832,7 +834,7 @@ fn get_startup_settings(
     } else {
         let named = initial_peers
             .iter()
-            .map(|peer| world.resolve_node_name(peer))
+            .map(|peer| world.resolve_node_runtime_name(peer))
             .collect::<Result<Vec<String>, StepError>>()?;
         PeerSelection::Named(named)
     };

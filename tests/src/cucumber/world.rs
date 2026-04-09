@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     env,
     fmt::Debug,
     num::NonZero,
@@ -21,7 +21,9 @@ use lb_testing_framework::{
     LbcEnv, LbcK8sManualCluster, LbcManualCluster, NodeHttpClient, ScenarioBuilder,
     ScenarioBuilderExt as _, configs::wallet::WalletAccount, workloads,
 };
-use testing_framework_core::scenario::{NodeControlCapability, Scenario, StartedNode};
+use testing_framework_core::scenario::{
+    NodeControlCapability, PeerSelection, Scenario, StartedNode,
+};
 use tokio::task::JoinHandle;
 use tracing::warn;
 
@@ -175,6 +177,11 @@ pub struct CucumberWorld {
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
     /// IDs.
     pub node_peer_ids: HashMap<String, PeerId>,
+    /// Manual: `group_name` -> set of `node_names`. Empty means "no groups
+    /// defined" and all nodes participate.
+    pub node_groups: HashMap<String, BTreeSet<String>>,
+    /// Manual: `node_name` -> `group_name` reverse lookup.
+    pub node_to_group: HashMap<String, String>,
     /// Manual: Whether to populate the IBD peers for each node after starting
     /// them,
     pub populate_ibd_peers_from_initial_peers: Option<bool>,
@@ -310,6 +317,8 @@ impl Debug for CucumberWorld {
             )
             .field("node_header_heights", &self.node_header_heights.len())
             .field("node_peer_ids", &self.node_peer_ids.len())
+            .field("node_groups", &self.node_groups.len())
+            .field("node_to_group", &self.node_to_group.len())
             .field(
                 "initial_override_peers_display",
                 &initial_peers_override_display(self.initial_peers_override.as_ref()),
@@ -710,8 +719,38 @@ impl CucumberWorld {
             .clone())
     }
 
-    pub fn resolve_node_name(&self, node_name: &str) -> Result<String, StepError> {
-        self.resolve_node_runtime_name(node_name)
+    pub fn resolve_wallet_node_name(&self, wallet_name: &str) -> Result<String, StepError> {
+        Ok(self
+            .wallet_info
+            .get(wallet_name)
+            .ok_or(StepError::LogicalError {
+                message: format!("Wallet '{wallet_name}' not found"),
+            })?
+            .node_name
+            .clone())
+    }
+
+    /// Helper to resolve a list of node names to a `PeerSelection::Named` with
+    /// their corresponding started node names.
+    pub fn peer_selection_from_names(
+        &self,
+        initial_peers: &[String],
+    ) -> Result<PeerSelection, StepError> {
+        Ok(PeerSelection::Named(
+            self.resolve_named_peers(initial_peers),
+        ))
+    }
+
+    /// Helper to resolve a list of node names to their corresponding started
+    /// node names.
+    pub fn resolve_named_peers(&self, initial_peers: &[String]) -> Vec<String> {
+        initial_peers
+            .iter()
+            .map(|peer| {
+                self.resolve_node_runtime_name(peer)
+                    .unwrap_or_else(|_| peer.clone())
+            })
+            .collect()
     }
 
     /// Helper to resolve a node http client to the actual started node name.
@@ -920,6 +959,8 @@ impl CucumberWorld {
                 &node_header_heights_display(&self.node_header_heights),
             )
             .field("node_peer_ids", &node_peer_ids_display(&self.node_peer_ids))
+            .field("node_groups", &self.node_groups)
+            .field("node_to_group", &self.node_to_group)
             .field(
                 "initial_override_peers_display",
                 &initial_peers_override_display(self.initial_peers_override.as_ref()),
