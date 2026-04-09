@@ -444,10 +444,10 @@ async fn duplicate_message_in_old_session_does_not_disconnect_peer() {
     // `TooManyMessages` instead.
     sleep(Duration::from_secs(3)).await;
 
-    // Sender sends X again, bypassing its own `Forwarded` guard.  From
+    // Sender sends X again, bypassing its own `Forwarded` guard. From
     // receiver's point of view this arrives over the old-session connection.
     // The old-session handler detects a duplicate from the same peer and
-    // returns `Err(DuplicateMessageFromPeer)`, but must NOT close the
+    // returns `Err(DuplicateMessageFromPeer)`, but it currently must NOT close the
     // connection as spammy.
     sender
         .behaviour_mut()
@@ -515,8 +515,8 @@ async fn duplicate_message_from_old_session_after_session_rotation_is_suppressed
         }
     }
 
-    // Receiver starts a new session.  The message cache \u{2014} now containing X
-    // as `Processed` \u{2014} is transferred into the old session object,
+    // Receiver starts a new session. The message cache now containing X
+    // as `Processed` is transferred into the old session object,
     // alongside the connections to both sender_a and sender_b.
     let memberships = build_memberships(&[&sender_a, &sender_b, &receiver]);
     receiver
@@ -524,8 +524,8 @@ async fn duplicate_message_from_old_session_after_session_rotation_is_suppressed
         .start_new_session((memberships[2].clone(), 1));
 
     // Sender B sends the identical message X through its (still-open)
-    // connection to receiver.  From receiver's point of view this connection
-    // now belongs to the old session.  Because X is already in the transferred
+    // connection to receiver. From receiver's point of view this connection
+    // now belongs to the old session. Because X is already in the transferred
     // cache, receiver must NOT emit a second `Message` event.
     sender_b
         .behaviour_mut()

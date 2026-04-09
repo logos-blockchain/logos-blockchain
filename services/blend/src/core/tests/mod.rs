@@ -324,16 +324,16 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
     // Send session 0 message claiming to be for session 1.
     // Signature is valid (built correctly) but PoQ will fail because the
     // MockProofsVerifier for session 1 expects session 1 proofs.
-    let _recovery_checkpoint = handle_incoming_blend_message(
+    drop(handle_incoming_blend_message(
         (msg.into(), session_1),
         &mut scheduler,
         None,
         &processor_1,
         None,
         recovery_checkpoint,
-    );
+    ));
 
-    // Nothing should be scheduled \u{2014} PoQ validation must have failed.
+    // Nothing should be scheduled - PoQ validation must have failed.
     assert_eq!(
         scheduler.release_delayer().unreleased_messages().len(),
         0,
