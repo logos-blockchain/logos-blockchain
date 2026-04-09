@@ -13,7 +13,9 @@ use crate::core::{
         behaviour::{
             Event, NegotiatedPeerState, SpamReason,
             message_cache::MessageStatus,
-            tests::utils::{BehaviourBuilder, SwarmExt as _, new_nodes_with_empty_address},
+            tests::utils::{
+                BehaviourBuilder, SwarmExt as _, build_memberships, new_nodes_with_empty_address,
+            },
         },
         error::SendError,
     },
@@ -320,4 +322,85 @@ async fn invalid_signature_message_received() {
             break;
         }
     }
+}
+
+#[test(tokio::test)]
+async fn duplicate_message_from_old_session_after_session_rotation_is_suppressed() {
+    let (mut identities, nodes) = new_nodes_with_empty_address(3);
+    let mut sender_a = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut sender_b = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut receiver = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id)
+            .with_membership(&nodes)
+            .with_peering_degree(1..=2)
+            .build()
+    });
+
+    receiver.listen().with_memory_addr_external().await;
+    sender_a.connect_and_wait_for_upgrade(&mut receiver).await;
+    sender_b.connect_and_wait_for_upgrade(&mut receiver).await;
+
+    // Sender A sends message X. Receiver processes it and stores X as
+    // `Processed` in its current-session message cache.
+    let test_message = TestEncapsulatedMessage::new(b"msg");
+    sender_a
+        .behaviour_mut()
+        .publish_message_with_validated_signature_to_current_session(
+            &test_message.as_ref().clone().into(),
+        )
+        .unwrap();
+
+    loop {
+        select! {
+            _ = sender_a.select_next_some() => {}
+            _ = sender_b.select_next_some() => {}
+            receiver_event = receiver.select_next_some() => {
+                if let SwarmEvent::Behaviour(Event::Message { .. }) = receiver_event {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Receiver starts a new session.  The message cache \u{2014} now containing X
+    // as `Processed` \u{2014} is transferred into the old session object,
+    // alongside the connections to both sender_a and sender_b.
+    let memberships = build_memberships(&[&sender_a, &sender_b, &receiver]);
+    receiver
+        .behaviour_mut()
+        .start_new_session((memberships[2].clone(), 1));
+
+    // Sender B sends the identical message X through its (still-open)
+    // connection to receiver.  From receiver's point of view this connection
+    // now belongs to the old session.  Because X is already in the transferred
+    // cache, receiver must NOT emit a second `Message` event.
+    sender_b
+        .behaviour_mut()
+        .publish_message_with_validated_signature_to_current_session(
+            &test_message.as_ref().clone().into(),
+        )
+        .unwrap();
+
+    let mut duplicate_message_received = false;
+    loop {
+        select! {
+            () = sleep(Duration::from_secs(5)) => { break; }
+            _ = sender_a.select_next_some() => {}
+            _ = sender_b.select_next_some() => {}
+            receiver_event = receiver.select_next_some() => {
+                if let SwarmEvent::Behaviour(Event::Message { .. }) = receiver_event {
+                    duplicate_message_received = true;
+                }
+            }
+        }
+    }
+
+    assert!(
+        !duplicate_message_received,
+        "Receiver must not re-emit a message that was already processed in the previous session"
+    );
 }

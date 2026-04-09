@@ -1,8 +1,10 @@
+use core::time::Duration;
+
 use futures::StreamExt as _;
 use lb_libp2p::SwarmEvent;
 use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
-use tokio::select;
+use tokio::{select, time::sleep};
 
 use crate::core::{
     tests::utils::{TestEncapsulatedMessageWithSession, TestSwarm},
@@ -232,4 +234,86 @@ async fn finish_session_transition() {
             }
         }
     }
+}
+
+#[test(tokio::test)]
+async fn old_session_message_not_forwarded_back_to_sender() {
+    let old_session = 0;
+    let (mut identities, nodes) = new_nodes_with_empty_address(3);
+    let mut sender = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut forwarder = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id)
+            .with_membership(&nodes)
+            .with_peering_degree(2..=2)
+            .build()
+    });
+    let mut receiver = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+
+    forwarder.listen().with_memory_addr_external().await;
+    receiver.listen().with_memory_addr_external().await;
+    // Topology: sender -> forwarder -> receiver (current session).
+    sender.connect_and_wait_for_upgrade(&mut forwarder).await;
+    forwarder.connect_and_wait_for_upgrade(&mut receiver).await;
+
+    // Forwarder starts a new session. Both the sender and the receiver
+    // connections move into the forwarder's old session.
+    let new_session = old_session + 1;
+    let memberships = build_memberships(&[&sender, &forwarder, &receiver]);
+    forwarder
+        .behaviour_mut()
+        .start_new_session((memberships[1].clone(), new_session));
+
+    // Sender publishes a message for the old session.
+    let test_message = TestEncapsulatedMessageWithSession::new(old_session, b"msg");
+    sender
+        .behaviour_mut()
+        .publish_message_with_validated_header(test_message.clone(), old_session)
+        .unwrap();
+
+    // Forwarder receives the message via the old session and forwards it,
+    // excluding the original sender. Only receiver should receive the message.
+    loop {
+        select! {
+            _ = sender.select_next_some() => {}
+            forwarder_event = forwarder.select_next_some() => {
+                if let SwarmEvent::Behaviour(Event::Message { message, session, sender: msg_sender }) = forwarder_event {
+                    assert_eq!(message.id(), test_message.id());
+                    forwarder.behaviour_mut()
+                        .forward_message_with_validated_signature(&message, msg_sender, session)
+                        .unwrap();
+                }
+            }
+            receiver_event = receiver.select_next_some() => {
+                if let SwarmEvent::Behaviour(Event::Message { message, .. }) = receiver_event {
+                    assert_eq!(message.id(), test_message.id());
+                    break;
+                }
+            }
+        }
+    }
+
+    // After receiver confirmed receipt, poll for a while to ensure sender
+    // does not receive the message back from the forwarder.
+    let mut sender_received_message_back = false;
+    loop {
+        select! {
+            () = sleep(Duration::from_secs(3)) => { break; }
+            _ = receiver.select_next_some() => {}
+            _ = forwarder.select_next_some() => {}
+            sender_event = sender.select_next_some() => {
+                if let SwarmEvent::Behaviour(Event::Message { .. }) = sender_event {
+                    sender_received_message_back = true;
+                }
+            }
+        }
+    }
+
+    assert!(
+        !sender_received_message_back,
+        "Old session should not forward the message back to the original sender"
+    );
 }
