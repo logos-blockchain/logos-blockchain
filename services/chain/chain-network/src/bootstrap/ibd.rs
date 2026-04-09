@@ -172,6 +172,10 @@ where
     /// download for the tip, no download is initiated and [`None`] is returned.
     ///
     /// If communication fails, an [`Error`] is returned.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn initiate_download(
         &mut self,
         peer: NetAdapter::PeerId,

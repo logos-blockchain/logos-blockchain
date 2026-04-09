@@ -384,6 +384,10 @@ where
     }
 
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn handle_wallet_message(
         msg: WalletMsg,
         state: &mut ServiceState<'_>,
@@ -979,6 +983,10 @@ where
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn handle_new_block(
         header_id: HeaderId,
         state: &mut ServiceState<'_>,

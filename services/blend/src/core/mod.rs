@@ -514,6 +514,10 @@ where
     clippy::too_many_arguments,
     reason = "Need to initialize many components."
 )]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: address this in a dedicated refactor"
+)]
 async fn initialize<
     NodeId,
     Backend,
@@ -1314,6 +1318,10 @@ enum HandleSessionEventOutput<
 /// the outermost layers addressed to this node are self-decapsulated so that
 /// blending tokens are collected immediately and only the remaining layers (or
 /// the fully unwrapped message) are scheduled for the next release round.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: address this in a dedicated refactor"
+)]
 async fn handle_serialized_local_data_message<
     NodeId,
     Rng,
@@ -1671,6 +1679,10 @@ where
 ///
 /// It returns the processed message if it has been scheduled, along with
 /// the blending tokens obtained from the decapsulation.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: address this in a dedicated refactor"
+)]
 fn schedule_decapsulated_incoming_message<
     BroadcastSettings,
     NodeId,

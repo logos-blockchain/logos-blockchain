@@ -550,6 +550,10 @@ where
 
     /// Ensure the blocks stream is connected. Returns `false` if not yet
     /// ready (caller should return `None`).
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn ensure_connected(&mut self) -> bool {
         if self.state.is_none() {
             match self.node.consensus_info().await {
@@ -779,6 +783,10 @@ fn handle_inflight(event: InFlight, resubmit_active: &mut bool) {
 /// The caller is responsible for triggering finalization after backfill
 /// completes.
 /// Returns the latest channel inscription `MsgId` found during backfill.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: address this in a dedicated refactor"
+)]
 async fn backfill_to_lib<Node>(
     state: &mut TxState,
     from_slot: Slot,
@@ -839,6 +847,10 @@ where
 /// Uses `state.lib()` during replay to avoid premature finalization.
 /// The caller is responsible for triggering finalization after backfill
 /// completes.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: address this in a dedicated refactor"
+)]
 async fn backfill_canonical<Node>(
     state: &mut TxState,
     missing_parent: HeaderId,
