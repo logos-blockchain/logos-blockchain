@@ -16,7 +16,7 @@ COPY . .
 
 # Install dependencies needed for building RocksDB.
 RUN apt-get update && apt-get install -yq \
-    git gcc g++ clang libssl-dev pkg-config ca-certificates curl unzip
+    build-essential git clang libssl-dev pkg-config ca-certificates curl unzip
 
 # Install Bun for L2 demo frontend.
 RUN curl -fsSL https://bun.sh/install | bash
