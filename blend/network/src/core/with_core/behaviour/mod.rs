@@ -640,23 +640,11 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
 
     /// Update the state of an already negotiated peer if exists,
     /// returning the previous state.
-    ///
-    /// It returns `None` if the peer or the connection ID do not match any of
-    /// the negotiated peers, and `Some(None)` if the peer is found but it is
-    /// not possible to update the state because the connection ID does not
-    /// match. This is to be used in cases where we want to update the state of
-    /// a peer only if we are sure that the state update is related to the
-    /// current connection (e.g., when marking a peer as unhealthy after a
-    /// failed message delivery, or marking a peer as healthy again after a
-    /// successful message delivery), so if the connection ID does not match, we
-    /// do not want to update the state nor notify the swarm, since the event
-    /// that triggered this state update might be related to an old connection
-    /// that has been already replaced with a new one.
     fn update_state_for_negotiated_peer(
         &mut self,
         (peer_id, connection_id): (PeerId, ConnectionId),
         state: NegotiatedPeerState,
-    ) -> Option<Option<NegotiatedPeerState>> {
+    ) -> Option<NegotiatedPeerState> {
         let peer_details = self.negotiated_peers.get_mut(&peer_id)?;
         // We double check we are dealing with the expected connection.
         // This could be false if `connection_id` is from the old session.
@@ -666,12 +654,9 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
                 "Provided connection ID {connection_id:?} does not match the stored connection ID {:?} for peer {peer_id:?}. Ignoring state update.",
                 peer_details.connection_id
             );
-            return None;
+            return Some(state);
         }
-        Some(Some(mem::replace(
-            &mut peer_details.negotiated_state,
-            state,
-        )))
+        Some(mem::replace(&mut peer_details.negotiated_state, state))
     }
 
     /// Handle an unhealthy connection if it exists in the current session.
@@ -682,7 +667,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     )]
     fn handle_unhealthy_connection(&mut self, (peer_id, connection_id): (PeerId, ConnectionId)) {
         // Notify swarm only on first transition into unhealthy state.
-        if let Some(Some(prev_state)) = self.update_state_for_negotiated_peer(
+        if let Some(prev_state) = self.update_state_for_negotiated_peer(
             (peer_id, connection_id),
             NegotiatedPeerState::Unhealthy,
         ) && prev_state != NegotiatedPeerState::Unhealthy
@@ -698,7 +683,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     /// If not, it is ignored.
     fn handle_healthy_connection(&mut self, (peer_id, connection_id): (PeerId, ConnectionId)) {
         // Notify swarm only on first transition into healthy state.
-        if let Some(Some(prev_state)) = self.update_state_for_negotiated_peer(
+        if let Some(prev_state) = self.update_state_for_negotiated_peer(
             (peer_id, connection_id),
             NegotiatedPeerState::Healthy,
         ) && prev_state != NegotiatedPeerState::Healthy

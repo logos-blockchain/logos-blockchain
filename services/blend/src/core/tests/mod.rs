@@ -420,7 +420,6 @@ async fn test_handle_session_transition_expired() {
 }
 
 #[test_log::test(tokio::test)]
-#[cfg(test)]
 async fn test_handle_session_event() {
     use lb_chain_service::Epoch;
 
@@ -603,10 +602,7 @@ async fn test_handle_session_event() {
 /// output. This exercises the `MaybeEmptyCoreSessionInfo::Empty` branch of
 /// `handle_session_event` directly.
 #[test_log::test(tokio::test)]
-#[cfg(test)]
 async fn test_handle_session_event_empty_session_retires() {
-    use lb_chain_service::Epoch;
-
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
 
@@ -642,7 +638,7 @@ async fn test_handle_session_event_empty_session_retires() {
     );
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
-    // Handle a NewSession(Empty) event — empty membership triggers Retiring.
+    // Handle a NewSession(Empty) event \u{2014} empty membership triggers Retiring.
     let empty_session: u64 = session + 1;
     let output = handle_session_event(
         SessionEvent::NewSession(empty_session.into()),
@@ -1261,20 +1257,20 @@ async fn test_handle_clock_event_new_epoch() {
 }
 
 /// Verify that `handle_new_secret_epoch_info` returns updated leader inputs
-/// when the PoL info epoch is newer than the current epoch, and returns `None`
-/// when the epoch has already been processed.
+/// when the `PoL` info epoch is newer than the current epoch, and returns
+/// `None` when the epoch has already been processed.
 #[test_log::test(tokio::test)]
 async fn test_handle_new_secret_epoch_info() {
     let minimal_network_size = 1;
     let (membership, local_private_key) = new_membership(minimal_network_size);
     let (settings, _recovery_file) = settings(
-        local_private_key.clone(),
+        local_private_key,
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
         0,
     );
     let session = 0;
-    let public_info = new_public_info(session, membership.clone(), &settings);
+    let public_info = new_public_info(session, membership, &settings);
     let mut processor = new_crypto_processor(
         SessionCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
@@ -1354,7 +1350,8 @@ async fn test_initialize_recovers_matching_saved_state() {
 
     let initial_session = 0;
 
-    // ── Matching session: saved state should be restored ──
+    // \u{2500}\u{2500} Matching session: saved state should be restored
+    // \u{2500}\u{2500}
 
     let (membership_stream, membership_sender) = new_stream();
     let (clock_stream, clock_sender) = new_stream();
@@ -1438,7 +1435,8 @@ async fn test_initialize_recovers_matching_saved_state() {
     );
     assert_eq!(recovered_checkpoint.last_seen_session(), initial_session);
 
-    // ── Mismatched session: fresh state should be created ──
+    // \u{2500}\u{2500} Mismatched session: fresh state should be created
+    // \u{2500}\u{2500}
 
     let (membership_stream2, membership_sender2) = new_stream();
     let (clock_stream2, clock_sender2) = new_stream();

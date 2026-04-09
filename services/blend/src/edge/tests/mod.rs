@@ -1,6 +1,12 @@
 use std::time::Duration;
 
-use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
+use lb_blend::{
+    message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
+    proofs::quota::inputs::prove::{
+        private::ProofOfLeadershipQuotaInputs,
+        public::{CoreInputs, LeaderInputs},
+    },
+};
 use lb_chain_service::Epoch;
 use lb_core::{crypto::ZkHash, proofs::leader_proof::LeaderPublic};
 use lb_groth16::{Field as _, Fr};
@@ -124,6 +130,23 @@ fn test_pol_epoch_info(epoch: Epoch) -> PolEpochInfo {
     }
 }
 
+fn poq_verification_inputs() -> PoQVerificationInputsMinusSigningKey {
+    PoQVerificationInputsMinusSigningKey {
+        leader: LeaderInputs {
+            pol_ledger_aged: ZkHash::ZERO,
+            pol_epoch_nonce: ZkHash::ZERO,
+            message_quota: 10,
+            lottery_0: Fr::ZERO,
+            lottery_1: Fr::ZERO,
+        },
+        core: CoreInputs {
+            quota: 1,
+            zk_root: Fr::ZERO,
+        },
+        session: 1,
+    }
+}
+
 /// `handle_clock_event` shuts down the message handler when a new epoch is
 /// detected ahead of the current handler's epoch.
 #[test_log::test(tokio::test)]
@@ -145,7 +168,7 @@ async fn handle_clock_event_new_epoch_shuts_down_handler() {
     >::try_new_with_edge_condition_check(
         settings(local_node, 1, node_id_sender),
         edge_membership,
-        Default::default(),
+        poq_verification_inputs(),
         pol_info.poq_private_inputs.clone(),
         overwatch_handle(),
         Epoch::new(1),
@@ -225,7 +248,7 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
     );
     assert_eq!(handler_state.as_ref().unwrap().0.epoch, Epoch::new(2));
 
-    // Provide secret PoL info for epoch 3 — handler should be replaced.
+    // Provide secret PoL info for epoch 3 \u{2014} handler should be replaced.
     let newer_pol_info = test_pol_epoch_info(Epoch::new(3));
     super::handle_new_secret_epoch_info(
         &newer_pol_info,
@@ -239,7 +262,7 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
 }
 
 /// Full epoch lifecycle: handler active → clock advances epoch → handler shut
-/// down → new secret PoL info → handler recreated.
+/// down → new secret `PoL` info → handler recreated.
 #[test_log::test(tokio::test)]
 async fn epoch_transition_full_lifecycle() {
     use utils::{MockLeaderProofsGenerator, NodeId, TestBackend, settings};
@@ -264,7 +287,7 @@ async fn epoch_transition_full_lifecycle() {
     >::try_new_with_edge_condition_check(
         settings.clone(),
         edge_membership,
-        Default::default(),
+        poq_verification_inputs(),
         pol_info.poq_private_inputs.clone(),
         overwatch.clone(),
         Epoch::new(1),
@@ -286,7 +309,7 @@ async fn epoch_transition_full_lifecycle() {
     .await;
     assert!(handler_state.is_some());
 
-    // Clock advances to epoch 2 → handler shut down.
+    // Clock advances to epoch 2 \u{2192} handler shut down.
     super::handle_clock_event::<TestBackend, NodeId, MockLeaderProofsGenerator, _, _>(
         SlotTick {
             epoch: Epoch::new(2),
@@ -301,7 +324,7 @@ async fn epoch_transition_full_lifecycle() {
         "Handler should be shut down on epoch advance"
     );
 
-    // Secret PoL info arrives for epoch 2 → handler recreated.
+    // Secret PoL info arrives for epoch 2 \u{2192} handler recreated.
     let new_pol_info = test_pol_epoch_info(Epoch::new(2));
     super::handle_new_secret_epoch_info(
         &new_pol_info,

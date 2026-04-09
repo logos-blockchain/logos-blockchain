@@ -319,11 +319,11 @@ async fn epoch_private_info() {
 async fn rotate_epoch_equal_is_noop() {
     let core_quota = 5;
     let leadership_quota = 10;
-    let (core_public_inputs, core_private_inputs) = valid_proof_of_quota_inputs(core_quota);
+    let (_, core_private_inputs) = valid_proof_of_quota_inputs(core_quota);
     let (leadership_public_inputs, leadership_private_inputs) =
         valid_proof_of_leader_inputs(leadership_quota);
 
-    let mut gen = RealCoreAndLeaderProofsGenerator::new(
+    let mut generator = RealCoreAndLeaderProofsGenerator::new(
         ProofsGeneratorSettings {
             local_node_index: None,
             membership_size: 1,
@@ -335,22 +335,23 @@ async fn rotate_epoch_equal_is_noop() {
     );
 
     // Provide private info so a leader generator exists.
-    gen.set_epoch_private(
+    generator.set_epoch_private(
         leadership_private_inputs,
         leadership_public_inputs.leader,
         Epoch::new(1),
     );
-    assert!(gen.leader_proofs_generator.is_some());
+    assert!(generator.leader_proofs_generator.is_some());
 
-    // Rotating with the same epoch should be a no-op — leader generator preserved.
-    gen.rotate_epoch(leadership_public_inputs.leader, Epoch::new(1));
+    // Rotating with the same epoch should be a no-op - leader generator
+    // preserved.
+    generator.rotate_epoch(leadership_public_inputs.leader, Epoch::new(1));
     assert!(
-        gen.leader_proofs_generator.is_some(),
+        generator.leader_proofs_generator.is_some(),
         "Leader generator should be preserved when rotating to the same epoch"
     );
 
     // Leader proofs should still work.
-    let proof = gen.get_next_leader_proof().await;
+    let proof = generator.get_next_leader_proof().await;
     assert!(proof.is_some());
 }
 
@@ -360,11 +361,11 @@ async fn rotate_epoch_equal_is_noop() {
 async fn rotate_epoch_drops_leader_then_set_epoch_private_recreates() {
     let core_quota = 5;
     let leadership_quota = 10;
-    let (core_public_inputs, core_private_inputs) = valid_proof_of_quota_inputs(core_quota);
+    let (_, core_private_inputs) = valid_proof_of_quota_inputs(core_quota);
     let (leadership_public_inputs, leadership_private_inputs) =
         valid_proof_of_leader_inputs(leadership_quota);
 
-    let mut gen = RealCoreAndLeaderProofsGenerator::new(
+    let mut generator = RealCoreAndLeaderProofsGenerator::new(
         ProofsGeneratorSettings {
             local_node_index: None,
             membership_size: 1,
@@ -376,33 +377,34 @@ async fn rotate_epoch_drops_leader_then_set_epoch_private_recreates() {
     );
 
     // Provide private info for epoch 0.
-    gen.set_epoch_private(
+    generator.set_epoch_private(
         leadership_private_inputs.clone(),
         leadership_public_inputs.leader,
         Epoch::new(0),
     );
-    assert!(gen.leader_proofs_generator.is_some());
+    assert!(generator.leader_proofs_generator.is_some());
 
-    // Rotate to epoch 1 — leader generator should be dropped because its epoch
-    // is behind.
-    gen.rotate_epoch(leadership_public_inputs.leader, Epoch::new(1));
+    // Rotate to epoch 1 - leader generator should be dropped because its
+    // epoch is behind.
+    generator.rotate_epoch(leadership_public_inputs.leader, Epoch::new(1));
     assert!(
-        gen.leader_proofs_generator.is_none(),
+        generator.leader_proofs_generator.is_none(),
         "Leader generator should be dropped after rotating to a newer epoch"
     );
-    assert!(gen.get_next_leader_proof().await.is_none());
+    assert!(generator.get_next_leader_proof().await.is_none());
 
-    // Provide private info for epoch 1 — leader generator should be recreated.
-    gen.set_epoch_private(
+    // Provide private info for epoch 1 - leader generator should be
+    // recreated.
+    generator.set_epoch_private(
         leadership_private_inputs,
         leadership_public_inputs.leader,
         Epoch::new(1),
     );
     assert!(
-        gen.leader_proofs_generator.is_some(),
+        generator.leader_proofs_generator.is_some(),
         "Leader generator should be recreated after set_epoch_private"
     );
-    let proof = gen.get_next_leader_proof().await;
+    let proof = generator.get_next_leader_proof().await;
     assert!(proof.is_some());
 }
 
@@ -414,7 +416,7 @@ async fn double_rotate_epoch_without_set_epoch_private() {
     let core_quota = 10;
     let (public_inputs, private_inputs) = valid_proof_of_quota_inputs(core_quota);
 
-    let mut gen = RealCoreAndLeaderProofsGenerator::new(
+    let mut generator = RealCoreAndLeaderProofsGenerator::new(
         ProofsGeneratorSettings {
             local_node_index: None,
             membership_size: 1,
@@ -426,22 +428,22 @@ async fn double_rotate_epoch_without_set_epoch_private() {
     );
 
     // Consume some core proofs.
-    for _ in 0..3 {
-        assert!(gen.get_next_core_proof().await.is_some());
+    for _ in 0u8..3 {
+        assert!(generator.get_next_core_proof().await.is_some());
     }
 
-    // First rotation: epoch 0 → 1.
-    gen.rotate_epoch(public_inputs.leader, Epoch::new(1));
-    assert!(gen.leader_proofs_generator.is_none());
+    // First rotation: epoch 0 \u{2192} 1.
+    generator.rotate_epoch(public_inputs.leader, Epoch::new(1));
+    assert!(generator.leader_proofs_generator.is_none());
 
-    // Second rotation: epoch 1 → 2.
-    gen.rotate_epoch(public_inputs.leader, Epoch::new(2));
-    assert!(gen.leader_proofs_generator.is_none());
+    // Second rotation: epoch 1 \u{2192} 2.
+    generator.rotate_epoch(public_inputs.leader, Epoch::new(2));
+    assert!(generator.leader_proofs_generator.is_none());
 
-    // Core proofs should still work — remaining quota preserved across rotations.
-    // We consumed 3 out of 10, so 7 remain.
-    for _ in 0..7 {
-        assert!(gen.get_next_core_proof().await.is_some());
+    // Core proofs should still work \u{2014} remaining quota preserved across
+    // rotations. We consumed 3 out of 10, so 7 remain.
+    for _ in 0u8..7 {
+        assert!(generator.get_next_core_proof().await.is_some());
     }
-    assert!(gen.get_next_core_proof().await.is_none());
+    assert!(generator.get_next_core_proof().await.is_none());
 }

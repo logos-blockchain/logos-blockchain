@@ -431,8 +431,8 @@ async fn event_message_carries_session_number() {
     }
 }
 
-/// After `start_new_session()`, current negotiated_peers must be empty and
-/// old peers must live inside the OldSession.
+/// After `start_new_session()`, current `negotiated_peers` must be empty and
+/// old peers must live inside the `OldSession`.
 #[test(tokio::test)]
 async fn start_new_session_moves_peers_to_old_session() {
     let (mut identities, nodes) = new_nodes_with_empty_address(3);

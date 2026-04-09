@@ -160,29 +160,14 @@ impl ProofsVerifier for RealProofsVerifier {
 
 #[cfg(test)]
 mod tests {
-    use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
+    use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
     use lb_core::crypto::ZkHash;
     use lb_groth16::{Field as _, Fr};
 
-    use super::{PoQVerificationInputsMinusSigningKey, RealProofsVerifier};
-    use crate::encap::ProofsVerifier as _;
-
-    fn default_inputs() -> PoQVerificationInputsMinusSigningKey {
-        PoQVerificationInputsMinusSigningKey {
-            session: 0,
-            core: CoreInputs {
-                zk_root: ZkHash::ZERO,
-                quota: 1,
-            },
-            leader: LeaderInputs {
-                pol_ledger_aged: ZkHash::ZERO,
-                pol_epoch_nonce: ZkHash::ZERO,
-                message_quota: 1,
-                lottery_0: Fr::ZERO,
-                lottery_1: Fr::ZERO,
-            },
-        }
-    }
+    use crate::{
+        crypto::proofs::{PoQVerificationInputsMinusSigningKey, RealProofsVerifier},
+        encap::ProofsVerifier as _,
+    };
 
     fn epoch_1_leader() -> LeaderInputs {
         LeaderInputs {
@@ -196,14 +181,17 @@ mod tests {
 
     #[test]
     fn new_verifier_has_no_previous_epoch() {
-        let verifier = RealProofsVerifier::new(default_inputs());
+        let verifier = RealProofsVerifier::new(PoQVerificationInputsMinusSigningKey::default());
         assert!(verifier.previous_epoch_inputs.is_none());
-        assert_eq!(verifier.current_inputs.leader, default_inputs().leader);
+        assert_eq!(
+            verifier.current_inputs.leader,
+            PoQVerificationInputsMinusSigningKey::default().leader
+        );
     }
 
     #[test]
     fn start_epoch_transition_stores_previous_epoch() {
-        let initial = default_inputs();
+        let initial = PoQVerificationInputsMinusSigningKey::default();
         let mut verifier = RealProofsVerifier::new(initial);
         let new_leader = epoch_1_leader();
 
@@ -217,7 +205,7 @@ mod tests {
 
     #[test]
     fn complete_epoch_transition_clears_previous_epoch() {
-        let mut verifier = RealProofsVerifier::new(default_inputs());
+        let mut verifier = RealProofsVerifier::new(PoQVerificationInputsMinusSigningKey::default());
         verifier.start_epoch_transition(epoch_1_leader());
 
         assert!(verifier.previous_epoch_inputs.is_some());
@@ -233,7 +221,7 @@ mod tests {
 
     #[test]
     fn consecutive_epoch_transitions_replace_previous() {
-        let initial = default_inputs();
+        let initial = PoQVerificationInputsMinusSigningKey::default();
         let mut verifier = RealProofsVerifier::new(initial);
 
         let leader_1 = epoch_1_leader();
@@ -257,7 +245,7 @@ mod tests {
 
     #[test]
     fn complete_then_new_epoch_transition() {
-        let initial = default_inputs();
+        let initial = PoQVerificationInputsMinusSigningKey::default();
         let mut verifier = RealProofsVerifier::new(initial);
 
         // Epoch 0 → 1
@@ -286,7 +274,7 @@ mod tests {
 
     #[test]
     fn session_and_core_inputs_preserved_across_epoch_transitions() {
-        let initial = default_inputs();
+        let initial = PoQVerificationInputsMinusSigningKey::default();
         let mut verifier = RealProofsVerifier::new(initial);
 
         verifier.start_epoch_transition(epoch_1_leader());
