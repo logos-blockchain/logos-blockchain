@@ -599,6 +599,78 @@ async fn test_handle_session_event() {
     assert_eq!(old_public_info.session.session_number, session + 1);
 }
 
+/// Handle a `NewSession(Empty)` event (empty membership), expecting `Retiring`
+/// output. This exercises the `MaybeEmptyCoreSessionInfo::Empty` branch of
+/// `handle_session_event` directly.
+#[test_log::test(tokio::test)]
+#[cfg(test)]
+async fn test_handle_session_event_empty_session_retires() {
+    use lb_chain_service::Epoch;
+
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+
+    let session = 0;
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let (settings, _recovery_file) = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    let public_info = new_public_info(session, membership.clone(), &settings);
+    let crypto_processor = new_crypto_processor(
+        SessionCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
+        },
+        &public_info,
+        (),
+    );
+    let scheduler = SessionMessageScheduler::new(
+        scheduler_session_info(&public_info),
+        BlakeRng::from_entropy(),
+        scheduler_settings(&settings.time, settings.num_blend_layers),
+    );
+    let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+        settings.clone(),
+        overwatch_handle.clone(),
+        public_info.clone(),
+        BlakeRng::from_entropy(),
+    );
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+
+    // Handle a NewSession(Empty) event — empty membership triggers Retiring.
+    let empty_session: u64 = session + 1;
+    let output = handle_session_event(
+        SessionEvent::NewSession(empty_session.into()),
+        &settings,
+        crypto_processor,
+        scheduler,
+        public_info.clone(),
+        ServiceState::with_session(session, token_collector, None, state_updater.clone()).unwrap(),
+        &mut backend,
+        &sdp_relay,
+        Epoch::new(0),
+        None,
+    )
+    .await;
+    let HandleSessionEventOutput::Retiring {
+        old_crypto_processor,
+        old_public_info,
+        ..
+    } = output
+    else {
+        panic!("expected Retiring output for Empty session");
+    };
+    // The old processor/info should be from the session we were on before
+    // the empty session arrived.
+    assert_eq!(old_crypto_processor.verifier().session_number(), session);
+    assert_eq!(old_public_info.session.session_number, session);
+}
+
 /// Check if the service keeps running after it receives a new session where
 /// it's still core. Also, check if it stops after the session transition period
 /// if it receives another new session that doesn't meet the core node
@@ -1263,5 +1335,191 @@ async fn test_handle_new_secret_epoch_info() {
     assert!(
         result.is_none(),
         "Should return None when PoL epoch < current epoch"
+    );
+}
+
+/// When `initialize` receives a `last_saved_state` whose session matches the
+/// current membership session, the saved state is restored (e.g. `spent_quota`
+/// is preserved). When the session does not match, a fresh state is created.
+#[test_log::test(tokio::test)]
+async fn test_initialize_recovers_matching_saved_state() {
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let (settings, _recovery_file) = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+
+    let initial_session = 0;
+
+    // ── Matching session: saved state should be restored ──
+
+    let (membership_stream, membership_sender) = new_stream();
+    let (clock_stream, clock_sender) = new_stream();
+    membership_sender
+        .send(MembershipInfo {
+            membership: membership.clone(),
+            zk: Some(ZkInfo {
+                root: ZkHash::ZERO,
+                core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+            }),
+            session_number: initial_session,
+        })
+        .await
+        .unwrap();
+    clock_sender
+        .send(SlotTick {
+            epoch: 0.into(),
+            slot: 0.into(),
+        })
+        .await
+        .unwrap();
+
+    let mut epoch_handler = EpochHandler::new(
+        TestChainService,
+        settings.time.epoch_transition_period_in_slots,
+    );
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources();
+    let (sdp_relay_1, _sdp_relay_receiver) = sdp_relay();
+
+    // Build a pre-populated saved state with matching session and some spent quota.
+    let public_info = new_public_info(initial_session, membership.clone(), &settings);
+    let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
+    let saved_state = ServiceState::with_session(
+        initial_session,
+        token_collector,
+        None,
+        state_updater.clone(),
+    )
+    .unwrap();
+    let mut updater = saved_state.start_updating();
+    updater.consume_core_quota(5);
+    let saved_state = updater.commit_changes();
+
+    let (
+        _remaining_session_stream,
+        _remaining_clock_stream,
+        _current_public_info,
+        _current_epoch,
+        _crypto_processor,
+        recovered_checkpoint,
+        _message_scheduler,
+        _backend,
+        _rng,
+    ) = initialize::<
+        NodeId,
+        TestBlendBackend,
+        TestNetworkAdapter,
+        TestChainService,
+        MockCoreAndLeaderProofsGenerator,
+        MockProofsVerifier,
+        MockKmsAdapter,
+        RuntimeServiceId,
+    >(
+        settings.clone(),
+        membership_stream,
+        clock_stream,
+        &mut epoch_handler,
+        overwatch_handle,
+        MockKmsAdapter,
+        &sdp_relay_1,
+        Some(saved_state),
+        state_updater,
+    )
+    .await;
+
+    assert_eq!(
+        recovered_checkpoint.spent_quota(),
+        5,
+        "Matching session: spent_quota should be restored from saved state"
+    );
+    assert_eq!(recovered_checkpoint.last_seen_session(), initial_session);
+
+    // ── Mismatched session: fresh state should be created ──
+
+    let (membership_stream2, membership_sender2) = new_stream();
+    let (clock_stream2, clock_sender2) = new_stream();
+    membership_sender2
+        .send(MembershipInfo {
+            membership: membership.clone(),
+            zk: Some(ZkInfo {
+                root: ZkHash::ZERO,
+                core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+            }),
+            session_number: initial_session,
+        })
+        .await
+        .unwrap();
+    clock_sender2
+        .send(SlotTick {
+            epoch: 0.into(),
+            slot: 1.into(),
+        })
+        .await
+        .unwrap();
+
+    let mut epoch_handler2 = EpochHandler::new(
+        TestChainService,
+        settings.time.epoch_transition_period_in_slots,
+    );
+    let (overwatch_handle2, _overwatch_cmd_receiver2, state_updater2, _state_receiver2) =
+        dummy_overwatch_resources();
+    let (sdp_relay2, _sdp_relay_receiver2) = sdp_relay();
+
+    // Build a saved state for a *different* session (session 99) with spent quota.
+    let stale_public_info = new_public_info(99, membership.clone(), &settings);
+    let stale_token_collector =
+        SessionBlendingTokenCollector::new(&reward_session_info(&stale_public_info));
+    let stale_state =
+        ServiceState::with_session(99, stale_token_collector, None, state_updater2.clone())
+            .unwrap();
+    let mut updater = stale_state.start_updating();
+    updater.consume_core_quota(42);
+    let stale_state = updater.commit_changes();
+
+    let (
+        _remaining_session_stream2,
+        _remaining_clock_stream2,
+        _current_public_info2,
+        _current_epoch2,
+        _crypto_processor2,
+        recovered_checkpoint2,
+        _message_scheduler2,
+        _backend2,
+        _rng2,
+    ) = initialize::<
+        NodeId,
+        TestBlendBackend,
+        TestNetworkAdapter,
+        TestChainService,
+        MockCoreAndLeaderProofsGenerator,
+        MockProofsVerifier,
+        MockKmsAdapter,
+        RuntimeServiceId,
+    >(
+        settings.clone(),
+        membership_stream2,
+        clock_stream2,
+        &mut epoch_handler2,
+        overwatch_handle2,
+        MockKmsAdapter,
+        &sdp_relay2,
+        Some(stale_state),
+        state_updater2,
+    )
+    .await;
+
+    assert_eq!(
+        recovered_checkpoint2.spent_quota(),
+        0,
+        "Mismatched session: spent_quota should be 0 for fresh state"
+    );
+    assert_eq!(
+        recovered_checkpoint2.last_seen_session(),
+        initial_session,
+        "Mismatched session: should track the current session, not the stale one"
     );
 }
