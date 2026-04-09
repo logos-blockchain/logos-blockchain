@@ -10,6 +10,7 @@ use tracing::warn;
 
 use crate::cucumber::{
     error::{StepError, StepResult},
+    fee_reserve::create_scenario_fee_wallet_account,
     steps::TARGET,
     world::{CucumberWorld, NodeInfo, WalletInfo, WalletType},
 };
@@ -37,6 +38,22 @@ pub fn build_manual_cluster_deployment(
             config.wallet_config.accounts.push(wallet_account.clone());
         }
     }
+
+    world.fee_state.wallet_account = match world.fee_state.sponsored_genesis_account {
+        Some(sponsored_genesis_account) => {
+            let scenario_fee_wallet_account =
+                create_scenario_fee_wallet_account(sponsored_genesis_account.token_value)?;
+
+            for _ in 0..sponsored_genesis_account.token_count.get() {
+                config
+                    .wallet_config
+                    .accounts
+                    .push(scenario_fee_wallet_account.clone());
+            }
+            Some(scenario_fee_wallet_account)
+        }
+        None => None,
+    };
 
     let deployment =
         DeploymentBuilder::new(config)

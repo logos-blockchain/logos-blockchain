@@ -6,27 +6,31 @@ use lb_testing_framework::{DeploymentBuilder, LbcLocalDeployer, TopologyConfig};
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
-use crate::cucumber::{
-    error::{StepError, StepResult},
-    steps::{
-        TARGET,
-        manual_cluster::{build_manual_cluster_deployment, stop_active_manual_cluster},
-        manual_nodes::{
-            config_override::set_user_config_override,
-            snapshots::{save_named_blockchain_snapshot, validate_snapshot_path_component},
-            utils::{
-                NodesToStartUnordered, create_snapshots_all_nodes, get_cryptarchia_info_all_nodes,
-                nodes_converged, parse_genesis_wallet_tokens_row, parse_url,
-                parse_wallet_resources_table_row, poll_all_nodes_and_update_consensus_cache,
-                restart_node, start_node, start_nodes_order_respecting_dependencies,
-                verify_genesis_wallet_resources_table_indexes,
-                verify_node_wallet_resources_table_indexes,
-                wait_for_all_nodes_to_be_synced_to_chain,
+use crate::{
+    cucumber::{
+        error::{StepError, StepResult},
+        steps::{
+            TARGET,
+            manual_cluster::{build_manual_cluster_deployment, stop_active_manual_cluster},
+            manual_nodes::{
+                config_override::set_user_config_override,
+                snapshots::{save_named_blockchain_snapshot, validate_snapshot_path_component},
+                utils::{
+                    NodesToStartUnordered, create_snapshots_all_nodes,
+                    get_cryptarchia_info_all_nodes, nodes_converged,
+                    parse_genesis_wallet_tokens_row, parse_url, parse_wallet_resources_table_row,
+                    poll_all_nodes_and_update_consensus_cache, restart_node, start_node,
+                    start_nodes_order_respecting_dependencies,
+                    verify_genesis_wallet_resources_table_indexes,
+                    verify_node_wallet_resources_table_indexes,
+                    wait_for_all_nodes_to_be_synced_to_chain,
+                },
             },
         },
+        utils::resolve_literal_or_env,
+        world::{CucumberWorld, GenesisTokens, NodeSnapshot, PublicCryptarchiaEndpointPeer},
     },
-    utils::resolve_literal_or_env,
-    world::{CucumberWorld, GenesisTokens, NodeSnapshot, PublicCryptarchiaEndpointPeer},
+    non_zero,
 };
 
 const PUBLIC_CRYPTARCHIA_ENDPOINT: &str = "public_cryptarchia_endpoint";
@@ -111,6 +115,20 @@ fn step_cluster_has_wallet_resources(world: &mut CucumberWorld, step: &Step) -> 
         });
     }
 
+    Ok(())
+}
+
+#[given(expr = "we have a sponsored genesis fee account with {int} tokens of {int} value each")]
+#[when(expr = "we have a sponsored genesis fee account with {int} tokens of {int} value each")]
+fn step_sponsored_genesis_fee_account(
+    world: &mut CucumberWorld,
+    token_count: usize,
+    token_value: u64,
+) -> StepResult {
+    world.fee_state.set_sponsored_genesis_account(
+        non_zero!("genesis fee token count", token_count)?,
+        non_zero!("genesis fee token value", token_value)?,
+    );
     Ok(())
 }
 
