@@ -430,3 +430,218 @@ async fn event_message_carries_session_number() {
         }
     }
 }
+
+/// After `start_new_session()`, current negotiated_peers must be empty and
+/// old peers must live inside the OldSession.
+#[test(tokio::test)]
+async fn start_new_session_moves_peers_to_old_session() {
+    let (mut identities, nodes) = new_nodes_with_empty_address(3);
+    let mut node_a = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id)
+            .with_membership(&nodes)
+            .with_peering_degree(2..=2)
+            .build()
+    });
+    let mut node_b = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut node_c = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+
+    node_b.listen().with_memory_addr_external().await;
+    node_c.listen().with_memory_addr_external().await;
+    node_a.connect_and_wait_for_upgrade(&mut node_b).await;
+    node_a.connect_and_wait_for_upgrade(&mut node_c).await;
+
+    // Before session transition: node_a has 2 negotiated peers.
+    assert_eq!(node_a.behaviour().negotiated_peers.len(), 2);
+    assert!(node_a.behaviour().old_session.is_none());
+
+    // Start a new session.
+    let memberships = build_memberships(&[&node_a, &node_b, &node_c]);
+    node_a
+        .behaviour_mut()
+        .start_new_session((memberships[0].clone(), 1));
+
+    // After session transition: current negotiated_peers must be empty
+    // and old_session must exist.
+    assert_eq!(
+        node_a.behaviour().negotiated_peers.len(),
+        0,
+        "Current session negotiated peers must be reset after start_new_session"
+    );
+    assert!(
+        node_a.behaviour().old_session.is_some(),
+        "Old session must be created after start_new_session"
+    );
+}
+
+/// `finish_session_transition()` emits close substream events for all peers
+/// in the old session, generating `PeerDisconnected` events.
+#[test(tokio::test)]
+async fn finish_session_transition_emits_peer_disconnected_for_old_session_peers() {
+    let (mut identities, nodes) = new_nodes_with_empty_address(3);
+    let mut node_a = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id)
+            .with_membership(&nodes)
+            .with_peering_degree(2..=2)
+            .build()
+    });
+    let mut node_b = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut node_c = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+
+    node_b.listen().with_memory_addr_external().await;
+    node_c.listen().with_memory_addr_external().await;
+    node_a.connect_and_wait_for_upgrade(&mut node_b).await;
+    node_a.connect_and_wait_for_upgrade(&mut node_c).await;
+
+    // Start a new session to move current peers into old session.
+    let memberships = build_memberships(&[&node_a, &node_b, &node_c]);
+    node_a
+        .behaviour_mut()
+        .start_new_session((memberships[0].clone(), 1));
+
+    // Finish the transition; this should close all old session connections.
+    node_a.behaviour_mut().finish_session_transition();
+
+    // Old session should now be gone.
+    assert!(
+        node_a.behaviour().old_session.is_none(),
+        "Old session must be cleared after finish_session_transition"
+    );
+
+    // Drive the swarms until both connections from the old session close.
+    let mut closed_count = 0usize;
+    loop {
+        select! {
+            _ = node_b.select_next_some() => {}
+            _ = node_c.select_next_some() => {}
+            event = node_a.select_next_some() => {
+                if let SwarmEvent::ConnectionClosed { .. } = event {
+                    closed_count += 1;
+                    if closed_count >= 2 {
+                        break;
+                    }
+                }
+            }
+            () = sleep(Duration::from_secs(15)) => {
+                panic!("Timed out waiting for old session connections to close");
+            }
+        }
+    }
+}
+
+/// Multiple consecutive `start_new_session` calls should discard the previous
+/// old session, moving current peers into a new old session each time.
+#[test(tokio::test)]
+async fn consecutive_session_transitions_replace_old_session() {
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+    let mut dialer = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut listener = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+
+    listener.listen().with_memory_addr_external().await;
+    dialer.connect_and_wait_for_upgrade(&mut listener).await;
+
+    // First session transition: move the current peer into old session.
+    let memberships = build_memberships(&[&dialer, &listener]);
+    dialer
+        .behaviour_mut()
+        .start_new_session((memberships[0].clone(), 1));
+    assert!(dialer.behaviour().old_session.is_some());
+
+    // Re-establish a connection for session 1 so there is something to move
+    // into old session again.
+    dialer.connect_and_wait_for_upgrade(&mut listener).await;
+    assert_eq!(dialer.behaviour().negotiated_peers.len(), 1);
+
+    // Second session transition: old session from session 0 gets stopped
+    // and current peers from session 1 move into old session.
+    let memberships = build_memberships(&[&dialer, &listener]);
+    dialer
+        .behaviour_mut()
+        .start_new_session((memberships[0].clone(), 2));
+    assert!(dialer.behaviour().old_session.is_some());
+    assert_eq!(
+        dialer.behaviour().negotiated_peers.len(),
+        0,
+        "Current negotiated peers must be empty after session transition"
+    );
+
+    // Drive the swarm until the original (session 0) connection closes
+    // (due to stop_old_session called for session 0 peers inside the second
+    // start_new_session).
+    loop {
+        select! {
+            _ = listener.select_next_some() => {}
+            event = dialer.select_next_some() => {
+                if let SwarmEvent::ConnectionClosed { .. } = event {
+                    break;
+                }
+            }
+            () = sleep(Duration::from_secs(15)) => {
+                panic!("Timed out waiting for old session 0 connections to close");
+            }
+        }
+    }
+}
+
+/// Verify that after session transition, re-bootstrapping into the new session
+/// respects peering degree limits.
+#[test(tokio::test)]
+async fn session_transition_reboots_peering_degree() {
+    let (mut identities, nodes) = new_nodes_with_empty_address(4);
+    let mut node_a = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id)
+            .with_membership(&nodes)
+            // Peering degree: exactly 2 peers.
+            .with_peering_degree(2..=2)
+            .build()
+    });
+    let mut node_b = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut node_c = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut node_d = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+
+    node_b.listen().with_memory_addr_external().await;
+    node_c.listen().with_memory_addr_external().await;
+    node_d.listen().with_memory_addr_external().await;
+
+    // Connect node_a to b and c (filling peering degree of 2).
+    node_a.connect_and_wait_for_upgrade(&mut node_b).await;
+    node_a.connect_and_wait_for_upgrade(&mut node_c).await;
+    assert_eq!(node_a.behaviour().negotiated_peers.len(), 2);
+    assert_eq!(node_a.behaviour().available_connection_slots(), 0);
+
+    // Start session transition - all current peers move to old session.
+    let memberships = build_memberships(&[&node_a, &node_b, &node_c, &node_d]);
+    node_a
+        .behaviour_mut()
+        .start_new_session((memberships[0].clone(), 1));
+
+    // After transition, new session has no peers, so all slots are available.
+    assert_eq!(
+        node_a.behaviour().available_connection_slots(),
+        2,
+        "All peering degree slots must be available after session transition"
+    );
+
+    // Connect to new peers in the new session.
+    node_a.connect_and_wait_for_upgrade(&mut node_b).await;
+    node_a.connect_and_wait_for_upgrade(&mut node_d).await;
+    assert_eq!(node_a.behaviour().negotiated_peers.len(), 2);
+    assert_eq!(node_a.behaviour().available_connection_slots(), 0);
+}

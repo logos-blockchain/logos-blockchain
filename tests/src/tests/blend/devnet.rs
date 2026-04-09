@@ -5,7 +5,10 @@ use lb_libp2p::protocol_name::StreamProtocol;
 use lb_node::config::{DeploymentSettings, deployment::devnet};
 use logos_blockchain_tests::{
     nodes::{Validator, create_validator_config},
-    topology::configs::create_general_configs,
+    topology::configs::{
+        create_general_configs, create_general_configs_with_blend_core_subset,
+        deployment::e2e_deployment_settings_with_genesis_tx, network::NetworkParams,
+    },
 };
 use time::OffsetDateTime;
 

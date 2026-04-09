@@ -944,3 +944,151 @@ async fn stop_on_empty_session() {
         .await
         .expect("the service should stop without panic on empty session");
 }
+
+/// Verify that the proof generator produces proofs for the correct session,
+/// and that those proofs are only accepted by a verifier for the same session.
+#[test_log::test(tokio::test)]
+async fn test_proof_generator_session_binding() {
+    let session_0 = 0u64;
+    let session_1 = 1u64;
+    let minimal_network_size = 1;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let (settings, _recovery_file) = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+
+    // Create proof generators for session 0 and session 1.
+    let public_info_0 = new_public_info(session_0, membership.clone(), &settings);
+    let public_info_1 = new_public_info(session_1, membership.clone(), &settings);
+
+    let mut generator_0 = new_crypto_processor(
+        SessionCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
+        },
+        &public_info_0,
+        (),
+    );
+
+    let mut generator_1 = new_crypto_processor(
+        SessionCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
+        },
+        &public_info_1,
+        (),
+    );
+
+    // Build a message with session 0 proofs.
+    let payload = NetworkMessage {
+        message: vec![],
+        broadcast_settings: (),
+    }
+    .to_bytes()
+    .expect("NetworkMessage serialization must succeed");
+    let msg_0 = generator_0
+        .encapsulate_data_payload(&payload)
+        .await
+        .expect("encapsulation with session 0 must succeed");
+
+    // Build a message with session 1 proofs.
+    let msg_1 = generator_1
+        .encapsulate_data_payload(&payload)
+        .await
+        .expect("encapsulation with session 1 must succeed");
+
+    // Session 0 message should be decapsulable by session 0 processor.
+    let (_, _, state_updater, _state_receiver) =
+        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+    let scheduler_settings = scheduler_settings(&timing_settings(), settings.num_blend_layers);
+    let mut scheduler_0 = SessionMessageScheduler::new(
+        scheduler_session_info(&public_info_0),
+        BlakeRng::from_entropy(),
+        scheduler_settings,
+    );
+    let recovery_checkpoint = ServiceState::with_session(
+        session_0,
+        SessionBlendingTokenCollector::new(&reward_session_info(&public_info_0)),
+        None,
+        state_updater,
+    )
+    .unwrap();
+    drop(handle_incoming_blend_message(
+        (msg_0.clone().into(), session_0),
+        &mut scheduler_0,
+        None,
+        &generator_0,
+        None,
+        recovery_checkpoint,
+    ));
+    assert_eq!(
+        scheduler_0.release_delayer().unreleased_messages().len(),
+        1,
+        "Session 0 message must be scheduled by session 0 processor"
+    );
+
+    // Session 1 message should NOT be decapsulable by session 0 processor
+    // (wrong PoQ proofs for session 0).
+    let (_, _, state_updater, _state_receiver) =
+        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+    let mut scheduler_0_only = SessionMessageScheduler::new(
+        scheduler_session_info(&public_info_0),
+        BlakeRng::from_entropy(),
+        scheduler_settings,
+    );
+    let recovery_checkpoint = ServiceState::with_session(
+        session_0,
+        SessionBlendingTokenCollector::new(&reward_session_info(&public_info_0)),
+        None,
+        state_updater,
+    )
+    .unwrap();
+    drop(handle_incoming_blend_message(
+        (msg_1.clone().into(), session_0),
+        &mut scheduler_0_only,
+        None,
+        &generator_0,
+        None,
+        recovery_checkpoint,
+    ));
+    assert_eq!(
+        scheduler_0_only
+            .release_delayer()
+            .unreleased_messages()
+            .len(),
+        0,
+        "Session 1 message must NOT be scheduled by session 0 processor"
+    );
+
+    // Session 1 message should be decapsulable by session 1 processor.
+    let (_, _, state_updater, _state_receiver) =
+        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+    let mut scheduler_1 = SessionMessageScheduler::new(
+        scheduler_session_info(&public_info_1),
+        BlakeRng::from_entropy(),
+        scheduler_settings,
+    );
+    let recovery_checkpoint = ServiceState::with_session(
+        session_1,
+        SessionBlendingTokenCollector::new(&reward_session_info(&public_info_1)),
+        None,
+        state_updater,
+    )
+    .unwrap();
+    drop(handle_incoming_blend_message(
+        (msg_1.into(), session_1),
+        &mut scheduler_1,
+        None,
+        &generator_1,
+        None,
+        recovery_checkpoint,
+    ));
+    assert_eq!(
+        scheduler_1.release_delayer().unreleased_messages().len(),
+        1,
+        "Session 1 message must be scheduled by session 1 processor"
+    );
+}
