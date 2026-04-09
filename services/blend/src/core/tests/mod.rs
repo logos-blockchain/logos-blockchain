@@ -22,8 +22,9 @@ use crate::{
     core::{
         HandleSessionEventOutput,
         backends::BlendBackend,
-        handle_incoming_blend_message, handle_session_event, handle_session_transition_expired,
-        initialize, post_initialize, retire, run_event_loop,
+        handle_clock_event, handle_incoming_blend_message, handle_new_secret_epoch_info,
+        handle_session_event, handle_session_transition_expired, initialize, post_initialize,
+        retire, run_event_loop,
         state::ServiceState,
         tests::utils::{
             MockKmsAdapter, MockProofsVerifier, NodeId, TestBlendBackend, TestBlendBackendEvent,
@@ -32,7 +33,7 @@ use crate::{
             scheduler_settings, sdp_relay, settings, timing_settings, wait_for_blend_backend_event,
         },
     },
-    epoch_info::EpochHandler,
+    epoch_info::{EpochHandler, PolEpochInfo},
     membership::{MembershipInfo, ZkInfo},
     message::NetworkMessage,
     session::{CoreSessionInfo, CoreSessionPublicInfo},
@@ -1090,5 +1091,177 @@ async fn test_proof_generator_session_binding() {
         scheduler_1.release_delayer().unreleased_messages().len(),
         1,
         "Session 1 message must be scheduled by session 1 processor"
+    );
+}
+
+/// Verify that `handle_clock_event` correctly updates the public info and
+/// epoch number when the `EpochHandler` emits a `NewEpoch` event.
+#[test_log::test(tokio::test)]
+async fn test_handle_clock_event_new_epoch() {
+    let minimal_network_size = 1;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let (settings, _recovery_file) = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    let session = 0;
+    let public_info = new_public_info(session, membership.clone(), &settings);
+    let mut processor = new_crypto_processor(
+        SessionCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
+        },
+        &public_info,
+        (),
+    );
+
+    let initial_epoch = Epoch::new(0);
+
+    // Create an EpochHandler with a transition period of 1 slot.
+    let mut epoch_handler: EpochHandler<_, RuntimeServiceId> =
+        EpochHandler::new(TestChainService, 1.try_into().unwrap());
+
+    // First tick initializes the epoch handler.
+    let (updated_info, updated_epoch) = handle_clock_event(
+        SlotTick {
+            epoch: 1.into(),
+            slot: 1.into(),
+        },
+        &settings,
+        &mut epoch_handler,
+        &mut processor,
+        public_info.clone(),
+        initial_epoch,
+    )
+    .await;
+    assert_eq!(
+        updated_epoch,
+        Epoch::new(1),
+        "Epoch must advance to 1 after first tick in epoch 1"
+    );
+    // Public info should be updated with new leader inputs derived from chain
+    // state.
+    assert_ne!(
+        updated_info.epoch, public_info.epoch,
+        "Leader inputs should be updated from chain epoch state"
+    );
+
+    // Tick in the same epoch should not change epoch.
+    let (unchanged_info, unchanged_epoch) = handle_clock_event(
+        SlotTick {
+            epoch: 1.into(),
+            slot: 2.into(),
+        },
+        &settings,
+        &mut epoch_handler,
+        &mut processor,
+        updated_info.clone(),
+        updated_epoch,
+    )
+    .await;
+    assert_eq!(unchanged_epoch, Epoch::new(1));
+    assert_eq!(unchanged_info.epoch, updated_info.epoch);
+
+    // Tick in a new epoch should advance again.
+    let (final_info, final_epoch) = handle_clock_event(
+        SlotTick {
+            epoch: 2.into(),
+            slot: 3.into(),
+        },
+        &settings,
+        &mut epoch_handler,
+        &mut processor,
+        unchanged_info.clone(),
+        unchanged_epoch,
+    )
+    .await;
+    assert_eq!(
+        final_epoch,
+        Epoch::new(2),
+        "Epoch must advance to 2 after tick in epoch 2"
+    );
+    // Since epoch_transition_period is 1 slot and slot 2 was the last in epoch 1,
+    // this triggers NewEpochAndOldEpochTransitionExpired which both completes the
+    // old transition and rotates to epoch 2.
+    assert_eq!(final_info.session.session_number, session);
+}
+
+/// Verify that `handle_new_secret_epoch_info` returns updated leader inputs
+/// when the PoL info epoch is newer than the current epoch, and returns `None`
+/// when the epoch has already been processed.
+#[test_log::test(tokio::test)]
+async fn test_handle_new_secret_epoch_info() {
+    let minimal_network_size = 1;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let (settings, _recovery_file) = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    let session = 0;
+    let public_info = new_public_info(session, membership.clone(), &settings);
+    let mut processor = new_crypto_processor(
+        SessionCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
+        },
+        &public_info,
+        (),
+    );
+
+    let current_epoch = Epoch::new(0);
+
+    // PoL info for a new epoch (epoch 1 > current 0): should return Some.
+    let pol_info = PolEpochInfo {
+        epoch: Epoch::new(1),
+        poq_public_inputs: lb_core::proofs::leader_proof::LeaderPublic {
+            slot: 1,
+            latest_root: lb_groth16::Fr::ZERO,
+            lottery_0: lb_groth16::Fr::ONE,
+            lottery_1: lb_groth16::Fr::ONE,
+            epoch_nonce: ZkHash::ONE,
+            aged_root: ZkHash::ONE,
+        },
+        poq_private_inputs:
+            lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs {
+                slot: 1,
+                note_value: 1,
+                transaction_hash: ZkHash::ZERO,
+                output_number: 1,
+                aged_path_and_selectors: [(ZkHash::ZERO, false); _],
+                secret_key: ZkHash::ZERO,
+            },
+    };
+    let result = handle_new_secret_epoch_info(&settings, &pol_info, &mut processor, current_epoch);
+    assert!(
+        result.is_some(),
+        "Should return Some(LeaderInputs) when PoL epoch > current epoch"
+    );
+    let new_leader = result.unwrap();
+    assert_eq!(new_leader.pol_epoch_nonce, ZkHash::ONE);
+    assert_eq!(new_leader.pol_ledger_aged, ZkHash::ONE);
+
+    // PoL info for the same epoch (epoch 1 == current 1): should return None.
+    let already_processed_epoch = Epoch::new(1);
+    let result = handle_new_secret_epoch_info(
+        &settings,
+        &pol_info,
+        &mut processor,
+        already_processed_epoch,
+    );
+    assert!(
+        result.is_none(),
+        "Should return None when PoL epoch <= current epoch"
+    );
+
+    // PoL info for an older epoch: should return None.
+    let future_epoch = Epoch::new(5);
+    let result = handle_new_secret_epoch_info(&settings, &pol_info, &mut processor, future_epoch);
+    assert!(
+        result.is_none(),
+        "Should return None when PoL epoch < current epoch"
     );
 }
