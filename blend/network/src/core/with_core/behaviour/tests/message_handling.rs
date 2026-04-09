@@ -325,6 +325,155 @@ async fn invalid_signature_message_received() {
 }
 
 #[test(tokio::test)]
+async fn message_already_forwarded_silently_ignored_when_received_from_peer() {
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+    let mut node_a = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut node_b = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+
+    node_b.listen().with_memory_addr_external().await;
+    node_a.connect_and_wait_for_upgrade(&mut node_b).await;
+
+    let test_message = TestEncapsulatedMessage::new(b"msg");
+
+    // Node A forwards X to Node B. In Node A's cache X is now `Forwarded`.
+    node_a
+        .behaviour_mut()
+        .publish_message_with_validated_signature_to_current_session(
+            &test_message.as_ref().clone().into(),
+        )
+        .unwrap();
+
+    // Wait until Node B has received the message.
+    loop {
+        select! {
+            _ = node_a.select_next_some() => {}
+            event = node_b.select_next_some() => {
+                if let SwarmEvent::Behaviour(Event::Message { .. }) = event {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Node B sends X back to Node A (bypassing Node B's own Forwarded check).
+    // From Node A's perspective X is already `Forwarded`, so the
+    // `is_message_processed` guard should fire and the message must be
+    // silently dropped - no event, no spam marking.
+    node_b
+        .behaviour_mut()
+        .force_send_message_to_peer(&test_message.into_inner(), *node_a.local_peer_id())
+        .unwrap();
+
+    let mut node_a_got_message = false;
+    let mut node_a_got_disconnect = false;
+    loop {
+        select! {
+            () = sleep(Duration::from_secs(3)) => { break; }
+            event = node_a.select_next_some() => {
+                match event {
+                    SwarmEvent::Behaviour(Event::Message { .. }) => {
+                        node_a_got_message = true;
+                    }
+                    SwarmEvent::Behaviour(Event::PeerDisconnected(..)) => {
+                        node_a_got_disconnect = true;
+                    }
+                    _ => {}
+                }
+            }
+            _ = node_b.select_next_some() => {}
+        }
+    }
+
+    assert!(
+        !node_a_got_message,
+        "Node A must not emit a Message event for a message it already forwarded"
+    );
+    assert!(
+        !node_a_got_disconnect,
+        "Node A must not mark Node B as spammy for sending an already-forwarded message"
+    );
+}
+
+#[test(tokio::test)]
+async fn duplicate_message_in_old_session_does_not_disconnect_peer() {
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+    let mut sender = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut receiver = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+
+    receiver.listen().with_memory_addr_external().await;
+    sender.connect_and_wait_for_upgrade(&mut receiver).await;
+
+    let test_message = TestEncapsulatedMessage::new(b"msg");
+
+    // Sender publishes X. Receiver marks it as `Processed` in its cache.
+    sender
+        .behaviour_mut()
+        .publish_message_with_validated_signature_to_current_session(
+            &test_message.as_ref().clone().into(),
+        )
+        .unwrap();
+
+    loop {
+        select! {
+            _ = sender.select_next_some() => {}
+            event = receiver.select_next_some() => {
+                if let SwarmEvent::Behaviour(Event::Message { .. }) = event {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Receiver starts a new session. Sender's connection moves to the old
+    // session together with the existing message cache (which contains X as
+    // `Processed`).
+    let memberships = build_memberships(&[&sender, &receiver]);
+    receiver
+        .behaviour_mut()
+        .start_new_session((memberships[1].clone(), 1));
+
+    // Wait long enough so that the connection monitor does not fire
+    // `TooManyMessages` instead.
+    sleep(Duration::from_secs(3)).await;
+
+    // Sender sends X again, bypassing its own `Forwarded` guard.  From
+    // receiver's point of view this arrives over the old-session connection.
+    // The old-session handler detects a duplicate from the same peer and
+    // returns `Err(DuplicateMessageFromPeer)`, but must NOT close the
+    // connection as spammy.
+    sender
+        .behaviour_mut()
+        .force_send_message_to_peer(&test_message.into_inner(), *receiver.local_peer_id())
+        .unwrap();
+
+    let mut peer_disconnected = false;
+    loop {
+        select! {
+            () = sleep(Duration::from_secs(3)) => { break; }
+            _ = sender.select_next_some() => {}
+            event = receiver.select_next_some() => {
+                if let SwarmEvent::Behaviour(Event::PeerDisconnected(..)) = event {
+                    peer_disconnected = true;
+                }
+            }
+        }
+    }
+
+    assert!(
+        !peer_disconnected,
+        "Receiver must not disconnect sender for a duplicate message received over the old-session connection"
+    );
+}
+
+#[test(tokio::test)]
 async fn duplicate_message_from_old_session_after_session_rotation_is_suppressed() {
     let (mut identities, nodes) = new_nodes_with_empty_address(3);
     let mut sender_a = TestSwarm::new(&identities.next().unwrap(), |id| {
