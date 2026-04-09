@@ -3,7 +3,7 @@ use core::time::Duration;
 use lb_core::{
     mantle::{
         MantleTx, Note, NoteId, OpProof, Utxo,
-        genesis_tx::GenesisTx,
+        genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GenesisTx},
         ops::{
             Op,
             channel::{ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp},
@@ -84,8 +84,8 @@ pub fn create_genesis_tx(utxos: &[Utxo], test_context: Option<&str>) -> GenesisT
     // Create the mantle transaction
     let mantle_tx = MantleTx {
         ops: vec![Op::Transfer(transfer_op), Op::ChannelInscribe(inscription)],
-        execution_gas_price: 0.into(),
-        storage_gas_price: 0.into(),
+        execution_gas_price: GENESIS_EXECUTION_GAS_PRICE,
+        storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
     };
     let signed_mantle_tx = SignedMantleTx {
         mantle_tx,
@@ -249,8 +249,8 @@ pub fn create_genesis_tx_with_declarations(
 
     let mantle_tx = MantleTx {
         ops,
-        execution_gas_price: 0.into(),
-        storage_gas_price: 0.into(),
+        execution_gas_price: GENESIS_EXECUTION_GAS_PRICE,
+        storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
     };
 
     let mantle_tx_hash = mantle_tx.hash();

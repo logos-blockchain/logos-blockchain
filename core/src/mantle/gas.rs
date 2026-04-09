@@ -34,6 +34,11 @@ pub struct GasPrice(Value);
 
 impl GasPrice {
     #[must_use]
+    pub const fn new(value: Value) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
     pub const fn into_inner(self) -> Value {
         self.0
     }
