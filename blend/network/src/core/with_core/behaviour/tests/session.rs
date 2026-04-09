@@ -317,3 +317,116 @@ async fn old_session_message_not_forwarded_back_to_sender() {
         "Old session should not forward the message back to the original sender"
     );
 }
+
+#[test(tokio::test)]
+async fn publish_to_invalid_session_returns_error() {
+    let session = 1;
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+    let mut dialer = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut listener = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+
+    listener.listen().with_memory_addr_external().await;
+    dialer.connect_and_wait_for_upgrade(&mut listener).await;
+
+    // Start the first session and connect.
+    let memberships = build_memberships(&[&dialer, &listener]);
+    dialer
+        .behaviour_mut()
+        .start_new_session((memberships[0].clone(), session));
+    listener
+        .behaviour_mut()
+        .start_new_session((memberships[1].clone(), session));
+    dialer.connect_and_wait_for_upgrade(&mut listener).await;
+
+    // Attempt to publish to a session that neither matches the current nor old.
+    let test_message = TestEncapsulatedMessageWithSession::new(999, b"invalid-session");
+    let result = dialer
+        .behaviour_mut()
+        .publish_message_with_validated_header(test_message.clone(), 999);
+    assert_eq!(result, Err(SendError::InvalidSession));
+}
+
+#[test(tokio::test)]
+async fn forward_to_invalid_session_returns_error() {
+    let session = 1;
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+    let mut dialer = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut listener = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+
+    listener.listen().with_memory_addr_external().await;
+    dialer.connect_and_wait_for_upgrade(&mut listener).await;
+
+    // Start the first session and connect.
+    let memberships = build_memberships(&[&dialer, &listener]);
+    dialer
+        .behaviour_mut()
+        .start_new_session((memberships[0].clone(), session));
+    listener
+        .behaviour_mut()
+        .start_new_session((memberships[1].clone(), session));
+    dialer.connect_and_wait_for_upgrade(&mut listener).await;
+
+    // Attempt to forward a message to an invalid session.
+    let test_message = TestEncapsulatedMessageWithSession::new(999, b"invalid-session");
+    let fake_sender = *listener.local_peer_id();
+    let sig_verified: lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedSignature =
+        (*test_message).clone().into();
+    let result = dialer
+        .behaviour_mut()
+        .forward_message_with_validated_signature(&sig_verified, fake_sender, 999);
+    assert_eq!(result, Err(SendError::InvalidSession));
+}
+
+#[test(tokio::test)]
+async fn event_message_carries_session_number() {
+    let mut session = 0;
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+    let mut dialer = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut listener = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+
+    listener.listen().with_memory_addr_external().await;
+    dialer.connect_and_wait_for_upgrade(&mut listener).await;
+
+    // Start session 1 and connect.
+    session += 1;
+    let memberships = build_memberships(&[&dialer, &listener]);
+    dialer
+        .behaviour_mut()
+        .start_new_session((memberships[0].clone(), session));
+    listener
+        .behaviour_mut()
+        .start_new_session((memberships[1].clone(), session));
+    dialer.connect_and_wait_for_upgrade(&mut listener).await;
+
+    // Send a message for session 1.
+    let test_message = TestEncapsulatedMessageWithSession::new(session, b"session-check");
+    dialer
+        .behaviour_mut()
+        .publish_message_with_validated_header(test_message.clone(), session)
+        .unwrap();
+
+    loop {
+        select! {
+            _ = dialer.select_next_some() => {}
+            event = listener.select_next_some() => {
+                if let SwarmEvent::Behaviour(Event::Message { message, session: event_session, .. }) = event {
+                    assert_eq!(message.id(), test_message.id());
+                    assert_eq!(event_session, session, "Event::Message must carry the correct session number");
+                    break;
+                }
+            }
+        }
+    }
+}

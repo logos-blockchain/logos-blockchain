@@ -258,6 +258,90 @@ async fn test_handle_incoming_blend_message() {
 }
 
 #[test_log::test(tokio::test)]
+async fn test_handle_incoming_blend_message_with_invalid_poq() {
+    let (_, _, state_updater, _state_receiver) =
+        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+
+    let minimal_network_size = 1;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let (settings, _recovery_file) = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+
+    // Create session 0 processor and build a message with session 0 proofs.
+    let session_0 = 0;
+    let public_info_0 = new_public_info(session_0, membership.clone(), &settings);
+    let mut processor_0 = new_crypto_processor(
+        SessionCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
+        },
+        &public_info_0,
+        (),
+    );
+
+    let payload = NetworkMessage {
+        message: vec![],
+        broadcast_settings: (),
+    }
+    .to_bytes()
+    .expect("NetworkMessage serialization must succeed");
+    let msg = processor_0
+        .encapsulate_data_payload(&payload)
+        .await
+        .expect("encapsulation must succeed");
+
+    // Create session 1 processor - its MockProofsVerifier expects session 1
+    // proofs.
+    let session_1 = 1;
+    let public_info_1 = new_public_info(session_1, membership, &settings);
+    let processor_1 = new_crypto_processor(
+        SessionCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
+        },
+        &public_info_1,
+        (),
+    );
+
+    let scheduler_settings = scheduler_settings(&timing_settings(), settings.num_blend_layers);
+    let mut scheduler = SessionMessageScheduler::new(
+        scheduler_session_info(&public_info_1),
+        BlakeRng::from_entropy(),
+        scheduler_settings,
+    );
+    let recovery_checkpoint = ServiceState::with_session(
+        session_1,
+        SessionBlendingTokenCollector::new(&reward_session_info(&public_info_1)),
+        None,
+        state_updater,
+    )
+    .unwrap();
+
+    // Send session 0 message claiming to be for session 1.
+    // Signature is valid (built correctly) but PoQ will fail because the
+    // MockProofsVerifier for session 1 expects session 1 proofs.
+    let _recovery_checkpoint = handle_incoming_blend_message(
+        (msg.into(), session_1),
+        &mut scheduler,
+        None,
+        &processor_1,
+        None,
+        recovery_checkpoint,
+    );
+
+    // Nothing should be scheduled \u{2014} PoQ validation must have failed.
+    assert_eq!(
+        scheduler.release_delayer().unreleased_messages().len(),
+        0,
+        "Message with invalid PoQ should not be scheduled"
+    );
+}
+
+#[test_log::test(tokio::test)]
 async fn test_handle_session_transition_expired() {
     let (overwatch_handle, _, _, _) = dummy_overwatch_resources::<(), (), RuntimeServiceId>();
 
