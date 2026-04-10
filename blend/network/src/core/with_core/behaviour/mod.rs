@@ -308,7 +308,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     /// Force send a message to a peer, as long as the peer is connected, no
     /// matter the state the connection is in.
     #[cfg(any(test, feature = "unsafe-test-functions"))]
-    pub fn force_send_message_to_peer_at_session(
+    fn force_send_message_to_peer_at_session(
         &mut self,
         message: &EncapsulatedMessageWithVerifiedPublicHeader,
         peer_id: PeerId,
@@ -324,8 +324,8 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     /// Force send a serialized message to a peer (without trying to deserialize
     /// nor validating it first), as long as the peer is connected, no
     /// matter the state the connection is in.
-    #[cfg(any(test, feature = "unsafe-test-functions"))]
-    pub fn force_send_serialized_message_to_current_session_peer(
+    #[cfg(test)]
+    fn force_send_serialized_message_to_current_session_peer(
         &mut self,
         serialized_message: Vec<u8>,
         peer_id: PeerId,
