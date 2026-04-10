@@ -271,7 +271,7 @@ async fn epoch_transition_full_lifecycle() {
     let membership_info =
         MembershipInfo::from_membership_and_session_number(edge_membership.clone(), 1);
     let settings = settings(local_node, 1, node_id_sender);
-    let overwatch = utils::overwatch_handle();
+    let overwatch = overwatch_handle();
 
     // Start with handler active at epoch 1.
     let pol_info = test_pol_epoch_info(Epoch::new(1));
