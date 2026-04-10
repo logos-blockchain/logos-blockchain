@@ -1574,7 +1574,7 @@ fn handle_incoming_blend_message_from_old_session<
             }
         }
         Err(e) => {
-            if matches!(e, MessageError::MessageDeserializationFailed) {
+            if matches!(e, MessageError::PrivateHeaderDeserializationFailed) {
                 tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message from old session due to deserialization error. This can happen when the message was intended for another node or when the message is malformed. Ignoring...");
             } else {
                 tracing::debug!(target: LOG_TARGET, "Failed to decapsulate received message from old session: {e:?}");

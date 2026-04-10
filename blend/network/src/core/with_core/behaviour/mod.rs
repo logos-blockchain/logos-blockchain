@@ -654,7 +654,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
                 "Provided connection ID {connection_id:?} does not match the stored connection ID {:?} for peer {peer_id:?}. Ignoring state update.",
                 peer_details.connection_id
             );
-            return Some(state);
+            return None;
         }
         Some(mem::replace(&mut peer_details.negotiated_state, state))
     }
