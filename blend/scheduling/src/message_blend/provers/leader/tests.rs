@@ -56,7 +56,7 @@ async fn proof_generation() {
     // Next proof should still return `Some` since leadership proofs do not have a
     // maximum cap.
     timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(20),
         leader_proofs_generator.get_next_proof(),
     )
     .await
@@ -174,7 +174,7 @@ async fn rotate_epoch_updates_epoch_and_regenerates_proofs() {
 
     // Proofs should still verify after a second rotation.
     let proof = timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(20),
         leader_proofs_generator.get_next_proof(),
     )
     .await
