@@ -168,13 +168,13 @@ async fn on_malicious_peer() {
         .behaviour_mut()
         .blend
         .with_core_mut()
-        .force_send_message_to_peer(&message_1, listening_swarm_peer_id)
+        .force_send_message_to_current_session_peer(&message_1, listening_swarm_peer_id)
         .unwrap();
     malicious_swarm
         .behaviour_mut()
         .blend
         .with_core_mut()
-        .force_send_message_to_peer(&message_2, listening_swarm_peer_id)
+        .force_send_message_to_current_session_peer(&message_2, listening_swarm_peer_id)
         .unwrap();
 
     loop {
