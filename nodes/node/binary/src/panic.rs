@@ -25,7 +25,7 @@ pub fn log_and_exit_hook(panic_info: &PanicHookInfo) {
     );
 
     #[cfg(feature = "dhat-heap")]
-    crate::profiling::drop_dhat_profiler();
+    crate::global_allocators::dhat_heap::drop_dhat_profiler();
 
     std::process::exit(1);
 }

@@ -7,7 +7,11 @@ use serial_test::serial;
 #[tokio::test]
 #[serial]
 async fn test_post_mantle_tx() {
-    let topology = Topology::spawn(TopologyConfig::two_validators()).await;
+    let topology = Topology::spawn(
+        TopologyConfig::two_validators(),
+        Some("test_post_mantle_tx"),
+    )
+    .await;
     let validator = &topology.validators()[0];
 
     let validator_url = Url::parse(
@@ -21,8 +25,8 @@ async fn test_post_mantle_tx() {
 
     let mantle_tx = MantleTx {
         ops: Vec::new(),
-        storage_gas_price: 0,
-        execution_gas_price: 0,
+        storage_gas_price: 0.into(),
+        execution_gas_price: 0.into(),
     };
 
     let signed_tx = SignedMantleTx {

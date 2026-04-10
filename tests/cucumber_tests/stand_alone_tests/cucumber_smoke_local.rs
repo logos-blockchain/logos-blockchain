@@ -1,3 +1,5 @@
+mod cucumber_smoke_k8s;
+
 use std::path::PathBuf;
 
 use cucumber::World as _;

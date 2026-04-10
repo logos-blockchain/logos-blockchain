@@ -14,7 +14,8 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-futures                          = { workspace = true }
+async-trait                      = { workspace = true }
+futures                          = { default-features = false, version = "0.3" }
 lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
 lb-key-management-system-service = { workspace = true }
@@ -24,3 +25,6 @@ serde                            = { features = ["derive"], workspace = true }
 thiserror                        = { workspace = true }
 tokio                            = { features = ["macros", "rt", "sync", "time"], workspace = true }
 tracing                          = { workspace = true }
+
+[dev-dependencies]
+num-bigint = { default-features = false, version = "0.4" }

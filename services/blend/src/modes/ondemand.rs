@@ -25,6 +25,10 @@ where
     Service: ServiceData<Message: Send + 'static>,
     RuntimeServiceId: AsServiceId<Service> + Debug + Display + Send + Sync + 'static,
 {
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     pub async fn new(overwatch_handle: OverwatchHandle<RuntimeServiceId>) -> Result<Self, Error> {
         let service_id = <RuntimeServiceId as AsServiceId<Service>>::SERVICE_ID;
         info!(target = LOG_TARGET, "Starting service {service_id:}");

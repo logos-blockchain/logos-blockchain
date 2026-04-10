@@ -1,5 +1,4 @@
 use core::{
-    convert::Infallible,
     fmt::Debug,
     iter::repeat_with,
     ops::{Deref, DerefMut},
@@ -7,20 +6,13 @@ use core::{
 use std::time::Duration;
 
 use lb_blend_message::{
-    PayloadType,
-    crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
-    encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
-    input::EncapsulationInput,
+    MessageIdentifier, PayloadType, crypto::key_ext::Ed25519SecretKeyExt as _,
+    encap::validated::EncapsulatedMessageWithVerifiedPublicHeader, input::EncapsulationInput,
 };
-use lb_blend_proofs::{
-    quota::{ProofOfQuota, VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},
-    selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
-};
+use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 use lb_blend_scheduling::message_blend::provers::BlendLayerProof;
 use lb_core::sdp::SessionNumber;
-use lb_key_management_system_keys::keys::{
-    Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key,
-};
+use lb_key_management_system_keys::keys::{Ed25519Signature, UnsecuredEd25519Key};
 use lb_libp2p::{NetworkBehaviour, ed25519, upgrade::Version};
 use libp2p::{
     PeerId, StreamProtocol, Swarm, Transport as _, core::transport::MemoryTransport,
@@ -100,6 +92,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct TestEncapsulatedMessage(EncapsulatedMessageWithVerifiedPublicHeader);
 
 impl TestEncapsulatedMessage {
@@ -120,19 +113,15 @@ impl TestEncapsulatedMessage {
     pub fn into_inner(self) -> EncapsulatedMessageWithVerifiedPublicHeader {
         self.0
     }
-}
 
-impl Deref for TestEncapsulatedMessage {
-    type Target = EncapsulatedMessageWithVerifiedPublicHeader;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    pub fn id(&self) -> MessageIdentifier {
+        self.0.id()
     }
 }
 
-impl DerefMut for TestEncapsulatedMessage {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+impl AsRef<EncapsulatedMessageWithVerifiedPublicHeader> for TestEncapsulatedMessage {
+    fn as_ref(&self) -> &EncapsulatedMessageWithVerifiedPublicHeader {
+        &self.0
     }
 }
 
@@ -161,54 +150,15 @@ fn generate_valid_inputs(session: SessionNumber) -> Vec<EncapsulationInput> {
         .take(3)
         .map(|recipient_signing_key| {
             let proofs = session_based_mock_blend_proof(session);
-            EncapsulationInput::new(
+            EncapsulationInput::try_new(
                 UnsecuredEd25519Key::generate_with_blake_rng(),
                 &recipient_signing_key.public_key(),
                 proofs.proof_of_quota,
                 proofs.proof_of_selection,
             )
+            .unwrap()
         })
         .collect::<Vec<_>>()
-}
-
-pub struct SessionBasedMockProofsVerifier(pub SessionNumber);
-
-impl ProofsVerifier for SessionBasedMockProofsVerifier {
-    type Error = ();
-
-    fn new(public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-        Self(public_inputs.session)
-    }
-
-    fn start_epoch_transition(&mut self, _new_pol_inputs: LeaderInputs) {}
-
-    fn complete_epoch_transition(&mut self) {}
-
-    fn verify_proof_of_quota(
-        &self,
-        proof: ProofOfQuota,
-        _: &Ed25519PublicKey,
-    ) -> Result<VerifiedProofOfQuota, Self::Error> {
-        let expected_proofs = session_based_mock_blend_proof(self.0);
-        if proof == expected_proofs.proof_of_quota {
-            Ok(expected_proofs.proof_of_quota)
-        } else {
-            Err(())
-        }
-    }
-
-    fn verify_proof_of_selection(
-        &self,
-        proof: ProofOfSelection,
-        _: &VerifyInputs,
-    ) -> Result<VerifiedProofOfSelection, Self::Error> {
-        let expected_proofs = session_based_mock_blend_proof(self.0);
-        if proof == expected_proofs.proof_of_selection {
-            Ok(expected_proofs.proof_of_selection)
-        } else {
-            Err(())
-        }
-    }
 }
 
 fn session_based_mock_blend_proof(session: SessionNumber) -> BlendLayerProof {
@@ -225,38 +175,5 @@ fn session_based_mock_blend_proof(session: SessionNumber) -> BlendLayerProof {
             bytes
         }),
         ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct AlwaysTrueVerifier;
-
-impl ProofsVerifier for AlwaysTrueVerifier {
-    type Error = Infallible;
-
-    fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-        Self
-    }
-
-    fn start_epoch_transition(&mut self, _new_pol_inputs: LeaderInputs) {}
-
-    fn complete_epoch_transition(&mut self) {}
-
-    fn verify_proof_of_quota(
-        &self,
-        proof: ProofOfQuota,
-        _signing_key: &Ed25519PublicKey,
-    ) -> Result<VerifiedProofOfQuota, Self::Error> {
-        Ok(VerifiedProofOfQuota::from_proof_of_quota_unchecked(proof))
-    }
-
-    fn verify_proof_of_selection(
-        &self,
-        proof: ProofOfSelection,
-        _: &VerifyInputs,
-    ) -> Result<VerifiedProofOfSelection, Self::Error> {
-        Ok(VerifiedProofOfSelection::from_proof_of_selection_unchecked(
-            proof,
-        ))
     }
 }

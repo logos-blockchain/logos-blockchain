@@ -12,7 +12,7 @@ use logos_blockchain_node::{
 #[tokio::main]
 async fn main() -> Result<()> {
     #[cfg(feature = "dhat-heap")]
-    let _dhat_drop_guard = logos_blockchain_node::profiling::setup();
+    let _dhat_drop_guard = logos_blockchain_node::global_allocators::dhat_heap::setup();
 
     let cli_args = CliArgs::parse();
 

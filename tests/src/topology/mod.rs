@@ -1,5 +1,4 @@
 pub mod configs;
-
 use std::{collections::HashSet, time::Duration};
 
 use configs::{
@@ -15,7 +14,7 @@ use lb_core::{
 use lb_key_management_system_service::keys::ZkKey;
 use lb_network_service::backends::libp2p::Libp2pInfo;
 use lb_node::config::{KmsConfig, kms::serde::PreloadKmsBackendSettings};
-use lb_utils::net::get_available_udp_port;
+use lb_testing_framework::get_reserved_available_udp_port;
 use rand::{Rng as _, thread_rng};
 
 use crate::{
@@ -27,7 +26,7 @@ use crate::{
         consensus::{SHORT_PROLONGED_BOOTSTRAP_PERIOD, create_consensus_configs},
         deployment::e2e_deployment_settings_with_genesis_tx,
         sdp::create_sdp_configs,
-        time::default_time_config,
+        time::set_time_config,
     },
 };
 
@@ -102,7 +101,7 @@ pub struct Topology {
 }
 
 impl Topology {
-    pub async fn spawn(config: TopologyConfig) -> Self {
+    pub async fn spawn(config: TopologyConfig, test_context: Option<&str>) -> Self {
         let n_participants = config.n_validators;
 
         // we use the same random bytes for:
@@ -113,16 +112,16 @@ impl Topology {
         let mut blend_ports = vec![];
         for id in &mut ids {
             thread_rng().fill(id);
-            blend_ports.push(get_available_udp_port().unwrap());
+            blend_ports.push(get_reserved_available_udp_port().unwrap());
         }
 
         let (consensus_configs, genesis_tx) =
-            create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+            create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD, test_context);
         let network_configs = create_network_configs(&ids, &config.network_params);
         let blend_configs = create_blend_configs(&ids, &blend_ports);
         let api_configs = create_api_configs(&ids);
         let tracing_configs = create_tracing_configs(&ids);
-        let time_config = default_time_config();
+        let time_config = set_time_config();
 
         // Setup genesis TX with Blend service declarations.
         let base_transfer_op = genesis_tx.genesis_transfer().clone();
@@ -147,7 +146,7 @@ impl Topology {
 
         // Update genesis TX to contain Blend providers.
         let genesis_tx_with_declarations =
-            create_genesis_tx_with_declarations(transfer_op, providers);
+            create_genesis_tx_with_declarations(transfer_op, providers, test_context);
         let updated_transfer_op = genesis_tx_with_declarations.genesis_transfer().clone();
         let injected_utxos: Vec<_> = updated_transfer_op
             .utxos()

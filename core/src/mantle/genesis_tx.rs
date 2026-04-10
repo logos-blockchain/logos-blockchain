@@ -4,12 +4,12 @@ use serde::{Deserialize, Serialize};
 
 use super::{OpProof, SignedMantleTx, ops::sdp::SDPDeclareOp};
 #[cfg(feature = "mock")]
-use crate::mantle::tx::MantleTxGasContext;
+use crate::mantle::tx::MantleTxContext;
 use crate::{
     crypto::ZkHasher,
     mantle::{
         MantleTx, Transaction, TransactionHasher, TxHash,
-        gas::{Gas, GasConstants, GasCost},
+        gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
@@ -17,6 +17,23 @@ use crate::{
         },
     },
 };
+
+/// Initial storage gas price at genesis
+///
+/// [Spec](https://www.notion.so/nomos-tech/v1-1-Storage-Markets-Specification-326261aa09df804ab483f573f522baf5?source=copy_link#326261aa09df804280b1fd5da1120a14):
+/// `P_STR(0)` = 1 LGO/gas
+//
+// TODO: This is currently set to 0 because zone-sdk and most of e2e tests are
+// not paying fees. This must be updated to the correct value defined in the
+// spec above.
+pub const GENESIS_STORAGE_GAS_PRICE: GasPrice = GasPrice::new(0);
+
+/// Initial execution gas price at genesis
+//
+// TODO: This is currently set to 0 because zone-sdk and most of e2e tests are
+// not paying fees. This must be updated to the correct value once the spec is
+// finalized.
+pub const GENESIS_EXECUTION_GAS_PRICE: GasPrice = GasPrice::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GenesisTx(SignedMantleTx);
@@ -41,8 +58,11 @@ impl GenesisTx {
     pub fn from_tx(signed_mantle_tx: SignedMantleTx) -> Result<Self, Error> {
         let mantle_tx = &signed_mantle_tx.mantle_tx;
 
-        // Genesis transactions must have execution gas prices of 0 and storage gas of 0
-        if mantle_tx.execution_gas_price != 0 || mantle_tx.storage_gas_price != 0 {
+        // Genesis transactions must have execution gas price and storage gas price
+        // matching the expected genesis values
+        if mantle_tx.execution_gas_price != GENESIS_EXECUTION_GAS_PRICE
+            || mantle_tx.storage_gas_price != GENESIS_STORAGE_GAS_PRICE
+        {
             return Err(Error::InvalidGenesisGasPrice);
         }
 
@@ -76,7 +96,7 @@ impl GenesisTx {
 
     #[cfg(feature = "mock")]
     #[must_use]
-    pub fn new_mocked(context: MantleTxGasContext) -> Self {
+    pub fn new_mocked(context: MantleTxContext) -> Self {
         use crate::mantle::tx_builder::MantleTxBuilder;
 
         Self(SignedMantleTx::new_unverified(
@@ -117,27 +137,33 @@ impl Transaction for GenesisTx {
     }
 }
 
-impl GasCost for GenesisTx {
+impl GasCalculator for GenesisTx {
     type Context = ();
 
-    fn total_gas_cost<Constants: GasConstants>(&self, _context: &Self::Context) -> Gas {
+    fn total_gas_cost<Constants: GasConstants>(
+        &self,
+        _context: &Self::Context,
+    ) -> Result<GasCost, GasOverflow> {
         // Genesis transactions have zero gas cost as per spec
-        0
+        Ok(0.into())
     }
 
-    fn storage_gas_cost(&self, _context: &Self::Context) -> Gas {
+    fn storage_gas_cost(&self, _context: &Self::Context) -> Result<GasCost, GasOverflow> {
         // Genesis transactions have zero gas cost as per spec
-        0
+        Ok(0.into())
     }
 
-    fn execution_gas_consumption<Constants: GasConstants>(&self, _context: &Self::Context) -> Gas {
+    fn execution_gas_consumption<Constants: GasConstants>(
+        &self,
+        _context: &Self::Context,
+    ) -> Result<Gas, GasOverflow> {
         // Genesis transactions have zero gas cost as per spec
-        0
+        Ok(0.into())
     }
 
-    fn storage_gas_consumption(&self, _context: &Self::Context) -> Gas {
+    fn storage_gas_consumption(&self, _context: &Self::Context) -> Result<Gas, GasOverflow> {
         // Genesis transactions have zero gas cost as per spec
-        0
+        Ok(0.into())
     }
 }
 
@@ -241,8 +267,8 @@ mod tests {
         new_ops.append(&mut ops);
         let mantle_tx = MantleTx {
             ops: new_ops,
-            execution_gas_price: 0,
-            storage_gas_price: 0,
+            execution_gas_price: GENESIS_EXECUTION_GAS_PRICE,
+            storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
         };
         let mut new_op_proofs = vec![OpProof::ZkSig(
             ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap(),
@@ -405,7 +431,8 @@ mod tests {
 
     #[test]
     fn test_genesis_fees() {
-        // Should succeed with zero gas prices
+        // Should succeed with execution_gas_price=GENESIS_EXECUTION_GAS_PRICE
+        // and storage_gas_price=GENESIS_STORAGE_GAS_PRICE
         let mut signed_mantle_tx = create_tx(
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
@@ -416,20 +443,24 @@ mod tests {
         );
         assert!(GenesisTx::from_tx(signed_mantle_tx.clone()).is_ok());
 
-        // Test with non-zero execution gas price
-        signed_mantle_tx.mantle_tx.execution_gas_price = 1;
+        // Test with wrong execution gas price
+        signed_mantle_tx.mantle_tx.execution_gas_price =
+            (GENESIS_EXECUTION_GAS_PRICE.into_inner() + 1).into();
         let result = GenesisTx::from_tx(signed_mantle_tx.clone());
         assert_eq!(result, Err(Error::InvalidGenesisGasPrice));
 
-        // test with non-zero storage gas price
-        signed_mantle_tx.mantle_tx.storage_gas_price = 1;
-        signed_mantle_tx.mantle_tx.execution_gas_price = 0;
+        // Test with wrong storage gas price
+        signed_mantle_tx.mantle_tx.storage_gas_price =
+            (GENESIS_STORAGE_GAS_PRICE.into_inner() + 1).into();
+        signed_mantle_tx.mantle_tx.execution_gas_price = 0.into();
         let result = GenesisTx::from_tx(signed_mantle_tx.clone());
         assert_eq!(result, Err(Error::InvalidGenesisGasPrice));
 
-        // test with both gas prices non-zero
-        signed_mantle_tx.mantle_tx.storage_gas_price = 1;
-        signed_mantle_tx.mantle_tx.execution_gas_price = 1;
+        // Test with wrong storage/execution gas prices
+        signed_mantle_tx.mantle_tx.storage_gas_price =
+            (GENESIS_STORAGE_GAS_PRICE.into_inner() + 1).into();
+        signed_mantle_tx.mantle_tx.execution_gas_price =
+            (GENESIS_EXECUTION_GAS_PRICE.into_inner() + 1).into();
         let result = GenesisTx::from_tx(signed_mantle_tx);
         assert_eq!(result, Err(Error::InvalidGenesisGasPrice));
     }

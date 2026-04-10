@@ -79,6 +79,15 @@ pub struct PublicCryptarchiaEndpointPeer {
     pub password: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct UserConfigOverride {
+    /// Dot-separated user config path, e.g.
+    /// `network.backend.swarm.gossipsub.retain_scores`.
+    pub path: String,
+    /// YAML value parsed from the step input.
+    pub value: serde_yaml::Value,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct ScenarioSpec {
     pub topology: Option<TopologySpec>,
@@ -117,6 +126,9 @@ pub struct ConsensusLivenessSpec {
 pub struct CucumberWorld {
     /// The deployer kind that this scenario is configured for.
     pub deployer: Option<DeployerKind>,
+    /// The unique test context, helfull to guarantee unique genesis transaction
+    /// inscription.
+    pub test_context: Option<String>,
     /// Base directory for scenario artifacts like logs and generated configs.
     pub scenario_base_dir: PathBuf,
     /// Automated: Scenario specification
@@ -176,6 +188,8 @@ pub struct CucumberWorld {
     /// Manual: Public base endpoints and credentials used to query
     /// `/cryptarchia/info` for external chain sync reference.
     pub public_cryptarchia_endpoint_peers: Option<Vec<PublicCryptarchiaEndpointPeer>>,
+    /// Manual: Dynamic user-config overrides applied on node startup.
+    pub user_config_overrides: Vec<UserConfigOverride>,
     /// Manual: If set, nodes use a `DeploymentSettings` loaded from disk
     /// bypassing generated genesis/test deployment.
     pub deployment_config_override_path: Option<PathBuf>,
@@ -239,6 +253,7 @@ impl Debug for CucumberWorld {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CucumberWorld")
             .field("deployer", &format!("{:?}", self.deployer))
+            .field("test_context", &format!("{:?}", self.test_context))
             .field("scenario_base_dir", &self.scenario_base_dir)
             .field("spec", &format!("{:?}", self.spec))
             .field("run", &format!("{:?}", self.run))
@@ -308,6 +323,10 @@ impl Debug for CucumberWorld {
                 &public_cryptarchia_endpoint_peers_display(
                     self.public_cryptarchia_endpoint_peers.as_ref(),
                 ),
+            )
+            .field(
+                "user_config_overrides",
+                &user_config_overrides_display(&self.user_config_overrides),
             )
             .field(
                 "deployment_config_override_path",
@@ -457,6 +476,11 @@ impl CucumberWorld {
     /// Set the deployer kind for this scenario.
     pub const fn set_deployer(&mut self, deployer: DeployerKind) {
         self.deployer = Some(deployer);
+    }
+
+    /// Set the unique test context for this scenario.
+    pub fn set_test_context(&mut self, test_context: String) {
+        self.test_context = Some(test_context);
     }
 
     /// Set the directory where scenario artifacts should be stored.
@@ -914,6 +938,10 @@ impl CucumberWorld {
                 ),
             )
             .field(
+                "user_config_overrides",
+                &user_config_overrides_display(&self.user_config_overrides),
+            )
+            .field(
                 "deployment_config_override_path",
                 &deployment_config_override_path_display(
                     self.deployment_config_override_path.as_ref(),
@@ -1127,4 +1155,16 @@ fn deployment_config_override_path_display(
         || "None".to_owned(),
         |path| format!("Some({})", path.display()),
     )
+}
+
+fn user_config_overrides_display(overrides: &[UserConfigOverride]) -> String {
+    if overrides.is_empty() {
+        return "[]".to_owned();
+    }
+
+    let values = overrides
+        .iter()
+        .map(|override_item| format!("{}={:?}", override_item.path, override_item.value))
+        .collect::<Vec<_>>();
+    format!("[{}]", values.join(", "))
 }

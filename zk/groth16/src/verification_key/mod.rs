@@ -54,7 +54,7 @@ impl TryFrom<VerificationKeyJsonDeser> for VerificationKey<ark_bn254::Bn254> {
             .map(StringifiedG1)
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(Self::Error::G2PointConversionError)?;
+            .map_err(Self::Error::G1PointConversionError)?;
 
         Ok(Self {
             alpha_1,

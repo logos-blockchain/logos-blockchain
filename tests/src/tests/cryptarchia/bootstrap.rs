@@ -33,6 +33,7 @@ async fn test_ibd_behind_nodes() {
         n_validators,
         n_initial_validators,
         &network_params,
+        Some("test_ibd_behind_nodes"),
     );
 
     let mut initial_validators = vec![];

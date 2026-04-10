@@ -1,4 +1,4 @@
-use core::{mem::swap, num::NonZeroUsize};
+use core::num::NonZeroUsize;
 use std::{
     collections::{HashSet, VecDeque},
     convert::Infallible,
@@ -8,14 +8,7 @@ use std::{
 };
 
 use either::Either;
-use lb_blend_message::{
-    Error,
-    encap::{
-        self, encapsulated::EncapsulatedMessage,
-        validated::EncapsulatedMessageWithVerifiedPublicHeader,
-    },
-};
-use lb_blend_proofs::quota::{self, inputs::prove::public::LeaderInputs};
+use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedSignature;
 use lb_blend_scheduling::{deserialize_encapsulated_message, membership::Membership};
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol,
@@ -38,9 +31,9 @@ const LOG_TARGET: &str = "blend::network::core::edge::behaviour";
 
 #[derive(Debug)]
 pub enum Event {
-    /// A message received from one of the edge peers, after its public header
+    /// A message received from one of the edge peers, after its signature
     /// has been verified.
-    Message(EncapsulatedMessageWithVerifiedPublicHeader),
+    Message(EncapsulatedMessageWithVerifiedSignature),
 }
 
 #[derive(Debug)]
@@ -52,7 +45,7 @@ pub struct Config {
 
 /// A [`NetworkBehaviour`]:
 /// - receives messages from edge nodes and forwards them to the swarm.
-pub struct Behaviour<ProofsVerifier> {
+pub struct Behaviour {
     /// Queue of events to yield to the swarm.
     events: VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     /// Waker that handles polling
@@ -64,56 +57,35 @@ pub struct Behaviour<ProofsVerifier> {
     max_incoming_connections: usize,
     protocol_name: StreamProtocol,
     minimum_network_size: NonZeroUsize,
-    current_session_poq_verifier: ProofsVerifier,
-    previous_session_poq_verifier: Option<ProofsVerifier>,
 }
 
-impl<ProofsVerifier> Behaviour<ProofsVerifier> {
+impl Behaviour {
     #[must_use]
     pub fn new(
         config: &Config,
-        current_membership: Membership<PeerId>,
+        current_session_info: Membership<PeerId>,
         protocol_name: StreamProtocol,
-        poq_verifier: ProofsVerifier,
     ) -> Self {
         Self {
             events: VecDeque::new(),
             waker: None,
-            current_membership,
+            current_membership: current_session_info,
             connection_timeout: config.connection_timeout,
             upgraded_edge_peers: HashSet::with_capacity(config.max_incoming_connections),
             max_incoming_connections: config.max_incoming_connections,
             protocol_name,
             minimum_network_size: config.minimum_network_size,
-            current_session_poq_verifier: poq_verifier,
-            previous_session_poq_verifier: None,
         }
     }
 
-    pub(crate) fn start_new_session(
-        &mut self,
-        new_membership: Membership<PeerId>,
-        new_verifier: ProofsVerifier,
-    ) {
-        self.current_membership = new_membership;
+    pub(crate) fn start_new_session(&mut self, new_session_info: Membership<PeerId>) {
+        self.current_membership = new_session_info;
         // Close all the connections without waiting for the transition period,
         // so that edge nodes can retry with the new membership.
         let peers = mem::take(&mut self.upgraded_edge_peers);
         for conn in &peers {
             self.close_substream(*conn);
         }
-
-        let old_verifier = {
-            let mut new_verifier = new_verifier;
-            swap(&mut new_verifier, &mut self.current_session_poq_verifier);
-            new_verifier
-        };
-
-        self.previous_session_poq_verifier = Some(old_verifier);
-    }
-
-    pub(crate) fn finish_session_transition(&mut self) {
-        self.previous_session_poq_verifier = None;
     }
 
     fn try_wake(&mut self) {
@@ -163,12 +135,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     fn is_network_large_enough(&self) -> bool {
         self.current_membership.size() >= self.minimum_network_size.get()
     }
-}
 
-impl<ProofsVerifier> Behaviour<ProofsVerifier>
-where
-    ProofsVerifier: encap::ProofsVerifier,
-{
     fn handle_received_serialized_encapsulated_message(&mut self, serialized_message: &[u8]) {
         let Ok(deserialized_encapsulated_message) =
             deserialize_encapsulated_message(serialized_message)
@@ -177,10 +144,9 @@ where
             return;
         };
 
-        let Ok(validated_message) =
-            self.validate_encapsulated_message_public_header(deserialized_encapsulated_message)
+        let Ok(validated_message) = deserialized_encapsulated_message.verify_header_signature()
         else {
-            tracing::trace!(target: LOG_TARGET, "Failed to validate public header of received message. Ignoring...");
+            tracing::trace!(target: LOG_TARGET, "Failed to validate signature of received message. Ignoring...");
             return;
         };
 
@@ -188,55 +154,16 @@ where
             .push_back(ToSwarm::GenerateEvent(Event::Message(validated_message)));
         self.try_wake();
     }
-
-    // Try to validate an encapsulated public header with the current session
-    // verifier, and on failure it tries with with previous one, if the session
-    // transition period is not over yet.
-    fn validate_encapsulated_message_public_header(
-        &self,
-        message: EncapsulatedMessage,
-    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
-        message
-            .clone()
-            .verify_public_header(&self.current_session_poq_verifier)
-            .or_else(|_| {
-                let Some(previous_session_verifier) = &self.previous_session_poq_verifier else {
-                    return Err(Error::ProofOfQuotaVerificationFailed(
-                        quota::Error::InvalidProof,
-                    ));
-                };
-                message.verify_public_header(previous_session_verifier)
-            })
-    }
-
-    /// Instruct both current and past session proof verifier (if present) of a
-    /// new epoch.
-    pub(crate) fn start_new_epoch(&mut self, new_pol_inputs: LeaderInputs) {
-        self.current_session_poq_verifier
-            .start_epoch_transition(new_pol_inputs);
-        if let Some(previous_session_poq_verifier) = &mut self.previous_session_poq_verifier {
-            previous_session_poq_verifier.start_epoch_transition(new_pol_inputs);
-        }
-    }
-
-    /// Instruct both current and past session proof verifier (if present) that
-    /// the epoch transition period is over.
-    pub(crate) fn finish_epoch_transition(&mut self) {
-        self.current_session_poq_verifier
-            .complete_epoch_transition();
-        if let Some(previous_session_poq_verifier) = &mut self.previous_session_poq_verifier {
-            previous_session_poq_verifier.complete_epoch_transition();
-        }
-    }
 }
 
-impl<ProofsVerifier> NetworkBehaviour for Behaviour<ProofsVerifier>
-where
-    ProofsVerifier: encap::ProofsVerifier + 'static,
-{
+impl NetworkBehaviour for Behaviour {
     type ConnectionHandler = Either<ConnectionHandler, DummyConnectionHandler>;
     type ToSwarm = Event;
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     fn handle_established_inbound_connection(
         &mut self,
         connection_id: ConnectionId,

@@ -7,15 +7,13 @@ use crate::core::{
 };
 
 #[derive(NetworkBehaviour)]
-pub struct BlendBehaviour<ProofsVerifier, ObservationWindowProvider> {
-    pub blend: lb_blend::network::core::NetworkBehaviour<ProofsVerifier, ObservationWindowProvider>,
+pub struct BlendBehaviour<ObservationWindowProvider> {
+    pub blend: lb_blend::network::core::NetworkBehaviour<ObservationWindowProvider>,
     pub blocked_peers: libp2p::allow_block_list::Behaviour<BlockedPeers>,
 }
 
-impl<ProofsVerifier, ObservationWindowProvider>
-    BlendBehaviour<ProofsVerifier, ObservationWindowProvider>
+impl<ObservationWindowProvider> BlendBehaviour<ObservationWindowProvider>
 where
-    ProofsVerifier: Clone,
     ObservationWindowProvider: for<'c> From<(
         &'c BlendConfig<Libp2pBlendBackendSettings>,
         &'c Membership<PeerId>,
@@ -23,11 +21,10 @@ where
 {
     pub fn new(
         config: &BlendConfig<Libp2pBlendBackendSettings>,
-        current_membership: Membership<PeerId>,
-        poq_verifier: ProofsVerifier,
+        current_membership_info: (Membership<PeerId>, u64),
     ) -> Self {
         let observation_window_interval_provider =
-            ObservationWindowProvider::from((config, &current_membership));
+            ObservationWindowProvider::from((config, &current_membership_info.0));
         let minimum_core_healthy_peering_degree =
             *config.backend.core_peering_degree.start() as usize;
         let maximum_core_peering_degree = *config.backend.core_peering_degree.end() as usize;
@@ -49,10 +46,9 @@ where
                     },
                 },
                 observation_window_interval_provider,
-                current_membership,
+                current_membership_info,
                 config.peer_id(),
                 config.backend.protocol_name.clone().into_inner(),
-                poq_verifier,
             ),
             blocked_peers: libp2p::allow_block_list::Behaviour::default(),
         }

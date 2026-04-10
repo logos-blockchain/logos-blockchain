@@ -12,7 +12,10 @@ use lb_blend::{
             ProofsVerifier as ProofsVerifierTrait,
             decapsulated::{DecapsulatedMessage, DecapsulationOutput},
             encapsulated::EncapsulatedMessage,
-            validated::EncapsulatedMessageWithVerifiedPublicHeader,
+            validated::{
+                EncapsulatedMessageWithVerifiedPublicHeader,
+                EncapsulatedMessageWithVerifiedSignature,
+            },
         },
         reward::BlendingToken,
     },
@@ -128,6 +131,22 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 where
     ProofsVerifier: ProofsVerifierTrait,
 {
+    /// Validate the public header of an [`EncapsulatedMessage`].
+    pub fn validate_message_header(
+        &self,
+        message: EncapsulatedMessage,
+    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, InnerError> {
+        message.verify_public_header(self.verifier())
+    }
+
+    /// Validate the `PoQ` of an [`EncapsulatedMessageWithVerifiedSignature`].
+    pub fn validate_message_poq(
+        &self,
+        message: EncapsulatedMessageWithVerifiedSignature,
+    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, InnerError> {
+        message.verify_proof_of_quota(self.verifier())
+    }
+
     /// Semantically similar to the underlying
     /// [`SessionCryptographicProcessor::decapsulate_message`], but it does not
     /// stop after decapsulating the outermost layer. It stops only when a layer
@@ -477,12 +496,13 @@ mod tests {
         recipient_signing_pubkey: &Ed25519PublicKey,
     ) -> EncapsulatedMessageWithVerifiedPublicHeader {
         let inputs = std::iter::repeat_with(|| {
-            EncapsulationInput::new(
+            EncapsulationInput::try_new(
                 UnsecuredEd25519Key::generate_with_blake_rng(),
                 recipient_signing_pubkey,
                 VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
                 VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
             )
+            .unwrap()
         })
         .take(3)
         .collect::<Vec<_>>();

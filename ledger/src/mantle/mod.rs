@@ -136,6 +136,11 @@ impl LedgerState {
         self.leaders.voucher_merkle_path(voucher_cm)
     }
 
+    #[must_use]
+    pub fn leader_reward_amount(&self) -> Value {
+        self.leaders.reward_amount()
+    }
+
     pub fn try_apply_header(
         mut self,
         epoch_state: &EpochState,

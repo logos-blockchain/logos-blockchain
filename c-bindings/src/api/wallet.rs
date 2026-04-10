@@ -29,9 +29,8 @@ use lb_wallet_service::{WalletService, api::WalletApi};
 use num_bigint::BigUint;
 
 use crate::{
-    LogosBlockchainNode,
+    LogosBlockchainNode, ValueResult,
     api::{
-        ValueResult,
         cryptarchia::{Hash, HeaderId, get_cryptarchia_info_sync},
         free,
         types::value::Value,

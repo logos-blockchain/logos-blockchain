@@ -10,6 +10,10 @@ use crate::behaviour::nat::state_machine::{
 /// the address is found to be unreachable, the state machine transitions to the
 /// `TestIfPublic` state to re-evaluate the address.
 impl OnEvent for State<Public> {
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     fn on_event(self: Box<Self>, event: Event, command_tx: &CommandTx) -> Box<dyn OnEvent> {
         match event {
             Event::ExternalAddressConfirmed(addr) | Event::AutonatClientTestOk(addr)

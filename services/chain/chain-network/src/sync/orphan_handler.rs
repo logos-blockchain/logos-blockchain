@@ -120,6 +120,10 @@ where
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     pub fn enqueue_orphan(
         &mut self,
         block_id: HeaderId,
@@ -256,6 +260,10 @@ where
     #[expect(
         clippy::too_many_lines,
         reason = "state machine logic kept in one place for readability; refactor can follow separately"
+    )]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
     )]
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.waker = Some(cx.waker().clone());

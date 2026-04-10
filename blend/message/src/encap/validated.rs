@@ -1,6 +1,9 @@
 use derivative::Derivative;
 use lb_blend_crypto::random_sized_bytes;
-use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::inputs::VerifyInputs};
+use lb_blend_proofs::{
+    quota::{self, VerifiedProofOfQuota},
+    selection::inputs::VerifyInputs,
+};
 use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, X25519PrivateKey};
 use serde::{Deserialize, Serialize};
 
@@ -13,9 +16,81 @@ use crate::{
         encapsulated::{EncapsulatedMessage, EncapsulatedPart},
     },
     input::EncapsulationInput,
-    message::public_header::VerifiedPublicHeader,
+    message::public_header::{PublicHeaderWithVerifiedSignature, VerifiedPublicHeader},
     reward::BlendingToken,
 };
+
+#[derive(Derivative, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[derivative(Debug)]
+/// An encapsulated message whose public header signature has been verified.
+pub struct EncapsulatedMessageWithVerifiedSignature {
+    public_header_with_verified_signature: PublicHeaderWithVerifiedSignature,
+    #[derivative(Debug = "ignore")] // too long
+    encapsulated_part: EncapsulatedPart,
+}
+
+impl EncapsulatedMessageWithVerifiedSignature {
+    #[must_use]
+    pub fn new(
+        inputs: &[EncapsulationInput],
+        payload_type: PayloadType,
+        payload_body: PaddedPayloadBody,
+    ) -> Self {
+        EncapsulatedMessageWithVerifiedPublicHeader::new(inputs, payload_type, payload_body).into()
+    }
+
+    #[must_use]
+    pub const fn from_components(
+        public_header_with_verified_signature: PublicHeaderWithVerifiedSignature,
+        encapsulated_part: EncapsulatedPart,
+    ) -> Self {
+        Self {
+            public_header_with_verified_signature,
+            encapsulated_part,
+        }
+    }
+
+    pub fn verify_proof_of_quota<Verifier>(
+        self,
+        verifier: &Verifier,
+    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error>
+    where
+        Verifier: ProofsVerifier,
+    {
+        let (_, signing_key, proof_of_quota, signature) =
+            self.public_header_with_verified_signature.into_components();
+        let verified_proof_of_quota = verifier
+            .verify_proof_of_quota(proof_of_quota, &signing_key)
+            .map_err(|_| Error::ProofOfQuotaVerificationFailed(quota::Error::InvalidProof))?;
+        let verified_public_header =
+            VerifiedPublicHeader::new(verified_proof_of_quota, signing_key, signature);
+        Ok(
+            EncapsulatedMessageWithVerifiedPublicHeader::from_components(
+                verified_public_header,
+                self.encapsulated_part,
+            ),
+        )
+    }
+
+    #[must_use]
+    pub const fn id(&self) -> MessageIdentifier {
+        self.public_header_with_verified_signature.id()
+    }
+
+    #[cfg(any(feature = "unsafe-test-functions", test))]
+    pub const fn public_header_mut(&mut self) -> &mut PublicHeaderWithVerifiedSignature {
+        &mut self.public_header_with_verified_signature
+    }
+}
+
+impl From<EncapsulatedMessageWithVerifiedSignature> for EncapsulatedMessage {
+    fn from(value: EncapsulatedMessageWithVerifiedSignature) -> Self {
+        Self::from_components(
+            value.public_header_with_verified_signature.into(),
+            value.encapsulated_part,
+        )
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(test, derive(Default))]
@@ -137,7 +212,9 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
             validated_public_header.into_components();
 
         // Derive the shared key.
-        let shared_key = private_key.derive_shared_key(&signing_key.derive_x25519());
+        let Some(shared_key) = private_key.derive_shared_key(&signing_key.derive_x25519()) else {
+            return Err(Error::InvalidSharedSecret);
+        };
 
         // Decapsulate the encapsulated part.
         match encapsulated_part.decapsulate(
@@ -196,6 +273,17 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
     #[cfg(any(feature = "unsafe-test-functions", test))]
     pub const fn public_header_mut(&mut self) -> &mut VerifiedPublicHeader {
         &mut self.validated_public_header
+    }
+}
+
+impl From<EncapsulatedMessageWithVerifiedPublicHeader>
+    for EncapsulatedMessageWithVerifiedSignature
+{
+    fn from(value: EncapsulatedMessageWithVerifiedPublicHeader) -> Self {
+        Self::from_components(
+            value.validated_public_header.into(),
+            value.encapsulated_part,
+        )
     }
 }
 

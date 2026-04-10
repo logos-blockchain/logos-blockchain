@@ -15,6 +15,11 @@ jobs:
   tests:
     name: Run end-to-end integration tests (including cucumber)
 
+    permissions:
+      contents: read
+      actions: write
+      checks: write
+
     # Only run if not a WIP or DO NOT MERGE PR
     if: >
       ${{
@@ -31,9 +36,9 @@ jobs:
       matrix:
         platform:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - os: [self-hosted, Linux]
+          - os: [ self-hosted, Linux ]
             label: self-hosted-linux
-          - os: [self-hosted, macOS]
+          - os: [ self-hosted, macOS ]
             label: self-hosted-macos
     runs-on: ${{ matrix.platform.os }}
 
@@ -74,8 +79,14 @@ jobs:
         with:
           tool: cargo-nextest
 
+      # Ensure a local NTP server is running for deterministic time sync in e2e and cucumber tests
+      - name: Verify Local NTP Server
+        id: verify_local_ntp
+        uses: ./.github/actions/verify-local-ntp-server
+
       # Build release binary for logos-blockchain-node (so runtimes can be reduced)
       - name: Build binaries with required features
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
@@ -83,17 +94,22 @@ jobs:
         env:
           CARGO_INCREMENTAL: 0  # Disable incremental compilation
 
+      # Run the main end-to-end integration tests using cargo-nextest for better performance and reliability
       - name: End-to-end integration tests
+        id: end_to_end
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 90
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        env:
+          USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
         with:
           command: nextest
           # - We don't test benches as they take 6h+, leading to a timeout
           args: run --locked --jobs 3 --retries 2 -p logos-blockchain-tests --no-fail-fast
 
       - name: Upload integration tests results on failure
+        if: ${{ failure() && steps.end_to_end.conclusion == 'failure' }}
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
-        if: failure()
         with:
           name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
           include-hidden-files: true
@@ -106,13 +122,15 @@ jobs:
 
       # Feature: Smoke (@smoke_ci)
       - name: Run cucumber - @smoke_ci
+        id: cucumber_smoke
         # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60  # Safety net timeout - this needs to be adjusted as more tests are added
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
           CUCUMBER_LOG_LEVEL: debug
           CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
+          USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
         with:
           command: test
           args: >-
@@ -121,7 +139,7 @@ jobs:
 
       # On failure, upload cucumber logs and artifacts for debugging
       - name: Upload cucumber logs on failure
-        if: failure()
+        if: ${{ failure() && steps.cucumber_smoke.conclusion == 'failure' }}
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
         with:
@@ -131,13 +149,15 @@ jobs:
 
       # Feature: Cryptarchia (@cryptarchia_ci)
       - name: Run cucumber - @cryptarchia_ci
+        id: cucumber_cryptarchia
         # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60  # Safety net timeout - this needs to be adjusted as more tests are added
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
           CUCUMBER_LOG_LEVEL: debug
           CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
+          USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
         with:
           command: test
           args: >-
@@ -146,7 +166,7 @@ jobs:
 
       # On failure, upload cucumber logs and artifacts for debugging
       - name: Upload cucumber logs on failure
-        if: failure()
+        if: ${{ failure() && steps.cucumber_cryptarchia.conclusion == 'failure' }}
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
         with:
@@ -156,13 +176,15 @@ jobs:
 
       # Feature: Transactions (@transactions_ci)
       - name: Run cucumber - @transactions_ci
+        id: cucumber_transactions
         # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60  # Safety net timeout - this needs to be adjusted as more tests are added
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         env:
           CUCUMBER_LOG_LEVEL: debug
           CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
+          USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
         with:
           command: test
           args: >-
@@ -171,7 +193,7 @@ jobs:
 
       # On failure, upload cucumber logs and artifacts for debugging
       - name: Upload cucumber logs on failure
-        if: failure()
+        if: ${{ failure() && steps.cucumber_transactions.conclusion == 'failure' }}
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
         with:
@@ -181,7 +203,7 @@ jobs:
 
       # Always upload JUnit test results for reporting, even if tests fail
       - name: Upload cucumber JUnit results
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
         with:
@@ -191,7 +213,7 @@ jobs:
 
       # Always publish a test report for visibility, do not fail workflow if this step fails
       - name: Publish cucumber test report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
         continue-on-error: true
         uses: dorny/test-reporter@v1
         with:

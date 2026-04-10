@@ -84,7 +84,11 @@ fn deployment_settings(
 
     let providers = collect_runtime_blend_providers(topology.nodes(), hostnames)?;
     let transfer_op = genesis_tx.genesis_transfer().clone();
-    let genesis_tx = create_genesis_tx_with_declarations(transfer_op, providers);
+    let genesis_tx = create_genesis_tx_with_declarations(
+        transfer_op,
+        providers,
+        topology.config.test_context.as_deref(),
+    );
 
     Ok(default_e2e_deployment_settings(genesis_tx))
 }

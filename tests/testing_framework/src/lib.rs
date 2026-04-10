@@ -6,14 +6,19 @@
 //! - `NodeHttpClient` for node API calls
 
 use std::{net::Ipv4Addr, sync::LazyLock};
-
+extern crate self as lb_testing_framework;
 use lb_libp2p::{Multiaddr, multiaddr};
 
 pub mod env;
 mod framework;
 pub use framework::local::USER_CONFIG_FILE;
 mod node;
+mod unique_persistent;
 pub mod workloads;
+pub use unique_persistent::{
+    get_reserved_available_tcp_port, get_reserved_available_udp_port, hash_str,
+    reap_all_stale_port_blocks, release_reserved_port_block, unique_test_context,
+};
 
 pub(crate) mod common {
     pub mod kms {
@@ -56,4 +61,11 @@ pub mod prelude {
         CoreBuilderExt as _, LbcLocalDeployer, LbcManualCluster, ScenarioBuilder,
         ScenarioBuilderExt as _,
     };
+}
+
+#[must_use]
+pub fn is_truthy_env(key: &str) -> bool {
+    std::env::var(key)
+        .ok()
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
 }

@@ -1,4 +1,4 @@
-use lb_core::mantle::Value;
+use lb_core::mantle::{Value, gas::GasCost};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +11,7 @@ pub struct Config {
 pub struct WalletConfig {
     // Hard cap on the ransaction fee for LEADER_CLAIM
     #[serde(default = "default_max_tx_fee")]
-    pub max_tx_fee: Value,
+    pub max_tx_fee: GasCost,
 
     // The key to use for paying transaction fees for LEADER_CLAIM.
     // Change notes will be returned to this same funding pk.
@@ -19,6 +19,6 @@ pub struct WalletConfig {
 }
 
 #[must_use]
-pub const fn default_max_tx_fee() -> Value {
-    Value::MAX
+pub const fn default_max_tx_fee() -> GasCost {
+    GasCost::new(Value::MAX)
 }

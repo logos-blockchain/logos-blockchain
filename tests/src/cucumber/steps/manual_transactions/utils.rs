@@ -5,7 +5,7 @@ use lb_core::{
     codec::SerializeOp as _,
     mantle::{
         Note, NoteId, SignedMantleTx, Transaction as _, Utxo, gas::MainnetGasConstants,
-        tx_builder::MantleTxBuilder,
+        tx::MantleTxContext, tx_builder::MantleTxBuilder,
     },
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
@@ -43,12 +43,13 @@ impl Display for WalletStateType {
 
 use std::str::FromStr;
 
-use lb_core::mantle::{OpProof, tx::MantleTxGasContext};
+use lb_core::mantle::OpProof;
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
+use lb_testing_framework::is_truthy_env;
 
 use crate::cucumber::{
     defaults::CUCUMBER_VERBOSE_CONSOLE, steps::manual_transactions::faucet::FaucetTask,
-    utils::is_truthy_env, world::WalletType,
+    world::WalletType,
 };
 
 impl FromStr for WalletStateType {
@@ -83,7 +84,7 @@ pub async fn create_and_submit_transaction(
             ref wallet_account, ..
         } => {
             let wallet_state = wallet_state_from_utxos(available_utxos);
-            let empty_context = MantleTxGasContext::new(HashMap::new());
+            let empty_context = MantleTxContext::default();
             let mut tx_builder = MantleTxBuilder::new(empty_context);
             for (receiver_pk, value) in receivers {
                 tx_builder = tx_builder.add_ledger_output(Note::new(*value, *receiver_pk));

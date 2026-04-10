@@ -1,5 +1,6 @@
 mod utils;
 
+use futures::StreamExt as _;
 use lb_blend::{
     message::reward::{ActivityProof, BlendingToken, SessionBlendingTokenCollector},
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
@@ -95,7 +96,7 @@ async fn test_handle_incoming_blend_message() {
     )
     .unwrap();
     let recovery_checkpoint = handle_incoming_blend_message(
-        msg.clone(),
+        (msg.clone().into(), 0),
         &mut scheduler,
         None,
         &processor,
@@ -141,7 +142,7 @@ async fn test_handle_incoming_blend_message() {
     )
     .unwrap();
     let recovery_checkpoint = handle_incoming_blend_message(
-        msg,
+        (msg.clone().into(), 0),
         &mut new_scheduler,
         Some(&mut scheduler),
         &new_processor,
@@ -179,7 +180,7 @@ async fn test_handle_incoming_blend_message() {
         .await
         .expect("encapsulation must succeed");
     let recovery_checkpoint = handle_incoming_blend_message(
-        msg,
+        (msg.into(), 1),
         &mut new_scheduler,
         Some(&mut scheduler),
         &new_processor,
@@ -225,7 +226,7 @@ async fn test_handle_incoming_blend_message() {
         .await
         .expect("encapsulation must succeed");
     let recovery_checkpoint = handle_incoming_blend_message(
-        msg,
+        (msg.into(), 2),
         &mut new_scheduler,
         Some(&mut scheduler),
         &new_processor,
@@ -276,7 +277,7 @@ async fn test_handle_session_transition_expired() {
 
     // Create backend.
     let public_info = new_public_info(session, membership.clone(), &settings);
-    let mut backend = <TestBlendBackend as BlendBackend<_, _, MockProofsVerifier, _>>::new(
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
         public_info.clone(),
@@ -304,7 +305,7 @@ async fn test_handle_session_transition_expired() {
     let (sdp_relay, mut sdp_relay_receiver) = sdp_relay();
 
     // Call `handle_session_transition_expired`.
-    handle_session_transition_expired::<_, NodeId, BlakeRng, MockProofsVerifier, _>(
+    handle_session_transition_expired::<_, NodeId, BlakeRng, _>(
         &mut backend,
         token_collector,
         &sdp_relay,
@@ -366,7 +367,7 @@ async fn test_handle_session_event() {
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
-    let mut backend = <TestBlendBackend as BlendBackend<_, _, MockProofsVerifier, _>>::new(
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
         public_info.clone(),
@@ -642,7 +643,7 @@ async fn complete_old_session_after_main_loop_done() {
         .await;
 
         retire(
-            blend_message_stream,
+            blend_message_stream.map(|(msg, _)| msg),
             remaining_clock_stream,
             remaining_session_stream,
             &settings_cloned,
@@ -820,7 +821,7 @@ async fn stop_on_empty_session() {
         .await;
 
         retire(
-            blend_message_stream,
+            blend_message_stream.map(|(msg, _)| msg),
             remaining_clock_stream,
             remaining_session_stream,
             &settings_cloned,
