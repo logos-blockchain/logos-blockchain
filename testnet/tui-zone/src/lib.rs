@@ -84,9 +84,13 @@ pub async fn run(args: InscribeArgs) {
     }
 
     let node = NodeHttpClient::new(CommonHttpClient::new(None), node_url);
-    let (sequencer, handle) = ZoneSequencer::init(channel_id, signing_key, node, checkpoint);
+    let (sequencer, mut handle) = ZoneSequencer::init(channel_id, signing_key, node, checkpoint);
     sequencer.spawn();
 
+    println!();
+    println!("Connecting to node...");
+    handle.wait_ready().await;
+    println!("Sequencer ready.");
     println!();
     println!("Type a message and press Enter to publish it as a zone block.");
     println!("Press Ctrl-D or type an empty line to exit.");
