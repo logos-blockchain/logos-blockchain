@@ -223,6 +223,7 @@ mod tests {
     use lb_key_management_system_keys::keys::Ed25519Key;
     use num_bigint::BigUint;
 
+    use super::*;
     use crate::mantle::{
         gas::MainnetGasConstants,
         ops::{
@@ -231,8 +232,6 @@ mod tests {
         },
         tx::MantleTxGasContext,
     };
-
-    use super::*;
 
     #[test]
     fn inscription_op() {
