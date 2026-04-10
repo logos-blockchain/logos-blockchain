@@ -2,8 +2,11 @@ use std::{collections::HashSet, num::NonZero, time::Duration};
 
 use futures::{StreamExt as _, future::join_all};
 use lb_common_http_client::CommonHttpClient;
-use lb_core::mantle::ops::channel::ChannelId;
+use lb_core::mantle::ops::channel::{ChannelId, deposit::DepositOp};
+use lb_http_api_common::bodies::channel::ChannelDepositRequestBody;
 use lb_key_management_system_service::keys::Ed25519Key;
+use lb_node::config::RunConfig;
+use lb_utils::math::NonNegativeRatio;
 use lb_zone_sdk::{
     ZoneMessage,
     adapter::NodeHttpClient,
@@ -44,13 +47,10 @@ async fn test_sequencer_publish_and_indexer_read() {
     // Use custom config with faster block production for test reliability:
     // - slot_duration: 1s (faster slots)
     // - security_param (k): 5 (fewer blocks needed for LIB to advance)
-    let (configs, genesis_tx) =
-        create_general_configs(2, Some("test_sequencer_publish_and_indexer_read"));
-    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
-    let configs: Vec<_> = configs
-        .into_iter()
-        .map(|c| {
-            let mut config = create_validator_config(c, deployment_settings.clone());
+    let validators = spawn_validators(
+        Some("test_sequencer_publish_and_indexer_read"),
+        2,
+        |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
                 .user
@@ -60,23 +60,11 @@ async fn test_sequencer_publish_and_indexer_read() {
                 .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
             config
-        })
-        .collect();
-
-    let validators: Vec<Validator> = join_all(configs.into_iter().map(Validator::spawn))
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .expect("Failed to spawn validators");
-
+        },
+        1,
+    )
+    .await;
     let validator = &validators[0];
-
-    // Wait for the chain to produce at least one block.
-    // Use generous timeout since leader election is probabilistic.
-    assert!(
-        wait_for_height(validator, 1, Duration::from_secs(120)).await,
-        "Chain should produce the first block"
-    );
     let node_url = validator.url();
 
     // Random signing key per test run to avoid channel collisions
@@ -184,12 +172,10 @@ async fn test_sequencer_publish_and_indexer_read() {
 #[serial]
 async fn test_sequencer_checkpoint_resume() {
     // Setup network with faster block production
-    let (configs, genesis_tx) = create_general_configs(2, Some("test_sequencer_checkpoint_resume"));
-    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
-    let configs: Vec<_> = configs
-        .into_iter()
-        .map(|c| {
-            let mut config = create_validator_config(c, deployment_settings.clone());
+    let validators = spawn_validators(
+        Some("test_sequencer_checkpoint_resume"),
+        2,
+        |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
                 .user
@@ -199,21 +185,11 @@ async fn test_sequencer_checkpoint_resume() {
                 .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
             config
-        })
-        .collect();
-
-    let validators: Vec<Validator> = join_all(configs.into_iter().map(Validator::spawn))
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .expect("Failed to spawn validators");
-
+        },
+        1,
+    )
+    .await;
     let validator = &validators[0];
-
-    assert!(
-        wait_for_height(validator, 1, Duration::from_secs(120)).await,
-        "Chain should produce the first block"
-    );
     let node_url = validator.url();
 
     // Random signing key per test run
@@ -335,13 +311,10 @@ async fn test_sequencer_checkpoint_resume() {
 #[tokio::test]
 #[serial]
 async fn test_sequencer_stale_checkpoint_resume() {
-    let (configs, genesis_tx) =
-        create_general_configs(2, Some("test_sequencer_stale_checkpoint_resume"));
-    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
-    let configs: Vec<_> = configs
-        .into_iter()
-        .map(|c| {
-            let mut config = create_validator_config(c, deployment_settings.clone());
+    let validators = spawn_validators(
+        Some("test_sequencer_stale_checkpoint_resume"),
+        2,
+        |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
                 .user
@@ -351,20 +324,12 @@ async fn test_sequencer_stale_checkpoint_resume() {
                 .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
             config
-        })
-        .collect();
-
-    let validators: Vec<Validator> = join_all(configs.into_iter().map(Validator::spawn))
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .expect("Failed to spawn validators");
-
-    assert!(
-        wait_for_height(&validators[0], 1, Duration::from_secs(120)).await,
-        "Chain should produce the first block"
-    );
-    let node_url = validators[0].url();
+        },
+        1,
+    )
+    .await;
+    let validator = &validators[0];
+    let node_url = validator.url();
 
     let mut key_bytes = [0u8; 32];
     thread_rng().fill(&mut key_bytes);
@@ -580,4 +545,192 @@ async fn test_sequencer_stale_checkpoint_resume() {
     assert_eq!(unique.len(), 5, "All 5 messages on chain");
 
     poll_task.abort();
+}
+
+#[tokio::test]
+#[serial]
+async fn test_subscribe_to_finalized_deposit() {
+    // Setup network with faster block production
+    let validators = spawn_validators(
+        Some("test_subscribe_to_finalized_deposit"),
+        1,
+        |mut config| {
+            config.deployment.time.slot_duration = Duration::from_secs(1);
+            config
+                .user
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period = Duration::ZERO;
+            config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
+            config.deployment.cryptarchia.slot_activation_coeff =
+                NonNegativeRatio::new(1, 2.try_into().unwrap());
+            config
+        },
+        1,
+    )
+    .await;
+    let validator = &validators[0];
+    let node_url = validator.url();
+
+    // Random signing key per test run to avoid channel collisions
+    let mut key_bytes = [0u8; 32];
+    thread_rng().fill(&mut key_bytes);
+    let signing_key = Ed25519Key::from_bytes(&key_bytes);
+    let channel_id = channel_id_from_key(&signing_key);
+
+    let (sequencer, mut handle) = ZoneSequencer::init_with_config(
+        channel_id,
+        signing_key,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
+        SequencerConfig::default(),
+        None, // Fresh start, no checkpoint
+    );
+    let sequencer_task = sequencer.spawn();
+    handle.wait_ready().await;
+
+    // Publish an inscription to create a channel
+    let msg1 = b"initial inscription".to_vec();
+    handle.publish_message(msg1.clone()).await.unwrap();
+
+    let indexer = ZoneIndexer::new(
+        channel_id,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url),
+    );
+    wait_for_zone_block(&indexer, msg1, Duration::from_secs(60)).await;
+
+    // Now, submit a deposit directly to Bedrock
+    let deposit = DepositOp {
+        channel_id,
+        amount: 1,
+        metadata: b"Mint 1 to Alice in Zone".to_vec(),
+    };
+    let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
+    let body = ChannelDepositRequestBody {
+        tip: None,
+        deposit: deposit.clone(),
+        change_public_key: pk,
+        funding_public_keys: vec![pk],
+        max_tx_fee: 10.into(),
+    };
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "http://{}/channel/deposit",
+            validator.config().user.api.backend.listen_address
+        ))
+        .json(&body)
+        .send()
+        .await
+        .expect("request should not fail");
+    assert!(
+        resp.status().is_success(),
+        "request should succeed, got status: {} body: {}",
+        resp.status(),
+        resp.text().await.unwrap_or_default(),
+    );
+
+    // Wait for the deposit to be finalized and detected by the ZoneIndexer
+    wait_for_deposit(&indexer, &deposit, Duration::from_secs(120)).await;
+
+    sequencer_task.abort();
+}
+
+async fn spawn_validators(
+    test_context: Option<&str>,
+    count: usize,
+    modify_run_config: impl Fn(RunConfig) -> RunConfig,
+    target_block: u64,
+) -> Vec<Validator> {
+    let (configs, genesis_tx) = create_general_configs(count, test_context);
+    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
+    let configs: Vec<_> = configs
+        .into_iter()
+        .map(|c| {
+            let config = create_validator_config(c, deployment_settings.clone());
+            modify_run_config(config)
+        })
+        .collect();
+
+    let validators = join_all(configs.into_iter().map(Validator::spawn))
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to spawn validators");
+
+    // Wait for the chain to produce at least one block.
+    // Use generous timeout since leader election is probabilistic.
+    assert!(wait_for_height(&validators[0], target_block, Duration::from_secs(120)).await);
+
+    validators
+}
+
+async fn wait_for_zone_block(
+    indexer: &ZoneIndexer<NodeHttpClient>,
+    expected_data: Vec<u8>,
+    timeout: Duration,
+) {
+    tokio::time::timeout(timeout, async {
+        let mut last_zone_block = None;
+        loop {
+            let stream = indexer.next_messages(last_zone_block).await.unwrap();
+            futures::pin_mut!(stream);
+
+            let stream = indexer
+                .next_messages(last_zone_block)
+                .await
+                .expect("indexer error");
+            futures::pin_mut!(stream);
+
+            while let Some((msg, slot)) = stream.next().await {
+                if let ZoneMessage::Block(block) = msg {
+                    if block.data == expected_data {
+                        println!("Found expected inscription: {expected_data:?}");
+                        return;
+                    }
+                    last_zone_block = Some((block.id, slot));
+                }
+            }
+
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .expect("timed out");
+}
+
+async fn wait_for_deposit(
+    indexer: &ZoneIndexer<NodeHttpClient>,
+    expected: &DepositOp,
+    timeout: Duration,
+) {
+    tokio::time::timeout(timeout, async {
+        let mut last_zone_block = None;
+        loop {
+            let stream = indexer.next_messages(last_zone_block).await.unwrap();
+            futures::pin_mut!(stream);
+
+            while let Some((msg, slot)) = stream.next().await {
+                match msg {
+                    ZoneMessage::Block(block) => {
+                        last_zone_block = Some((block.id, slot));
+                    }
+                    ZoneMessage::Deposit(deposit) => {
+                        if deposit.amount == expected.amount
+                            && deposit.metadata == expected.metadata
+                        {
+                            println!(
+                                "Found expected deposit in indexer: amount={} metadata={:?}",
+                                deposit.amount, deposit.metadata
+                            );
+                            return;
+                        }
+                    }
+                }
+            }
+
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .expect("timed out");
 }

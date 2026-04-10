@@ -31,5 +31,5 @@ pub struct Deposit {
     /// Amount of the deposit
     pub amount: Value,
     /// Opaque metadata associated with this deposit
-    metadata: Vec<u8>,
+    pub metadata: Vec<u8>,
 }
