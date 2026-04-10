@@ -556,6 +556,9 @@ async fn consecutive_session_transitions_replace_old_session() {
     dialer
         .behaviour_mut()
         .start_new_session((memberships[0].clone(), 1));
+    listener
+        .behaviour_mut()
+        .start_new_session((memberships[1].clone(), 1));
     assert!(dialer.behaviour().old_session.is_some());
 
     // Re-establish a connection for session 1 so there is something to move
@@ -569,6 +572,9 @@ async fn consecutive_session_transitions_replace_old_session() {
     dialer
         .behaviour_mut()
         .start_new_session((memberships[0].clone(), 2));
+    listener
+        .behaviour_mut()
+        .start_new_session((memberships[1].clone(), 2));
     assert!(dialer.behaviour().old_session.is_some());
     assert_eq!(
         dialer.behaviour().negotiated_peers.len(),
@@ -631,6 +637,15 @@ async fn session_transition_reboots_peering_degree() {
     node_a
         .behaviour_mut()
         .start_new_session((memberships[0].clone(), 1));
+    node_b
+        .behaviour_mut()
+        .start_new_session((memberships[1].clone(), 1));
+    node_c
+        .behaviour_mut()
+        .start_new_session((memberships[2].clone(), 1));
+    node_d
+        .behaviour_mut()
+        .start_new_session((memberships[3].clone(), 1));
 
     // After transition, new session has no peers, so all slots are available.
     assert_eq!(

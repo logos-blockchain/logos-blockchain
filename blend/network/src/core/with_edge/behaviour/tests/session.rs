@@ -116,7 +116,7 @@ async fn session_transition_updates_membership_for_new_connections() {
     let new_membership = Membership::new_without_local(&[Node {
         address: Multiaddr::empty(),
         id: other_core_peer,
-        public_key: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+        public_key: Ed25519PublicKey::from_bytes(&[0; _]).unwrap(),
     }]);
     blend_swarm
         .behaviour_mut()

@@ -440,8 +440,8 @@ async fn double_rotate_epoch_without_set_epoch_private() {
     generator.rotate_epoch(public_inputs.leader, Epoch::new(2));
     assert!(generator.leader_proofs_generator.is_none());
 
-    // Core proofs should still work — remaining quota preserved across
-    // rotations. We consumed 3 out of 10, so 7 remain.
+    // Core proofs should still work - remaining quota preserved across rotations.
+    // We consumed 3 out of 10, so 7 remain.
     for _ in 0u8..7 {
         assert!(generator.get_next_core_proof().await.is_some());
     }
