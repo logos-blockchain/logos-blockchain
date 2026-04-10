@@ -146,7 +146,7 @@ async fn rotate_epoch_updates_epoch_and_regenerates_proofs() {
     drop(leader_proofs_generator.get_next_proof().await);
     assert_eq!(leader_proofs_generator.current_epoch(), Epoch::new(0));
 
-    // Rotate to epoch 1 \u{2014} this should update epoch and regenerate the proofs
+    // Rotate to epoch 1 - this should update epoch and regenerate the proofs
     // stream.
     leader_proofs_generator.rotate_epoch(
         public_inputs.leader,

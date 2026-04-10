@@ -638,7 +638,7 @@ async fn test_handle_session_event_empty_session_retires() {
     );
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
-    // Handle a NewSession(Empty) event \u{2014} empty membership triggers Retiring.
+    // Handle a NewSession(Empty) event - empty membership triggers Retiring.
     let empty_session: u64 = session + 1;
     let output = handle_session_event(
         SessionEvent::NewSession(empty_session.into()),
@@ -1350,8 +1350,7 @@ async fn test_initialize_recovers_matching_saved_state() {
 
     let initial_session = 0;
 
-    // \u{2500}\u{2500} Matching session: saved state should be restored
-    // \u{2500}\u{2500}
+    // Matching session: saved state should be restored
 
     let (membership_stream, membership_sender) = new_stream();
     let (clock_stream, clock_sender) = new_stream();
@@ -1435,8 +1434,7 @@ async fn test_initialize_recovers_matching_saved_state() {
     );
     assert_eq!(recovered_checkpoint.last_seen_session(), initial_session);
 
-    // \u{2500}\u{2500} Mismatched session: fresh state should be created
-    // \u{2500}\u{2500}
+    // Mismatched session: fresh state should be created
 
     let (membership_stream2, membership_sender2) = new_stream();
     let (clock_stream2, clock_sender2) = new_stream();

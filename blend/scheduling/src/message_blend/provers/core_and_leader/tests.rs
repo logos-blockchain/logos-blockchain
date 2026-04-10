@@ -432,15 +432,15 @@ async fn double_rotate_epoch_without_set_epoch_private() {
         assert!(generator.get_next_core_proof().await.is_some());
     }
 
-    // First rotation: epoch 0 \u{2192} 1.
+    // First rotation: epoch 0 -> 1.
     generator.rotate_epoch(public_inputs.leader, Epoch::new(1));
     assert!(generator.leader_proofs_generator.is_none());
 
-    // Second rotation: epoch 1 \u{2192} 2.
+    // Second rotation: epoch 1 -> 2.
     generator.rotate_epoch(public_inputs.leader, Epoch::new(2));
     assert!(generator.leader_proofs_generator.is_none());
 
-    // Core proofs should still work \u{2014} remaining quota preserved across
+    // Core proofs should still work — remaining quota preserved across
     // rotations. We consumed 3 out of 10, so 7 remain.
     for _ in 0u8..7 {
         assert!(generator.get_next_core_proof().await.is_some());

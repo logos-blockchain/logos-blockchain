@@ -139,11 +139,11 @@ mod test {
     use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
     use multiaddr::{Multiaddr, PeerId};
 
-    use super::SessionCryptographicProcessor;
     use crate::{
         membership::{Membership, Node},
         message_blend::crypto::{
             SessionCryptographicProcessorSettings,
+            core_and_leader::send_and_receive::SessionCryptographicProcessor,
             test_utils::{
                 MockCorePoQGenerator, TestEpochChangeCoreAndLeaderProofsGenerator,
                 TestEpochChangeProofsVerifier,

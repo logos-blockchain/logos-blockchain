@@ -1,4 +1,4 @@
-use std::time::Duration;
+use core::time::Duration;
 
 use lb_blend::{
     message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
@@ -16,7 +16,9 @@ use tokio::time::sleep;
 use crate::{
     edge::{
         handlers::Error,
-        tests::utils::{NodeId, spawn_run},
+        tests::utils::{
+            MockLeaderProofsGenerator, NodeId, TestBackend, overwatch_handle, settings, spawn_run,
+        },
     },
     epoch_info::{EpochHandler, PolEpochInfo},
     membership::MembershipInfo,
@@ -151,8 +153,6 @@ fn poq_verification_inputs() -> PoQVerificationInputsMinusSigningKey {
 /// detected ahead of the current handler's epoch.
 #[test_log::test(tokio::test)]
 async fn handle_clock_event_new_epoch_shuts_down_handler() {
-    use utils::{MockLeaderProofsGenerator, NodeId, TestBackend, overwatch_handle, settings};
-
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
@@ -215,8 +215,6 @@ async fn handle_clock_event_new_epoch_shuts_down_handler() {
 /// provided epoch's public and private inputs.
 #[test_log::test(tokio::test)]
 async fn handle_new_secret_epoch_info_recreates_handler() {
-    use utils::{MockLeaderProofsGenerator, NodeId, TestBackend, settings};
-
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
@@ -225,7 +223,7 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
     let membership_info = MembershipInfo::from_membership_and_session_number(edge_membership, 1);
 
     let settings = settings(local_node, 1, node_id_sender);
-    let overwatch = utils::overwatch_handle();
+    let overwatch = overwatch_handle();
 
     // Start with no handler (e.g. after an epoch transition shut it down).
     let mut handler_state: Option<(
@@ -248,7 +246,7 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
     );
     assert_eq!(handler_state.as_ref().unwrap().0.epoch, Epoch::new(2));
 
-    // Provide secret PoL info for epoch 3 \u{2014} handler should be replaced.
+    // Provide secret PoL info for epoch 3 - handler should be replaced.
     let newer_pol_info = test_pol_epoch_info(Epoch::new(3));
     super::handle_new_secret_epoch_info(
         &newer_pol_info,
@@ -265,8 +263,6 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
 /// down → new secret `PoL` info → handler recreated.
 #[test_log::test(tokio::test)]
 async fn epoch_transition_full_lifecycle() {
-    use utils::{MockLeaderProofsGenerator, NodeId, TestBackend, settings};
-
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
@@ -309,7 +305,7 @@ async fn epoch_transition_full_lifecycle() {
     .await;
     assert!(handler_state.is_some());
 
-    // Clock advances to epoch 2 \u{2192} handler shut down.
+    // Clock advances to epoch 2 - handler shut down.
     super::handle_clock_event::<TestBackend, NodeId, MockLeaderProofsGenerator, _, _>(
         SlotTick {
             epoch: Epoch::new(2),
@@ -324,7 +320,7 @@ async fn epoch_transition_full_lifecycle() {
         "Handler should be shut down on epoch advance"
     );
 
-    // Secret PoL info arrives for epoch 2 \u{2192} handler recreated.
+    // Secret PoL info arrives for epoch 2 - handler recreated.
     let new_pol_info = test_pol_epoch_info(Epoch::new(2));
     super::handle_new_secret_epoch_info(
         &new_pol_info,
