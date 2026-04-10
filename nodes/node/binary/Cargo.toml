@@ -90,7 +90,7 @@ rand = { workspace = true }
 
 [features]
 config-gen      = ["lb-key-management-system-service/unsafe"]
-default         = ["config-gen", "jemalloc", "tracing"]
+default         = ["config-gen", "tracing"]
 dhat-heap       = ["dep:dhat"]
 instrumentation = []
 jemalloc        = ["dep:tikv-jemallocator"]
