@@ -2,10 +2,22 @@ use std::{collections::HashSet, num::NonZero, time::Duration};
 
 use futures::{StreamExt as _, future::join_all};
 use lb_common_http_client::CommonHttpClient;
-use lb_core::mantle::ops::channel::{ChannelId, deposit::DepositOp};
-use lb_http_api_common::bodies::channel::ChannelDepositRequestBody;
-use lb_key_management_system_service::keys::Ed25519Key;
-use lb_node::config::RunConfig;
+use lb_core::mantle::{
+    MantleTx, Note, NoteId, Op, OpProof, Value,
+    ops::{
+        channel::{ChannelId, deposit::DepositOp},
+        transfer::TransferOp,
+    },
+};
+use lb_http_api_common::bodies::{
+    channel::ChannelDepositRequestBody,
+    wallet::{
+        balance::WalletBalanceResponseBody,
+        sign::{WalletSignTxZkRequestBody, WalletSignTxZkResponseBody},
+    },
+};
+use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, ZkSignature};
+use lb_node::{SignedMantleTx, Transaction as _, config::RunConfig};
 use lb_utils::math::NonNegativeRatio;
 use lb_zone_sdk::{
     ZoneMessage,
@@ -635,6 +647,114 @@ async fn test_subscribe_to_finalized_deposit() {
     sequencer_task.abort();
 }
 
+#[tokio::test]
+#[serial]
+async fn test_atomic_deposit_inscription() {
+    // Setup network with faster block production
+    let validators = spawn_validators(
+        Some("test_atomic_deposit_inscription"),
+        1,
+        |mut config| {
+            config.deployment.time.slot_duration = Duration::from_secs(1);
+            config
+                .user
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period = Duration::ZERO;
+            config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
+            config.deployment.cryptarchia.slot_activation_coeff =
+                NonNegativeRatio::new(1, 2.try_into().unwrap());
+            config
+        },
+        1,
+    )
+    .await;
+    let validator = &validators[0];
+    let node_url = validator.url();
+
+    // Initialize a sequencer
+    // Random signing key per test run to avoid channel collisions
+    let mut key_bytes = [0u8; 32];
+    thread_rng().fill(&mut key_bytes);
+    let signing_key = Ed25519Key::from_bytes(&key_bytes);
+    let channel_id = channel_id_from_key(&signing_key);
+
+    let (sequencer, mut handle) = ZoneSequencer::init_with_config(
+        channel_id,
+        signing_key,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
+        SequencerConfig::default(),
+        None, // Fresh start, no checkpoint
+    );
+    let sequencer_task = sequencer.spawn();
+    handle.wait_ready().await;
+
+    // Create a channel, so that a user can deposit into it.
+    let msg1 = b"initial inscription".to_vec();
+    handle.publish_message(msg1.clone()).await.unwrap();
+
+    // Wait for the inscription to be accepted.
+    // We wait for finalization even though it's not necessary,
+    // because that's the only way we have currently.
+    let indexer = ZoneIndexer::new(
+        channel_id,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url),
+    );
+    wait_for_zone_block(&indexer, msg1, Duration::from_secs(60)).await;
+
+    // Now, prepare a tx for deposit (from user) + inscription (from sequencer)
+    let deposit = DepositOp {
+        channel_id,
+        amount: 1,
+        metadata: b"Mint 1 to Alice in Zone".to_vec(),
+    };
+    let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
+    let (note_id, note_value) = get_note(validator, pk, deposit.amount)
+        .await
+        .expect("should find a note with sufficient balance for deposit");
+    let change = note_value.checked_sub(deposit.amount).unwrap();
+    let transfer = TransferOp {
+        inputs: vec![note_id],
+        outputs: if change > 0 {
+            vec![Note::new(change, pk)]
+        } else {
+            vec![]
+        },
+    };
+    let inscription_data = b"Mint 1 to Alice".to_vec();
+    let (tx, msg_id, sequencer_sig) = handle
+        .prepare_tx(
+            vec![Op::ChannelDeposit(deposit.clone()), Op::Transfer(transfer)],
+            inscription_data.clone(),
+        )
+        .await
+        .unwrap();
+
+    // Ask the user to sign tx only for his own operations (deposit + transfer)
+    let user_transfer_sig = sign_tx_zk(validator, &tx, vec![pk]).await;
+
+    // Build a signed tx using signatures from user and sequencer
+    let signed_tx = SignedMantleTx::new(
+        tx,
+        vec![
+            OpProof::NoProof,
+            OpProof::ZkSig(user_transfer_sig),
+            OpProof::Ed25519Sig(sequencer_sig),
+        ],
+    )
+    .unwrap();
+
+    // Submit the signed tx via zone-sdk
+    handle.submit_signed_tx(signed_tx, msg_id).await.unwrap();
+
+    // Wait for deposit/inscription to be finalized and detected by the ZoneIndexer
+    wait_for_deposit(&indexer, &deposit, Duration::from_secs(120)).await;
+    wait_for_zone_block(&indexer, inscription_data, Duration::from_secs(120)).await;
+
+    sequencer_task.abort();
+}
+
 async fn spawn_validators(
     test_context: Option<&str>,
     count: usize,
@@ -733,4 +853,66 @@ async fn wait_for_deposit(
     })
     .await
     .expect("timed out");
+}
+
+async fn get_note(
+    validator: &Validator,
+    pk: ZkPublicKey,
+    min_value: Value,
+) -> Option<(NoteId, Value)> {
+    let resp = reqwest::Client::new()
+        .get(format!(
+            "http://{}/wallet/{}/balance",
+            validator.config().user.api.backend.listen_address,
+            hex::encode(lb_groth16::fr_to_bytes(&pk.into()))
+        ))
+        .send()
+        .await
+        .expect("balance request should not fail");
+
+    assert!(
+        resp.status().is_success(),
+        "balance request should succeed: status={}",
+        resp.status()
+    );
+
+    let body: WalletBalanceResponseBody = resp
+        .json()
+        .await
+        .expect("balance response should be valid JSON");
+    for (note_id, value) in body.notes {
+        if value >= min_value {
+            return Some((note_id, value));
+        }
+    }
+
+    None
+}
+
+async fn sign_tx_zk(validator: &Validator, tx: &MantleTx, pks: Vec<ZkPublicKey>) -> ZkSignature {
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "http://{}/wallet/sign/zk",
+            validator.config().user.api.backend.listen_address,
+        ))
+        .json(&WalletSignTxZkRequestBody {
+            tx_hash: tx.hash(),
+            pks,
+        })
+        .send()
+        .await
+        .expect("sign API should not fail");
+
+    assert!(
+        resp.status().is_success(),
+        "sign API should succeed: status={}",
+        resp.status()
+    );
+
+    let body: WalletSignTxZkResponseBody = resp
+        .json()
+        .await
+        .expect("sign response should be valid JSON");
+
+    body.sig
 }
