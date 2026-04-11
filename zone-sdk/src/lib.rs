@@ -14,6 +14,8 @@ pub enum ZoneMessage {
     Block(ZoneBlock),
     /// A deposit operation submitted to a channel
     Deposit(Deposit),
+    /// An withdraw operation submitted to a channel
+    Withdraw(Withdraw),
 }
 
 /// A zone block from a zone channel, included/finalized in Bedrock
@@ -32,4 +34,11 @@ pub struct Deposit {
     pub amount: Value,
     /// Opaque metadata associated with this deposit
     pub metadata: Vec<u8>,
+}
+
+/// An withdrawal from a zone channel, included/finalized in Bedrock
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Withdraw {
+    /// Amount of the withdrawal
+    pub amount: Value,
 }
