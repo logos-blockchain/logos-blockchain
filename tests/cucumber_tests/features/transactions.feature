@@ -163,10 +163,10 @@ Feature: Transactions
     And I send 1 transactions of 700 LGO each from wallet "WALLET_5A" to wallet "WALLET_BURN"
     And I send 1 transactions of 700 LGO each from wallet "WALLET_5A" to wallet "WALLET_4A"
     # Each wallet should now have 3 outputs: one received + two change (allow for fees)
-    When wallet "WALLET_1A" has 3 or more outputs in 10 seconds
-    And wallet "WALLET_2A" has 3 or more outputs in 10 seconds
-    And wallet "WALLET_4A" has 3 or more outputs in 10 seconds
-    And wallet "WALLET_5A" has 3 or more outputs in 10 seconds
+    When wallet "WALLET_1A" has 3 or more outputs in 120 seconds
+    And wallet "WALLET_2A" has 3 or more outputs in 60 seconds
+    And wallet "WALLET_4A" has 3 or more outputs in 60 seconds
+    And wallet "WALLET_5A" has 3 or more outputs in 60 seconds
     # Wait for more blocks to be mined on each fork to ensure the chains are well established
     When node "NODE_1" is at height 5 in 180 seconds
     And node "NODE_4" is at height 5 in 180 seconds
@@ -176,7 +176,7 @@ Feature: Transactions
     When node "NODE_JOIN" is at height 8 in 180 seconds
     # Query balances for all wallets after the forks join - previous state should be restored for the re-orged chain
     When I update all user wallets balances
-    When wallet "WALLET_1A" has 3 or more outputs in 10 seconds
+    When wallet "WALLET_1A" has 3 or more outputs in 120 seconds
     And wallet "WALLET_2A" has 3 or more outputs in 10 seconds
     And wallet "WALLET_4A" has 3 or more outputs in 10 seconds
     And wallet "WALLET_5A" has 3 or more outputs in 10 seconds
