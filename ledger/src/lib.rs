@@ -16,6 +16,7 @@ use lb_core::{
     mantle::{
         AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value, VerificationError,
         gas::{Gas, GasConstants, GasCost, GasOverflow},
+        tx::MantleTxContext,
     },
     proofs::leader_proof,
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
@@ -342,6 +343,13 @@ impl LedgerState {
 
             // Check the transaction is balanced
             let total_gas_cost = AuthenticatedMantleTx::total_gas_cost::<Constants>(&tx)?;
+            tracing::debug!(
+                balance,
+                total_gas_cost = total_gas_cost.into_inner(),
+                storage_gas_price = ?tx.mantle_tx().storage_gas_price,
+                execution_gas_price = ?tx.mantle_tx().execution_gas_price,
+                "tx balance check"
+            );
             match balance.cmp(&Balance::from(total_gas_cost.into_inner())) {
                 Ordering::Less => return Err(LedgerError::InsufficientBalance),
                 Ordering::Greater => return Err(LedgerError::UnbalancedTransaction),
@@ -479,6 +487,14 @@ impl LedgerState {
         self.mantle_ledger.active_sessions()
     }
 
+    #[must_use]
+    pub fn tx_context(&self) -> MantleTxContext {
+        MantleTxContext {
+            gas_context: self.mantle_ledger().channels().into(),
+            leader_reward_amount: self.mantle_ledger().leader_reward_amount(),
+        }
+    }
+
     /// Applies a transaction to the ledger state, returning the updated state
     /// and the net balance change.
     ///
@@ -614,6 +630,7 @@ mod tests {
         mantle::{
             MantleTx, Note, SignedMantleTx, Transaction as _,
             gas::{GasPrice, MainnetGasConstants},
+            genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
             ops::{
                 channel::{
                     ChannelId, MsgId, deposit::DepositOp, inscribe::InscriptionOp,
@@ -754,8 +771,8 @@ mod tests {
             vec![utxo.id()],
             vec![output_note],
             std::slice::from_ref(&sk),
-            1.into(),
-            1.into(),
+            GENESIS_EXECUTION_GAS_PRICE,
+            GENESIS_STORAGE_GAS_PRICE,
         );
         let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx).unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
@@ -763,8 +780,8 @@ mod tests {
             vec![utxo.id()],
             vec![output_note],
             &[sk],
-            1.into(),
-            1.into(),
+            GENESIS_EXECUTION_GAS_PRICE,
+            GENESIS_STORAGE_GAS_PRICE,
         );
 
         // Create a dummy proof (using same structure as in cryptarchia tests)
@@ -1371,8 +1388,8 @@ mod tests {
             vec![utxo.id()],
             vec![output_note],
             std::slice::from_ref(&sk),
-            1.into(),
-            0.into(),
+            GENESIS_EXECUTION_GAS_PRICE,
+            (GENESIS_STORAGE_GAS_PRICE.into_inner() + 1).into(), // wrong storage gas price
         );
         let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx).unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
@@ -1380,8 +1397,8 @@ mod tests {
             vec![utxo.id()],
             vec![output_note],
             &[sk],
-            1.into(),
-            0.into(),
+            GENESIS_EXECUTION_GAS_PRICE,
+            (GENESIS_STORAGE_GAS_PRICE.into_inner() + 1).into(), // wrong storage gas price
         );
 
         let result = ledger
@@ -1390,6 +1407,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "TODO: enable once we determine non-zero genesis execution gas price"]
     fn test_base_fee_rejection() {
         let utxo = utxo();
         let config = config();
@@ -1431,6 +1449,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "TODO: enable once we determine non-zero genesis execution/storage gas price"]
     fn test_priority_fees_go_to_leader() {
         let utxo = utxo();
         let config = config();

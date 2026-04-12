@@ -24,7 +24,7 @@ use lb_core::{
             },
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
-        tx::MantleTxGasContext,
+        tx::MantleTxContext,
         tx_builder::MantleTxBuilder,
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
@@ -145,9 +145,9 @@ pub enum WalletMsg {
     GetKnownAddresses {
         resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
     },
-    GetGasContext {
+    GetTxContext {
         block_id: Option<HeaderId>,
-        resp_tx: Sender<Result<MantleTxGasContext, WalletServiceError>>,
+        resp_tx: Sender<Result<MantleTxContext, WalletServiceError>>,
     },
 }
 
@@ -180,7 +180,7 @@ impl WalletMsg {
             | Self::SignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. }
             | Self::GetClaimableVoucher { tip, .. }
-            | Self::GetGasContext { block_id: tip, .. } => *tip,
+            | Self::GetTxContext { block_id: tip, .. } => *tip,
             Self::GenerateNewVoucherSecret { .. } | Self::GetKnownAddresses { .. } => None,
         }
     }
@@ -384,6 +384,10 @@ where
     }
 
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn handle_wallet_message(
         msg: WalletMsg,
         state: &mut ServiceState<'_>,
@@ -494,8 +498,8 @@ where
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
             }
-            WalletMsg::GetGasContext { block_id, resp_tx } => {
-                Self::get_gas_context(block_id, resp_tx, cryptarchia).await;
+            WalletMsg::GetTxContext { block_id, resp_tx } => {
+                Self::get_tx_context(block_id, resp_tx, cryptarchia).await;
             }
         }
     }
@@ -979,6 +983,10 @@ where
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn handle_new_block(
         header_id: HeaderId,
         state: &mut ServiceState<'_>,
@@ -1121,9 +1129,9 @@ where
         }
     }
 
-    async fn get_gas_context(
+    async fn get_tx_context(
         block_id: Option<HeaderId>,
-        resp_tx: Sender<Result<MantleTxGasContext, WalletServiceError>>,
+        resp_tx: Sender<Result<MantleTxContext, WalletServiceError>>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
         let block_id = match Self::msg_tip_or_latest(block_id, cryptarchia).await {
@@ -1146,8 +1154,7 @@ where
             }
         };
 
-        let gas_context = ledger_state.mantle_ledger().channels().into();
-        if let Err(e) = resp_tx.send(Ok(gas_context)) {
+        if let Err(e) = resp_tx.send(Ok(ledger_state.tx_context())) {
             error!(err = ?e, "Failed to send gas context response");
         }
     }

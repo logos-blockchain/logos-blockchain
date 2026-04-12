@@ -163,21 +163,7 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: clippy
-          args: >-
-            --locked --workspace --all-targets --all-features
-            --exclude testing_framework
-            --exclude logos-blockchain-tests
-            --exclude logos-blockchain-cfgsync
-
-      - name: Run cargo clippy on test workspace packages
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: clippy
-          args: >-
-            --locked --all-targets --all-features --no-deps
-            -p testing_framework
-            -p logos-blockchain-tests
-            -p logos-blockchain-cfgsync
+          args: --locked --workspace --all-targets --all-features
 
       - name: Update Cargo cache
         if: success() || failure()

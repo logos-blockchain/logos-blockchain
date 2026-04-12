@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx,
+        Note, Op, SignedMantleTx, Value,
         gas::{GasCost, GasOverflow, MainnetGasConstants},
         ops::leader_claim::LeaderClaimOp,
         tx_builder::MantleTxBuilder,
@@ -26,6 +26,7 @@ pub struct LeaderWalletConfig {
 
 pub async fn fund_and_sign_leader_claim_tx<Wallet, RuntimeServiceId>(
     op: LeaderClaimOp,
+    reward_amount: Value,
     tip: HeaderId,
     wallet: &WalletApi<Wallet, RuntimeServiceId>,
     config: &LeaderWalletConfig,
@@ -34,11 +35,13 @@ where
     Wallet: WalletServiceData,
     RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<Wallet>,
 {
-    let gas_context = wallet
-        .get_gas_context(Some(tip))
+    let tx_context = wallet
+        .get_tx_context(Some(tip))
         .await
         .map_err(|error| LeaderWalletError::WalletApi(Box::new(error)))?;
-    let tx_builder = MantleTxBuilder::new(gas_context).push_op(Op::LeaderClaim(op));
+    let tx_builder = MantleTxBuilder::new(tx_context)
+        .push_op(Op::LeaderClaim(op))
+        .add_ledger_output(Note::new(reward_amount, config.funding_pk));
     let funded_tx_builder = wallet
         .fund_tx(
             Some(tip),
@@ -51,6 +54,13 @@ where
         .response;
 
     let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>()?;
+    tracing::debug!(
+        net_balance = funded_tx_builder.net_balance(),
+        gas_cost = ?tx_fee,
+        reward_amount,
+        n_inputs = funded_tx_builder.ledger_inputs().len(),
+        "leader claim tx builder state after funding"
+    );
     if tx_fee > config.max_tx_fee {
         return Err(LeaderWalletError::TxFeeExceedsMaxFee {
             tx_fee,

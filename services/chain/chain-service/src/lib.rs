@@ -1113,6 +1113,10 @@ where
     /// * `ledger_config` - The ledger configuration.
     /// * `relays` - The relays object containing all the necessary relays for
     ///   the consensus.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn initialize_cryptarchia(
         &self,
         bootstrap_config: &BootstrapConfig,

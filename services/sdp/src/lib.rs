@@ -15,7 +15,7 @@ use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     block::BlockNumber,
     header::HeaderId,
-    mantle::{NoteId, SignedMantleTx, tx::MantleTxGasContext, tx_builder::MantleTxBuilder},
+    mantle::{NoteId, SignedMantleTx, tx::MantleTxContext, tx_builder::MantleTxBuilder},
     sdp::{
         ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator, ProviderId,
         ServiceType, WithdrawMessage,
@@ -315,6 +315,10 @@ where
         )))
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn handle_post_declaration(
         &self,
         declaration: Box<DeclarationMessage>,
@@ -323,11 +327,11 @@ where
         reply_channel: oneshot::Sender<Result<DeclarationId, DynError>>,
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
     ) {
-        let Ok(gas_context) = self.get_gas_context(None, chain_api).await else {
+        let Ok(tx_context) = self.get_tx_context(None, chain_api).await else {
             tracing::error!("Failed to get gas context for declaration");
             return;
         };
-        let tx_builder = MantleTxBuilder::new(gas_context);
+        let tx_builder = MantleTxBuilder::new(tx_context);
         let declaration_id = declaration.id();
 
         let signed_tx = match wallet_adapter
@@ -355,6 +359,10 @@ where
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn handle_post_activity(
         &mut self,
         metadata: ActivityMetadata,
@@ -374,11 +382,11 @@ where
             metadata,
         };
 
-        let Ok(gas_context) = self.get_gas_context(None, chain_api).await else {
+        let Ok(tx_context) = self.get_tx_context(None, chain_api).await else {
             tracing::error!("Failed to get gas context for activity");
             return;
         };
-        let tx_builder = MantleTxBuilder::new(gas_context);
+        let tx_builder = MantleTxBuilder::new(tx_context);
 
         let signed_tx = match wallet_adapter
             .active_tx(tx_builder, active_message, &self.wallet_config)
@@ -400,6 +408,10 @@ where
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn handle_post_withdrawal(
         &mut self,
         declaration_id: DeclarationId,
@@ -420,11 +432,11 @@ where
             nonce: self.bump_nonce(),
         };
 
-        let Ok(gas_context) = self.get_gas_context(None, chain_api).await else {
+        let Ok(tx_context) = self.get_tx_context(None, chain_api).await else {
             tracing::error!("Failed to get gas context for withdrawal");
             return;
         };
-        let tx_builder = MantleTxBuilder::new(gas_context);
+        let tx_builder = MantleTxBuilder::new(tx_context);
 
         let signed_tx = match wallet_adapter
             .withdraw_tx(tx_builder, withdraw_message, &self.wallet_config)
@@ -479,16 +491,16 @@ where
         }
     }
 
-    async fn get_gas_context(
+    async fn get_tx_context(
         &self,
         block_id: Option<HeaderId>,
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
-    ) -> Result<MantleTxGasContext, DynError> {
+    ) -> Result<MantleTxContext, DynError> {
         let block_id = self.block_id_or_tip(block_id, chain_api).await?;
         let Some(ledger_state) = chain_api.get_ledger_state(block_id).await? else {
             return Err(format!("Ledger state not found for block {block_id:?}").into());
         };
-        Ok(ledger_state.mantle_ledger().channels().into())
+        Ok(ledger_state.tx_context())
     }
 
     /// Increments the nonce of the current declaration, and returns the

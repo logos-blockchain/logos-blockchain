@@ -22,8 +22,8 @@ pub struct MerklePath {
 impl MerklePath {
     /// Compute the merkle root from a leaf hash and this proof.
     #[must_use]
-    pub fn root<Hash: Digest>(&self, leaf_hash: Fr) -> Fr {
-        let mut current = leaf_hash;
+    pub fn root<Hash: Digest>(&self, leaf: Fr) -> Fr {
+        let mut current = leaf;
         for (h, &sibling) in self.siblings.iter().enumerate() {
             let height = h + 1;
             if is_left_child(self.leaf_index, height) {
@@ -35,10 +35,10 @@ impl MerklePath {
         current
     }
 
-    /// Verify that `leaf_hash` is included under `expected_root`.
+    /// Verify that `leaf` is included under `expected_root`.
     #[must_use]
-    pub fn verify<Hash: Digest>(&self, leaf_hash: Fr, expected_root: Fr) -> bool {
-        self.root::<Hash>(leaf_hash) == expected_root
+    pub fn verify<Hash: Digest>(&self, leaf: Fr, expected_root: Fr) -> bool {
+        self.root::<Hash>(leaf) == expected_root
     }
 
     /// The 0-indexed leaf position this path corresponds to.

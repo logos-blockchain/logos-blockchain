@@ -354,7 +354,7 @@ mod tests {
             Note, Op, TxHash,
             gas::MainnetGasConstants as Gas,
             ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
-            tx::MantleTxGasContext,
+            tx::MantleTxContext,
         },
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
@@ -521,8 +521,7 @@ mod tests {
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
-        let context: MantleTxGasContext = ledger_state.mantle_ledger().channels().into();
-        let tx_builder = MantleTxBuilder::new(context)
+        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context())
             .set_execution_gas_price(1.into())
             .set_storage_gas_price(1.into());
 
@@ -571,8 +570,7 @@ mod tests {
 
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
-        let context: MantleTxGasContext = ledger_state.mantle_ledger().channels().into();
-        let mut tx_builder = MantleTxBuilder::new(context)
+        let mut tx_builder = MantleTxBuilder::new(ledger_state.tx_context())
             .set_execution_gas_price(1.into())
             .set_storage_gas_price(1.into());
 
@@ -604,8 +602,7 @@ mod tests {
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
-        let context: MantleTxGasContext = ledger_state.mantle_ledger().channels().into();
-        let tx_builder = MantleTxBuilder::new(context)
+        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context())
             .set_execution_gas_price(1.into())
             .set_storage_gas_price(1.into());
 
@@ -629,8 +626,7 @@ mod tests {
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1), (bob, 2)]), &ledger_state);
 
-        let context: MantleTxGasContext = ledger_state.mantle_ledger().channels().into();
-        let tx_builder = MantleTxBuilder::new(context)
+        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context())
             .set_execution_gas_price(1.into())
             .set_storage_gas_price(1.into());
 
@@ -652,8 +648,7 @@ mod tests {
     fn test_fund_tx_unfundable_region() {
         let alice = pk(1);
 
-        let context = MantleTxGasContext::new(HashMap::new());
-        let tx_builder = MantleTxBuilder::new(context)
+        let tx_builder = MantleTxBuilder::new(MantleTxContext::default())
             .set_execution_gas_price(1.into())
             .set_storage_gas_price(1.into());
 

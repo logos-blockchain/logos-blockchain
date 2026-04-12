@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::{
     crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTES_SIZE, Hasher, ZkHasher},
     mantle::{
-        AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher,
+        AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher, Value,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         ops::{
@@ -91,7 +91,13 @@ struct MantleTxDeSerImpl {
     pub storage_gas_price: GasPrice,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
+pub struct MantleTxContext {
+    pub gas_context: MantleTxGasContext,
+    pub leader_reward_amount: Value,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct MantleTxGasContext {
     withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
 }

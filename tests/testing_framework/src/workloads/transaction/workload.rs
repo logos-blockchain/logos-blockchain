@@ -9,7 +9,7 @@ use std::{
 
 use async_trait::async_trait;
 use lb_core::mantle::{
-    GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo, tx::MantleTxGasContext,
+    GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo, tx::MantleTxContext,
     tx_builder::MantleTxBuilder,
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
@@ -184,9 +184,9 @@ impl<'a, E: LbcScenarioEnv> Submission<'a, E> {
     }
 
     async fn execute(mut self) -> Result<(), DynError> {
-        let gas_context = MantleTxGasContext::new(HashMap::new());
+        let tx_context = MantleTxContext::default();
         while let Some(input) = self.plan.pop_front() {
-            submit_wallet_transaction(self.ctx, &input, gas_context.clone()).await?;
+            submit_wallet_transaction(self.ctx, &input, tx_context.clone()).await?;
             if !self.interval.is_zero() {
                 sleep(self.interval).await;
             }
@@ -198,9 +198,9 @@ impl<'a, E: LbcScenarioEnv> Submission<'a, E> {
 async fn submit_wallet_transaction(
     ctx: &RunContext<impl LbcScenarioEnv>,
     input: &WalletInput,
-    gas_context: MantleTxGasContext,
+    tx_context: MantleTxContext,
 ) -> Result<(), DynError> {
-    let signed_tx = Arc::new(build_wallet_transaction(input, gas_context)?);
+    let signed_tx = Arc::new(build_wallet_transaction(input, tx_context)?);
     submit_transaction_via_cluster(ctx, signed_tx).await
 }
 
@@ -267,9 +267,9 @@ fn cluster_client_exhausted_error() -> DynError {
 
 fn build_wallet_transaction(
     input: &WalletInput,
-    gas_context: MantleTxGasContext,
+    tx_context: MantleTxContext,
 ) -> Result<SignedMantleTx, DynError> {
-    let tx = MantleTxBuilder::new(gas_context)
+    let tx = MantleTxBuilder::new(tx_context)
         .add_ledger_input(input.utxo)
         .add_ledger_output(Note::new(input.utxo.note.value, input.account.public_key()))
         .build();

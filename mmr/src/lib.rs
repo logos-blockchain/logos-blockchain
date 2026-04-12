@@ -83,7 +83,7 @@ where
             return Err(MmrFull);
         }
 
-        let root = Hash::digest(&[*elem.as_ref()]);
+        let root = *elem.as_ref();
         let mut last_root = Root { root, height: 1 };
         let mut roots = self.roots.clone();
 
@@ -132,7 +132,7 @@ where
                 .collect(),
         };
 
-        let root = Hash::digest(&[*elem.as_ref()]);
+        let root = *elem.as_ref();
         let mut last_root = Root { root, height: 1 };
         let mut roots = self.roots.clone();
 
@@ -276,7 +276,7 @@ mod test {
     }
 
     pub fn leaf(data: &[u8]) -> Fr {
-        ZkHasher::digest(&[b2p(data)])
+        b2p(data)
     }
 
     #[test]

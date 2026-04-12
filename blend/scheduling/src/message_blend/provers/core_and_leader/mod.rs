@@ -94,6 +94,10 @@ where
     // Changes epoch-related info for the core generator, and stops the old leader
     // generator if it's still on the previous epoch. If not, `rotate_epoch` is
     // effectively a no-op.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     fn rotate_epoch(&mut self, new_epoch_public: LeaderInputs, new_epoch: Epoch) {
         match self.core_proofs_generator.current_epoch().cmp(&new_epoch) {
             Ordering::Less => {

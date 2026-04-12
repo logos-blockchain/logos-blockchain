@@ -706,6 +706,10 @@ where
 
     /// Apply our own proposed block to the chain and publish it to the blend
     /// network.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn apply_and_publish_block_proposal(
         block: Block<Mempool::Item>,
         chain_network_api: &ChainNetworkServiceApi<ChainNetwork, RuntimeServiceId>,
@@ -795,11 +799,13 @@ where
             .ok_or(Error::NoClaimableVoucher)?
             .nullifier;
 
+        let reward_amount = ledger_state.mantle_ledger().leader_reward_amount();
         let signed_tx = fund_and_sign_leader_claim_tx(
             LeaderClaimOp {
                 rewards_root: ledger_state.mantle_ledger().claimable_vouchers_root(),
                 voucher_nullifier,
             },
+            reward_amount,
             tip,
             wallet,
             config,

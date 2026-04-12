@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{OpProof, SignedMantleTx, ops::sdp::SDPDeclareOp};
 #[cfg(feature = "mock")]
-use crate::mantle::tx::MantleTxGasContext;
+use crate::mantle::tx::MantleTxContext;
 use crate::{
     crypto::ZkHasher,
     mantle::{
@@ -96,7 +96,7 @@ impl GenesisTx {
 
     #[cfg(feature = "mock")]
     #[must_use]
-    pub fn new_mocked(context: MantleTxGasContext) -> Self {
+    pub fn new_mocked(context: MantleTxContext) -> Self {
         use crate::mantle::tx_builder::MantleTxBuilder;
 
         Self(SignedMantleTx::new_unverified(
