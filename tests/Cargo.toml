@@ -13,6 +13,13 @@ version     = { workspace = true }
 [lints]
 workspace = true
 
+[dev-dependencies]
+divan       = { workspace = true }
+lb-core     = { workspace = true }
+lb-groth16  = { workspace = true }
+lb-mmr      = { workspace = true }
+lb-utxotree = { workspace = true }
+
 [dependencies]
 async-trait                      = "0.1"
 cucumber                         = { features = ["output-junit"], version = "=0.22.0" }
@@ -153,3 +160,7 @@ required-features = ["cucumber"]
 [[test]]
 name = "test_zone_sdk_e2e"
 path = "src/tests/zone_sdk/e2e.rs"
+
+[[bench]]
+harness = false
+name    = "voucher"
