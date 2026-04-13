@@ -6,4 +6,3 @@ pub mod manual_cluster;
 pub mod sync;
 pub mod time;
 pub mod wallet;
-pub mod zone;

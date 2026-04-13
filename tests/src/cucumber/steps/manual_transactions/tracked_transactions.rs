@@ -104,7 +104,7 @@ pub async fn submit_funded_transfer_transaction(
 }
 
 pub async fn transaction_is_not_included_in_seconds(
-    world: &mut CucumberWorld,
+    world: &CucumberWorld,
     step: &str,
     transaction_alias: String,
     timeout_seconds: u64,

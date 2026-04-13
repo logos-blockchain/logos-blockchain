@@ -202,7 +202,7 @@ async fn submit_wallet_transaction(
     input: &WalletInput,
     gas_context: MantleTxGasContext,
 ) -> Result<(), DynError> {
-    let signed_tx = Arc::new(build_wallet_transaction(input, gas_context)?);
+    let signed_tx = Arc::new(build_wallet_transaction(input, &gas_context)?);
     submit_transaction_via_cluster(ctx, signed_tx).await
 }
 
@@ -269,7 +269,7 @@ fn cluster_client_exhausted_error() -> DynError {
 
 fn build_wallet_transaction(
     input: &WalletInput,
-    gas_context: MantleTxGasContext,
+    gas_context: &MantleTxGasContext,
 ) -> Result<SignedMantleTx, DynError> {
     let receiver = input.account.public_key();
     let tx_context = MantleTxContext {
@@ -285,7 +285,7 @@ fn build_wallet_transaction(
         .build();
 
     let fee = provisional_tx
-        .total_gas_cost::<MainnetGasConstants>(&gas_context)?
+        .total_gas_cost::<MainnetGasConstants>(gas_context)?
         .into_inner();
     let output_value = input.utxo.note.value.checked_sub(fee).ok_or_else(|| {
         format!(

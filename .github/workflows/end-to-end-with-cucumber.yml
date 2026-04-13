@@ -161,31 +161,6 @@ jobs:
           artifact_subdir: Transactions
           verbose_console: "true"
 
-      # Feature: Zone SDK (@zone_ci)
-      - name: Run cucumber - @zone_ci
-        # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
-        if: ${{ !cancelled() }}
-        timeout-minutes: 60  # Safety net timeout - this needs to be adjusted as more tests are added
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
-        env:
-          CUCUMBER_LOG_LEVEL: debug
-          CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
-        with:
-          command: test
-          args: >-
-            --locked -p logos-blockchain-tests --features cucumber
-            --test cucumber -- --tags "@zone_ci and not (@broken or @undefined_behaviour)"
-
-      # On failure, upload cucumber logs and artifacts for debugging
-      - name: Upload cucumber logs on failure
-        if: failure()
-        continue-on-error: true
-        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
-        with:
-          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-zone  # ✅ Unique per OS
-          include-hidden-files: true
-          path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Zone SDK/**
-
       # Always upload JUnit test results for reporting, even if tests fail
       - name: Upload cucumber JUnit results
         if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}

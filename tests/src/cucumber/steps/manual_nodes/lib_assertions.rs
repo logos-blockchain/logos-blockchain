@@ -57,10 +57,12 @@ async fn step_all_nodes_share_lib_at_or_above_height(
 fn format_lib_snapshots(snapshots: &[LibSnapshot]) -> String {
     snapshots
         .iter()
-        .map(|snapshot| format!(
-            "{}@{}:{}",
-            snapshot.node_name, snapshot.lib_height, snapshot.lib_hash
-        ))
+        .map(|snapshot| {
+            format!(
+                "{}@{}:{}",
+                snapshot.node_name, snapshot.lib_height, snapshot.lib_hash
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }

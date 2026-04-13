@@ -16,7 +16,8 @@ const DEFAULT_NODE_COUNT: usize = 4;
 const NODE_COUNT_ENV: &str = "LOGOS_LOCAL_NODE_COUNT";
 
 // To run use:
-// `cargo test -p logos-blockchain-tests --test test_blend_local_setup blend_devnet_setup -- --ignored --nocapture`
+// `cargo test -p logos-blockchain-tests --test blend_devnet_setup
+// blend_devnet_setup -- --ignored --nocapture`
 #[ignore = "For local debugging"]
 #[tokio::test]
 async fn blend_devnet_setup() {

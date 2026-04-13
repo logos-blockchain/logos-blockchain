@@ -213,7 +213,7 @@ fn build_capture_plan<E: LbcBlockFeedEnv>(
     Ok((plan, wallet_pks))
 }
 
-fn catchup_wait_budget<E: LbcBlockFeedEnv>(_ctx: &RunContext<E>) -> Duration {
+const fn catchup_wait_budget<E: LbcBlockFeedEnv>(_ctx: &RunContext<E>) -> Duration {
     // Transactions can remain pending until the end of the workload window on
     // slower runners, so a tiny slot-based hint is too optimistic here.
     MAX_CATCHUP_WAIT

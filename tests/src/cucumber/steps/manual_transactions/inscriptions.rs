@@ -8,9 +8,7 @@ use tracing::{info, warn};
 use crate::{
     common::{
         chain::wait_for_transactions_inclusion,
-        mantle_inscription::{
-            build_funded_inscription_transaction, channel_id_for_payload_size,
-        },
+        mantle_inscription::{build_funded_inscription_transaction, channel_id_for_payload_size},
     },
     cucumber::{
         error::{StepError, StepResult},

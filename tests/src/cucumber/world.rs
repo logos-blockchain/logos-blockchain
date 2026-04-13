@@ -305,6 +305,10 @@ pub struct NodeSnapshot {
 }
 
 impl Debug for CucumberWorld {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Debug output intentionally enumerates world state fields for test diagnostics"
+    )]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CucumberWorld")
             .field("deployer", &format!("{:?}", self.deployer))
