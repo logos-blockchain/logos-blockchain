@@ -126,6 +126,8 @@ where
         let mut swarm = SwarmBuilder::with_existing_identity(config.keypair())
             .with_tokio()
             .with_quic()
+            .with_dns()
+            .expect("DNS transport should be supported")
             .with_behaviour(|_| {
                 BlendBehaviour::new(
                     config,
