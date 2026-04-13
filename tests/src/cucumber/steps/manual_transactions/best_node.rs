@@ -388,44 +388,6 @@ fn summarize_tip_groups(snapshots: &[NodeConsensusSnapshot]) -> String {
         .join(" | ")
 }
 
-// fn summarize_tip_groups(snapshots: &[NodeConsensusSnapshot]) -> String {
-//     let mut grouped: HashMap<String, Vec<(String, u64)>> = HashMap::new();
-//     for snapshot in snapshots {
-//         grouped
-//             .entry(tip_key(&snapshot.consensus))
-//             .or_default()
-//             .push((snapshot.node_name.clone(), snapshot.consensus.height));
-//     }
-//
-//     let mut groups = grouped.into_iter().collect::<Vec<_>>();
-//     groups.sort_by(|(left_tip, left_nodes), (right_tip, right_nodes)| {
-//         right_nodes
-//             .len()
-//             .cmp(&left_nodes.len())
-//             .then_with(|| right_tip.cmp(left_tip))
-//     });
-//
-//     groups
-//         .into_iter()
-//         .map(|(tip, mut nodes)| {
-//             let node_count = nodes.len();
-//             nodes.sort_by(|(left_name, left_height), (right_name,
-// right_height)| {                 right_height
-//                     .cmp(left_height)
-//                     .then_with(|| left_name.cmp(right_name))
-//             });
-//             let node_summary = nodes
-//                 .into_iter()
-//                 .map(|(name, height)| format!("{name}@{height}"))
-//                 .collect::<Vec<_>>()
-//                 .join(", ");
-//             let tip_prefix: String = tip.chars().take(16).collect();
-//             format!("{tip_prefix}..({node_count}) [{node_summary}]")
-//         })
-//         .collect::<Vec<_>>()
-//         .join(" | ")
-// }
-
 fn select_majority_tip_group(snapshots: &[NodeConsensusSnapshot]) -> Option<Vec<usize>> {
     let mut grouped: HashMap<String, Vec<usize>> = HashMap::new();
     let responsive_nodes = snapshots.len();

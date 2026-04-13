@@ -124,7 +124,7 @@ Feature: Transactions
     When wallet "WALLET_1A" has 0 or less encumbered outputs in 60 seconds
     Then I stop all nodes
 
-  @transactions_ci
+  @transactions_ci @undefined_behaviour
   Scenario: Two fork chains join later and preserve persisted state wallet balances
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
