@@ -13,12 +13,12 @@ Progress on the checklist must be provided as comments to the issue.
 
 - [ ] <span style="color:red">**!! IMPORTANT: Make sure that *ALL* the deployment settings are committed to `master` before starting the ceremony. The only value that is *expected* to be out-of-sync is the cryptarchia genesis state, which will be a result of running the ceremony**</span>.
 - [ ] Checkout `master` and tag commit with `pre-X.Y.Z` and push the tag
-- [ ] Manually trigger the [testnet Docker workflow][testnet-docker-workflow] using the `pre-X.Y.Z` tag and using the `devnet` image tag.
+- [ ] Manually trigger the [testnet Docker workflow][testnet-docker-workflow] using the `pre-X.Y.Z` tag and using the `testnet` image tag.
 - [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the workflow run to complete
 - [ ] Verify the right image with the right tag was pushed to the [GitHub container registry][devnet-image-container-registry]
 - [ ] Checkout and force reset the `testnet` branch to point to the tagged commit
-- [ ] Create a new symlink `compose.static.yml` -> `compose.devnet.setup.yml`
+- [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml`
 - [ ] Add a file called `entropy` in the `testnet` folder with any content. Using the same entropy content as a previous deployment will result in the same faucet keys. We recommend using the release version as the tag corresponding to the release commit (i.e., `X.Y.Z`)
 - [ ] Push to `testnet` branch to trigger a new deployment
 - [ ] Wait around 1 minute for deployment to be updated with the new changes and for the ceremony to happen. Until ready, you should see a `502` error while the containers restart.
@@ -47,7 +47,7 @@ Progress on the checklist must be provided as comments to the issue.
 
 ## Devnet deployment
 
-- [ ] Checkout `testnet` branch again and change the `compose.static.yml` symlink to now point to `compose.devnet.run.yml`
+- [ ] Checkout `testnet` branch again and change the `compose.static.yml` symlink to now point to `compose.run.yml`
 - [ ] Commit and push the changes to trigger environment re-deployment. Environment is now live.
 - [ ] Wait around 1 minute for deployment to be updated
 - [ ] If needed, at any time you can download fleet nodes' configs and logs from [https://devnet.blockchain.logos.co/internal/node-data/](https://devnet.blockchain.logos.co/internal/node-data/)
