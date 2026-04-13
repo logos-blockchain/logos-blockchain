@@ -1,11 +1,9 @@
-use std::{
-    env,
-    time::{Duration, SystemTime},
-};
+use std::{env, time::Duration};
 
 use lb_testing_framework::{
     CoreBuilderExt as _, LbcLocalDeployer, ScenarioBuilder, ScenarioBuilderExt as _,
 };
+use logos_blockchain_tests::common::manual_cluster::unique_scenario_base_dir;
 use testing_framework_core::scenario::{Deployer as _, ExternalNodeSource};
 use thiserror::Error;
 
@@ -108,14 +106,6 @@ fn run_duration_from_env() -> Result<Duration, TestConfigError> {
     Ok(Duration::from_secs(secs))
 }
 
-fn unique_scenario_base_dir() -> std::path::PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0u128, |duration| duration.as_nanos());
-
-    env::temp_dir().join(format!("tf-external-urls-inscription-{nanos}"))
-}
-
 #[tokio::test]
 #[ignore = "long-running scenario: external inscription workload; duration configurable via LOGOS_WORKLOAD_DURATION_SECS"]
 async fn external_urls_inscription_workload() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
@@ -132,7 +122,7 @@ async fn external_urls_inscription_workload() -> Result<(), Box<dyn std::error::
     let deployer = LbcLocalDeployer::new();
 
     // External-only sources: no managed nodes.
-    let scenario_base_dir = unique_scenario_base_dir();
+    let scenario_base_dir = unique_scenario_base_dir("tf-external-urls-inscription");
     let mut builder =
         ScenarioBuilder::deployment_with(|t| t.nodes(0).scenario_base_dir(scenario_base_dir));
 

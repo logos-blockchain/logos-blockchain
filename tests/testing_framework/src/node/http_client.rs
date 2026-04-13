@@ -5,12 +5,12 @@ use common_http_client::{
 };
 use futures::Stream;
 use lb_chain_service::CryptarchiaInfo;
-use lb_core::{header::HeaderId, mantle::SignedMantleTx};
+use lb_core::{header::HeaderId, mantle::SignedMantleTx, sdp::Declaration};
 use lb_http_api_common::{
     bodies::wallet::transfer_funds::{
         WalletTransferFundsRequestBody, WalletTransferFundsResponseBody,
     },
-    paths::NETWORK_INFO,
+    paths::{MANTLE_SDP_DECLARATIONS, NETWORK_INFO},
 };
 use lb_network_service::backends::libp2p::Libp2pInfo;
 use reqwest::Url;
@@ -104,6 +104,16 @@ impl NodeHttpClient {
             .await
     }
 
+    pub async fn get_sdp_declarations(&self) -> Result<Vec<Declaration>, Error> {
+        if let Some(testing_url) = self.testing_url.clone()
+            && let Ok(declarations) = self.get_sdp_declarations_at(testing_url).await
+        {
+            return Ok(declarations);
+        }
+
+        self.get_sdp_declarations_at(self.base_url.clone()).await
+    }
+
     #[must_use]
     pub const fn base_url(&self) -> &Url {
         &self.base_url
@@ -120,6 +130,15 @@ impl NodeHttpClient {
             .map_err(Error::Url)?;
         self.http_client
             .get::<(), Libp2pInfo>(request_url, None)
+            .await
+    }
+
+    async fn get_sdp_declarations_at(&self, base_url: Url) -> Result<Vec<Declaration>, Error> {
+        let request_url = base_url
+            .join(MANTLE_SDP_DECLARATIONS.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.http_client
+            .get::<(), Vec<Declaration>>(request_url, None)
             .await
     }
 }

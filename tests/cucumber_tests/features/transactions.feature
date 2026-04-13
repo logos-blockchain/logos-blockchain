@@ -1,10 +1,30 @@
 Feature: Transactions
 
   @transactions_ci
+  Scenario: Large inscriptions are included
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 1           | 2000000      |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet resources:
+      | node_name | account_index | wallet_name | connected_to |
+      | NODE_1    | 1             | WALLET_1A   |              |
+    When node "NODE_1" is at height 2 in 180 seconds
+    And I submit inscription transaction "INSCRIPTION_32K" of 32 KiB from wallet "WALLET_1A"
+    Then transaction "INSCRIPTION_32K" is included on node "NODE_1" in 60 seconds
+    When I submit inscription transaction "INSCRIPTION_128K" of 128 KiB from wallet "WALLET_1A"
+    Then transaction "INSCRIPTION_128K" is included on node "NODE_1" in 60 seconds
+    When I submit inscription transaction "INSCRIPTION_512K" of 512 KiB from wallet "WALLET_1A"
+    Then transaction "INSCRIPTION_512K" is included on node "NODE_1" in 60 seconds
+    When I submit inscription transaction "INSCRIPTION_896K" of 896 KiB from wallet "WALLET_1A"
+    Then transaction "INSCRIPTION_896K" is included on node "NODE_1" in 60 seconds
+    And I stop all nodes
+
+  @transactions_ci
   Scenario: Two nodes two wallets multiple transactions
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 1000         |
+      | 1             | 2           | 5000         |
       | 2             | 0           | 0            |
     And we have a sponsored genesis fee account with 2 tokens of 997 value each
     And I have a cluster with capacity of 2 nodes
@@ -15,7 +35,7 @@ Feature: Transactions
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When node "NODE_1" is at height 2 in 180 seconds
-    And I send 2 transactions of 500 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
+    And I send 2 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
     When wallet "WALLET_2A" has 2 or more outputs in 120 seconds
     And I send 2 transactions of 250 LGO each from wallet "WALLET_2A" to wallet "WALLET_1A"
     When wallet "WALLET_2A" has all submitted transactions settled in 120 seconds
@@ -27,7 +47,7 @@ Feature: Transactions
   Scenario: Two nodes two wallets multiple outputs one transaction
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 1000         |
+      | 1             | 2           | 5000         |
       | 2             | 0           | 0            |
     And we have a sponsored genesis fee account with 2 tokens of 997 value each
     And I have a cluster with capacity of 2 nodes
@@ -38,7 +58,7 @@ Feature: Transactions
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When node "NODE_1" is at height 2 in 180 seconds
-    And I send one transaction with 2 outputs of 500 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
+    And I send one transaction with 2 outputs of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
     When wallet "WALLET_2A" has 2 or more outputs in 120 seconds
     And I send 2 transactions of 250 LGO each from wallet "WALLET_2A" to wallet "WALLET_1A"
     When wallet "WALLET_2A" has all submitted transactions settled in 120 seconds
@@ -105,7 +125,7 @@ Feature: Transactions
   Scenario: Coin split with many transfers to other
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 4           | 26000        |
+      | 1             | 4           | 30000        |
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
 #    And we use IBD peers
@@ -121,11 +141,11 @@ Feature: Transactions
     And I do a coin split for "WALLET_1A" of 25 UTXOs valued at 1000 LGO tokens each
     And I do a coin split for "WALLET_1A" of 25 UTXOs valued at 1000 LGO tokens each
     # Many small transfers to other wallet
-    When wallet "WALLET_1A" has 100 or more outputs in 240 seconds
-    And I send 50 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
-    When wallet "WALLET_2A" has 50 or more outputs in 240 seconds
+    When wallet "WALLET_1A" has 70 or more outputs in 240 seconds
+    And I send 35 transactions of 500 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
+    When wallet "WALLET_2A" has 35 or more outputs in 240 seconds
     # All outputs accounted for
-    When wallet "WALLET_1A" has 56000 or less LGO in 180 seconds
+    When wallet "WALLET_1A" has 89000 or less LGO in 180 seconds
     When wallet "WALLET_1A" has 0 or less encumbered outputs in 60 seconds
     Then I stop all nodes
 
@@ -275,3 +295,20 @@ Feature: Transactions
     And I send one transaction with 300 outputs of 100 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
     When wallet "WALLET_2A" has 100 or more outputs in 60 seconds
     Then I stop all nodes
+
+  @transactions_ci
+  Scenario: Invalid transactions do not block valid transactions
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 2           | 1000         |
+      | 2             | 0           | 0            |
+    And I have a cluster with capacity of 2 nodes
+    And I start nodes with wallet resources:
+      | node_name | account_index | wallet_name | connected_to |
+      | NODE_1    | 1             | WALLET_1A   |              |
+      | NODE_2    | 2             | WALLET_2A   | NODE_1       |
+    When node "NODE_1" is at height 2 in 180 seconds
+    And I submit invalid transfer transaction "BAD_TX" to node "NODE_1"
+    And I submit funded transfer transaction "GOOD_TX" of 1 LGO from wallet "WALLET_1A" to wallet "WALLET_2A"
+    Then transaction "GOOD_TX" is included on node "NODE_1" in 120 seconds
+    And transaction "BAD_TX" is not included in 120 seconds

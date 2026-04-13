@@ -89,6 +89,36 @@ pub async fn create_and_submit_transaction(
     receivers: &[(ZkPublicKey, u64)],
     best_node_info: Option<&BestNodeInfo>,
 ) -> Result<String, StepError> {
+    let tx_hashes = create_and_submit_transaction_hashes(
+        world,
+        step,
+        sender_wallet_name,
+        receivers,
+        best_node_info,
+    )
+    .await?;
+
+    let tx_hashes_hex: String = tx_hashes
+        .iter()
+        .map(|h| {
+            h.to_bytes()
+                .unwrap()
+                .to_ascii_lowercase()
+                .encode_hex::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Ok(tx_hashes_hex)
+}
+
+pub async fn create_and_submit_transaction_hashes(
+    world: &mut CucumberWorld,
+    step: &str,
+    sender_wallet_name: &str,
+    receivers: &[(ZkPublicKey, u64)],
+    best_node_info: Option<&BestNodeInfo>,
+) -> Result<Vec<TxHash>, StepError> {
     let wallet = world.resolve_wallet(sender_wallet_name).inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step);
     })?;
@@ -128,18 +158,7 @@ pub async fn create_and_submit_transaction(
         }
     };
 
-    let tx_hashes_hex: String = tx_hashes
-        .iter()
-        .map(|h| {
-            h.to_bytes()
-                .unwrap()
-                .to_ascii_lowercase()
-                .encode_hex::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    Ok(tx_hashes_hex)
+    Ok(tx_hashes)
 }
 
 async fn submit_user_wallet_transaction(
@@ -1204,7 +1223,7 @@ fn get_last_known_height<'a>(
         |&cached_header_id| {
             let cached_height = node_header_heights
                 .get(wallet_node_name)
-                .and_then(|m| m.get(cached_header_id))
+                .and_then(|m: &HashMap<String, u64>| m.get(cached_header_id))
                 .copied();
 
             cached_height.map_or((1, "~"), |h| (h + 1, ""))

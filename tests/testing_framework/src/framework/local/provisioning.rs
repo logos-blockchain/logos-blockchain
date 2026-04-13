@@ -501,14 +501,14 @@ fn build_run_config(config: Config, genesis_tx: GenesisTx) -> RunConfig {
         },
         storage: storage::serde::Config::default(),
         sdp: sdp::serde::Config {
-            declaration_id: None,
+            declaration_id: config.sdp_config.declaration_id,
             wallet: sdp::serde::WalletConfig {
                 max_tx_fee: mantle::Value::MAX.into(),
                 funding_pk: config.consensus_config.funding_sk.as_public_key(),
             },
         },
-        wallet: wallet::serde::Config {
-            known_keys: HashMap::from_iter([
+        wallet: {
+            let known_keys: HashMap<_, _> = [
                 (
                     key_id_for_preload_backend(&Key::Zk(config.consensus_config.known_key.clone())),
                     config.consensus_config.known_key.as_public_key(),
@@ -519,10 +519,36 @@ fn build_run_config(config: Config, genesis_tx: GenesisTx) -> RunConfig {
                     )),
                     config.consensus_config.funding_sk.as_public_key(),
                 ),
-            ]),
-            voucher_master_key_id: key_id_for_preload_backend(&Key::Zk(
-                config.consensus_config.known_key.clone(),
-            )),
+            ]
+            .into_iter()
+            .chain(config.consensus_config.other_keys.iter().map(|sk| {
+                (
+                    key_id_for_preload_backend(&sk.clone().into()),
+                    sk.as_public_key(),
+                )
+            }))
+            .chain(
+                config
+                    .kms_config
+                    .backend
+                    .keys
+                    .values()
+                    .filter_map(|key| match key {
+                        Key::Zk(sk) => Some((
+                            key_id_for_preload_backend(&Key::Zk(sk.clone())),
+                            sk.as_public_key(),
+                        )),
+                        _ => None,
+                    }),
+            )
+            .collect();
+
+            wallet::serde::Config {
+                known_keys,
+                voucher_master_key_id: key_id_for_preload_backend(&Key::Zk(
+                    config.consensus_config.known_key.clone(),
+                )),
+            }
         },
         kms: config::kms::serde::Config {
             backend: config::kms::serde::PreloadKmsBackendSettings {

@@ -19,7 +19,7 @@ use thiserror::Error;
 use tokio::{sync::broadcast, time::sleep};
 
 use super::workload::{SubmissionPlan, limited_user_count, submission_plan};
-use crate::{TopologyConfig, framework::LbcEnv, workloads::LbcBlockFeedEnv};
+use crate::{framework::LbcEnv, workloads::LbcBlockFeedEnv};
 
 const MIN_INCLUSION_RATIO: f64 = 0.5;
 const CATCHUP_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -213,21 +213,10 @@ fn build_capture_plan<E: LbcBlockFeedEnv>(
     Ok((plan, wallet_pks))
 }
 
-fn block_interval_hint<E: LbcBlockFeedEnv>(ctx: &RunContext<E>) -> Option<Duration> {
-    let config: &TopologyConfig = ctx.descriptors().config();
-    let slot = config.slot_duration?;
-    let coeff = config.active_slot_coeff.clamp(0.0, 1.0);
-    Some(slot.mul_f64(coeff))
-}
-
-fn catchup_wait_budget<E: LbcBlockFeedEnv>(ctx: &RunContext<E>) -> Duration {
-    let security_param = ctx.descriptors().config().security_param;
-    let hinted_wait =
-        block_interval_hint(ctx).map(|interval| interval.mul_f64(f64::from(security_param)));
-
-    hinted_wait
-        .unwrap_or(MAX_CATCHUP_WAIT)
-        .min(MAX_CATCHUP_WAIT)
+fn catchup_wait_budget<E: LbcBlockFeedEnv>(_ctx: &RunContext<E>) -> Duration {
+    // Transactions can remain pending until the end of the workload window on
+    // slower runners, so a tiny slot-based hint is too optimistic here.
+    MAX_CATCHUP_WAIT
 }
 
 fn capture_tx_outputs(
