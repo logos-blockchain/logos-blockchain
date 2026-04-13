@@ -18,7 +18,7 @@ Feature: Transactions
     Then transaction "INSCRIPTION_512K" is included on node "NODE_1" in 60 seconds
     When I submit inscription transaction "INSCRIPTION_896K" of 896 KiB from wallet "WALLET_1A"
     Then transaction "INSCRIPTION_896K" is included on node "NODE_1" in 60 seconds
-    And I stop all nodes
+    Then I stop all nodes
 
   @transactions_ci
   Scenario: Two nodes two wallets multiple transactions
@@ -312,3 +312,4 @@ Feature: Transactions
     And I submit funded transfer transaction "GOOD_TX" of 1 LGO from wallet "WALLET_1A" to wallet "WALLET_2A"
     Then transaction "GOOD_TX" is included on node "NODE_1" in 120 seconds
     And transaction "BAD_TX" is not included in 120 seconds
+    Then I stop all nodes

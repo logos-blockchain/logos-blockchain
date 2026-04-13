@@ -538,7 +538,7 @@ fn build_run_config(config: Config, genesis_tx: GenesisTx) -> RunConfig {
                             key_id_for_preload_backend(&Key::Zk(sk.clone())),
                             sk.as_public_key(),
                         )),
-                        _ => None,
+                        Key::Ed25519(_) => None,
                     }),
             )
             .collect();

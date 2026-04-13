@@ -2,12 +2,15 @@ use std::time::Duration;
 
 use cucumber::{gherkin::Step, when};
 use lb_core::mantle::Transaction as _;
+use lb_key_management_system_service::keys::Ed25519Key;
 use tracing::{info, warn};
 
 use crate::{
     common::{
         chain::wait_for_transactions_inclusion,
-        mantle_inscription::build_funded_inscription_transaction,
+        mantle_inscription::{
+            build_funded_inscription_transaction, channel_id_for_payload_size,
+        },
     },
     cucumber::{
         error::{StepError, StepResult},
@@ -47,12 +50,16 @@ async fn step_submit_inscription_transaction(
 
     let payload_size = payload_kib * 1024;
 
+    let signing_key = Ed25519Key::from_bytes(&[0u8; 32]);
+
     let transaction = build_funded_inscription_transaction(
         &node,
         &world.genesis_block_utxos,
         &wallet_account.secret_key,
-        payload_size,
         vec![0xAB; payload_size],
+        &signing_key,
+        channel_id_for_payload_size(payload_size),
+        None,
     )
     .await;
 
@@ -75,6 +82,7 @@ async fn step_submit_inscription_transaction(
     Ok(())
 }
 
+#[cucumber::when(expr = "transaction {string} is included on node {string} in {int} seconds")]
 #[cucumber::then(expr = "transaction {string} is included on node {string} in {int} seconds")]
 #[expect(
     clippy::needless_pass_by_ref_mut,

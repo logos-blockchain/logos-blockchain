@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use lb_core::mantle::{
     MantleTx, OpProof, SignedMantleTx, Transaction as _, Utxo,
+    genesis_tx::GENESIS_STORAGE_GAS_PRICE,
     ops::{
         Op,
         channel::{ChannelId, MsgId, inscribe::InscriptionOp},
@@ -14,20 +15,20 @@ use lb_testing_framework::NodeHttpClient;
 
 use crate::common::wallet::{current_utxos_for_public_key, fund_transfer_builder_from_utxos};
 
-const STORAGE_GAS_PRICE: u64 = 1;
-
 pub async fn build_funded_inscription_transaction(
     client: &NodeHttpClient,
     genesis_utxos: &[Utxo],
     funding_secret_key: &ZkKey,
-    payload_size: usize,
     inscription: Vec<u8>,
+    signing_key: &Ed25519Key,
+    channel_id: ChannelId,
+    parent: Option<MsgId>,
 ) -> SignedMantleTx {
     let funding_utxos = collect_funding_utxos(client, genesis_utxos, funding_secret_key).await;
-    let tx_builder = build_inscription_tx_builder(payload_size, inscription);
+    let tx_builder = build_inscription_tx_builder(inscription, signing_key, channel_id, parent);
     let funded_tx = fund_inscription_transaction(funding_utxos, &tx_builder, funding_secret_key);
 
-    sign_inscription_transaction(funded_tx)
+    sign_inscription_transaction(funded_tx, signing_key)
 }
 
 async fn collect_funding_utxos(
@@ -38,7 +39,12 @@ async fn collect_funding_utxos(
     current_utxos_for_public_key(client, genesis_utxos, funding_secret_key.to_public_key()).await
 }
 
-fn build_inscription_tx_builder(payload_size: usize, inscription: Vec<u8>) -> MantleTxBuilder {
+fn build_inscription_tx_builder(
+    inscription: Vec<u8>,
+    signing_key: &Ed25519Key,
+    channel_id: ChannelId,
+    parent: Option<MsgId>,
+) -> MantleTxBuilder {
     let empty_context = MantleTxGasContext::new(HashMap::new());
     let tx_context = MantleTxContext {
         gas_context: empty_context,
@@ -47,10 +53,12 @@ fn build_inscription_tx_builder(payload_size: usize, inscription: Vec<u8>) -> Ma
 
     MantleTxBuilder::new(tx_context)
         .push_op(Op::ChannelInscribe(build_inscription_op(
-            payload_size,
             inscription,
+            signing_key,
+            channel_id,
+            parent,
         )))
-        .set_storage_gas_price(STORAGE_GAS_PRICE.into())
+        .set_storage_gas_price(GENESIS_STORAGE_GAS_PRICE)
         .set_execution_gas_price(0.into())
 }
 
@@ -76,8 +84,10 @@ fn fund_inscription_transaction(
     }
 }
 
-fn sign_inscription_transaction(funded_tx: FundedInscriptionTransaction) -> SignedMantleTx {
-    let signing_key = Ed25519Key::from_bytes(&[0u8; 32]);
+fn sign_inscription_transaction(
+    funded_tx: FundedInscriptionTransaction,
+    signing_key: &Ed25519Key,
+) -> SignedMantleTx {
     let tx_hash = funded_tx.tx.hash();
     let ed25519_sig = Ed25519Signature::from_bytes(
         &signing_key
@@ -97,18 +107,22 @@ fn sign_inscription_transaction(funded_tx: FundedInscriptionTransaction) -> Sign
     .expect("funded inscription transaction should be valid")
 }
 
-fn build_inscription_op(payload_size: usize, inscription: Vec<u8>) -> InscriptionOp {
-    let signing_key = Ed25519Key::from_bytes(&[0u8; 32]);
-
+fn build_inscription_op(
+    inscription: Vec<u8>,
+    signing_key: &Ed25519Key,
+    channel_id: ChannelId,
+    parent: Option<MsgId>,
+) -> InscriptionOp {
     InscriptionOp {
-        channel_id: channel_id_for_payload(payload_size),
+        channel_id,
         inscription,
-        parent: MsgId::root(),
+        parent: parent.unwrap_or_else(MsgId::root),
         signer: signing_key.public_key(),
     }
 }
 
-fn channel_id_for_payload(payload_size: usize) -> ChannelId {
+#[must_use]
+pub fn channel_id_for_payload_size(payload_size: usize) -> ChannelId {
     let mut bytes = [0u8; 32];
     bytes[..8].copy_from_slice(&(payload_size as u64).to_le_bytes());
 

@@ -1,6 +1,5 @@
 use std::{collections::HashSet, time::Duration};
 
-use cucumber::{gherkin::Step, then, when};
 use lb_core::mantle::{
     MantleTx, Note, Op, OpProof, SignedMantleTx, Transaction as _, TxHash,
     genesis_tx::GENESIS_STORAGE_GAS_PRICE, ops::transfer::TransferOp,
@@ -12,30 +11,29 @@ use tracing::{info, warn};
 use crate::{
     common::chain::scan_chain_until,
     cucumber::{
-        error::{StepError, StepResult},
+        error::StepError,
         steps::{TARGET, manual_transactions::utils::create_and_submit_transaction_hashes},
         world::{CucumberWorld, WalletType},
     },
 };
 
-#[when(expr = "I submit invalid transfer transaction {string} to node {string}")]
-async fn step_submit_invalid_transfer_transaction(
+pub async fn submit_invalid_transfer_transaction(
     world: &mut CucumberWorld,
-    step: &Step,
+    step: &str,
     transaction_alias: String,
     node_name: String,
-) -> StepResult {
+) -> Result<(), StepError> {
     let node = world
         .resolve_node_http_client(&node_name)
         .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+            warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
 
     let signed_tx = create_invalid_transaction();
     let tx_hash = signed_tx.hash();
 
     node.submit_transaction(&signed_tx).await.inspect_err(|e| {
-        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+        warn!(target: TARGET, "Step `{step}` error: {e}");
     })?;
 
     world.remember_submitted_transaction(transaction_alias.clone(), tx_hash);
@@ -48,21 +46,18 @@ async fn step_submit_invalid_transfer_transaction(
     Ok(())
 }
 
-#[when(
-    expr = "I submit funded transfer transaction {string} of {int} LGO from wallet {string} to wallet {string}"
-)]
-async fn step_submit_funded_transfer_transaction(
+pub async fn submit_funded_transfer_transaction(
     world: &mut CucumberWorld,
-    step: &Step,
+    step: &str,
     transaction_alias: String,
     amount: u64,
     sender_wallet_name: String,
     receiver_wallet_name: String,
-) -> StepResult {
+) -> Result<(), StepError> {
     let wallets = world
         .resolve_wallets(&[sender_wallet_name.clone(), receiver_wallet_name.clone()])
         .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+            warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
     let sender_wallet = wallets[0].clone();
     let receiver_wallet = wallets[1].clone();
@@ -80,14 +75,14 @@ async fn step_submit_funded_transfer_transaction(
 
     let tx_hashes = create_and_submit_transaction_hashes(
         world,
-        &step.value,
+        step,
         &sender_wallet_name,
         &[(receiver_wallet.public_key()?, amount)],
         None,
     )
     .await
     .inspect_err(|e| {
-        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+        warn!(target: TARGET, "Step `{step}` error: {e}");
     })?;
 
     let [tx_hash] = tx_hashes.as_slice() else {
@@ -108,17 +103,12 @@ async fn step_submit_funded_transfer_transaction(
     Ok(())
 }
 
-#[then(expr = "transaction {string} is not included in {int} seconds")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require `&mut World` as the first parameter"
-)]
-async fn step_transaction_is_not_included_in_seconds(
+pub async fn transaction_is_not_included_in_seconds(
     world: &mut CucumberWorld,
-    step: &Step,
+    step: &str,
     transaction_alias: String,
     timeout_seconds: u64,
-) -> StepResult {
+) -> Result<(), StepError> {
     let tx_hash = world.resolve_submitted_transaction(&transaction_alias)?;
     let node_name = world
         .nodes_info
@@ -129,13 +119,13 @@ async fn step_transaction_is_not_included_in_seconds(
             message: "No started node available to scan chain state".to_owned(),
         })
         .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+            warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
 
     let node = world
         .resolve_node_http_client(&node_name)
         .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+            warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
 
     let included = timeout(Duration::from_secs(timeout_seconds), async {

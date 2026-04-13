@@ -11,6 +11,10 @@ use crate::{
             manual_transactions::{
                 best_node::get_best_node_info,
                 command_file_utils::perform_manual_step_control,
+                tracked_transactions::{
+                    submit_funded_transfer_transaction, submit_invalid_transfer_transaction,
+                    transaction_is_not_included_in_seconds,
+                },
                 utils,
                 utils::{
                     WalletStateType, assert_tracked_wallet_fees_equal_sponsored_fee_account_spend,
@@ -326,6 +330,54 @@ async fn step_send_multiple_transactions_to_single_wallet(
     }
 
     Ok(())
+}
+
+#[when(expr = "I submit invalid transfer transaction {string} to node {string}")]
+async fn step_submit_invalid_transfer_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    node_name: String,
+) -> StepResult {
+    submit_invalid_transfer_transaction(world, &step.value, transaction_alias, node_name).await
+}
+
+#[when(
+    expr = "I submit funded transfer transaction {string} of {int} LGO from wallet {string} to wallet {string}"
+)]
+async fn step_submit_funded_transfer_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    amount: u64,
+    sender_wallet_name: String,
+    receiver_wallet_name: String,
+) -> StepResult {
+    submit_funded_transfer_transaction(
+        world,
+        &step.value,
+        transaction_alias,
+        amount,
+        sender_wallet_name,
+        receiver_wallet_name,
+    )
+    .await
+}
+
+#[when(expr = "transaction {string} is not included in {int} seconds")]
+#[then(expr = "transaction {string} is not included in {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_transaction_is_not_included_in_seconds(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    transaction_is_not_included_in_seconds(world, &step.value, transaction_alias, timeout_seconds)
+        .await
 }
 
 #[when(

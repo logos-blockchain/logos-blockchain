@@ -3,9 +3,11 @@ use std::time::Duration;
 use hex::ToHex as _;
 use lb_chain_service::CryptarchiaInfo;
 use tokio::time::{Instant, sleep};
+use tracing::{info, warn};
 
 use crate::cucumber::{
     error::{StepError, StepResult},
+    steps::TARGET,
     world::CucumberWorld,
 };
 
@@ -21,13 +23,27 @@ async fn step_all_nodes_share_lib_at_or_above_height(
     timeout_secs: u64,
 ) -> StepResult {
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    let mut next_progress_log = Instant::now();
 
     loop {
         let snapshots = fetch_lib_snapshots(world).await?;
 
         if let Err(err) = validate_shared_lib_at_height(&snapshots, min_height) {
             if Instant::now() >= deadline {
+                warn!(
+                    target: TARGET,
+                    "Step `all nodes share the same LIB at or above height {min_height} in {timeout_secs} seconds` error: {err}"
+                );
                 return Err(err);
+            }
+
+            if Instant::now() >= next_progress_log {
+                info!(
+                    target: TARGET,
+                    "Waiting for shared LIB at or above height {min_height}: {}",
+                    format_lib_snapshots(&snapshots)
+                );
+                next_progress_log = Instant::now() + Duration::from_secs(5);
             }
 
             sleep(Duration::from_secs(1)).await;
@@ -36,6 +52,17 @@ async fn step_all_nodes_share_lib_at_or_above_height(
 
         return Ok(());
     }
+}
+
+fn format_lib_snapshots(snapshots: &[LibSnapshot]) -> String {
+    snapshots
+        .iter()
+        .map(|snapshot| format!(
+            "{}@{}:{}",
+            snapshot.node_name, snapshot.lib_height, snapshot.lib_hash
+        ))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[derive(Debug, Clone)]

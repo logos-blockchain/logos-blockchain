@@ -12,7 +12,7 @@ use lb_chain_service::CryptarchiaInfo;
 use lb_core::mantle::{GenesisTx as _, Transaction as _, Utxo};
 use lb_http_api_common::paths::CRYPTARCHIA_INFO;
 use lb_libp2p::PeerId;
-use lb_node::config::{DeploymentSettings, RunConfig};
+use lb_node::config::{DeploymentSettings, RunConfig, WellKnownDeployment};
 use lb_testing_framework::{
     LbcEnv, LbcManualCluster, NodeHttpClient, USER_CONFIG_FILE, configs::wallet::WalletAccount,
 };
@@ -890,14 +890,18 @@ fn get_startup_settings(
 
 fn prepare_config_patch(
     config: &mut RunConfig,
-    _join_external_network: bool,
+    join_external_network: bool,
     deployment_override: Option<&DeploymentSettings>,
     config_overrides: &ManualNodeConfigOverrides,
     initial_peers_override: Option<&Vec<Multiaddr>>,
     ibd_peers: &HashSet<PeerId>,
     user_config_overrides: &[UserConfigOverride],
 ) -> Result<(), StepError> {
-    if let Some(deployment_override) = deployment_override {
+    if join_external_network {
+        config.deployment = deployment_override
+            .cloned()
+            .unwrap_or_else(|| DeploymentSettings::from(WellKnownDeployment::Devnet));
+    } else if let Some(deployment_override) = deployment_override {
         config.deployment = deployment_override.clone();
     }
 
