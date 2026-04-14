@@ -5,8 +5,8 @@
 The zone-sdk sequencer manages inscription publishing on a channel. It handles:
 - Connection management and reconnection
 - Backfill on startup (catching up from checkpoint or genesis to current chain state)
-- Automatic resubmission of pending inscriptions
-- Detection of competing inscriptions and reorgs via `ChannelUpdate` events
+- Automatic resubmission of pending inscriptions (internal, timer-based retry of txs not yet included in a block)
+- Conflict resolution via `ChannelUpdate` events (user-facing, when competing inscriptions or L1 reorgs invalidate pending inscriptions)
 
 The sequencer exposes two integration patterns:
 1. **Spawn mode** — `sequencer.spawn()` runs the event loop in a background task; the caller uses `handle.publish()` and optionally `handle.subscribe()` to react to events.
@@ -51,7 +51,7 @@ doesn't need to handle `ChannelUpdate` events at all.
 
 ---
 
-## Use Case 2: Competing Sequencers (Resubmission with Business Logic)
+## Use Case 2: Competing Sequencers (Conflict Resolution)
 
 Multiple sequencers publish to the same channel. When two sequencers build inscriptions
 with the same `parent_msg_id`, only one can win — the other gets orphaned.
@@ -97,23 +97,23 @@ Each `ChannelUpdate` event gives the user a complete picture of the branch switc
 - **`new_channel_tip`** — the current tip of the channel on the winning branch
 
 This means the user can **reconstruct the state of the current canonical branch** at
-every event and make informed resubmission decisions — not just "resubmit everything
-blindly" but "given what's now on-chain, does this message still make sense?"
+every event and make informed conflict resolution decisions — not just "re-publish
+everything blindly" but "given what's now on-chain, does this message still make sense?"
 
 For example, a DeFi sequencer might decide:
 - "My swap was orphaned, but the adopted branch contains a price update that makes
-  my swap unprofitable — **don't resubmit**"
-- "My deposit was orphaned but nothing on the new branch conflicts — **resubmit**"
+  my swap unprofitable — **don't re-publish**"
+- "My deposit was orphaned but nothing on the new branch conflicts — **re-publish**"
 - "My message was orphaned and an identical one from a competing sequencer was
   adopted — **skip** (already on-chain)"
 
 The sequencer doesn't prescribe what to do with conflicts. It surfaces the full
 branch state and lets the application's business logic decide. The simple
-"resubmit if not adopted" handler shown above is one policy; real applications
+"re-publish if not adopted" handler shown above is one policy; real applications
 can implement arbitrarily complex logic based on the `invalidated` and `adopted`
 sets.
 
-### Why resubmission must be payload-based, not msg_id-based
+### Why conflict resolution must be payload-based, not msg_id-based
 
 `msg_id` is derived from `(channel_id, parent_msg_id, payload, signer)`. When we
 re-publish after a conflict, the `parent_msg_id` changes (because the channel tip moved
@@ -121,10 +121,10 @@ to whatever the competing sequencer published). This means the new inscription g
 **different `msg_id`** than the original.
 
 So we can't track "did my message make it" by msg_id — we track by **payload content**.
-This is a deliberate design choice: the sequencer doesn't prescribe deduplication strategy;
-it gives the user the payload and lets them decide.
+This is a deliberate design choice: the sequencer doesn't prescribe a conflict resolution
+strategy; it gives the user the payload and lets them decide.
 
-### Deduplication strategies for real applications
+### Deduplication strategies for conflict resolution in real applications
 
 The payload-matching approach above works for demos but real applications need a more
 structured approach. Two patterns:
@@ -148,7 +148,7 @@ struct AppMessage {
     payload: Vec<u8>,   // actual content
 }
 ```
-The `tx_id` provides uniqueness. On reorg, the resubmission handler checks: "is there
+The `tx_id` provides uniqueness. On conflict, the resolution handler checks: "is there
 an adopted inscription with the same `tx_id`?" If yes, skip (it was adopted via a
 different sequencer or branch). If no, re-publish.
 
@@ -157,7 +157,7 @@ sequencer doesn't need to understand message semantics.
 
 ### Why the guard against double-publishing
 
-In the resubmission handler above, we check `!adopted_payloads.contains(&inv.payload)`
+In the conflict resolution handler above, we check `!adopted_payloads.contains(&inv.payload)`
 before re-publishing. This prevents a subtle bug:
 
 When a `ChannelUpdate` fires, `adopted` contains inscriptions that appeared on the
@@ -178,35 +178,35 @@ multiple concerns), spawning the sequencer as a separate task adds unnecessary
 complexity. Instead, drive the event loop directly:
 
 ```rust
-let (mut sequencer, handle) = ZoneSequencer::init(channel_id, signing_key, node, checkpoint);
+fn init() -> ZoneSequencer {
+    ZoneSequencer::init(channel_id, signing_key, node, checkpoint)
+}
 
-// Application's main loop
-loop {
-    tokio::select! {
-        // Drive the sequencer — returns events as they occur
-        Some(event) = sequencer.next_event() => {
-            match event {
-                Event::TxsFinalized { tx_hashes } => {
-                    // Update application state
-                    println!("Finalized: {tx_hashes:?}");
-                }
-                Event::ChannelUpdate { invalidated, adopted, new_channel_tip } => {
-                    // Handle conflicts inline — no separate task needed
-                    for inv in &invalidated {
-                        // currently we spawn a task here, because publish is sync, but there is todo to fix this, which will be addressed in the PR
-                        handle.publish(inv.payload.clone()).await.ok();
+async fn run(mut sequencer: ZoneSequencer) {
+    loop {
+        tokio::select! {
+            // Drive the sequencer — returns events as they occur
+            Some(event) = sequencer.next_event() => {
+                match event {
+                    Event::TxsFinalized { tx_hashes } => {
+                        println!("Finalized: {tx_hashes:?}");
+                    }
+                    Event::ChannelUpdate { invalidated, adopted, new_channel_tip } => {
+                        for inv in &invalidated {
+                            sequencer.publish(inv.payload.clone()).await.ok();
+                        }
+                    }
+                    Event::FinalizedInscriptions { inscriptions } => {
+                        // Backfill catch-up events during startup
                     }
                 }
-                Event::FinalizedInscriptions { inscriptions } => {
-                    // Backfill catch-up events during startup
-                }
             }
-        }
 
-        // Application's own work
-        msg = app_receiver.recv() => {
-            if let Some(data) = msg {
-                handle.publish(data).await.ok();
+            // Application's own events (other services, user input, timers, etc.)
+            msg = app_receiver.recv() => {
+                if let Some(data) = msg {
+                    sequencer.publish(data).await.ok();
+                }
             }
         }
     }
@@ -240,19 +240,19 @@ channels, timers, or I/O.
 
 ---
 
-## Future: High-Level Resubmission Policies
+## Future: Built-in Conflict Resolution Policies
 
 The current API gives full control to the user: subscribe to events, decide what to
 re-publish, implement your own deduplication. This is powerful but requires understanding
 the event model.
 
-For common use cases, we plan to offer built-in resubmission policies that handle
-conflicts automatically:
+For common use cases, we plan to offer built-in conflict resolution policies that handle
+`ChannelUpdate` events automatically:
 
 ```rust
 // Example future API (not yet implemented):
 let config = SequencerConfig {
-    resubmission_policy: ResubmissionPolicy::RebaseOnConflict,
+    conflict_resolution: ConflictResolution::RebaseOnConflict,
     ..Default::default()
 };
 let (sequencer, handle) = ZoneSequencer::init_with_config(
@@ -260,7 +260,7 @@ let (sequencer, handle) = ZoneSequencer::init_with_config(
 );
 sequencer.spawn();
 
-// Just publish — conflicts are handled automatically
+// Just publish — conflicts are resolved automatically
 handle.publish(data).await?;
 ```
 
@@ -273,9 +273,10 @@ Planned policies:
 - **`DropOnConflict`** — discard orphaned inscriptions silently. Suitable for
   time-sensitive data where stale messages shouldn't be retried (e.g., price feeds).
 
-- **`Custom(handler)`** — user provides a closure that receives `(invalidated, adopted)`
-  and returns a list of payloads to re-publish. Full flexibility without managing the
-  event subscription manually.
+For custom conflict resolution logic that depends on application state (e.g., checking
+balances, comparing prices, or consulting external services), use the event API directly
+via `subscribe()` or `next_event()`. The application has its state in scope and can make
+arbitrarily complex decisions — something a closure-based policy can't do ergonomically.
 
 These policies would be opt-in. The raw event API remains available for users who
 need full control over conflict resolution, deduplication, or integration with
