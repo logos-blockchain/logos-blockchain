@@ -439,6 +439,7 @@ where
                 target: LOG_TARGET,
                 "Skipping retry for peer {peer_id:?}: peering degree already satisfied."
             );
+            self.ongoing_dials.remove(&peer_id);
             return;
         }
         tracing::trace!(
