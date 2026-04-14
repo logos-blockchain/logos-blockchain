@@ -706,13 +706,9 @@ where
 
     /// Apply our own proposed block to the chain and publish it to the blend
     /// network.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: address this in a dedicated refactor"
-    )]
     async fn apply_and_publish_block_proposal(
         block: Block<Mempool::Item>,
-        chain_network_api: &ChainNetworkServiceApi<ChainNetwork, RuntimeServiceId>,
+        _chain_network_api: &ChainNetworkServiceApi<ChainNetwork, RuntimeServiceId>,
         proposal_strategy: BlockProposalStrategy<
             '_,
             BlendService,
@@ -720,13 +716,20 @@ where
             RuntimeServiceId,
         >,
     ) {
-        if let Err(e) = chain_network_api
-            .apply_block_and_reconcile_mempool(block.clone())
-            .await
-        {
-            error!(target: LOG_TARGET, "Failed to apply our own proposed block {:?}: {e:?}", block.header().id());
-            return;
-        }
+        // TODO: enable this once we elimnate sessions from Blend and so on
+        // Now we're disabling this to avoid a case which a proposing node
+        // transitions to a new session much earlier than other nodes.
+        debug!(
+            target: LOG_TARGET, header_id = ?block.header().id(), ?proposal_strategy,
+            "skipping self-applying block and just publishing it",
+        );
+        // if let Err(e) = chain_network_api
+        //     .apply_block_and_reconcile_mempool(block.clone())
+        //     .await
+        // {
+        //     error!(target: LOG_TARGET, "Failed to apply our own proposed block {:?}: {e:?}", block.header().id());
+        //     return;
+        // }
 
         match proposal_strategy {
             BlockProposalStrategy::Blend(blend_adapter) => {
