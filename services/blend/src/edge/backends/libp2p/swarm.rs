@@ -1,9 +1,5 @@
-use core::num::{NonZeroU64, NonZeroUsize};
-use std::{
-    collections::{HashMap, hash_map::Entry},
-    io,
-    time::Duration,
-};
+use core::num::NonZeroUsize;
+use std::{collections::hash_map::Entry, io, time::Duration};
 
 use futures::{AsyncWriteExt as _, StreamExt as _};
 use lb_blend::{
@@ -26,32 +22,10 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, trace, warn};
 
 use super::settings::Libp2pBlendBackendSettings;
-use crate::edge::backends::libp2p::LOG_TARGET;
-
-#[derive(Debug)]
-pub struct DialAttempt {
-    /// Address of peer being dialed.
-    address: Multiaddr,
-    /// The latest (ongoing) attempt number.
-    attempt_number: NonZeroU64,
-    /// The message to send once the peer is successfully dialed.
-    message: EncapsulatedMessageWithVerifiedPublicHeader,
-}
-
-#[cfg(test)]
-impl DialAttempt {
-    pub const fn address(&self) -> &Multiaddr {
-        &self.address
-    }
-
-    pub const fn attempt_number(&self) -> NonZeroU64 {
-        self.attempt_number
-    }
-
-    pub const fn message(&self) -> &EncapsulatedMessageWithVerifiedPublicHeader {
-        &self.message
-    }
-}
+use crate::edge::backends::libp2p::{
+    LOG_TARGET,
+    dials::{DialAttempt, PendingDials},
+};
 
 pub(super) struct BlendSwarm<Rng>
 where
@@ -62,8 +36,7 @@ where
     command_receiver: mpsc::Receiver<Command>,
     membership: Membership<PeerId>,
     rng: Rng,
-    max_dial_attempts_per_connection: NonZeroU64,
-    pending_dials: HashMap<(PeerId, ConnectionId), DialAttempt>,
+    pending_dials: PendingDials,
     protocol_name: StreamProtocol,
     replication_factor: NonZeroUsize,
 }
@@ -112,8 +85,7 @@ where
             command_receiver,
             membership,
             rng,
-            pending_dials: HashMap::new(),
-            max_dial_attempts_per_connection: settings.max_dial_attempts_per_peer_per_message,
+            pending_dials: PendingDials::new(settings.max_dial_attempts_per_peer_per_message),
             protocol_name: settings.protocol_name.into_inner(),
             replication_factor,
         }
@@ -124,7 +96,7 @@ where
         identity: &Keypair,
         membership: Membership<PeerId>,
         command_receiver: mpsc::Receiver<Command>,
-        max_dial_attempts_per_connection: NonZeroU64,
+        max_dial_attempts_per_connection: core::num::NonZeroU64,
         rng: Rng,
         protocol_name: StreamProtocol,
         replication_factor: NonZeroUsize,
@@ -141,8 +113,7 @@ where
         Self {
             command_receiver,
             membership,
-            max_dial_attempts_per_connection,
-            pending_dials: HashMap::new(),
+            pending_dials: PendingDials::new(max_dial_attempts_per_connection),
             rng,
             stream_control: inner_swarm.behaviour().new_control(),
             swarm: inner_swarm,
@@ -152,7 +123,7 @@ where
     }
 
     #[cfg(test)]
-    pub const fn pending_dials(&self) -> &HashMap<(PeerId, ConnectionId), DialAttempt> {
+    pub const fn pending_dials(&self) -> &PendingDials {
         &self.pending_dials
     }
 
@@ -193,11 +164,7 @@ where
                     "Dial attempt for peer {peer_id:?} and connection {connection_id:?} should not be present in storage."
                 );
             };
-            empty_entry.insert(DialAttempt {
-                address,
-                attempt_number: 1.try_into().unwrap(),
-                message: msg.clone(),
-            });
+            empty_entry.insert(DialAttempt::new(address, msg.clone()));
 
             if let Err(e) = self.swarm.dial(opts) {
                 error!(target: LOG_TARGET, "Failed to dial peer {peer_id:?} on connection {connection_id:?}: {e:?}");
@@ -206,35 +173,26 @@ where
         }
     }
 
-    /// Attempt to retry dialing the specified peer, if the maximum attempts
-    /// have not already been performed.
-    ///
-    /// It returns `None` if a new dial attempt is performed, `Some` otherwise
-    /// with the dial details of the peer that has been removed from the map
-    /// of ongoing dials.
     fn retry_dial(&mut self, peer_id: PeerId, connection_id: ConnectionId) -> Option<DialAttempt> {
-        let dial_attempt = self
-            .pending_dials
-            .remove(&(peer_id, connection_id))
-            .unwrap();
-        let new_dial_attempt_number = dial_attempt.attempt_number.checked_add(1).unwrap();
-        if new_dial_attempt_number > self.max_dial_attempts_per_connection {
-            return Some(dial_attempt);
-        }
-        let new_dial_opts = dial_opts(peer_id, dial_attempt.address.clone());
-        self.pending_dials.insert(
-            (peer_id, new_dial_opts.connection_id()),
-            DialAttempt {
-                attempt_number: new_dial_attempt_number,
-                ..dial_attempt
-            },
-        );
+        self.pending_dials.schedule_retry(peer_id, connection_id)
+    }
 
-        if let Err(e) = self.swarm.dial(new_dial_opts) {
+    fn execute_retry(&mut self, (peer_id, dial_attempt): (PeerId, DialAttempt)) {
+        let opts = dial_opts(peer_id, dial_attempt.address().clone());
+        let connection_id = opts.connection_id();
+
+        self.pending_dials
+            .insert((peer_id, connection_id), dial_attempt);
+
+        if let Err(e) = self.swarm.dial(opts) {
             error!(target: LOG_TARGET, "Failed to redial peer {peer_id:?}: {e:?}");
-            self.retry_dial(peer_id, connection_id);
+            if let Some((_, _, message)) = self
+                .retry_dial(peer_id, connection_id)
+                .map(DialAttempt::into_components)
+            {
+                self.dial_and_schedule_message_except(&message, Some(peer_id));
+            }
         }
-        None
     }
 
     fn choose_peers_except(&mut self, except: Option<PeerId>) -> Vec<Node<PeerId>> {
@@ -283,8 +241,9 @@ where
         let message = self
             .pending_dials
             .get(&(peer_id, connection_id))
-            .map(|entry| entry.message.clone())
-            .unwrap();
+            .unwrap()
+            .message()
+            .clone();
 
         match self
             .stream_control
@@ -339,7 +298,10 @@ where
         error!(target: LOG_TARGET, "Failed to send message: {error} to peer {peer_id:?} on connection {connection_id:?}.");
         // If the maximum attempt count was reached for this peer, try to schedule the
         // message for a different peer.
-        if let Some(DialAttempt { message, .. }) = self.retry_dial(peer_id, connection_id) {
+        if let Some((_, _, message)) = self
+            .retry_dial(peer_id, connection_id)
+            .map(DialAttempt::into_components)
+        {
             self.dial_and_schedule_message_except(&message, Some(peer_id));
         }
     }
@@ -352,7 +314,10 @@ where
         error!(target: LOG_TARGET, "Failed to open stream to {peer_id}: {error}");
         // If the maximum attempt count was reached for this peer, try to schedule the
         // message for a different peer.
-        if let Some(DialAttempt { message, .. }) = self.retry_dial(peer_id, connection_id) {
+        if let Some((_, _, message)) = self
+            .retry_dial(peer_id, connection_id)
+            .map(DialAttempt::into_components)
+        {
             self.dial_and_schedule_message_except(&message, Some(peer_id));
         }
     }
@@ -372,7 +337,10 @@ where
 
         // If the maximum attempt count was reached for this peer, try to schedule the
         // message for a different peer.
-        if let Some(DialAttempt { message, .. }) = self.retry_dial(peer_id, connection_id) {
+        if let Some((_, _, message)) = self
+            .retry_dial(peer_id, connection_id)
+            .map(DialAttempt::into_components)
+        {
             self.dial_and_schedule_message_except(&message, Some(peer_id));
         }
     }
@@ -413,6 +381,10 @@ where
             }
             Some(command) = self.command_receiver.recv() => {
                 self.handle_command(command);
+                false
+            }
+            Some(retry) = self.pending_dials.next() => {
+                self.execute_retry(retry);
                 false
             }
         }

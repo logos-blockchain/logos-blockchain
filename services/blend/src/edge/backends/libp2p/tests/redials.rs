@@ -23,6 +23,9 @@ use crate::{
 
 #[test(tokio::test)]
 async fn edge_redial_same_peer() {
+    // Pause time so that exponential backoff delays are auto-advanced.
+    tokio::time::pause();
+
     let random_peer_id = PeerId::random();
     let empty_multiaddr: Multiaddr = Protocol::Memory(0).into();
 
@@ -39,6 +42,7 @@ async fn edge_redial_same_peer() {
 
     let dial_attempt_1_record = swarm
         .pending_dials()
+        .active()
         .iter()
         .filter(|((peer_id, _), _)| peer_id == &random_peer_id)
         .map(|(_, value)| value)
@@ -52,6 +56,7 @@ async fn edge_redial_same_peer() {
     assert_eq!(*dial_attempt_1_record.message(), message.clone());
 
     // We poll the swarm until we know the first dial attempt has failed.
+    // After failure, a retry is scheduled with exponential backoff.
     swarm
         .poll_next_until(|event| {
             let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
@@ -60,21 +65,10 @@ async fn edge_redial_same_peer() {
             *peer_id == Some(random_peer_id)
         })
         .await;
-    let dial_attempt_2_record = swarm
-        .pending_dials()
-        .iter()
-        .filter(|((peer_id, _), _)| peer_id == &random_peer_id)
-        .map(|(_, value)| value)
-        .next()
-        .unwrap();
-    assert_eq!(*dial_attempt_2_record.address(), empty_multiaddr);
-    assert_eq!(
-        dial_attempt_2_record.attempt_number(),
-        2.try_into().unwrap()
-    );
-    assert_eq!(*dial_attempt_2_record.message(), message.clone());
+    assert_eq!(swarm.pending_dials().retry_count(), 1);
 
-    // We poll the swarm until the next failure.
+    // We poll the swarm until the next failure. The backoff timer auto-advances,
+    // the retry fires, and then fails again.
     swarm
         .poll_next_until(|event| {
             let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
@@ -83,20 +77,7 @@ async fn edge_redial_same_peer() {
             *peer_id == Some(random_peer_id)
         })
         .await;
-
-    let dial_attempt_3_record = swarm
-        .pending_dials()
-        .iter()
-        .filter(|((peer_id, _), _)| peer_id == &random_peer_id)
-        .map(|(_, value)| value)
-        .next()
-        .unwrap();
-    assert_eq!(*dial_attempt_3_record.address(), empty_multiaddr);
-    assert_eq!(
-        dial_attempt_3_record.attempt_number(),
-        3.try_into().unwrap()
-    );
-    assert_eq!(*dial_attempt_3_record.message(), message.into_inner());
+    assert_eq!(swarm.pending_dials().retry_count(), 1);
 
     // We poll the swarm until the next failure, after which there should be no more
     // attempts.
@@ -109,13 +90,17 @@ async fn edge_redial_same_peer() {
         })
         .await;
 
-    // Storage map should be cleared up, and since there is no other peer, there is
+    // Storage should be cleared up, and since there is no other peer, there is
     // no new peer that is dialed.
-    assert!(swarm.pending_dials().is_empty());
+    assert!(swarm.pending_dials().active().is_empty());
+    assert_eq!(swarm.pending_dials().retry_count(), 0);
 }
 
 #[test(tokio::test)]
 async fn edge_redial_different_peer_after_redial_limit() {
+    // Pause time so that exponential backoff delays are auto-advanced.
+    tokio::time::pause();
+
     let random_peer_id = PeerId::random();
     let empty_multiaddr: Multiaddr = Protocol::Memory(0).into();
 
