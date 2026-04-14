@@ -123,13 +123,11 @@ fn step_cluster_has_wallet_resources(world: &mut CucumberWorld, step: &Step) -> 
 #[when(expr = "we have a sponsored genesis fee account with {int} tokens of {int} value each")]
 fn step_sponsored_genesis_fee_account(
     world: &mut CucumberWorld,
+    step: &Step,
     token_count: usize,
     token_value: u64,
 ) -> StepResult {
-    ensure_fee_sponsorship_and_fork_groups_are_not_mixed(
-        world,
-        "we have a sponsored genesis fee account with <number_of_tokens> tokens of <token_value> value each",
-    )?;
+    ensure_fee_sponsorship_and_fork_groups_are_not_mixed(world, step.value.as_str())?;
 
     let token_count = non_zero!("genesis fee token count", token_count)?;
     let token_value = non_zero!("genesis fee token value", token_value)?;
