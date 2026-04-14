@@ -7,6 +7,7 @@ use crate::{
     header::Header,
     mantle::{
         MantleTx, Note, Op, OpProof, SignedMantleTx,
+        gas::GasPrice,
         genesis_tx::{self, GenesisTx},
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp},
         tx::VerificationError,
@@ -631,8 +632,8 @@ impl GenesisBlockBuilder<WithAll> {
         let signed_tx = SignedMantleTx::new_unverified(
             MantleTx {
                 ops,
-                execution_gas_price: 0,
-                storage_gas_price: 0,
+                execution_gas_price: GasPrice::new(0),
+                storage_gas_price: GasPrice::new(0),
             },
             vec![OpProof::NoProof; n],
         );
@@ -724,8 +725,8 @@ mod tests {
         SignedMantleTx::new_unverified(
             MantleTx {
                 ops,
-                execution_gas_price: 0,
-                storage_gas_price: 0,
+                execution_gas_price: GasPrice::new(0),
+                storage_gas_price: GasPrice::new(0),
             },
             vec![OpProof::NoProof; n],
         )
