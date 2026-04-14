@@ -125,10 +125,12 @@ fn step_sponsored_genesis_fee_account(
     token_count: usize,
     token_value: u64,
 ) -> StepResult {
-    world.fee_state.set_sponsored_genesis_account(
-        non_zero!("genesis fee token count", token_count)?,
-        non_zero!("genesis fee token value", token_value)?,
-    );
+    let token_count = non_zero!("genesis fee token count", token_count)?;
+    let token_value = non_zero!("genesis fee token value", token_value)?;
+
+    world
+        .fee_state
+        .set_sponsored_genesis_account(token_count, token_value);
     Ok(())
 }
 
