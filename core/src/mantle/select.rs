@@ -3,7 +3,7 @@ use std::{marker::PhantomData, pin::Pin};
 use futures::Stream;
 
 use crate::{
-    mantle::{Transaction, TxSelect},
+    mantle::{StorageSize, Transaction, TxSelect},
     utils,
 };
 
@@ -19,7 +19,7 @@ impl<const SIZE: usize, Tx> FillSize<SIZE, Tx> {
     }
 }
 
-impl<const SIZE: usize, Tx: Transaction + Send> TxSelect for FillSize<SIZE, Tx> {
+impl<const SIZE: usize, Tx: Transaction + StorageSize + Send> TxSelect for FillSize<SIZE, Tx> {
     type Tx = Tx;
     type Settings = ();
 
@@ -31,7 +31,58 @@ impl<const SIZE: usize, Tx: Transaction + Send> TxSelect for FillSize<SIZE, Tx> 
     where
         S: Stream<Item = Self::Tx> + Send + 'i,
     {
-        let stream = utils::select::select_from_till_fill_size_stream::<SIZE, Self::Tx>(|_| 1, txs);
+        let stream = utils::select::select_from_till_fill_size_stream::<SIZE, Self::Tx>(
+            |tx: &Self::Tx| tx.storage_size(),
+            txs,
+        );
         Box::pin(stream)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::{StreamExt as _, stream};
+    use lb_groth16::Fr;
+
+    use super::*;
+    use crate::mantle::{TransactionHasher, TxHash};
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct TestTx {
+        id: u64,
+        size: usize,
+    }
+
+    impl Transaction for TestTx {
+        const HASHER: TransactionHasher<Self> = |tx| TxHash(Fr::from(tx.id));
+        type Hash = TxHash;
+
+        fn as_signing_frs(&self) -> Vec<Fr> {
+            vec![Fr::from(self.id)]
+        }
+    }
+
+    impl StorageSize for TestTx {
+        fn storage_size(&self) -> usize {
+            self.size
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_fill_size_storage_budget() {
+        let selector = FillSize::<10, TestTx>::new();
+        let txs = vec![
+            TestTx { id: 1, size: 3 },
+            TestTx { id: 2, size: 4 },
+            TestTx { id: 3, size: 5 },
+            TestTx { id: 4, size: 1 },
+        ];
+
+        let selected: Vec<_> = selector.select_tx_from(stream::iter(txs)).collect().await;
+
+        assert_eq!(
+            selected,
+            vec![TestTx { id: 1, size: 3 }, TestTx { id: 2, size: 4 }]
+        );
     }
 }

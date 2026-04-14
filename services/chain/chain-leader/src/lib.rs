@@ -18,11 +18,11 @@ use lb_chain_service::{
 };
 use lb_chain_service_common::NetworkMessage as ChainNetworkMessage;
 use lb_core::{
-    block::{Block, Error as BlockError, MAX_BLOCK_TRANSACTIONS},
+    block::{Block, Error as BlockError, MAX_BLOCK_SIZE, MAX_BLOCK_TRANSACTIONS},
     codec::SerializeOp as _,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, SignedMantleTx, Transaction, TxHash, TxSelect,
+        AuthenticatedMantleTx, SignedMantleTx, StorageSize, Transaction, TxHash, TxSelect,
         gas::MainnetGasConstants, ops::leader_claim::LeaderClaimOp,
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
@@ -67,6 +67,35 @@ pub(crate) type WinningPolInfo = (LeaderPrivate, LeaderPublic, Epoch);
 const SERVICE_ID: &str = "ChainLeader";
 
 pub(crate) const LOG_TARGET: &str = "chain_leader::service";
+
+fn build_block_with_tail_trim<Tx>(
+    parent: HeaderId,
+    slot: Slot,
+    proof: Groth16LeaderProof,
+    mut txs: Vec<Tx>,
+    signing_key: &Ed25519Key,
+) -> Result<Block<Tx>, BlockError>
+where
+    Tx: Transaction<Hash = TxHash> + StorageSize,
+{
+    let mut total_size: usize = txs.iter().map(StorageSize::storage_size).sum();
+
+    while total_size > MAX_BLOCK_SIZE && !txs.is_empty() {
+        debug!(
+            target: LOG_TARGET,
+            total_size,
+            max = MAX_BLOCK_SIZE,
+            tx_count = txs.len(),
+            "selected transactions exceeded block size, trimming tail"
+        );
+        let removed_tx = txs
+            .pop()
+            .expect("txs is not empty while trimming oversized block");
+        total_size -= removed_tx.storage_size();
+    }
+
+    Block::create(parent, slot, proof, txs, signing_key)
+}
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -655,6 +684,19 @@ where
 
         while let Some(tx) = tx_stream.next().await {
             let tx_hash = tx.hash();
+            let tx_size = tx.storage_size();
+            if tx_size > MAX_BLOCK_SIZE {
+                tracing::debug!(
+                    target: LOG_TARGET,
+                    ?tx_hash,
+                    tx_size,
+                    max = MAX_BLOCK_SIZE,
+                    "skipping individually oversized tx during block assembly"
+                );
+                invalid_tx_hashes.push(tx_hash);
+                continue;
+            }
+
             match ledger_state
                 .clone()
                 .try_apply_contents::<HeaderId, MainnetGasConstants>(
@@ -692,7 +734,7 @@ where
             .collect()
             .await;
 
-        let block = Block::create(parent, slot, proof, txs, signing_key)?;
+        let block = build_block_with_tail_trim(parent, slot, proof, txs, signing_key)?;
 
         info!(
             "proposed block with id {:?} containing {} transactions ({} removed)",
@@ -824,5 +866,129 @@ where
             .await?
             .ok_or(Error::LedgerStateNotFound(tip))?;
         Ok((tip, ledger_state))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZero;
+
+    use lb_core::mantle::{
+        TransactionHasher,
+        ledger::{Note, Utxo},
+        ops::leader_claim::VoucherCm,
+    };
+    use lb_groth16::Fr;
+    use lb_key_management_system_service::keys::UnsecuredZkKey;
+    use lb_ledger::UtxoTree;
+    use lb_utils::math::NonNegativeRatio;
+
+    use super::*;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct TestTx {
+        id: u64,
+        size: usize,
+    }
+
+    impl Transaction for TestTx {
+        const HASHER: TransactionHasher<Self> = |tx| TxHash(Fr::from(tx.id));
+        type Hash = TxHash;
+
+        fn as_signing_frs(&self) -> Vec<Fr> {
+            vec![Fr::from(self.id)]
+        }
+    }
+
+    impl StorageSize for TestTx {
+        fn storage_size(&self) -> usize {
+            self.size
+        }
+    }
+
+    fn create_proof(signing_key: &Ed25519Key) -> Groth16LeaderProof {
+        let leader_sk = UnsecuredZkKey::zero();
+        let utxo = Utxo::new(
+            TxHash::from(Fr::from(1u64)),
+            0,
+            Note::new(1000, leader_sk.to_public_key()),
+        );
+        let utxo_tree = UtxoTree::new().insert(utxo.id(), utxo).0;
+        let utxo_tree_root = utxo_tree.root();
+        let utxo_merkle_path = utxo_tree.path(&utxo.id()).expect("note must exist in tree");
+        let consensus_config = lb_cryptarchia_engine::Config::new(
+            NonZero::new(1).unwrap(),
+            NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            1.0.try_into().unwrap(),
+        );
+        let (lottery_0, lottery_1) = consensus_config
+            .lottery_constants()
+            .compute_lottery_values(1000);
+
+        let public_inputs = {
+            let mut nonce = 0;
+            while nonce < 1000 {
+                let inputs = LeaderPublic::new(
+                    utxo_tree_root,
+                    utxo_tree_root,
+                    Fr::from(nonce),
+                    0,
+                    lottery_0,
+                    lottery_1,
+                );
+
+                if inputs.check_winning(utxo.note.value, *utxo.id().as_fr(), *leader_sk.as_fr()) {
+                    break;
+                }
+
+                nonce += 1;
+            }
+            LeaderPublic::new(
+                utxo_tree_root,
+                utxo_tree_root,
+                Fr::from(nonce),
+                0,
+                lottery_0,
+                lottery_1,
+            )
+        };
+
+        let private_inputs = LeaderPrivate::new(
+            public_inputs,
+            utxo,
+            &utxo_merkle_path,
+            &utxo_merkle_path,
+            *leader_sk.as_fr(),
+            &signing_key.public_key(),
+        );
+
+        Groth16LeaderProof::prove(private_inputs, VoucherCm::default())
+            .expect("proof generation should succeed")
+    }
+
+    #[test]
+    fn test_build_block_with_tail_trim() {
+        let parent = HeaderId::from([0; 32]);
+        let slot = Slot::from(42u64);
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let proof = create_proof(&signing_key);
+        let txs = vec![
+            TestTx {
+                id: 1,
+                size: MAX_BLOCK_SIZE - 16,
+            },
+            TestTx { id: 2, size: 32 },
+            TestTx { id: 3, size: 32 },
+        ];
+
+        let block = build_block_with_tail_trim(parent, slot, proof, txs, &signing_key).unwrap();
+
+        assert_eq!(
+            block.transactions().copied().collect::<Vec<_>>(),
+            vec![TestTx {
+                id: 1,
+                size: MAX_BLOCK_SIZE - 16,
+            }]
+        );
     }
 }

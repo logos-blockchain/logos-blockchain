@@ -2,6 +2,7 @@ use lb_chain_leader_service::CryptarchiaLeader;
 use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapter;
 use lb_chain_service::CryptarchiaConsensus;
 use lb_core::{
+    block::MAX_BLOCK_SIZE,
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction, TxHash},
 };
@@ -10,7 +11,7 @@ use lb_storage_service::backends::rocksdb::RocksBackend;
 use lb_time_service::backends::NtpTimeBackend;
 use lb_tx_service::{backend::pool::Mempool, storage::adapters::rocksdb::RocksStorageAdapter};
 
-use crate::{MB16, generic_services::blend::BlendService};
+use crate::generic_services::blend::BlendService;
 
 pub mod blend;
 pub mod sdp;
@@ -77,7 +78,7 @@ pub type CryptarchiaLeaderService<Cryptarchia, ChainNetwork, Wallet, RuntimeServ
         BlendService<RuntimeServiceId>,
         MempoolBackend<RuntimeServiceId>,
         MempoolAdapter<RuntimeServiceId>,
-        lb_core::mantle::select::FillSize<MB16, SignedMantleTx>,
+        lb_core::mantle::select::FillSize<MAX_BLOCK_SIZE, SignedMantleTx>,
         NtpTimeBackend,
         Cryptarchia,
         ChainNetwork,
