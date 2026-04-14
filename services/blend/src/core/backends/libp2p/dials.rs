@@ -4,11 +4,11 @@ use core::{
     task::{Context, Poll},
     time::Duration,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 
 use futures::{Stream, stream::FuturesUnordered};
 use libp2p::{Multiaddr, PeerId};
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::core::backends::libp2p::LOG_TARGET;
 
@@ -31,6 +31,10 @@ impl DialAttempt {
         &self.address
     }
 
+    pub(super) const fn attempt_number_mut(&mut self) -> &mut NonZeroU64 {
+        &mut self.attempt_number
+    }
+
     #[cfg(test)]
     pub const fn attempt_number(&self) -> NonZeroU64 {
         self.attempt_number
@@ -48,6 +52,7 @@ type PendingRetries = FuturesUnordered<Pin<Box<dyn Future<Output = (PeerId, Dial
 
 pub struct OngoingDials {
     active: HashMap<PeerId, DialAttempt>,
+    retrying: HashSet<PeerId>,
     retries: PendingRetries,
     max_attempts: NonZeroU64,
 }
@@ -56,6 +61,7 @@ impl OngoingDials {
     pub(super) fn new(max_attempts: NonZeroU64, capacity: usize) -> Self {
         Self {
             active: HashMap::with_capacity(capacity),
+            retrying: HashSet::new(),
             retries: FuturesUnordered::new(),
             max_attempts,
         }
@@ -65,17 +71,23 @@ impl OngoingDials {
         self.active.remove(peer_id)
     }
 
+    pub(super) fn entry(&mut self, peer_id: PeerId) -> Entry<'_, PeerId, DialAttempt> {
+        self.active.entry(peer_id)
+    }
+
     pub(super) fn keys(&self) -> impl Iterator<Item = &PeerId> {
-        self.active.keys()
+        self.active.keys().chain(self.retrying.iter())
     }
 
     /// Clear all active dials and pending retries (e.g., on session rotation).
     pub(super) fn clear(&mut self) {
         self.active.clear();
+        self.retrying.clear();
         self.retries.clear();
     }
 
     pub(super) fn insert(&mut self, peer_id: PeerId, attempt: DialAttempt) {
+        self.retrying.remove(&peer_id);
         self.active.insert(peer_id, attempt);
     }
 
@@ -111,7 +123,7 @@ impl OngoingDials {
         }
         let new_attempt_number = old_dial_attempt.attempt_number.checked_add(1).unwrap();
         let delay = Duration::from_secs(1 << (new_attempt_number.get() - 1));
-        debug!(
+        trace!(
             target: LOG_TARGET,
             "Scheduling retry {new_attempt_number} for peer {peer_id:?} in {delay:?}"
         );
@@ -123,6 +135,7 @@ impl OngoingDials {
             tokio::time::sleep(delay).await;
             (peer_id, new_dial_attempt)
         }));
+        self.retrying.insert(peer_id);
         SessionDialAttempt::OngoingSession(None)
     }
 

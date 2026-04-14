@@ -1901,7 +1901,7 @@ async fn handle_release_round_for_old_session<NodeId, Rng, Backend, NetAdapter, 
     // Release all messages concurrently, and wait for all of them to be sent.
     let num_futures = futures.len();
     join_all(futures).await;
-    tracing::debug!(
+    tracing::trace!(
         target: LOG_TARGET,
         "Sent out {num_futures} processed messages at this release window for the old session"
     );

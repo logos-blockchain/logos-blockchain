@@ -2,7 +2,10 @@ use core::{
     num::NonZeroUsize,
     ops::{Deref, RangeInclusive},
 };
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashSet, hash_map::Entry},
+    time::Duration,
+};
 
 use futures::StreamExt as _;
 use lb_blend::{
@@ -397,8 +400,15 @@ where
     /// the context of the calling function.
     fn dial(&mut self, peer_id: PeerId, address: Multiaddr) {
         tracing::trace!(target: LOG_TARGET, "Dialing peer {peer_id:?} at address {address:?}.");
-        self.ongoing_dials
-            .insert(peer_id, DialAttempt::new(address.clone()));
+        match self.ongoing_dials.entry(peer_id) {
+            Entry::Vacant(empty_entry) => {
+                empty_entry.insert(DialAttempt::new(address.clone()));
+            }
+            Entry::Occupied(mut existing_entry) => {
+                let last_attempt_number = existing_entry.get_mut().attempt_number_mut();
+                *last_attempt_number = last_attempt_number.checked_add(1).unwrap();
+            }
+        }
 
         if let Err(e) = self.swarm.dial(
             DialOpts::peer_id(peer_id)
