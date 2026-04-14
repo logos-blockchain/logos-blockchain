@@ -34,7 +34,7 @@ use crate::{
             libp2p::{
                 LOG_TARGET, Libp2pBlendBackendSettings,
                 behaviour::{BlendBehaviour, BlendBehaviourEvent},
-                dials::{OngoingDials, SessionDialAttempt},
+                dials::{DialAttempt, OngoingDials, SessionDialAttempt},
             },
         },
         settings::RunningBlendConfig as BlendConfig,
@@ -360,7 +360,7 @@ where
                 predicate_matched
             }
             Some((peer_id, dial_attempt)) = self.ongoing_dials.next() => {
-                self.execute_retry(peer_id, dial_attempt.address());
+                self.execute_retry(peer_id, dial_attempt);
                 false
             }
         }
@@ -397,7 +397,8 @@ where
     /// the context of the calling function.
     fn dial(&mut self, peer_id: PeerId, address: Multiaddr) {
         tracing::trace!(target: LOG_TARGET, "Dialing peer {peer_id:?} at address {address:?}.");
-        self.ongoing_dials.insert_or_bump(peer_id, address.clone());
+        self.ongoing_dials
+            .insert(peer_id, DialAttempt::new(address.clone()));
 
         if let Err(e) = self.swarm.dial(
             DialOpts::peer_id(peer_id)
@@ -430,7 +431,7 @@ where
 
     /// Called when a pending retry fires. Re-checks peering degree before
     /// actually dialing, so we don't waste a slot on a peer we no longer need.
-    fn execute_retry(&mut self, peer_id: PeerId, address: &Multiaddr) {
+    fn execute_retry(&mut self, peer_id: PeerId, dial_attempt: DialAttempt) {
         let num_new_conns_needed = self
             .minimum_healthy_peering_degree()
             .saturating_sub(self.num_healthy_peers());
@@ -439,17 +440,17 @@ where
                 target: LOG_TARGET,
                 "Skipping retry for peer {peer_id:?}: peering degree already satisfied."
             );
-            self.ongoing_dials.remove(&peer_id);
             return;
         }
         tracing::trace!(
             target: LOG_TARGET,
             "Executing backoff retry for peer {peer_id:?}."
         );
-        self.ongoing_dials.insert_or_bump(peer_id, address.clone());
+        let address = dial_attempt.address().clone();
+        self.ongoing_dials.insert(peer_id, dial_attempt);
         if let Err(e) = self.swarm.dial(
             DialOpts::peer_id(peer_id)
-                .addresses(vec![address.clone()])
+                .addresses(vec![address])
                 .condition(PeerCondition::Always)
                 .build(),
         ) {

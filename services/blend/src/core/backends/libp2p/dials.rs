@@ -31,10 +31,6 @@ impl DialAttempt {
         &self.address
     }
 
-    pub(super) const fn increment_attempt(&mut self) {
-        self.attempt_number = self.attempt_number.checked_add(1).unwrap();
-    }
-
     #[cfg(test)]
     pub const fn attempt_number(&self) -> NonZeroU64 {
         self.attempt_number
@@ -79,21 +75,8 @@ impl OngoingDials {
         self.retries.clear();
     }
 
-    /// Insert or bump the attempt counter for a peer, returning the address
-    /// to be used for the dial. The caller is responsible for actually
-    /// calling `swarm.dial()`.
-    pub(super) fn insert_or_bump(&mut self, peer_id: PeerId, address: Multiaddr) -> &Multiaddr {
-        use std::collections::hash_map::Entry;
-        match self.active.entry(peer_id) {
-            Entry::Vacant(empty_entry) => {
-                let attempt = empty_entry.insert(DialAttempt::new(address));
-                &attempt.address
-            }
-            Entry::Occupied(mut existing_entry) => {
-                existing_entry.get_mut().increment_attempt();
-                &existing_entry.into_mut().address
-            }
-        }
+    pub(super) fn insert(&mut self, peer_id: PeerId, attempt: DialAttempt) {
+        self.active.insert(peer_id, attempt);
     }
 
     /// Attempt to retry dialing the specified peer, if the maximum attempts
@@ -110,7 +93,7 @@ impl OngoingDials {
     /// Retries use exponential backoff: attempt 2 waits 2s, attempt 3 waits
     /// 4s, attempt N waits 2^(N-1) seconds.
     pub(super) fn schedule_retry(&mut self, peer_id: PeerId) -> SessionDialAttempt {
-        let Some(dial_attempt) = self.active.remove(&peer_id) else {
+        let Some(old_dial_attempt) = self.active.remove(&peer_id) else {
             debug!(
                 target: LOG_TARGET,
                 "Received a dial error for peer {peer_id:?} that is not being tracked. \
@@ -118,23 +101,23 @@ impl OngoingDials {
             );
             return SessionDialAttempt::PreviousSession;
         };
-        if dial_attempt.attempt_number >= self.max_attempts {
+        if old_dial_attempt.attempt_number >= self.max_attempts {
             debug!(
                 target: LOG_TARGET,
                 "Maximum attempts ({}) reached for peer {peer_id:?}. Re-dialing stopped.",
                 self.max_attempts
             );
-            return SessionDialAttempt::OngoingSession(Some(dial_attempt));
+            return SessionDialAttempt::OngoingSession(Some(old_dial_attempt));
         }
-        let new_attempt_number = dial_attempt.attempt_number.checked_add(1).unwrap();
+        let new_attempt_number = old_dial_attempt.attempt_number.checked_add(1).unwrap();
         let delay = Duration::from_secs(1 << (new_attempt_number.get() - 1));
         debug!(
             target: LOG_TARGET,
             "Scheduling retry {new_attempt_number} for peer {peer_id:?} in {delay:?}"
         );
         let new_dial_attempt = DialAttempt {
-            address: dial_attempt.address,
             attempt_number: new_attempt_number,
+            ..old_dial_attempt
         };
         self.retries.push(Box::pin(async move {
             tokio::time::sleep(delay).await;
