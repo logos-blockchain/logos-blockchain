@@ -297,35 +297,73 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     /// Force send a message to a peer, as long as the peer is connected, no
     /// matter the state the connection is in.
     #[cfg(any(test, feature = "unsafe-test-functions"))]
-    pub fn force_send_message_to_peer(
+    pub fn force_send_message_to_current_session_peer(
         &mut self,
         message: &EncapsulatedMessageWithVerifiedPublicHeader,
         peer_id: PeerId,
+    ) -> Result<(), SendError> {
+        self.force_send_message_to_peer_at_session(message, peer_id, self.current_session_info.1)
+    }
+
+    /// Force send a message to a peer, as long as the peer is connected, no
+    /// matter the state the connection is in.
+    #[cfg(any(test, feature = "unsafe-test-functions"))]
+    fn force_send_message_to_peer_at_session(
+        &mut self,
+        message: &EncapsulatedMessageWithVerifiedPublicHeader,
+        peer_id: PeerId,
+        session: u64,
     ) -> Result<(), SendError> {
         let serialized_message =
             lb_blend_scheduling::serialize_encapsulated_message_with_verified_public_header(
                 message,
             );
-        self.force_send_serialized_message_to_peer(serialized_message, peer_id)
+        self.force_send_serialized_message_to_peer_at_session(serialized_message, peer_id, session)
     }
 
     /// Force send a serialized message to a peer (without trying to deserialize
     /// nor validating it first), as long as the peer is connected, no
     /// matter the state the connection is in.
-    #[cfg(any(test, feature = "unsafe-test-functions"))]
-    pub fn force_send_serialized_message_to_peer(
+    #[cfg(test)]
+    fn force_send_serialized_message_to_current_session_peer(
         &mut self,
         serialized_message: Vec<u8>,
         peer_id: PeerId,
     ) -> Result<(), SendError> {
+        self.force_send_serialized_message_to_peer_at_session(
+            serialized_message,
+            peer_id,
+            self.current_session_info.1,
+        )
+    }
+
+    #[cfg(any(test, feature = "unsafe-test-functions"))]
+    pub fn force_send_serialized_message_to_peer_at_session(
+        &mut self,
+        serialized_message: Vec<u8>,
+        peer_id: PeerId,
+        session: u64,
+    ) -> Result<(), SendError> {
+        if session != self.current_session_info.1 {
+            let Some(old_session) = &mut self.old_session else {
+                return Err(SendError::InvalidSession);
+            };
+            return old_session.force_send_serialized_message_to_peer_at_session(
+                serialized_message,
+                peer_id,
+                session,
+            );
+        }
+
         let Some(RemotePeerConnectionDetails { connection_id, .. }) =
             self.negotiated_peers.get(&peer_id)
         else {
             return Err(SendError::NoPeers);
         };
+
         tracing::trace!(
             target: LOG_TARGET,
-            "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver already-serialized message."
+            "Notifying handler with peer {peer_id:?} on current session connection {connection_id:?} to deliver already-serialized message."
         );
         self.events.push_back(ToSwarm::NotifyHandler {
             peer_id,
@@ -654,7 +692,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
                 "Provided connection ID {connection_id:?} does not match the stored connection ID {:?} for peer {peer_id:?}. Ignoring state update.",
                 peer_details.connection_id
             );
-            return Some(state);
+            return None;
         }
         Some(mem::replace(&mut peer_details.negotiated_state, state))
     }
@@ -853,8 +891,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
                         return;
                     }
                 }
-                Err(e) => {
-                    tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old session: {e:?}");
+                Err(_) => {
                     return;
                 }
             }

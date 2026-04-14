@@ -33,7 +33,7 @@ lb-services-utils                = { workspace = true }
 lb-time-service                  = { workspace = true }
 lb-tracing                       = { workspace = true }
 lb-utils                         = { features = ["serde"], workspace = true }
-libp2p                           = { optional = true, workspace = true }
+libp2p                           = { features = ["dns"], optional = true, workspace = true }
 libp2p-stream                    = { optional = true, workspace = true }
 overwatch                        = { workspace = true }
 rand                             = { workspace = true }
