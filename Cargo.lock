@@ -4514,7 +4514,6 @@ dependencies = [
  "logos-blockchain-tracing",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
- "num-bigint",
  "overwatch",
  "rand 0.8.5",
  "serde",
