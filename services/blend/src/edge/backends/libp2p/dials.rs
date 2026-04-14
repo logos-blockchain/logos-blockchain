@@ -9,44 +9,30 @@ use std::collections::{HashMap, hash_map::Entry};
 use futures::{Stream, stream::FuturesUnordered};
 use lb_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
 use libp2p::{Multiaddr, PeerId, swarm::ConnectionId};
-use tracing::debug;
+use tracing::{debug, error, trace, warn};
 
 use crate::edge::backends::libp2p::LOG_TARGET;
 
-type PendingRetries = FuturesUnordered<Pin<Box<dyn Future<Output = (PeerId, DialAttempt)> + Send>>>;
+type PendingRetries =
+    FuturesUnordered<Pin<Box<dyn Future<Output = (PeerId, ConnectionId)> + Send>>>;
 
-pub struct PendingDials {
-    active: HashMap<(PeerId, ConnectionId), DialAttempt>,
+pub struct OngoingDials {
+    dials: HashMap<(PeerId, ConnectionId), (DialAttempt, bool)>,
     retries: PendingRetries,
     max_attempts: NonZeroU64,
 }
 
-impl PendingDials {
+pub enum Error {
+    CurrentlyRetrying,
+}
+
+impl OngoingDials {
     pub(super) fn new(max_attempts: NonZeroU64) -> Self {
         Self {
-            active: HashMap::new(),
+            dials: HashMap::new(),
             retries: FuturesUnordered::new(),
             max_attempts,
         }
-    }
-
-    pub(super) fn insert(&mut self, key: (PeerId, ConnectionId), attempt: DialAttempt) {
-        self.active.insert(key, attempt);
-    }
-
-    pub(super) fn entry(
-        &mut self,
-        key: (PeerId, ConnectionId),
-    ) -> Entry<'_, (PeerId, ConnectionId), DialAttempt> {
-        self.active.entry(key)
-    }
-
-    pub(super) fn get(&self, key: &(PeerId, ConnectionId)) -> Option<&DialAttempt> {
-        self.active.get(key)
-    }
-
-    pub(super) fn remove(&mut self, key: &(PeerId, ConnectionId)) -> Option<DialAttempt> {
-        self.active.remove(key)
     }
 
     /// Attempt to retry dialing the specified peer, if the maximum attempts
@@ -61,89 +47,93 @@ impl PendingDials {
         &mut self,
         peer_id: PeerId,
         connection_id: ConnectionId,
-    ) -> Option<DialAttempt> {
-        let last_dial_attempt = self.active.remove(&(peer_id, connection_id)).unwrap();
-        let new_dial_attempt_number = last_dial_attempt.attempt_number.checked_add(1).unwrap();
-        if new_dial_attempt_number > self.max_attempts {
-            return Some(last_dial_attempt);
-        }
-        let delay = Duration::from_secs(1 << (new_dial_attempt_number.get() - 1));
-        debug!(
-            target: LOG_TARGET,
-            "Scheduling retry {new_dial_attempt_number} for peer {peer_id:?} in {:?} seconds", delay.as_secs()
-        );
-        let new_dial_attempt = DialAttempt {
-            attempt_number: new_dial_attempt_number,
-            ..last_dial_attempt
+    ) -> Result<Option<DialAttempt>, Error> {
+        let Entry::Occupied(mut entry) = self.dials.entry((peer_id, connection_id)) else {
+            panic!(
+                "Received a dial error for peer {peer_id:?} and connection {connection_id:?} that is not being tracked."
+            );
         };
+        let (old_dial_attempt, is_retrying) = entry.get_mut();
+        if *is_retrying {
+            return Err(Error::CurrentlyRetrying);
+        }
+        if old_dial_attempt.attempt_number >= self.max_attempts {
+            return Ok(Some(entry.remove().0));
+        }
+        let new_attempt_number = old_dial_attempt.attempt_number.checked_add(1).unwrap();
+        let delay = Duration::from_secs(1 << (new_attempt_number.get() - 1));
+        trace!(
+            target: LOG_TARGET,
+            "Scheduling retry {new_attempt_number} for peer {peer_id:?} in {:?} seconds", delay.as_secs()
+        );
+        old_dial_attempt.attempt_number = new_attempt_number;
+        *is_retrying = true;
         self.retries.push(Box::pin(async move {
             tokio::time::sleep(delay).await;
-            (peer_id, new_dial_attempt)
+            (peer_id, connection_id)
         }));
-        None
+        Ok(None)
     }
 
-    #[cfg(test)]
-    pub const fn active(&self) -> &HashMap<(PeerId, ConnectionId), DialAttempt> {
-        &self.active
+    pub(super) fn remove(&mut self, key: &(PeerId, ConnectionId)) -> Option<DialAttempt> {
+        self.dials.remove(key).map(|(attempt, _)| attempt)
     }
 
-    #[cfg(test)]
-    pub fn retry_count(&self) -> usize {
-        self.retries.len()
+    pub(super) fn insert(&mut self, key: (PeerId, ConnectionId), attempt: DialAttempt) {
+        self.dials.insert(key, (attempt, false));
     }
+
+    // pub(super) fn entry(
+    //     &mut self,
+    //     key: (PeerId, ConnectionId),
+    // ) -> Entry<'_, (PeerId, ConnectionId), DialAttempt> {
+    //     self.dials.entry(key)
+    // }
+
+    pub(super) fn get(&self, key: &(PeerId, ConnectionId)) -> Option<&DialAttempt> {
+        self.dials.get(key).map(|(attempt, _)| attempt)
+    }
+
+    // #[cfg(test)]
+    // pub const fn active(&self) -> &HashMap<(PeerId, ConnectionId), DialAttempt> {
+    //     &self.dials
+    // }
+
+    // #[cfg(test)]
+    // pub fn retry_count(&self) -> usize {
+    //     self.retries.len()
+    // }
 }
 
-impl Stream for PendingDials {
+impl Stream for OngoingDials {
     type Item = (PeerId, DialAttempt);
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.retries).poll_next(cx)
-    }
-}
-
-#[derive(Debug)]
-pub struct DialAttempt {
-    /// Address of peer being dialed.
-    address: Multiaddr,
-    /// The latest (ongoing) attempt number.
-    attempt_number: NonZeroU64,
-    /// The message to send once the peer is successfully dialed.
-    message: EncapsulatedMessageWithVerifiedPublicHeader,
-}
-
-impl DialAttempt {
-    pub(super) const fn new(
-        address: Multiaddr,
-        message: EncapsulatedMessageWithVerifiedPublicHeader,
-    ) -> Self {
-        Self {
-            address,
-            attempt_number: NonZeroU64::new(1).unwrap(),
-            message,
+        let next = Pin::new(&mut self.retries).poll_next(cx);
+        match next {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(Some((peer_id, connection_id))) => {
+                let Entry::Occupied(mut entry) = self.dials.entry((peer_id, connection_id)) else {
+                    warn!(
+                        target: LOG_TARGET,
+                        "Received a retry signal for peer {peer_id:?} and connection {connection_id:?} that is not being tracked. This should not happen."
+                    );
+                    return Poll::Pending;
+                };
+                entry.get_mut().1 = false;
+                Poll::Ready(Some((peer_id, entry.get().0.clone())))
+            }
         }
     }
+}
 
-    pub(super) fn into_components(
-        self,
-    ) -> (
-        Multiaddr,
-        NonZeroU64,
-        EncapsulatedMessageWithVerifiedPublicHeader,
-    ) {
-        (self.address, self.attempt_number, self.message)
-    }
-
-    pub const fn address(&self) -> &Multiaddr {
-        &self.address
-    }
-
-    pub const fn message(&self) -> &EncapsulatedMessageWithVerifiedPublicHeader {
-        &self.message
-    }
-
-    #[cfg(test)]
-    pub const fn attempt_number(&self) -> NonZeroU64 {
-        self.attempt_number
-    }
+#[derive(Clone, Debug)]
+pub struct DialAttempt {
+    /// Address of peer being dialed.
+    pub address: Multiaddr,
+    /// The latest (ongoing) attempt number.
+    pub attempt_number: NonZeroU64,
+    /// The message to send once the peer is successfully dialed.
+    pub message: EncapsulatedMessageWithVerifiedPublicHeader,
 }

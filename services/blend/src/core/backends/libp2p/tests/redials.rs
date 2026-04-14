@@ -42,8 +42,8 @@ async fn core_redial_same_peer() {
 
     // --- Attempt 1: peer is in active dials ---
     let dial_attempt_1 = dialing_swarm.ongoing_dials().get(&random_peer_id).unwrap();
-    assert_eq!(*dial_attempt_1.address(), empty_multiaddr);
-    assert_eq!(dial_attempt_1.attempt_number(), 1.try_into().unwrap());
+    assert_eq!(dial_attempt_1.address, empty_multiaddr);
+    assert_eq!(dial_attempt_1.attempt_number, 1.try_into().unwrap());
 
     // Poll until the first dial fails.
     dialing_swarm
@@ -65,8 +65,8 @@ async fn core_redial_same_peer() {
     dialing_swarm.poll_next().await;
 
     let dial_attempt_2 = dialing_swarm.ongoing_dials().get(&random_peer_id).unwrap();
-    assert_eq!(*dial_attempt_2.address(), empty_multiaddr);
-    assert_eq!(dial_attempt_2.attempt_number(), 2.try_into().unwrap());
+    assert_eq!(dial_attempt_2.address, empty_multiaddr);
+    assert_eq!(dial_attempt_2.attempt_number, 2.try_into().unwrap());
 
     // Poll until second dial fails.
     dialing_swarm
@@ -87,8 +87,8 @@ async fn core_redial_same_peer() {
     dialing_swarm.poll_next().await;
 
     let dial_attempt_3 = dialing_swarm.ongoing_dials().get(&random_peer_id).unwrap();
-    assert_eq!(*dial_attempt_3.address(), empty_multiaddr);
-    assert_eq!(dial_attempt_3.attempt_number(), 3.try_into().unwrap());
+    assert_eq!(dial_attempt_3.address, empty_multiaddr);
+    assert_eq!(dial_attempt_3.attempt_number, 3.try_into().unwrap());
 
     // Poll until third (final) dial fails.
     dialing_swarm
@@ -221,7 +221,7 @@ async fn core_backoff_delay_is_respected() {
 
     // Retry should have fired: peer is back in active dials at attempt 2.
     let attempt = dialing_swarm.ongoing_dials().get(&random_peer_id).unwrap();
-    assert_eq!(attempt.attempt_number(), 2.try_into().unwrap());
+    assert_eq!(attempt.attempt_number, 2.try_into().unwrap());
     assert_eq!(dialing_swarm.ongoing_dials().retry_count(), 0);
 }
 
