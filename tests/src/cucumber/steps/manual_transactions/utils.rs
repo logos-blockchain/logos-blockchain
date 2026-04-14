@@ -1,6 +1,6 @@
 use std::{
     cmp::{Ordering, Reverse},
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::Display,
     num::NonZero,
     str::FromStr,
@@ -151,16 +151,17 @@ async fn submit_user_wallet_transaction(
     receivers: &[(ZkPublicKey, u64)],
     best_node_info: Option<&BestNodeInfo>,
 ) -> Result<TxHash, StepError> {
+    let available_utxos =
+        update_wallet_balance_all_user_wallets(world, step, best_node_info).await?;
     let sender_available_utxos =
-        update_wallet_balance_all_user_wallets(world, step, best_node_info)
-            .await?
+        available_utxos
             .get(sender_wallet_name)
             .cloned()
             .ok_or(StepError::LogicalError {
                 message: format!("Wallet '{sender_wallet_name}' not found in updated balances"),
             })?;
     let scenario_fee_state =
-        scenario_fee_account_state(world, sender_wallet_name, best_node_info).await?;
+        scenario_fee_account_state(world, sender_wallet_name, &available_utxos)?;
 
     let PreparedUserWalletTransaction {
         funded_builder,
@@ -296,30 +297,26 @@ fn partition_transaction_inputs(
     (newly_encumbered, newly_encumbered_fee)
 }
 
-async fn scenario_fee_account_state(
-    world: &mut CucumberWorld,
+fn scenario_fee_account_state(
+    world: &CucumberWorld,
     wallet_name: &str,
-    best_node_info: Option<&BestNodeInfo>,
+    available_utxos: &WalletUtxos,
 ) -> Result<Option<(WalletAccount, Vec<Utxo>)>, StepError> {
     let Some(fee_wallet_account) = world.fee_state.wallet_account.clone() else {
         return Ok(None);
     };
 
-    let (best_node_name, _, _) =
-        sanitize_best_node_info(world, wallet_name, best_node_info).await?;
+    let fee_wallet_name =
+        scenario_fee_wallet_request_name(&group_key_for_wallet(world, wallet_name)?);
 
-    let fee_utxos = collect_wallet_utxos(
-        world,
-        SCENARIO_FEE_ACCOUNT_NAME,
-        &best_node_name,
-        &[fee_wallet_account.public_key()],
-    )
-    .await
-    .inspect_err(|e| {
-        warn!(target: TARGET, "Failed to collect scenario fee account UTXOs: {e}");
-    })?;
+    let mut available_fee_utxos = available_utxos.get(&fee_wallet_name).cloned().ok_or_else(
+        || StepError::LogicalError {
+            message: format!(
+                "Scenario fee account state for wallet '{wallet_name}' not found in grouped scan"
+            ),
+        },
+    )?;
 
-    let mut available_fee_utxos = fee_utxos;
     let all_encumbered_fee_note_ids: HashSet<_> = world
         .fee_state
         .encumbered_tokens_per_wallet
@@ -478,8 +475,9 @@ pub async fn update_wallet_balance_all_user_wallets(
     step: &str,
     best_node_info: Option<&BestNodeInfo>,
 ) -> Result<WalletUtxos, StepError> {
-    update_wallet_balance_multiple_wallets(world, step, world.all_user_wallets(), best_node_info)
-        .await
+    let mut requests = build_wallet_utxo_requests(world, step, &world.all_user_wallets())?;
+    append_scenario_fee_wallet_requests(world, &mut requests);
+    scan_available_utxos(world, step, &requests, best_node_info).await
 }
 
 pub async fn update_wallet_balance_all_funding_wallets(
@@ -531,58 +529,102 @@ pub async fn update_wallet_balance_multiple_wallets(
             });
         }
     }
-    let requests: Vec<UtxosRequest> = wallets
-        .iter()
-        .filter_map(|wallet| {
-            let group_key = world
-                .node_to_group
-                .get(&wallet.node_name)
-                .cloned()
-                .unwrap_or_default();
-            wallet
-                .public_key()
-                .map(|wallet_pk| UtxosRequest {
-                    wallet_name: wallet.wallet_name.clone(),
-                    group_key,
-                    wallet_pk,
-                })
-                .map_err(|e| {
-                    warn!(target: TARGET, "Step `{}` error: {e}", step);
-                    e
-                })
-                .ok()
-        })
-        .collect();
+    let requests = build_wallet_utxo_requests(world, step, &wallets)?;
+    scan_available_utxos(world, step, &requests, best_node_info).await
+}
 
-    let mut requests_by_group: HashMap<String, Vec<UtxosRequest>> = HashMap::new();
-    for request in &requests {
+fn build_wallet_utxo_requests(
+    world: &CucumberWorld,
+    step: &str,
+    wallets: &[WalletInfo],
+) -> Result<GroupedUtxoRequests, StepError> {
+    let mut requests_by_group = GroupedUtxoRequests::new();
+
+    for wallet in wallets {
+        let group_key = world
+            .node_to_group
+            .get(&wallet.node_name)
+            .cloned()
+            .unwrap_or_default();
         requests_by_group
-            .entry(request.group_key.clone())
+            .entry(group_key)
             .or_default()
-            .push(request.clone());
+            .push(UtxosRequest {
+                wallet_name: wallet.wallet_name.clone(),
+                wallet_pk: wallet.public_key().inspect_err(|e| {
+                    warn!(target: TARGET, "Step `{}` error: {e}", step);
+                })?,
+            });
     }
 
+    Ok(requests_by_group)
+}
+
+fn append_scenario_fee_wallet_requests(
+    world: &CucumberWorld,
+    requests_by_group: &mut GroupedUtxoRequests,
+) {
+    let Some(fee_wallet_account) = world.fee_state.wallet_account.clone() else {
+        return;
+    };
+
+    for (group_key, requests) in requests_by_group {
+        requests.push(UtxosRequest {
+            wallet_name: scenario_fee_wallet_request_name(group_key),
+            wallet_pk: fee_wallet_account.public_key(),
+        });
+    }
+}
+
+async fn scan_available_utxos(
+    world: &mut CucumberWorld,
+    step: &str,
+    requests_by_group: &GroupedUtxoRequests,
+    best_node_info: Option<&BestNodeInfo>,
+) -> Result<WalletUtxos, StepError> {
     let mut on_chain_utxos = WalletUtxos::new();
-    for grouped_requests in requests_by_group.into_values() {
-        let grouped_utxos =
-            collect_multiple_wallets_utxos(world, &grouped_requests, best_node_info)
-                .await
-                .inspect_err(|e| {
-                    warn!(target: TARGET, "Step `{}` error: {e}", step);
-                })?;
+    for grouped_requests in requests_by_group.values() {
+        let grouped_utxos = collect_multiple_wallets_utxos(world, grouped_requests, best_node_info)
+            .await
+            .inspect_err(|e| {
+                warn!(target: TARGET, "Step `{}` error: {e}", step);
+            })?;
         on_chain_utxos.extend(grouped_utxos);
     }
-    let available_utxos = requests
-        .iter()
+
+    let available_utxos = requests_by_group
+        .values()
+        .flat_map(|requests| requests.iter())
         .map(|UtxosRequest { wallet_name, .. }| {
             let wallet_on_chain_utxos =
                 on_chain_utxos.get(wallet_name).cloned().unwrap_or_default();
-            let available = get_available_utxos(world, wallet_name, wallet_on_chain_utxos);
+            let available = if wallet_name.starts_with(SCENARIO_FEE_ACCOUNT_NAME) {
+                get_available_scenario_fee_utxos(world, wallet_on_chain_utxos)
+            } else {
+                get_available_utxos(world, wallet_name, wallet_on_chain_utxos)
+            };
             (wallet_name.clone(), available)
         })
         .collect();
 
     Ok(available_utxos)
+}
+
+fn scenario_fee_wallet_request_name(group_key: &str) -> String {
+    if group_key.is_empty() {
+        SCENARIO_FEE_ACCOUNT_NAME.to_owned()
+    } else {
+        format!("{SCENARIO_FEE_ACCOUNT_NAME}@{group_key}")
+    }
+}
+
+fn group_key_for_wallet(world: &CucumberWorld, wallet_name: &str) -> Result<String, StepError> {
+    let wallet = world.resolve_wallet(wallet_name)?;
+    Ok(world
+        .node_to_group
+        .get(&wallet.node_name)
+        .cloned()
+        .unwrap_or_default())
 }
 
 /// Helper to count and sum UTXOs for a specific sender key.
@@ -814,6 +856,20 @@ fn get_available_utxos(
     }
 
     available_utxos
+}
+
+fn get_available_scenario_fee_utxos(world: &CucumberWorld, on_chain_utxos: Vec<Utxo>) -> Vec<Utxo> {
+    let all_encumbered_fee_note_ids: HashSet<_> = world
+        .fee_state
+        .encumbered_tokens_per_wallet
+        .values()
+        .flat_map(|utxos| utxos.iter().map(Utxo::id))
+        .collect();
+
+    on_chain_utxos
+        .into_iter()
+        .filter(|utxo| !all_encumbered_fee_note_ids.contains(&utxo.id()))
+        .collect()
 }
 
 async fn get_output_balances(
@@ -1159,9 +1215,10 @@ fn get_last_known_height<'a>(
 #[derive(Clone)]
 struct UtxosRequest {
     wallet_name: String,
-    group_key: String,
     wallet_pk: ZkPublicKey,
 }
+
+type GroupedUtxoRequests = BTreeMap<String, Vec<UtxosRequest>>;
 
 type WalletPkMap = HashMap<String, ZkPublicKey>;
 type WalletsByPk = HashMap<ZkPublicKey, String>;
@@ -1178,7 +1235,6 @@ fn collect_multiple_sync_wallet_info(
     for UtxosRequest {
         wallet_name,
         wallet_pk,
-        ..
     } in requests
     {
         let Some(existing_pk) = wallet_pks.get(wallet_name) else {
@@ -1277,22 +1333,6 @@ fn update_genesis_utxos_multi_wallets(
     }
 }
 
-fn verify_request_group_key_is_consistent(requests: &[UtxosRequest]) -> Result<(), StepError> {
-    let expected_group_key = requests[0].group_key.as_str();
-    for request in requests {
-        if request.group_key != expected_group_key {
-            return Err(StepError::LogicalError {
-                message: format!(
-                    "Mixed node groups in one UTXO batch: expected group '{}', found '{}' for wallet '{}'",
-                    expected_group_key, request.group_key, request.wallet_name
-                ),
-            });
-        }
-    }
-
-    Ok(())
-}
-
 async fn collect_multiple_wallets_utxos(
     world: &mut CucumberWorld,
     requests: &[UtxosRequest],
@@ -1302,7 +1342,6 @@ async fn collect_multiple_wallets_utxos(
         return Ok(HashMap::new());
     }
 
-    verify_request_group_key_is_consistent(requests)?;
     let (best_node_name, best_node_client, best_consensus) =
         sanitize_best_node_info(world, &requests[0].wallet_name, best_node_info).await?;
     let (wallet_pks, mut owned_per_wallet) = collect_multiple_sync_wallet_info(requests)?;

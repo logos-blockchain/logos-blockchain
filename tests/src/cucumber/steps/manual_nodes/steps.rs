@@ -17,6 +17,7 @@ use crate::{
                 snapshots::{save_named_blockchain_snapshot, validate_snapshot_path_component},
                 utils::{
                     NodesToStartUnordered, create_snapshots_all_nodes,
+                    ensure_fee_sponsorship_and_fork_groups_are_not_mixed,
                     get_cryptarchia_info_all_nodes, nodes_converged,
                     parse_genesis_wallet_tokens_row, parse_url, parse_wallet_resources_table_row,
                     poll_all_nodes_and_update_consensus_cache, restart_node, start_node,
@@ -125,6 +126,11 @@ fn step_sponsored_genesis_fee_account(
     token_count: usize,
     token_value: u64,
 ) -> StepResult {
+    ensure_fee_sponsorship_and_fork_groups_are_not_mixed(
+        world,
+        "we have a sponsored genesis fee account with <number_of_tokens> tokens of <token_value> value each",
+    )?;
+
     let token_count = non_zero!("genesis fee token count", token_count)?;
     let token_value = non_zero!("genesis fee token value", token_value)?;
 
@@ -221,6 +227,8 @@ const fn step_we_join_external_network(world: &mut CucumberWorld) {
 #[given(expr = "we will have distinct node groups to query wallet balances:")]
 #[when(expr = "we will have distinct node groups to query wallet balances:")]
 fn step_define_node_groups(world: &mut CucumberWorld, step: &Step) -> Result<(), StepError> {
+    ensure_fee_sponsorship_and_fork_groups_are_not_mixed(world, &step.value)?;
+
     let table = step.table.as_ref().ok_or(StepError::LogicalError {
         message: "Expected a data table".to_owned(),
     })?;
