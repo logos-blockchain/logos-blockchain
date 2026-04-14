@@ -208,14 +208,21 @@ impl<'de> Deserialize<'de> for GenesisTx {
     where
         D: serde::Deserializer<'de>,
     {
-        let tx = SignedMantleTx::deserialize(deserializer)?;
+        #[derive(Deserialize)]
+        struct Helper {
+            mantle_tx: MantleTx,
+            ops_proofs: Vec<OpProof>,
+        }
+
+        let helper = Helper::deserialize(deserializer)?;
+        let tx = SignedMantleTx::new_unverified(helper.mantle_tx, helper.ops_proofs);
         Self::from_tx(tx).map_err(serde::de::Error::custom)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use lb_key_management_system_keys::keys::{ZkKey, ZkPublicKey};
+    use lb_key_management_system_keys::keys::{Ed25519Signature, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
 
     use super::*;
@@ -289,7 +296,9 @@ mod tests {
                 MsgId::root(),
                 Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
-            vec![OpProof::NoProof],
+            vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
+                &[0u8; 64],
+            ))],
         );
         assert!(matches!(
             GenesisTx::from_tx(tx),
@@ -303,7 +312,9 @@ mod tests {
                 MsgId::from([1; 32]),
                 Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
-            vec![OpProof::NoProof],
+            vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
+                &[0u8; 64],
+            ))],
         );
         assert!(matches!(
             GenesisTx::from_tx(tx),
@@ -317,7 +328,9 @@ mod tests {
                 MsgId::root(),
                 Ed25519PublicKey::from_bytes(&[1; 32]).unwrap(),
             ))],
-            vec![OpProof::NoProof],
+            vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
+                &[0u8; 64],
+            ))],
         );
         assert!(matches!(
             GenesisTx::from_tx(tx),
@@ -331,7 +344,9 @@ mod tests {
                 MsgId::root(),
                 Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
-            vec![OpProof::NoProof],
+            vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
+                &[0u8; 64],
+            ))],
         );
         assert!(GenesisTx::from_tx(tx).is_ok());
     }
@@ -366,7 +381,8 @@ mod tests {
 
         // Execute all test cases
         for (ops, expected_err) in test_cases {
-            let ops_proofs = vec![OpProof::NoProof; ops.len()];
+            let ops_proofs =
+                vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(&[0u8; 64])); ops.len()];
             let tx = create_tx(ops, ops_proofs);
             let result = GenesisTx::from_tx(tx);
             match expected_err {
@@ -386,8 +402,8 @@ mod tests {
             )
         };
         let verifying_key = Ed25519PublicKey::from_bytes(&[0; 32]).unwrap();
-        let utxo1 = Utxo::new(TxHash::from(Fr::from(0u64)), 0, create_test_note(1000));
-        let utxo2 = Utxo::new(TxHash::from(Fr::from(1u64)), 1, create_test_note(2000));
+        let utxo1 = Utxo::new([0u8; 32], 0, create_test_note(1000));
+        let utxo2 = Utxo::new([1u8; 32], 1, create_test_note(2000));
         let sdp_declare_op_helper = |utxo_to_use: Utxo, zk_id_value: u8| {
             sdp_declare_op(utxo_to_use, zk_id_value, verifying_key)
         };
@@ -419,7 +435,8 @@ mod tests {
 
         // Execute all test cases
         for (ops, expected_err) in test_cases {
-            let ops_proofs = vec![OpProof::NoProof; ops.len()];
+            let ops_proofs =
+                vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(&[0u8; 64])); ops.len()];
             let tx = create_tx(ops, ops_proofs);
             let result = GenesisTx::from_tx(tx);
             match expected_err {
@@ -439,7 +456,9 @@ mod tests {
                 MsgId::root(),
                 Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
-            vec![OpProof::NoProof],
+            vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
+                &[0u8; 64],
+            ))],
         );
         assert!(GenesisTx::from_tx(signed_mantle_tx.clone()).is_ok());
 
@@ -474,7 +493,9 @@ mod tests {
                 MsgId::root(),
                 Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
             ))],
-            vec![OpProof::NoProof],
+            vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(
+                &[0u8; 64],
+            ))],
         );
         let genesis_tx = GenesisTx::from_tx(signed_mantle_tx).expect("Valid genesis transaction");
 

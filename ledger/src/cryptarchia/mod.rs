@@ -10,7 +10,11 @@ use lb_core::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasPrice},
         genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
-        ops::transfer::TransferOp,
+        ops::{
+            channel::{deposit::DepositOp, withdraw::ChannelWithdrawOp},
+            leader_claim::LeaderClaimOp,
+            transfer::TransferOp,
+        },
     },
     proofs::leader_proof::{self, LeaderPublic},
 };
@@ -404,6 +408,61 @@ impl LedgerState {
             .increment_block_density(slot))
     }
 
+    pub fn try_apply_channel_deposit<Id, Constants: GasConstants>(
+        mut self,
+        locked_notes: &LockedNotes,
+        channel_deposit_op: &DepositOp,
+        channel_deposit_sig: &ZkSignature,
+        tx_hash: TxHash,
+    ) -> Result<(Self, Value), LedgerError<Id>> {
+        let mut amount_deposited: Value = 0;
+        let mut pks: Vec<ZkPublicKey> = vec![];
+        for input in &channel_deposit_op.inputs {
+            if locked_notes.contains(input) {
+                return Err(LedgerError::LockedNote(*input));
+            }
+            let utxo;
+            (self.utxos, utxo) = self
+                .utxos
+                .remove(input)
+                .map_err(|_| LedgerError::InvalidNote(*input))?;
+            amount_deposited += utxo.note.value;
+            pks.push(utxo.note.pk);
+        }
+
+        if !ZkPublicKey::verify_multi(&pks, &tx_hash.0, channel_deposit_sig) {
+            return Err(LedgerError::InvalidProof);
+        }
+
+        Ok((self, amount_deposited))
+    }
+
+    pub fn try_apply_channel_withdraw<Id, Constants: GasConstants>(
+        mut self,
+        withdraw_op: &ChannelWithdrawOp,
+    ) -> Result<(Self, Value), LedgerError<Id>> {
+        let mut amount_withdrawed: Value = 0;
+
+        for utxo in withdraw_op.utxos() {
+            if utxo.note.value == 0 {
+                return Err(LedgerError::ZeroValueNote);
+            }
+            amount_withdrawed += utxo.note.value;
+            self.utxos = self.utxos.insert(utxo.id(), utxo).0;
+        }
+        Ok((self, amount_withdrawed))
+    }
+
+    pub fn try_apply_leader_claim<Id, Constants: GasConstants>(
+        mut self,
+        leader_claim_op: &LeaderClaimOp,
+        reward_amount: Value,
+    ) -> Result<Self, LedgerError<Id>> {
+        let utxo = leader_claim_op.utxo(reward_amount);
+        self.utxos = self.utxos.insert(utxo.id(), utxo).0;
+        Ok(self)
+    }
+
     pub fn try_apply_transfer<Id, Constants: GasConstants>(
         mut self,
         locked_notes: &LockedNotes,
@@ -413,6 +472,9 @@ impl LedgerState {
     ) -> Result<(Self, Balance), LedgerError<Id>> {
         let mut balance: i128 = 0;
         let mut pks: Vec<ZkPublicKey> = vec![];
+        if transfer_op.inputs.is_empty() {
+            return Err(LedgerError::NoInputTransfer);
+        }
         for input in &transfer_op.inputs {
             if locked_notes.contains(input) {
                 return Err(LedgerError::LockedNote(*input));
@@ -686,10 +748,11 @@ pub mod tests {
 
     #[must_use]
     pub fn utxo_with_sk() -> (ZkKey, Utxo) {
-        let transfer_hash: Fr = BigUint::from(thread_rng().next_u64()).into();
+        let mut op_id = [0u8; 32];
+        thread_rng().fill_bytes(&mut op_id);
         let zk_sk = ZkKey::from(BigUint::from(0u64));
         let utxo = Utxo {
-            transfer_hash: transfer_hash.into(),
+            op_id,
             output_index: 0,
             note: Note::new(10000, zk_sk.to_public_key()),
         };
@@ -1277,7 +1340,7 @@ pub mod tests {
         let output_note2_sk = ZkKey::from(BigUint::from(3u8));
         let input_note = Note::new(11000, note_sk.to_public_key());
         let input_utxo = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: input_note,
         };
@@ -1348,25 +1411,25 @@ pub mod tests {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(1000, input_sk.to_public_key());
         let input_utxo = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: input_note,
         };
 
         let non_existent_utxo_1 = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 1,
             note: input_note,
         };
 
         let non_existent_utxo_2 = Utxo {
-            transfer_hash: Fr::from(BigUint::from(2u8)).into(),
+            op_id: [2u8; 32],
             output_index: 0,
             note: input_note,
         };
 
         let non_existent_utxo_3 = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: Note::new(999, Fr::from(BigUint::from(1u8)).into()),
         };
@@ -1400,7 +1463,7 @@ pub mod tests {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(1, input_sk.to_public_key());
         let input_utxo = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: input_note,
         };
@@ -1444,7 +1507,7 @@ pub mod tests {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(10000, input_sk.to_public_key());
         let input_utxo = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: input_note,
         };
@@ -1474,7 +1537,7 @@ pub mod tests {
     fn test_output_not_zero() {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_utxo = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: Note::new(10000, input_sk.to_public_key()),
         };

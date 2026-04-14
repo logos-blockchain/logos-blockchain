@@ -150,7 +150,7 @@ fn op_to_zone_message(op: &Op, channel_id: ChannelId) -> Option<ZoneMessage> {
         }
         Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
             Some(ZoneMessage::Deposit(Deposit {
-                amount: deposit.amount,
+                inputs: deposit.inputs.clone(),
                 metadata: deposit.metadata.clone(),
             }))
         }

@@ -1,5 +1,6 @@
 use std::sync::LazyLock;
 
+use ark_ff::PrimeField as _;
 use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -7,7 +8,7 @@ use lb_poseidon2::Digest as _;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 
-use crate::{crypto::ZkHasher, mantle::tx::TxHash};
+use crate::crypto::{Hash, ZkHasher};
 
 pub type Value = u64;
 
@@ -59,7 +60,7 @@ impl Note {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Utxo {
-    pub transfer_hash: TxHash,
+    pub op_id: Hash,
     pub output_index: usize,
     pub note: Note,
 }
@@ -70,9 +71,9 @@ static NOTE_ID_V1: LazyLock<Fr> = LazyLock::new(|| {
 
 impl Utxo {
     #[must_use]
-    pub const fn new(transfer_hash: TxHash, output_index: usize, note: Note) -> Self {
+    pub const fn new(op_id: Hash, output_index: usize, note: Note) -> Self {
         Self {
-            transfer_hash,
+            op_id,
             output_index,
             note,
         }
@@ -81,9 +82,9 @@ impl Utxo {
     #[must_use]
     pub fn id(&self) -> NoteId {
         // constants and structure as defined in the Mantle spec:
-        // https://www.notion.so/nomos-tech/v1-3-Mantle-Specification-31e261aa09df818f9327ee87e5a6d433#31e261aa09df80aea7cff4eb98d61b6e
+        // https://www.notion.so/nomos-tech/v1-4-Mantle-Specification-335261aa09df8065a38acff4b25aee82
 
-        let transfer_hash: Fr = *self.transfer_hash.as_ref();
+        let op_id: Fr = Fr::from_le_bytes_mod_order(self.op_id.as_ref());
         let output_index =
             fr_from_bytes(self.output_index.to_le_bytes().as_slice()).expect("usize fits in Fr");
         let note_value: Fr =
@@ -92,7 +93,7 @@ impl Utxo {
 
         NoteId(ZkHasher::digest(&[
             *NOTE_ID_V1,
-            transfer_hash,
+            op_id,
             output_index,
             note_value,
             note_pk,
@@ -112,7 +113,7 @@ mod test {
     #[test]
     fn test_note_id() {
         let utxo = Utxo::new(
-            TxHash::from(Fr::from(BigUint::from(123u32))),
+            [0u8; 32],
             0,
             Note::new(100, ZkPublicKey::from(Fr::from(BigUint::from(456u32)))),
         );
@@ -120,7 +121,7 @@ mod test {
             utxo.id(),
             NoteId::from(
                 Fr::from_str(
-                    "7000453536948078697982837270969513402421497654766692285707895413806329167703"
+                    "7557997998773395727489806263315711564569794358720487479582958381680367418066"
                 )
                 .unwrap()
             )

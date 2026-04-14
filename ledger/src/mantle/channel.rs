@@ -35,6 +35,8 @@ pub enum Error {
     InsufficientFunds,
     #[error("Balance overflow")]
     BalanceOverflow,
+    #[error("The withdraw nonce doesn't correspond to the channel state")]
+    InvalidWithdrawNonce,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -64,6 +66,7 @@ pub struct ChannelState {
     // Indicating how many accredited keys are required to withdraw
     // funds from the channel.
     pub withdraw_threshold: ChannelKeyIndex,
+    pub withdraw_nonce: u32,
 }
 
 const DEFAULT_WITHDRAW_THRESHOLD: ChannelKeyIndex = 1;
@@ -95,6 +98,7 @@ impl Channels {
                 keys: vec![*signer].into(),
                 balance: 0,
                 withdraw_threshold: DEFAULT_WITHDRAW_THRESHOLD,
+                withdraw_nonce: 0,
             });
 
         if *parent != channel.tip {
@@ -119,6 +123,7 @@ impl Channels {
                 keys: Arc::clone(&channel.keys),
                 balance: channel.balance,
                 withdraw_threshold: channel.withdraw_threshold,
+                withdraw_nonce: channel.withdraw_nonce,
             },
         );
         Ok(self)
@@ -154,6 +159,7 @@ impl Channels {
                     // TODO: Replace with `ChannelConfig.withdraw_threshold`
                     // once this op is replaced with CHANNEL_CONFIG op: https://github.com/logos-blockchain/logos-blockchain/issues/2461
                     withdraw_threshold: DEFAULT_WITHDRAW_THRESHOLD,
+                    withdraw_nonce: 0,
                 },
             );
         }
@@ -161,11 +167,11 @@ impl Channels {
         Ok(self)
     }
 
-    pub fn deposit(mut self, op: &DepositOp) -> Result<Self, Error> {
+    pub fn deposit(mut self, op: &DepositOp, amount: Value) -> Result<Self, Error> {
         if let Some(channel) = self.channels.get_mut(&op.channel_id) {
             channel.balance = channel
                 .balance
-                .checked_add(op.amount)
+                .checked_add(amount)
                 .ok_or(Error::BalanceOverflow)?;
             Ok(self)
         } else {
@@ -175,13 +181,18 @@ impl Channels {
         }
     }
 
-    pub fn withdraw(mut self, op: &ChannelWithdrawOp) -> Result<Self, Error> {
+    pub fn withdraw(mut self, op: &ChannelWithdrawOp, amount: Value) -> Result<Self, Error> {
         if let Some(channel) = self.channels.get_mut(&op.channel_id) {
-            channel.balance = channel
-                .balance
-                .checked_sub(op.amount)
-                .ok_or(Error::InsufficientFunds)?;
-            Ok(self)
+            if channel.withdraw_nonce == op.withdraw_nonce {
+                channel.balance = channel
+                    .balance
+                    .checked_sub(amount)
+                    .ok_or(Error::InsufficientFunds)?;
+                channel.withdraw_threshold += 1;
+                Ok(self)
+            } else {
+                Err(Error::InvalidWithdrawNonce)
+            }
         } else {
             Err(Error::ChannelNotFound {
                 channel_id: op.channel_id,
@@ -204,7 +215,9 @@ impl Channels {
 
 #[cfg(test)]
 mod tests {
-    use lb_key_management_system_keys::keys::Ed25519Key;
+    use lb_core::mantle::{Note, NoteId};
+    use lb_groth16::Fr;
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
 
     use super::*;
 
@@ -223,6 +236,7 @@ mod tests {
                         keys: vec![test_public_key(7)].into(),
                         balance,
                         withdraw_threshold: 1,
+                        withdraw_nonce: 0,
                     },
                 ),
             }
@@ -244,6 +258,7 @@ mod tests {
                         keys: vec![test_public_key(11)].into(),
                         balance: 5,
                         withdraw_threshold: 1,
+                        withdraw_nonce: 0,
                     },
                 )
                 .insert(
@@ -253,6 +268,7 @@ mod tests {
                         keys: vec![test_public_key(22), test_public_key(23)].into(),
                         balance: 9,
                         withdraw_threshold: 2,
+                        withdraw_nonce: 0,
                     },
                 ),
         };
@@ -270,11 +286,14 @@ mod tests {
         let channels = Channels::with_balance(channel_id, 10);
 
         let updated = channels
-            .deposit(&DepositOp {
-                channel_id,
-                amount: 6,
-                metadata: vec![],
-            })
+            .deposit(
+                &DepositOp {
+                    channel_id,
+                    inputs: vec![NoteId(Fr::from(0u32))],
+                    metadata: vec![],
+                },
+                6,
+            )
             .expect("deposit should succeed");
 
         assert_eq!(updated.channel_state(&channel_id).unwrap().balance, 16);
@@ -286,10 +305,17 @@ mod tests {
         let channels = Channels::with_balance(channel_id, 10);
 
         let updated = channels
-            .withdraw(&ChannelWithdrawOp {
-                channel_id,
-                amount: 6,
-            })
+            .withdraw(
+                &ChannelWithdrawOp {
+                    channel_id,
+                    outputs: vec![Note {
+                        value: 6,
+                        pk: ZkPublicKey::zero(),
+                    }],
+                    withdraw_nonce: 0,
+                },
+                6,
+            )
             .expect("withdraw should succeed");
 
         assert_eq!(updated.channel_state(&channel_id).unwrap().balance, 4);
@@ -300,20 +326,34 @@ mod tests {
         let channel_id = ChannelId::from([0u8; 32]);
         let channels = Channels::with_balance(channel_id, 3);
 
-        let result = channels.withdraw(&ChannelWithdrawOp {
-            channel_id,
-            amount: 6,
-        });
+        let result = channels.withdraw(
+            &ChannelWithdrawOp {
+                channel_id,
+                outputs: vec![Note {
+                    value: 6,
+                    pk: ZkPublicKey::zero(),
+                }],
+                withdraw_nonce: 0,
+            },
+            6,
+        );
 
         assert!(matches!(result, Err(Error::InsufficientFunds)));
     }
 
     #[test]
     fn withdraw_fails_for_missing_channel() {
-        let result = Channels::new().withdraw(&ChannelWithdrawOp {
-            channel_id: ChannelId::from([0u8; 32]),
-            amount: 1,
-        });
+        let result = Channels::new().withdraw(
+            &ChannelWithdrawOp {
+                channel_id: ChannelId::from([0u8; 32]),
+                outputs: vec![Note {
+                    value: 1,
+                    pk: ZkPublicKey::zero(),
+                }],
+                withdraw_nonce: 0,
+            },
+            1,
+        );
 
         assert!(matches!(result, Err(Error::ChannelNotFound { .. })));
     }

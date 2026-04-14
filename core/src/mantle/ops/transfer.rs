@@ -5,7 +5,7 @@ use lb_poseidon2::Digest;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTES_SIZE, Hasher, ZkHasher},
+    crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTES_SIZE, Hash, Hasher, ZkHasher},
     mantle::{
         Note, NoteId, Transaction, TransactionHasher, TxHash, Utxo, encoding::encode_transfer_op,
     },
@@ -41,20 +41,28 @@ impl TransferOp {
 
     #[must_use]
     pub fn utxo_by_index(&self, index: usize) -> Option<Utxo> {
+        let transfer_id = self.id();
         self.outputs.get(index).map(|note| Utxo {
-            transfer_hash: self.hash(),
+            op_id: transfer_id,
             output_index: index,
             note: *note,
         })
     }
 
+    #[must_use]
+    pub fn id(&self) -> Hash {
+        let mut encoded_bytes: Vec<u8> = b"OPERATION_ID_V1".into();
+        encoded_bytes.extend(encode_transfer_op(self));
+        Hasher::digest(&encoded_bytes).into()
+    }
+
     pub fn utxos(&self) -> impl Iterator<Item = Utxo> + '_ {
-        let transfer_hash = self.hash();
+        let transfer_id = self.id();
         self.outputs
             .iter()
             .enumerate()
             .map(move |(index, note)| Utxo {
-                transfer_hash,
+                op_id: transfer_id,
                 output_index: index,
                 note: *note,
             })
@@ -95,7 +103,7 @@ mod test {
         assert_eq!(
             transfer.utxo_by_index(0),
             Some(Utxo {
-                transfer_hash: transfer.hash(),
+                op_id: transfer.id(),
                 output_index: 0,
                 note: Note::new(100, pk0),
             })
@@ -103,7 +111,7 @@ mod test {
         assert_eq!(
             transfer.utxo_by_index(1),
             Some(Utxo {
-                transfer_hash: transfer.hash(),
+                op_id: transfer.id(),
                 output_index: 1,
                 note: Note::new(200, pk1),
             })
@@ -111,7 +119,7 @@ mod test {
         assert_eq!(
             transfer.utxo_by_index(2),
             Some(Utxo {
-                transfer_hash: transfer.hash(),
+                op_id: transfer.id(),
                 output_index: 2,
                 note: Note::new(300, pk2),
             })

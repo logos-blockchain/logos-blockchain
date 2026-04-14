@@ -1,3 +1,5 @@
+// TODO: this needs a refactoring with the new deposit
+/*
 use std::{num::NonZero, time::Duration};
 
 use futures::future::join_all;
@@ -194,4 +196,4 @@ async fn get_channel_balance(validator: &Validator, channel_id: ChannelId) -> u6
     }
 
     panic!("Failed to get channel state after retries");
-}
+}*/

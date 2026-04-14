@@ -186,21 +186,26 @@ impl LedgerState {
         Ok(self)
     }
 
-    pub fn try_apply_channel_deposit(mut self, op: &DepositOp) -> Result<(Self, Value), Error> {
-        self.channels = self.channels.deposit(op).inspect_err(
+    pub fn try_apply_channel_deposit(
+        mut self,
+        op: &DepositOp,
+        amount_deposited: Value,
+    ) -> Result<Self, Error> {
+        self.channels = self.channels.deposit(op, amount_deposited).inspect_err(
             |err| error!(target: LOG_TARGET, %err, "Failed to apply the Channel Deposit message."),
         )?;
-        Ok((self, op.amount))
+        Ok(self)
     }
 
     pub fn try_apply_channel_withdraw(
         mut self,
         op: &ChannelWithdrawOp,
-    ) -> Result<(Self, Value), Error> {
-        self.channels = self.channels.withdraw(op).inspect_err(
+        amount_withdrawed: Value,
+    ) -> Result<Self, Error> {
+        self.channels = self.channels.withdraw(op, amount_withdrawed).inspect_err(
             |err| error!(target: LOG_TARGET, %err, "Failed to apply the Channel Withdraw message."),
         )?;
-        Ok((self, op.amount))
+        Ok(self)
     }
 
     pub fn try_apply_sdp_declaration(

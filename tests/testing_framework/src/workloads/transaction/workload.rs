@@ -288,13 +288,13 @@ fn wallet_utxo_map(
     genesis_tx: &lb_core::mantle::genesis_tx::GenesisTx,
 ) -> HashMap<ZkPublicKey, Utxo> {
     let transfer_op = genesis_tx.genesis_transfer().clone();
-    let tx_hash = transfer_op.hash();
+    let op_id = transfer_op.id();
 
     transfer_op
         .outputs
         .iter()
         .enumerate()
-        .map(|(idx, note)| (note.pk, Utxo::new(tx_hash, idx, *note)))
+        .map(|(idx, note)| (note.pk, Utxo::new(op_id, idx, *note)))
         .collect()
 }
 

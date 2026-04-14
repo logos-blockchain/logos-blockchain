@@ -63,7 +63,6 @@ pub enum Op {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpProof {
-    NoProof,
     Ed25519Sig(Ed25519Signature),
     ZkSig(ZkSignature),
     ZkAndEd25519Sigs {

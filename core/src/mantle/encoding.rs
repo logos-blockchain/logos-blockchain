@@ -154,7 +154,7 @@ fn decode_channel_set_keys(input: &[u8]) -> IResult<&[u8], SetKeysOp> {
 fn decode_channel_deposit(input: &[u8]) -> IResult<&[u8], DepositOp> {
     // ChannelDeposit = ChannelId Amount Metadata
     let (input, channel_id) = map(decode_hash32, ChannelId::from).parse(input)?;
-    let (input, amount) = decode_uint64(input)?;
+    let (input, inputs) = decode_inputs(input)?;
     let (input, metadata_len) = decode_uint32(input)?;
     let (input, metadata) =
         map(take(metadata_len as usize), |bytes: &[u8]| bytes.to_vec()).parse(input)?;
@@ -163,7 +163,7 @@ fn decode_channel_deposit(input: &[u8]) -> IResult<&[u8], DepositOp> {
         input,
         DepositOp {
             channel_id,
-            amount,
+            inputs,
             metadata,
         },
     ))
@@ -172,8 +172,16 @@ fn decode_channel_deposit(input: &[u8]) -> IResult<&[u8], DepositOp> {
 fn decode_channel_withdraw(input: &[u8]) -> IResult<&[u8], ChannelWithdrawOp> {
     // ChannelWithdraw = ChannelId Amount
     let (input, channel_id) = map(decode_hash32, ChannelId::from).parse(input)?;
-    let (input, amount) = decode_uint64(input)?;
-    Ok((input, ChannelWithdrawOp { channel_id, amount }))
+    let (input, outputs) = decode_outputs(input)?;
+    let (input, withdraw_nonce) = decode_uint32(input)?;
+    Ok((
+        input,
+        ChannelWithdrawOp {
+            channel_id,
+            outputs,
+            withdraw_nonce,
+        },
+    ))
 }
 
 // ==============================================================================
@@ -278,12 +286,14 @@ fn decode_leader_claim(input: &[u8]) -> IResult<&[u8], LeaderClaimOp> {
     // LeaderClaim = RewardsRoot VoucherNullifier
     let (input, rewards_root_fr) = decode_field_element(input)?;
     let (input, voucher_nullifier_fr) = decode_field_element(input)?;
+    let (input, pk) = decode_zk_public_key(input)?;
 
     Ok((
         input,
         LeaderClaimOp {
             rewards_root: RewardsRoot::from(rewards_root_fr),
             voucher_nullifier: VoucherNullifier::from(voucher_nullifier_fr),
+            pk,
         },
     ))
 }
@@ -360,7 +370,7 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
         }
 
         // ZkSigProof = ZkSignature
-        Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) => {
+        Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_) => {
             map(decode_zk_signature, OpProof::ZkSig).parse(input)
         }
 
@@ -377,9 +387,6 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
         Op::ChannelWithdraw(_) => {
             map(decode_channel_withdraw_proof, OpProof::ChannelWithdrawProof).parse(input)
         }
-
-        // None. It's indirectly signed through the Ledger Transaction signature.
-        Op::ChannelDeposit(_) => Ok((input, OpProof::NoProof)),
     }
 }
 
@@ -611,16 +618,18 @@ fn encode_channel_set_keys(op: &SetKeysOp) -> Vec<u8> {
 fn encode_channel_deposit(op: &DepositOp) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_hash32(op.channel_id.as_ref()));
-    bytes.extend(encode_uint64(op.amount));
+    bytes.extend(encode_inputs(op.inputs.as_ref()));
     bytes.extend(encode_uint32(op.metadata.len() as u32));
     bytes.extend(op.metadata.as_slice());
     bytes
 }
 
-fn encode_channel_withdraw(op: &ChannelWithdrawOp) -> Vec<u8> {
+#[must_use]
+pub fn encode_channel_withdraw(op: &ChannelWithdrawOp) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_hash32(op.channel_id.as_ref()));
-    bytes.extend(encode_uint64(op.amount));
+    bytes.extend(encode_outputs(op.outputs.as_ref()));
+    bytes.extend(encode_uint32(op.withdraw_nonce));
     bytes
 }
 
@@ -695,7 +704,8 @@ pub fn encode_sdp_active(op: &SDPActiveOp) -> Vec<u8> {
 }
 
 /// Encode leader operations
-fn encode_leader_claim(op: &LeaderClaimOp) -> Vec<u8> {
+#[must_use]
+pub fn encode_leader_claim(op: &LeaderClaimOp) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_field_element(&op.rewards_root.into()));
     bytes.extend(encode_field_element(&op.voucher_nullifier.into()));
@@ -814,7 +824,6 @@ fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
         (OpProof::Ed25519Sig(sig), Op::ChannelInscribe(_) | Op::ChannelSetKeys(_)) => {
             encode_ed25519_signature(sig)
         }
-        (OpProof::NoProof, Op::ChannelDeposit(_)) => Vec::new(),
         (OpProof::ChannelWithdrawProof(proof), Op::ChannelWithdraw(_)) => {
             encode_channel_withdraw_proof(proof)
         }
@@ -829,9 +838,10 @@ fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
             bytes.extend(encode_ed25519_signature(ed25519_sig));
             bytes
         }
-        (OpProof::ZkSig(sig), Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_)) => {
-            encode_zk_signature(sig)
-        }
+        (
+            OpProof::ZkSig(sig),
+            Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_),
+        ) => encode_zk_signature(sig),
         (OpProof::PoC(poc), Op::LeaderClaim(_)) => encode_poc(poc),
         _ => {
             panic!("Mismatch between proof type and operation type");
@@ -909,10 +919,7 @@ mod tests {
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::{
-        mantle::{Transaction as _, TxHash},
-        sdp::blend::ActivityProof,
-    };
+    use crate::{mantle::Transaction as _, sdp::blend::ActivityProof};
 
     fn dbg_test_vector(actual: &str, expected: &str) {
         println!("{:32} {:32}", "actual", "expected");
@@ -1321,7 +1328,7 @@ mod tests {
 
         let locked_note_sk = ZkKey::from(BigUint::from(1u64));
         let locked_note = crate::mantle::Utxo {
-            transfer_hash: TxHash::from(BigUint::from(42u64)),
+            op_id: [1u8; 32],
             output_index: 12,
             note: Note {
                 value: 500,
@@ -1622,6 +1629,7 @@ mod tests {
         let leader_claim_op = LeaderClaimOp {
             rewards_root: RewardsRoot::default(),
             voucher_nullifier: VoucherNullifier::default(),
+            pk: ZkPublicKey::from(BigUint::from(0u64)),
         };
 
         let mantle_tx = MantleTx {
@@ -1662,6 +1670,7 @@ mod tests {
         let leader_claim_op = LeaderClaimOp {
             rewards_root: RewardsRoot::default(),
             voucher_nullifier: voucher_nf,
+            pk: ZkPublicKey::from(BigUint::from(0u64)),
         };
         let op = Op::LeaderClaim(leader_claim_op);
 
@@ -1681,11 +1690,18 @@ mod tests {
 
     #[test]
     fn test_encode_decode_channel_withdraw_tx() {
+        let pk1 = ZkPublicKey::from(BigUint::from(100u64));
+        let pk2 = ZkPublicKey::from(BigUint::from(200u64));
+
+        let note1 = Note::new(1000, pk1);
+        let note2 = Note::new(2000, pk2);
+
         let signing_key = Ed25519Key::from_bytes(&[21u8; 32]);
         let mantle_tx = MantleTx {
             ops: vec![Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id: ChannelId::from([0xAB; 32]),
-                amount: 17,
+                outputs: vec![note1, note2],
+                withdraw_nonce: 0,
             })],
             execution_gas_price: 100.into(),
             storage_gas_price: 50.into(),

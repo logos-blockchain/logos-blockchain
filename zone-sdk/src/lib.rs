@@ -5,7 +5,7 @@ pub mod state;
 
 pub use lb_common_http_client::{CommonHttpClient, Slot};
 pub use lb_core::mantle::ops::channel::Ed25519PublicKey;
-use lb_core::mantle::{Value, ops::channel::MsgId};
+use lb_core::mantle::{NoteId, ops::channel::MsgId};
 
 /// A message from a zone channel, included/finalized in Bedrock
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,7 +29,7 @@ pub struct ZoneBlock {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Deposit {
     /// Amount of the deposit
-    pub amount: Value,
+    pub inputs: Vec<NoteId>,
     /// Opaque metadata associated with this deposit
     metadata: Vec<u8>,
 }

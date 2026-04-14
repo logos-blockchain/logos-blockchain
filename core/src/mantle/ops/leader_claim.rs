@@ -1,10 +1,14 @@
 use std::sync::LazyLock;
 
 use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::{Fr, ZkHash};
 use serde::{Deserialize, Serialize};
 
-use crate::crypto::ZkHasher;
+use crate::{
+    crypto::{Digest as _, Hash, Hasher, ZkHasher},
+    mantle::{Note, Utxo, Value, encoding::encode_leader_claim},
+};
 
 static REWARD_VOUCHER: LazyLock<Fr> = LazyLock::new(|| {
     fr_from_bytes(b"REWARD_VOUCHER").expect("BigUint should load from constant string")
@@ -30,6 +34,30 @@ pub struct VoucherCm(#[serde(with = "serde_fr")] ZkHash);
 pub struct LeaderClaimOp {
     pub rewards_root: RewardsRoot,
     pub voucher_nullifier: VoucherNullifier,
+    pub pk: ZkPublicKey,
+}
+
+impl LeaderClaimOp {
+    #[must_use]
+    pub fn id(&self) -> Hash {
+        let encoded_bytes = encode_leader_claim(self);
+        let mut hasher = Hasher::new();
+        hasher.update(b"OPERATION_ID_V1");
+        hasher.update(encoded_bytes);
+        hasher.finalize().into()
+    }
+
+    #[must_use]
+    pub fn utxo(&self, amount: Value) -> Utxo {
+        Utxo {
+            op_id: self.id(),
+            output_index: 0,
+            note: Note {
+                value: amount,
+                pk: self.pk,
+            },
+        }
+    }
 }
 
 impl From<Fr> for VoucherSecret {

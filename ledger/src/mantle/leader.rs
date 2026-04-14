@@ -193,6 +193,7 @@ impl LeaderState {
 #[cfg(test)]
 mod tests {
     use lb_groth16::{Field as _, Fr};
+    use lb_key_management_system_keys::keys::ZkPublicKey;
 
     use super::*;
 
@@ -222,6 +223,7 @@ mod tests {
         let op1 = LeaderClaimOp {
             rewards_root: state.claimable_vouchers_root,
             voucher_nullifier: Fr::ZERO.into(),
+            pk: ZkPublicKey::zero(),
         };
         let (state, bal) = state.claim(&op1).unwrap();
         assert_eq!(bal, 100);
@@ -229,6 +231,7 @@ mod tests {
         let op2 = LeaderClaimOp {
             rewards_root: state.claimable_vouchers_root,
             voucher_nullifier: Fr::ONE.into(),
+            pk: ZkPublicKey::zero(),
         };
         let (state, bal) = state.claim(&op2).unwrap();
         assert_eq!(bal, 100);
@@ -236,6 +239,7 @@ mod tests {
         let op3 = LeaderClaimOp {
             rewards_root: state.claimable_vouchers_root,
             voucher_nullifier: Fr::from(2u64).into(),
+            pk: ZkPublicKey::zero(),
         };
         let (state, bal) = state.claim(&op3).unwrap();
         assert_eq!(bal, 100);
@@ -285,6 +289,7 @@ mod tests {
         let op = LeaderClaimOp {
             voucher_nullifier: Fr::ZERO.into(),
             rewards_root: state.claimable_vouchers_root,
+            pk: ZkPublicKey::zero(),
         };
         let (state, balance) = state.claim(&op).unwrap();
         assert_eq!(balance, 0);
