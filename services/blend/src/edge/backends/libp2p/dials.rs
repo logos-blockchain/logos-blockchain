@@ -13,8 +13,7 @@ use tracing::debug;
 
 use crate::edge::backends::libp2p::LOG_TARGET;
 
-pub type PendingRetries =
-    FuturesUnordered<Pin<Box<dyn Future<Output = (PeerId, DialAttempt)> + Send>>>;
+type PendingRetries = FuturesUnordered<Pin<Box<dyn Future<Output = (PeerId, DialAttempt)> + Send>>>;
 
 pub struct PendingDials {
     active: HashMap<(PeerId, ConnectionId), DialAttempt>,
@@ -63,20 +62,19 @@ impl PendingDials {
         peer_id: PeerId,
         connection_id: ConnectionId,
     ) -> Option<DialAttempt> {
-        let dial_attempt = self.active.remove(&(peer_id, connection_id)).unwrap();
-        let new_dial_attempt_number = dial_attempt.attempt_number.checked_add(1).unwrap();
+        let last_dial_attempt = self.active.remove(&(peer_id, connection_id)).unwrap();
+        let new_dial_attempt_number = last_dial_attempt.attempt_number.checked_add(1).unwrap();
         if new_dial_attempt_number > self.max_attempts {
-            return Some(dial_attempt);
+            return Some(last_dial_attempt);
         }
         let delay = Duration::from_secs(1 << (new_dial_attempt_number.get() - 1));
         debug!(
             target: LOG_TARGET,
-            "Scheduling retry {new_dial_attempt_number} for peer {peer_id:?} in {delay:?}"
+            "Scheduling retry {new_dial_attempt_number} for peer {peer_id:?} in {:?} seconds", delay.as_secs()
         );
         let new_dial_attempt = DialAttempt {
-            address: dial_attempt.address,
             attempt_number: new_dial_attempt_number,
-            message: dial_attempt.message,
+            ..last_dial_attempt
         };
         self.retries.push(Box::pin(async move {
             tokio::time::sleep(delay).await;
@@ -126,7 +124,7 @@ impl DialAttempt {
         }
     }
 
-    pub fn into_components(
+    pub(super) fn into_components(
         self,
     ) -> (
         Multiaddr,

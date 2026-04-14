@@ -177,24 +177,6 @@ where
         self.pending_dials.schedule_retry(peer_id, connection_id)
     }
 
-    fn execute_retry(&mut self, (peer_id, dial_attempt): (PeerId, DialAttempt)) {
-        let opts = dial_opts(peer_id, dial_attempt.address().clone());
-        let connection_id = opts.connection_id();
-
-        self.pending_dials
-            .insert((peer_id, connection_id), dial_attempt);
-
-        if let Err(e) = self.swarm.dial(opts) {
-            error!(target: LOG_TARGET, "Failed to redial peer {peer_id:?}: {e:?}");
-            if let Some((_, _, message)) = self
-                .retry_dial(peer_id, connection_id)
-                .map(DialAttempt::into_components)
-            {
-                self.dial_and_schedule_message_except(&message, Some(peer_id));
-            }
-        }
-    }
-
     fn choose_peers_except(&mut self, except: Option<PeerId>) -> Vec<Node<PeerId>> {
         let peers_to_choose = self.membership.size().min(self.replication_factor.get());
         self.membership
@@ -386,6 +368,24 @@ where
             Some(retry) = self.pending_dials.next() => {
                 self.execute_retry(retry);
                 false
+            }
+        }
+    }
+
+    fn execute_retry(&mut self, (peer_id, dial_attempt): (PeerId, DialAttempt)) {
+        let opts = dial_opts(peer_id, dial_attempt.address().clone());
+        let connection_id = opts.connection_id();
+
+        self.pending_dials
+            .insert((peer_id, connection_id), dial_attempt);
+
+        if let Err(e) = self.swarm.dial(opts) {
+            error!(target: LOG_TARGET, "Failed to redial peer {peer_id:?}: {e:?}");
+            if let Some((_, _, message)) = self
+                .retry_dial(peer_id, connection_id)
+                .map(DialAttempt::into_components)
+            {
+                self.dial_and_schedule_message_except(&message, Some(peer_id));
             }
         }
     }
