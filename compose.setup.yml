@@ -92,8 +92,8 @@ services:
       - node-data:/node-data
       - ./testnet/nginx/setup.conf:/etc/nginx/nginx.conf
       - ./testnet/nginx/static/setup:/usr/share/nginx/html
-      - ./testnet/scripts/run_nginx.sh:/etc/run_nginx.sh
-    entrypoint: [ "nginx", "-g", "daemon off;" ]
+      - ./testnet/scripts/setup_nginx.sh:/etc/setup_nginx.sh
+    entrypoint: /etc/setup_nginx.sh
 
 volumes:
   node-data:

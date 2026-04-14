@@ -138,8 +138,8 @@ services:
       - node-data:/node-data
       - ./testnet/nginx/run.conf:/etc/nginx/nginx.conf
       - ./testnet/nginx/static/run:/usr/share/nginx/html
-      - ./testnet/scripts/setup_nginx.sh:/etc/setup_nginx.sh
-    entrypoint: /etc/setup_nginx.sh
+      - ./testnet/scripts/run_nginx.sh:/etc/run_nginx.sh
+    entrypoint: /etc/run_nginx.sh
 
   # L2 Sequencer Demo Services
   l2-sequencer:
