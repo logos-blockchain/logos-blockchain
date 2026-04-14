@@ -193,6 +193,7 @@ loop {
                 Event::ChannelUpdate { invalidated, adopted, new_channel_tip } => {
                     // Handle conflicts inline — no separate task needed
                     for inv in &invalidated {
+                        // currently we spawn a task here, because publish is sync, but there is todo to fix this, which will be addressed in the PR
                         handle.publish(inv.payload.clone()).await.ok();
                     }
                 }
