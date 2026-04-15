@@ -266,10 +266,12 @@ async fn test_sequencer_checkpoint_resume() {
 
     // Checkpoint arrives via Published event
     let mut checkpoint = None;
+    let mut published_count = 0;
     while let Ok(event) = events.recv().await {
         if let Event::Published { checkpoint: cp, .. } = event {
             checkpoint = Some(cp);
-            if checkpoint.is_some() {
+            published_count += 1;
+            if published_count >= test_data_phase1.len() {
                 break;
             }
         }
@@ -1247,10 +1249,14 @@ async fn test_sequencer_stale_checkpoint_resume() {
 
     // Checkpoint arrives via Published event
     let mut stale_checkpoint = None;
+    let mut published_count = 0;
     while let Ok(event) = events.recv().await {
         if let Event::Published { checkpoint, .. } = event {
             stale_checkpoint = Some(checkpoint);
-            break;
+            published_count += 1;
+            if published_count >= data_phase1.len() {
+                break;
+            }
         }
     }
     let stale_checkpoint = stale_checkpoint.expect("should receive Published event");
