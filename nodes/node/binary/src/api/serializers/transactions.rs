@@ -19,16 +19,25 @@ pub struct ApiSignedTransactionSerializer {
     ops_proofs: Vec<OpProof>,
 }
 
-#[derive(serde::Serialize)]
-struct SignedApiTransaction<'a>(
+#[derive(Serialize)]
+struct ApiSignedTransactionRef<'a>(
     #[serde(with = "ApiSignedTransactionSerializer")] &'a SignedMantleTx,
 );
+
+#[derive(Serialize)]
+pub struct ApiSignedTransaction(#[serde(with = "ApiSignedTransactionSerializer")] SignedMantleTx);
+
+impl From<SignedMantleTx> for ApiSignedTransaction {
+    fn from(value: SignedMantleTx) -> Self {
+        Self(value)
+    }
+}
 
 pub mod signed_api_transaction_vec {
     use lb_core::mantle::SignedMantleTx;
     use serde::ser::SerializeSeq as _;
 
-    use crate::api::serializers::transactions::SignedApiTransaction;
+    use crate::api::serializers::transactions::ApiSignedTransactionRef;
 
     pub fn serialize<Serializer>(
         value: &Vec<SignedMantleTx>,
@@ -39,7 +48,7 @@ pub mod signed_api_transaction_vec {
     {
         let mut sequence = serializer.serialize_seq(Some(value.len()))?;
         for transaction in value {
-            let signed_api_transaction = SignedApiTransaction(transaction);
+            let signed_api_transaction = ApiSignedTransactionRef(transaction);
             sequence.serialize_element(&signed_api_transaction)?;
         }
         sequence.end()

@@ -18,6 +18,8 @@ pub const BLOCKS: &str = "/cryptarchia/blocks";
 pub const BLOCK: &str = "/cryptarchia/block/:id";
 pub const BLOCKS_STREAM: &str = "/cryptarchia/events/blocks/stream";
 
+pub const TRANSACTION: &str = "/cryptarchia/transaction/:id";
+
 pub mod wallet {
     pub const BALANCE: &str = "/wallet/:public_key/balance";
     pub const TRANSACTIONS_TRANSFER_FUNDS: &str = "/wallet/transactions/transfer-funds";

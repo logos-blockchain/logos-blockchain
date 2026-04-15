@@ -20,7 +20,7 @@ use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Transaction, gas::MainnetGasConstants, ops::channel::ChannelId,
+        Op, SignedMantleTx, Transaction, TxHash, gas::MainnetGasConstants, ops::channel::ChannelId,
         tx_builder::MantleTxBuilder,
     },
 };
@@ -56,7 +56,10 @@ use crate::api::{
     openapi::schema,
     queries::BlockRangeQuery,
     responses::{self, overwatch::get_relay_or_500},
-    serializers::blocks::{ApiBlock, ApiProcessedBlockEvent},
+    serializers::{
+        blocks::{ApiBlock, ApiProcessedBlockEvent},
+        transactions::ApiSignedTransaction,
+    },
 };
 
 #[macro_export]
@@ -712,6 +715,39 @@ where
     match stream {
         Ok(stream) => responses::ndjson::from_stream(stream),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = paths::TRANSACTION,
+    responses(
+        (status = 200, description = "Transaction found"),
+        (status = 404, description = "Transaction not found"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn transaction<HttpStorageAdapter, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(id): Path<TxHash>,
+) -> Response
+where
+    HttpStorageAdapter: StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
+    RuntimeServiceId:
+        AsServiceId<StorageService<RocksBackend, RuntimeServiceId>> + Debug + Sync + Display,
+{
+    let relay = match get_relay_or_500(&handle).await {
+        Ok(relay) => relay,
+        Err(error_response) => return error_response,
+    };
+    let transaction = HttpStorageAdapter::get_transaction::<SignedMantleTx>(relay, id).await;
+    match transaction {
+        Ok(Some(transaction)) => {
+            let api_transaction = ApiSignedTransaction::from(transaction);
+            (StatusCode::OK, Json(api_transaction)).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND,).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response(),
     }
 }
 

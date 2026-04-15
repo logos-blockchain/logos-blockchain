@@ -41,7 +41,8 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use super::handlers::{
     add_tx, block, blocks, blocks_stream, cryptarchia_headers, cryptarchia_info,
-    cryptarchia_lib_stream, libp2p_info, mantle_metrics, mantle_status, storage_block, wallet,
+    cryptarchia_lib_stream, libp2p_info, mantle_metrics, mantle_status, storage_block, transaction,
+    wallet,
 };
 use crate::{
     WalletService,
@@ -296,6 +297,10 @@ where
             .route(
                 paths::BLOCK,
                 routing::get(block::<StorageAdapter, RuntimeServiceId>),
+            )
+            .route(
+                paths::TRANSACTION,
+                routing::get(transaction::<StorageAdapter, RuntimeServiceId>),
             );
 
         let app = app
