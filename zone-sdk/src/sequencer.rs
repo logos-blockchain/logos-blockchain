@@ -938,14 +938,15 @@ where
     // Backfill if needed (self-healing on every event)
     // 1. Backfill finalized blocks up to LIB (only when state's LIB is behind)
     let mut lib_finalized = Vec::new();
+    let mut lib_inscriptions = Vec::new();
     if lib != s.lib() {
         let new_lib_slot = event.lib_slot;
         let from: u64 = (*lib_slot).into();
         let to: u64 = new_lib_slot.into();
         if from < to {
-            lib_finalized = fetch_and_process_blocks(s, from + 1, to, channel_id, node)
-                .await
-                .our_tx_hashes;
+            let batch = fetch_and_process_blocks(s, from + 1, to, channel_id, node).await;
+            lib_finalized = batch.our_tx_hashes;
+            lib_inscriptions = batch.inscriptions;
         }
         *lib_slot = new_lib_slot;
     }
@@ -968,31 +969,25 @@ where
 
     // Process the actual event block
     s.process_block(block_id, parent_id, lib, our_txs, inscriptions);
-    let mut finalized_tx_hashes = Vec::new();
-    let mut finalized_inscriptions = Vec::new();
 
-    // Finalize txs found in backfilled LIB blocks — this is ground truth
-    // from the node. LIB blocks are truly final (can't be reorged), so
-    // txs found there are definitively on the canonical chain. Our safe
-    // set may miss them due to gaps or reorgs in the block event stream.
+    // Remove our pending txs that were finalized in backfilled LIB blocks.
+    let mut finalized_tx_hashes = Vec::new();
     for tx_hash in &lib_finalized {
-        if let Some(tx) = s.remove_pending(tx_hash) {
+        if s.remove_pending(tx_hash).is_some() {
             finalized_tx_hashes.push(*tx_hash);
-            for op in &tx.mantle_tx.ops {
-                if let Op::ChannelInscribe(inscribe) = op {
-                    debug!(
-                        " Backfill-finalized: payload={:?}, tx={tx_hash:?}",
-                        String::from_utf8_lossy(&inscribe.inscription)
-                    );
-                    finalized_inscriptions.push(InscriptionInfo {
-                        tx_hash: *tx_hash,
-                        parent_msg: inscribe.parent,
-                        this_msg: inscribe.id(),
-                        payload: inscribe.inscription.clone(),
-                    });
-                }
-            }
         }
+    }
+
+    // All channel inscriptions from backfilled LIB blocks — includes both
+    // our own and other sequencers' inscriptions. Consumers need the full
+    // picture to update their local state correctly.
+    let finalized_inscriptions = lib_inscriptions;
+    for info in &finalized_inscriptions {
+        debug!(
+            " Backfill-finalized: payload={:?}, tx={:?}",
+            String::from_utf8_lossy(&info.payload),
+            info.tx_hash
+        );
     }
     *current_tip = Some(tip);
 
