@@ -104,6 +104,8 @@ pub enum Event {
     /// Batch of finalized inscriptions discovered during backfill catch-up.
     /// Emitted incrementally when the sequencer catches up from a checkpoint.
     FinalizedInscriptions { inscriptions: Vec<InscriptionInfo> },
+    /// Sequencer is connected, backfill complete, ready to accept publishes.
+    Ready,
     /// An inscription was created and submitted to the network.
     Published {
         inscription_id: InscriptionId,
@@ -573,6 +575,7 @@ where
                         && self.backfill_to.is_none()
                     {
                         let _ = self.ready_tx.send(true);
+                        drop(self.event_tx.send(Event::Ready));
                     }
 
                     self.apply_block_result(result)
