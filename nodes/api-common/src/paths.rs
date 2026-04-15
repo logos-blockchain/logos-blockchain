@@ -15,6 +15,7 @@ pub const SDP_POST_WITHDRAWAL: &str = "/sdp/withdrawal";
 pub const LEADER_CLAIM: &str = "/leader/claim";
 
 pub const BLOCKS: &str = "/cryptarchia/blocks";
+pub const BLOCK: &str = "/cryptarchia/block/:id";
 pub const BLOCKS_STREAM: &str = "/cryptarchia/events/blocks/stream";
 
 pub mod wallet {
