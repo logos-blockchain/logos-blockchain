@@ -727,7 +727,11 @@ where
         //     .apply_block_and_reconcile_mempool(block.clone())
         //     .await
         // {
-        //     error!(target: LOG_TARGET, "Failed to apply our own proposed block {:?}: {e:?}", block.header().id());
+        //     error!(
+        //         target: LOG_TARGET,
+        //         "Failed to apply our own proposed block {:?}: {e:?}",
+        //         block.header().id(),
+        //     );
         //     return;
         // }
 
