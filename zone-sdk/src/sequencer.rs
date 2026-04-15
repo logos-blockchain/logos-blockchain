@@ -780,11 +780,12 @@ where
             adopted: u.adopted,
             new_channel_tip: u.new_channel_tip,
         });
-        let finalized_event =
-            (!result.finalized_tx_hashes.is_empty()).then_some(Event::TxsFinalized {
-                tx_hashes: result.finalized_tx_hashes,
-                inscriptions: result.finalized_inscriptions,
-            });
+        let finalized_event = (!result.finalized_tx_hashes.is_empty()
+            || !result.finalized_inscriptions.is_empty())
+        .then_some(Event::TxsFinalized {
+            tx_hashes: result.finalized_tx_hashes,
+            inscriptions: result.finalized_inscriptions,
+        });
 
         // Emit one event now, buffer the other if both exist
         match (channel_event, finalized_event) {

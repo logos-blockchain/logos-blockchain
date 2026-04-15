@@ -14,7 +14,7 @@ use lb_zone_sdk::{
 };
 use reqwest::Url;
 use tokio::sync::mpsc;
-use tracing::{debug, error};
+use tracing::error;
 
 use crate::{
     message::AppMessage,
@@ -67,7 +67,6 @@ pub async fn run(args: InscribeArgs) {
         tokio::select! {
             event = sequencer.next_event() => {
                 let Some(event) = event else {
-                    debug!("next_event returned None, retrying...");
                     continue;
                 };
 
@@ -116,7 +115,11 @@ pub async fn run(args: InscribeArgs) {
                     Event::Published { checkpoint, .. } => {
                         state.save_checkpoint(checkpoint);
                     }
-                    Event::FinalizedInscriptions { .. } => {}
+                    Event::FinalizedInscriptions { inscriptions } => {
+                        let payloads: Vec<Vec<u8>> =
+                            inscriptions.iter().map(|i| i.payload.clone()).collect();
+                        state.finalize(&payloads);
+                    }
                 }
             }
 
@@ -127,11 +130,11 @@ pub async fn run(args: InscribeArgs) {
                 };
 
                 let msg = AppMessage::new(text);
-                debug!("publishing \"{}\" id={}", msg.text, msg.tx_id);
                 if let Err(e) = handle.publish_message(msg.to_bytes()).await {
                     error!("failed to publish: {e}");
                     break;
                 }
+                eprintln!("  \x1b[90mpending...\x1b[0m");
                 ui::prompt();
             }
 
