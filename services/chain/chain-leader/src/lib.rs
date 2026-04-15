@@ -22,7 +22,7 @@ use lb_core::{
     codec::SerializeOp as _,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, SignedMantleTx, StorageSize, Transaction, TxHash, TxSelect,
+        AuthenticatedMantleTx, SignedMantleTx, StorageSize as _, Transaction, TxHash, TxSelect,
         gas::MainnetGasConstants, ops::leader_claim::LeaderClaimOp,
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
@@ -67,35 +67,6 @@ pub(crate) type WinningPolInfo = (LeaderPrivate, LeaderPublic, Epoch);
 const SERVICE_ID: &str = "ChainLeader";
 
 pub(crate) const LOG_TARGET: &str = "chain_leader::service";
-
-fn build_block_with_tail_trim<Tx>(
-    parent: HeaderId,
-    slot: Slot,
-    proof: Groth16LeaderProof,
-    mut txs: Vec<Tx>,
-    signing_key: &Ed25519Key,
-) -> Result<Block<Tx>, BlockError>
-where
-    Tx: Transaction<Hash = TxHash> + StorageSize,
-{
-    let mut total_size: usize = txs.iter().map(StorageSize::storage_size).sum();
-
-    while total_size > MAX_BLOCK_SIZE && !txs.is_empty() {
-        debug!(
-            target: LOG_TARGET,
-            total_size,
-            max = MAX_BLOCK_SIZE,
-            tx_count = txs.len(),
-            "selected transactions exceeded block size, trimming tail"
-        );
-        let removed_tx = txs
-            .pop()
-            .expect("txs is not empty while trimming oversized block");
-        total_size -= removed_tx.storage_size();
-    }
-
-    Block::create(parent, slot, proof, txs, signing_key)
-}
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -734,7 +705,7 @@ where
             .collect()
             .await;
 
-        let block = build_block_with_tail_trim(parent, slot, proof, txs, signing_key)?;
+        let block = Block::create(parent, slot, proof, txs, signing_key)?;
 
         info!(
             "proposed block with id {:?} containing {} transactions ({} removed)",
@@ -874,7 +845,7 @@ mod tests {
     use std::num::NonZero;
 
     use lb_core::mantle::{
-        TransactionHasher,
+        StorageSize, TransactionHasher,
         ledger::{Note, Utxo},
         ops::leader_claim::VoucherCm,
     };
@@ -981,7 +952,7 @@ mod tests {
             TestTx { id: 3, size: 32 },
         ];
 
-        let block = build_block_with_tail_trim(parent, slot, proof, txs, &signing_key).unwrap();
+        let block = Block::create(parent, slot, proof, txs, &signing_key).unwrap();
 
         assert_eq!(
             block.transactions().copied().collect::<Vec<_>>(),

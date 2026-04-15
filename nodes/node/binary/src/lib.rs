@@ -61,8 +61,6 @@ use crate::{
     panic::log_and_exit_hook,
 };
 
-pub const MB16: usize = 1024 * 1024 * 16;
-
 #[cfg(feature = "tracing")]
 pub(crate) type TracingService = Tracing<RuntimeServiceId>;
 
