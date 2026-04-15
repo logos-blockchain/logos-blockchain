@@ -14,11 +14,11 @@ use lb_zone_sdk::{
 };
 use reqwest::Url;
 use tokio::sync::mpsc;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 use crate::{
     message::AppMessage,
-    state::{InMemoryZoneState, ZoneState, resolve_conflicts},
+    state::{InMemoryZoneState, ZoneState as _, resolve_conflicts},
 };
 
 #[derive(Parser, Debug)]
@@ -67,8 +67,8 @@ pub async fn run(args: InscribeArgs) {
         tokio::select! {
             event = sequencer.next_event() => {
                 let Some(event) = event else {
-                    warn!("sequencer disconnected");
-                    break;
+                    debug!("next_event returned None, retrying...");
+                    continue;
                 };
 
                 match event {
@@ -81,7 +81,7 @@ pub async fn run(args: InscribeArgs) {
                         println!("Type a message and press Enter to publish.");
                         println!("Press Ctrl-D or type an empty line to exit.");
                         println!();
-                        ui::print_header(&state);
+                        ui::render_state(&state);
                         ui::prompt();
                     }
                     Event::ChannelUpdate {
@@ -103,27 +103,20 @@ pub async fn run(args: InscribeArgs) {
                             }
                         }
 
-                        ui::render_canonical(&state);
+                        ui::render_state(&state);
                         ui::prompt();
                     }
-                    Event::TxsFinalized { .. } => {}
+                    Event::TxsFinalized { inscriptions, .. } => {
+                        let payloads: Vec<Vec<u8>> =
+                            inscriptions.iter().map(|i| i.payload.clone()).collect();
+                        state.finalize(&payloads);
+                        ui::render_state(&state);
+                        ui::prompt();
+                    }
                     Event::Published { checkpoint, .. } => {
                         state.save_checkpoint(checkpoint);
                     }
-                    Event::FinalizedInscriptions { inscriptions } => {
-                        let payloads: Vec<Vec<u8>> =
-                            inscriptions.iter().map(|i| i.payload.clone()).collect();
-
-                        for payload in &payloads {
-                            if let Some(msg) = AppMessage::from_bytes(payload) {
-                                ui::print_finalized(&msg.text);
-                            }
-                        }
-
-                        state.finalize(&payloads);
-                        ui::render_canonical(&state);
-                        ui::prompt();
-                    }
+                    Event::FinalizedInscriptions { .. } => {}
                 }
             }
 
@@ -139,9 +132,12 @@ pub async fn run(args: InscribeArgs) {
                     error!("failed to publish: {e}");
                     break;
                 }
-                state.apply(msg);
-                ui::render_canonical(&state);
                 ui::prompt();
+            }
+
+            _ = tokio::signal::ctrl_c() => {
+                println!();
+                break;
             }
         }
     }
@@ -182,14 +178,13 @@ fn spawn_stdin_reader(ready: tokio::sync::oneshot::Receiver<()>) -> mpsc::Receiv
         loop {
             line.clear();
             match stdin.read_line(&mut line) {
-                Ok(0) => break,
+                Ok(0) | Err(_) => break,
                 Ok(_) => {
-                    let text = line.trim_end().to_string();
+                    let text = line.trim_end().to_owned();
                     if text.is_empty() || tx.blocking_send(text).is_err() {
                         break;
                     }
                 }
-                Err(_) => break,
             }
         }
     });

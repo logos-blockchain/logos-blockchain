@@ -17,7 +17,7 @@ pub trait ZoneState {
     /// Revert a message from canonical state (orphaned by reorg).
     fn revert(&mut self, tx_id: &Uuid);
 
-    /// Check if a message with this tx_id exists in canonical or finalized
+    /// Check if a message with this `tx_id` exists in canonical or finalized
     /// state.
     fn contains(&self, tx_id: &Uuid) -> bool;
 
@@ -26,6 +26,9 @@ pub trait ZoneState {
 
     /// Current canonical (unfinalized) messages.
     fn canonical(&self) -> &[AppMessage];
+
+    /// Finalized messages (below LIB, immutable).
+    fn finalized(&self) -> &[AppMessage];
 
     /// Save a sequencer checkpoint.
     fn save_checkpoint(&mut self, checkpoint: SequencerCheckpoint);
@@ -73,6 +76,10 @@ impl ZoneState for InMemoryZoneState {
         &self.canonical
     }
 
+    fn finalized(&self) -> &[AppMessage] {
+        &self.finalized
+    }
+
     fn save_checkpoint(&mut self, checkpoint: SequencerCheckpoint) {
         self.checkpoint = Some(checkpoint);
     }
@@ -88,7 +95,7 @@ impl ZoneState for InMemoryZoneState {
 /// This is the core of conflict resolution:
 /// 1. Revert all invalidated inscriptions from our state
 /// 2. Apply all adopted inscriptions to our state
-/// 3. For each invalidated message whose tx_id is NOT in our state after the
+/// 3. For each invalidated message whose `tx_id` is NOT in our state after the
 ///    update — it was truly lost and needs re-publishing
 ///
 /// A real sequencer might add additional checks here (e.g., skip re-publishing
@@ -115,10 +122,10 @@ pub fn resolve_conflicts(
     // Step 3: collect messages that need re-publishing
     let mut to_republish = Vec::new();
     for inv in invalidated {
-        if let Some(msg) = AppMessage::from_bytes(&inv.payload) {
-            if !state.contains(&msg.tx_id) {
-                to_republish.push(msg);
-            }
+        if let Some(msg) = AppMessage::from_bytes(&inv.payload)
+            && !state.contains(&msg.tx_id)
+        {
+            to_republish.push(msg);
         }
     }
     to_republish

@@ -575,15 +575,31 @@ where
 
                     // Signal readiness after first block event when no
                     // pending startup backfill remains.
+                    let mut became_ready = false;
                     if !self.is_ready()
                         && self.backfill_from.is_none()
                         && self.backfill_to.is_none()
                     {
+                        debug!("Sequencer ready (backfill complete, first block processed)");
                         let _ = self.ready_tx.send(true);
                         drop(self.event_tx.send(Event::Ready));
+                        became_ready = true;
+                    } else if !self.is_ready() {
+                        debug!(
+                            "Not yet ready: backfill_from={:?}, backfill_to={:?}",
+                            self.backfill_from, self.backfill_to
+                        );
                     }
 
-                    self.apply_block_result(result)
+                    let block_event = self.apply_block_result(result);
+                    if became_ready {
+                        if let Some(event) = block_event {
+                            self.buffered_event = Some(event);
+                        }
+                        Some(Event::Ready)
+                    } else {
+                        block_event
+                    }
                 } else {
                     warn!("Blocks stream disconnected, will reconnect on next call");
                     self.blocks_stream = None;
@@ -667,6 +683,8 @@ where
             return true;
         }
 
+        debug!("ensure_connected: connecting...");
+
         // Initialize state from consensus info if needed
         if self.state.is_none() {
             match self.node.consensus_info().await {
@@ -686,8 +704,10 @@ where
             }
         }
 
+        debug!("ensure_connected: opening blocks stream...");
         match self.node.block_stream().await {
             Ok(stream) => {
+                debug!("ensure_connected: blocks stream connected");
                 self.blocks_stream = Some(Box::pin(stream));
             }
             Err(e) => {

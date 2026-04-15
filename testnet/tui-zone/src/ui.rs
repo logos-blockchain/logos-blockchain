@@ -1,51 +1,49 @@
-use std::io::Write as _;
+use std::{
+    io::Write as _,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use crate::state::ZoneState;
 
-/// Number of fixed lines the UI uses above the prompt:
-/// 1 for "Canonical: [...]"
-/// 1 for blank separator
-const CANONICAL_LINES: usize = 2;
+/// Tracks how many lines the last render used, so we can clear and redraw.
+static LAST_RENDER_LINES: AtomicUsize = AtomicUsize::new(0);
 
-/// Clear N lines above the cursor and move back up.
-fn clear_lines_above(n: usize) {
-    for _ in 0..n {
-        // Move up one line, clear it
+/// Clear the previous render and redraw canonical + finalized state.
+pub fn render_state(state: &dyn ZoneState) {
+    let lines = LAST_RENDER_LINES.load(Ordering::Relaxed);
+    for _ in 0..lines {
         eprint!("\x1b[1A\x1b[2K");
     }
-}
 
-/// Render the canonical line and prompt. Overwrites previous canonical display.
-pub fn render_canonical(state: &dyn ZoneState) {
-    clear_lines_above(CANONICAL_LINES);
+    let canonical: Vec<&str> = state.canonical().iter().map(|m| m.text.as_str()).collect();
+    let finalized = state.finalized();
 
-    let texts: Vec<&str> = state.canonical().iter().map(|m| m.text.as_str()).collect();
-    if texts.is_empty() {
+    let mut count = 0;
+
+    if canonical.is_empty() {
         eprintln!("  Canonical: (empty)");
     } else {
-        eprintln!("  Canonical: [{}]", texts.join(", "));
+        eprintln!("  Canonical: [{}]", canonical.join(", "));
     }
-    eprintln!(); // separator
-}
+    count += 1;
 
-/// Print a newly finalized message (appends, never overwrites).
-pub fn print_finalized(text: &str) {
-    eprintln!("  \x1b[32m+finalized\x1b[0m {text}");
-}
-
-/// Print the initial UI header.
-pub fn print_header(state: &dyn ZoneState) {
-    let texts: Vec<&str> = state.canonical().iter().map(|m| m.text.as_str()).collect();
-    if texts.is_empty() {
-        eprintln!("  Canonical: (empty)");
-    } else {
-        eprintln!("  Canonical: [{}]", texts.join(", "));
+    if !finalized.is_empty() {
+        eprintln!("  Finalized:");
+        count += 1;
+        for msg in finalized {
+            eprintln!("    {}", msg.text);
+            count += 1;
+        }
     }
-    eprintln!(); // separator before prompt
+
+    eprintln!();
+    count += 1;
+
+    LAST_RENDER_LINES.store(count, Ordering::Relaxed);
 }
 
 /// Print the prompt character.
 pub fn prompt() {
     eprint!("> ");
-    std::io::stderr().flush().ok();
+    std::io::stderr().flush().expect("flush stderr");
 }
