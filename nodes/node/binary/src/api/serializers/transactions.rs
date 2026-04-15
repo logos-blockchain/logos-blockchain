@@ -20,15 +20,12 @@ pub struct ApiSignedTransactionSerializer {
 }
 
 #[derive(Serialize)]
-struct ApiSignedTransactionRef<'a>(
+pub struct ApiSignedTransactionRef<'a>(
     #[serde(with = "ApiSignedTransactionSerializer")] &'a SignedMantleTx,
 );
 
-#[derive(Serialize)]
-pub struct ApiSignedTransaction(#[serde(with = "ApiSignedTransactionSerializer")] SignedMantleTx);
-
-impl From<SignedMantleTx> for ApiSignedTransaction {
-    fn from(value: SignedMantleTx) -> Self {
+impl<'a> From<&'a SignedMantleTx> for ApiSignedTransactionRef<'a> {
+    fn from(value: &'a SignedMantleTx) -> Self {
         Self(value)
     }
 }

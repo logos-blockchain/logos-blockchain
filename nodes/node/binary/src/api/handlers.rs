@@ -58,7 +58,7 @@ use crate::api::{
     responses::{self, overwatch::get_relay_or_500},
     serializers::{
         blocks::{ApiBlock, ApiProcessedBlockEvent},
-        transactions::ApiSignedTransaction,
+        transactions::ApiSignedTransactionRef,
     },
 };
 
@@ -740,14 +740,23 @@ where
         Ok(relay) => relay,
         Err(error_response) => return error_response,
     };
-    let transaction = HttpStorageAdapter::get_transaction::<SignedMantleTx>(relay, id).await;
-    match transaction {
-        Ok(Some(transaction)) => {
-            let api_transaction = ApiSignedTransaction::from(transaction);
+    let Ok(transactions) = HttpStorageAdapter::get_transactions::<SignedMantleTx>(relay, id).await
+    else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response();
+    };
+    match transactions.as_slice() {
+        [] => (StatusCode::NOT_FOUND,).into_response(),
+        [transaction] => {
+            let api_transaction = ApiSignedTransactionRef::from(transaction);
             (StatusCode::OK, Json(api_transaction)).into_response()
         }
-        Ok(None) => (StatusCode::NOT_FOUND,).into_response(),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response(),
+        _ => {
+            let error_body = serde_json::json!({
+                "error": "Multiple transactions found",
+                "len": transactions.len()
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_body)).into_response()
+        }
     }
 }
 
