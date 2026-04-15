@@ -71,7 +71,7 @@ fn bench_mmr_epoch(bencher: Bencher, initial_size: u64) {
     let mut paths: Vec<lb_mmr::MerklePath> = Vec::new();
 
     for i in 0..initial_size {
-        let (new_mmr, new_path) = mmr.push_with_paths(voucher(i), paths.iter_mut()).unwrap();
+        let (new_mmr, new_path) = mmr.push_with_paths(voucher(i), &mut paths).unwrap();
         if i % NUM_NODES == 0 {
             paths.push(new_path);
         }
@@ -84,7 +84,7 @@ fn bench_mmr_epoch(bencher: Bencher, initial_size: u64) {
 
         for i in 0..BLOCKS_PER_EPOCH {
             let (new_mmr, new_path) = mmr
-                .push_with_paths(voucher(initial_size + i), paths.iter_mut())
+                .push_with_paths(voucher(initial_size + i), &mut paths)
                 .unwrap();
             mmr = new_mmr;
             if i % NUM_NODES == 0 {
