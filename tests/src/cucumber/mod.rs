@@ -1,5 +1,6 @@
 pub mod defaults;
 pub mod error;
+pub mod fee_reserve;
 pub mod steps;
 pub mod utils;
 pub mod world;

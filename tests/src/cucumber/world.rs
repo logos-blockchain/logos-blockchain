@@ -36,6 +36,7 @@ use crate::{
             set_default_env,
         },
         error::{StepError, StepResult},
+        fee_reserve::ScenarioFeeState,
         utils::{make_builder, shared_host_bin_path},
     },
     non_zero,
@@ -72,6 +73,13 @@ pub enum NetworkKind {
 #[derive(Debug, Default, Clone)]
 pub struct RunState {
     pub result: Option<Result<(), String>>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct WalletRuntimeState {
+    pub encumbered_tokens: Vec<Utxo>,
+    pub submitted_tx_hashes: Vec<TxHash>,
+    pub tracked_spent_fees: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -166,12 +174,13 @@ pub struct CucumberWorld {
     /// Manual: Mapping of wallet account indices to their corresponding wallet
     /// account in the cluster.
     pub wallet_accounts: HashMap<usize, WalletAccount>,
+    /// Manual: Scenario-level fee sponsor configuration and accounting.
+    pub fee_state: ScenarioFeeState,
     /// Manual: Mapping of logical wallet names to a mapping of chain height to
     /// the
     pub wallet_tokens_per_block: HashMap<String, WalletTokenMap>,
-    /// Manual: Mapping of logical wallet names to the UTXOs that are currently
-    /// encumbered (i.e. spent but not yet finalized) for that wallet.
-    pub wallet_encumbered_tokens: HashMap<String, Vec<Utxo>>,
+    /// Manual: Mutable runtime state scoped to each logical wallet.
+    pub wallet_runtime_state: HashMap<String, WalletRuntimeState>,
     /// Manual:  Per node: `header_id` -> height
     pub node_header_heights: HashMap<String, HashMap<String, u64>>,
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
@@ -307,13 +316,15 @@ impl Debug for CucumberWorld {
                 &format!("{}", self.faucet_task_handles.as_ref().map_or(0, Vec::len)),
             )
             .field("wallet_accounts", &self.wallet_accounts.len())
+            .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field(
                 "wallet_tokens_per_block",
                 &self.wallet_tokens_per_block.len(),
             )
+            .field("wallet_runtime_state", &self.wallet_runtime_state.len())
             .field(
-                "wallet_encumbered_tokens",
-                &self.wallet_encumbered_tokens.len(),
+                "scenario_fee_encumbered_tokens",
+                &self.fee_state.encumbered_tokens_per_wallet.len(),
             )
             .field("node_header_heights", &self.node_header_heights.len())
             .field("node_peer_ids", &self.node_peer_ids.len())
@@ -771,6 +782,15 @@ impl CucumberWorld {
         self.nodes_info.keys().cloned().collect::<Vec<_>>()
     }
 
+    pub fn any_started_node(&self) -> Result<&NodeInfo, StepError> {
+        self.nodes_info
+            .values()
+            .next()
+            .ok_or_else(|| StepError::LogicalError {
+                message: "No started nodes available in world".to_owned(),
+            })
+    }
+
     /// Helper to resolve all user wallet names to the actual wallet
     /// information.
     pub fn all_user_wallets(&self) -> Vec<WalletInfo> {
@@ -894,6 +914,37 @@ impl CucumberWorld {
         format!("{:?}", FullDebugInfo(self))
     }
 
+    /// Record a submitted transaction hash for a wallet
+    pub fn record_submitted_tx_hash(&mut self, wallet_name: &str, tx_hash: TxHash) {
+        self.wallet_runtime_state
+            .entry(wallet_name.to_owned())
+            .or_default()
+            .submitted_tx_hashes
+            .push(tx_hash);
+    }
+
+    pub fn record_tracked_spent_fee(&mut self, wallet_name: &str, spent_fee: u64) {
+        self.wallet_runtime_state
+            .entry(wallet_name.to_owned())
+            .or_default()
+            .tracked_spent_fees += spent_fee;
+    }
+
+    #[must_use]
+    pub fn total_tracked_spent_fees(&self) -> u64 {
+        self.wallet_runtime_state
+            .values()
+            .map(|state| state.tracked_spent_fees)
+            .sum()
+    }
+
+    /// Get submitted transaction hashes for a wallet
+    pub fn submitted_tx_hashes_for_wallet(&self, wallet_name: &str) -> &[TxHash] {
+        self.wallet_runtime_state
+            .get(wallet_name)
+            .map_or(&[], |state| state.submitted_tx_hashes.as_slice())
+    }
+
     pub fn full_debug_info(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CucumberWorld")
             .field("deployer", &format!("{:?}", self.deployer))
@@ -946,13 +997,14 @@ impl CucumberWorld {
                 "wallet_accounts",
                 &wallet_accounts_display(&self.wallet_accounts),
             )
+            .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field(
                 "wallet_tokens_per_block",
                 &wallet_tokens_per_block_display(&self.wallet_tokens_per_block),
             )
             .field(
-                "wallet_encumbered_tokens",
-                &wallet_encumbered_tokens_display(&self.wallet_encumbered_tokens),
+                "wallet_runtime_state",
+                &wallet_runtime_state_display(&self.wallet_runtime_state),
             )
             .field(
                 "node_header_heights",
@@ -1093,14 +1145,40 @@ fn wallet_tokens_per_block_display(
     format!("HashMap<String, WalletTokenMap>({})", blocks.join(", "))
 }
 
-fn wallet_encumbered_tokens_display(
-    wallet_encumbered_tokens: &HashMap<String, Vec<Utxo>>,
+fn wallet_runtime_state_display(
+    wallet_runtime_state: &HashMap<String, WalletRuntimeState>,
 ) -> String {
-    let tokens: Vec<_> = wallet_encumbered_tokens
+    let states: Vec<_> = wallet_runtime_state
         .iter()
-        .map(|(k, v)| format!("'{k}: {}'", v.len()))
+        .map(|(k, state)| {
+            format!(
+                "'{k}: encumbered={}, submitted={}, tracked_fees={}'",
+                state.encumbered_tokens.len(),
+                state.submitted_tx_hashes.len(),
+                state.tracked_spent_fees
+            )
+        })
         .collect();
-    format!("HashMap<String, Vec<Utxo>>({})", tokens.join(", "))
+    format!("HashMap<String, WalletRuntimeState>({})", states.join(", "))
+}
+
+fn fee_state_summary(fee_state: &ScenarioFeeState) -> String {
+    let sponsor = fee_state.sponsored_genesis_account.map_or_else(
+        || "none".to_owned(),
+        |account| {
+            format!(
+                "{}x{}",
+                account.token_count.get(),
+                account.token_value.get()
+            )
+        },
+    );
+
+    format!(
+        "sponsor={sponsor}, wallet_account={}, encumbered_by_wallet={}",
+        fee_state.wallet_account.is_some(),
+        fee_state.encumbered_tokens_per_wallet.len(),
+    )
 }
 
 fn node_header_heights_display(
