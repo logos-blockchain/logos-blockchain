@@ -1,4 +1,3 @@
-mod dials;
 mod settings;
 mod swarm;
 

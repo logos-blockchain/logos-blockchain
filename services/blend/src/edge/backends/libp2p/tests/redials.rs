@@ -8,7 +8,7 @@ use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_libp2p::{Protocol, SwarmEvent};
 use libp2p::{Multiaddr, PeerId};
 use test_log::test;
-use tokio::spawn;
+use tokio::{spawn, time};
 
 use crate::{
     core::backends::libp2p::core_swarm_test_utils::{
@@ -23,9 +23,6 @@ use crate::{
 
 #[test(tokio::test)]
 async fn edge_redial_same_peer() {
-    // Pause time so that exponential backoff delays are auto-advanced.
-    tokio::time::pause();
-
     let random_peer_id = PeerId::random();
     let empty_multiaddr: Multiaddr = Protocol::Memory(0).into();
 
@@ -36,66 +33,48 @@ async fn edge_redial_same_peer() {
             id: random_peer_id,
             public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
         })))
+        .with_max_dial_attempts(3.try_into().unwrap())
         .build();
     let message = TestEncapsulatedMessage::new(b"test-payload");
     swarm.send_message(&message);
 
+    // After send_message, the first dial attempt should be in pending_dials.
     let dial_attempt_1_record = swarm
         .pending_dials()
+        .iter()
         .filter(|((peer_id, _), _)| peer_id == &random_peer_id)
         .map(|(_, value)| value)
         .next()
         .unwrap();
-    assert_eq!(dial_attempt_1_record.address, empty_multiaddr);
-    assert_eq!(dial_attempt_1_record.attempt_number, 1.try_into().unwrap());
-    assert_eq!(dial_attempt_1_record.message, message.clone());
+    assert_eq!(*dial_attempt_1_record.address(), empty_multiaddr);
+    assert_eq!(
+        dial_attempt_1_record.attempt_number(),
+        1.try_into().unwrap()
+    );
+    assert_eq!(*dial_attempt_1_record.message(), message.clone());
 
-    // We poll the swarm until we know the first dial attempt has failed.
-    // After failure, a retry is scheduled with exponential backoff.
-    swarm
-        .poll_next_until(|event| {
-            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
-                return false;
-            };
-            *peer_id == Some(random_peer_id)
-        })
-        .await;
-    assert_eq!(swarm.pending_dials().retry_count(), 1);
+    // Poll through all 3 dial attempts (each fails with OutgoingConnectionError).
+    // Between errors, schedule_retry removes the entry from pending_dials and
+    // schedules a delayed retry, so we cannot check intermediate pending_dials
+    // state.
+    for _ in 0..3 {
+        swarm
+            .poll_next_until(|event| {
+                let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                    return false;
+                };
+                *peer_id == Some(random_peer_id)
+            })
+            .await;
+    }
 
-    // We poll the swarm until the next failure. The backoff timer auto-advances,
-    // the retry fires, and then fails again.
-    swarm
-        .poll_next_until(|event| {
-            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
-                return false;
-            };
-            *peer_id == Some(random_peer_id)
-        })
-        .await;
-    assert_eq!(swarm.pending_dials().retry_count(), 1);
-
-    // We poll the swarm until the next failure, after which there should be no more
-    // attempts.
-    swarm
-        .poll_next_until(|event| {
-            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
-                return false;
-            };
-            *peer_id == Some(random_peer_id)
-        })
-        .await;
-
-    // Storage should be cleared up, and since there is no other peer, there is
-    // no new peer that is dialed.
-    assert!(swarm.pending_dials().active().is_empty());
-    assert_eq!(swarm.pending_dials().retry_count(), 0);
+    // All attempts exhausted. Storage map should be cleared up, and since there
+    // is no other peer, no new peer is dialed.
+    assert!(swarm.pending_dials().is_empty());
 }
 
 #[test(tokio::test)]
 async fn edge_redial_different_peer_after_redial_limit() {
-    // Pause time so that exponential backoff delays are auto-advanced.
-    tokio::time::pause();
-
     let random_peer_id = PeerId::random();
     let empty_multiaddr: Multiaddr = Protocol::Memory(0).into();
 
@@ -118,10 +97,13 @@ async fn edge_redial_different_peer_after_redial_limit() {
             public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
         },
     ]);
+    // We use max_dial_attempts=1 to avoid backoff delays in this test.
     let EdgeTestSwarm {
         swarm: mut edge_swarm,
         ..
-    } = EdgeSwarmBuilder::new(edge_membership).build();
+    } = EdgeSwarmBuilder::new(edge_membership)
+        .with_max_dial_attempts(1)
+        .build();
 
     let message = TestEncapsulatedMessage::new(b"test-payload");
 
@@ -138,4 +120,70 @@ async fn edge_redial_different_peer_after_redial_limit() {
         core_swarm_incoming_message_receiver.recv().await.unwrap();
     assert_eq!(received_message, message.into_inner().into());
     assert_eq!(received_message_session, 1);
+}
+
+/// Verifies that retries use exponential backoff by measuring the elapsed time
+/// between consecutive connection errors.
+#[test(tokio::test)]
+async fn edge_redial_uses_exponential_backoff() {
+    let random_peer_id = PeerId::random();
+    let empty_multiaddr: Multiaddr = Protocol::Memory(0).into();
+
+    // Use max_dial_attempts=3 so we get two backoff intervals to verify:
+    // attempt 1 -> fail -> 2s delay -> attempt 2 -> fail -> 4s delay -> attempt 3
+    let EdgeTestSwarm { mut swarm, .. } =
+        EdgeSwarmBuilder::new(Membership::new_without_local(from_ref(&Node {
+            address: empty_multiaddr,
+            id: random_peer_id,
+            public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
+        })))
+        .build();
+    let message = TestEncapsulatedMessage::new(b"test-payload");
+    swarm.send_message(&message);
+
+    // Wait for the first error (no backoff on the initial dial).
+    swarm
+        .poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(random_peer_id)
+        })
+        .await;
+
+    // Measure the delay until the second error. With exponential backoff, the
+    // retry (attempt 2) is delayed by 2^1 = 2 seconds.
+    let before_second_error = time::Instant::now();
+    swarm
+        .poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(random_peer_id)
+        })
+        .await;
+    let first_backoff = before_second_error.elapsed();
+    assert!(
+        first_backoff >= time::Duration::from_secs(2),
+        "First backoff should be >= 2s, was {:?}",
+        first_backoff
+    );
+
+    // Measure the delay until the third error. The retry (attempt 3) should be
+    // delayed by 2^2 = 4 seconds.
+    let before_third_error = time::Instant::now();
+    swarm
+        .poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(random_peer_id)
+        })
+        .await;
+    let second_backoff = before_third_error.elapsed();
+    assert!(
+        second_backoff >= time::Duration::from_secs(4),
+        "Second backoff should be >= 4s, was {:?}",
+        second_backoff
+    );
 }

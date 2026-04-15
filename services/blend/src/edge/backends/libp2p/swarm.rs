@@ -1,7 +1,14 @@
-use core::num::{NonZeroU64, NonZeroUsize};
-use std::{io, time::Duration};
+use core::{
+    num::{NonZeroU64, NonZeroUsize},
+    pin::Pin,
+};
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    io,
+    time::Duration,
+};
 
-use futures::{AsyncWriteExt as _, StreamExt as _};
+use futures::{AsyncWriteExt as _, StreamExt as _, stream::FuturesUnordered};
 use lb_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     network::send_msg,
@@ -22,10 +29,34 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, trace, warn};
 
 use super::settings::Libp2pBlendBackendSettings;
-use crate::edge::backends::libp2p::{
-    LOG_TARGET,
-    dials::{DialAttempt, Error, OngoingDials},
-};
+use crate::edge::backends::libp2p::LOG_TARGET;
+
+#[derive(Debug)]
+pub struct DialAttempt {
+    /// Address of peer being dialed.
+    address: Multiaddr,
+    /// The latest (ongoing) attempt number.
+    attempt_number: NonZeroU64,
+    /// The message to send once the peer is successfully dialed.
+    message: EncapsulatedMessageWithVerifiedPublicHeader,
+}
+
+#[cfg(test)]
+impl DialAttempt {
+    pub const fn address(&self) -> &Multiaddr {
+        &self.address
+    }
+
+    pub const fn attempt_number(&self) -> NonZeroU64 {
+        self.attempt_number
+    }
+
+    pub const fn message(&self) -> &EncapsulatedMessageWithVerifiedPublicHeader {
+        &self.message
+    }
+}
+
+type PendingRetries = FuturesUnordered<Pin<Box<dyn Future<Output = (PeerId, DialAttempt)> + Send>>>;
 
 pub(super) struct BlendSwarm<Rng>
 where
@@ -36,7 +67,9 @@ where
     command_receiver: mpsc::Receiver<Command>,
     membership: Membership<PeerId>,
     rng: Rng,
-    ongoing_dials: OngoingDials,
+    max_dial_attempts_per_connection: NonZeroU64,
+    pending_dials: HashMap<(PeerId, ConnectionId), DialAttempt>,
+    pending_retries: PendingRetries,
     protocol_name: StreamProtocol,
     replication_factor: NonZeroUsize,
 }
@@ -85,7 +118,9 @@ where
             command_receiver,
             membership,
             rng,
-            ongoing_dials: OngoingDials::new(settings.max_dial_attempts_per_peer_per_message),
+            pending_dials: HashMap::new(),
+            pending_retries: FuturesUnordered::new(),
+            max_dial_attempts_per_connection: settings.max_dial_attempts_per_peer_per_message,
             protocol_name: settings.protocol_name.into_inner(),
             replication_factor,
         }
@@ -113,7 +148,9 @@ where
         Self {
             command_receiver,
             membership,
-            ongoing_dials: OngoingDials::new(max_dial_attempts_per_connection),
+            max_dial_attempts_per_connection,
+            pending_dials: HashMap::new(),
+            pending_retries: FuturesUnordered::new(),
             rng,
             stream_control: inner_swarm.behaviour().new_control(),
             swarm: inner_swarm,
@@ -123,19 +160,20 @@ where
     }
 
     #[cfg(test)]
-    pub fn pending_dials(&self) -> impl Iterator<Item = (&(PeerId, ConnectionId), &DialAttempt)> {
-        self.ongoing_dials
-            .active()
-            .iter()
-            .map(|(connection, (dial_attempt, _))| (connection, dial_attempt))
+    pub const fn pending_dials(&self) -> &HashMap<(PeerId, ConnectionId), DialAttempt> {
+        &self.pending_dials
     }
 
     fn handle_command(&mut self, command: Command) {
         match command {
             Command::SendMessage(msg) => {
-                self.dial_and_schedule_message_except(&msg, None);
+                self.handle_send_message_command(&msg);
             }
         }
+    }
+
+    fn handle_send_message_command(&mut self, msg: &EncapsulatedMessageWithVerifiedPublicHeader) {
+        self.dial_and_schedule_message_except(msg, None);
     }
 
     /// Schedule a dial with retries for a given message.
@@ -157,10 +195,64 @@ where
             let opts = dial_opts(peer_id, address.clone());
             let connection_id = opts.connection_id();
 
-            self.ongoing_dials
-                .schedule((peer_id, connection_id), (address, msg.clone()))
-                .unwrap();
+            let Entry::Vacant(empty_entry) = self.pending_dials.entry((peer_id, connection_id))
+            else {
+                panic!(
+                    "Dial attempt for peer {peer_id:?} and connection {connection_id:?} should not be present in storage."
+                );
+            };
+            empty_entry.insert(DialAttempt {
+                address,
+                attempt_number: 1.try_into().unwrap(),
+                message: msg.clone(),
+            });
+
+            if let Err(e) = self.swarm.dial(opts) {
+                error!(target: LOG_TARGET, "Failed to dial peer {peer_id:?} on connection {connection_id:?}: {e:?}");
+                self.schedule_retry(peer_id, connection_id);
+            }
         }
+    }
+
+    /// Schedule a retry for a failed dial attempt with exponential backoff.
+    ///
+    /// The dial attempt is removed from `pending_dials` and, if the maximum
+    /// number of attempts has not been reached, a delayed future is pushed
+    /// into `pending_retries`. When the future fires, the dial will be
+    /// re-attempted in `poll_next_and_match`.
+    ///
+    /// Returns `Some(DialAttempt)` if the maximum attempts have been exhausted,
+    /// `None` if a retry has been scheduled.
+    fn schedule_retry(
+        &mut self,
+        peer_id: PeerId,
+        connection_id: ConnectionId,
+    ) -> Option<DialAttempt> {
+        let dial_attempt = self
+            .pending_dials
+            .remove(&(peer_id, connection_id))
+            .unwrap();
+        let new_dial_attempt_number = dial_attempt.attempt_number.checked_add(1).unwrap();
+        if new_dial_attempt_number > self.max_dial_attempts_per_connection {
+            return Some(dial_attempt);
+        }
+        let delay = Duration::from_secs(1 << (new_dial_attempt_number.get() - 1));
+        debug!(
+            target: LOG_TARGET,
+            "Scheduling retry {new_dial_attempt_number} for peer {peer_id:?} in {} seconds",
+            delay.as_secs()
+        );
+        self.pending_retries.push(Box::pin(async move {
+            tokio::time::sleep(delay).await;
+            (
+                peer_id,
+                DialAttempt {
+                    attempt_number: new_dial_attempt_number,
+                    ..dial_attempt
+                },
+            )
+        }));
+        None
     }
 
     fn choose_peers_except(&mut self, except: Option<PeerId>) -> Vec<Node<PeerId>> {
@@ -207,11 +299,10 @@ where
 
         // We need to clone so we can access `&mut self` below.
         let message = self
-            .ongoing_dials
+            .pending_dials
             .get(&(peer_id, connection_id))
-            .unwrap()
-            .message
-            .clone();
+            .map(|entry| entry.message.clone())
+            .unwrap();
 
         match self
             .stream_control
@@ -255,7 +346,7 @@ where
         close_stream(stream, peer_id, connection_id).await;
         // Regardless of the result of closing the stream, the message was sent so we
         // can remove the pending dial info.
-        self.ongoing_dials.remove(&(peer_id, connection_id));
+        self.pending_dials.remove(&(peer_id, connection_id));
     }
 
     fn handle_send_message_failure(
@@ -266,11 +357,7 @@ where
         error!(target: LOG_TARGET, "Failed to send message: {error} to peer {peer_id:?} on connection {connection_id:?}.");
         // If the maximum attempt count was reached for this peer, try to schedule the
         // message for a different peer.
-        if let Some(DialAttempt { message, .. }) = self
-            .ongoing_dials
-            .reschedule(peer_id, connection_id)
-            .unwrap()
-        {
+        if let Some(DialAttempt { message, .. }) = self.schedule_retry(peer_id, connection_id) {
             self.dial_and_schedule_message_except(&message, Some(peer_id));
         }
     }
@@ -283,11 +370,7 @@ where
         error!(target: LOG_TARGET, "Failed to open stream to {peer_id}: {error}");
         // If the maximum attempt count was reached for this peer, try to schedule the
         // message for a different peer.
-        if let Some(DialAttempt { message, .. }) = self
-            .ongoing_dials
-            .reschedule(peer_id, connection_id)
-            .unwrap()
-        {
+        if let Some(DialAttempt { message, .. }) = self.schedule_retry(peer_id, connection_id) {
             self.dial_and_schedule_message_except(&message, Some(peer_id));
         }
     }
@@ -307,11 +390,7 @@ where
 
         // If the maximum attempt count was reached for this peer, try to schedule the
         // message for a different peer.
-        if let Some(DialAttempt { message, .. }) = self
-            .ongoing_dials
-            .reschedule(peer_id, connection_id)
-            .unwrap()
-        {
+        if let Some(DialAttempt { message, .. }) = self.schedule_retry(peer_id, connection_id) {
             self.dial_and_schedule_message_except(&message, Some(peer_id));
         }
     }
@@ -354,15 +433,14 @@ where
                 self.handle_command(command);
                 false
             }
-            Some((peer_id, dial_attempt)) = self.ongoing_dials.next() => {
-                let opts = dial_opts(peer_id, dial_attempt.address);
+            Some((peer_id, dial_attempt)) = self.pending_retries.next() => {
+                let opts = dial_opts(peer_id, dial_attempt.address.clone());
                 let connection_id = opts.connection_id();
+                self.pending_dials.insert((peer_id, connection_id), dial_attempt);
 
                 if let Err(e) = self.swarm.dial(opts) {
                     error!(target: LOG_TARGET, "Failed to redial peer {peer_id:?}: {e:?}");
-                    if let Some(DialAttempt { message, .. }) = self.ongoing_dials.reschedule(peer_id, connection_id).unwrap() {
-                        self.dial_and_schedule_message_except(&message, Some(peer_id));
-                    }
+                    self.schedule_retry(peer_id, connection_id);
                 }
                 false
             }
