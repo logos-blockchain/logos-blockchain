@@ -1,3 +1,5 @@
+use lb_groth16::fr_from_bytes;
+
 use crate::{LogosBlockchainNode, api::free, errors::OperationStatus, result::PointerResult};
 
 #[repr(C)]
@@ -17,6 +19,32 @@ impl From<lb_cryptarchia_engine::State> for State {
 
 pub type Hash = [u8; 32];
 pub type HeaderId = Hash;
+pub type TxHash = Hash;
+
+/// Converts a raw pointer to a `TxHash` into a `lb_core::mantle::TxHash`.
+///
+/// # Parameters
+///
+/// - `tx_hash`: A raw pointer to a `TxHash` (32-byte array).
+///
+/// # Returns
+///
+/// - A `lb_core::mantle::TxHash` if successful, or an
+///   `OperationStatus::ValidationError` if the conversion fails.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer.
+/// The caller must ensure that the pointer is valid and points to a properly
+/// initialized `TxHash`.
+pub(crate) unsafe fn into_tx_hash(
+    tx_hash: *const TxHash,
+) -> Result<lb_core::mantle::TxHash, OperationStatus> {
+    let tx_hash = unsafe { *tx_hash };
+    fr_from_bytes(&tx_hash)
+        .map(lb_core::mantle::TxHash::from)
+        .map_err(|_| OperationStatus::ValidationError)
+}
 
 #[repr(C)]
 pub struct CryptarchiaInfo {

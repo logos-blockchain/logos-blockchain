@@ -421,7 +421,7 @@ where
 /// Returns a boxed `DynError` if any error occurs during processing.
 pub async fn get_transactions<Transaction, StorageBackend, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-    transaction_hashes: BTreeSet<TxHash>,
+    tx_hashes: BTreeSet<TxHash>,
 ) -> Result<
     impl Stream<Item = Transaction> + use<Transaction, StorageBackend, RuntimeServiceId>,
     super::DynError,
@@ -444,7 +444,7 @@ where
 {
     let relay = handle.relay().await?;
     let storage_adapter = StorageAdapter::<_, _, RuntimeServiceId>::new(relay).await;
-    storage_adapter.get_transactions(transaction_hashes).await
+    storage_adapter.get_transactions(tx_hashes).await
 }
 
 /// Fetch a single transaction by its hash.

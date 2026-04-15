@@ -1,10 +1,11 @@
 use std::ffi::{CString, c_char};
 
-use lb_groth16::fr_from_bytes;
 use lb_node::{RocksBackend, RuntimeServiceId, SignedMantleTx};
 
 use crate::{
-    LogosBlockchainNode, PointerResult, api::cryptarchia::HeaderId, errors::OperationStatus,
+    LogosBlockchainNode, PointerResult,
+    api::cryptarchia::{HeaderId, TxHash, into_tx_hash},
+    errors::OperationStatus,
 };
 
 /// Gets a block by its header ID as a JSON string.
@@ -137,7 +138,7 @@ pub(crate) fn get_transaction_sync(
         >(overwatch_handle, tx_hash))
         .map_err(|e| {
             log::error!("[get_transaction_sync] Failed to get transaction: {e}");
-            OperationStatus::RelayError
+            OperationStatus::RuntimeError
         })?
         .ok_or(OperationStatus::NotFound)?;
 
@@ -187,7 +188,7 @@ pub type GetTransactionResult = PointerResult<c_char, OperationStatus>;
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_transaction(
     node: *const LogosBlockchainNode,
-    tx_hash: *const u8,
+    tx_hash: *const TxHash,
 ) -> GetTransactionResult {
     if node.is_null() {
         log::error!("[get_transaction] Received a null `node` pointer. Exiting.");
@@ -198,17 +199,16 @@ pub unsafe extern "C" fn get_transaction(
         return GetTransactionResult::from_error(OperationStatus::NullPointer);
     }
 
-    let tx_hash_bytes = unsafe { std::slice::from_raw_parts(tx_hash, 32) };
-    let zk_hash = match fr_from_bytes(tx_hash_bytes) {
-        Ok(fr) => fr,
-        Err(e) => {
-            log::error!("[get_transaction] Invalid tx_hash bytes: {e}");
-            return GetTransactionResult::from_error(OperationStatus::ValidationError);
+    let node = unsafe { &*node };
+    let tx_hash_result = unsafe { into_tx_hash(tx_hash) };
+    let tx_hash = match tx_hash_result {
+        Ok(tx_hash) => tx_hash,
+        Err(error) => {
+            log::error!("[get_transaction] Invalid `tx_hash`. Exiting.");
+            return GetTransactionResult::from_error(error);
         }
     };
-    let tx_hash = lb_core::mantle::TxHash::from(zk_hash);
 
-    let node = unsafe { &*node };
     match get_transaction_sync(node, tx_hash) {
         Ok(json_cstring) => GetTransactionResult::from_pointer(json_cstring.into_raw()),
         Err(error) => GetTransactionResult::from_error(error),
