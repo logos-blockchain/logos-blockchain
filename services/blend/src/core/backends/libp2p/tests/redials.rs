@@ -174,9 +174,7 @@ async fn core_redial_uses_exponential_backoff() {
         })
         .await;
     let second_backoff = before_third_error.elapsed();
-    assert!(
-        second_backoff >= Duration::from_secs(4),
-    );
+    assert!(second_backoff >= Duration::from_secs(4),);
 }
 
 /// When a new session rotation occurs, pending backoff retries should be
