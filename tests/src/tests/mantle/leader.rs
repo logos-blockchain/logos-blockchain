@@ -1,6 +1,7 @@
 use std::{num::NonZero, time::Duration};
 
 use futures::future::join_all;
+use lb_node::config::cryptarchia::deployment::EpochConfig;
 use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_tests::{
     common::{sync::wait_for_validators_mode_and_height, time::max_block_propagation_time},
@@ -33,7 +34,12 @@ async fn leader_claim() {
         .map(|c| {
             let mut config = create_validator_config(c, deployment_settings.clone());
             config.deployment.time.slot_duration = Duration::from_secs(1);
-            config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
+            config.deployment.cryptarchia.epoch_config = EpochConfig {
+                epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+                epoch_period_nonce_buffer: 1.try_into().unwrap(),
+                epoch_period_nonce_stabilization: 1.try_into().unwrap(),
+            };
+            config.deployment.cryptarchia.security_param = NonZero::new(2).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
             config
