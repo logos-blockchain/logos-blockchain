@@ -252,28 +252,29 @@ async fn test_sequencer_checkpoint_resume() {
         sequencer_config.clone(),
         None, // Fresh start
     );
-
-    // Spawn polling task with reorg handling
     let poll_task = sequencer.spawn();
-    spawn_republish_handler(&handle);
+    let mut events = handle.subscribe();
+    handle.wait_ready().await;
 
     let test_data_phase1: Vec<Vec<u8>> = vec![tag_payload("Message 1"), tag_payload("Message 2")];
-
-    handle.wait_ready().await;
-    let mut last_result = None;
     for data in &test_data_phase1 {
-        last_result = Some(
-            handle
-                .publish_message(data.clone())
-                .await
-                .expect("publish should succeed"),
-        );
+        handle
+            .publish_message(data.clone())
+            .await
+            .expect("publish should succeed");
     }
 
-    // Get checkpoint from last publish result
-    let checkpoint = last_result
-        .expect("Should have result after publishing")
-        .checkpoint;
+    // Checkpoint arrives via Published event
+    let mut checkpoint = None;
+    while let Ok(event) = events.recv().await {
+        if let Event::Published { checkpoint: cp, .. } = event {
+            checkpoint = Some(cp);
+            if checkpoint.is_some() {
+                break;
+            }
+        }
+    }
+    let checkpoint = checkpoint.expect("should receive Published event");
 
     // Stop the sequencer (simulating stop)
     poll_task.abort();
@@ -370,12 +371,9 @@ fn spawn_republish_handler(handle: &SequencerHandle<Node>) -> tokio::task::JoinH
                                 "Re-publishing orphaned: {:?}",
                                 String::from_utf8_lossy(&inv.payload)
                             );
-                            let h = handle.clone(); // TODO: remove spawn when publish is fire-and-forget
-                            tokio::spawn(async move {
-                                if let Err(e) = h.publish_message(inv.payload).await {
-                                    debug!("Failed to re-publish: {e}");
-                                }
-                            });
+                            if let Err(e) = handle.publish_message(inv.payload).await {
+                                debug!("Failed to re-publish: {e}");
+                            }
                         }
                     }
                 }
@@ -896,12 +894,9 @@ fn spawn_sequencer_sorted_policy(
                                     .as_ref()
                                     .map(|m| String::from_utf8_lossy(m).to_string()),
                             );
-                            let h = handle.clone(); // TODO: remove spawn when publish is fire-and-forget
-                            tokio::spawn(async move {
-                                if let Err(e) = h.publish_message(inv.payload).await {
-                                    debug!("Failed to re-publish: {e}");
-                                }
-                            });
+                            if let Err(e) = handle.publish_message(inv.payload).await {
+                                debug!("Failed to re-publish: {e}");
+                            }
                         } else {
                             debug!(
                                 "Sorted policy: dropping {:?} (< max {:?})",
@@ -1239,18 +1234,26 @@ async fn test_sequencer_stale_checkpoint_resume() {
         None,
     );
     let poll_task = sequencer.spawn();
+    let mut events = handle.subscribe();
     handle.wait_ready().await;
 
     let data_phase1: Vec<Vec<u8>> = vec![b"msg-1".to_vec(), b"msg-2".to_vec()];
-    let mut last_result = None;
     for data in &data_phase1 {
-        let r = handle
+        handle
             .publish_message(data.clone())
             .await
             .expect("publish failed");
-        last_result = Some(r);
     }
-    let stale_checkpoint = last_result.unwrap().checkpoint;
+
+    // Checkpoint arrives via Published event
+    let mut stale_checkpoint = None;
+    while let Ok(event) = events.recv().await {
+        if let Event::Published { checkpoint, .. } = event {
+            stale_checkpoint = Some(checkpoint);
+            break;
+        }
+    }
+    let stale_checkpoint = stale_checkpoint.expect("should receive Published event");
 
     // Wait for phase 1 to finalize
     let mut received: Vec<Vec<u8>> = Vec::new();

@@ -104,14 +104,16 @@ pub enum Event {
     /// Batch of finalized inscriptions discovered during backfill catch-up.
     /// Emitted incrementally when the sequencer catches up from a checkpoint.
     FinalizedInscriptions { inscriptions: Vec<InscriptionInfo> },
+    /// An inscription was created and submitted to the network.
+    Published {
+        inscription_id: InscriptionId,
+        checkpoint: SequencerCheckpoint,
+    },
 }
 
 enum ActorRequest {
     /// Create/sign/submit a transaction with an inscription
-    PublishMessage {
-        data: Vec<u8>,
-        reply: tokio::sync::oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
-    },
+    PublishMessage { data: Vec<u8> },
     /// Build an unsigned tx for the given ops and an inscription
     ///
     /// Calling this multiple times without submitting the prepared txs via
@@ -183,36 +185,24 @@ where
         }
     }
 
-    /// Create/sign/submit a transaction with an inscription for the given
-    /// message to the zone's channel.
+    /// Publish an inscription to the zone's channel.
     ///
-    /// Returns the inscription ID and a checkpoint for persistence.
-    pub async fn publish_message(&self, data: Vec<u8>) -> Result<PublishResult, Error> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let request = ActorRequest::PublishMessage {
-            data,
-            reply: reply_tx,
-        };
-
+    /// Fire-and-forget: the inscription is queued for processing by the
+    /// sequencer's event loop. The result (inscription ID + checkpoint) is
+    /// delivered via [`Event::Published`] once the tx is created and posted
+    /// to the network.
+    pub async fn publish_message(&self, data: Vec<u8>) -> Result<(), Error> {
+        if !*self.ready_rx.borrow() {
+            return Err(Error::Unavailable {
+                reason: "sequencer not yet ready",
+            });
+        }
         self.request_tx
-            .send(request)
+            .send(ActorRequest::PublishMessage { data })
             .await
             .map_err(|_| Error::Unavailable {
                 reason: "sequencer channel closed",
-            })?;
-
-        let (signed_tx, result) = reply_rx.await.map_err(|_| Error::Unavailable {
-            reason: "sequencer dropped reply",
-        })??;
-
-        info!("Created inscription {:?}", result.inscription_id);
-
-        // Post to network (best effort, will be resubmitted if needed)
-        if let Err(e) = self.node.post_transaction(signed_tx).await {
-            warn!("Failed to post transaction: {e}");
-        }
-
-        Ok(result)
+            })
     }
 
     /// Build a [`MantleTx`] for the given ops and an inscription message,
@@ -561,7 +551,7 @@ where
 
         tokio::select! {
             Some(request) = self.request_rx.recv() => {
-                self.handle_request(request);
+                self.handle_request(request).await;
                 None
             }
             maybe_event = stream.next() => {
@@ -781,11 +771,13 @@ where
         }
     }
 
-    fn handle_request(&mut self, request: ActorRequest) {
+    async fn handle_request(&mut self, request: ActorRequest) {
         if !self.is_ready() {
             match request {
-                ActorRequest::PublishMessage { reply, .. }
-                | ActorRequest::SetKeys { reply, .. } => {
+                ActorRequest::PublishMessage { .. } => {
+                    warn!("Publish dropped: sequencer not yet ready");
+                }
+                ActorRequest::SetKeys { reply, .. } => {
                     drop(reply.send(Err(Error::Unavailable {
                         reason: "sequencer not yet ready",
                     })));
@@ -808,7 +800,7 @@ where
         let s = self.state.as_mut().unwrap();
 
         match request {
-            ActorRequest::PublishMessage { data, reply } => {
+            ActorRequest::PublishMessage { data } => {
                 // Derive publish parent from state instead of trusting
                 // last_msg_id blindly — handles branch switches correctly.
                 let parent = if let Some(tip) = self.current_tip {
@@ -824,12 +816,18 @@ where
                 s.submit_inscription(signed_tx.clone(), parent, new_msg_id, data);
                 self.last_msg_id = new_msg_id;
 
+                info!("Created inscription {id:?}");
+
+                // Post to network (best effort, resubmit timer retries if needed)
+                if let Err(e) = self.node.post_transaction(signed_tx).await {
+                    debug!("Failed to post transaction: {e}");
+                }
+
                 let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
-                let result = PublishResult {
+                drop(self.event_tx.send(Event::Published {
                     inscription_id: id,
                     checkpoint,
-                };
-                drop(reply.send(Ok((signed_tx, result))));
+                }));
             }
             ActorRequest::PrepareTx { ops, msg, reply } => {
                 let result = prepare_tx(

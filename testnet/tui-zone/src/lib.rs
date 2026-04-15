@@ -26,11 +26,6 @@ pub struct InscribeArgs {
     checkpoint_path: String,
 }
 
-fn save_checkpoint(path: &Path, checkpoint: &SequencerCheckpoint) {
-    let data = serde_json::to_vec(checkpoint).expect("failed to serialize checkpoint");
-    fs::write(path, data).expect("failed to write checkpoint file");
-}
-
 fn load_checkpoint(path: &Path) -> Option<SequencerCheckpoint> {
     if !path.exists() {
         return None;
@@ -154,15 +149,8 @@ pub async fn run(args: InscribeArgs) {
         let id: u64 = rand::random();
         let tagged_payload = format!("{id:016x}:{msg}");
 
-        match handle.publish_message(tagged_payload.into_bytes()).await {
-            Ok(result) => {
-                let tx_hash: [u8; 32] = result.inscription_id.into();
-                println!("  published: {}", hex::encode(tx_hash));
-                save_checkpoint(checkpoint_path, &result.checkpoint);
-            }
-            Err(e) => {
-                println!("  error: {e}");
-            }
+        if let Err(e) = handle.publish_message(tagged_payload.into_bytes()).await {
+            eprintln!("  error: {e}");
         }
     }
 
