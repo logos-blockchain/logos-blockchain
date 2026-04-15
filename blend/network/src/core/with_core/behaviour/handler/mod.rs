@@ -157,6 +157,10 @@ where
 
     #[expect(deprecated, reason = "Self::OutboundOpenInfo is deprecated")]
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     fn poll(
         &mut self,
         cx: &mut Context<'_>,
@@ -198,7 +202,13 @@ where
                     self.pending_events_to_behaviour
                         .push_back(ToBehaviour::HealthyPeer);
                 }
-                None => panic!("Connection monitor stream was closed."),
+                None => {
+                    tracing::debug!(
+                        target: LOG_TARGET,
+                        "Connection monitor stream closed unexpectedly. Closing substreams proactively."
+                    );
+                    self.close_substreams();
+                }
             }
         }
 
@@ -330,6 +340,10 @@ where
     #[expect(
         deprecated,
         reason = "Self::InboundOpenInfo and Self::OutboundOpenInfo are deprecated"
+    )]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
     )]
     fn on_connection_event(
         &mut self,

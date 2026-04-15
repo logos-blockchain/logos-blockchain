@@ -13,7 +13,7 @@ use lb_core::{
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_tx_service::backend::RecoverableMempool;
 use overwatch::DynError;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     Error as ChainError, IbdConfig,
@@ -127,6 +127,7 @@ where
             return Ok(self.block_processor);
         }
 
+        info!("starting IBD with {} peers", config.peers.len());
         let downloads = self.initiate_downloads(config).await?;
         self.proceed_downloads(downloads).await
     }
@@ -171,6 +172,10 @@ where
     /// download for the tip, no download is initiated and [`None`] is returned.
     ///
     /// If communication fails, an [`Error`] is returned.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn initiate_download(
         &mut self,
         peer: NetAdapter::PeerId,
@@ -202,6 +207,11 @@ where
         let initial_cryptarchia_info = self.block_processor.info().await?;
 
         // Request a block stream.
+        debug!(
+            ?target, local_tip = ?initial_cryptarchia_info.tip, local_tip_height = initial_cryptarchia_info.height,
+            local_lib = ?initial_cryptarchia_info.lib, ?peer,
+            "requesting blocks from peer",
+        );
         let stream = self
             .network
             .request_blocks_from_peer(
@@ -216,6 +226,7 @@ where
                 crate::metrics::chainsync_observe_download_blocks_err();
             })
             .map_err(Error::BlockProvider)?;
+        debug!(?peer, ?target, "a download initiated");
 
         Ok(Some(Download::new(peer, target, stream)))
     }
@@ -296,11 +307,7 @@ where
         NetAdapter::PeerId: 'a,
         NetAdapter::Block: 'a,
     {
-        debug!(
-            "Handling a block received from {:?}: {:?}",
-            download.peer(),
-            block
-        );
+        debug!("Handling a block received from {:?}", download.peer());
 
         self.block_processor
             .process_block(block)

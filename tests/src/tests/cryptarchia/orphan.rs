@@ -28,6 +28,7 @@ async fn test_orphan_handling() {
         &NetworkParams {
             libp2p_network_layout: Libp2pNetworkLayout::Full,
         },
+        Some("test_orphan_handling"),
     );
 
     let mut validators = vec![];

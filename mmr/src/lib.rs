@@ -6,8 +6,13 @@ use lb_groth16::serde::serde_fr;
 use lb_poseidon2::{Digest, Fr};
 use rpds::StackSync;
 
+mod path;
+
+pub use path::MerklePath;
+use path::{update_paths_above_merge, update_paths_at_merge};
+
 const EMPTY_VALUE: Fr = Fr::ZERO;
-const ACCEPTABLE_MAX_HEIGHT: u8 = 32;
+const ACCEPTABLE_MAX_HEIGHT: u8 = 33;
 
 /// An append-only persistent Merkle Mountain Range (MMR), which can accept up
 /// to 2^(`MAX_HEIGHT`-1) elements (leaves).
@@ -40,10 +45,10 @@ impl<T, Hash, const MAX_HEIGHT: u8> Eq for MerkleMountainRange<T, Hash, MAX_HEIG
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Root {
+pub(crate) struct Root {
     #[cfg_attr(feature = "serde", serde(with = "serde_fr"))]
-    root: Fr,
-    height: u8,
+    pub(crate) root: Fr,
+    pub(crate) height: u8,
 }
 
 impl<const MAX_HEIGHT: u8, T, Hash> Default for MerkleMountainRange<T, Hash, MAX_HEIGHT>
@@ -78,8 +83,10 @@ where
             return Err(MmrFull);
         }
 
-        let root = Hash::digest(&[*elem.as_ref()]);
-        let mut last_root = Root { root, height: 1 };
+        let mut last_root = Root {
+            root: *elem.as_ref(),
+            height: 1,
+        };
         let mut roots = self.roots.clone();
 
         while let Some(root) = roots.peek().copied() {
@@ -104,6 +111,71 @@ where
             roots,
             _hash: std::marker::PhantomData,
         })
+    }
+
+    /// Push an element, updating any tracked [`MerklePath`]s and returning
+    /// a new one for the pushed element.
+    ///
+    /// All paths in `paths` are updated in-place so they remain valid
+    /// against the new [`frontier_root`](Self::frontier_root).
+    pub fn push_with_paths(
+        &self,
+        elem: T,
+        paths: &mut [MerklePath],
+    ) -> Result<(Self, MerklePath), MmrFull> {
+        if self.roots.peek().is_some_and(|r| r.height == MAX_HEIGHT) {
+            return Err(MmrFull);
+        }
+
+        let mut new_path = MerklePath {
+            leaf_index: self.len(),
+            siblings: (1..MAX_HEIGHT)
+                .map(|h| empty_subtree_root::<Hash>(h))
+                .collect(),
+        };
+
+        let mut last_root = Root {
+            root: *elem.as_ref(),
+            height: 1,
+        };
+        let mut roots = self.roots.clone();
+
+        // Phase 1: merge same-height peaks, updating sibling hashes at each merge
+        // height.
+        while let Some(root) = roots.peek().copied() {
+            if last_root.height == root.height {
+                roots.pop_mut();
+                update_paths_at_merge(last_root, root, paths, &mut new_path);
+                last_root = Root {
+                    root: Hash::compress(&[root.root, last_root.root]),
+                    height: last_root.height + 1,
+                };
+                assert!(
+                    last_root.height <= MAX_HEIGHT,
+                    "Height must be less than or equal to {MAX_HEIGHT}"
+                );
+            } else {
+                break;
+            }
+        }
+
+        // Phase 2: update sibling hashes at heights above the merge point.
+        update_paths_above_merge::<Hash, MAX_HEIGHT>(
+            last_root,
+            roots.iter().copied(),
+            paths,
+            &mut new_path,
+        );
+
+        roots = roots.push(last_root);
+
+        Ok((
+            Self {
+                roots,
+                _hash: std::marker::PhantomData,
+            },
+            new_path,
+        ))
     }
 
     #[must_use]
@@ -157,7 +229,7 @@ where
     }
 }
 
-fn empty_subtree_root<Hash: Digest>(height: u8) -> Fr {
+pub(crate) fn empty_subtree_root<Hash: Digest>(height: u8) -> Fr {
     static PRECOMPUTED_EMPTY_ROOTS: OnceLock<[Fr; ACCEPTABLE_MAX_HEIGHT as usize]> =
         OnceLock::new();
     assert!(
@@ -208,14 +280,14 @@ mod test {
     }
 
     pub fn leaf(data: &[u8]) -> Fr {
-        ZkHasher::digest(&[b2p(data)])
+        b2p(data)
     }
 
     #[test]
     #[expect(clippy::clone_on_copy, reason = "for the sake of the test")]
     fn test_empty_roots() {
         let mut root = Fr::ZERO;
-        for i in 1..=32 {
+        for i in 1..=ACCEPTABLE_MAX_HEIGHT {
             assert_eq!(root, empty_subtree_root::<ZkHasher>(i));
             root = <ZkHasher as Digest>::compress(&[root.clone(), root]);
         }
@@ -332,5 +404,121 @@ mod test {
             mmr.push(b"already full".as_ref().into()),
             Err(MmrFull)
         ));
+    }
+
+    #[test]
+    fn test_merkle_path_track_all() {
+        const HEIGHT: u8 = 4; // max 8 leaves
+        let elements: &[&[u8]] = &[b"a", b"b", b"c", b"d", b"e", b"f", b"g", b"h"];
+        let leaf_hashes: Vec<Fr> = elements.iter().map(|e| leaf(e)).collect();
+
+        let mut mmr = <MerkleMountainRange<TestFr, ZkHasher, HEIGHT>>::new();
+        let mut paths: Vec<MerklePath> = Vec::new();
+
+        for (i, elem) in elements.iter().enumerate() {
+            let (new_mmr, new_path) = mmr
+                .push_with_paths(TestFr::from(*elem), &mut paths)
+                .unwrap();
+            mmr = new_mmr;
+            paths.push(new_path);
+
+            let frontier = mmr.frontier_root();
+            for (j, path) in paths.iter().enumerate() {
+                assert!(
+                    path.verify::<ZkHasher>(leaf_hashes[j], frontier),
+                    "path {j} invalid after pushing element {i}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_merkle_path_track_some() {
+        const HEIGHT: u8 = 4;
+        let elements: &[&[u8]] = &[b"a", b"b", b"c", b"d", b"e", b"f", b"g", b"h"];
+
+        let mut mmr = <MerkleMountainRange<TestFr, ZkHasher, HEIGHT>>::new();
+        let mut paths: Vec<MerklePath> = Vec::new();
+        let mut tracked_indices: Vec<usize> = Vec::new();
+
+        for (i, elem) in elements.iter().enumerate() {
+            let (new_mmr, new_path) = mmr
+                .push_with_paths(TestFr::from(*elem), &mut paths)
+                .unwrap();
+            mmr = new_mmr;
+            // Keep only even-indexed elements.
+            if i % 2 == 0 {
+                tracked_indices.push(i);
+                paths.push(new_path);
+            }
+
+            let frontier = mmr.frontier_root();
+            for (k, path) in paths.iter().enumerate() {
+                let idx = tracked_indices[k];
+                assert!(
+                    path.verify::<ZkHasher>(leaf(elements[idx]), frontier),
+                    "path for leaf {idx} invalid after pushing element {i}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_merkle_path_single_element() {
+        const HEIGHT: u8 = 3;
+        let mut mmr = <MerkleMountainRange<TestFr, ZkHasher, HEIGHT>>::new();
+        let (new_mmr, path) = mmr
+            .push_with_paths(TestFr::from(b"only".as_ref()), &mut [])
+            .unwrap();
+        mmr = new_mmr;
+        assert_eq!(path.leaf_index(), 0);
+        assert!(path.verify::<ZkHasher>(leaf(b"only"), mmr.frontier_root()));
+    }
+
+    #[test]
+    fn test_merkle_path_full_tree() {
+        const HEIGHT: u8 = 3; // 4 leaves
+        let mut mmr = <MerkleMountainRange<TestFr, ZkHasher, HEIGHT>>::new();
+        let mut paths: Vec<MerklePath> = Vec::new();
+        let elems: &[&[u8]] = &[b"w", b"x", b"y", b"z"];
+
+        for elem in elems {
+            let (new_mmr, new_path) = mmr
+                .push_with_paths(TestFr::from(*elem), &mut paths)
+                .unwrap();
+            mmr = new_mmr;
+            paths.push(new_path);
+        }
+
+        // All paths should produce the same root as frontier_root.
+        let frontier = mmr.frontier_root();
+        let expected = root(&padded_leaves(elems.iter(), HEIGHT));
+        assert_eq!(frontier, expected);
+        for (i, path) in paths.iter().enumerate() {
+            assert_eq!(path.root::<ZkHasher>(leaf(elems[i])), frontier);
+        }
+
+        // Tree is full — next push should fail.
+        assert!(
+            mmr.push_with_paths(TestFr::from(b"overflow".as_ref()), &mut paths)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_push_with_paths_matches_push() {
+        const HEIGHT: u8 = 8;
+        let mut mmr_a = <MerkleMountainRange<TestFr, ZkHasher, HEIGHT>>::new();
+        let mut mmr_b = <MerkleMountainRange<TestFr, ZkHasher, HEIGHT>>::new();
+
+        for i in 0u64..50 {
+            let bytes = i.to_le_bytes();
+            mmr_a = mmr_a.push(TestFr::from(bytes.as_ref())).unwrap();
+            let (new_b, _) = mmr_b
+                .push_with_paths(TestFr::from(bytes.as_ref()), &mut [])
+                .unwrap();
+            mmr_b = new_b;
+            assert_eq!(mmr_a.frontier_root(), mmr_b.frontier_root());
+        }
     }
 }

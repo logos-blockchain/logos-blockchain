@@ -10,7 +10,7 @@ use crate::{
         swarm::BlendSwarmMessage,
         tests::utils::{BlendBehaviourBuilder, SwarmBuilder, TestSwarm},
     },
-    test_utils::{TestEncapsulatedMessage, crypto::MockProofsVerifier},
+    test_utils::TestEncapsulatedMessage,
 };
 
 #[test(tokio::test)]
@@ -20,21 +20,18 @@ async fn core_message_propagation() {
         swarm: mut swarm_1,
         swarm_message_sender: swarm_1_message_sender,
         ..
-    } = SwarmBuilder::new(identities.next().unwrap(), &peer_ids).build(|id, membership| {
-        BlendBehaviourBuilder::new(id, MockProofsVerifier, membership).build()
-    });
+    } = SwarmBuilder::new(identities.next().unwrap(), &peer_ids)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
     let TestSwarm {
         swarm: mut swarm_2, ..
-    } = SwarmBuilder::new(identities.next().unwrap(), &peer_ids).build(|id, membership| {
-        BlendBehaviourBuilder::new(id, MockProofsVerifier, membership).build()
-    });
+    } = SwarmBuilder::new(identities.next().unwrap(), &peer_ids)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
     let TestSwarm {
         swarm: mut swarm_3,
         incoming_message_receiver: mut swarm_3_message_receiver,
         ..
-    } = SwarmBuilder::new(identities.next().unwrap(), &peer_ids).build(|id, membership| {
-        BlendBehaviourBuilder::new(id, MockProofsVerifier, membership).build()
-    });
+    } = SwarmBuilder::new(identities.next().unwrap(), &peer_ids)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
 
     let (swarm_2_address, _) = swarm_2.listen().await;
     let (swarm_3_address, _) = swarm_3.listen().await;
@@ -52,13 +49,17 @@ async fn core_message_propagation() {
     let message = TestEncapsulatedMessage::new(b"test-payload");
 
     swarm_1_message_sender
-        .send(BlendSwarmMessage::Publish(Box::new(message.clone().into())))
+        .send(BlendSwarmMessage::Publish {
+            message: Box::new(message.clone()),
+            session: 1,
+        })
         .await
         .unwrap();
 
     // We test that swarm 1 publishes a message, sending it to swarm 2, the only
     // swarm it is connected to. Then swarm 2 forwards it to swarm 3, which is not
     // connected to swarm 1.
-    let swarm_3_received_message = swarm_3_message_receiver.recv().await.unwrap();
-    assert_eq!(swarm_3_received_message, message.into_inner());
+    let (swarm_3_received_message, session) = swarm_3_message_receiver.recv().await.unwrap();
+    assert_eq!(swarm_3_received_message, message.into_inner().into());
+    assert_eq!(session, 1);
 }

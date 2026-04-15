@@ -26,11 +26,14 @@ pub struct TestEncapsulatedMessage(EncapsulatedMessageWithVerifiedPublicHeader);
 
 impl TestEncapsulatedMessage {
     pub fn new(payload: &[u8]) -> Self {
-        Self(EncapsulatedMessageWithVerifiedPublicHeader::new(
-            &generate_valid_inputs(),
-            PayloadType::Data,
-            payload.try_into().unwrap(),
-        ))
+        Self(
+            EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+                &generate_valid_inputs(),
+                PayloadType::Data,
+                payload.try_into().unwrap(),
+            )
+            .unwrap(),
+        )
     }
 
     pub fn into_inner(self) -> EncapsulatedMessageWithVerifiedPublicHeader {
@@ -57,12 +60,13 @@ fn generate_valid_inputs() -> Vec<EncapsulationInput> {
         .take(3)
         .map(|recipient_signing_key| {
             let recipient_signing_pubkey = recipient_signing_key.public_key();
-            EncapsulationInput::new(
+            EncapsulationInput::try_new(
                 UnsecuredEd25519Key::generate_with_blake_rng(),
                 &recipient_signing_pubkey,
                 VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
                 VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
             )
+            .unwrap()
         })
         .collect::<Vec<_>>()
 }

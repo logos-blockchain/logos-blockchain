@@ -14,8 +14,8 @@ use lb_core::{
     sdp::{Locator, ServiceType},
 };
 use lb_node::config::{KmsConfig, kms::serde::PreloadKmsBackendSettings};
-use lb_utils::net::get_available_udp_port;
-use network::GeneralNetworkConfig;
+use lb_testing_framework::get_reserved_available_udp_port;
+use network::{GeneralNetworkConfig, NetworkParams};
 use rand::{Rng as _, thread_rng};
 use tracing::GeneralTracingConfig;
 
@@ -24,9 +24,8 @@ use crate::{
     topology::configs::{
         api::GeneralApiConfig,
         consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD,
-        network::NetworkParams,
         sdp::{GeneralSdpConfig, create_sdp_configs},
-        time::GeneralTimeConfig,
+        time::{GeneralTimeConfig, set_time_config},
     },
 };
 
@@ -43,16 +42,20 @@ pub struct GeneralConfig {
 }
 
 #[must_use]
-pub fn create_general_configs(n_nodes: usize) -> (Vec<GeneralConfig>, GenesisTx) {
-    create_general_configs_with_network(n_nodes, &NetworkParams::default())
+pub fn create_general_configs(
+    n_nodes: usize,
+    test_context: Option<&str>,
+) -> (Vec<GeneralConfig>, GenesisTx) {
+    create_general_configs_with_network(n_nodes, &NetworkParams::default(), test_context)
 }
 
 #[must_use]
 pub fn create_general_configs_with_network(
     n_nodes: usize,
     network_params: &NetworkParams,
+    test_context: Option<&str>,
 ) -> (Vec<GeneralConfig>, GenesisTx) {
-    create_general_configs_with_blend_core_subset(n_nodes, n_nodes, network_params)
+    create_general_configs_with_blend_core_subset(n_nodes, n_nodes, network_params, test_context)
 }
 
 #[must_use]
@@ -62,6 +65,7 @@ pub fn create_general_configs_with_blend_core_subset(
     // That would be also useful for non-even token distributions: https://github.com/logos-blockchain/logos-blockchain/issues/1888
     n_blend_core_nodes: usize,
     network_params: &NetworkParams,
+    test_context: Option<&str>,
 ) -> (Vec<GeneralConfig>, GenesisTx) {
     assert!(
         n_blend_core_nodes <= n_nodes,
@@ -75,16 +79,16 @@ pub fn create_general_configs_with_blend_core_subset(
 
     for id in &mut ids {
         thread_rng().fill(id);
-        blend_ports.push(get_available_udp_port().unwrap());
+        blend_ports.push(get_reserved_available_udp_port().unwrap());
     }
 
     let (consensus_configs, genesis_tx) =
-        consensus::create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+        consensus::create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD, test_context);
     let network_configs = network::create_network_configs(&ids, network_params);
     let api_configs = api::create_api_configs(&ids);
     let blend_configs = blend::create_blend_configs(&ids, &blend_ports);
     let tracing_configs = tracing::create_tracing_configs(&ids);
-    let time_config = time::default_time_config();
+    let time_config = set_time_config();
 
     let providers: Vec<_> = blend_configs
         .iter()
@@ -101,7 +105,8 @@ pub fn create_general_configs_with_blend_core_subset(
         )
         .collect();
     let transfer_op = genesis_tx.genesis_transfer().clone();
-    let genesis_tx_with_declarations = create_genesis_tx_with_declarations(transfer_op, providers);
+    let genesis_tx_with_declarations =
+        create_genesis_tx_with_declarations(transfer_op, providers, test_context);
     let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations, n_nodes);
 
     // Set note keys and Blend keys in KMS of each node config.

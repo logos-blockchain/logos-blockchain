@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
 use cucumber::World as _;
+use lb_testing_framework::is_truthy_env;
 use logos_blockchain_tests::cucumber::{
     defaults::{
         ARTEFACTS, SCENARIO_OUTPUT_DIR_REL, init_logging_defaults, init_node_log_dir_defaults,
         init_tracing,
     },
-    utils::is_truthy_env,
     world::{CucumberWorld, DeployerKind},
 };
 

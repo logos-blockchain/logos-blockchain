@@ -7,7 +7,7 @@ use test_log::test;
 use tokio::{select, time::sleep};
 
 use crate::core::{
-    tests::utils::{AlwaysTrueVerifier, TestEncapsulatedMessage, TestSwarm},
+    tests::utils::{TestEncapsulatedMessage, TestSwarm},
     with_core::behaviour::{
         Event, NegotiatedPeerState, SpamReason,
         tests::utils::{
@@ -21,15 +21,13 @@ use crate::core::{
 async fn detect_spammy_peer() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
     let mut dialing_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id)
-            .with_membership(&nodes)
-            .build::<AlwaysTrueVerifier>()
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
     });
     let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
             .with_provider(IntervalProviderBuilder::default().with_range(1..=1).build())
-            .build::<AlwaysTrueVerifier>()
+            .build()
     });
 
     listening_swarm.listen().with_memory_addr_external().await;
@@ -43,11 +41,15 @@ async fn detect_spammy_peer() {
     // Send two messages when only one was expected.
     dialing_swarm
         .behaviour_mut()
-        .validate_and_publish_message(TestEncapsulatedMessage::new(b"msg1").into_inner().into())
+        .publish_message_with_validated_signature_to_current_session(
+            &TestEncapsulatedMessage::new(b"msg1").into_inner().into(),
+        )
         .unwrap();
     dialing_swarm
         .behaviour_mut()
-        .validate_and_publish_message(TestEncapsulatedMessage::new(b"msg2").into_inner().into())
+        .publish_message_with_validated_signature_to_current_session(
+            &TestEncapsulatedMessage::new(b"msg2").into_inner().into(),
+        )
         .unwrap();
 
     let mut events_to_match = 2u8;
@@ -59,11 +61,13 @@ async fn detect_spammy_peer() {
                     SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, NegotiatedPeerState::Spammy(SpamReason::TooManyMessages))) => {
                         assert_eq!(peer_id, *dialing_swarm.local_peer_id());
                         assert!(listening_swarm.behaviour().negotiated_peers.is_empty());
+                        assert!(listening_swarm.behaviour().message_cache.messages_from_peer(dialing_swarm.local_peer_id()).count() == 2);
                         events_to_match -= 1;
                     }
                     SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } => {
                         assert_eq!(peer_id, *dialing_swarm.local_peer_id());
                         assert!(endpoint.is_listener());
+                        assert!(listening_swarm.behaviour().message_cache.messages_from_peer(dialing_swarm.local_peer_id()).count() == 0);
                         events_to_match -= 1;
                     }
                     _ => {}
@@ -81,15 +85,13 @@ async fn detect_spammy_peer() {
 async fn detect_unhealthy_peer() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
     let mut dialing_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id)
-            .with_membership(&nodes)
-            .build::<AlwaysTrueVerifier>()
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
     });
     let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
             .with_provider(IntervalProviderBuilder::default().with_range(1..=1).build())
-            .build::<AlwaysTrueVerifier>()
+            .build()
     });
 
     listening_swarm.listen().with_memory_addr_external().await;
@@ -144,15 +146,13 @@ async fn detect_unhealthy_peer() {
 async fn restore_healthy_peer() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
     let mut dialing_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
-        BehaviourBuilder::new(id)
-            .with_membership(&nodes)
-            .build::<AlwaysTrueVerifier>()
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
     });
     let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id)
             .with_membership(&nodes)
             .with_provider(IntervalProviderBuilder::default().with_range(1..=1).build())
-            .build::<AlwaysTrueVerifier>()
+            .build()
     });
 
     listening_swarm.listen().with_memory_addr_external().await;
@@ -166,8 +166,8 @@ async fn restore_healthy_peer() {
     // Send a message to the listening swarm to revert from unhealthy to healthy.
     dialing_swarm
         .behaviour_mut()
-        .force_send_message_to_peer(
-            &TestEncapsulatedMessage::new(b"msg"),
+        .force_send_message_to_current_session_peer(
+            &TestEncapsulatedMessage::new(b"msg").into_inner(),
             *listening_swarm.local_peer_id(),
         )
         .unwrap();

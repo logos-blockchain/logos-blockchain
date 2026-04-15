@@ -18,7 +18,7 @@ use overwatch::overwatch::OverwatchHandle;
 
 /// Secret `PoL` info associated to an epoch, as returned by the `PoL` info
 /// provider.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct PolEpochInfo {
     pub epoch: Epoch,
     pub poq_public_inputs: LeaderPublic,
@@ -249,6 +249,10 @@ where
     ChainService: ChainApi<RuntimeServiceId> + Sync,
     RuntimeServiceId: Sync,
 {
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     pub async fn tick(&mut self, new_tick: SlotTick) -> Option<EpochEvent> {
         // We try to validate the new tick, else we restore the last valid one that we
         // had.

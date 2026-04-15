@@ -415,6 +415,7 @@ fn plan_local_node_config(
             blend_port,
             base_consensus,
             base_time,
+            descriptors.config.test_context.as_deref(),
         )
         .map_err(|source| -> DynError { source.into() })?;
 
@@ -502,7 +503,7 @@ fn build_run_config(config: Config, genesis_tx: GenesisTx) -> RunConfig {
         sdp: sdp::serde::Config {
             declaration_id: None,
             wallet: sdp::serde::WalletConfig {
-                max_tx_fee: mantle::Value::MAX,
+                max_tx_fee: mantle::Value::MAX.into(),
                 funding_pk: config.consensus_config.funding_sk.as_public_key(),
             },
         },
@@ -578,7 +579,7 @@ fn build_cryptarchia_user_config(
         },
         leader: LeaderConfig {
             wallet: leader::WalletConfig {
-                max_tx_fee: mantle::Value::MAX,
+                max_tx_fee: mantle::Value::MAX.into(),
                 funding_pk: consensus.funding_pk,
             },
         },

@@ -23,7 +23,7 @@ pub enum ApiError {
     #[error("Missing parent while applying block {parent}, {info:?}")]
     ParentMissing {
         parent: HeaderId,
-        info: CryptarchiaInfo,
+        info: Box<CryptarchiaInfo>,
     },
     #[error("Failed to establish connection to chain-service: {0}")]
     CommsFailure(String),

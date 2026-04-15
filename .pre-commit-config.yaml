@@ -9,7 +9,10 @@ repos:
         entry: cargo +nightly-2026-01-18 fmt
         pass_filenames: false
       - id: clippy
-        args: ["--all", "--all-targets", "--all-features", "--", "-D", "warnings"]
+        name: cargo clippy
+        args:
+          ["--all", "--all-targets", "--all-features", "--", "-D", "warnings"]
+        pass_filenames: false
   - repo: https://github.com/EmbarkStudios/cargo-deny
     rev: 09faadcea2d0d1742492e6872b743d1e4d151a27 # 0.19.0
     hooks:

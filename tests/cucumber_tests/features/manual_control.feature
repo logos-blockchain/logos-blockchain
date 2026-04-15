@@ -132,7 +132,7 @@ Feature: Manual control of transactions
   Scenario: Start from snapshot and create new snapshot
     Given I have a devnet cluster with capacity of 2 nodes
     And we join an external network
-    And I will initialize started nodes from snapshot "SNAP_TEST_02" source node "NODE_1"
+    And I will initialize started nodes from snapshot "000_094_856" source node "NODE"
     And I will create a blockchain snapshot "SNAP_TEST_03" of all nodes when stopping
     And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
     And I have initial peers:
@@ -155,15 +155,20 @@ Feature: Manual control of transactions
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
-    When node "NODE_1" is at height 30200 in 30000 seconds
-    When node "NODE_2" is at height 30200 in 30000 seconds
+    And I have public cryptarchia endpoint peers:
+      | public_cryptarchia_endpoint               | username               | password              |
+      | https://devnet.blockchain.logos.co/node/0 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
+      | https://devnet.blockchain.logos.co/node/1 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
+      | https://devnet.blockchain.logos.co/node/2 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
+      | https://devnet.blockchain.logos.co/node/3 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
+    When I wait for all nodes to be synced to the chain
     Then I stop all nodes
 
   @transactions_devnet_manual_control
   Scenario: Start from base snapshot
     Given I have a devnet cluster with capacity of 2 nodes
     And we join an external network
-    And I will initialize started nodes from snapshot "000_076_658" source node "NODE"
+    And I will initialize started nodes from snapshot "000_094_856" source node "NODE"
     And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
     And I have initial peers:
       | initial_peer                                                                                  |
@@ -198,6 +203,7 @@ Feature: Manual control of transactions
   Scenario: Transactions devnet manual control
     Given I have a devnet cluster with capacity of 2 nodes
     And we join an external network
+    And I will initialize started nodes from snapshot "000_094_856" source node "NODE"
     And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
     And I have initial peers:
       | initial_peer                                                                                  |
@@ -235,6 +241,7 @@ Feature: Manual control of transactions
   Scenario: Transactions stress devnet manual control
     Given I have a devnet cluster with capacity of 10 nodes
     And we join an external network
+    And I will initialize started nodes from snapshot "000_094_856" source node "NODE"
     And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
     And I have initial peers:
       | initial_peer                                                                                  |

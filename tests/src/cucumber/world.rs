@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     env,
     fmt::Debug,
     num::NonZero,
@@ -21,7 +21,9 @@ use lb_testing_framework::{
     LbcEnv, LbcK8sManualCluster, LbcManualCluster, NodeHttpClient, ScenarioBuilder,
     ScenarioBuilderExt as _, configs::wallet::WalletAccount, workloads,
 };
-use testing_framework_core::scenario::{NodeControlCapability, Scenario, StartedNode};
+use testing_framework_core::scenario::{
+    NodeControlCapability, PeerSelection, Scenario, StartedNode,
+};
 use tokio::task::JoinHandle;
 use tracing::warn;
 
@@ -34,6 +36,7 @@ use crate::{
             set_default_env,
         },
         error::{StepError, StepResult},
+        fee_reserve::ScenarioFeeState,
         utils::{make_builder, shared_host_bin_path},
     },
     non_zero,
@@ -72,11 +75,27 @@ pub struct RunState {
     pub result: Option<Result<(), String>>,
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct WalletRuntimeState {
+    pub encumbered_tokens: Vec<Utxo>,
+    pub submitted_tx_hashes: Vec<TxHash>,
+    pub tracked_spent_fees: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct PublicCryptarchiaEndpointPeer {
     pub url: String,
     pub username: String,
     pub password: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct UserConfigOverride {
+    /// Dot-separated user config path, e.g.
+    /// `network.backend.swarm.gossipsub.retain_scores`.
+    pub path: String,
+    /// YAML value parsed from the step input.
+    pub value: serde_yaml::Value,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -117,6 +136,9 @@ pub struct ConsensusLivenessSpec {
 pub struct CucumberWorld {
     /// The deployer kind that this scenario is configured for.
     pub deployer: Option<DeployerKind>,
+    /// The unique test context, helfull to guarantee unique genesis transaction
+    /// inscription.
+    pub test_context: Option<String>,
     /// Base directory for scenario artifacts like logs and generated configs.
     pub scenario_base_dir: PathBuf,
     /// Automated: Scenario specification
@@ -152,17 +174,23 @@ pub struct CucumberWorld {
     /// Manual: Mapping of wallet account indices to their corresponding wallet
     /// account in the cluster.
     pub wallet_accounts: HashMap<usize, WalletAccount>,
+    /// Manual: Scenario-level fee sponsor configuration and accounting.
+    pub fee_state: ScenarioFeeState,
     /// Manual: Mapping of logical wallet names to a mapping of chain height to
     /// the
     pub wallet_tokens_per_block: HashMap<String, WalletTokenMap>,
-    /// Manual: Mapping of logical wallet names to the UTXOs that are currently
-    /// encumbered (i.e. spent but not yet finalized) for that wallet.
-    pub wallet_encumbered_tokens: HashMap<String, Vec<Utxo>>,
+    /// Manual: Mutable runtime state scoped to each logical wallet.
+    pub wallet_runtime_state: HashMap<String, WalletRuntimeState>,
     /// Manual:  Per node: `header_id` -> height
     pub node_header_heights: HashMap<String, HashMap<String, u64>>,
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
     /// IDs.
     pub node_peer_ids: HashMap<String, PeerId>,
+    /// Manual: `group_name` -> set of `node_names`. Empty means "no groups
+    /// defined" and all nodes participate.
+    pub node_groups: HashMap<String, BTreeSet<String>>,
+    /// Manual: `node_name` -> `group_name` reverse lookup.
+    pub node_to_group: HashMap<String, String>,
     /// Manual: Whether to populate the IBD peers for each node after starting
     /// them,
     pub populate_ibd_peers_from_initial_peers: Option<bool>,
@@ -176,6 +204,8 @@ pub struct CucumberWorld {
     /// Manual: Public base endpoints and credentials used to query
     /// `/cryptarchia/info` for external chain sync reference.
     pub public_cryptarchia_endpoint_peers: Option<Vec<PublicCryptarchiaEndpointPeer>>,
+    /// Manual: Dynamic user-config overrides applied on node startup.
+    pub user_config_overrides: Vec<UserConfigOverride>,
     /// Manual: If set, nodes use a `DeploymentSettings` loaded from disk
     /// bypassing generated genesis/test deployment.
     pub deployment_config_override_path: Option<PathBuf>,
@@ -239,6 +269,7 @@ impl Debug for CucumberWorld {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CucumberWorld")
             .field("deployer", &format!("{:?}", self.deployer))
+            .field("test_context", &format!("{:?}", self.test_context))
             .field("scenario_base_dir", &self.scenario_base_dir)
             .field("spec", &format!("{:?}", self.spec))
             .field("run", &format!("{:?}", self.run))
@@ -285,16 +316,20 @@ impl Debug for CucumberWorld {
                 &format!("{}", self.faucet_task_handles.as_ref().map_or(0, Vec::len)),
             )
             .field("wallet_accounts", &self.wallet_accounts.len())
+            .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field(
                 "wallet_tokens_per_block",
                 &self.wallet_tokens_per_block.len(),
             )
+            .field("wallet_runtime_state", &self.wallet_runtime_state.len())
             .field(
-                "wallet_encumbered_tokens",
-                &self.wallet_encumbered_tokens.len(),
+                "scenario_fee_encumbered_tokens",
+                &self.fee_state.encumbered_tokens_per_wallet.len(),
             )
             .field("node_header_heights", &self.node_header_heights.len())
             .field("node_peer_ids", &self.node_peer_ids.len())
+            .field("node_groups", &self.node_groups.len())
+            .field("node_to_group", &self.node_to_group.len())
             .field(
                 "initial_override_peers_display",
                 &initial_peers_override_display(self.initial_peers_override.as_ref()),
@@ -308,6 +343,10 @@ impl Debug for CucumberWorld {
                 &public_cryptarchia_endpoint_peers_display(
                     self.public_cryptarchia_endpoint_peers.as_ref(),
                 ),
+            )
+            .field(
+                "user_config_overrides",
+                &user_config_overrides_display(&self.user_config_overrides),
             )
             .field(
                 "deployment_config_override_path",
@@ -457,6 +496,11 @@ impl CucumberWorld {
     /// Set the deployer kind for this scenario.
     pub const fn set_deployer(&mut self, deployer: DeployerKind) {
         self.deployer = Some(deployer);
+    }
+
+    /// Set the unique test context for this scenario.
+    pub fn set_test_context(&mut self, test_context: String) {
+        self.test_context = Some(test_context);
     }
 
     /// Set the directory where scenario artifacts should be stored.
@@ -686,8 +730,38 @@ impl CucumberWorld {
             .clone())
     }
 
-    pub fn resolve_node_name(&self, node_name: &str) -> Result<String, StepError> {
-        self.resolve_node_runtime_name(node_name)
+    pub fn resolve_wallet_node_name(&self, wallet_name: &str) -> Result<String, StepError> {
+        Ok(self
+            .wallet_info
+            .get(wallet_name)
+            .ok_or(StepError::LogicalError {
+                message: format!("Wallet '{wallet_name}' not found"),
+            })?
+            .node_name
+            .clone())
+    }
+
+    /// Helper to resolve a list of node names to a `PeerSelection::Named` with
+    /// their corresponding started node names.
+    pub fn peer_selection_from_names(
+        &self,
+        initial_peers: &[String],
+    ) -> Result<PeerSelection, StepError> {
+        Ok(PeerSelection::Named(
+            self.resolve_named_peers(initial_peers),
+        ))
+    }
+
+    /// Helper to resolve a list of node names to their corresponding started
+    /// node names.
+    pub fn resolve_named_peers(&self, initial_peers: &[String]) -> Vec<String> {
+        initial_peers
+            .iter()
+            .map(|peer| {
+                self.resolve_node_runtime_name(peer)
+                    .unwrap_or_else(|_| peer.clone())
+            })
+            .collect()
     }
 
     /// Helper to resolve a node http client to the actual started node name.
@@ -701,6 +775,20 @@ impl CucumberWorld {
             .started_node
             .client
             .clone())
+    }
+
+    /// Helper to retrieve all node names.
+    pub fn all_node_names(&self) -> Vec<String> {
+        self.nodes_info.keys().cloned().collect::<Vec<_>>()
+    }
+
+    pub fn any_started_node(&self) -> Result<&NodeInfo, StepError> {
+        self.nodes_info
+            .values()
+            .next()
+            .ok_or_else(|| StepError::LogicalError {
+                message: "No started nodes available in world".to_owned(),
+            })
     }
 
     /// Helper to resolve all user wallet names to the actual wallet
@@ -753,19 +841,11 @@ impl CucumberWorld {
         &self,
         wallet: &WalletInfo,
         signed_tx: &SignedMantleTx,
+        node_client: &NodeHttpClient,
     ) -> Result<(), StepError> {
-        let node = self
-            .nodes_info
-            .get(&wallet.node_name)
-            .ok_or(StepError::LogicalError {
-                message: format!(
-                    "Node '{}' for wallet '{}' not found",
-                    wallet.node_name, wallet.wallet_name
-                ),
-            })?;
         tokio::time::timeout(
             Duration::from_secs(10),
-            node.started_node.client.submit_transaction(signed_tx),
+            node_client.submit_transaction(signed_tx),
         )
         .await
         .map_err(|_| StepError::Timeout {
@@ -834,6 +914,37 @@ impl CucumberWorld {
         format!("{:?}", FullDebugInfo(self))
     }
 
+    /// Record a submitted transaction hash for a wallet
+    pub fn record_submitted_tx_hash(&mut self, wallet_name: &str, tx_hash: TxHash) {
+        self.wallet_runtime_state
+            .entry(wallet_name.to_owned())
+            .or_default()
+            .submitted_tx_hashes
+            .push(tx_hash);
+    }
+
+    pub fn record_tracked_spent_fee(&mut self, wallet_name: &str, spent_fee: u64) {
+        self.wallet_runtime_state
+            .entry(wallet_name.to_owned())
+            .or_default()
+            .tracked_spent_fees += spent_fee;
+    }
+
+    #[must_use]
+    pub fn total_tracked_spent_fees(&self) -> u64 {
+        self.wallet_runtime_state
+            .values()
+            .map(|state| state.tracked_spent_fees)
+            .sum()
+    }
+
+    /// Get submitted transaction hashes for a wallet
+    pub fn submitted_tx_hashes_for_wallet(&self, wallet_name: &str) -> &[TxHash] {
+        self.wallet_runtime_state
+            .get(wallet_name)
+            .map_or(&[], |state| state.submitted_tx_hashes.as_slice())
+    }
+
     pub fn full_debug_info(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CucumberWorld")
             .field("deployer", &format!("{:?}", self.deployer))
@@ -886,19 +997,22 @@ impl CucumberWorld {
                 "wallet_accounts",
                 &wallet_accounts_display(&self.wallet_accounts),
             )
+            .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field(
                 "wallet_tokens_per_block",
                 &wallet_tokens_per_block_display(&self.wallet_tokens_per_block),
             )
             .field(
-                "wallet_encumbered_tokens",
-                &wallet_encumbered_tokens_display(&self.wallet_encumbered_tokens),
+                "wallet_runtime_state",
+                &wallet_runtime_state_display(&self.wallet_runtime_state),
             )
             .field(
                 "node_header_heights",
                 &node_header_heights_display(&self.node_header_heights),
             )
             .field("node_peer_ids", &node_peer_ids_display(&self.node_peer_ids))
+            .field("node_groups", &self.node_groups)
+            .field("node_to_group", &self.node_to_group)
             .field(
                 "initial_override_peers_display",
                 &initial_peers_override_display(self.initial_peers_override.as_ref()),
@@ -912,6 +1026,10 @@ impl CucumberWorld {
                 &public_cryptarchia_endpoint_peers_display(
                     self.public_cryptarchia_endpoint_peers.as_ref(),
                 ),
+            )
+            .field(
+                "user_config_overrides",
+                &user_config_overrides_display(&self.user_config_overrides),
             )
             .field(
                 "deployment_config_override_path",
@@ -1027,14 +1145,40 @@ fn wallet_tokens_per_block_display(
     format!("HashMap<String, WalletTokenMap>({})", blocks.join(", "))
 }
 
-fn wallet_encumbered_tokens_display(
-    wallet_encumbered_tokens: &HashMap<String, Vec<Utxo>>,
+fn wallet_runtime_state_display(
+    wallet_runtime_state: &HashMap<String, WalletRuntimeState>,
 ) -> String {
-    let tokens: Vec<_> = wallet_encumbered_tokens
+    let states: Vec<_> = wallet_runtime_state
         .iter()
-        .map(|(k, v)| format!("'{k}: {}'", v.len()))
+        .map(|(k, state)| {
+            format!(
+                "'{k}: encumbered={}, submitted={}, tracked_fees={}'",
+                state.encumbered_tokens.len(),
+                state.submitted_tx_hashes.len(),
+                state.tracked_spent_fees
+            )
+        })
         .collect();
-    format!("HashMap<String, Vec<Utxo>>({})", tokens.join(", "))
+    format!("HashMap<String, WalletRuntimeState>({})", states.join(", "))
+}
+
+fn fee_state_summary(fee_state: &ScenarioFeeState) -> String {
+    let sponsor = fee_state.sponsored_genesis_account.map_or_else(
+        || "none".to_owned(),
+        |account| {
+            format!(
+                "{}x{}",
+                account.token_count.get(),
+                account.token_value.get()
+            )
+        },
+    );
+
+    format!(
+        "sponsor={sponsor}, wallet_account={}, encumbered_by_wallet={}",
+        fee_state.wallet_account.is_some(),
+        fee_state.encumbered_tokens_per_wallet.len(),
+    )
 }
 
 fn node_header_heights_display(
@@ -1127,4 +1271,16 @@ fn deployment_config_override_path_display(
         || "None".to_owned(),
         |path| format!("Some({})", path.display()),
     )
+}
+
+fn user_config_overrides_display(overrides: &[UserConfigOverride]) -> String {
+    if overrides.is_empty() {
+        return "[]".to_owned();
+    }
+
+    let values = overrides
+        .iter()
+        .map(|override_item| format!("{}={:?}", override_item.path, override_item.value))
+        .collect::<Vec<_>>();
+    format!("[{}]", values.join(", "))
 }

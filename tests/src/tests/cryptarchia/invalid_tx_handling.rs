@@ -23,7 +23,11 @@ use serial_test::serial;
 #[tokio::test]
 #[serial]
 async fn invalid_transactions_are_handled() {
-    let topology = Topology::spawn(TopologyConfig::two_validators()).await;
+    let topology = Topology::spawn(
+        TopologyConfig::two_validators(),
+        Some("invalid_transactions_are_handled"),
+    )
+    .await;
     let validator = &topology.validators()[0];
 
     let validator_url = Url::parse(
@@ -154,8 +158,8 @@ fn create_invalid_transaction_with_id(id: usize) -> SignedMantleTx {
 
     let mantle_tx = MantleTx {
         ops: vec![Op::Transfer(transfer_op)],
-        storage_gas_price: 0,
-        execution_gas_price: 0,
+        storage_gas_price: 0.into(),
+        execution_gas_price: 0.into(),
     };
 
     let transfer_proof = ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap();

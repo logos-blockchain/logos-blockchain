@@ -81,6 +81,10 @@ time       = { default-features = false, version = "0.3" }
 tower      = { default-features = false, features = ["limit"], version = "0.4" }
 tower-http = { default-features = false, features = ["cors", "limit", "timeout", "trace"], version = "0.5" }
 
+# Jemalloc
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = { optional = true, version = "0.6" }
+
 [dev-dependencies]
 rand = { workspace = true }
 
@@ -89,6 +93,7 @@ config-gen      = ["lb-key-management-system-service/unsafe"]
 default         = ["config-gen", "tracing"]
 dhat-heap       = ["dep:dhat"]
 instrumentation = []
+jemalloc        = ["dep:tikv-jemallocator"]
 profiling       = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
 testing         = ["lb-key-management-system-service/unsafe"]
 tracing         = []

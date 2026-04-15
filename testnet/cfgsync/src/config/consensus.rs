@@ -34,7 +34,7 @@ pub fn create_consensus_configs(
         &mut sdp_notes,
         faucet_settings,
     );
-    let genesis_tx = create_genesis_tx(&utxos);
+    let genesis_tx = create_genesis_tx(&utxos, None);
     let consensus_configs = regular_note_keys
         .into_iter()
         .enumerate()

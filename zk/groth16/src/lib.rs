@@ -61,7 +61,7 @@ pub struct FrFromBytesError {
 
 pub fn fr_from_bytes(fr: &[u8]) -> Result<Fr, impl Error + use<>> {
     let n = BigUint::from_bytes_le(fr);
-    if n > <Fr as PrimeField>::MODULUS.into() {
+    if n >= <Fr as PrimeField>::MODULUS.into() {
         return Err(FrFromBytesError {
             parsed_bytes: n.to_string(),
             modulus: <Fr as PrimeField>::MODULUS.to_string(),

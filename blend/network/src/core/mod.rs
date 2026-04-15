@@ -4,8 +4,6 @@ pub mod with_edge;
 #[cfg(test)]
 mod tests;
 
-use lb_blend_message::encap;
-use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
 use lb_blend_scheduling::membership::Membership;
 use libp2p::{PeerId, StreamProtocol};
 
@@ -21,38 +19,9 @@ use crate::core::{
 /// A composed behaviour that wraps the two sub-behaviours for dealing with core
 /// and edge nodes.
 #[derive(lb_libp2p::NetworkBehaviour)]
-pub struct NetworkBehaviour<ProofsVerifier, ObservationWindowClockProvider> {
-    with_core: CoreToCoreBehaviour<ProofsVerifier, ObservationWindowClockProvider>,
-    with_edge: CoreToEdgeBehaviour<ProofsVerifier>,
-}
-
-impl<ProofsVerifier, ObservationWindowClockProvider>
-    NetworkBehaviour<ProofsVerifier, ObservationWindowClockProvider>
-{
-    pub const fn with_core(
-        &self,
-    ) -> &CoreToCoreBehaviour<ProofsVerifier, ObservationWindowClockProvider> {
-        &self.with_core
-    }
-
-    pub const fn with_core_mut(
-        &mut self,
-    ) -> &mut CoreToCoreBehaviour<ProofsVerifier, ObservationWindowClockProvider> {
-        &mut self.with_core
-    }
-
-    pub const fn with_edge(&self) -> &CoreToEdgeBehaviour<ProofsVerifier> {
-        &self.with_edge
-    }
-
-    pub const fn with_edge_mut(&mut self) -> &mut CoreToEdgeBehaviour<ProofsVerifier> {
-        &mut self.with_edge
-    }
-
-    pub fn finish_session_transition(&mut self) {
-        self.with_core_mut().finish_session_transition();
-        self.with_edge_mut().finish_session_transition();
-    }
+pub struct NetworkBehaviour<ObservationWindowClockProvider> {
+    with_core: CoreToCoreBehaviour<ObservationWindowClockProvider>,
+    with_edge: CoreToEdgeBehaviour,
 }
 
 pub struct Config {
@@ -60,61 +29,55 @@ pub struct Config {
     pub with_edge: CoreToEdgeConfig,
 }
 
-impl<ProofsVerifier, ObservationWindowClockProvider>
-    NetworkBehaviour<ProofsVerifier, ObservationWindowClockProvider>
-where
-    ProofsVerifier: Clone,
-{
+impl<ObservationWindowClockProvider> NetworkBehaviour<ObservationWindowClockProvider> {
     pub fn new(
         config: &Config,
         observation_window_clock_provider: ObservationWindowClockProvider,
-        current_membership: Membership<PeerId>,
+        current_session_info: (Membership<PeerId>, u64),
         local_peer_id: PeerId,
         protocol_name: StreamProtocol,
-        poq_verifier: ProofsVerifier,
     ) -> Self {
         Self {
             with_core: CoreToCoreBehaviour::new(
                 &config.with_core,
                 observation_window_clock_provider,
-                current_membership.clone(),
+                current_session_info.clone(),
                 local_peer_id,
                 protocol_name.clone(),
-                poq_verifier.clone(),
             ),
             with_edge: CoreToEdgeBehaviour::new(
                 &config.with_edge,
-                current_membership,
+                current_session_info.0,
                 protocol_name,
-                poq_verifier,
             ),
         }
     }
 
-    pub fn start_new_session(
-        &mut self,
-        new_membership: Membership<PeerId>,
-        new_verifier: ProofsVerifier,
-    ) {
+    pub fn start_new_session(&mut self, new_session_info: (Membership<PeerId>, u64)) {
         self.with_core_mut()
-            .start_new_session(new_membership.clone(), new_verifier.clone());
-        self.with_edge_mut()
-            .start_new_session(new_membership, new_verifier);
-    }
-}
-
-impl<ProofsVerifier, ObservationWindowClockProvider>
-    NetworkBehaviour<ProofsVerifier, ObservationWindowClockProvider>
-where
-    ProofsVerifier: encap::ProofsVerifier,
-{
-    pub fn start_new_epoch(&mut self, new_pol_inputs: LeaderInputs) {
-        self.with_core_mut().start_new_epoch(new_pol_inputs);
-        self.with_edge_mut().start_new_epoch(new_pol_inputs);
+            .start_new_session(new_session_info.clone());
+        self.with_edge_mut().start_new_session(new_session_info.0);
     }
 
-    pub fn finish_epoch_transition(&mut self) {
-        self.with_core_mut().finish_epoch_transition();
-        self.with_edge_mut().finish_epoch_transition();
+    pub const fn with_core(&self) -> &CoreToCoreBehaviour<ObservationWindowClockProvider> {
+        &self.with_core
+    }
+
+    pub const fn with_core_mut(
+        &mut self,
+    ) -> &mut CoreToCoreBehaviour<ObservationWindowClockProvider> {
+        &mut self.with_core
+    }
+
+    pub const fn with_edge(&self) -> &CoreToEdgeBehaviour {
+        &self.with_edge
+    }
+
+    pub const fn with_edge_mut(&mut self) -> &mut CoreToEdgeBehaviour {
+        &mut self.with_edge
+    }
+
+    pub fn finish_session_transition(&mut self) {
+        self.with_core_mut().finish_session_transition();
     }
 }

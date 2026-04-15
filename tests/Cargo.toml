@@ -13,6 +13,13 @@ version     = { workspace = true }
 [lints]
 workspace = true
 
+[dev-dependencies]
+divan       = { workspace = true }
+lb-core     = { workspace = true }
+lb-groth16  = { workspace = true }
+lb-mmr      = { workspace = true }
+lb-utxotree = { workspace = true }
+
 [dependencies]
 async-trait                      = "0.1"
 cucumber                         = { features = ["output-junit"], version = "=0.22.0" }
@@ -42,7 +49,6 @@ libp2p                           = "0.55.0"
 num-bigint                       = { default-features = false, version = "0.4" }
 rand                             = { workspace = true }
 reqwest                          = { features = ["json"], workspace = true }
-rpds                             = "1.1"
 serde_json                       = "1.0"
 serde_yaml                       = "0.9"
 serial_test                      = "3.1.1"
@@ -63,8 +69,20 @@ cucumber_stand_alone = []
 testing_framework    = []
 
 [[test]]
-name = "test_blend_local_setup"
-path = "src/tests/blend/local.rs"
+name = "blend_devnet_setup"
+path = "src/tests/blend/devnet.rs"
+
+[[test]]
+name = "test_blend_core_mode"
+path = "src/tests/blend/core.rs"
+
+[[test]]
+name = "test_blend_edge_mode"
+path = "src/tests/blend/edge.rs"
+
+[[test]]
+name = "test_blend_broadcast_mode"
+path = "src/tests/blend/broadcast.rs"
 
 [[test]]
 name = "test_cryptarchia_happy_path"
@@ -91,8 +109,16 @@ name = "test_mempool_api"
 path = "src/tests/mempool/api.rs"
 
 [[test]]
+name = "test_mantle_channel"
+path = "src/tests/mantle/channel.rs"
+
+[[test]]
 name = "test_mantle_sdp_ops"
 path = "src/tests/mantle/sdp_ops.rs"
+
+[[test]]
+name = "test_mantle_leader"
+path = "src/tests/mantle/leader.rs"
 
 [[test]]
 name = "test_cli_restart"
@@ -137,3 +163,7 @@ required-features = ["cucumber"]
 [[test]]
 name = "test_zone_sdk_e2e"
 path = "src/tests/zone_sdk/e2e.rs"
+
+[[bench]]
+harness = false
+name    = "voucher"

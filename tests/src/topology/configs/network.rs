@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use lb_libp2p::{Multiaddr, ed25519};
 use lb_node::config::network::serde as network;
-use lb_utils::net::get_available_udp_port;
+use lb_testing_framework::get_reserved_available_udp_port;
 
 use crate::node_address_from_port;
 
@@ -39,7 +39,7 @@ pub fn create_network_configs(
 
             network::SwarmConfig {
                 node_key,
-                port: get_available_udp_port().unwrap(),
+                port: get_reserved_available_udp_port().unwrap(),
                 chain_sync: network::chainsync::Config {
                     peer_response_timeout: Duration::from_secs(60),
                 },

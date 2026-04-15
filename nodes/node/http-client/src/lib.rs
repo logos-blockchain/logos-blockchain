@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use futures::{Stream, StreamExt as _};
-use lb_chain_broadcast_service::BlockInfo;
-use lb_chain_service::CryptarchiaInfo;
-pub use lb_chain_service::Slot;
+pub use lb_chain_broadcast_service::BlockInfo;
+pub use lb_chain_service::{CryptarchiaInfo, Slot, State};
 use lb_core::{
     block::Block,
     header::{ContentId, HeaderId},
@@ -52,7 +51,9 @@ pub struct ApiBlock {
 pub struct ProcessedBlockEvent {
     pub block: ApiBlock,
     pub tip: HeaderId,
+    pub tip_slot: Slot,
     pub lib: HeaderId,
+    pub lib_slot: Slot,
 }
 
 #[derive(thiserror::Error, Debug)]

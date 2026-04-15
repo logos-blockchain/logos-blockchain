@@ -48,13 +48,6 @@ pub enum ManualCommand {
         value: u64,
         cycles: usize,
     },
-    ContinuousFundingWallets {
-        coin_split_outputs: usize,
-        coin_split_value: u64,
-        transactions: usize,
-        value: u64,
-        cycles: usize,
-    },
     FaucetFundsAllUserWallets {
         rounds: usize,
     },
@@ -141,10 +134,6 @@ pub(crate) fn take_next_command(path: &Path) -> Result<Option<ManualCommand>, St
     Ok(selected)
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Enum match arms - useful to have in a single place."
-)]
 fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
     let parts: Vec<String> = raw
         .split(',')
@@ -221,13 +210,6 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
             to: parse_quoted_field(&parts, "to")?,
         }),
         "CONTINUOUS_USER_WALLETS" => Ok(ManualCommand::ContinuousUserWallets {
-            coin_split_outputs: parse_usize_field(&parts, "coin_split_outputs")?,
-            coin_split_value: parse_u64_field(&parts, "coin_split_value")?,
-            transactions: parse_usize_field(&parts, "transactions")?,
-            value: parse_u64_field(&parts, "value")?,
-            cycles: parse_usize_field(&parts, "cycles")?,
-        }),
-        "CONTINUOUS_FUNDING_WALLETS" => Ok(ManualCommand::ContinuousFundingWallets {
             coin_split_outputs: parse_usize_field(&parts, "coin_split_outputs")?,
             coin_split_value: parse_u64_field(&parts, "coin_split_value")?,
             transactions: parse_usize_field(&parts, "transactions")?,
@@ -427,6 +409,7 @@ mod tests {
 
     fn assert_balance_all_user_wallets_command() {
         let command = parse_ok("BALANCE_ALL_USER_WALLETS");
+
         assert!(matches!(
             command,
             ManualCommand::WalletBalanceAllUserWallets
@@ -435,6 +418,7 @@ mod tests {
 
     fn assert_balance_all_funding_wallets_command() {
         let command = parse_ok("BALANCE_ALL_FUNDING_WALLETS");
+
         assert!(matches!(
             command,
             ManualCommand::WalletBalanceAllFundingWallets
@@ -443,6 +427,7 @@ mod tests {
 
     fn assert_balance_all_wallets_command() {
         let command = parse_ok("BALANCE_ALL_WALLETS");
+
         assert!(matches!(command, ManualCommand::WalletBalanceAllWallets));
     }
 
@@ -495,27 +480,6 @@ mod tests {
                 && transactions == 4
                 && value == 50
                 && cycles == 3
-        ));
-    }
-
-    fn assert_continuous_funding_wallets_command() {
-        let command = parse_ok(
-            "CONTINUOUS_FUNDING_WALLETS, coin_split_outputs 8, coin_split_value 25, transactions 3, value 20, cycles 2",
-        );
-
-        assert!(matches!(
-            command,
-            ManualCommand::ContinuousFundingWallets {
-                coin_split_outputs,
-                coin_split_value,
-                transactions,
-                value,
-                cycles,
-            } if coin_split_outputs == 8
-                && coin_split_value == 25
-                && transactions == 3
-                && value == 20
-                && cycles == 2
         ));
     }
 
@@ -605,13 +569,6 @@ mod tests {
                 value: 0,
                 cycles: 0,
             },
-            ManualCommand::ContinuousFundingWallets {
-                coin_split_outputs: 0,
-                coin_split_value: 0,
-                transactions: 0,
-                value: 0,
-                cycles: 0,
-            },
             ManualCommand::FaucetFundsAllUserWallets { rounds: 0 },
             ManualCommand::FaucetFundsAllFundingWallets { rounds: 0 },
             ManualCommand::RestartNode {
@@ -688,10 +645,6 @@ mod tests {
                 }
                 ManualCommand::ContinuousUserWallets { .. } => {
                     assert_continuous_user_wallets_command();
-                    visited += 1;
-                }
-                ManualCommand::ContinuousFundingWallets { .. } => {
-                    assert_continuous_funding_wallets_command();
                     visited += 1;
                 }
                 ManualCommand::FaucetFundsAllUserWallets { .. } => {

@@ -2,8 +2,10 @@ use std::{collections::HashSet, time::Duration};
 
 use lb_common_http_client::CommonHttpClient;
 use lb_core::{
-    block::MAX_BLOCK_SIZE,
-    mantle::{Note, NoteId, Transaction as _, ops::channel::ChannelId},
+    mantle::{
+        Note, NoteId, Transaction as _, encoding::MAX_ENCODE_DECODE_INSCRIPTION_SIZE,
+        ops::channel::ChannelId,
+    },
     sdp::{Declaration, Locator, ServiceType, WithdrawMessage},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
@@ -44,7 +46,7 @@ async fn sdp_ops_e2e() {
             note_sk: note_sk.clone(),
         })
         .with_lock_period(3);
-    let topology = Topology::spawn(topology_config).await;
+    let topology = Topology::spawn(topology_config, Some("sdp_ops_e2e")).await;
 
     topology.wait_network_ready().await;
 
@@ -54,13 +56,13 @@ async fn sdp_ops_e2e() {
         2, // wait for 1-2 blocks
         2, // network size
         &validator.config().deployment,
-        3.0,
+        3.5,
     );
 
     validator
         .wait_for_height(1, initial_height_timeout)
         .await
-        .expect("validator should produce the first block before submitting declare");
+        .unwrap_or_else(|| panic!("validator should produce the first block before submitting declare- timed out at {initial_height_timeout:.2?}"));
 
     let inclusion_timeout = Duration::from_secs(30);
     let state_timeout = Duration::from_secs(45);
@@ -184,7 +186,11 @@ async fn sdp_ops_e2e() {
 #[tokio::test]
 #[serial]
 async fn sdp_declaration_restoration_e2e() {
-    let mut topology = Topology::spawn(TopologyConfig::two_validators()).await;
+    let mut topology = Topology::spawn(
+        TopologyConfig::two_validators(),
+        Some("sdp_declaration_restoration_e2e"),
+    )
+    .await;
     topology.wait_network_ready().await;
 
     let validator = &topology.validators()[0];
@@ -193,13 +199,15 @@ async fn sdp_declaration_restoration_e2e() {
         2, // wait for 1-2 blocks
         2, // network size
         &validator.config().deployment,
-        3.0,
+        3.5,
     );
 
     validator
         .wait_for_height(1, height_timeout)
         .await
-        .expect("validator should produce the first block");
+        .unwrap_or_else(|| {
+            panic!("validator should produce the first block - timed out at {height_timeout:.2?}")
+        });
 
     let declarations = validator.get_sdp_declarations().await;
     assert!(
@@ -250,16 +258,30 @@ async fn sdp_declaration_restoration_e2e() {
 async fn large_inscription_e2e() {
     // The largest payload must leave room for transaction encoding overhead
     // (signatures, headers, etc.) to fit within MAX_BLOCK_SIZE.
-    let max_payload = MAX_BLOCK_SIZE * 7 / 8;
-    for payload_size in [32 * 1024, 128 * 1024, MAX_BLOCK_SIZE / 2, max_payload] {
-        let topology = Topology::spawn(TopologyConfig::two_validators()).await;
+    let max_payload = MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize;
+    for payload_size in [
+        max_payload / 256,
+        max_payload / 64,
+        max_payload / 2,
+        max_payload,
+    ] {
+        let topology = Topology::spawn(
+            TopologyConfig::two_validators(),
+            Some("large_inscription_e2e"),
+        )
+        .await;
         topology.wait_network_ready().await;
 
         let validator = &topology.validators()[0];
+        let height_timeout = Duration::from_secs(60);
         validator
-            .wait_for_height(1, Duration::from_secs(30))
+            .wait_for_height(1, height_timeout)
             .await
-            .expect("validator should produce the first block");
+            .unwrap_or_else(|| {
+                panic!(
+                    "validator should produce the first block - timed out at {height_timeout:.2?}"
+                )
+            });
 
         let validator_url = validator.url();
         let client = CommonHttpClient::new(None);

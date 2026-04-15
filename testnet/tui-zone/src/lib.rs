@@ -3,7 +3,11 @@ use std::{collections::HashSet, fs, io::Write as _, path::Path};
 use clap::Parser;
 use lb_core::mantle::ops::channel::ChannelId;
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
-use lb_zone_sdk::sequencer::{Event, SequencerCheckpoint, ZoneSequencer};
+use lb_zone_sdk::{
+    CommonHttpClient,
+    adapter::NodeHttpClient,
+    sequencer::{Event, SequencerCheckpoint, ZoneSequencer},
+};
 use reqwest::Url;
 
 #[derive(Parser, Debug)]
@@ -79,8 +83,8 @@ pub async fn run(args: InscribeArgs) {
         println!("  Restored checkpoint from {}", args.checkpoint_path);
     }
 
-    let (sequencer, handle) =
-        ZoneSequencer::init(channel_id, signing_key, node_url, None, checkpoint);
+    let node = NodeHttpClient::new(CommonHttpClient::new(None), node_url);
+    let (sequencer, mut handle) = ZoneSequencer::init(channel_id, signing_key, node, checkpoint);
     sequencer.spawn();
 
     // Handle reorgs by re-publishing invalidated inscriptions that
@@ -99,7 +103,7 @@ pub async fn run(args: InscribeArgs) {
                         adopted.into_iter().map(|a| a.payload).collect();
                     for inv in invalidated {
                         if !adopted_payloads.contains(&inv.payload)
-                            && let Err(e) = reorg_handle.publish(inv.payload).await
+                            && let Err(e) = reorg_handle.publish_message(inv.payload).await
                         {
                             eprintln!("  Failed to re-publish after reorg: {e}");
                         }
@@ -115,6 +119,10 @@ pub async fn run(args: InscribeArgs) {
     let mut input_handle = handle.clone();
     input_handle.wait_ready().await;
 
+    println!();
+    println!("Connecting to node...");
+    handle.wait_ready().await;
+    println!("Sequencer ready.");
     println!();
     println!("Type a message and press Enter to publish it as a zone block.");
     println!("Press Ctrl-D or type an empty line to exit.");
@@ -146,7 +154,7 @@ pub async fn run(args: InscribeArgs) {
         let id: u64 = rand::random();
         let tagged_payload = format!("{id:016x}:{msg}");
 
-        match handle.publish(tagged_payload.into_bytes()).await {
+        match handle.publish_message(tagged_payload.into_bytes()).await {
             Ok(result) => {
                 let tx_hash: [u8; 32] = result.inscription_id.into();
                 println!("  published: {}", hex::encode(tx_hash));

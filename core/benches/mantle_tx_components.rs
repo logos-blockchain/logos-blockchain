@@ -53,8 +53,8 @@ fn make_inscription_tx(payload_size: usize) -> MantleTx {
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key(),
         })],
-        execution_gas_price: 100,
-        storage_gas_price: 50,
+        execution_gas_price: 100.into(),
+        storage_gas_price: 50.into(),
     }
 }
 

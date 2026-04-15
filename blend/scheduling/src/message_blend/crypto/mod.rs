@@ -4,10 +4,13 @@ use derivative::Derivative;
 use lb_blend_message::{
     Error,
     encap::{
-        encapsulated::EncapsulatedMessage, validated::EncapsulatedMessageWithVerifiedPublicHeader,
+        encapsulated::EncapsulatedMessage,
+        validated::{
+            EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
+        },
     },
 };
-use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
+use lb_core::codec::{DeserializeOp as _, SerializeOp};
 use lb_key_management_system_keys::keys::X25519PrivateKey;
 
 pub mod core_and_leader;
@@ -33,12 +36,26 @@ pub struct SessionCryptographicProcessorSettings {
 }
 
 #[must_use]
-pub fn serialize_encapsulated_message(
+pub fn serialize_encapsulated_message_with_verified_public_header(
     message: &EncapsulatedMessageWithVerifiedPublicHeader,
 ) -> Vec<u8> {
+    serialize_message(message)
+}
+
+#[must_use]
+pub fn serialize_encapsulated_message_with_verified_signature(
+    message: &EncapsulatedMessageWithVerifiedSignature,
+) -> Vec<u8> {
+    serialize_message(message)
+}
+
+fn serialize_message<Message>(message: &Message) -> Vec<u8>
+where
+    Message: SerializeOp,
+{
     message
         .to_bytes()
-        .expect("EncapsulatedMessage should be serializable")
+        .expect("Message should be serializable")
         .to_vec()
 }
 

@@ -11,7 +11,7 @@ use lb_node::{
 };
 use tokio::runtime::Runtime;
 
-use crate::{LogosBlockchainNode, api::PointerResult, errors::OperationStatus};
+use crate::{LogosBlockchainNode, PointerResult, errors::OperationStatus};
 
 pub type InitializedLogosBlockchainNodeResult = PointerResult<LogosBlockchainNode, OperationStatus>;
 

@@ -1,7 +1,7 @@
 use std::{pin::Pin, time::Duration};
 
 use futures::{StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
-use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient, ProcessedBlockEvent, Slot};
+use lb_common_http_client::{ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -15,12 +15,14 @@ use lb_core::{
         tx::TxHash,
     },
 };
-use lb_key_management_system_service::keys::Ed25519Key;
-use reqwest::Url;
+use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, warn};
 
-use crate::state::{InscriptionInfo, TxState};
+use crate::{
+    adapter,
+    state::{InscriptionInfo, TxState},
+};
 
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -105,9 +107,27 @@ pub enum Event {
 }
 
 enum ActorRequest {
-    Publish {
+    /// Create/sign/submit a transaction with an inscription
+    PublishMessage {
         data: Vec<u8>,
         reply: tokio::sync::oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
+    },
+    /// Build an unsigned tx for the given ops and an inscription
+    ///
+    /// Calling this multiple times without submitting the prepared txs via
+    /// `SubmitSignedTx` can cause parent msg ID conflicts, so ensure
+    /// prepared txs are submitted promptly. If additional prepares are
+    /// unavoidable, handle potential conflicts carefully.
+    PrepareTx {
+        ops: Vec<Op>,
+        msg: Vec<u8>,
+        reply: tokio::sync::oneshot::Sender<Result<(MantleTx, MsgId, Ed25519Signature), Error>>,
+    },
+    /// Submit a signed tx associated with a msg ID
+    SubmitSignedTx {
+        tx: SignedMantleTx,
+        msg_id: MsgId,
+        reply: tokio::sync::oneshot::Sender<Result<PublishResult, Error>>,
     },
     SetKeys {
         keys: Vec<Ed25519PublicKey>,
@@ -125,15 +145,17 @@ enum InFlight {
 ///
 /// This is cheaply cloneable and can be shared across tasks.
 #[derive(Clone)]
-pub struct SequencerHandle {
+pub struct SequencerHandle<Node> {
     request_tx: mpsc::Sender<ActorRequest>,
-    node_url: Url,
-    http_client: CommonHttpClient,
+    node: Node,
     event_tx: broadcast::Sender<Event>,
     ready_rx: tokio::sync::watch::Receiver<bool>,
 }
 
-impl SequencerHandle {
+impl<Node> SequencerHandle<Node>
+where
+    Node: adapter::Node + Sync,
+{
     /// Subscribe to sequencer events.
     ///
     /// Use this with [`spawn`](ZoneSequencer::spawn) to react to events
@@ -161,15 +183,13 @@ impl SequencerHandle {
         }
     }
 
-    /// Publish an inscription to the zone's channel.
+    /// Create/sign/submit a transaction with an inscription for the given
+    /// message to the zone's channel.
     ///
     /// Returns the inscription ID and a checkpoint for persistence.
-    ///
-    /// TODO: make fire-and-forget so clients can call from event handlers
-    /// without spawning a task. Currently goes through the actor loop.
-    pub async fn publish(&self, data: Vec<u8>) -> Result<PublishResult, Error> {
+    pub async fn publish_message(&self, data: Vec<u8>) -> Result<PublishResult, Error> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let request = ActorRequest::Publish {
+        let request = ActorRequest::PublishMessage {
             data,
             reply: reply_tx,
         };
@@ -188,11 +208,73 @@ impl SequencerHandle {
         info!("Created inscription {:?}", result.inscription_id);
 
         // Post to network (best effort, will be resubmitted if needed)
-        if let Err(e) = self
-            .http_client
-            .post_transaction(self.node_url.clone(), signed_tx)
+        if let Err(e) = self.node.post_transaction(signed_tx).await {
+            warn!("Failed to post transaction: {e}");
+        }
+
+        Ok(result)
+    }
+
+    /// Build a [`MantleTx`] for the given ops and an inscription message,
+    /// without submitting it.
+    ///
+    /// The returned [`MantleTx`] should be signed by all parties and submitted
+    /// via [`Self::submit_signed_tx`].
+    pub async fn prepare_tx(
+        &self,
+        ops: Vec<Op>,
+        data: Vec<u8>,
+    ) -> Result<(MantleTx, MsgId, Ed25519Signature), Error> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let request = ActorRequest::PrepareTx {
+            ops,
+            msg: data,
+            reply: reply_tx,
+        };
+
+        self.request_tx
+            .send(request)
             .await
-        {
+            .map_err(|_| Error::Unavailable {
+                reason: "actor channel closed",
+            })?;
+
+        reply_rx.await.map_err(|_| Error::Unavailable {
+            reason: "actor dropped reply",
+        })?
+    }
+
+    /// Submit a [`SignedMantleTx`] that is associated with a [`MsgId`]
+    pub async fn submit_signed_tx(
+        &self,
+        tx: SignedMantleTx,
+        msg_id: MsgId,
+    ) -> Result<PublishResult, Error> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let request = ActorRequest::SubmitSignedTx {
+            tx: tx.clone(),
+            msg_id,
+            reply: reply_tx,
+        };
+
+        self.request_tx
+            .send(request)
+            .await
+            .map_err(|_| Error::Unavailable {
+                reason: "actor channel closed",
+            })?;
+
+        let result = reply_rx.await.map_err(|_| Error::Unavailable {
+            reason: "actor dropped reply",
+        })??;
+
+        info!(
+            "Submitted tx including inscription {:?}",
+            result.inscription_id
+        );
+
+        // Post to network (best effort, will be resubmitted if needed)
+        if let Err(e) = self.node.post_transaction(tx).await {
             warn!("Failed to post transaction: {e}");
         }
 
@@ -242,11 +324,7 @@ impl SequencerHandle {
         info!("Submitted set_keys transaction {:?}", tx_hash);
 
         // Post to network (best effort, will be resubmitted if needed)
-        if let Err(e) = self
-            .http_client
-            .post_transaction(self.node_url.clone(), signed_tx)
-            .await
-        {
+        if let Err(e) = self.node.post_transaction(signed_tx).await {
             warn!("Failed to post set_keys transaction: {e}");
         }
 
@@ -275,12 +353,11 @@ impl SequencerHandle {
 /// The caller drives execution by calling [`next_event`](Self::next_event) in a
 /// loop. Publish and admin operations are submitted via the [`SequencerHandle`]
 /// which can be used from any task.
-pub struct ZoneSequencer {
+pub struct ZoneSequencer<Node> {
     // Config
     channel_id: ChannelId,
     signing_key: Ed25519Key,
-    node_url: Url,
-    http_client: CommonHttpClient,
+    node: Node,
     config: SequencerConfig,
 
     // Actor channel for receiving requests from other tasks
@@ -315,7 +392,10 @@ pub struct ZoneSequencer {
     ready_tx: tokio::sync::watch::Sender<bool>,
 }
 
-impl ZoneSequencer {
+impl<Node> ZoneSequencer<Node>
+where
+    Node: adapter::Node + Clone + Send + Sync + 'static,
+{
     /// Create a new sequencer with default configuration.
     ///
     /// Returns the sequencer (to drive via [`next_event`](Self::next_event))
@@ -327,15 +407,13 @@ impl ZoneSequencer {
     pub fn init(
         channel_id: ChannelId,
         signing_key: Ed25519Key,
-        node_url: Url,
-        auth: Option<BasicAuthCredentials>,
+        node: Node,
         checkpoint: Option<SequencerCheckpoint>,
-    ) -> (Self, SequencerHandle) {
+    ) -> (Self, SequencerHandle<Node>) {
         Self::init_with_config(
             channel_id,
             signing_key,
-            node_url,
-            auth,
+            node,
             SequencerConfig::default(),
             checkpoint,
         )
@@ -349,12 +427,10 @@ impl ZoneSequencer {
     pub fn init_with_config(
         channel_id: ChannelId,
         signing_key: Ed25519Key,
-        node_url: Url,
-        auth: Option<BasicAuthCredentials>,
+        node: Node,
         config: SequencerConfig,
         checkpoint: Option<SequencerCheckpoint>,
-    ) -> (Self, SequencerHandle) {
-        let http_client = CommonHttpClient::new(auth);
+    ) -> (Self, SequencerHandle<Node>) {
         let (request_tx, request_rx) = mpsc::channel(config.publish_channel_capacity);
 
         let (state, lib_slot, last_msg_id) = if let Some(cp) = checkpoint {
@@ -396,8 +472,7 @@ impl ZoneSequencer {
 
         let handle = SequencerHandle {
             request_tx,
-            node_url: node_url.clone(),
-            http_client: http_client.clone(),
+            node: node.clone(),
             event_tx: event_tx.clone(),
             ready_rx,
         };
@@ -405,8 +480,7 @@ impl ZoneSequencer {
         let sequencer = Self {
             channel_id,
             signing_key,
-            node_url,
-            http_client,
+            node,
             config,
             request_rx,
             state,
@@ -498,8 +572,7 @@ impl ZoneSequencer {
                         &mut self.current_tip,
                         &mut self.lib_slot,
                         self.channel_id,
-                        &self.http_client,
-                        &self.node_url,
+                        &self.node
                     )
                     .await;
 
@@ -528,8 +601,7 @@ impl ZoneSequencer {
                 enqueue_resubmit(
                     self.state.as_ref().unwrap(),
                     self.current_tip.unwrap(),
-                    &self.http_client,
-                    &self.node_url,
+                    &self.node,
                     &self.in_flight,
                     &mut self.resubmit_active,
                 );
@@ -562,8 +634,7 @@ impl ZoneSequencer {
             from_u64,
             batch_end,
             self.channel_id,
-            &self.http_client,
-            &self.node_url,
+            &self.node,
         )
         .await;
 
@@ -589,6 +660,10 @@ impl ZoneSequencer {
 
     /// Ensure the blocks stream is connected. Returns `false` if not yet
     /// ready (caller should return `None`).
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn ensure_connected(&mut self) -> bool {
         if self.blocks_stream.is_some() {
             return true;
@@ -596,7 +671,7 @@ impl ZoneSequencer {
 
         // Initialize state from consensus info if needed
         if self.state.is_none() {
-            match self.http_client.consensus_info(self.node_url.clone()).await {
+            match self.node.consensus_info().await {
                 Ok(info) => {
                     info!(
                         "Sequencer connected: tip={:?}, lib={:?}",
@@ -613,11 +688,7 @@ impl ZoneSequencer {
             }
         }
 
-        match self
-            .http_client
-            .get_blocks_stream(self.node_url.clone())
-            .await
-        {
+        match self.node.block_stream().await {
             Ok(stream) => {
                 self.blocks_stream = Some(Box::pin(stream));
             }
@@ -631,14 +702,9 @@ impl ZoneSequencer {
         // Check if we need incremental backfill from checkpoint to
         // current network LIB.
         if self.state.is_some() && self.backfill_from.is_none() {
-            match self.http_client.consensus_info(self.node_url.clone()).await {
+            match self.node.consensus_info().await {
                 Ok(info) => {
-                    let Ok(network_lib_slot) =
-                        get_lib_slot(&self.http_client, &self.node_url, info.lib).await
-                    else {
-                        warn!("Failed to get LIB slot for backfill check");
-                        return true;
-                    };
+                    let network_lib_slot = info.lib_slot;
                     let from: u64 = self.lib_slot.into();
                     let to: u64 = network_lib_slot.into();
                     if from < to {
@@ -718,7 +784,18 @@ impl ZoneSequencer {
     fn handle_request(&mut self, request: ActorRequest) {
         if !self.is_ready() {
             match request {
-                ActorRequest::Publish { reply, .. } | ActorRequest::SetKeys { reply, .. } => {
+                ActorRequest::PublishMessage { reply, .. }
+                | ActorRequest::SetKeys { reply, .. } => {
+                    drop(reply.send(Err(Error::Unavailable {
+                        reason: "sequencer not yet ready",
+                    })));
+                }
+                ActorRequest::PrepareTx { reply, .. } => {
+                    drop(reply.send(Err(Error::Unavailable {
+                        reason: "sequencer not yet ready",
+                    })));
+                }
+                ActorRequest::SubmitSignedTx { reply, .. } => {
                     drop(reply.send(Err(Error::Unavailable {
                         reason: "sequencer not yet ready",
                     })));
@@ -731,7 +808,7 @@ impl ZoneSequencer {
         let s = self.state.as_mut().unwrap();
 
         match request {
-            ActorRequest::Publish { data, reply } => {
+            ActorRequest::PublishMessage { data, reply } => {
                 // Derive publish parent from state instead of trusting
                 // last_msg_id blindly — handles branch switches correctly.
                 let parent = if let Some(tip) = self.current_tip {
@@ -754,6 +831,21 @@ impl ZoneSequencer {
                 };
                 drop(reply.send(Ok((signed_tx, result))));
             }
+            ActorRequest::PrepareTx { ops, msg, reply } => {
+                let result = prepare_tx(
+                    ops,
+                    self.channel_id,
+                    &self.signing_key,
+                    msg,
+                    self.last_msg_id,
+                );
+                // do not update last_msg_id since tx is not submitted yet
+                drop(reply.send(Ok(result)));
+            }
+            ActorRequest::SubmitSignedTx { tx, msg_id, reply } => {
+                let result = submit_signed_tx(s, tx, msg_id, &mut self.last_msg_id, self.lib_slot);
+                drop(reply.send(Ok(result)));
+            }
             ActorRequest::SetKeys { keys, reply } => {
                 let signed_tx = create_set_keys_tx(self.channel_id, &self.signing_key, keys);
                 s.submit_other(signed_tx.clone());
@@ -765,6 +857,24 @@ impl ZoneSequencer {
                 drop(reply.send(Ok((signed_tx, result))));
             }
         }
+    }
+}
+
+fn submit_signed_tx(
+    state: &mut TxState,
+    tx: SignedMantleTx,
+    msg_id: MsgId,
+    last_msg_id: &mut MsgId,
+    lib_slot: Slot,
+) -> PublishResult {
+    let id = tx.mantle_tx.hash();
+    state.submit_other(tx);
+    *last_msg_id = msg_id;
+
+    let checkpoint = build_checkpoint(state, *last_msg_id, lib_slot);
+    PublishResult {
+        inscription_id: id,
+        checkpoint,
     }
 }
 
@@ -785,15 +895,17 @@ struct BlockEventResult {
 
 /// Process a block event. Returns finalized tx hashes and optional channel
 /// update.
-async fn handle_block_event(
+async fn handle_block_event<Node>(
     event: &ProcessedBlockEvent,
     state: &mut Option<TxState>,
     current_tip: &mut Option<HeaderId>,
     lib_slot: &mut Slot,
     channel_id: ChannelId,
-    http_client: &CommonHttpClient,
-    node_url: &Url,
-) -> BlockEventResult {
+    node: &Node,
+) -> BlockEventResult
+where
+    Node: adapter::Node + Sync,
+{
     let block_id = event.block.header.id;
     let parent_id = event.block.header.parent_block;
     let tip = event.tip;
@@ -817,27 +929,20 @@ async fn handle_block_event(
     // 1. Backfill finalized blocks up to LIB (only when state's LIB is behind)
     let mut lib_finalized = Vec::new();
     if lib != s.lib() {
-        let Ok(new_lib_slot) = get_lib_slot(http_client, node_url, lib).await else {
-            warn!("Failed to get LIB slot during backfill, skipping");
-            return BlockEventResult {
-                newly_finalized: Vec::new(),
-                channel_update: None,
-            };
-        };
+        let new_lib_slot = event.lib_slot;
         let from: u64 = (*lib_slot).into();
         let to: u64 = new_lib_slot.into();
         if from < to {
-            lib_finalized =
-                fetch_and_process_blocks(s, from + 1, to, channel_id, http_client, node_url)
-                    .await
-                    .our_tx_hashes;
+            lib_finalized = fetch_and_process_blocks(s, from + 1, to, channel_id, node)
+                .await
+                .our_tx_hashes;
         }
         *lib_slot = new_lib_slot;
     }
 
     // 2. Backfill canonical chain if parent is missing
     if !s.has_block(&parent_id) && parent_id != s.lib() {
-        backfill_canonical(s, parent_id, channel_id, http_client, node_url).await;
+        backfill_canonical(s, parent_id, channel_id, node).await;
     }
 
     // Extract tx hashes and inscription info for our channel
@@ -956,17 +1061,6 @@ fn handle_inflight(event: InFlight, resubmit_active: &mut bool) {
     }
 }
 
-async fn get_lib_slot(
-    http_client: &CommonHttpClient,
-    node_url: &Url,
-    lib: HeaderId,
-) -> Result<Slot, lb_common_http_client::Error> {
-    Ok(http_client
-        .get_block(node_url.clone(), lib)
-        .await?
-        .map_or(Slot::genesis(), |block| block.header().slot()))
-}
-
 /// Result of fetching and processing a slot range.
 struct FetchedBatch {
     our_tx_hashes: Vec<TxHash>,
@@ -975,21 +1069,23 @@ struct FetchedBatch {
 
 /// Fetch blocks in a slot range, process them into state, and return
 /// discovered tx hashes and inscriptions.
-async fn fetch_and_process_blocks(
+async fn fetch_and_process_blocks<Node>(
     state: &mut TxState,
     from_slot: u64,
     to_slot: u64,
     channel_id: ChannelId,
-    http_client: &CommonHttpClient,
-    node_url: &Url,
-) -> FetchedBatch {
+    node: &Node,
+) -> FetchedBatch
+where
+    Node: adapter::Node + Sync,
+{
     let mut result = FetchedBatch {
         our_tx_hashes: Vec::new(),
         inscriptions: Vec::new(),
     };
 
-    match http_client
-        .get_blocks(node_url.clone(), from_slot, to_slot)
+    match node
+        .blocks(Slot::from(from_slot), Slot::from(to_slot))
         .await
     {
         Ok(blocks) => {
@@ -1028,13 +1124,18 @@ async fn fetch_and_process_blocks(
 /// Uses `state.lib()` during replay to avoid premature finalization.
 /// The caller is responsible for triggering finalization after backfill
 /// completes.
-async fn backfill_canonical(
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: address this in a dedicated refactor"
+)]
+async fn backfill_canonical<Node>(
     state: &mut TxState,
     missing_parent: HeaderId,
     channel_id: ChannelId,
-    http_client: &CommonHttpClient,
-    node_url: &Url,
-) {
+    node: &Node,
+) where
+    Node: adapter::Node + Sync,
+{
     debug!("Backfilling canonical chain from {:?}", missing_parent);
 
     let mut blocks_to_process = Vec::new();
@@ -1043,7 +1144,7 @@ async fn backfill_canonical(
 
     // Walk backwards until we find a known block or reach lib
     while !state.has_block(&current) && current != lib {
-        match http_client.get_block(node_url.clone(), current).await {
+        match node.block(current).await {
             Ok(Some(block)) => {
                 let parent = block.header().parent_block();
                 blocks_to_process.push(block);
@@ -1085,14 +1186,15 @@ async fn backfill_canonical(
     debug!("Canonical backfill complete");
 }
 
-fn enqueue_resubmit(
+fn enqueue_resubmit<Node>(
     state: &TxState,
     tip: HeaderId,
-    http_client: &CommonHttpClient,
-    node_url: &Url,
+    node: &Node,
     in_flight: &FuturesUnordered<BoxFuture<'static, InFlight>>,
     resubmit_active: &mut bool,
-) {
+) where
+    Node: adapter::Node + Clone + Send + Sync + 'static,
+{
     let pending: Vec<(InscriptionId, SignedMantleTx)> = state.pending_txs(tip);
 
     if pending.is_empty() {
@@ -1101,17 +1203,13 @@ fn enqueue_resubmit(
 
     debug!("Resubmitting {} pending inscription(s)", pending.len());
 
-    let client = http_client.clone();
-    let url = node_url.clone();
+    let node = node.clone();
     *resubmit_active = true;
 
     in_flight.push(Box::pin(async move {
         let mut results = Vec::with_capacity(pending.len());
         for (id, tx) in pending {
-            let result = client
-                .post_transaction(url.clone(), tx)
-                .await
-                .map_err(|e| e.to_string());
+            let result = node.post_transaction(tx).await.map_err(|e| e.to_string());
             results.push((id, result));
         }
         InFlight::ResubmittedBatch { results }
@@ -1196,10 +1294,11 @@ fn create_inscribe_tx(
     };
     let msg_id = inscribe_op.id();
 
+    // TODO: set realistic gas prices and fund tx
     let inscribe_tx = MantleTx {
         ops: vec![Op::ChannelInscribe(inscribe_op)],
-        storage_gas_price: 0,
-        execution_gas_price: 0,
+        storage_gas_price: 0.into(),
+        execution_gas_price: 0.into(),
     };
 
     let tx_hash = inscribe_tx.hash();
@@ -1223,10 +1322,11 @@ fn create_set_keys_tx(
         keys,
     };
 
+    // TODO: set realistic gas prices and fund tx
     let set_keys_tx = MantleTx {
         ops: vec![Op::ChannelSetKeys(set_keys_op)],
-        storage_gas_price: 0,
-        execution_gas_price: 0,
+        storage_gas_price: 0.into(),
+        execution_gas_price: 0.into(),
     };
 
     let tx_hash = set_keys_tx.hash();
@@ -1235,5 +1335,230 @@ fn create_set_keys_tx(
     SignedMantleTx {
         ops_proofs: vec![OpProof::Ed25519Sig(signature)],
         mantle_tx: set_keys_tx,
+    }
+}
+
+fn prepare_tx(
+    mut ops: Vec<Op>,
+    channel_id: ChannelId,
+    signing_key: &Ed25519Key,
+    inscription: Vec<u8>,
+    parent: MsgId,
+) -> (MantleTx, MsgId, Ed25519Signature) {
+    let inscription_op = InscriptionOp {
+        channel_id,
+        inscription,
+        parent,
+        signer: signing_key.public_key(),
+    };
+    let msg_id = inscription_op.id();
+    ops.push(Op::ChannelInscribe(inscription_op));
+
+    // TODO: set realistic gas prices and fund tx
+    let tx = MantleTx {
+        ops,
+        storage_gas_price: 0.into(),
+        execution_gas_price: 0.into(),
+    };
+
+    let inscription_sig = signing_key.sign_payload(tx.hash().as_signing_bytes().as_ref());
+
+    (tx, msg_id, inscription_sig)
+}
+
+#[cfg(test)]
+mod tests {
+    use async_trait::async_trait;
+    use futures::Stream;
+    use lb_common_http_client::{ApiBlock, ApiHeader, BlockInfo, CryptarchiaInfo, State};
+    use lb_core::{
+        block::Block,
+        header::ContentId,
+        mantle::{
+            Note, Utxo,
+            ops::{channel::deposit::DepositOp, transfer::TransferOp},
+        },
+        proofs::leader_proof::Groth16LeaderProof,
+    };
+    use lb_key_management_system_service::keys::ZkKey;
+    use num_bigint::BigUint;
+
+    use super::*;
+    use crate::ZoneMessage;
+
+    #[tokio::test]
+    async fn prepare_submit_deposit_and_inscription() {
+        // Init a sequencer
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let (node, mut posted_txs) = MockNode::new();
+        let (sequencer, mut handle) = ZoneSequencer::init(channel_id, sequencer_key, node, None);
+        let _join_handle = sequencer.spawn();
+        handle.wait_ready().await;
+
+        // Prepare a deposit op and a transfer op using a depositer's key.
+        // The transfer op burns the same amount of tokens as the deposit amount.
+        let depositer_key = ZkKey::zero();
+        let input_note = Utxo::new(
+            TxHash::from(BigUint::ZERO),
+            0,
+            Note::new(30, depositer_key.to_public_key()),
+        );
+        let deposit_op = DepositOp {
+            channel_id,
+            amount: 10,
+            metadata: "to Alice".into(),
+        };
+        let transfer_op = TransferOp {
+            inputs: vec![input_note.id()],
+            // a change note
+            outputs: vec![Note::new(
+                input_note.note.value - deposit_op.amount,
+                depositer_key.to_public_key(),
+            )],
+        };
+
+        // Prepare a `MantleTx` with two operations prepared and a inscribe op
+        // that presents the zone state transition corresponding to the operations.
+        let (tx, msg_id, inscription_sig) = handle
+            .prepare_tx(
+                vec![
+                    Op::ChannelDeposit(deposit_op.clone()),
+                    Op::Transfer(transfer_op.clone()),
+                ],
+                "Mint 10 to Alice".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(tx.ops.len(), 3);
+        assert_eq!(&tx.ops[0], &Op::ChannelDeposit(deposit_op));
+        assert_eq!(&tx.ops[1], &Op::Transfer(transfer_op));
+        assert!(matches!(&tx.ops[2], &Op::ChannelInscribe(_)));
+
+        // Sign the `MantleTx` with the depositer's key, and put the signature in the
+        // 2nd position of proofs since the transfer op is the 2nd op.
+        let transfer_sig = depositer_key.sign_payload(tx.hash().as_ref()).unwrap();
+        let signed_tx = SignedMantleTx::new(
+            tx,
+            vec![
+                OpProof::NoProof,
+                OpProof::ZkSig(transfer_sig),
+                OpProof::Ed25519Sig(inscription_sig),
+            ],
+        )
+        .unwrap();
+
+        // Submit the signed tx
+        let result = handle
+            .submit_signed_tx(signed_tx.clone(), msg_id)
+            .await
+            .unwrap();
+        assert_eq!(result.inscription_id, signed_tx.mantle_tx.hash());
+        assert_eq!(result.checkpoint.last_msg_id, msg_id);
+        assert_eq!(posted_txs.recv().await.unwrap(), signed_tx);
+    }
+
+    #[derive(Clone)]
+    struct MockNode {
+        posted_transactions_sender: mpsc::Sender<SignedMantleTx>,
+    }
+
+    impl MockNode {
+        fn new() -> (Self, mpsc::Receiver<SignedMantleTx>) {
+            let (tx, rx) = mpsc::channel(10);
+            (
+                Self {
+                    posted_transactions_sender: tx,
+                },
+                rx,
+            )
+        }
+    }
+
+    #[async_trait]
+    impl adapter::Node for MockNode {
+        async fn consensus_info(&self) -> Result<CryptarchiaInfo, lb_common_http_client::Error> {
+            Ok(CryptarchiaInfo {
+                lib: HeaderId::from([0; 32]),
+                lib_slot: Slot::genesis(),
+                tip: HeaderId::from([0; 32]),
+                slot: Slot::genesis(),
+                height: 0,
+                mode: State::Online,
+            })
+        }
+
+        async fn block_stream(
+            &self,
+        ) -> Result<
+            impl Stream<Item = ProcessedBlockEvent> + Send + 'static,
+            lb_common_http_client::Error,
+        > {
+            Ok(futures::stream::once(async {
+                ProcessedBlockEvent {
+                    block: ApiBlock {
+                        header: ApiHeader {
+                            id: HeaderId::from([1; 32]),
+                            parent_block: HeaderId::from([0; 32]),
+                            slot: 1.into(),
+                            block_root: ContentId::from([0; 32]),
+                            proof_of_leadership: Groth16LeaderProof::genesis(),
+                        },
+                        transactions: Vec::new(),
+                    },
+                    tip: HeaderId::from([1; 32]),
+                    tip_slot: 1.into(),
+                    lib: HeaderId::from([0; 32]),
+                    lib_slot: Slot::genesis(),
+                }
+            })
+            .chain(futures::stream::pending()))
+        }
+
+        async fn lib_stream(
+            &self,
+        ) -> Result<impl Stream<Item = BlockInfo> + Send, lb_common_http_client::Error> {
+            Ok(futures::stream::pending())
+        }
+
+        async fn block(
+            &self,
+            _id: HeaderId,
+        ) -> Result<Option<Block<SignedMantleTx>>, lb_common_http_client::Error> {
+            unimplemented!()
+        }
+
+        async fn blocks(
+            &self,
+            _slot_from: Slot,
+            _slot_to: Slot,
+        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
+            unimplemented!()
+        }
+
+        async fn zone_messages_in_block(
+            &self,
+            _id: HeaderId,
+            _channel_id: ChannelId,
+        ) -> Result<impl Stream<Item = ZoneMessage>, lb_common_http_client::Error> {
+            Ok(futures::stream::pending())
+        }
+
+        async fn zone_messages_in_blocks(
+            &self,
+            _slot_from: Slot,
+            _slot_to: Slot,
+            _channel_id: ChannelId,
+        ) -> Result<impl Stream<Item = (ZoneMessage, Slot)>, lb_common_http_client::Error> {
+            Ok(futures::stream::pending())
+        }
+
+        async fn post_transaction(
+            &self,
+            tx: SignedMantleTx,
+        ) -> Result<(), lb_common_http_client::Error> {
+            self.posted_transactions_sender.send(tx).await.unwrap();
+            Ok(())
+        }
     }
 }

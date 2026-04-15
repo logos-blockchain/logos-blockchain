@@ -438,10 +438,8 @@ where
             handle.relay::<WalletService>().await?,
         );
 
-        let gas_context = wallet.get_gas_context(None).await?;
-        let tx_builder = MantleTxBuilder::new(gas_context)
-            .push_op(Op::ChannelDeposit(req.deposit))
-            .push_op(Op::Transfer(req.burn));
+        let tx_context = wallet.get_tx_context(None).await?;
+        let tx_builder = MantleTxBuilder::new(tx_context).push_op(Op::ChannelDeposit(req.deposit));
         let lb_wallet_service::TipResponse {
             tip,
             response: funded_tx_builder,
@@ -454,7 +452,7 @@ where
             )
             .await?;
 
-        let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>();
+        let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>()?;
         if tx_fee > req.max_tx_fee {
             return Err(overwatch::DynError::from(format!(
                 "tx_fee({tx_fee}) exceeds max_tx_fee({})",

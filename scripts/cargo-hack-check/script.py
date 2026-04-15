@@ -4,6 +4,8 @@
 
 import json
 import dataclasses
+import argparse
+import os
 from collections import namedtuple
 from pathlib import Path
 from sys import stderr
@@ -11,6 +13,8 @@ from typing import List, Dict, Set, Iterable, TypedDict, Any, Optional
 import heapq
 import subprocess
 import re
+import time
+from ui import CargoHackDashboard
 
 
 #################
@@ -31,6 +35,7 @@ WORKSPACE_CARGO_LOCK = WORKSPACE_ROOT / "Cargo.lock"
 CACHE_DIRECTORY = WORKSPACE_ROOT / ".cache/cargo-hack-check"
 COMPUTE_CREATE_HASH_SCRIPT = CURRENT_FILE_DIRECTORY / "compute_crate_hash.sh"
 TAG = "[Cargo Hack Powerset]"
+STRICT_WARNING_FLAG = "-D warnings"
 
 
 ###############
@@ -42,13 +47,10 @@ def with_tag(message: str) -> str:
     return f"{TAG} {message}"
 
 
-def with_tag_and_crate(crate: str, message: str) -> str:
-    return with_tag(f"({crate}) {message}")
-
-
 def with_indent(message: str, indent_level: int = 1, bullet: str = "-") -> str:
     indent = " " * indent_level
     return f"{indent}{bullet} {message}"
+
 
 def ensure_cache_directory_exists():
     CACHE_DIRECTORY.mkdir(parents=True, exist_ok=True)
@@ -59,6 +61,14 @@ def normalize_path_to_workspace_root(str_path: str) -> Path:
     if not path.is_absolute():
         path = WORKSPACE_ROOT / path
     return path.resolve()
+
+
+def build_cargo_environment() -> Dict[str, str]:
+    env = os.environ.copy()
+    rustflags = env.get("RUSTFLAGS", "").strip()
+    if STRICT_WARNING_FLAG not in rustflags:
+        env["RUSTFLAGS"] = f"{rustflags} {STRICT_WARNING_FLAG}".strip()
+    return env
 
 
 ###################################################### Workspace #######################################################
@@ -328,58 +338,92 @@ class CargoHackCheckEntry:
 
 
 class CargoHackCheckCommand:
-    def __init__(self, entry: CargoHackCheckEntry, member: WorkspaceMember, dependents: Set[WorkspaceMember]):
+    def __init__(self, entry, member, dependents):
         self.entry = entry
         self.member = member
-        self.dependents: Set[WorkspaceMember] = dependents
-        assert self.entry.manifest_path_posix == self.member.manifest_path_posix
+        self.dependents = dependents
 
     @property
-    def crate_name(self) -> str:
+    def crate_name(self):
         return self.member.name
 
-    def run(self) -> int:
+    def run(self, dashboard) -> int:
         current_cache_key = self.member.compute_cache_key()
+
         if self.member.is_cache_valid(current_cache_key):
-            print(with_tag_and_crate(self.crate_name, "Cache is valid, skipping."), file=stderr)
+            dashboard.log_crate_detail(self.crate_name, "Cache is valid, skipping.")
             return 0
 
-        print(with_tag_and_crate(self.crate_name, "Running..."), file=stderr)
-        result = subprocess.run(self.entry.as_feature_powerset_command(), capture_output=True, text=True, check=False)
+        dashboard.log_crate_detail(self.crate_name, "Running...")
 
-        # Only invalidate on success. On failure, dependent crates cannot be trusted.
-        # Invalidating them would only cause unnecessary work on the next run.
+        result = subprocess.run(
+            self.entry.as_feature_powerset_command(),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=build_cargo_environment(),
+        )
+
         if result.returncode == 0:
-            self.handle_success(current_cache_key)
+            self.handle_success(dashboard, current_cache_key)
         else:
-            self.handle_failure(result)
+            self.handle_failure(dashboard, result)
 
         return result.returncode
 
-    def handle_success(self, current_cache_key: str):
-        print(with_tag_and_crate(self.crate_name, "Succeeded."), file=stderr)
-        print(with_tag_and_crate(self.crate_name, "Updating cache..."), file=stderr)
+    # ----------------------------------------------------------
+
+    def handle_success(self, dashboard, current_cache_key: str):
+        dashboard.log_crate_detail(self.crate_name, "Succeeded.")
+        dashboard.log_crate_detail(self.crate_name, "Updating cache...")
+
         self.member.save_cache_key(current_cache_key)
-        print(with_tag_and_crate(self.crate_name, "Invalidating dependents..."), file=stderr)
-        self.invalidate_dependents()
-        print(with_tag_and_crate(self.crate_name, "Done."), file=stderr)
 
-    def handle_failure(self, result: subprocess.CompletedProcess):
-        print(with_tag_and_crate(self.crate_name, "Failed."), file=stderr)
-        print(result.stdout, end="", file=stderr)
-        print(result.stderr, end="", file=stderr)
+        dashboard.log_crate_detail(self.crate_name, "Invalidating dependents...")
 
-    def invalidate_dependents(self):
-        if len(self.dependents) == 0:
-            print(with_tag_and_crate(self.crate_name, "No dependents to invalidate."), file=stderr)
+        self.invalidate_dependents(dashboard)
+
+        dashboard.log_crate_detail(self.crate_name, "Done.")
+
+    # ----------------------------------------------------------
+
+    def handle_failure(self, dashboard, result):
+        dashboard.log_crate_detail(self.crate_name, "Failed.")
+        dashboard.log(result.stdout)
+        dashboard.log(result.stderr)
+
+    # ----------------------------------------------------------
+
+    def invalidate_dependents(self, dashboard):
+        if not self.dependents:
+            dashboard.log_crate_detail(self.crate_name, "No dependents to invalidate.")
             return
 
+        removed = 0
+        missing = 0
         for dependent in self.dependents:
             try:
                 dependent.get_cache_path().unlink(missing_ok=False)
-                print(with_indent(f"{dependent.name} was invalidated.", 4), file=stderr)
+                removed += 1
+                if dashboard.verbose:
+                    dashboard.log(
+                        with_indent(
+                            f"invalidated dependent cache for {dependent.name}.",
+                            4,
+                        )
+                    )
             except FileNotFoundError:
-                print(with_indent(f"{dependent.name} was not found in cache.", 4), file=stderr)
+                missing += 1
+                if dashboard.verbose:
+                    dashboard.log(
+                        with_indent(
+                            f"no dependent cache entry existed for {dependent.name}.",
+                            4,
+                        )
+                    )
+
+        dashboard.log_cache_invalidation_summary(removed, missing)
+
 
 
 #################
@@ -404,6 +448,7 @@ def list_cargo_hack_check_commands() -> Set[CargoHackCheckEntry]:
         stderr=subprocess.PIPE,
         text=True,
         check=True,
+        env=build_cargo_environment(),
     )
     return {CargoHackCheckEntry.from_command_line(line) for line in result.stdout.splitlines()}
 
@@ -427,18 +472,105 @@ def build_cargo_hack_commands_sorted_topologically() -> List[CargoHackCheckComma
 ######################################################## Main ##########################################################
 
 
-def main():
+# def main():
+    # sorted_commands = build_cargo_hack_commands_sorted_topologically()
+    # ensure_cache_directory_exists()
+    # for command in sorted_commands:
+    #     return_code = command.run()
+    #     if return_code != 0:
+    #         # Save time by exiting early since dependent crates cannot be trusted.
+    #         return return_code
+    # return 0
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run cache-aware cargo-hack feature powerset checks for workspace crates.",
+    )
+    output_mode = parser.add_mutually_exclusive_group()
+    output_mode.add_argument(
+        "--interactive",
+        action="store_true",
+        dest="interactive",
+        help="Force interactive output even if terminal auto-detection would disable it.",
+    )
+    output_mode.add_argument(
+        "--plain",
+        action="store_true",
+        dest="plain",
+        help="Force plain line-based output even if terminal auto-detection would enable interactive output.",
+    )
+    parser.add_argument(
+        "--continue-on-failure",
+        action="store_true",
+        help="Continue checking remaining crates after a failure; exit non-zero if any crate fails.",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show detailed cache invalidation output for each dependent crate.",
+    )
+    return parser.parse_args()
+
+
+def main(args: argparse.Namespace):
     sorted_commands = build_cargo_hack_commands_sorted_topologically()
     ensure_cache_directory_exists()
-    for command in sorted_commands:
-        return_code = command.run()
-        if return_code != 0:
-            # Save time by exiting early since dependent crates cannot be trusted.
-            return return_code
-    return 0
 
+    rich_enabled = True if args.interactive else False if args.plain else None
+    max_crate_name_width = max((len(command.crate_name) for command in sorted_commands), default=0)
+    dashboard = CargoHackDashboard(
+        len(sorted_commands),
+        TAG,
+        max_crate_name_width=max_crate_name_width,
+        rich_enabled=rich_enabled,
+        verbose=args.verbose,
+    )
+    failed_crates: List[str] = []
+
+    try:
+        for i, command in enumerate(sorted_commands, start=1):
+
+            cache_key = command.member.compute_cache_key()
+            was_cached = command.member.is_cache_valid(cache_key)
+
+            dashboard.start_crate(command.crate_name, i)
+
+            crate_started_at = time.monotonic()
+            rc = command.run(dashboard)
+            crate_elapsed = time.monotonic() - crate_started_at
+
+            dashboard.finish_crate(
+                crate_name=command.crate_name,
+                index=i,
+                skipped=was_cached,
+                success=(rc == 0 and not was_cached),
+                crate_elapsed=crate_elapsed,
+            )
+
+            if rc != 0:
+                failed_crates.append(command.crate_name)
+                if not args.continue_on_failure:
+                    dashboard.fail(command.crate_name)
+                    dashboard.print_summary(failed_crates, stopped_early=True)
+                    return rc
+
+        dashboard.finish()
+        dashboard.print_summary(failed_crates)
+        if failed_crates:
+            return 1
+        return 0
+
+    except KeyboardInterrupt:
+        dashboard.interrupt()
+        dashboard.close()
+        dashboard.print_summary(failed_crates, interrupted=True)
+        return 130
+
+    finally:
+        dashboard.close()
 
 if __name__ == "__main__":
-    status = main()
+    status = main(parse_args())
     # TODO: Return different exit code for "everything skipped", to avoid saving cache again.
     exit(status)

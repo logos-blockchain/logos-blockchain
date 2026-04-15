@@ -24,11 +24,16 @@ pub enum ChainApiRequest<Backend: StorageBackend> {
     },
     StoreBlock {
         header_id: HeaderId,
+        parent_id: HeaderId,
         block: <Backend as StorageChainApi>::Block,
     },
     RemoveBlock {
         header_id: HeaderId,
         response_tx: Sender<Option<Backend::Block>>,
+    },
+    GetBlockParent {
+        header_id: HeaderId,
+        response_tx: Sender<Option<HeaderId>>,
     },
     StoreImmutableBlockIds {
         ids: BTreeMap<Slot, HeaderId>,
@@ -64,13 +69,19 @@ where
                 header_id,
                 response_tx,
             } => handle_get_block(backend, header_id, response_tx).await,
-            Self::StoreBlock { header_id, block } => {
-                handle_store_block(backend, header_id, block).await
-            }
+            Self::StoreBlock {
+                header_id,
+                parent_id,
+                block,
+            } => handle_store_block(backend, header_id, parent_id, block).await,
             Self::RemoveBlock {
                 header_id,
                 response_tx,
             } => handle_remove_block(backend, header_id, response_tx).await,
+            Self::GetBlockParent {
+                header_id,
+                response_tx,
+            } => handle_get_block_parent(backend, header_id, response_tx).await,
             Self::StoreImmutableBlockIds { ids: block_ids } => {
                 handle_store_immutable_block_ids(backend, block_ids).await
             }
@@ -120,12 +131,34 @@ async fn handle_get_block<Backend: StorageBackend>(
 async fn handle_store_block<Backend: StorageBackend>(
     backend: &mut Backend,
     header_id: HeaderId,
+    parent_id: HeaderId,
     block: Backend::Block,
 ) -> Result<(), StorageServiceError> {
     backend
-        .store_block(header_id, block)
+        .store_block(header_id, parent_id, block)
         .await
         .map_err(|e| StorageServiceError::BackendError(e.into()))
+}
+
+async fn handle_get_block_parent<Backend: StorageBackend>(
+    backend: &mut Backend,
+    header_id: HeaderId,
+    response_tx: Sender<Option<HeaderId>>,
+) -> Result<(), StorageServiceError> {
+    let result = backend
+        .get_block_parent(header_id)
+        .await
+        .map_err(|e| StorageServiceError::BackendError(e.into()))?;
+
+    if response_tx.send(result).is_err() {
+        return Err(StorageServiceError::ReplyError {
+            message: format!(
+                "Failed to send reply for get block parent request by header_id: {header_id}"
+            ),
+        });
+    }
+
+    Ok(())
 }
 
 async fn handle_remove_block<B>(
@@ -216,10 +249,28 @@ impl<Api: StorageBackend> StorageMsg<Api> {
 
     pub const fn store_block_request(
         header_id: HeaderId,
+        parent_id: HeaderId,
         block: <Api as StorageChainApi>::Block,
     ) -> Self {
         Self::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::StoreBlock { header_id, block }),
+            request: StorageApiRequest::Chain(ChainApiRequest::StoreBlock {
+                header_id,
+                parent_id,
+                block,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub const fn get_block_parent_request(
+        header_id: HeaderId,
+        response_tx: Sender<Option<HeaderId>>,
+    ) -> Self {
+        Self::Api {
+            request: StorageApiRequest::Chain(ChainApiRequest::GetBlockParent {
+                header_id,
+                response_tx,
+            }),
         }
     }
 

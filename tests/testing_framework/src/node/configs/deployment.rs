@@ -2,7 +2,6 @@ use std::{collections::HashMap, error::Error, path::PathBuf, sync::Arc, time::Du
 
 use lb_core::mantle::genesis_tx::GenesisTx;
 use lb_node::config::RunConfig;
-use lb_utils::net::get_available_udp_port;
 use rand::{Rng, SeedableRng as _};
 use testing_framework_core::topology::{DeploymentProvider, DeploymentSeed, DynTopologyError};
 use thiserror::Error;
@@ -11,9 +10,12 @@ use super::{
     Libp2pNetworkLayout, NetworkParams,
     wallet::{WalletConfig, WalletConfigError},
 };
-use crate::node::{
-    DeploymentPlan, NodePlan,
-    configs::{Config, create_node_configs_from_ids, key_id_for_preload_backend, postprocess},
+use crate::{
+    get_reserved_available_udp_port,
+    node::{
+        DeploymentPlan, NodePlan,
+        configs::{Config, create_node_configs_from_ids, key_id_for_preload_backend, postprocess},
+    },
 };
 
 pub type DynError = Box<dyn Error + Send + Sync + 'static>;
@@ -49,6 +51,7 @@ pub struct TopologyConfig {
     node_config_overrides: HashMap<usize, RunConfig>,
     allow_multiple_genesis_tokens: bool,
     allow_zero_value_genesis_tokens: bool,
+    pub test_context: Option<String>,
 }
 
 impl TopologyConfig {
@@ -68,6 +71,12 @@ impl TopologyConfig {
     #[must_use]
     pub const fn with_allow_zero_value_genesis_tokens(mut self, allow_multiple: bool) -> Self {
         self.allow_zero_value_genesis_tokens = allow_multiple;
+        self
+    }
+
+    #[must_use]
+    pub fn with_test_context(mut self, test_context: Option<String>) -> Self {
+        self.test_context = test_context;
         self
     }
 
@@ -101,6 +110,7 @@ impl Default for TopologyConfig {
             node_config_overrides: HashMap::new(),
             allow_multiple_genesis_tokens: false,
             allow_zero_value_genesis_tokens: false,
+            test_context: None,
         }
     }
 }
@@ -161,6 +171,12 @@ impl DeploymentBuilder {
         self
     }
 
+    #[must_use]
+    pub fn with_test_context(mut self, test_context: &str) -> Self {
+        self.config.test_context = Some(test_context.to_owned());
+        self
+    }
+
     pub fn build(mut self) -> Result<DeploymentPlan, TopologyBuildError> {
         self.config.wallet_config.validate(
             self.config.allow_multiple_genesis_tokens,
@@ -180,6 +196,7 @@ impl DeploymentBuilder {
             &blend_ports,
             node_count,
             self.config.network_params.as_ref(),
+            self.config.test_context.as_deref(),
         );
 
         let wallet_accounts = self
@@ -195,6 +212,7 @@ impl DeploymentBuilder {
             &base_genesis_tx,
             &wallet_accounts,
             key_id_for_preload_backend,
+            self.config.test_context.as_deref(),
         );
 
         let nodes = build_node_plans(node_count, &ids, &node_configs)?;
@@ -208,7 +226,7 @@ fn allocate_blend_ports(node_count: usize) -> Result<Vec<u16>, TopologyBuildErro
     let mut ports = Vec::with_capacity(node_count);
 
     for _ in 0..node_count {
-        let Some(port) = get_available_udp_port() else {
+        let Some(port) = get_reserved_available_udp_port() else {
             return Err(TopologyBuildError::BlendPortAllocation);
         };
         ports.push(port);

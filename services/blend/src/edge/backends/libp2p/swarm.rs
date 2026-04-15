@@ -11,7 +11,7 @@ use lb_blend::{
     network::send_msg,
     scheduling::{
         membership::{Membership, Node},
-        serialize_encapsulated_message,
+        serialize_encapsulated_message_with_verified_public_header,
     },
 };
 use lb_libp2p::{DialError, DialOpts, SwarmEvent};
@@ -87,6 +87,8 @@ where
         let swarm = SwarmBuilder::with_existing_identity(identity)
             .with_tokio()
             .with_quic()
+            .with_dns()
+            .expect("DNS transport should be supported")
             .with_behaviour(|_| libp2p_stream::Behaviour::new())
             .expect("Behaviour should be built")
             .with_swarm_config(|cfg| {
@@ -303,7 +305,12 @@ where
         message: &EncapsulatedMessageWithVerifiedPublicHeader,
         (peer_id, connection_id): (PeerId, ConnectionId),
     ) {
-        match send_msg(stream, serialize_encapsulated_message(message)).await {
+        match send_msg(
+            stream,
+            serialize_encapsulated_message_with_verified_public_header(message),
+        )
+        .await
+        {
             Ok(stream) => {
                 self.handle_send_message_success(stream, (peer_id, connection_id))
                     .await;
