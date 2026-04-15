@@ -85,7 +85,10 @@ pub enum Error {
 #[derive(Debug, Clone)]
 pub enum Event {
     /// Transactions finalized (at or below LIB).
-    TxsFinalized { tx_hashes: Vec<TxHash> },
+    TxsFinalized {
+        tx_hashes: Vec<TxHash>,
+        inscriptions: Vec<InscriptionInfo>,
+    },
     /// Channel state changed.
     ///
     /// When `invalidated` is empty, this is a simple extension — new
@@ -323,7 +326,9 @@ where
         let finalized = async move {
             loop {
                 match event_rx.recv().await {
-                    Ok(Event::TxsFinalized { ref tx_hashes }) if tx_hashes.contains(&tx_hash) => {
+                    Ok(Event::TxsFinalized { ref tx_hashes, .. })
+                        if tx_hashes.contains(&tx_hash) =>
+                    {
                         return Ok(());
                     }
                     Ok(_) => {}
@@ -755,9 +760,11 @@ where
             adopted: u.adopted,
             new_channel_tip: u.new_channel_tip,
         });
-        let finalized_event = (!result.newly_finalized.is_empty()).then_some(Event::TxsFinalized {
-            tx_hashes: result.newly_finalized,
-        });
+        let finalized_event =
+            (!result.finalized_tx_hashes.is_empty()).then_some(Event::TxsFinalized {
+                tx_hashes: result.finalized_tx_hashes,
+                inscriptions: result.finalized_inscriptions,
+            });
 
         // Emit one event now, buffer the other if both exist
         match (channel_event, finalized_event) {
@@ -890,7 +897,8 @@ fn build_checkpoint(state: &TxState, last_msg_id: MsgId, lib_slot: Slot) -> Sequ
 
 /// Result of processing a block event.
 struct BlockEventResult {
-    newly_finalized: Vec<TxHash>,
+    finalized_tx_hashes: Vec<TxHash>,
+    finalized_inscriptions: Vec<InscriptionInfo>,
     channel_update: Option<crate::state::ChannelUpdateInfo>,
 }
 
@@ -919,7 +927,8 @@ where
 
     let Some(s) = state.as_mut() else {
         return BlockEventResult {
-            newly_finalized: Vec::new(),
+            finalized_tx_hashes: Vec::new(),
+            finalized_inscriptions: Vec::new(),
             channel_update: None,
         };
     };
@@ -959,7 +968,8 @@ where
 
     // Process the actual event block
     s.process_block(block_id, parent_id, lib, our_txs, inscriptions);
-    let mut newly_finalized = Vec::new();
+    let mut finalized_tx_hashes = Vec::new();
+    let mut finalized_inscriptions = Vec::new();
 
     // Finalize txs found in backfilled LIB blocks — this is ground truth
     // from the node. LIB blocks are truly final (can't be reorged), so
@@ -967,21 +977,21 @@ where
     // set may miss them due to gaps or reorgs in the block event stream.
     for tx_hash in &lib_finalized {
         if let Some(tx) = s.remove_pending(tx_hash) {
-            // Try to extract payload for debug
-            let payload_str: String = tx
-                .mantle_tx
-                .ops
-                .iter()
-                .find_map(|op| {
-                    if let Op::ChannelInscribe(i) = op {
-                        Some(String::from_utf8_lossy(&i.inscription).to_string())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| "non-inscription".to_owned());
-            debug!(" Backfill-finalized: payload={payload_str:?}, tx={tx_hash:?}");
-            newly_finalized.push(*tx_hash);
+            finalized_tx_hashes.push(*tx_hash);
+            for op in &tx.mantle_tx.ops {
+                if let Op::ChannelInscribe(inscribe) = op {
+                    debug!(
+                        " Backfill-finalized: payload={:?}, tx={tx_hash:?}",
+                        String::from_utf8_lossy(&inscribe.inscription)
+                    );
+                    finalized_inscriptions.push(InscriptionInfo {
+                        tx_hash: *tx_hash,
+                        parent_msg: inscribe.parent,
+                        this_msg: inscribe.id(),
+                        payload: inscribe.inscription.clone(),
+                    });
+                }
+            }
         }
     }
     *current_tip = Some(tip);
@@ -1020,7 +1030,8 @@ where
     }
 
     BlockEventResult {
-        newly_finalized,
+        finalized_tx_hashes,
+        finalized_inscriptions,
         channel_update,
     }
 }
