@@ -7,14 +7,15 @@ use serde::{Deserialize, Serialize};
 use crate::{
     crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTES_SIZE, Hash, Hasher, ZkHasher},
     mantle::{
-        Note, NoteId, Transaction, TransactionHasher, TxHash, Utxo, encoding::encode_transfer_op,
+        NoteId, Transaction, TransactionHasher, TxHash, encoding::encode_transfer_op,
+        ledger::Outputs, ops::OpId,
     },
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TransferOp {
     pub inputs: Vec<NoteId>,
-    pub outputs: Vec<Note>,
+    pub outputs: Outputs,
 }
 
 static TRANSFER_HASH_V1_FR: LazyLock<Fr> =
@@ -22,7 +23,7 @@ static TRANSFER_HASH_V1_FR: LazyLock<Fr> =
 
 impl TransferOp {
     #[must_use]
-    pub const fn new(inputs: Vec<NoteId>, outputs: Vec<Note>) -> Self {
+    pub const fn new(inputs: Vec<NoteId>, outputs: Outputs) -> Self {
         Self { inputs, outputs }
     }
 
@@ -38,34 +39,13 @@ impl TransferOp {
             .map(fr_from_bytes_unchecked);
         std::iter::once(*TRANSFER_HASH_V1_FR).chain(frs).collect()
     }
+}
 
-    #[must_use]
-    pub fn utxo_by_index(&self, index: usize) -> Option<Utxo> {
-        let transfer_id = self.id();
-        self.outputs.get(index).map(|note| Utxo {
-            op_id: transfer_id,
-            output_index: index,
-            note: *note,
-        })
-    }
-
-    #[must_use]
-    pub fn id(&self) -> Hash {
+impl OpId for TransferOp {
+    fn op_id(&self) -> Hash {
         let mut encoded_bytes: Vec<u8> = b"OPERATION_ID_V1".into();
         encoded_bytes.extend(encode_transfer_op(self));
         Hasher::digest(&encoded_bytes).into()
-    }
-
-    pub fn utxos(&self) -> impl Iterator<Item = Utxo> + '_ {
-        let transfer_id = self.id();
-        self.outputs
-            .iter()
-            .enumerate()
-            .map(move |(index, note)| Utxo {
-                op_id: transfer_id,
-                output_index: index,
-                note: *note,
-            })
     }
 }
 
@@ -86,6 +66,7 @@ mod test {
     use num_bigint::BigUint;
 
     use super::*;
+    use crate::mantle::{Note, Utxo};
 
     #[test]
     fn test_utxo_by_index() {
@@ -94,37 +75,37 @@ mod test {
         let pk2 = ZkPublicKey::from(Fr::from(BigUint::from(2u8)));
         let transfer = TransferOp {
             inputs: vec![NoteId(BigUint::from(0u8).into())],
-            outputs: vec![
+            outputs: Outputs::new(vec![
                 Note::new(100, pk0),
                 Note::new(200, pk1),
                 Note::new(300, pk2),
-            ],
+            ]),
         };
         assert_eq!(
-            transfer.utxo_by_index(0),
+            transfer.outputs.utxo_by_index(0, &transfer),
             Some(Utxo {
-                op_id: transfer.id(),
+                op_id: transfer.op_id(),
                 output_index: 0,
                 note: Note::new(100, pk0),
             })
         );
         assert_eq!(
-            transfer.utxo_by_index(1),
+            transfer.outputs.utxo_by_index(1, &transfer),
             Some(Utxo {
-                op_id: transfer.id(),
+                op_id: transfer.op_id(),
                 output_index: 1,
                 note: Note::new(200, pk1),
             })
         );
         assert_eq!(
-            transfer.utxo_by_index(2),
+            transfer.outputs.utxo_by_index(2, &transfer),
             Some(Utxo {
-                op_id: transfer.id(),
+                op_id: transfer.op_id(),
                 output_index: 2,
                 note: Note::new(300, pk2),
             })
         );
 
-        assert!(transfer.utxo_by_index(3).is_none());
+        assert!(transfer.outputs.utxo_by_index(3, &transfer).is_none());
     }
 }

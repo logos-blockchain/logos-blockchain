@@ -443,7 +443,7 @@ impl LedgerState {
     ) -> Result<(Self, Value), LedgerError<Id>> {
         let mut amount_withdrawed: Value = 0;
 
-        for utxo in withdraw_op.utxos() {
+        for utxo in withdraw_op.outputs.utxos(withdraw_op) {
             if utxo.note.value == 0 {
                 return Err(LedgerError::ZeroValueNote);
             }
@@ -494,7 +494,7 @@ impl LedgerState {
             return Err(LedgerError::InvalidProof);
         }
 
-        for utxo in transfer_op.utxos() {
+        for utxo in transfer_op.outputs.utxos(transfer_op) {
             if utxo.note.value == 0 {
                 return Err(LedgerError::ZeroValueNote);
             }
@@ -611,7 +611,11 @@ impl LedgerState {
             return Err(LedgerError::InputInGenesis(transfer_op.inputs[0]));
         }
 
-        Ok(Self::from_utxos(transfer_op.utxos(), config, epoch_nonce))
+        Ok(Self::from_utxos(
+            transfer_op.outputs.utxos(transfer_op),
+            config,
+            epoch_nonce,
+        ))
     }
 
     pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config, nonce: Fr) -> Self {
@@ -721,7 +725,8 @@ pub mod tests {
         crypto::{Digest as _, Hasher},
         mantle::{
             AuthenticatedMantleTx, MantleTx, Note, Op, OpProof::ZkSig, SignedMantleTx,
-            Transaction as _, gas::MainnetGasConstants, ops::leader_claim::VoucherCm,
+            Transaction as _, gas::MainnetGasConstants, ledger::Outputs,
+            ops::leader_claim::VoucherCm,
         },
         sdp::ServiceParameters,
     };
@@ -1316,7 +1321,7 @@ pub mod tests {
             .map(|(sk, _)| (*sk).clone())
             .collect::<Vec<_>>();
         let inputs = inputs.iter().map(|(_, utxo)| utxo.id()).collect::<Vec<_>>();
-        let transfer_op = TransferOp::new(inputs, outputs);
+        let transfer_op = TransferOp::new(inputs, Outputs::new(outputs));
         let mantle_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op.clone())],
             execution_gas_price: GENESIS_EXECUTION_GAS_PRICE,
@@ -1374,8 +1379,8 @@ pub mod tests {
         // Verify outputs were created
         let (_, transfer_op, _) =
             create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
-        let output_utxo1 = transfer_op.utxo_by_index(0).unwrap();
-        let output_utxo2 = transfer_op.utxo_by_index(1).unwrap();
+        let output_utxo1 = transfer_op.outputs.utxo_by_index(0, &transfer_op).unwrap();
+        let output_utxo2 = transfer_op.outputs.utxo_by_index(1, &transfer_op).unwrap();
 
         assert!(new_state.utxos.contains(&output_utxo1.id()));
         assert!(new_state.utxos.contains(&output_utxo2.id()));

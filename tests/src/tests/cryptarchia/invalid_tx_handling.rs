@@ -3,6 +3,7 @@ use std::{collections::HashSet, time::Duration};
 use lb_common_http_client::CommonHttpClient;
 use lb_core::mantle::{
     MantleTx, Note, Op, OpProof, SignedMantleTx, Transaction as _, TxHash,
+    ledger::Outputs,
     ops::{channel::ChannelId, transfer::TransferOp},
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
@@ -154,7 +155,7 @@ fn create_invalid_transaction_with_id(id: usize) -> SignedMantleTx {
         1000 + id as u64,
         ZkPublicKey::new(BigUint::from(1u8).into()),
     );
-    let transfer_op = TransferOp::new(vec![], vec![output_note]);
+    let transfer_op = TransferOp::new(vec![], Outputs::new(vec![output_note]));
 
     let mantle_tx = MantleTx {
         ops: vec![Op::Transfer(transfer_op)],

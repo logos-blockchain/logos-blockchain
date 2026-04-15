@@ -24,6 +24,7 @@ use super::{
     },
 };
 use crate::{
+    crypto::Hash,
     mantle::{
         encoding::{decode_op, encode_op},
         ops::{
@@ -36,6 +37,10 @@ use crate::{
         channel_withdraw_proof::ChannelWithdrawProof, leader_claim_proof::Groth16LeaderClaimProof,
     },
 };
+
+pub trait OpId {
+    fn op_id(&self) -> Hash;
+}
 
 /// Core set of supported Mantle operations.
 ///

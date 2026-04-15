@@ -317,11 +317,13 @@ fn decode_inputs(input: &[u8]) -> IResult<&[u8], Vec<NoteId>> {
     count(map(decode_field_element, NoteId), input_count as usize).parse(input)
 }
 
-fn decode_outputs(input: &[u8]) -> IResult<&[u8], Vec<Note>> {
+fn decode_outputs(input: &[u8]) -> IResult<&[u8], Outputs> {
     // Outputs = OutputCount *Note
     let (input, output_count) = decode_byte(input)?;
 
-    count(decode_note, output_count as usize).parse(input)
+    count(decode_note, output_count as usize)
+        .parse(input)
+        .map(|(bytes, notes)| (bytes, Outputs::new(notes)))
 }
 
 fn decode_transfer(input: &[u8]) -> IResult<&[u8], TransferOp> {
@@ -516,6 +518,7 @@ use super::ops::opcode;
 use crate::{
     block::MAX_BLOCK_SIZE,
     mantle::{
+        ledger::Outputs,
         ops::channel::{ChannelKeyIndex, withdraw::ChannelWithdrawOp},
         tx::MantleTxGasContext,
     },
@@ -1191,7 +1194,7 @@ mod tests {
         let pk = ZkPublicKey::from(BigUint::from(42u64));
         let note = Note::new(1000, pk);
         let note_id = NoteId(BigUint::from(123u64).into());
-        let transfer_op = TransferOp::new(vec![note_id], vec![note]);
+        let transfer_op = TransferOp::new(vec![note_id], Outputs::new(vec![note]));
 
         let original_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op)],
@@ -1526,7 +1529,10 @@ mod tests {
         let note_id2 = NoteId(BigUint::from(222u64).into());
         let note_id3 = NoteId(BigUint::from(333u64).into());
 
-        let transfer_op = TransferOp::new(vec![note_id1, note_id2, note_id3], vec![note1, note2]);
+        let transfer_op = TransferOp::new(
+            vec![note_id1, note_id2, note_id3],
+            Outputs::new(vec![note1, note2]),
+        );
 
         let mantle_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op)],
@@ -1572,7 +1578,7 @@ mod tests {
         let locked_note_sk = ZkKey::from(BigUint::from(1u64));
         let transfer_op = TransferOp {
             inputs: vec![NoteId(BigUint::from(777u64).into())],
-            outputs: vec![Note::new(5000, locked_note_sk.to_public_key())],
+            outputs: Outputs::new(vec![Note::new(5000, locked_note_sk.to_public_key())]),
         };
 
         let locator: multiaddr::Multiaddr = "/dns4/example.com/tcp/443".parse().unwrap();
@@ -1582,7 +1588,11 @@ mod tests {
             locators: vec![Locator::new(locator)],
             provider_id: ProviderId(signing_key1.public_key()),
             zk_id: zk_sk.to_public_key(),
-            locked_note_id: transfer_op.utxo_by_index(0).unwrap().id(),
+            locked_note_id: transfer_op
+                .outputs
+                .utxo_by_index(0, &transfer_op)
+                .unwrap()
+                .id(),
         };
 
         let mantle_tx = MantleTx {
@@ -1700,7 +1710,7 @@ mod tests {
         let mantle_tx = MantleTx {
             ops: vec![Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id: ChannelId::from([0xAB; 32]),
-                outputs: vec![note1, note2],
+                outputs: Outputs::new(vec![note1, note2]),
                 withdraw_nonce: 0,
             })],
             execution_gas_price: 100.into(),

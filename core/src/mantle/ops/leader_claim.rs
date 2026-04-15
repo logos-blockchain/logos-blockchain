@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     crypto::{Digest as _, Hash, Hasher, ZkHasher},
-    mantle::{Note, Utxo, Value, encoding::encode_leader_claim},
+    mantle::{Note, Utxo, Value, encoding::encode_leader_claim, ops::OpId},
 };
 
 static REWARD_VOUCHER: LazyLock<Fr> = LazyLock::new(|| {
@@ -39,24 +39,23 @@ pub struct LeaderClaimOp {
 
 impl LeaderClaimOp {
     #[must_use]
-    pub fn id(&self) -> Hash {
-        let encoded_bytes = encode_leader_claim(self);
-        let mut hasher = Hasher::new();
-        hasher.update(b"OPERATION_ID_V1");
-        hasher.update(encoded_bytes);
-        hasher.finalize().into()
-    }
-
-    #[must_use]
     pub fn utxo(&self, amount: Value) -> Utxo {
         Utxo {
-            op_id: self.id(),
+            op_id: self.op_id(),
             output_index: 0,
             note: Note {
                 value: amount,
                 pk: self.pk,
             },
         }
+    }
+}
+
+impl OpId for LeaderClaimOp {
+    fn op_id(&self) -> Hash {
+        let mut encoded_bytes: Vec<u8> = b"OPERATION_ID_V1".into();
+        encoded_bytes.extend(encode_leader_claim(self));
+        Hasher::digest(&encoded_bytes).into()
     }
 }
 

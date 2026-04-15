@@ -184,7 +184,7 @@ impl WalletState {
             }
 
             // Add new UTXOs (outputs) - only if they belong to our known keys
-            for utxo in transfer.utxos() {
+            for utxo in transfer.outputs.utxos(transfer) {
                 if known_keys.contains_key(&utxo.note.pk) {
                     let note_id = utxo.id();
                     utxos = utxos.insert(note_id, utxo);
@@ -353,6 +353,7 @@ mod tests {
         mantle::{
             Note, Op,
             gas::MainnetGasConstants as Gas,
+            ledger::Outputs,
             ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
             tx::MantleTxContext,
         },
@@ -467,7 +468,7 @@ mod tests {
         // - alice is minted 104 NMO in two notes (100 NMO and 4 NMO)
         let transfer1 = TransferOp {
             inputs: vec![],
-            outputs: vec![Note::new(100, alice), Note::new(4, alice)],
+            outputs: Outputs::new(vec![Note::new(100, alice), Note::new(4, alice)]),
         };
 
         let block_1 = WalletBlock {
@@ -480,14 +481,14 @@ mod tests {
 
         // Block 2
         //  - alice spends 100 NMO utxo, sending 20 NMO to bob and 80 to herself
-        let alice_100_nmo_utxo = transfer1.utxo_by_index(0).unwrap();
+        let alice_100_nmo_utxo = transfer1.outputs.utxo_by_index(0, &transfer1).unwrap();
 
         let block_2 = WalletBlock {
             id: HeaderId::from([2; 32]),
             parent: block_1.id,
             transfers: vec![TransferOp {
                 inputs: vec![alice_100_nmo_utxo.id()],
-                outputs: vec![Note::new(20, bob), Note::new(80, alice)],
+                outputs: Outputs::new(vec![Note::new(20, bob), Note::new(80, alice)]),
             }],
         };
         wallet.apply_block(&block_2).unwrap();
@@ -545,10 +546,10 @@ mod tests {
             // ensure change was returned to alice
             assert_eq!(
                 transfer_op.outputs,
-                vec![Note {
+                Outputs::new(vec![Note {
                     value: 4190,
                     pk: alice,
-                }]
+                }])
             );
         } else {
             panic!("last op must be a transfer")
@@ -682,7 +683,7 @@ mod tests {
         if let Op::Transfer(transfer_op) =
             &funded_tx_wo_change.ops[funded_tx_wo_change.ops.len() - 1]
         {
-            assert_eq!(transfer_op.outputs, vec![]);
+            assert_eq!(transfer_op.outputs, Outputs::new(vec![]));
         } else {
             panic!("last op must be a transfer")
         }
@@ -737,7 +738,7 @@ mod tests {
         if let Op::Transfer(transfer_op) =
             &funded_tx_wo_change.ops[funded_tx_wo_change.ops.len() - 1]
         {
-            assert_eq!(transfer_op.outputs, vec![Note::new(1, alice)]);
+            assert_eq!(transfer_op.outputs, Outputs::new(vec![Note::new(1, alice)]));
         } else {
             panic!("the last operation must be a transfer")
         }

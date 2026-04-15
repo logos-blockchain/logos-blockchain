@@ -215,7 +215,7 @@ impl Channels {
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{Note, NoteId};
+    use lb_core::mantle::{Note, NoteId, ledger::Outputs};
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
 
@@ -308,10 +308,10 @@ mod tests {
             .withdraw(
                 &ChannelWithdrawOp {
                     channel_id,
-                    outputs: vec![Note {
+                    outputs: Outputs::new(vec![Note {
                         value: 6,
                         pk: ZkPublicKey::zero(),
-                    }],
+                    }]),
                     withdraw_nonce: 0,
                 },
                 6,
@@ -329,10 +329,10 @@ mod tests {
         let result = channels.withdraw(
             &ChannelWithdrawOp {
                 channel_id,
-                outputs: vec![Note {
+                outputs: Outputs::new(vec![Note {
                     value: 6,
                     pk: ZkPublicKey::zero(),
-                }],
+                }]),
                 withdraw_nonce: 0,
             },
             6,
@@ -346,10 +346,10 @@ mod tests {
         let result = Channels::new().withdraw(
             &ChannelWithdrawOp {
                 channel_id: ChannelId::from([0u8; 32]),
-                outputs: vec![Note {
+                outputs: Outputs::new(vec![Note {
                     value: 1,
                     pk: ZkPublicKey::zero(),
-                }],
+                }]),
                 withdraw_nonce: 0,
             },
             1,

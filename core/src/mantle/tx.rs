@@ -619,7 +619,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        mantle::{Note, ops::channel::inscribe::InscriptionOp},
+        mantle::{Note, ledger::Outputs, ops::channel::inscribe::InscriptionOp},
         proofs::channel_withdraw_proof::WithdrawSignature,
     };
 
@@ -691,7 +691,7 @@ mod tests {
         };
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
             channel_id,
-            outputs: vec![withdraw_note],
+            outputs: Outputs::new(vec![withdraw_note]),
             withdraw_nonce: 0,
         })]);
         let tx_hash = mantle_tx.hash();

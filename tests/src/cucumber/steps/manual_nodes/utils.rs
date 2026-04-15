@@ -9,7 +9,7 @@ use cucumber::gherkin::Table;
 use futures_util::future::try_join_all;
 use hex::ToHex as _;
 use lb_chain_service::CryptarchiaInfo;
-use lb_core::mantle::{GenesisTx as _, Utxo};
+use lb_core::mantle::{GenesisTx as _, Utxo, ops::OpId as _};
 use lb_http_api_common::paths::CRYPTARCHIA_INFO;
 use lb_libp2p::PeerId;
 use lb_node::config::{DeploymentSettings, RunConfig, WellKnownDeployment};
@@ -107,7 +107,7 @@ pub(crate) fn genesis_block_utxos(
     genesis_tx: &lb_core::mantle::genesis_tx::GenesisTx,
 ) -> Vec<Utxo> {
     let transfer_op = genesis_tx.genesis_transfer().clone();
-    let transfer_id = transfer_op.id();
+    let transfer_id = transfer_op.op_id();
 
     transfer_op
         .outputs

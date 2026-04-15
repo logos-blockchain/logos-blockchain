@@ -663,7 +663,7 @@ async fn collect_wallet_utxos(
         for tx in block.transactions() {
             // Unspent outputs
             for transfer in tx.mantle_tx.transfers() {
-                for utxo in transfer.utxos() {
+                for utxo in transfer.outputs.utxos(&transfer) {
                     if utxo.note.pk == wallet_pk {
                         owned.insert(utxo.id(), utxo);
                         if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {

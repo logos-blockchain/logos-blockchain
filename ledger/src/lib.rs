@@ -641,6 +641,7 @@ mod tests {
             MantleTx, Note, SignedMantleTx, Transaction as _,
             gas::{GasPrice, MainnetGasConstants},
             genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
+            ledger::Outputs,
             ops::{
                 channel::{
                     ChannelId, MsgId, deposit::DepositOp, inscribe::InscriptionOp,
@@ -670,7 +671,7 @@ mod tests {
         execution_price: GasPrice,
         storage_price: GasPrice,
     ) -> SignedMantleTx {
-        let transfer_op = TransferOp::new(inputs, outputs);
+        let transfer_op = TransferOp::new(inputs, Outputs::new(outputs));
         let mantle_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op)],
             execution_gas_price: execution_price,
@@ -818,7 +819,7 @@ mod tests {
 
         // Verify output was created
         if let Op::Transfer(transfer_op) = &tx.mantle_tx.ops[0] {
-            let output_utxo = transfer_op.utxo_by_index(0).unwrap();
+            let output_utxo = transfer_op.outputs.utxo_by_index(0, transfer_op).unwrap();
             assert!(new_state.latest_utxos().contains(&output_utxo.id()));
         } else {
             panic!("first op must be a transfer")
@@ -989,7 +990,7 @@ mod tests {
         };
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            outputs: vec![withdraw_note],
+            outputs: Outputs::new(vec![withdraw_note]),
             withdraw_nonce: 0,
         };
         let withdraw_tx = MantleTx {
@@ -1022,7 +1023,8 @@ mod tests {
             .balance;
         assert_eq!(channel_balance, utxo.note.value - withdraw_note.value);
         let withdraw_utxo = withdraw
-            .utxos()
+            .outputs
+            .utxos(&withdraw)
             .next()
             .expect("withdraw should have at least one utxo")
             .id();
@@ -1076,7 +1078,7 @@ mod tests {
         };
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            outputs: vec![withdraw_note],
+            outputs: Outputs::new(vec![withdraw_note]),
             withdraw_nonce: 0,
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
@@ -1123,7 +1125,8 @@ mod tests {
             channel_balance_after_withdraw
         );
         let withdraw_utxo = withdraw
-            .utxos()
+            .outputs
+            .utxos(&withdraw)
             .next()
             .expect("withdraw should have at least one utxo")
             .id();

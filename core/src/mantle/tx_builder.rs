@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, collections::HashMap};
+use std::{cmp::Ordering, collections::HashMap, ops::DerefMut as _};
 
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
@@ -7,6 +7,7 @@ use crate::{
     mantle::{
         NoteId,
         gas::{GasCost, GasOverflow, GasPrice},
+        ledger::Outputs,
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
         tx::MantleTxContext,
     },
@@ -34,7 +35,7 @@ impl MantleTxBuilder {
                 storage_gas_price: 0.into(),
             },
             ledger_inputs: vec![],
-            pending_transfer: TransferOp::new(vec![], vec![]),
+            pending_transfer: TransferOp::new(vec![], Outputs::new(vec![])),
             channel_withdraw_proofs: HashMap::new(),
             context,
         }
@@ -80,7 +81,7 @@ impl MantleTxBuilder {
 
     #[must_use]
     pub fn extend_ledger_outputs(mut self, notes: impl IntoIterator<Item = Note>) -> Self {
-        self.pending_transfer.outputs.extend(notes);
+        self.pending_transfer.outputs.deref_mut().extend(notes);
         self
     }
 
@@ -267,7 +268,7 @@ mod tests {
         };
         let op = ChannelWithdrawOp {
             channel_id: [0; 32].into(),
-            outputs: vec![withdraw_note],
+            outputs: Outputs::new(vec![withdraw_note]),
             withdraw_nonce: 0,
         };
 
@@ -362,7 +363,7 @@ mod tests {
             }))
             .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
-                outputs: vec![withdraw_note],
+                outputs: Outputs::new(vec![withdraw_note]),
                 withdraw_nonce: 0,
             }))
             .push_op(Op::LeaderClaim(LeaderClaimOp {

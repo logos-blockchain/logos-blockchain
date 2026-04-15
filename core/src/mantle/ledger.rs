@@ -8,9 +8,51 @@ use lb_poseidon2::Digest as _;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 
-use crate::crypto::{Hash, ZkHasher};
+use crate::{
+    crypto::{Hash, ZkHasher},
+    mantle::ops::OpId,
+};
 
 pub type Value = u64;
+
+#[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Outputs(Vec<Note>);
+
+impl Outputs {
+    #[must_use]
+    pub const fn new(notes: Vec<Note>) -> Self {
+        Self(notes)
+    }
+
+    pub fn utxos<O: OpId>(&self, op: &O) -> impl Iterator<Item = Utxo> {
+        self.0.iter().enumerate().map(move |(index, note)| Utxo {
+            op_id: op.op_id(),
+            output_index: index,
+            note: *note,
+        })
+    }
+
+    pub fn utxo_by_index<O: OpId>(&self, index: usize, op: &O) -> Option<Utxo> {
+        self.0.get(index).map(|note| Utxo {
+            op_id: op.op_id(),
+            output_index: index,
+            note: *note,
+        })
+    }
+}
+
+impl std::ops::Deref for Outputs {
+    type Target = Vec<Note>;
+    fn deref(&self) -> &Vec<Note> {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Outputs {
+    fn deref_mut(&mut self) -> &mut Vec<Note> {
+        &mut self.0
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]

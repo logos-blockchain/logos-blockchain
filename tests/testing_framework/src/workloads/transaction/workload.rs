@@ -9,8 +9,8 @@ use std::{
 
 use async_trait::async_trait;
 use lb_core::mantle::{
-    GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo, tx::MantleTxContext,
-    tx_builder::MantleTxBuilder,
+    GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo, ops::OpId as _,
+    tx::MantleTxContext, tx_builder::MantleTxBuilder,
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use rand::{seq::SliceRandom as _, thread_rng};
@@ -288,7 +288,7 @@ fn wallet_utxo_map(
     genesis_tx: &lb_core::mantle::genesis_tx::GenesisTx,
 ) -> HashMap<ZkPublicKey, Utxo> {
     let transfer_op = genesis_tx.genesis_transfer().clone();
-    let op_id = transfer_op.id();
+    let op_id = transfer_op.op_id();
 
     transfer_op
         .outputs
