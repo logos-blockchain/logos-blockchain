@@ -595,7 +595,9 @@ where
         session: u64,
         message_type: metrics::InboundMessageType,
     ) {
-        tracing::trace!("Received message from a peer: {msg:?}");
+        tracing::trace!(
+            "Received message from a peer: {msg:?} from session {session:?} of type {message_type:?}."
+        );
 
         if self.incoming_message_sender.send((msg, session)).is_err() {
             tracing::trace!(target: LOG_TARGET, "Failed to send incoming message to channel. No active listeners yet.");
