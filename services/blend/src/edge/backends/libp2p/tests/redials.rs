@@ -163,11 +163,7 @@ async fn edge_redial_uses_exponential_backoff() {
         })
         .await;
     let first_backoff = before_second_error.elapsed();
-    assert!(
-        first_backoff >= time::Duration::from_secs(2),
-        "First backoff should be >= 2s, was {:?}",
-        first_backoff
-    );
+    assert!(first_backoff >= time::Duration::from_secs(2));
 
     // Measure the delay until the third error. The retry (attempt 3) should be
     // delayed by 2^2 = 4 seconds.
@@ -181,9 +177,5 @@ async fn edge_redial_uses_exponential_backoff() {
         })
         .await;
     let second_backoff = before_third_error.elapsed();
-    assert!(
-        second_backoff >= time::Duration::from_secs(4),
-        "Second backoff should be >= 4s, was {:?}",
-        second_backoff
-    );
+    assert!(second_backoff >= time::Duration::from_secs(4));
 }

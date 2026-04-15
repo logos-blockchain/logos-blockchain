@@ -1,10 +1,14 @@
 use core::{
     num::{NonZeroU64, NonZeroUsize},
     ops::{Deref, RangeInclusive},
+    pin::Pin,
 };
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
-use futures::StreamExt as _;
+use futures::{StreamExt as _, stream::FuturesUnordered};
 use lb_blend::{
     message::encap::validated::{
         EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
@@ -34,7 +38,6 @@ use crate::{
             libp2p::{
                 LOG_TARGET, Libp2pBlendBackendSettings,
                 behaviour::{BlendBehaviour, BlendBehaviourEvent},
-                dials::{DialAttempt, Error, OngoingDials, SessionDialAttempt},
             },
         },
         settings::RunningBlendConfig as BlendConfig,
@@ -52,6 +55,33 @@ pub enum BlendSwarmMessage {
     CompleteSessionTransition,
 }
 
+pub struct DialAttempt {
+    /// Address of peer being dialed.
+    address: Multiaddr,
+    /// The latest (ongoing) attempt number.
+    attempt_number: NonZeroU64,
+}
+
+/// [`DialAttempt`] with session information, i.e., whether the attempt was made
+/// at this session or the previous one.
+pub enum SessionDialAttempt {
+    OngoingSession(Option<DialAttempt>),
+    PreviousSession,
+}
+
+#[cfg(test)]
+impl DialAttempt {
+    pub const fn address(&self) -> &Multiaddr {
+        &self.address
+    }
+
+    pub const fn attempt_number(&self) -> NonZeroU64 {
+        self.attempt_number
+    }
+}
+
+type PendingRetries = FuturesUnordered<Pin<Box<dyn Future<Output = (PeerId, DialAttempt)> + Send>>>;
+
 pub struct BlendSwarm<Rng, ObservationWindowProvider>
 where
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
@@ -62,7 +92,9 @@ where
     incoming_message_sender: broadcast::Sender<(EncapsulatedMessageWithVerifiedSignature, u64)>,
     public_info: PublicInfo<PeerId>,
     rng: Rng,
-    ongoing_dials: OngoingDials,
+    max_dial_attempts_per_connection: NonZeroU64,
+    ongoing_dials: HashMap<PeerId, DialAttempt>,
+    pending_retries: PendingRetries,
     minimum_network_size: NonZeroUsize,
 }
 
@@ -128,10 +160,11 @@ where
             incoming_message_sender,
             public_info: current_public_info,
             rng,
-            ongoing_dials: OngoingDials::new(
-                config.backend.max_dial_attempts_per_peer,
-                *config.backend.core_peering_degree.start() as usize,
+            max_dial_attempts_per_connection: config.backend.max_dial_attempts_per_peer,
+            ongoing_dials: HashMap::with_capacity(
+                *config.backend.core_peering_degree.start() as usize
             ),
+            pending_retries: FuturesUnordered::new(),
             minimum_network_size,
         };
 
@@ -231,7 +264,7 @@ where
                 match reason {
                     ConnectionUpgradeFailureReason::ConnectionFailure => {
                         // If we ran out of dial attempts, we try to connect to another random peer that we are not yet connected to, if the dial attempt was performed in the current session.
-                        let Ok(SessionDialAttempt::OngoingSession(Some(_))) = self.schedule_retry(peer) else {
+                        let SessionDialAttempt::OngoingSession(Some(_)) = self.schedule_retry(peer) else {
                             return;
                         };
                         self.check_and_dial_new_peers_except(Some(peer));
@@ -295,14 +328,14 @@ where
                 };
 
                 match self.schedule_retry(peer_id) {
-                    Ok(SessionDialAttempt::PreviousSession) => {
+                    SessionDialAttempt::PreviousSession => {
                         tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new session has cleared the map of pending dials. No retry will be performed.");
                     }
-                    Ok(SessionDialAttempt::OngoingSession(Some(_))) | Err(_) => {
+                    SessionDialAttempt::OngoingSession(Some(_)) => {
                         self.check_and_dial_new_peers_except(Some(peer_id));
                     }
                     // Retry in progress.
-                    Ok(SessionDialAttempt::OngoingSession(None)) => {}
+                    SessionDialAttempt::OngoingSession(None) => {}
                 }
             }
             _ => {
@@ -324,6 +357,7 @@ where
                     self.public_info.session.session_number,
                 ));
                 self.ongoing_dials.clear();
+                self.pending_retries.clear();
                 self.check_and_dial_new_peers_except(None);
             }
             BlendSwarmMessage::CompleteSessionTransition => {
@@ -359,7 +393,7 @@ where
                 self.handle_event(event);
                 predicate_matched
             }
-            Some((peer_id, dial_attempt)) = self.ongoing_dials.next() => {
+            Some((peer_id, dial_attempt)) = self.pending_retries.next() => {
                 self.execute_retry(peer_id, dial_attempt);
                 false
             }
@@ -400,7 +434,7 @@ where
             peer_id,
             DialAttempt {
                 address: address.clone(),
-                attempt_number: NonZeroU64::new(1).unwrap(),
+                attempt_number: 1.try_into().unwrap(),
             },
         );
 
@@ -423,14 +457,59 @@ where
     }
 
     #[cfg(test)]
-    pub const fn ongoing_dials(&self) -> &OngoingDials {
+    pub const fn ongoing_dials(&self) -> &HashMap<PeerId, DialAttempt> {
         &self.ongoing_dials
     }
 
-    /// Delegate to [`OngoingDials::schedule_retry`] for exponential-backoff
-    /// redial scheduling.
-    fn schedule_retry(&mut self, peer_id: PeerId) -> Result<SessionDialAttempt, Error> {
-        self.ongoing_dials.schedule_retry(peer_id)
+    #[cfg(test)]
+    pub fn pending_retries_count(&self) -> usize {
+        self.pending_retries.len()
+    }
+
+    /// Schedule a retry for a failed dial attempt with exponential backoff.
+    ///
+    /// The dial attempt is removed from `ongoing_dials` and, if the maximum
+    /// number of attempts has not been reached, a delayed future is pushed
+    /// into `pending_retries`. When the future fires, `execute_retry` will
+    /// re-check the peering degree before actually dialing.
+    ///
+    /// It returns:
+    ///
+    /// * `SessionDialAttempt::PreviousSession` if the peer is not being tracked
+    ///   in the map of ongoing dials, which means that a new session has been
+    ///   started and the dial attempts have been reset;
+    /// * `SessionDialAttempt::OngoingSession(None)` if a retry has been
+    ///   scheduled with exponential backoff;
+    /// * `SessionDialAttempt::OngoingSession(Some)` if the maximum attempts
+    ///   have been reached and the peer has been removed from the map of
+    ///   ongoing dials.
+    fn schedule_retry(&mut self, peer_id: PeerId) -> SessionDialAttempt {
+        let Some(dial_attempt) = self.ongoing_dials.remove(&peer_id) else {
+            tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new session has cleared the map of pending dials.");
+            return SessionDialAttempt::PreviousSession;
+        };
+        let new_attempt_number = dial_attempt.attempt_number.checked_add(1).unwrap();
+        if new_attempt_number > self.max_dial_attempts_per_connection {
+            tracing::debug!(target: LOG_TARGET, "Maximum attempts ({}) reached for peer {peer_id:?}. Re-dialing stopped.", self.max_dial_attempts_per_connection);
+            return SessionDialAttempt::OngoingSession(Some(dial_attempt));
+        }
+        let delay = Duration::from_secs(1 << (new_attempt_number.get() - 1));
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Scheduling retry {new_attempt_number} for peer {peer_id:?} in {} seconds.",
+            delay.as_secs()
+        );
+        self.pending_retries.push(Box::pin(async move {
+            tokio::time::sleep(delay).await;
+            (
+                peer_id,
+                DialAttempt {
+                    attempt_number: new_attempt_number,
+                    ..dial_attempt
+                },
+            )
+        }));
+        SessionDialAttempt::OngoingSession(None)
     }
 
     /// Called when a pending retry fires. Re-checks peering degree before
@@ -444,12 +523,19 @@ where
                 target: LOG_TARGET,
                 "Skipping retry for peer {peer_id:?}: peering degree already satisfied."
             );
-            self.ongoing_dials.remove(&peer_id);
             return;
         }
-        tracing::trace!(
+        tracing::debug!(
             target: LOG_TARGET,
-            "Executing backoff retry for peer {peer_id:?}."
+            "Executing backoff retry for peer {peer_id:?} (attempt {}).",
+            dial_attempt.attempt_number
+        );
+        self.ongoing_dials.insert(
+            peer_id,
+            DialAttempt {
+                address: dial_attempt.address.clone(),
+                ..dial_attempt
+            },
         );
         if let Err(e) = self.swarm.dial(
             DialOpts::peer_id(peer_id)
@@ -606,7 +692,9 @@ where
         Self {
             incoming_message_sender,
             public_info: current_public_info,
-            ongoing_dials: OngoingDials::new(max_dial_attempts_per_connection, 0),
+            max_dial_attempts_per_connection,
+            ongoing_dials: HashMap::new(),
+            pending_retries: FuturesUnordered::new(),
             rng,
             swarm: memory_test_swarm(
                 identity,

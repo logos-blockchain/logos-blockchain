@@ -1869,7 +1869,7 @@ where
 
     // Release all messages concurrently, and wait for all of them to be sent.
     join_all(message_futures).await;
-    tracing::debug!(
+    tracing::trace!(
         target: LOG_TARGET,
         "Sent out {data_count} data, {processed_count} processed and {cover_count} cover messages at this release window."
     );

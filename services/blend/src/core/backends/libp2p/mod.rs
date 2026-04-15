@@ -28,7 +28,6 @@ use crate::core::{
 const LOG_TARGET: &str = "blend::backend::libp2p";
 
 pub(crate) mod behaviour;
-mod dials;
 pub mod settings;
 pub use self::settings::Libp2pBlendBackendSettings;
 mod swarm;
