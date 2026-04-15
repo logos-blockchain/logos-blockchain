@@ -290,7 +290,7 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn block<HttpStorageAdapter, RuntimeServiceId>(
+pub async fn storage_block<HttpStorageAdapter, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(id): Json<HeaderId>,
 ) -> Response

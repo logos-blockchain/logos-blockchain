@@ -11,7 +11,7 @@ use utoipa::OpenApi;
         crate::api::handlers::cryptarchia_headers,
         crate::api::handlers::cryptarchia_lib_stream,
         crate::api::handlers::libp2p_info,
-        crate::api::handlers::block,
+        crate::api::handlers::storage_block,
         crate::api::handlers::add_tx,
         crate::api::handlers::post_declaration,
         crate::api::handlers::post_activity,

@@ -40,8 +40,8 @@ use utoipa::OpenApi as _;
 use utoipa_swagger_ui::SwaggerUi;
 
 use super::handlers::{
-    add_tx, block, blocks, blocks_stream, cryptarchia_headers, cryptarchia_info,
-    cryptarchia_lib_stream, libp2p_info, mantle_metrics, mantle_status, wallet,
+    add_tx, blocks, blocks_stream, cryptarchia_headers, cryptarchia_info, cryptarchia_lib_stream,
+    libp2p_info, mantle_metrics, mantle_status, storage_block, wallet,
 };
 use crate::{
     WalletService,
@@ -212,7 +212,7 @@ where
             )
             .route(
                 paths::STORAGE_BLOCK,
-                routing::post(block::<StorageAdapter, RuntimeServiceId>),
+                routing::post(storage_block::<StorageAdapter, RuntimeServiceId>),
             )
             .route(
                 paths::MEMPOOL_ADD_TX,
