@@ -57,56 +57,65 @@ impl GenesisBlock {
             transactions,
         }
     }
+
+    #[must_use]
+    pub fn genesis_tx(&self) -> GenesisTx {
+        self.transactions[0].clone()
+    }
 }
 
 // ── Typestate markers
 // ─────────────────────────────────────────────────────────
 
 /// Typestate marker: builder has no input yet.
-struct Empty;
+pub struct Empty;
 
 /// Typestate marker: builder holds a pre-validated [`GenesisTx`].
-struct WithGenesisTx {
+pub struct WithGenesisTx {
     tx: GenesisTx,
 }
 
 /// Typestate marker: builder has genesis transfer output notes only.
-struct WithNotes {
+pub struct WithNotes {
     notes: Vec<Note>,
 }
 
 /// Typestate marker: builder has a genesis inscription only.
-struct WithInscription {
+pub struct WithInscription {
     inscription: InscriptionOp,
 }
 
 /// Typestate marker: builder has SDP service-declaration ops only.
-struct WithDeclarations {
+pub struct WithDeclarations {
     sdp_declarations: Vec<SDPDeclareOp>,
 }
 
 /// Typestate marker: builder has genesis notes and an inscription.
-struct WithNotesAndInscription {
+pub struct WithNotesAndInscription {
     notes: Vec<Note>,
     inscription: InscriptionOp,
 }
 
 /// Typestate marker: builder has genesis notes and SDP declarations.
-struct WithNotesAndDeclarations {
+pub struct WithNotesAndDeclarations {
     notes: Vec<Note>,
     sdp_declarations: Vec<SDPDeclareOp>,
 }
 
 /// Typestate marker: builder has a genesis inscription and SDP declarations.
-struct WithInscriptionAndDeclarations {
+pub struct WithInscriptionAndDeclarations {
     inscription: InscriptionOp,
     sdp_declarations: Vec<SDPDeclareOp>,
 }
 
+#[expect(
+    clippy::too_long_first_doc_paragraph,
+    reason = "Its actually not that long..."
+)]
 /// Typestate marker: builder holds all three pieces required to assemble a
 /// [`GenesisTx`] — notes, an inscription, and at least one SDP declaration.
 /// This is the only state that exposes [`GenesisBlockBuilder::build`].
-struct WithAll {
+pub struct WithAll {
     notes: Vec<Note>,
     inscription: InscriptionOp,
     sdp_declarations: Vec<SDPDeclareOp>,
@@ -203,7 +212,10 @@ impl GenesisBlockBuilder<Empty> {
         notes: impl IntoIterator<Item = impl Into<Note>>,
     ) -> GenesisBlockBuilder<WithNotes> {
         let mut iter = notes.into_iter().peekable();
-        assert!(iter.peek().is_some(), "add_notes called with empty iterator");
+        assert!(
+            iter.peek().is_some(),
+            "add_notes called with empty iterator"
+        );
         GenesisBlockBuilder {
             state: WithNotes {
                 notes: iter.map(Into::into).collect(),
@@ -284,7 +296,10 @@ impl GenesisBlockBuilder<WithNotes> {
     #[must_use]
     pub fn add_notes(self, notes: impl IntoIterator<Item = impl Into<Note>>) -> Self {
         let mut iter = notes.into_iter().peekable();
-        assert!(iter.peek().is_some(), "add_notes called with empty iterator");
+        assert!(
+            iter.peek().is_some(),
+            "add_notes called with empty iterator"
+        );
         let Self {
             state: WithNotes { mut notes },
         } = self;
@@ -386,7 +401,10 @@ impl GenesisBlockBuilder<WithInscription> {
         notes: impl IntoIterator<Item = impl Into<Note>>,
     ) -> GenesisBlockBuilder<WithNotesAndInscription> {
         let mut iter = notes.into_iter().peekable();
-        assert!(iter.peek().is_some(), "add_notes called with empty iterator");
+        assert!(
+            iter.peek().is_some(),
+            "add_notes called with empty iterator"
+        );
         let Self {
             state: WithInscription { inscription },
         } = self;
@@ -483,7 +501,10 @@ impl GenesisBlockBuilder<WithDeclarations> {
         notes: impl IntoIterator<Item = impl Into<Note>>,
     ) -> GenesisBlockBuilder<WithNotesAndDeclarations> {
         let mut iter = notes.into_iter().peekable();
-        assert!(iter.peek().is_some(), "add_notes called with empty iterator");
+        assert!(
+            iter.peek().is_some(),
+            "add_notes called with empty iterator"
+        );
         let Self {
             state: WithDeclarations { sdp_declarations },
         } = self;
@@ -582,7 +603,10 @@ impl GenesisBlockBuilder<WithNotesAndInscription> {
     #[must_use]
     pub fn add_notes(self, notes: impl IntoIterator<Item = impl Into<Note>>) -> Self {
         let mut iter = notes.into_iter().peekable();
-        assert!(iter.peek().is_some(), "add_notes called with empty iterator");
+        assert!(
+            iter.peek().is_some(),
+            "add_notes called with empty iterator"
+        );
         let Self {
             state:
                 WithNotesAndInscription {
@@ -696,7 +720,10 @@ impl GenesisBlockBuilder<WithNotesAndDeclarations> {
     #[must_use]
     pub fn add_notes(self, notes: impl IntoIterator<Item = impl Into<Note>>) -> Self {
         let mut iter = notes.into_iter().peekable();
-        assert!(iter.peek().is_some(), "add_notes called with empty iterator");
+        assert!(
+            iter.peek().is_some(),
+            "add_notes called with empty iterator"
+        );
         let Self {
             state:
                 WithNotesAndDeclarations {
@@ -820,7 +847,10 @@ impl GenesisBlockBuilder<WithInscriptionAndDeclarations> {
         notes: impl IntoIterator<Item = impl Into<Note>>,
     ) -> GenesisBlockBuilder<WithAll> {
         let mut iter = notes.into_iter().peekable();
-        assert!(iter.peek().is_some(), "add_notes called with empty iterator");
+        assert!(
+            iter.peek().is_some(),
+            "add_notes called with empty iterator"
+        );
         let Self {
             state:
                 WithInscriptionAndDeclarations {
@@ -938,7 +968,10 @@ impl GenesisBlockBuilder<WithAll> {
     #[must_use]
     pub fn add_notes(self, notes: impl IntoIterator<Item = impl Into<Note>>) -> Self {
         let mut iter = notes.into_iter().peekable();
-        assert!(iter.peek().is_some(), "add_notes called with empty iterator");
+        assert!(
+            iter.peek().is_some(),
+            "add_notes called with empty iterator"
+        );
         let Self {
             state:
                 WithAll {
