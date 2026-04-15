@@ -137,7 +137,7 @@ services:
     volumes:
       - node-data:/node-data
       - ./testnet/nginx/run.conf:/etc/nginx/nginx.conf
-      - ./testnet/nginx/static/run:/usr/share/nginx/html
+      - ./testnet/nginx/static/run:/usr/share/nginx/html_template
       - ./testnet/scripts/run_nginx.sh:/etc/run_nginx.sh
     entrypoint: /etc/run_nginx.sh
 
