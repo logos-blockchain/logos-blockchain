@@ -244,7 +244,7 @@ impl Sequencer {
 
             let Some(block) = self
                 .http_client
-                .get_block(self.node_url.clone(), block_id)
+                .get_block_by_id(self.node_url.clone(), block_id)
                 .await?
             else {
                 break;

@@ -129,16 +129,6 @@ where
     >(&handle))
 }
 
-pub async fn get_sdp_declarations<RuntimeServiceId>(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-) -> Response
-where
-    RuntimeServiceId:
-        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
-{
-    make_request_and_return_response!(mantle::get_sdp_declarations::<RuntimeServiceId>(&handle))
-}
-
 #[utoipa::path(
     post,
     path = paths::MANTLE_STATUS,
@@ -283,30 +273,6 @@ where
         >,
 {
     make_request_and_return_response!(libp2p::libp2p_info::<RuntimeServiceId>(&handle))
-}
-
-#[utoipa::path(
-    post,
-    path = paths::STORAGE_BLOCK,
-    responses(
-        (status = 200, description = "Get the block by block id", body = HeaderId),
-        (status = 500, description = "Internal server error", body = String),
-    )
-)]
-pub async fn storage_block<HttpStorageAdapter, RuntimeServiceId>(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(id): Json<HeaderId>,
-) -> Response
-where
-    HttpStorageAdapter: StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
-    RuntimeServiceId:
-        AsServiceId<StorageService<RocksBackend, RuntimeServiceId>> + Debug + Sync + Display,
-{
-    let relay = match get_relay_or_500(&handle).await {
-        Ok(relay) => relay,
-        Err(error_response) => return error_response,
-    };
-    make_request_and_return_response!(HttpStorageAdapter::get_block::<SignedMantleTx>(relay, id))
 }
 
 #[utoipa::path(
@@ -653,7 +619,7 @@ where
 
 #[utoipa::path(
     post,
-    path = paths::BLOCK,
+    path = paths::BLOCKS_DETAIL,
     responses(
         (status = 200, description = "Block found"),
         (status = 404, description = "Block not found"),

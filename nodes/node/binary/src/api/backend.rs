@@ -41,8 +41,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use super::handlers::{
     add_tx, block, blocks, blocks_stream, cryptarchia_headers, cryptarchia_info,
-    cryptarchia_lib_stream, libp2p_info, mantle_metrics, mantle_status, storage_block, transaction,
-    wallet,
+    cryptarchia_lib_stream, libp2p_info, mantle_metrics, mantle_status, transaction, wallet,
 };
 use crate::{
     WalletService,
@@ -212,10 +211,6 @@ where
                 routing::get(libp2p_info::<RuntimeServiceId>),
             )
             .route(
-                paths::STORAGE_BLOCK,
-                routing::post(storage_block::<StorageAdapter, RuntimeServiceId>),
-            )
-            .route(
                 paths::MEMPOOL_ADD_TX,
                 routing::post(add_tx::<MempoolStorageAdapter, RuntimeServiceId>),
             )
@@ -295,7 +290,7 @@ where
                 routing::get(blocks::<BlockStorageBackend, RuntimeServiceId>),
             )
             .route(
-                paths::BLOCK,
+                paths::BLOCKS_DETAIL,
                 routing::get(block::<StorageAdapter, RuntimeServiceId>),
             )
             .route(

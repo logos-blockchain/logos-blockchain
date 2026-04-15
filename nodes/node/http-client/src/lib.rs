@@ -16,8 +16,8 @@ use lb_http_api_common::{
         transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
     },
     paths::{
-        BLOCKS, BLOCKS_STREAM, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX,
-        STORAGE_BLOCK,
+        BLOCKS, BLOCKS_DETAIL, BLOCKS_STREAM, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM,
+        MEMPOOL_ADD_TX,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
     settings::default_max_body_size,
@@ -184,18 +184,16 @@ impl CommonHttpClient {
         }
     }
 
-    pub async fn get_block_by_id<HeaderId>(
+    pub async fn get_block_by_id(
         &self,
         base_url: Url,
-        header_id: HeaderId,
-    ) -> Result<Option<Block<SignedMantleTx>>, Error>
-    where
-        HeaderId: Serialize + Send + Sync,
-    {
-        let request_url = base_url
-            .join(STORAGE_BLOCK.trim_start_matches('/'))
-            .map_err(Error::Url)?;
-        self.post(request_url, &header_id).await
+        id: HeaderId,
+    ) -> Result<Option<Block<SignedMantleTx>>, Error> {
+        let path = BLOCKS_DETAIL
+            .trim_start_matches('/')
+            .replace(":id", &id.to_string());
+        let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
+        self.get(request_url, None::<&()>).await
     }
 
     pub async fn post_transaction<Tx>(&self, base_url: Url, transaction: Tx) -> Result<(), Error>
@@ -214,18 +212,6 @@ impl CommonHttpClient {
             .join(CRYPTARCHIA_INFO.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.get::<(), CryptarchiaInfo>(request_url, None).await
-    }
-
-    /// Get a block by its header ID
-    pub async fn get_block(
-        &self,
-        base_url: Url,
-        header_id: HeaderId,
-    ) -> Result<Option<Block<SignedMantleTx>>, Error> {
-        let request_url = base_url
-            .join(STORAGE_BLOCK.trim_start_matches('/'))
-            .map_err(Error::Url)?;
-        self.post(request_url, &header_id).await
     }
 
     /// Get blocks in a slot range.
