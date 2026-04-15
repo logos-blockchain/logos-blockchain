@@ -1,6 +1,7 @@
 use core::time::Duration;
 
 use lb_core::{
+    block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
         MantleTx, Note, NoteId, OpProof, Utxo,
         genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GenesisTx},
@@ -74,31 +75,25 @@ fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
 }
 
 #[must_use]
-pub fn create_genesis_tx(utxos: &[Utxo], test_context: Option<&str>) -> GenesisTx {
+pub fn create_genesis_block(utxos: &[Utxo], test_context: Option<&str>) -> GenesisBlock {
+    // Create transfer op with the utxos as outputs
+    let mut outputs = utxos.iter().map(|u| u.note);
+    let genesis_builder = if let Some(note) = outputs.next() {
+        let mut genesis_builder = GenesisBlockBuilder::new().add_note(note);
+        for note in outputs {
+            genesis_builder = genesis_builder.add_note(note);
+        }
+        genesis_builder
+    } else {
+        panic!("No outputs provided for genesis block")
+    };
+
     let inscription = inscription_for_current_test(test_context);
 
-    // Create transfer op with the utxos as outputs
-    let outputs: Vec<Note> = utxos.iter().map(|u| u.note).collect();
-    let transfer_op = TransferOp::new(vec![], outputs);
-
-    // Create the mantle transaction
-    let mantle_tx = MantleTx {
-        ops: vec![Op::Transfer(transfer_op), Op::ChannelInscribe(inscription)],
-        execution_gas_price: GENESIS_EXECUTION_GAS_PRICE,
-        storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
-    };
-    let signed_mantle_tx = SignedMantleTx {
-        mantle_tx,
-        ops_proofs: vec![
-            OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
-                &[0u8; 128],
-            ))),
-            OpProof::NoProof,
-        ],
-    };
-
-    // Wrap in GenesisTx
-    GenesisTx::from_tx(signed_mantle_tx).expect("Invalid genesis transaction")
+    genesis_builder
+        .set_inscription(inscription)
+        .build()
+        .expect("Genesis block shoudl build properly")
 }
 
 #[must_use]
@@ -106,7 +101,7 @@ pub fn create_consensus_configs(
     ids: &[[u8; 32]],
     prolonged_bootstrap_period: Duration,
     test_context: Option<&str>,
-) -> (Vec<GeneralConsensusConfig>, GenesisTx) {
+) -> (Vec<GeneralConsensusConfig>, GenesisBlock) {
     let mut regular_note_keys = Vec::new();
     let mut blend_notes = Vec::new();
     let mut sdp_notes = Vec::new();
@@ -117,7 +112,7 @@ pub fn create_consensus_configs(
         &mut blend_notes,
         &mut sdp_notes,
     );
-    let genesis_tx = create_genesis_tx(&utxos, test_context);
+    let genesis_block = create_genesis_block(&utxos, test_context);
 
     (
         regular_note_keys
@@ -138,7 +133,7 @@ pub fn create_consensus_configs(
                 }
             })
             .collect(),
-        genesis_tx,
+        genesis_block,
     )
 }
 

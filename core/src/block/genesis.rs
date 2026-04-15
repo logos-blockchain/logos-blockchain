@@ -411,6 +411,19 @@ impl GenesisBlockBuilder<WithNotesAndInscription> {
             },
         }
     }
+
+    // Build a block with empty declarations but properly set inscription and
+    // transfer.
+    pub fn build(self) -> Result<GenesisBlock> {
+        GenesisBlockBuilder {
+            state: WithAll {
+                notes: self.state.notes,
+                inscription: self.state.inscription,
+                sdp_declarations: vec![],
+            },
+        }
+        .build()
+    }
 }
 
 // ── WithNotesAndDeclarations

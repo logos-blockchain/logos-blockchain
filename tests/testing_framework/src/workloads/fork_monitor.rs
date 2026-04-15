@@ -272,7 +272,7 @@ where
     E: LbcBlockFeedEnv,
 {
     let config: &TopologyConfig = ctx.descriptors().config();
-    let Some(genesis_tx) = config.genesis_tx.clone() else {
+    let Some(genesis_tx) = config.genesis_block.clone() else {
         return (
             DEFAULT_TIP_STALL_THRESHOLD,
             DEFAULT_NODE_TIP_STALL_THRESHOLD,

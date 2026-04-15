@@ -2,6 +2,7 @@ use anyhow::Result;
 use cfgsync_adapter::MaterializedArtifacts;
 use cfgsync_artifacts::ArtifactFile;
 use lb_core::{
+    block::genesis::GenesisBlock,
     mantle::GenesisTx as _,
     sdp::{Locator, ServiceType},
 };
@@ -23,7 +24,7 @@ use crate::{
 #[derive(Debug, Error)]
 pub enum ArtifactError {
     #[error("deployment plan is missing `genesis_tx`")]
-    MissingGenesisTx,
+    MissingGenesisBlock,
     #[error("runtime hostname count ({hostnames}) does not match node count ({nodes})")]
     HostnameCountMismatch { hostnames: usize, nodes: usize },
     #[error("node {node_index} blend address is missing a UDP port")]
@@ -76,21 +77,26 @@ fn deployment_settings(
     topology: &DeploymentPlan,
     hostnames: &[String],
 ) -> Result<DeploymentSettings> {
-    let genesis_tx = topology
+    let genesis_block: GenesisBlock = topology
         .config()
-        .genesis_tx
+        .genesis_block
         .clone()
-        .ok_or(ArtifactError::MissingGenesisTx)?;
+        .ok_or(ArtifactError::MissingGenesisBlock)?;
 
     let providers = collect_runtime_blend_providers(topology.nodes(), hostnames)?;
-    let transfer_op = genesis_tx.genesis_transfer().clone();
+    let transfer_op = genesis_block
+        .transactions()
+        .next()
+        .expect("Genesis block should be valid")
+        .genesis_transfer()
+        .clone();
     let genesis_tx = create_genesis_tx_with_declarations(
         transfer_op,
         providers,
         topology.config.test_context.as_deref(),
     );
 
-    Ok(default_e2e_deployment_settings(genesis_tx))
+    Ok(default_e2e_deployment_settings(genesis_block))
 }
 
 fn collect_runtime_blend_providers(

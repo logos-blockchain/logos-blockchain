@@ -102,7 +102,7 @@ where
             .ok_or(TxWorkloadError::MissingReferenceNode)?;
         let genesis_tx = descriptors
             .config()
-            .genesis_tx
+            .genesis_block
             .as_ref()
             .ok_or(TxWorkloadError::MissingReferenceNode)?;
         let utxo_map = wallet_utxo_map(genesis_tx);

@@ -4,7 +4,7 @@ use core::{
 };
 use std::sync::OnceLock;
 
-use lb_core::{mantle::genesis_tx::GenesisTx, sdp::ServiceType};
+use lb_core::{block::genesis::GenesisBlock, sdp::ServiceType};
 use lb_libp2p::protocol_name::StreamProtocol;
 use lb_node::config::{
     blend::deployment::{
@@ -32,7 +32,7 @@ fn get_or_init_chain_start_time() -> OffsetDateTime {
 }
 
 #[must_use]
-pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> DeploymentSettings {
+pub fn e2e_deployment_settings_with_genesis_tx(genesis_block: GenesisBlock) -> DeploymentSettings {
     let slot_duration_in_secs = std::env::var(CONSENSUS_SLOT_TIME_VAR)
         .map(|s| s.parse::<u64>().unwrap())
         .unwrap_or(DEFAULT_SLOT_TIME_IN_SECS);
@@ -106,7 +106,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
                     timestamp: 0,
                 },
             },
-            genesis_state: genesis_tx,
+            genesis_state: genesis_block,
             learning_rate: 0.1f64.try_into().expect("1 > 0"),
             faucet_pk: None,
         },

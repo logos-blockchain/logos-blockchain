@@ -23,7 +23,7 @@ pub(crate) use crate::common::kms::key_id_for_preload_backend;
 
 #[must_use]
 pub fn default_e2e_deployment_settings(
-    genesis_tx: lb_core::mantle::genesis_tx::GenesisTx,
+    genesis_block: lb_core::block::genesis::GenesisBlock,
 ) -> DeploymentSettings {
-    node_configs::deployment::e2e_deployment_settings_with_genesis_tx(genesis_tx)
+    node_configs::deployment::e2e_deployment_settings_with_genesis_tx(genesis_block)
 }

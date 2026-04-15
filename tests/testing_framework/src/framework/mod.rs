@@ -14,6 +14,7 @@ use std::{
 use async_trait::async_trait;
 pub use block_feed::{BlockFeed, BlockFeedSnapshot, BlockRecord, NodeHeadSnapshot};
 use common_http_client::BasicAuthCredentials;
+use lb_core::block::genesis::GenesisBlock;
 use lb_node::config::RunConfig;
 use reqwest::Url;
 use testing_framework_core::{
@@ -159,7 +160,11 @@ pub fn apply_wallet_config_to_deployment(deployment: &mut DeploymentPlan, wallet
         .map(|plan| plan.general.clone())
         .collect::<Vec<_>>();
 
-    let Some(base_genesis_tx) = deployment.config.genesis_tx.clone() else {
+    let Some(genesis_block): Option<GenesisBlock> = deployment.config.genesis_block.clone() else {
+        return;
+    };
+
+    let Some(base_genesis_tx) = genesis_block.transactions().next().clone() else {
         return;
     };
 
@@ -170,7 +175,7 @@ pub fn apply_wallet_config_to_deployment(deployment: &mut DeploymentPlan, wallet
         key_id_for_preload_backend,
         deployment.config.test_context.as_deref(),
     );
-    deployment.config.genesis_tx = Some(genesis_tx);
+    deployment.config.genesis_block = Some(genesis_block);
 
     for (plan, node_config) in deployment.plans.iter_mut().zip(node_configs) {
         plan.general = node_config;
