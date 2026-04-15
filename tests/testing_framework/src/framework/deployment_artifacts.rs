@@ -16,7 +16,7 @@ use crate::{
         NodePlan,
         configs::{
             default_e2e_deployment_settings,
-            node_configs::consensus::{ProviderInfo, create_genesis_tx_with_declarations},
+            node_configs::consensus::{ProviderInfo, create_genesis_block_with_declarations},
         },
     },
 };
@@ -90,7 +90,7 @@ fn deployment_settings(
         .expect("Genesis block should be valid")
         .genesis_transfer()
         .clone();
-    let genesis_tx = create_genesis_tx_with_declarations(
+    let genesis_block = create_genesis_block_with_declarations(
         transfer_op,
         providers,
         topology.config.test_context.as_deref(),

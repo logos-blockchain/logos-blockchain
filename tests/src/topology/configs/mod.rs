@@ -8,9 +8,10 @@ pub mod time;
 pub mod tracing;
 
 use blend::GeneralBlendConfig;
-use consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_tx_with_declarations};
+use consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_block_with_declarations};
 use lb_core::{
-    mantle::{GenesisTx as _, genesis_tx::GenesisTx},
+    block::genesis::GenesisBlock,
+    mantle::GenesisTx as _,
     sdp::{Locator, ServiceType},
 };
 use lb_node::config::{KmsConfig, kms::serde::PreloadKmsBackendSettings};
@@ -45,7 +46,7 @@ pub struct GeneralConfig {
 pub fn create_general_configs(
     n_nodes: usize,
     test_context: Option<&str>,
-) -> (Vec<GeneralConfig>, GenesisTx) {
+) -> (Vec<GeneralConfig>, GenesisBlock) {
     create_general_configs_with_network(n_nodes, &NetworkParams::default(), test_context)
 }
 
@@ -54,7 +55,7 @@ pub fn create_general_configs_with_network(
     n_nodes: usize,
     network_params: &NetworkParams,
     test_context: Option<&str>,
-) -> (Vec<GeneralConfig>, GenesisTx) {
+) -> (Vec<GeneralConfig>, GenesisBlock) {
     create_general_configs_with_blend_core_subset(n_nodes, n_nodes, network_params, test_context)
 }
 
@@ -66,7 +67,7 @@ pub fn create_general_configs_with_blend_core_subset(
     n_blend_core_nodes: usize,
     network_params: &NetworkParams,
     test_context: Option<&str>,
-) -> (Vec<GeneralConfig>, GenesisTx) {
+) -> (Vec<GeneralConfig>, GenesisBlock) {
     assert!(
         n_blend_core_nodes <= n_nodes,
         "n_blend_core_nodes({n_blend_core_nodes}) must be less than or equal to n_nodes({n_nodes})",
@@ -82,7 +83,7 @@ pub fn create_general_configs_with_blend_core_subset(
         blend_ports.push(get_reserved_available_udp_port().unwrap());
     }
 
-    let (consensus_configs, genesis_tx) =
+    let (consensus_configs, genesis_block) =
         consensus::create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD, test_context);
     let network_configs = network::create_network_configs(&ids, network_params);
     let api_configs = api::create_api_configs(&ids);
@@ -104,10 +105,10 @@ pub fn create_general_configs_with_blend_core_subset(
             },
         )
         .collect();
-    let transfer_op = genesis_tx.genesis_transfer().clone();
-    let genesis_tx_with_declarations =
-        create_genesis_tx_with_declarations(transfer_op, providers, test_context);
-    let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations, n_nodes);
+    let transfer_op = genesis_block.genesis_tx().genesis_transfer().clone();
+    let genesis_block =
+        create_genesis_block_with_declarations(transfer_op, providers, test_context);
+    let sdp_configs = create_sdp_configs(&genesis_block.genesis_tx(), n_nodes);
 
     // Set note keys and Blend keys in KMS of each node config.
     let kms_configs: Vec<_> = blend_configs
@@ -160,5 +161,5 @@ pub fn create_general_configs_with_blend_core_subset(
         });
     }
 
-    (general_configs, genesis_tx_with_declarations)
+    (general_configs, genesis_block)
 }

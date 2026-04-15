@@ -30,8 +30,8 @@ use tokio::time::sleep;
 #[serial]
 async fn channel_deposit() {
     // Spwan a validator
-    let (configs, genesis_tx) = create_general_configs(1, None);
-    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx.clone());
+    let (configs, genesis_block) = create_general_configs(1, None);
+    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_block.clone());
     let configs: Vec<_> = configs
         .into_iter()
         .map(|c| {
@@ -72,7 +72,7 @@ async fn channel_deposit() {
 
     // Also, record the channel balance before deposit
     // We use the channel created by the genesis inscription for simplicity.
-    let channel_id = genesis_tx.genesis_inscription().channel_id;
+    let channel_id = genesis_block.genesis_tx().genesis_inscription().channel_id;
     let channel_balance_before = get_channel_balance(validator, channel_id).await;
     println!("Channel balance before deposit: {channel_balance_before}");
 

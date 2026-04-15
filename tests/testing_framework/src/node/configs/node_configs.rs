@@ -21,9 +21,10 @@ pub mod tracing;
 use std::time::Duration;
 
 use blend::GeneralBlendConfig;
-use consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_tx_with_declarations};
+use consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_block_with_declarations};
 use lb_core::{
-    mantle::{GenesisTx as _, genesis_tx::GenesisTx},
+    block::genesis::GenesisBlock,
+    mantle::GenesisTx as _,
     sdp::{Locator, ServiceType},
 };
 use lb_node::config::{KmsConfig, kms::serde::PreloadKmsBackendSettings};
@@ -55,7 +56,7 @@ pub fn create_general_configs_from_ids(
     n_blend_core_nodes: usize,
     network_params: &NetworkParams,
     test_context: Option<&str>,
-) -> (Vec<GeneralConfig>, GenesisTx) {
+) -> (Vec<GeneralConfig>, GenesisBlock) {
     let n_nodes = ids.len();
 
     assert_eq!(
@@ -71,7 +72,7 @@ pub fn create_general_configs_from_ids(
         ids.len()
     );
 
-    let (consensus_configs, genesis_tx) =
+    let (consensus_configs, genesis_block) =
         consensus::create_consensus_configs(ids, PROLONGED_BOOTSTRAP_PERIOD, test_context);
     let network_configs = network::create_network_configs(ids, network_params);
     let api_configs = api::create_api_configs(ids);
@@ -93,10 +94,14 @@ pub fn create_general_configs_from_ids(
             },
         )
         .collect();
+    let genesis_tx = genesis_block
+        .transactions()
+        .next()
+        .expect("Genesis block contains genesis tx");
 
     let transfer_op = genesis_tx.genesis_transfer().clone();
     let genesis_tx_with_declarations =
-        create_genesis_tx_with_declarations(transfer_op, providers, test_context);
+        create_genesis_block_with_declarations(transfer_op, providers, test_context);
 
     let kms_configs: Vec<_> = blend_configs
         .iter()

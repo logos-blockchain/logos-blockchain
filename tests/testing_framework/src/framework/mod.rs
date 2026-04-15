@@ -164,13 +164,9 @@ pub fn apply_wallet_config_to_deployment(deployment: &mut DeploymentPlan, wallet
         return;
     };
 
-    let Some(base_genesis_tx) = genesis_block.transactions().next().clone() else {
-        return;
-    };
-
-    let genesis_tx = postprocess::apply_wallet_genesis_overrides(
+    let genesis_block = postprocess::apply_wallet_genesis_overrides(
         &mut node_configs,
-        &base_genesis_tx,
+        &genesis_block,
         &wallet_accounts,
         key_id_for_preload_backend,
         deployment.config.test_context.as_deref(),

@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use config::{api, sdp, state, storage, wallet};
 use lb_core::{
     block::genesis::GenesisBlock,
-    mantle::{self, genesis_tx::GenesisTx},
+    mantle::{self},
 };
 use lb_key_management_system_service::keys::{Key, secured_key::SecuredKey as _};
 use lb_libp2p::Multiaddr;

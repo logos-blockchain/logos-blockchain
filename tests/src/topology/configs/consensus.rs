@@ -78,6 +78,10 @@ fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
 pub fn create_genesis_block(utxos: &[Utxo], test_context: Option<&str>) -> GenesisBlock {
     // Create transfer op with the utxos as outputs
     let mut outputs = utxos.iter().map(|u| u.note);
+    #[expect(
+        clippy::option_if_let_else,
+        reason = "Moving notes inside of consuming lambda function is harder to read"
+    )]
     let genesis_builder = if let Some(note) = outputs.next() {
         let mut genesis_builder = GenesisBlockBuilder::new().add_note(note);
         for note in outputs {
@@ -215,11 +219,11 @@ fn create_utxos(
 }
 
 #[must_use]
-pub fn create_genesis_tx_with_declarations(
+pub fn create_genesis_block_with_declarations(
     transfer_op: TransferOp,
     providers: Vec<ProviderInfo>,
     test_context: Option<&str>,
-) -> GenesisTx {
+) -> GenesisBlock {
     let inscription = inscription_for_current_test(test_context);
 
     let transfer_hash = transfer_op.hash();
@@ -274,5 +278,8 @@ pub fn create_genesis_tx_with_declarations(
         ops_proofs,
     };
 
-    GenesisTx::from_tx(signed_mantle_tx).expect("Invalid genesis transaction")
+    // TODO: Maybe use the builder instead of trusting the signed mantle tx
+    GenesisBlockBuilder::new()
+        .with_genesis_tx(GenesisTx::from_tx(signed_mantle_tx).expect("Genesis tx should build"))
+        .build()
 }
