@@ -26,7 +26,7 @@ use tokio::time::sleep;
 #[serial]
 async fn leader_claim() {
     // Spwan a validator with a short epoch length
-    let (configs, genesis_tx) = create_general_configs(1, None);
+    let (configs, genesis_tx) = create_general_configs(1, Some("leader_claim"));
     let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
     let configs: Vec<_> = configs
         .into_iter()
