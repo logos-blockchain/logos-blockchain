@@ -6,6 +6,7 @@ Feature: Transactions
       | account_index | token_count | token_amount |
       | 1             | 2           | 1000         |
       | 2             | 0           | 0            |
+    And we have a sponsored genesis fee account with 2 tokens of 997 value each
     And I have a cluster with capacity of 2 nodes
     And we use IBD peers
     And all peers must be mode online after startup in 30 seconds
@@ -17,7 +18,9 @@ Feature: Transactions
     And I send 2 transactions of 500 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
     When wallet "WALLET_2A" has 2 or more outputs in 120 seconds
     And I send 2 transactions of 250 LGO each from wallet "WALLET_2A" to wallet "WALLET_1A"
-    When wallet "WALLET_1A" has 1300 or more LGO in 120 seconds
+    When wallet "WALLET_2A" has all submitted transactions settled in 120 seconds
+    And tracked wallet fees equal sponsored fee account spent fees
+    And wallet "WALLET_1A" has exact settled balance of 1500 LGO in 120 seconds
     Then I stop all nodes
 
   @transactions_ci
@@ -26,6 +29,7 @@ Feature: Transactions
       | account_index | token_count | token_amount |
       | 1             | 2           | 1000         |
       | 2             | 0           | 0            |
+    And we have a sponsored genesis fee account with 2 tokens of 997 value each
     And I have a cluster with capacity of 2 nodes
     And we use IBD peers
     And all peers must be mode online after startup in 30 seconds
@@ -37,7 +41,8 @@ Feature: Transactions
     And I send one transaction with 2 outputs of 500 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
     When wallet "WALLET_2A" has 2 or more outputs in 120 seconds
     And I send 2 transactions of 250 LGO each from wallet "WALLET_2A" to wallet "WALLET_1A"
-    When wallet "WALLET_1A" has 1300 or more LGO in 120 seconds
+    When wallet "WALLET_2A" has all submitted transactions settled in 120 seconds
+    And wallet "WALLET_1A" has exact settled balance of 1500 LGO in 120 seconds
     Then I stop all nodes
 
   @transactions_ci

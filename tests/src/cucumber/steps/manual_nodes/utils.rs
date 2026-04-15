@@ -292,6 +292,21 @@ pub(crate) fn parse_wallet_resources_table_row(
     ))
 }
 
+pub(crate) fn ensure_fee_sponsorship_and_fork_groups_are_not_mixed(
+    world: &CucumberWorld,
+    step_value: &str,
+) -> StepResult {
+    if world.fee_state.sponsored_genesis_account.is_some() && !world.node_groups.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: format!(
+                "Step `{step_value}` error: sponsored fee accounts cannot be combined with distinct node groups in the same scenario"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
     world: &CucumberWorld,
     step: &str,

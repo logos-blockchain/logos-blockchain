@@ -83,8 +83,10 @@ where
             return Err(MmrFull);
         }
 
-        let root = *elem.as_ref();
-        let mut last_root = Root { root, height: 1 };
+        let mut last_root = Root {
+            root: *elem.as_ref(),
+            height: 1,
+        };
         let mut roots = self.roots.clone();
 
         while let Some(root) = roots.peek().copied() {
@@ -132,8 +134,10 @@ where
                 .collect(),
         };
 
-        let root = *elem.as_ref();
-        let mut last_root = Root { root, height: 1 };
+        let mut last_root = Root {
+            root: *elem.as_ref(),
+            height: 1,
+        };
         let mut roots = self.roots.clone();
 
         // Phase 1: merge same-height peaks, updating sibling hashes at each merge
