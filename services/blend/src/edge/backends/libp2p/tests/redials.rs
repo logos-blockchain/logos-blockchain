@@ -42,18 +42,13 @@ async fn edge_redial_same_peer() {
 
     let dial_attempt_1_record = swarm
         .pending_dials()
-        .active()
-        .iter()
         .filter(|((peer_id, _), _)| peer_id == &random_peer_id)
         .map(|(_, value)| value)
         .next()
         .unwrap();
-    assert_eq!(*dial_attempt_1_record.address(), empty_multiaddr);
-    assert_eq!(
-        dial_attempt_1_record.attempt_number(),
-        1.try_into().unwrap()
-    );
-    assert_eq!(*dial_attempt_1_record.message(), message.clone());
+    assert_eq!(dial_attempt_1_record.address, empty_multiaddr);
+    assert_eq!(dial_attempt_1_record.attempt_number, 1.try_into().unwrap());
+    assert_eq!(dial_attempt_1_record.message, message.clone());
 
     // We poll the swarm until we know the first dial attempt has failed.
     // After failure, a retry is scheduled with exponential backoff.

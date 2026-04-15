@@ -6,7 +6,7 @@ use core::{
 };
 use std::collections::{HashMap, hash_map::Entry};
 
-use futures::{Stream, stream::FuturesUnordered};
+use futures::{Stream, future::ready, stream::FuturesUnordered};
 use lb_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
 use libp2p::{Multiaddr, PeerId, swarm::ConnectionId};
 use tracing::{debug, error, trace, warn};
@@ -22,8 +22,10 @@ pub struct OngoingDials {
     max_attempts: NonZeroU64,
 }
 
+#[derive(Debug)]
 pub enum Error {
     CurrentlyRetrying,
+    AlreadyRegistered,
 }
 
 impl OngoingDials {
@@ -35,22 +37,45 @@ impl OngoingDials {
         }
     }
 
-    /// Attempt to retry dialing the specified peer, if the maximum attempts
-    /// have not already been performed.
+    /// Schedule a new dial attempt for the specified peer and connection, with
+    /// the provided address and message.
     ///
-    /// Returns `None` if a new retry is scheduled, `Some` otherwise
-    /// with the dial details of the peer that has exhausted its retries.
+    /// Returns an error if a dial attempt for the specified peer and connection
+    /// is already being tracked.
+    pub(super) fn schedule(
+        &mut self,
+        key: (PeerId, ConnectionId),
+        (address, message): (Multiaddr, EncapsulatedMessageWithVerifiedPublicHeader),
+    ) -> Result<(), Error> {
+        let Entry::Vacant(entry) = self.dials.entry(key) else {
+            return Err(Error::AlreadyRegistered);
+        };
+        entry.insert((
+            DialAttempt {
+                address,
+                message,
+                attempt_number: 1.try_into().unwrap(),
+            },
+            true,
+        ));
+        self.retries.push(Box::pin(ready((key.0, key.1))));
+        Ok(())
+    }
+
+    /// Reschedule a dial attempt for the specified peer and connection.
     ///
-    /// Retries use exponential backoff: attempt 2 waits 2s, attempt 3 waits
-    /// 4s, attempt N waits 2^(N-1) seconds.
-    pub(super) fn schedule_retry(
+    /// If the dial attempt is currently being retried, an error is returned.
+    /// If the maximum number of attempts has been reached, the dial attempt is
+    /// removed from tracking and returned. Otherwise, the dial attempt is
+    /// updated with an incremented attempt number and a new retry is scheduled.
+    pub(super) fn reschedule(
         &mut self,
         peer_id: PeerId,
         connection_id: ConnectionId,
     ) -> Result<Option<DialAttempt>, Error> {
         let Entry::Occupied(mut entry) = self.dials.entry((peer_id, connection_id)) else {
             panic!(
-                "Received a dial error for peer {peer_id:?} and connection {connection_id:?} that is not being tracked."
+                "Rescheduling the dial for peer {peer_id:?} and connection {connection_id:?} that is not being tracked."
             );
         };
         let (old_dial_attempt, is_retrying) = entry.get_mut();
@@ -64,8 +89,7 @@ impl OngoingDials {
         let delay = Duration::from_secs(1 << (new_attempt_number.get() - 1));
         trace!(
             target: LOG_TARGET,
-            "Scheduling retry {new_attempt_number} for peer {peer_id:?} in {:?} seconds", delay.as_secs()
-        );
+            "Scheduling retry {new_attempt_number} for peer {peer_id:?} in {:?} seconds", delay.as_secs()     );
         old_dial_attempt.attempt_number = new_attempt_number;
         *is_retrying = true;
         self.retries.push(Box::pin(async move {
@@ -79,30 +103,19 @@ impl OngoingDials {
         self.dials.remove(key).map(|(attempt, _)| attempt)
     }
 
-    pub(super) fn insert(&mut self, key: (PeerId, ConnectionId), attempt: DialAttempt) {
-        self.dials.insert(key, (attempt, false));
-    }
-
-    // pub(super) fn entry(
-    //     &mut self,
-    //     key: (PeerId, ConnectionId),
-    // ) -> Entry<'_, (PeerId, ConnectionId), DialAttempt> {
-    //     self.dials.entry(key)
-    // }
-
     pub(super) fn get(&self, key: &(PeerId, ConnectionId)) -> Option<&DialAttempt> {
         self.dials.get(key).map(|(attempt, _)| attempt)
     }
 
-    // #[cfg(test)]
-    // pub const fn active(&self) -> &HashMap<(PeerId, ConnectionId), DialAttempt> {
-    //     &self.dials
-    // }
+    #[cfg(test)]
+    pub const fn active(&self) -> &HashMap<(PeerId, ConnectionId), (DialAttempt, bool)> {
+        &self.dials
+    }
 
-    // #[cfg(test)]
-    // pub fn retry_count(&self) -> usize {
-    //     self.retries.len()
-    // }
+    #[cfg(test)]
+    pub fn retry_count(&self) -> usize {
+        self.retries.len()
+    }
 }
 
 impl Stream for OngoingDials {
