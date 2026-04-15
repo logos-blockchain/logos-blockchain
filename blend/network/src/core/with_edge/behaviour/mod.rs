@@ -29,11 +29,20 @@ mod tests;
 
 const LOG_TARGET: &str = "blend::network::core::edge::behaviour";
 
+#[cfg_attr(
+    test,
+    expect(
+        clippy::large_enum_variant,
+        reason = "We have a second variant only for tests. We can ignore the Clippy warning in that case."
+    )
+)]
 #[derive(Debug)]
 pub enum Event {
     /// A message received from one of the edge peers, after its signature
     /// has been verified.
     Message(EncapsulatedMessageWithVerifiedSignature),
+    #[cfg(test)]
+    NegotiatedConnection { peer: PeerId },
 }
 
 #[derive(Debug)]
@@ -119,8 +128,13 @@ impl Behaviour {
             handler: NotifyHandler::One(connection.1),
             event: Either::Left(FromBehaviour::StartReceiving),
         });
-        self.try_wake();
         self.upgraded_edge_peers.insert(connection);
+        #[cfg(test)]
+        self.events
+            .push_back(ToSwarm::GenerateEvent(Event::NegotiatedConnection {
+                peer: connection.0,
+            }));
+        self.try_wake();
     }
 
     fn close_substream(&mut self, (peer_id, connection_id): (PeerId, ConnectionId)) {

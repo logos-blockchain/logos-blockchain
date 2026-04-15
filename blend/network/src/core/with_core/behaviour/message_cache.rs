@@ -155,3 +155,164 @@ impl MessageCache {
         self.messages.get(message_id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use lb_blend_message::encap::{
+        encapsulated::EncapsulatedMessage, validated::EncapsulatedMessageWithVerifiedSignature,
+    };
+    use libp2p::PeerId;
+
+    use crate::core::{
+        tests::utils::TestEncapsulatedMessage,
+        with_core::behaviour::message_cache::{MessageCache, MessageStatus},
+    };
+
+    fn make_verified(payload: &[u8]) -> EncapsulatedMessageWithVerifiedSignature {
+        TestEncapsulatedMessage::new(payload).into_inner().into()
+    }
+
+    fn make_raw(payload: &[u8]) -> EncapsulatedMessage {
+        make_verified(payload).into()
+    }
+
+    #[test]
+    fn forwarded_status_not_downgraded_to_processed() {
+        let mut cache = MessageCache::new();
+        let msg = make_verified(b"fw-not-downgraded");
+
+        cache.mark_message_as_forwarded(&msg);
+        cache.mark_message_as_processed(&msg);
+
+        assert_eq!(
+            cache.message_status(&msg.id()),
+            Some(&MessageStatus::Forwarded),
+            "Forwarded status must not be downgraded to Processed"
+        );
+    }
+
+    #[test]
+    fn processed_status_upgraded_to_forwarded() {
+        let mut cache = MessageCache::new();
+        let msg = make_verified(b"proc-upgraded");
+
+        cache.mark_message_as_processed(&msg);
+        assert_eq!(
+            cache.message_status(&msg.id()),
+            Some(&MessageStatus::Processed)
+        );
+
+        cache.mark_message_as_forwarded(&msg);
+        assert_eq!(
+            cache.message_status(&msg.id()),
+            Some(&MessageStatus::Forwarded),
+            "Processed status must be upgradeable to Forwarded"
+        );
+    }
+
+    #[test]
+    fn is_message_processed_true_for_both_statuses() {
+        let mut cache = MessageCache::new();
+        let proc_msg = make_verified(b"processed");
+        let fwd_msg = make_verified(b"forwarded");
+
+        cache.mark_message_as_processed(&proc_msg);
+        cache.mark_message_as_forwarded(&fwd_msg);
+
+        let raw_proc: EncapsulatedMessage = proc_msg.into();
+        let raw_fwd: EncapsulatedMessage = fwd_msg.into();
+
+        assert!(
+            cache.is_message_processed(&raw_proc),
+            "is_message_processed should return true for Processed status"
+        );
+        assert!(
+            cache.is_message_processed(&raw_fwd),
+            "is_message_processed should return true for Forwarded status"
+        );
+    }
+
+    #[test]
+    fn is_message_forwarded_returns_false_for_processed_status() {
+        let mut cache = MessageCache::new();
+        let msg = make_verified(b"only-processed");
+
+        cache.mark_message_as_processed(&msg);
+        let raw: EncapsulatedMessage = msg.into();
+
+        assert!(
+            !cache.is_message_forwarded(&raw),
+            "is_message_forwarded should return false for Processed status"
+        );
+    }
+
+    #[test]
+    fn mark_as_seen_from_peer_returns_false_on_duplicate() {
+        let mut cache = MessageCache::new();
+        let peer = PeerId::random();
+        let raw = make_raw(b"seen-twice");
+
+        assert!(
+            cache.mark_message_as_seen_from_peer(&raw, peer),
+            "First insertion should return true"
+        );
+        assert!(
+            !cache.mark_message_as_seen_from_peer(&raw, peer),
+            "Second insertion of the same message from the same peer should return false"
+        );
+    }
+
+    #[test]
+    fn mark_as_seen_from_peer_is_independent_per_peer() {
+        let mut cache = MessageCache::new();
+        let peer1 = PeerId::random();
+        let peer2 = PeerId::random();
+        let raw = make_raw(b"shared-message");
+
+        assert!(
+            cache.mark_message_as_seen_from_peer(&raw, peer1),
+            "Insertion from peer1 should return true"
+        );
+        assert!(
+            cache.mark_message_as_seen_from_peer(&raw, peer2),
+            "Insertion from peer2 should also return true (independent tracking)"
+        );
+    }
+
+    #[test]
+    fn remove_peer_info_clears_seen_messages() {
+        let mut cache = MessageCache::new();
+        let peer = PeerId::random();
+        let raw = make_raw(b"to-be-removed");
+
+        cache.mark_message_as_seen_from_peer(&raw, peer);
+        assert!(cache.messages_from_peer(&peer).next().is_some());
+
+        cache.remove_peer_info(&peer);
+        assert!(
+            cache.messages_from_peer(&peer).next().is_none(),
+            "Peer should have no seen messages after remove_peer_info"
+        );
+    }
+
+    #[test]
+    fn remove_peer_info_does_not_affect_other_peers() {
+        let mut cache = MessageCache::new();
+        let peer1 = PeerId::random();
+        let peer2 = PeerId::random();
+
+        cache.mark_message_as_seen_from_peer(&make_raw(b"msg-for-peer1"), peer1);
+        cache.mark_message_as_seen_from_peer(&make_raw(b"msg-for-peer2"), peer2);
+
+        cache.remove_peer_info(&peer1);
+
+        assert!(
+            cache.messages_from_peer(&peer1).next().is_none(),
+            "peer1 records should be gone"
+        );
+        assert!(
+            cache.messages_from_peer(&peer2).next().is_some(),
+            "peer2 records must not be affected"
+        );
+    }
+}

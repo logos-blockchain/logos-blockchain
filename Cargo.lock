@@ -5121,7 +5121,6 @@ dependencies = [
  "num-bigint",
  "rand 0.8.5",
  "reqwest",
- "rpds",
  "serde_json",
  "serde_yaml",
  "serial_test",

@@ -6,27 +6,32 @@ use lb_testing_framework::{DeploymentBuilder, LbcLocalDeployer, TopologyConfig};
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
-use crate::cucumber::{
-    error::{StepError, StepResult},
-    steps::{
-        TARGET,
-        manual_cluster::{build_manual_cluster_deployment, stop_active_manual_cluster},
-        manual_nodes::{
-            config_override::set_user_config_override,
-            snapshots::{save_named_blockchain_snapshot, validate_snapshot_path_component},
-            utils::{
-                NodesToStartUnordered, create_snapshots_all_nodes, get_cryptarchia_info_all_nodes,
-                nodes_converged, parse_genesis_wallet_tokens_row, parse_url,
-                parse_wallet_resources_table_row, poll_all_nodes_and_update_consensus_cache,
-                restart_node, start_node, start_nodes_order_respecting_dependencies,
-                verify_genesis_wallet_resources_table_indexes,
-                verify_node_wallet_resources_table_indexes,
-                wait_for_all_nodes_to_be_synced_to_chain,
+use crate::{
+    cucumber::{
+        error::{StepError, StepResult},
+        steps::{
+            TARGET,
+            manual_cluster::{build_manual_cluster_deployment, stop_active_manual_cluster},
+            manual_nodes::{
+                config_override::set_user_config_override,
+                snapshots::{save_named_blockchain_snapshot, validate_snapshot_path_component},
+                utils::{
+                    NodesToStartUnordered, create_snapshots_all_nodes,
+                    ensure_fee_sponsorship_and_fork_groups_are_not_mixed,
+                    get_cryptarchia_info_all_nodes, nodes_converged,
+                    parse_genesis_wallet_tokens_row, parse_url, parse_wallet_resources_table_row,
+                    poll_all_nodes_and_update_consensus_cache, restart_node, start_node,
+                    start_nodes_order_respecting_dependencies,
+                    verify_genesis_wallet_resources_table_indexes,
+                    verify_node_wallet_resources_table_indexes,
+                    wait_for_all_nodes_to_be_synced_to_chain,
+                },
             },
         },
+        utils::resolve_literal_or_env,
+        world::{CucumberWorld, GenesisTokens, NodeSnapshot, PublicCryptarchiaEndpointPeer},
     },
-    utils::resolve_literal_or_env,
-    world::{CucumberWorld, GenesisTokens, NodeSnapshot, PublicCryptarchiaEndpointPeer},
+    non_zero,
 };
 
 const PUBLIC_CRYPTARCHIA_ENDPOINT: &str = "public_cryptarchia_endpoint";
@@ -114,6 +119,25 @@ fn step_cluster_has_wallet_resources(world: &mut CucumberWorld, step: &Step) -> 
     Ok(())
 }
 
+#[given(expr = "we have a sponsored genesis fee account with {int} tokens of {int} value each")]
+#[when(expr = "we have a sponsored genesis fee account with {int} tokens of {int} value each")]
+fn step_sponsored_genesis_fee_account(
+    world: &mut CucumberWorld,
+    step: &Step,
+    token_count: usize,
+    token_value: u64,
+) -> StepResult {
+    ensure_fee_sponsorship_and_fork_groups_are_not_mixed(world, step.value.as_str())?;
+
+    let token_count = non_zero!("genesis fee token count", token_count)?;
+    let token_value = non_zero!("genesis fee token value", token_value)?;
+
+    world
+        .fee_state
+        .set_sponsored_genesis_account(token_count, token_value);
+    Ok(())
+}
+
 #[given("I start nodes with wallet resources:")]
 #[when("I start nodes with wallet resources:")]
 async fn step_start_nodes_with_wallet_resources(
@@ -196,6 +220,59 @@ const fn step_we_use_ibd_peers(world: &mut CucumberWorld) {
 #[when(expr = "we join an external network")]
 const fn step_we_join_external_network(world: &mut CucumberWorld) {
     world.join_external_network = Some(true);
+}
+
+#[given(expr = "we will have distinct node groups to query wallet balances:")]
+#[when(expr = "we will have distinct node groups to query wallet balances:")]
+fn step_define_node_groups(world: &mut CucumberWorld, step: &Step) -> Result<(), StepError> {
+    ensure_fee_sponsorship_and_fork_groups_are_not_mixed(world, &step.value)?;
+
+    let table = step.table.as_ref().ok_or(StepError::LogicalError {
+        message: "Expected a data table".to_owned(),
+    })?;
+
+    if table.rows.is_empty() || table.rows[0].len() != 2 {
+        return Err(StepError::LogicalError {
+            message: "Expected table columns: | group_name | node_name |".to_owned(),
+        });
+    }
+
+    if table.rows[0][0].trim() != "group_name" || table.rows[0][1].trim() != "node_name" {
+        return Err(StepError::LogicalError {
+            message: "Expected table columns: | group_name | node_name |".to_owned(),
+        });
+    }
+
+    world.node_groups.clear();
+    world.node_to_group.clear();
+
+    for row in table.rows.iter().skip(1) {
+        if row.len() != 2 {
+            return Err(StepError::LogicalError {
+                message: "Each node-group row must have exactly two columns".to_owned(),
+            });
+        }
+
+        let group_name = row[0].trim().to_owned();
+        let node_name = row[1].trim().to_owned();
+
+        if let Some(existing_group) = world.node_to_group.get(&node_name) {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Node `{node_name}` appears in both group `{existing_group}` and `{group_name}`"
+                ),
+            });
+        }
+
+        world
+            .node_groups
+            .entry(group_name.clone())
+            .or_default()
+            .insert(node_name.clone());
+        world.node_to_group.insert(node_name, group_name);
+    }
+
+    Ok(())
 }
 
 #[given(expr = "I have user config setting {string} as {string}")]

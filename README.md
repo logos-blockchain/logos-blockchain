@@ -73,7 +73,11 @@ cargo test -p logos-blockchain-circuits-prover -p logos-blockchain-circuits-veri
 ```bash
 cargo build -p logos-blockchain-node --release
 ```
-The `jemalloc` feature is automatically enabled by default to mitigate heap fragmentation.
+
+If you want to use [Jemalloc](https://crates.io/crates/tikv-jemallocator) as the global allocator, enable the `jemalloc` feature:
+```bash
+cargo build -p logos-blockchain-node --release --features jemalloc
+```
 
 ### 3. Run a standalone node
 

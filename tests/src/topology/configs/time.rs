@@ -48,7 +48,6 @@ fn local_host_ntp_time_config() -> GeneralTimeConfig {
             - Ensure only one 'pool' or 'server' line exit to avoid duplicates\n  \
             - Add 'bindaddress 127.0.0.1'\n  \
             - Add 'allow 127.0.0.1'\n\
-            - Add 'allow 127.0.0.1'\n\
           - Start/restart the NTP service\n  \
             - `sudo systemctl restart chrony`\n\
           - Check the NTP service status and sources:\n  \
