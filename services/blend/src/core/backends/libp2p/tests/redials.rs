@@ -1,4 +1,5 @@
 use core::time::Duration;
+use std::collections::HashSet;
 
 use lb_blend::scheduling::membership::Membership;
 use lb_core::crypto::ZkHash;
@@ -177,6 +178,115 @@ async fn core_redial_uses_exponential_backoff() {
         .await;
     let second_backoff = before_third_error.elapsed();
     assert!(second_backoff >= Duration::from_secs(4),);
+}
+
+/// Verifies that when a peer fails all dial attempts, it is added to the failed
+/// peers set, preventing it from being chosen again on the next attempt.
+#[test(tokio::test)]
+async fn core_remembers_failed_peers_across_retries() {
+    // Create 3 membership nodes: 1 local (the dialing swarm) + 2 remote
+    // unreachable.
+    let (mut identities, nodes) = new_nodes_with_empty_address(3);
+    let TestSwarm {
+        swarm: mut dialing_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &nodes)
+        // Use max_dial_attempts=1 to avoid backoff delays.
+        .with_max_dial_attempts(1.try_into().unwrap())
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
+
+    // Manually dial one of the unreachable peers.
+    let unreachable_peer_1 = nodes[1].id;
+    let unreachable_peer_2 = nodes[2].id;
+    dialing_swarm.dial_peer_at_addr(unreachable_peer_1, Protocol::Memory(0).into());
+
+    // The first dial has no failed peers memory.
+    assert_eq!(
+        dialing_swarm.failed_peers_for(&unreachable_peer_1),
+        Some(&HashSet::new()),
+    );
+
+    // Let the first peer fail its single dial attempt.
+    dialing_swarm
+        .poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(unreachable_peer_1)
+        })
+        .await;
+
+    // After failure, check_and_dial_new_peers should have picked the second peer,
+    // and the second peer's dial attempt should carry the first peer in its
+    // failed_peers set.
+    assert!(
+        dialing_swarm
+            .ongoing_dials()
+            .contains_key(&unreachable_peer_2),
+        "Second peer should be dialed after first peer failed"
+    );
+    assert_eq!(
+        dialing_swarm.failed_peers_for(&unreachable_peer_2),
+        Some(&HashSet::from([unreachable_peer_1])),
+    );
+}
+
+/// Verifies that when all peers have been tried and failed, the failed peers
+/// memory is cleared and peers are retried from scratch.
+#[test(tokio::test)]
+async fn core_clears_failed_peers_memory_when_all_exhausted() {
+    // Create 3 membership nodes: 1 local + 2 remote unreachable.
+    let (mut identities, nodes) = new_nodes_with_empty_address(3);
+    let TestSwarm {
+        swarm: mut dialing_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .with_max_dial_attempts(1.try_into().unwrap())
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
+
+    let unreachable_peer_1 = nodes[1].id;
+    dialing_swarm.dial_peer_at_addr(unreachable_peer_1, Protocol::Memory(0).into());
+
+    // Fail the first peer.
+    dialing_swarm
+        .poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(unreachable_peer_1)
+        })
+        .await;
+
+    // The second peer should now be being dialed.
+    let second_peer = *dialing_swarm
+        .ongoing_dials()
+        .keys()
+        .next()
+        .expect("should have an ongoing dial");
+    assert_ne!(unreachable_peer_1, second_peer);
+
+    // Fail the second peer.
+    dialing_swarm
+        .poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(second_peer)
+        })
+        .await;
+
+    // Both peers have been tried. The memory should be cleared and a new dial
+    // should be attempted with an empty failed_peers set.
+    assert!(
+        !dialing_swarm.ongoing_dials().is_empty(),
+        "A new dial should be attempted after clearing failed peers memory"
+    );
+    let retried_peer = *dialing_swarm.ongoing_dials().keys().next().unwrap();
+    assert_eq!(
+        dialing_swarm.failed_peers_for(&retried_peer),
+        Some(&HashSet::new()),
+        "Failed peers memory should be cleared after all peers have been tried"
+    );
 }
 
 /// When a new session rotation occurs, pending backoff retries should be
