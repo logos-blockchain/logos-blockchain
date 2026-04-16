@@ -4,7 +4,10 @@ use futures::future::join_all;
 use lb_node::config::cryptarchia::deployment::EpochConfig;
 use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_tests::{
-    common::{sync::wait_for_validators_mode_and_height, time::max_block_propagation_time},
+    common::{
+        sync::{wait_for_validators_mode_and_height, wait_for_validators_mode_and_slot},
+        time::max_block_propagation_time,
+    },
     nodes::{create_validator_config, validator::Validator},
     topology::configs::{
         create_general_configs, deployment::e2e_deployment_settings_with_genesis_tx,
@@ -52,25 +55,19 @@ async fn leader_claim() {
         .collect::<Result<Vec<_>, _>>()
         .expect("Failed to spawn validators");
 
-    // Wait for 3 epochs to be safe.
-    // We need at least 2 epoch transitions:
+    // Wait for 2 epoch transitions:
     // epoch 0→1 (vouchers become pending), epoch 1→2 (vouchers flushed into MMR).
     let validator = &validators[0];
-    let target_height = 3 * validator.config().deployment.cryptarchia.blocks_per_epoch();
+    let target_slot = 2 * validator.config().deployment.cryptarchia.slots_per_epoch();
     println!(
-        "target_height:{target_height}, deployment.cryptarchia:{:?}",
+        "target_slot:{target_slot}, deployment.cryptarchia:{:?}",
         validator.config().deployment.cryptarchia
     );
-    wait_for_validators_mode_and_height(
+    wait_for_validators_mode_and_slot(
         &validators,
         lb_cryptarchia_engine::State::Online,
-        target_height,
-        max_block_propagation_time(
-            target_height as u32,
-            validators.len() as u64,
-            &validator.config().deployment,
-            3.0,
-        ),
+        target_slot.into(),
+        Duration::from_secs(300),
     )
     .await;
 
@@ -97,13 +94,14 @@ async fn leader_claim() {
     );
 
     // Wait for the claim tx to be included (a few more blocks)
-    let post_claim_height = target_height + 5;
+    let tip_height = validator.consensus_info(false).await.height;
+    let target_height = tip_height + 5;
     wait_for_validators_mode_and_height(
         &validators,
         lb_cryptarchia_engine::State::Online,
-        post_claim_height,
+        target_height,
         max_block_propagation_time(
-            (post_claim_height - target_height) as u32,
+            5,
             validators.len() as u64,
             &validator.config().deployment,
             3.0,

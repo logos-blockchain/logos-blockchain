@@ -683,6 +683,10 @@ where
 }
 
 pub mod wallet {
+    use lb_http_api_common::bodies::wallet::sign::{
+        WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody, WalletSignTxZkRequestBody,
+        WalletSignTxZkResponseBody,
+    };
     use lb_key_management_system_service::keys::ZkPublicKey;
 
     use super::*;
@@ -831,5 +835,121 @@ pub mod wallet {
             }
             Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
         }
+    }
+
+    #[utoipa::path(
+        post,
+        path = paths::wallet::SIGN_TX_ED25519,
+        responses(
+            (status = 200, description = "Signed transaction"),
+            (status = 500, description = "Internal server error", body = String),
+        )
+    )]
+    pub async fn sign_tx_ed25519<WalletService, StorageAdapter, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Json(req): Json<WalletSignTxEd25519RequestBody>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData,
+        StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+                RuntimeServiceId,
+                Item = SignedMantleTx,
+                Key = <SignedMantleTx as Transaction>::Hash,
+            > + Send
+            + Sync
+            + Clone
+            + 'static,
+        StorageAdapter::Error: Debug,
+        RuntimeServiceId: Debug
+            + Display
+            + Send
+            + Sync
+            + 'static
+            + AsServiceId<WalletService>
+            + AsServiceId<
+                TxMempoolService<
+                    MempoolNetworkAdapter<
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        RuntimeServiceId,
+                    >,
+                    Mempool<
+                        HeaderId,
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        StorageAdapter,
+                        RuntimeServiceId,
+                    >,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+            >,
+    {
+        make_request_and_return_response!(async {
+            let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+                handle.relay::<WalletService>().await?,
+            );
+
+            let sig = wallet.sign_tx_with_ed25519(req.tx_hash, req.pk).await?;
+            Ok::<_, DynError>(WalletSignTxEd25519ResponseBody { sig })
+        })
+    }
+
+    #[utoipa::path(
+        post,
+        path = paths::wallet::SIGN_TX_ZK,
+        responses(
+            (status = 200, description = "Signed transaction"),
+            (status = 500, description = "Internal server error", body = String),
+        )
+    )]
+    pub async fn sign_tx_zk<WalletService, StorageAdapter, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Json(req): Json<WalletSignTxZkRequestBody>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData,
+        StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+                RuntimeServiceId,
+                Item = SignedMantleTx,
+                Key = <SignedMantleTx as Transaction>::Hash,
+            > + Send
+            + Sync
+            + Clone
+            + 'static,
+        StorageAdapter::Error: Debug,
+        RuntimeServiceId: Debug
+            + Display
+            + Send
+            + Sync
+            + 'static
+            + AsServiceId<WalletService>
+            + AsServiceId<
+                TxMempoolService<
+                    MempoolNetworkAdapter<
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        RuntimeServiceId,
+                    >,
+                    Mempool<
+                        HeaderId,
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        StorageAdapter,
+                        RuntimeServiceId,
+                    >,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+            >,
+    {
+        make_request_and_return_response!(async {
+            let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+                handle.relay::<WalletService>().await?,
+            );
+
+            let sig = wallet.sign_tx_with_zk(req.tx_hash, req.pks).await?;
+            Ok::<_, DynError>(WalletSignTxZkResponseBody { sig })
+        })
     }
 }

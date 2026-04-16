@@ -275,6 +275,14 @@ where
                         _,
                     >,
                 ),
+            )
+            .route(
+                paths::wallet::SIGN_TX_ED25519,
+                routing::post(wallet::sign_tx_ed25519::<WalletService, MempoolStorageAdapter, _>),
+            )
+            .route(
+                paths::wallet::SIGN_TX_ZK,
+                routing::post(wallet::sign_tx_zk::<WalletService, MempoolStorageAdapter, _>),
             );
 
         let app = app.route(

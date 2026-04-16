@@ -130,6 +130,13 @@ enum ActorRequest {
         msg: Vec<u8>,
         reply: tokio::sync::oneshot::Sender<Result<(MantleTx, MsgId, Ed25519Signature), Error>>,
     },
+    /// Sign a tx using the sequencer's key
+    ///
+    /// Useful when signing tx built by other sequencers (e.g. withdraw).
+    SignTx {
+        tx_hash: TxHash,
+        reply: tokio::sync::oneshot::Sender<Result<Ed25519Signature, Error>>,
+    },
     /// Submit a signed tx associated with a msg ID
     SubmitSignedTx {
         tx: SignedMantleTx,
@@ -237,6 +244,30 @@ where
         reply_rx.await.map_err(|_| Error::Unavailable {
             reason: "actor dropped reply",
         })?
+    }
+
+    /// Sign a [`MantleTx`] using the sequencer's key.
+    ///
+    /// Useful when signing tx built by other sequencers (e.g. withdraw).
+    pub async fn sign_tx(&self, tx: &MantleTx) -> Result<Ed25519Signature, Error> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let request = ActorRequest::SignTx {
+            tx_hash: tx.hash(),
+            reply: reply_tx,
+        };
+
+        self.request_tx
+            .send(request)
+            .await
+            .map_err(|_| Error::Unavailable {
+                reason: "actor channel closed",
+            })?;
+
+        let result = reply_rx.await.map_err(|_| Error::Unavailable {
+            reason: "actor dropped reply",
+        })??;
+
+        Ok(result)
     }
 
     /// Submit a [`SignedMantleTx`] that is associated with a [`MsgId`]
@@ -804,62 +835,12 @@ where
 
     async fn handle_request(&mut self, request: ActorRequest) {
         if !self.is_ready() {
-            match request {
-                ActorRequest::PublishMessage { .. } => {
-                    warn!("Publish dropped: sequencer not yet ready");
-                }
-                ActorRequest::SetKeys { reply, .. } => {
-                    drop(reply.send(Err(Error::Unavailable {
-                        reason: "sequencer not yet ready",
-                    })));
-                }
-                ActorRequest::PrepareTx { reply, .. } => {
-                    drop(reply.send(Err(Error::Unavailable {
-                        reason: "sequencer not yet ready",
-                    })));
-                }
-                ActorRequest::SubmitSignedTx { reply, .. } => {
-                    drop(reply.send(Err(Error::Unavailable {
-                        reason: "sequencer not yet ready",
-                    })));
-                }
-            }
+            reject_not_ready(request);
             return;
         }
 
-        // Safe to unwrap — is_ready() guarantees state is initialized
-        let s = self.state.as_mut().unwrap();
-
         match request {
-            ActorRequest::PublishMessage { data } => {
-                // Derive publish parent from state instead of trusting
-                // last_msg_id blindly — handles branch switches correctly.
-                let parent = if let Some(tip) = self.current_tip {
-                    s.publish_parent(tip)
-                } else {
-                    self.last_msg_id
-                };
-                debug!(" Publishing with parent={parent:?}");
-                let (signed_tx, new_msg_id) =
-                    create_inscribe_tx(self.channel_id, &self.signing_key, data.clone(), parent);
-                let id = signed_tx.mantle_tx.hash();
-
-                s.submit_inscription(signed_tx.clone(), parent, new_msg_id, data);
-                self.last_msg_id = new_msg_id;
-
-                info!("Created inscription {id:?}");
-
-                // Post to network (best effort, resubmit timer retries if needed)
-                if let Err(e) = self.node.post_transaction(signed_tx).await {
-                    debug!("Failed to post transaction: {e}");
-                }
-
-                let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
-                drop(self.event_tx.send(Event::Published {
-                    inscription_id: id,
-                    checkpoint,
-                }));
-            }
+            ActorRequest::PublishMessage { data } => self.handle_publish(data).await,
             ActorRequest::PrepareTx { ops, msg, reply } => {
                 let result = prepare_tx(
                     ops,
@@ -871,11 +852,19 @@ where
                 // do not update last_msg_id since tx is not submitted yet
                 drop(reply.send(Ok(result)));
             }
+            ActorRequest::SignTx { tx_hash, reply } => {
+                let signature = sign_tx(tx_hash, &self.signing_key);
+                drop(reply.send(Ok(signature)));
+            }
             ActorRequest::SubmitSignedTx { tx, msg_id, reply } => {
+                // Safe to unwrap — is_ready() guarantees state is initialized
+                let s = self.state.as_mut().unwrap();
                 let result = submit_signed_tx(s, tx, msg_id, &mut self.last_msg_id, self.lib_slot);
                 drop(reply.send(Ok(result)));
             }
             ActorRequest::SetKeys { keys, reply } => {
+                // Safe to unwrap — is_ready() guarantees state is initialized
+                let s = self.state.as_mut().unwrap();
                 let signed_tx = create_set_keys_tx(self.channel_id, &self.signing_key, keys);
                 s.submit_other(signed_tx.clone());
                 let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
@@ -886,6 +875,54 @@ where
                 drop(reply.send(Ok((signed_tx, result))));
             }
         }
+    }
+
+    async fn handle_publish(&mut self, data: Vec<u8>) {
+        // Safe to unwrap — handle_request checks is_ready() first
+        let s = self.state.as_mut().unwrap();
+
+        // Derive publish parent from state instead of trusting
+        // last_msg_id blindly — handles branch switches correctly.
+        let parent = if let Some(tip) = self.current_tip {
+            s.publish_parent(tip)
+        } else {
+            self.last_msg_id
+        };
+        debug!(" Publishing with parent={parent:?}");
+        let (signed_tx, new_msg_id) =
+            create_inscribe_tx(self.channel_id, &self.signing_key, data.clone(), parent);
+        let id = signed_tx.mantle_tx.hash();
+
+        s.submit_inscription(signed_tx.clone(), parent, new_msg_id, data);
+        self.last_msg_id = new_msg_id;
+
+        info!("Created inscription {id:?}");
+
+        // Post to network (best effort, resubmit timer retries if needed)
+        if let Err(e) = self.node.post_transaction(signed_tx).await {
+            debug!("Failed to post transaction: {e}");
+        }
+
+        let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
+        drop(self.event_tx.send(Event::Published {
+            inscription_id: id,
+            checkpoint,
+        }));
+    }
+}
+
+fn reject_not_ready(request: ActorRequest) {
+    let err = || Error::Unavailable {
+        reason: "sequencer not yet ready",
+    };
+    match request {
+        ActorRequest::PublishMessage { .. } => {
+            warn!("Publish dropped: sequencer not yet ready");
+        }
+        ActorRequest::SetKeys { reply, .. } => drop(reply.send(Err(err()))),
+        ActorRequest::PrepareTx { reply, .. } => drop(reply.send(Err(err()))),
+        ActorRequest::SignTx { reply, .. } => drop(reply.send(Err(err()))),
+        ActorRequest::SubmitSignedTx { reply, .. } => drop(reply.send(Err(err()))),
     }
 }
 
@@ -1330,7 +1367,7 @@ fn create_inscribe_tx(
     };
 
     let tx_hash = inscribe_tx.hash();
-    let signature = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
+    let signature = sign_tx(tx_hash, signing_key);
 
     let signed_tx = SignedMantleTx {
         ops_proofs: vec![OpProof::Ed25519Sig(signature)],
@@ -1358,7 +1395,7 @@ fn create_set_keys_tx(
     };
 
     let tx_hash = set_keys_tx.hash();
-    let signature = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
+    let signature = sign_tx(tx_hash, signing_key);
 
     SignedMantleTx {
         ops_proofs: vec![OpProof::Ed25519Sig(signature)],
@@ -1389,9 +1426,13 @@ fn prepare_tx(
         execution_gas_price: 0.into(),
     };
 
-    let inscription_sig = signing_key.sign_payload(tx.hash().as_signing_bytes().as_ref());
+    let inscription_sig = sign_tx(tx.hash(), signing_key);
 
     (tx, msg_id, inscription_sig)
+}
+
+fn sign_tx(tx_hash: TxHash, signing_key: &Ed25519Key) -> Ed25519Signature {
+    signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref())
 }
 
 #[cfg(test)]
