@@ -980,7 +980,7 @@ where
                 self.protocol_name.clone(),
             ))
         } else {
-            tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with edge peer {peer_id:?}.");
+            tracing::trace!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with edge peer {peer_id:?}.");
             Either::Right(DummyConnectionHandler)
         })
     }
