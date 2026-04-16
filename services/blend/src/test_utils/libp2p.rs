@@ -26,11 +26,14 @@ pub struct TestEncapsulatedMessage(EncapsulatedMessageWithVerifiedPublicHeader);
 
 impl TestEncapsulatedMessage {
     pub fn new(payload: &[u8]) -> Self {
-        Self(EncapsulatedMessageWithVerifiedPublicHeader::new(
-            &generate_valid_inputs(),
-            PayloadType::Data,
-            payload.try_into().unwrap(),
-        ))
+        Self(
+            EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+                &generate_valid_inputs(),
+                PayloadType::Data,
+                payload.try_into().unwrap(),
+            )
+            .unwrap(),
+        )
     }
 
     pub fn into_inner(self) -> EncapsulatedMessageWithVerifiedPublicHeader {

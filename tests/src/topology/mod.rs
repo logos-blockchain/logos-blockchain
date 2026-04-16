@@ -32,6 +32,7 @@ use crate::{
 
 pub struct TopologyConfig {
     pub n_validators: usize,
+    pub blend_core_nodes: usize,
     pub network_params: NetworkParams,
     pub extra_genesis_notes: Vec<GenesisNoteSpec>,
     /// Override the SDP `lock_period` for this test topology.
@@ -44,6 +45,7 @@ impl TopologyConfig {
     pub fn one_validator() -> Self {
         Self {
             n_validators: 1,
+            blend_core_nodes: 1,
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
             lock_period_override: None,
@@ -54,6 +56,7 @@ impl TopologyConfig {
     pub fn two_validators() -> Self {
         Self {
             n_validators: 2,
+            blend_core_nodes: 2,
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
             lock_period_override: None,
@@ -64,6 +67,7 @@ impl TopologyConfig {
     pub fn n_validators(n_validators: usize) -> Self {
         Self {
             n_validators,
+            blend_core_nodes: n_validators,
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
             lock_period_override: None,
@@ -80,6 +84,21 @@ impl TopologyConfig {
     pub const fn with_lock_period(mut self, lock_period: u64) -> Self {
         self.lock_period_override = Some(lock_period);
         self
+    }
+
+    #[must_use]
+    pub fn n_validators_with_m_blend_node(n: usize, m: usize) -> Self {
+        assert!(
+            m <= n,
+            "Number of Blend core nodes `m` must be less than or equal to total number of validators `n`."
+        );
+        Self {
+            n_validators: n,
+            blend_core_nodes: m,
+            network_params: NetworkParams::default(),
+            extra_genesis_notes: Vec::new(),
+            lock_period_override: None,
+        }
     }
 }
 

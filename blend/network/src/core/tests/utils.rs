@@ -97,11 +97,14 @@ pub struct TestEncapsulatedMessage(EncapsulatedMessageWithVerifiedPublicHeader);
 
 impl TestEncapsulatedMessage {
     pub fn new(payload: &[u8]) -> Self {
-        Self(EncapsulatedMessageWithVerifiedPublicHeader::new(
-            &generate_valid_inputs(0),
-            PayloadType::Data,
-            payload.try_into().unwrap(),
-        ))
+        Self(
+            EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+                &generate_valid_inputs(0),
+                PayloadType::Data,
+                payload.try_into().unwrap(),
+            )
+            .unwrap(),
+        )
     }
 
     pub fn new_with_invalid_signature(payload: &[u8]) -> Self {
@@ -129,11 +132,14 @@ pub struct TestEncapsulatedMessageWithSession(EncapsulatedMessageWithVerifiedPub
 
 impl TestEncapsulatedMessageWithSession {
     pub fn new(session: SessionNumber, payload: &[u8]) -> Self {
-        Self(EncapsulatedMessageWithVerifiedPublicHeader::new(
-            &generate_valid_inputs(session),
-            PayloadType::Data,
-            payload.try_into().unwrap(),
-        ))
+        Self(
+            EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+                &generate_valid_inputs(session),
+                PayloadType::Data,
+                payload.try_into().unwrap(),
+            )
+            .unwrap(),
+        )
     }
 }
 

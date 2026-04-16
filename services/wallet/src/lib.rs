@@ -130,6 +130,16 @@ pub enum WalletMsg {
         tx_builder: MantleTxBuilder,
         resp_tx: Sender<Result<TipResponse<SignedMantleTx>, WalletServiceError>>,
     },
+    SignTxWithEd25519 {
+        tx_hash: TxHash,
+        pk: <Ed25519Key as SecuredKey>::PublicKey,
+        resp_tx: Sender<Result<<Ed25519Key as SecuredKey>::Signature, WalletServiceError>>,
+    },
+    SignTxWithZk {
+        tx_hash: TxHash,
+        pks: Vec<ZkPublicKey>,
+        resp_tx: Sender<Result<ZkSignature, WalletServiceError>>,
+    },
     GetLeaderAgedNotes {
         tip: Option<HeaderId>,
         resp_tx: Sender<Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError>>,
@@ -181,7 +191,10 @@ impl WalletMsg {
             | Self::GetLeaderAgedNotes { tip, .. }
             | Self::GetClaimableVoucher { tip, .. }
             | Self::GetTxContext { block_id: tip, .. } => *tip,
-            Self::GenerateNewVoucherSecret { .. } | Self::GetKnownAddresses { .. } => None,
+            Self::SignTxWithEd25519 { .. }
+            | Self::SignTxWithZk { .. }
+            | Self::GenerateNewVoucherSecret { .. }
+            | Self::GetKnownAddresses { .. } => None,
         }
     }
 }
@@ -478,6 +491,26 @@ where
 
                 if resp_tx.send(resp).is_err() {
                     error!("Failed to respond to SignTx");
+                }
+            }
+            WalletMsg::SignTxWithEd25519 {
+                tx_hash,
+                pk,
+                resp_tx,
+            } => {
+                let result = Self::sign_ed25519(tx_hash, pk, kms).await;
+                if resp_tx.send(result).is_err() {
+                    error!("Failed to respond to SignTxWithEd25519");
+                }
+            }
+            WalletMsg::SignTxWithZk {
+                tx_hash,
+                pks,
+                resp_tx,
+            } => {
+                let result = Self::sign_zksig(tx_hash, pks.into_iter(), kms).await;
+                if resp_tx.send(result).is_err() {
+                    error!("Failed to respond to SignTxWithZk");
                 }
             }
             WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {

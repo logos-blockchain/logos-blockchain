@@ -312,3 +312,138 @@ async fn epoch_private_info() {
         })
         .unwrap();
 }
+
+/// `rotate_epoch` with the same epoch as the current one should be a no-op:
+/// the leader generator (if present) should be preserved.
+#[test(tokio::test)]
+async fn rotate_epoch_equal_is_noop() {
+    let core_quota = 5;
+    let leadership_quota = 10;
+    let (_, core_private_inputs) = valid_proof_of_quota_inputs(core_quota);
+    let (leadership_public_inputs, leadership_private_inputs) =
+        valid_proof_of_leader_inputs(leadership_quota);
+
+    let mut generator = RealCoreAndLeaderProofsGenerator::new(
+        ProofsGeneratorSettings {
+            local_node_index: None,
+            membership_size: 1,
+            public_inputs: leadership_public_inputs,
+            encapsulation_layers: 1.try_into().unwrap(),
+            epoch: Epoch::new(1),
+        },
+        CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs),
+    );
+
+    // Provide private info so a leader generator exists.
+    generator.set_epoch_private(
+        leadership_private_inputs,
+        leadership_public_inputs.leader,
+        Epoch::new(1),
+    );
+    assert!(generator.leader_proofs_generator.is_some());
+
+    // Rotating with the same epoch should be a no-op - leader generator
+    // preserved.
+    generator.rotate_epoch(leadership_public_inputs.leader, Epoch::new(1));
+    assert!(
+        generator.leader_proofs_generator.is_some(),
+        "Leader generator should be preserved when rotating to the same epoch"
+    );
+
+    // Leader proofs should still work.
+    let proof = generator.get_next_leader_proof().await;
+    assert!(proof.is_some());
+}
+
+/// `rotate_epoch` drops the leader generator. `set_epoch_private` then
+/// recreates it for the new epoch.
+#[test(tokio::test)]
+async fn rotate_epoch_drops_leader_then_set_epoch_private_recreates() {
+    let core_quota = 5;
+    let leadership_quota = 10;
+    let (_, core_private_inputs) = valid_proof_of_quota_inputs(core_quota);
+    let (leadership_public_inputs, leadership_private_inputs) =
+        valid_proof_of_leader_inputs(leadership_quota);
+
+    let mut generator = RealCoreAndLeaderProofsGenerator::new(
+        ProofsGeneratorSettings {
+            local_node_index: None,
+            membership_size: 1,
+            public_inputs: leadership_public_inputs,
+            encapsulation_layers: 1.try_into().unwrap(),
+            epoch: Epoch::new(0),
+        },
+        CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs),
+    );
+
+    // Provide private info for epoch 0.
+    generator.set_epoch_private(
+        leadership_private_inputs.clone(),
+        leadership_public_inputs.leader,
+        Epoch::new(0),
+    );
+    assert!(generator.leader_proofs_generator.is_some());
+
+    // Rotate to epoch 1 - leader generator should be dropped because its
+    // epoch is behind.
+    generator.rotate_epoch(leadership_public_inputs.leader, Epoch::new(1));
+    assert!(
+        generator.leader_proofs_generator.is_none(),
+        "Leader generator should be dropped after rotating to a newer epoch"
+    );
+    assert!(generator.get_next_leader_proof().await.is_none());
+
+    // Provide private info for epoch 1 - leader generator should be
+    // recreated.
+    generator.set_epoch_private(
+        leadership_private_inputs,
+        leadership_public_inputs.leader,
+        Epoch::new(1),
+    );
+    assert!(
+        generator.leader_proofs_generator.is_some(),
+        "Leader generator should be recreated after set_epoch_private"
+    );
+    let proof = generator.get_next_leader_proof().await;
+    assert!(proof.is_some());
+}
+
+/// Two consecutive `rotate_epoch` calls without `set_epoch_private` in between:
+/// the first drops the leader generator, the second is a no-op on the leader
+/// side since there is nothing to drop.
+#[test(tokio::test)]
+async fn double_rotate_epoch_without_set_epoch_private() {
+    let core_quota = 10;
+    let (public_inputs, private_inputs) = valid_proof_of_quota_inputs(core_quota);
+
+    let mut generator = RealCoreAndLeaderProofsGenerator::new(
+        ProofsGeneratorSettings {
+            local_node_index: None,
+            membership_size: 1,
+            public_inputs,
+            encapsulation_layers: 1.try_into().unwrap(),
+            epoch: Epoch::new(0),
+        },
+        CorePoQGeneratorFromPrivateCoreQuotaInputs::new(private_inputs),
+    );
+
+    // Consume some core proofs.
+    for _ in 0u8..3 {
+        assert!(generator.get_next_core_proof().await.is_some());
+    }
+
+    // First rotation: epoch 0 -> 1.
+    generator.rotate_epoch(public_inputs.leader, Epoch::new(1));
+    assert!(generator.leader_proofs_generator.is_none());
+
+    // Second rotation: epoch 1 -> 2.
+    generator.rotate_epoch(public_inputs.leader, Epoch::new(2));
+    assert!(generator.leader_proofs_generator.is_none());
+
+    // Core proofs should still work - remaining quota preserved across rotations.
+    // We consumed 3 out of 10, so 7 remain.
+    for _ in 0u8..7 {
+        assert!(generator.get_next_core_proof().await.is_some());
+    }
+    assert!(generator.get_next_core_proof().await.is_none());
+}

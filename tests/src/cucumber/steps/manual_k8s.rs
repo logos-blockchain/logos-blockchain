@@ -9,8 +9,8 @@ use crate::cucumber::{
     steps::{
         manual_cluster::{
             assert_manual_node_has_peers, build_manual_cluster_deployment, build_user_wallets,
-            insert_started_node_info, peer_selection_from_names, resolve_named_peers,
-            start_manual_node, stop_active_manual_cluster, wait_manual_node_ready,
+            insert_started_node_info, start_manual_node, stop_active_manual_cluster,
+            wait_manual_node_ready,
         },
         manual_nodes::utils::{
             NodesToStartUnordered, parse_wallet_resources_table_row,
@@ -63,7 +63,7 @@ async fn step_k8s_manual_start_connected_node(
     node_name: String,
     peer_name: String,
 ) -> StepResult {
-    let peer_selection = peer_selection_from_names(world, &[peer_name])?;
+    let peer_selection = world.peer_selection_from_names(&[peer_name])?;
     start_manual_node(
         world,
         &node_name,
@@ -104,7 +104,7 @@ async fn step_k8s_manual_start_nodes_with_wallet_resources(
         let started_node = if initial_peers.is_empty() {
             start_manual_node(world, &runtime_node_name, StartNodeOptions::default()).await
         } else {
-            let peer_selection = PeerSelection::Named(resolve_named_peers(world, &initial_peers));
+            let peer_selection = PeerSelection::Named(world.resolve_named_peers(&initial_peers));
             start_manual_node(
                 world,
                 &runtime_node_name,

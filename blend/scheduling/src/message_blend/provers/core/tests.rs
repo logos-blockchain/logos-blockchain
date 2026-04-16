@@ -126,3 +126,44 @@ async fn epoch_rotation() {
     core_proofs_generator.rotate_epoch(public_inputs.leader);
     assert!(core_proofs_generator.get_next_proof().await.is_none());
 }
+
+/// Mid-quota epoch rotation: consume some proofs, rotate epoch, and verify the
+/// remaining quota is preserved (i.e. exactly the unconsumed proofs remain).
+#[test(tokio::test)]
+async fn epoch_rotation_mid_quota_preserves_remaining() {
+    let core_quota = 10;
+    let proofs_before_rotation = 4;
+    let (public_inputs, private_inputs) = valid_proof_of_quota_inputs(core_quota);
+
+    let mut core_proofs_generator = RealCoreProofsGenerator::new(
+        ProofsGeneratorSettings {
+            local_node_index: None,
+            membership_size: 1,
+            public_inputs,
+            encapsulation_layers: 1.try_into().unwrap(),
+            epoch: Epoch::new(0),
+        },
+        CorePoQGeneratorFromPrivateCoreQuotaInputs::new(private_inputs),
+    );
+
+    // Consume some proofs before rotating.
+    for _ in 0..proofs_before_rotation {
+        assert!(core_proofs_generator.get_next_proof().await.is_some());
+    }
+
+    // Rotate epoch mid-quota.
+    core_proofs_generator.rotate_epoch(public_inputs.leader);
+
+    // Remaining quota should allow exactly (core_quota - proofs_before_rotation)
+    // more proofs.
+    let remaining = core_quota - proofs_before_rotation;
+    for i in 0..remaining {
+        assert!(
+            core_proofs_generator.get_next_proof().await.is_some(),
+            "Expected proof {i} of {remaining} remaining after rotation"
+        );
+    }
+
+    // Quota should now be exhausted.
+    assert!(core_proofs_generator.get_next_proof().await.is_none());
+}

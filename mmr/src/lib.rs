@@ -12,7 +12,7 @@ pub use path::MerklePath;
 use path::{update_paths_above_merge, update_paths_at_merge};
 
 const EMPTY_VALUE: Fr = Fr::ZERO;
-const ACCEPTABLE_MAX_HEIGHT: u8 = 32;
+const ACCEPTABLE_MAX_HEIGHT: u8 = 33;
 
 /// An append-only persistent Merkle Mountain Range (MMR), which can accept up
 /// to 2^(`MAX_HEIGHT`-1) elements (leaves).
@@ -83,8 +83,10 @@ where
             return Err(MmrFull);
         }
 
-        let root = *elem.as_ref();
-        let mut last_root = Root { root, height: 1 };
+        let mut last_root = Root {
+            root: *elem.as_ref(),
+            height: 1,
+        };
         let mut roots = self.roots.clone();
 
         while let Some(root) = roots.peek().copied() {
@@ -132,8 +134,10 @@ where
                 .collect(),
         };
 
-        let root = *elem.as_ref();
-        let mut last_root = Root { root, height: 1 };
+        let mut last_root = Root {
+            root: *elem.as_ref(),
+            height: 1,
+        };
         let mut roots = self.roots.clone();
 
         // Phase 1: merge same-height peaks, updating sibling hashes at each merge
@@ -283,7 +287,7 @@ mod test {
     #[expect(clippy::clone_on_copy, reason = "for the sake of the test")]
     fn test_empty_roots() {
         let mut root = Fr::ZERO;
-        for i in 1..=32 {
+        for i in 1..=ACCEPTABLE_MAX_HEIGHT {
             assert_eq!(root, empty_subtree_root::<ZkHasher>(i));
             root = <ZkHasher as Digest>::compress(&[root.clone(), root]);
         }

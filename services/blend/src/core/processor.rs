@@ -506,11 +506,12 @@ mod tests {
         })
         .take(3)
         .collect::<Vec<_>>();
-        EncapsulatedMessageWithVerifiedPublicHeader::new(
+        EncapsulatedMessageWithVerifiedPublicHeader::try_new(
             &inputs,
             PayloadType::Cover,
             b"".as_slice().try_into().unwrap(),
         )
+        .unwrap()
     }
 
     fn settings(local_id: NodeId) -> SessionCryptographicProcessorSettings {

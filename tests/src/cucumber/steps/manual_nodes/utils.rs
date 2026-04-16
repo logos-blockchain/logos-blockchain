@@ -292,6 +292,21 @@ pub(crate) fn parse_wallet_resources_table_row(
     ))
 }
 
+pub(crate) fn ensure_fee_sponsorship_and_fork_groups_are_not_mixed(
+    world: &CucumberWorld,
+    step_value: &str,
+) -> StepResult {
+    if world.fee_state.sponsored_genesis_account.is_some() && !world.node_groups.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: format!(
+                "Step `{step_value}` error: sponsored fee accounts cannot be combined with distinct node groups in the same scenario"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
     world: &CucumberWorld,
     step: &str,
@@ -746,9 +761,11 @@ pub async fn restart_node(world: &CucumberWorld, step: &str, node_name: &str) ->
         .ok_or(StepError::LogicalError {
             message: "No local cluster available".into(),
         })?;
-    let started_node_name = world.resolve_node_name(node_name).inspect_err(|e| {
-        warn!(target: TARGET, "Step `{step}` error: {e}");
-    })?;
+    let started_node_name = world
+        .resolve_node_runtime_name(node_name)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{step}` error: {e}");
+        })?;
 
     cluster
         .restart_node(&started_node_name)
@@ -832,7 +849,7 @@ fn get_startup_settings(
     } else {
         let named = initial_peers
             .iter()
-            .map(|peer| world.resolve_node_name(peer))
+            .map(|peer| world.resolve_node_runtime_name(peer))
             .collect::<Result<Vec<String>, StepError>>()?;
         PeerSelection::Named(named)
     };

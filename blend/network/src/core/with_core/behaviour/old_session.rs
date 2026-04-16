@@ -26,6 +26,8 @@ use crate::core::with_core::{
     error::{ReceiveError, SendError},
 };
 
+const LOG_TARGET: &str = "blend::network::core::core::behaviour::old";
+
 /// Defines behaviours for processing messages from the old session
 /// until the session transition period has passed.
 pub struct OldSession {
@@ -100,6 +102,33 @@ impl OldSession {
         )
     }
 
+    #[cfg(any(test, feature = "unsafe-test-functions"))]
+    pub(super) fn force_send_serialized_message_to_peer_at_session(
+        &mut self,
+        serialized_message: Vec<u8>,
+        peer_id: PeerId,
+        session: u64,
+    ) -> Result<(), SendError> {
+        if session != self.session_number {
+            return Err(SendError::InvalidSession);
+        }
+
+        let Some(connection_id) = self.negotiated_peers.get(&peer_id) else {
+            return Err(SendError::NoPeers);
+        };
+        tracing::trace!(
+            target: LOG_TARGET,
+            "Notifying handler with peer {peer_id:?} on old session connection {connection_id:?} to deliver already-serialized message."
+        );
+        self.events.push_back(ToSwarm::NotifyHandler {
+            peer_id,
+            handler: NotifyHandler::One(*connection_id),
+            event: Either::Left(FromBehaviour::Message(serialized_message)),
+        });
+        self.try_wake();
+        Ok(())
+    }
+
     /// Handles a message received from a peer.
     ///
     /// # Returns
@@ -123,7 +152,15 @@ impl OldSession {
             &mut self.events,
             self.waker.take(),
             self.session_number,
-        )?;
+        ).inspect_err(|receive_error| {
+            tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old session: {receive_error:?}. Closing connection with spammy peer.");
+            self.events.push_back(ToSwarm::NotifyHandler {
+                peer_id: from_peer_id,
+                handler: NotifyHandler::One(from_connection_id),
+                event: Either::Left(FromBehaviour::CloseSubstreams),
+            });
+            self.try_wake();
+        })?;
 
         Ok(true)
     }
@@ -168,6 +205,12 @@ impl OldSession {
             return true;
         }
         false
+    }
+
+    fn try_wake(&mut self) {
+        if let Some(waker) = self.waker.take() {
+            waker.wake();
+        }
     }
 
     pub fn poll(
