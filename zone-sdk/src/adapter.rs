@@ -10,7 +10,7 @@ use lb_core::{
 };
 use reqwest::Url;
 
-use crate::{Deposit, ZoneBlock, ZoneMessage};
+use crate::{Deposit, Withdraw, ZoneBlock, ZoneMessage};
 
 #[async_trait]
 pub trait Node {
@@ -152,6 +152,11 @@ fn op_to_zone_message(op: &Op, channel_id: ChannelId) -> Option<ZoneMessage> {
             Some(ZoneMessage::Deposit(Deposit {
                 amount: deposit.amount,
                 metadata: deposit.metadata.clone(),
+            }))
+        }
+        Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
+            Some(ZoneMessage::Withdraw(Withdraw {
+                amount: withdraw.amount,
             }))
         }
         _ => None,

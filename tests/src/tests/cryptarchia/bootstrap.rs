@@ -100,13 +100,14 @@ async fn test_ibd_behind_nodes() {
         .bootstrap
         .prolonged_bootstrap_period = Duration::ZERO;
 
-    let behind_node = Validator::spawn(config.clone())
+    let behind_nodes = [Validator::spawn(config.clone())
         .await
-        .expect("Behind node should start successfully");
+        .expect("Behind node should start successfully")];
+    let behind_node = &behind_nodes[0];
 
     println!("Behind node started, waiting for it to finish IBD and switch to online mode...");
     wait_for_validators_mode(
-        &[&behind_node],
+        &behind_nodes,
         lb_cryptarchia_engine::State::Online,
         Duration::from_secs(10),
     )
