@@ -4448,7 +4448,6 @@ dependencies = [
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-ledger",
- "logos-blockchain-network-service",
  "logos-blockchain-services-utils",
  "logos-blockchain-time-service",
  "logos-blockchain-tracing",
