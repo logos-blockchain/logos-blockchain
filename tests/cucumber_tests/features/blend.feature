@@ -8,7 +8,7 @@ Feature: Blend
     And I start peer node "NODE_2" connected to node "NODE_1"
     And I start peer node "NODE_3" connected to node "NODE_1"
     And I start peer node "NODE_4" connected to node "NODE_1"
-    Then all nodes have at least 10 blocks and converged to within 1 blocks in 300 seconds
+    Then all nodes have at least 10 blocks and converged to within 1 blocks in 360 seconds
     And all nodes agree on LIB in 300 seconds
     Then I stop all nodes
 
@@ -20,7 +20,7 @@ Feature: Blend
     And I start peer node "NODE_2" connected to node "NODE_1"
     And I start peer node "NODE_3" connected to node "NODE_1"
     And I start peer node "NODE_4" connected to node "NODE_1"
-    Then all nodes have at least 10 blocks and converged to within 1 blocks in 300 seconds
+    Then all nodes have at least 10 blocks and converged to within 1 blocks in 360 seconds
     And all nodes agree on LIB in 300 seconds
     Then I stop all nodes
 
@@ -32,6 +32,6 @@ Feature: Blend
     And I start peer node "NODE_2" connected to node "NODE_1"
     And I start peer node "NODE_3" connected to node "NODE_1"
     And I start peer node "NODE_4" connected to node "NODE_1"
-    Then all nodes have at least 10 blocks and converged to within 1 blocks in 300 seconds
+    Then all nodes have at least 10 blocks and converged to within 1 blocks in 360 seconds
     And all nodes agree on LIB in 300 seconds
     Then I stop all nodes

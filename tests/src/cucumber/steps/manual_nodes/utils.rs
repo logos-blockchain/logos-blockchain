@@ -1385,7 +1385,7 @@ pub async fn ensure_all_nodes_agree_on_lib(
             .map(|(_, _, lib)| lib.clone())
             .collect::<HashSet<_>>();
 
-        if libs.len() <= 1 {
+        if libs.len() == 1 {
             info!(
                 target: TARGET,
                 "All nodes agree on LIB in {:.2?}",
