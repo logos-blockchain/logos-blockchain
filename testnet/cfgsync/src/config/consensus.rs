@@ -1,14 +1,16 @@
 use std::time::Duration;
 
 use blake2::{Blake2b, Digest as _, digest::consts::U32};
-use lb_core::mantle::{Note, Utxo, genesis_tx::GenesisTx};
-use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
-use lb_tools_config::consensus::{
+use lb_config::consensus::{
     GeneralConsensusConfig, create_base_consensus_material, create_genesis_tx,
 };
+use lb_core::mantle::{Note, Utxo, genesis_tx::GenesisTx};
+use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use num_bigint::BigUint;
 
 use crate::{Entropy, FaucetSettings};
+
+const FAUCET_KEY_CONTEXT: &[u8] = b"faucet";
 
 pub struct FaucetInfo {
     pub sk: ZkKey,
@@ -51,7 +53,7 @@ pub fn create_consensus_configs(
 fn generate_faucet_key(entropy: &Entropy) -> ZkKey {
     let mut hasher = Blake2b::<U32>::new();
     hasher.update(entropy);
-    hasher.update(b"faucet");
+    hasher.update(FAUCET_KEY_CONTEXT);
     let bytes: [u8; 32] = hasher.finalize().into();
     ZkKey::from(BigUint::from_bytes_le(&bytes))
 }

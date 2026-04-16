@@ -9,9 +9,11 @@ use crate::kms::key_id_for_preload_backend;
 
 pub type GeneralBlendConfig = (blend::Config, Ed25519Key, ZkKey);
 
+const DEFAULT_BLEND_LISTENING_HOST: &str = "127.0.0.1";
+
 #[must_use]
 pub fn create_blend_configs(ids: &[[u8; 32]], ports: &[u16]) -> Vec<GeneralBlendConfig> {
-    create_blend_configs_with_listening_host(ids, "127.0.0.1", ports)
+    create_blend_configs_with_listening_host(ids, DEFAULT_BLEND_LISTENING_HOST, ports)
 }
 
 #[must_use]

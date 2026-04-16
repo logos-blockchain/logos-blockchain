@@ -4,7 +4,7 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "logos-blockchain-tools-config"
+name        = "lb_config"
 publish     = false
 readme      = { workspace = true }
 repository  = { workspace = true }

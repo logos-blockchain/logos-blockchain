@@ -18,10 +18,6 @@ pub use unique_persistent::{
     reap_all_stale_port_blocks, release_reserved_port_block, unique_test_context,
 };
 
-pub(crate) mod common {
-    pub use lb_tools_config::kms::key_id_for_preload_backend;
-}
-
 pub static IS_DEBUG_TRACING: LazyLock<bool> = LazyLock::new(env::debug_tracing);
 pub const LOGOS_BLOCKCHAIN_LOG_LEVEL: &str = "LOGOS_BLOCKCHAIN_LOG_LEVEL";
 

@@ -1,5 +1,6 @@
 use std::{collections::HashMap, error::Error, path::PathBuf, sync::Arc, time::Duration};
 
+use lb_config::kms::key_id_for_preload_backend;
 use lb_core::mantle::genesis_tx::GenesisTx;
 use lb_node::config::RunConfig;
 use rand::{Rng, SeedableRng as _};
@@ -14,7 +15,7 @@ use crate::{
     get_reserved_available_udp_port,
     node::{
         DeploymentPlan, NodePlan,
-        configs::{Config, create_node_configs_from_ids, key_id_for_preload_backend, postprocess},
+        configs::{Config, create_node_configs_from_ids, postprocess},
     },
 };
 

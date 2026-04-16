@@ -69,9 +69,8 @@ fn test_port_allocator_slot() -> &'static Mutex<Option<TestPortAllocator>> {
 
 fn with_test_port_allocator(f: impl FnOnce(&mut TestPortAllocator) -> Option<u16>) -> Option<u16> {
     let slot = test_port_allocator_slot();
-    let mut guard = match slot.lock() {
-        Ok(guard) => guard,
-        Err(_) => return None,
+    let Ok(mut guard) = slot.lock() else {
+        return None;
     };
     let allocator = guard.as_mut()?;
     f(allocator)
@@ -101,28 +100,25 @@ impl TestPortAllocator {
                 try_reap_stale_port_claim_file(&claim_file);
             }
 
-            match OpenOptions::new()
+            if let Ok(mut file) = OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&claim_file)
             {
-                Ok(mut file) => {
-                    write_port_claim_metadata(&mut file, &owner, block_start, block_end).ok()?;
+                write_port_claim_metadata(&mut file, &owner, block_start, block_end).ok()?;
 
-                    let tcp_next = block_start;
-                    let tcp_end = block_start + (PORT_BLOCK_SIZE / 2) - 1;
-                    let udp_next = tcp_end + 1;
-                    let udp_end = block_end;
+                let tcp_next = block_start;
+                let tcp_end = block_start + (PORT_BLOCK_SIZE / 2) - 1;
+                let udp_next = tcp_end + 1;
+                let udp_end = block_end;
 
-                    return Some(Self {
-                        claim_file,
-                        tcp_next,
-                        tcp_end,
-                        udp_next,
-                        udp_end,
-                    });
-                }
-                Err(_) => {}
+                return Some(Self {
+                    claim_file,
+                    tcp_next,
+                    tcp_end,
+                    udp_next,
+                    udp_end,
+                });
             }
         }
 

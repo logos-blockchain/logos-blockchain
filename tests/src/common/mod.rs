@@ -6,4 +6,4 @@ pub mod sync;
 pub mod time;
 pub mod wallet;
 
-pub use lb_tools_config::kms::key_id_for_preload_backend;
+pub use lb_config::kms::key_id_for_preload_backend;

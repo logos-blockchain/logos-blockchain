@@ -27,6 +27,40 @@ use crate::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
 static CHAIN_START_TIME: OnceLock<OffsetDateTime> = OnceLock::new();
 
+const MINIMUM_BLEND_NETWORK_SIZE: u64 = 1;
+const NUM_BLEND_LAYERS: u64 = 3;
+const BLEND_PROTOCOL_NAME: &str = "/blend/integration-tests";
+const DATA_REPLICATION_FACTOR: u64 = 0;
+
+const MINIMUM_MESSAGES_COEFFICIENT: u64 = 1;
+const BLEND_NORMALIZATION_CONSTANT: f64 = 1.03;
+const COVER_SAFETY_BUFFER_INTERVALS: u64 = 100;
+const COVER_MESSAGE_FREQUENCY_PER_ROUND: f64 = 1.0;
+const MAXIMUM_RELEASE_DELAY_IN_ROUNDS: u64 = 3;
+const ACTIVITY_THRESHOLD_SENSITIVITY: u64 = 1;
+
+const IDENTIFY_PROTOCOL_NAME: &str = "/integration/logos-blockchain/identify/1.0.0";
+const KADEMLIA_PROTOCOL_NAME: &str = "/integration/logos-blockchain/kad/1.0.0";
+const CHAIN_SYNC_PROTOCOL_NAME: &str = "/integration/logos-blockchain/chainsync/1.0.0";
+
+const GOSSIPSUB_PROTOCOL_NAME: &str = "/integration/logos-blockchain/cryptarchia/proto/1.0.0";
+const SECURITY_PARAM: u32 = 20;
+const SLOT_ACTIVATION_COEFF_NUMERATOR: u32 = 1;
+const SLOT_ACTIVATION_COEFF_DENOMINATOR: u32 = 10;
+const EPOCH_STAKE_DISTRIBUTION_STABILIZATION: u8 = 3;
+const EPOCH_PERIOD_NONCE_BUFFER: u8 = 3;
+const EPOCH_PERIOD_NONCE_STABILIZATION: u8 = 4;
+
+const SDP_LOCK_PERIOD: u64 = 10;
+const SDP_INACTIVITY_PERIOD: u64 = 1;
+const SDP_RETENTION_PERIOD: u64 = 1;
+const SDP_TIMESTAMP: u64 = 0;
+const MIN_STAKE_THRESHOLD: u64 = 1;
+const MIN_STAKE_TIMESTAMP: u64 = 0;
+const LEARNING_RATE: f64 = 0.1;
+
+const MEMPOOL_TOPIC: &str = "mantle_e2e_tests";
+
 fn get_or_init_chain_start_time() -> OffsetDateTime {
     *CHAIN_START_TIME.get_or_init(OffsetDateTime::now_utc)
 }
@@ -39,69 +73,76 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
     DeploymentSettings {
         blend: BlendDeploymentSettings {
             common: BlendCommonSettings {
-                minimum_network_size: NonZeroU64::try_from(1u64)
+                minimum_network_size: NonZeroU64::try_from(MINIMUM_BLEND_NETWORK_SIZE)
                     .expect("Minimum network size cannot be zero."),
-                num_blend_layers: NonZeroU64::try_from(3)
+                num_blend_layers: NonZeroU64::try_from(NUM_BLEND_LAYERS)
                     .expect("Number of blend layers cannot be zero."),
-                protocol_name: StreamProtocol::new("/blend/integration-tests"),
-                data_replication_factor: 0,
+                protocol_name: StreamProtocol::new(BLEND_PROTOCOL_NAME),
+                data_replication_factor: DATA_REPLICATION_FACTOR,
             },
             core: BlendCoreSettings {
-                minimum_messages_coefficient: NonZeroU64::try_from(1)
+                minimum_messages_coefficient: NonZeroU64::try_from(MINIMUM_MESSAGES_COEFFICIENT)
                     .expect("Minimum messages coefficient cannot be zero."),
-                normalization_constant: 1.03f64
+                normalization_constant: BLEND_NORMALIZATION_CONSTANT
                     .try_into()
                     .expect("Normalization constant cannot be negative."),
                 scheduler: SchedulerSettings {
                     cover: CoverTrafficSettings {
-                        intervals_for_safety_buffer: 100,
-                        message_frequency_per_round: NonNegativeF64::try_from(1f64)
-                            .expect("Message frequency per round cannot be negative."),
+                        intervals_for_safety_buffer: COVER_SAFETY_BUFFER_INTERVALS,
+                        message_frequency_per_round: NonNegativeF64::try_from(
+                            COVER_MESSAGE_FREQUENCY_PER_ROUND,
+                        )
+                        .expect("Message frequency per round cannot be negative."),
                     },
                     delayer: MessageDelayerSettings {
-                        maximum_release_delay_in_rounds: NonZeroU64::try_from(3u64)
-                            .expect("Maximum release delay between rounds cannot be zero."),
+                        maximum_release_delay_in_rounds: NonZeroU64::try_from(
+                            MAXIMUM_RELEASE_DELAY_IN_ROUNDS,
+                        )
+                        .expect("Maximum release delay between rounds cannot be zero."),
                     },
                 },
-                activity_threshold_sensitivity: 1,
+                activity_threshold_sensitivity: ACTIVITY_THRESHOLD_SENSITIVITY,
             },
         },
         network: NetworkDeploymentSettings {
-            identify_protocol_name: StreamProtocol::new(
-                "/integration/logos-blockchain/identify/1.0.0",
-            ),
-            kademlia_protocol_name: StreamProtocol::new("/integration/logos-blockchain/kad/1.0.0"),
-            chain_sync_protocol_name: StreamProtocol::new(
-                "/integration/logos-blockchain/chainsync/1.0.0",
-            ),
+            identify_protocol_name: StreamProtocol::new(IDENTIFY_PROTOCOL_NAME),
+            kademlia_protocol_name: StreamProtocol::new(KADEMLIA_PROTOCOL_NAME),
+            chain_sync_protocol_name: StreamProtocol::new(CHAIN_SYNC_PROTOCOL_NAME),
         },
         cryptarchia: CryptarchiaDeploymentSettings {
-            gossipsub_protocol: "/integration/logos-blockchain/cryptarchia/proto/1.0.0".to_owned(),
-            security_param: NonZero::new(20).unwrap(),
-            slot_activation_coeff: NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            gossipsub_protocol: GOSSIPSUB_PROTOCOL_NAME.to_owned(),
+            security_param: NonZero::new(SECURITY_PARAM).unwrap(),
+            slot_activation_coeff: NonNegativeRatio::new(
+                SLOT_ACTIVATION_COEFF_NUMERATOR,
+                NonZero::new(SLOT_ACTIVATION_COEFF_DENOMINATOR).unwrap(),
+            ),
             epoch_config: EpochConfig {
-                epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
-                epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
-                epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
+                epoch_stake_distribution_stabilization: NonZero::new(
+                    EPOCH_STAKE_DISTRIBUTION_STABILIZATION,
+                )
+                .unwrap(),
+                epoch_period_nonce_buffer: NonZero::new(EPOCH_PERIOD_NONCE_BUFFER).unwrap(),
+                epoch_period_nonce_stabilization: NonZero::new(EPOCH_PERIOD_NONCE_STABILIZATION)
+                    .unwrap(),
             },
             sdp_config: lb_node::config::cryptarchia::deployment::SdpConfig {
                 service_params: [(
                     ServiceType::BlendNetwork,
                     ServiceParameters {
-                        lock_period: 10,
-                        inactivity_period: 1,
-                        retention_period: 1,
-                        timestamp: 0,
+                        lock_period: SDP_LOCK_PERIOD,
+                        inactivity_period: SDP_INACTIVITY_PERIOD,
+                        retention_period: SDP_RETENTION_PERIOD,
+                        timestamp: SDP_TIMESTAMP,
                     },
                 )]
                 .into(),
                 min_stake: lb_core::sdp::MinStake {
-                    threshold: 1,
-                    timestamp: 0,
+                    threshold: MIN_STAKE_THRESHOLD,
+                    timestamp: MIN_STAKE_TIMESTAMP,
                 },
             },
             genesis_state: genesis_tx,
-            learning_rate: 0.1f64.try_into().expect("1 > 0"),
+            learning_rate: LEARNING_RATE.try_into().expect("1 > 0"),
             faucet_pk: None,
         },
         time: TimeDeploymentSettings {
@@ -109,7 +150,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
             chain_start_time: get_or_init_chain_start_time(),
         },
         mempool: MempoolDeploymentSettings {
-            pubsub_topic: "mantle_e2e_tests".to_owned(),
+            pubsub_topic: MEMPOOL_TOPIC.to_owned(),
         },
     }
 }

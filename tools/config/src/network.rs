@@ -5,6 +5,8 @@ use lb_node::config::network::serde as network;
 
 use crate::unique::get_reserved_available_udp_port;
 
+const CHAIN_SYNC_PEER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
+
 #[derive(Default)]
 pub enum Libp2pNetworkLayout {
     #[default]
@@ -40,7 +42,7 @@ pub fn create_network_configs(
                 node_key,
                 port: get_reserved_available_udp_port().unwrap(),
                 chain_sync: network::chainsync::Config {
-                    peer_response_timeout: Duration::from_mins(1),
+                    peer_response_timeout: CHAIN_SYNC_PEER_RESPONSE_TIMEOUT,
                 },
                 ..default_swarm_config()
             }

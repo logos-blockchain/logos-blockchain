@@ -7,24 +7,19 @@ use std::time::Duration;
 
 use blend::GeneralBlendConfig;
 use consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_tx_with_declarations};
+use lb_config::kms::key_id_for_preload_backend;
+pub(crate) use lb_config::{api, blend, consensus, network, sdp, time, tracing};
 use lb_core::{
     mantle::{GenesisTx as _, genesis_tx::GenesisTx},
     sdp::{Locator, ServiceType},
 };
 use lb_node::config::{KmsConfig, kms::serde::PreloadKmsBackendSettings};
-pub(crate) use lb_tools_config::{api, blend, consensus, network, time, tracing};
 use network::GeneralNetworkConfig;
 use tracing::GeneralTracingConfig;
 
-use self::{
-    api::GeneralApiConfig,
-    network::NetworkParams,
-    sdp::{GeneralSdpConfig, create_sdp_configs},
-    time::GeneralTimeConfig,
-};
-use crate::{
-    common::key_id_for_preload_backend, configs::node_configs::time::set_time_config,
-};
+use self::{api::GeneralApiConfig, network::NetworkParams, time::GeneralTimeConfig};
+use crate::configs::node_configs::time::set_time_config;
+use self::sdp::{GeneralSdpConfig, create_sdp_configs};
 
 const PROLONGED_BOOTSTRAP_PERIOD: Duration = Duration::from_secs(5);
 
