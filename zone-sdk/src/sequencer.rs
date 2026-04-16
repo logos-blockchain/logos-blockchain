@@ -593,50 +593,7 @@ where
                 None
             }
             maybe_event = stream.next() => {
-                if let Some(ref block_event) = maybe_event {
-                    let result = handle_block_event(
-                        block_event,
-                        &mut self.state,
-                        &mut self.current_tip,
-                        &mut self.lib_slot,
-                        self.channel_id,
-                        &self.node
-                    )
-                    .await;
-
-                    // Signal readiness after first block event when no
-                    // pending startup backfill remains.
-                    let mut became_ready = false;
-                    if !self.is_ready()
-                        && self.backfill_from.is_none()
-                        && self.backfill_to.is_none()
-                    {
-                        debug!("Sequencer ready (backfill complete, first block processed)");
-                        let _ = self.ready_tx.send(true);
-                        drop(self.event_tx.send(Event::Ready));
-                        became_ready = true;
-                    } else if !self.is_ready() {
-                        debug!(
-                            "Not yet ready: backfill_from={:?}, backfill_to={:?}",
-                            self.backfill_from, self.backfill_to
-                        );
-                    }
-
-                    let block_event = self.apply_block_result(result);
-                    if became_ready {
-                        if let Some(event) = block_event {
-                            self.buffered_event = Some(event);
-                        }
-                        Some(Event::Ready)
-                    } else {
-                        block_event
-                    }
-                } else {
-                    warn!("Blocks stream disconnected, will reconnect on next call");
-                    self.blocks_stream = None;
-                    let _ = self.ready_tx.send(false);
-                    None
-                }
+                self.handle_stream_item(maybe_event).await
             }
             Some(inflight_result) = self.in_flight.next(), if !self.in_flight.is_empty() => {
                 handle_inflight(inflight_result, &mut self.resubmit_active);
@@ -652,6 +609,62 @@ where
                 );
                 None
             }
+        }
+    }
+
+    /// Handle a single item from the blocks stream. `None` means the stream
+    /// disconnected; any other value is processed as a block event.
+    async fn handle_stream_item(
+        &mut self,
+        maybe_event: Option<ProcessedBlockEvent>,
+    ) -> Option<Event> {
+        let Some(block_event) = maybe_event else {
+            warn!("Blocks stream disconnected, will reconnect on next call");
+            self.blocks_stream = None;
+            let _ = self.ready_tx.send(false);
+            return None;
+        };
+
+        let result = handle_block_event(
+            &block_event,
+            &mut self.state,
+            &mut self.current_tip,
+            &mut self.lib_slot,
+            self.channel_id,
+            &self.node,
+        )
+        .await;
+
+        let became_ready = self.maybe_signal_ready();
+        let block_event = self.apply_block_result(result);
+
+        if became_ready {
+            if let Some(event) = block_event {
+                self.buffered_event = Some(event);
+            }
+            Some(Event::Ready)
+        } else {
+            block_event
+        }
+    }
+
+    /// If not yet ready and startup backfill is complete, mark ready and
+    /// broadcast `Event::Ready`. Returns true iff readiness transitioned.
+    fn maybe_signal_ready(&self) -> bool {
+        if self.is_ready() {
+            return false;
+        }
+        if self.backfill_from.is_none() && self.backfill_to.is_none() {
+            debug!("Sequencer ready (backfill complete, first block processed)");
+            let _ = self.ready_tx.send(true);
+            drop(self.event_tx.send(Event::Ready));
+            true
+        } else {
+            debug!(
+                "Not yet ready: backfill_from={:?}, backfill_to={:?}",
+                self.backfill_from, self.backfill_to
+            );
+            false
         }
     }
 
@@ -705,10 +718,6 @@ where
 
     /// Ensure the blocks stream is connected. Returns `false` if not yet
     /// ready (caller should return `None`).
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: address this in a dedicated refactor"
-    )]
     async fn ensure_connected(&mut self) -> bool {
         if self.blocks_stream.is_some() {
             return true;
@@ -1189,10 +1198,6 @@ where
 /// Uses `state.lib()` during replay to avoid premature finalization.
 /// The caller is responsible for triggering finalization after backfill
 /// completes.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "TODO: address this in a dedicated refactor"
-)]
 async fn backfill_canonical<Node>(
     state: &mut TxState,
     missing_parent: HeaderId,
