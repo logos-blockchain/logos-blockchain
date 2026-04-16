@@ -48,6 +48,8 @@ async fn core_redial_same_peer() {
                 *peer_id == Some(random_peer_id)
             })
             .await;
+        // Before retrying, the failed peer should have been removed from ongoing_dials.
+        assert!(!dialing_swarm.ongoing_dials().contains_key(&random_peer_id));
     }
 
     // All attempts exhausted. Storage map should be cleared up, and since there
