@@ -51,7 +51,7 @@ runs:
           --test cucumber -- --tags "${{ inputs.suite_tag }} and not (@broken or @undefined_behaviour)"
 
     - name: Upload cucumber logs on failure
-      if: ${{ failure() && (steps.run_suite.conclusion == 'failure' || steps.run_suite_verbose.conclusion == 'failure') }}
+      if: ${{ steps.run_suite.outcome == 'failure' || steps.run_suite_verbose.outcome == 'failure' }}
       continue-on-error: true
       uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
       with:
@@ -60,6 +60,6 @@ runs:
         path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/${{ inputs.artifact_subdir }}/**
 
     - name: Fail suite
-      if: ${{ steps.run_suite.conclusion == 'failure' || steps.run_suite_verbose.conclusion == 'failure' }}
+      if: ${{ steps.run_suite.outcome == 'failure' || steps.run_suite_verbose.outcome == 'failure' }}
       shell: bash
       run: exit 1
