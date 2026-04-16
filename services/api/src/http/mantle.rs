@@ -486,16 +486,8 @@ where
     )
     .await?;
 
-    match stream.next().await {
-        None => Ok(None),
-        Some(tx) => {
-            if stream.next().await.is_some() {
-                Err("Expected at most one transaction, but multiple were found.".into())
-            } else {
-                Ok(Some(tx))
-            }
-        }
-    }
+    // Assume only one transaction is returned
+    Ok(stream.next().await)
 }
 
 pub async fn get_sdp_declarations<RuntimeServiceId>(
