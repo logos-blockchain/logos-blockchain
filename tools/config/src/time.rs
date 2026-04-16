@@ -4,10 +4,9 @@ use std::{
 };
 
 use lb_node::config::time::serde as time;
-use lb_testing_framework::is_truthy_env;
 
-pub(crate) const DEFAULT_SLOT_TIME_IN_SECS: u64 = 1;
-pub(crate) const CONSENSUS_SLOT_TIME_VAR: &str = "CONSENSUS_SLOT_TIME";
+pub const DEFAULT_SLOT_TIME_IN_SECS: u64 = 1;
+pub const CONSENSUS_SLOT_TIME_VAR: &str = "CONSENSUS_SLOT_TIME";
 pub const USE_LOCAL_HOST_NTP_TIME_CONFIG: &str = "USE_LOCAL_HOST_NTP_TIME_CONFIG";
 pub type GeneralTimeConfig = time::Config;
 
@@ -18,6 +17,12 @@ pub fn set_time_config() -> GeneralTimeConfig {
     } else {
         default_public_time_config()
     }
+}
+
+fn is_truthy_env(key: &str) -> bool {
+    std::env::var(key)
+        .ok()
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
 }
 
 #[must_use]
@@ -68,17 +73,16 @@ fn local_host_ntp_time_config() -> GeneralTimeConfig {
 }
 
 fn is_local_ntp_server_running() -> bool {
-    // Reliable check: send a real NTP request to 127.0.0.1:123 and expect a valid
-    // response with stratum 1-15
     use std::net::UdpSocket;
-    let ntp_port = 123;
-    let addr = ("127.0.0.1", ntp_port);
+
+    let addr = ("127.0.0.1", 123);
     let socket = UdpSocket::bind(("127.0.0.1", 0)).expect("Failed to bind UDP socket");
     drop(socket.set_read_timeout(Some(Duration::from_millis(500))));
-    // NTP request: 48 bytes, first byte 0x1B (LI=0, VN=3, Mode=3)
+
     let mut req = [0u8; 48];
     req[0] = 0x1B;
     drop(socket.send_to(&req, addr));
+
     let mut buf = [0u8; 48];
     match socket.recv_from(&mut buf) {
         Ok((len, _)) if len >= 48 => {

@@ -1,6 +1,4 @@
-mod blend;
 mod consensus;
-mod kms;
 
 use std::{collections::HashMap, net::Ipv4Addr, str::FromStr as _};
 
@@ -12,14 +10,15 @@ use lb_core::{
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, multiaddr};
 use lb_node::config::{TracingConfig, network::serde as network, tracing::serde as tracing};
-use lb_tests::topology::configs::{
+use lb_tools_config::{
     GeneralConfig,
     api::GeneralApiConfig,
-    blend::GeneralBlendConfig,
+    blend::{GeneralBlendConfig, create_blend_configs_with_listening_host},
     consensus::{
         GeneralConsensusConfig, ProviderInfo, SHORT_PROLONGED_BOOTSTRAP_PERIOD,
         create_genesis_tx_with_declarations,
     },
+    kms::create_kms_configs,
     network::{NetworkParams, create_network_configs},
     sdp::{GeneralSdpConfig, create_sdp_configs},
     time::set_time_config,
@@ -27,12 +26,7 @@ use lb_tests::topology::configs::{
 };
 use rand::{Rng as _, thread_rng};
 
-use crate::{
-    Entropy, FaucetSettings, Host,
-    config::{
-        blend::create_blend_configs, consensus::create_consensus_configs, kms::create_kms_configs,
-    },
-};
+use crate::{Entropy, FaucetSettings, Host, config::consensus::create_consensus_configs};
 
 type HostId = [u8; 32];
 
@@ -66,8 +60,9 @@ pub fn create_node_configs(
     );
     let faucet_pk = faucet_info.as_ref().map(|f| f.pk);
     let network_configs = create_network_configs(&ids, &NetworkParams::default());
-    let blend_configs = create_blend_configs(
+    let blend_configs = create_blend_configs_with_listening_host(
         &ids,
+        "0.0.0.0",
         hosts
             .iter()
             .map(|h| h.blend_port)
@@ -95,7 +90,11 @@ pub fn create_node_configs(
 
     // Set Blend keys in KMS of each node config.
     // Give faucet SK to all nodes so the faucet service can route to any node.
-    let kms_configs = create_kms_configs(&blend_configs, &consensus_configs, faucet_info.as_ref());
+    let shared_keys = faucet_info
+        .as_ref()
+        .map(|faucet| vec![faucet.sk.clone().into()]);
+    let kms_configs =
+        create_kms_configs(&blend_configs, &consensus_configs, shared_keys.as_deref());
 
     let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations, hosts.len());
 
@@ -170,7 +169,8 @@ pub fn create_node_config_from_template(
         &FaucetSettings::default(),
     );
     let network_configs = create_network_configs(&ids, &NetworkParams::default());
-    let blend_configs = create_blend_configs(&ids, &[new_host.blend_port]);
+    let blend_configs =
+        create_blend_configs_with_listening_host(&ids, "0.0.0.0", &[new_host.blend_port]);
 
     let kms_configs = create_kms_configs(&blend_configs, &consensus_configs, None);
 
@@ -287,7 +287,7 @@ mod cfgsync_tests {
     use lb_core::mantle::GenesisTx as _;
     use lb_libp2p::{Multiaddr, Protocol, ed25519};
     use lb_node::config::{TracingConfig, tracing::serde as tracing};
-    use lb_tests::common::kms::key_id_for_preload_backend;
+    use lb_tools_config::kms::key_id_for_preload_backend;
 
     use super::{Host, create_node_configs};
     use crate::{

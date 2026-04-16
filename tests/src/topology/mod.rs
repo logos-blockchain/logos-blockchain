@@ -1,4 +1,4 @@
-pub mod configs;
+pub use lb_tools_config as configs;
 use std::{collections::HashSet, time::Duration};
 
 use configs::{
@@ -18,7 +18,7 @@ use lb_testing_framework::get_reserved_available_udp_port;
 use rand::{Rng as _, thread_rng};
 
 use crate::{
-    common::kms::key_id_for_preload_backend,
+    common::key_id_for_preload_backend,
     nodes::validator::{Validator, create_validator_config},
     topology::configs::{
         api::create_api_configs,

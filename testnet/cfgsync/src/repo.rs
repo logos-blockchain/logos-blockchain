@@ -9,7 +9,7 @@ use lb_node::config::{
     TracingConfig,
     deployment::{DeploymentSettings, WellKnownDeployment},
 };
-use lb_tests::topology::configs::GeneralConfig;
+use lb_tools_config::GeneralConfig;
 use time::OffsetDateTime;
 use tokio::{sync::oneshot::Sender, time::timeout};
 

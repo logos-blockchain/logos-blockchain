@@ -23,7 +23,7 @@ use lb_node::config::{
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use time::OffsetDateTime;
 
-use super::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
+use crate::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
 static CHAIN_START_TIME: OnceLock<OffsetDateTime> = OnceLock::new();
 
@@ -77,11 +77,6 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
         },
         cryptarchia: CryptarchiaDeploymentSettings {
             gossipsub_protocol: "/integration/logos-blockchain/cryptarchia/proto/1.0.0".to_owned(),
-            // by setting the slot coeff to 1, we also increase the probability of multiple
-            // blocks (forks) being produced in the same slot (epoch).
-            // Setting the security parameter to some value > 1 ensures
-            // nodes have some time to sync before deciding on the
-            // longest chain.
             security_param: NonZero::new(20).unwrap(),
             slot_activation_coeff: NonNegativeRatio::new(1, 10.try_into().unwrap()),
             epoch_config: EpochConfig {

@@ -40,7 +40,7 @@ use tokio::time::error::Elapsed;
 
 use super::{CLIENT, create_tempdir, get_exe_path, persist_tempdir};
 use crate::{
-    IS_DEBUG_TRACING, common::kms::key_id_for_preload_backend, get_reserved_available_tcp_port,
+    IS_DEBUG_TRACING, common::key_id_for_preload_backend, get_reserved_available_tcp_port,
     nodes::LOGS_PREFIX, topology::configs::GeneralConfig,
 };
 

@@ -71,6 +71,7 @@ members = [
   "testnet/l2-sequencer-archival-demo/sequencer",
   "tests",
   "tests/testing_framework",
+  "tools/config",
   "tracing",
   "utils",
   "utxotree",
@@ -141,6 +142,7 @@ lb-system-sig-service              = { default-features = false, package = "logo
 lb-testing-framework               = { default-features = false, package = "testing_framework", path = "./tests/testing_framework" }
 lb-tests                           = { default-features = false, package = "logos-blockchain-tests", path = "./tests" }
 lb-time-service                    = { default-features = false, package = "logos-blockchain-time-service", path = "./services/time" }
+lb-tools-config                    = { default-features = false, package = "logos-blockchain-tools-config", path = "./tools/config" }
 lb-tracing                         = { default-features = false, package = "logos-blockchain-tracing", path = "./tracing" }
 lb-tracing-service                 = { default-features = false, package = "logos-blockchain-tracing-service", path = "./services/tracing" }
 lb-tx-service                      = { default-features = false, package = "logos-blockchain-tx-service", path = "./services/tx-service" }

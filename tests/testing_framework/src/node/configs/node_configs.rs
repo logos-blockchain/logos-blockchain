@@ -3,23 +3,6 @@
     reason = "Imported shared config modules expose pub(crate) constants."
 )]
 
-#[path = "../../../../src/topology/configs/api.rs"]
-pub mod api;
-#[path = "../../../../src/topology/configs/blend.rs"]
-pub mod blend;
-#[path = "../../../../src/topology/configs/consensus.rs"]
-pub mod consensus;
-#[path = "../../../../src/topology/configs/deployment.rs"]
-pub mod deployment;
-#[path = "../../../../src/topology/configs/network.rs"]
-pub mod network;
-#[path = "../../../../src/topology/configs/sdp.rs"]
-pub mod sdp;
-#[path = "../../../../src/topology/configs/time.rs"]
-pub mod time;
-#[path = "../../../../src/topology/configs/tracing.rs"]
-pub mod tracing;
-
 use std::time::Duration;
 
 use blend::GeneralBlendConfig;
@@ -29,6 +12,7 @@ use lb_core::{
     sdp::{Locator, ServiceType},
 };
 use lb_node::config::{KmsConfig, kms::serde::PreloadKmsBackendSettings};
+pub(crate) use lb_tools_config::{api, blend, consensus, network, time, tracing};
 use network::GeneralNetworkConfig;
 use tracing::GeneralTracingConfig;
 
@@ -39,7 +23,7 @@ use self::{
     time::GeneralTimeConfig,
 };
 use crate::{
-    common::kms::key_id_for_preload_backend, configs::node_configs::time::set_time_config,
+    common::key_id_for_preload_backend, configs::node_configs::time::set_time_config,
 };
 
 const PROLONGED_BOOTSTRAP_PERIOD: Duration = Duration::from_secs(5);

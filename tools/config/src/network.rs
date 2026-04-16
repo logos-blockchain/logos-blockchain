@@ -1,10 +1,9 @@
-use std::time::Duration;
+use std::{net::Ipv4Addr, time::Duration};
 
-use lb_libp2p::{Multiaddr, ed25519};
+use lb_libp2p::{Multiaddr, ed25519, multiaddr};
 use lb_node::config::network::serde as network;
-use lb_testing_framework::get_reserved_available_udp_port;
 
-use crate::node_address_from_port;
+use crate::unique::get_reserved_available_udp_port;
 
 #[derive(Default)]
 pub enum Libp2pNetworkLayout {
@@ -70,27 +69,22 @@ fn initial_peers_by_network_layout(
 
     match network_params.libp2p_network_layout {
         Libp2pNetworkLayout::Star => {
-            // First node is the hub - has no initial peers
             all_initial_peers.push(vec![]);
             let first_addr = node_address_from_port(swarm_configs[0].port);
 
-            // All other nodes connect to the first node
             for _ in 1..swarm_configs.len() {
                 all_initial_peers.push(vec![first_addr.clone()]);
             }
         }
         Libp2pNetworkLayout::Chain => {
-            // First node has no initial peers
             all_initial_peers.push(vec![]);
 
-            // Each subsequent node connects to the previous one
             for i in 1..swarm_configs.len() {
                 let prev_addr = node_address_from_port(swarm_configs[i - 1].port);
                 all_initial_peers.push(vec![prev_addr]);
             }
         }
         Libp2pNetworkLayout::Full => {
-            // Each node connects to all previous nodes, unidirectional connections
             for i in 0..swarm_configs.len() {
                 let mut peers = vec![];
                 for swarm_config in swarm_configs.iter().take(i) {
@@ -102,4 +96,8 @@ fn initial_peers_by_network_layout(
     }
 
     all_initial_peers
+}
+
+fn node_address_from_port(port: u16) -> Multiaddr {
+    multiaddr(Ipv4Addr::LOCALHOST, port)
 }

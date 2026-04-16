@@ -4423,6 +4423,7 @@ dependencies = [
  "logos-blockchain-libp2p",
  "logos-blockchain-node",
  "logos-blockchain-tests",
+ "logos-blockchain-tools-config",
  "logos-blockchain-utils",
  "num-bigint",
  "rand 0.8.6",
@@ -5132,6 +5133,7 @@ dependencies = [
  "logos-blockchain-mmr",
  "logos-blockchain-network-service",
  "logos-blockchain-node",
+ "logos-blockchain-tools-config",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
@@ -5178,6 +5180,22 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-tools-config"
+version = "0.2.1"
+dependencies = [
+ "hex",
+ "logos-blockchain-core",
+ "logos-blockchain-groth16",
+ "logos-blockchain-key-management-system-service",
+ "logos-blockchain-libp2p",
+ "logos-blockchain-node",
+ "logos-blockchain-utils",
+ "num-bigint",
+ "rand 0.8.6",
+ "time",
 ]
 
 [[package]]
@@ -8331,6 +8349,7 @@ dependencies = [
  "logos-blockchain-network-service",
  "logos-blockchain-node",
  "logos-blockchain-time-service",
+ "logos-blockchain-tools-config",
  "logos-blockchain-utils",
  "num-bigint",
  "rand 0.8.6",

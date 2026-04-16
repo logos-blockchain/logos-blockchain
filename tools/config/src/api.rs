@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use lb_testing_framework::get_reserved_available_tcp_port;
+use crate::unique::get_reserved_available_tcp_port;
 
 #[derive(Clone)]
 pub struct GeneralApiConfig {
