@@ -871,6 +871,9 @@ fn spawn_sequencer_sorted_policy(
                     ..
                 }) => {
                     for a in &adopted {
+                        // If a previously-dropped payload comes back on a
+                        // new canonical branch, un-discard it.
+                        discarded.lock().await.remove(&a.payload);
                         if max_seen_on_chain
                             .as_ref()
                             .is_none_or(|max| a.payload > *max)
