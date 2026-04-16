@@ -152,8 +152,8 @@ async fn edge_remembers_failed_peers_across_retries() {
         },
     ]);
 
-    // Use max_dial_attempts=1 and replication_factor=1 so each peer fails immediately
-    // and only one peer is chosen at a time.
+    // Use max_dial_attempts=1 and replication_factor=1 so each peer fails
+    // immediately and only one peer is chosen at a time.
     let EdgeTestSwarm { mut swarm, .. } = EdgeSwarmBuilder::new(membership)
         .with_max_dial_attempts(1)
         .with_replication_factor(1)
@@ -176,10 +176,7 @@ async fn edge_remembers_failed_peers_across_retries() {
     };
 
     // The first dial has no failed peers memory.
-    assert_eq!(
-        swarm.failed_peers_for(&first_peer),
-        Some(&HashSet::new()),
-    );
+    assert_eq!(swarm.failed_peers_for(&first_peer), Some(&HashSet::new()),);
 
     // Let the first peer fail.
     swarm
@@ -193,7 +190,10 @@ async fn edge_remembers_failed_peers_across_retries() {
 
     // The second peer should now be dialed, with the first peer in the failed set.
     assert!(
-        swarm.pending_dials().keys().any(|(pid, _)| *pid == second_peer),
+        swarm
+            .pending_dials()
+            .keys()
+            .any(|(pid, _)| *pid == second_peer),
         "Second peer should be dialed after first peer failed"
     );
     assert_eq!(

@@ -185,6 +185,10 @@ where
     /// The peer to send the message to is chosen at random, excluding the peers
     /// in `failed_peers`. If all available peers have already been tried, the
     /// set is cleared and peers are chosen from scratch.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: Address this at some point."
+    )]
     fn dial_and_schedule_message(
         &mut self,
         msg: &EncapsulatedMessageWithVerifiedPublicHeader,
