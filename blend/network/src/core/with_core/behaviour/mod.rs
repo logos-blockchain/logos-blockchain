@@ -978,6 +978,7 @@ where
             Either::Left(ConnectionHandler::new(
                 ConnectionMonitor::new(self.observation_window_clock_provider.interval_stream()),
                 self.protocol_name.clone(),
+                (peer_id, connection_id),
             ))
         } else {
             tracing::trace!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with edge peer {peer_id:?}.");
@@ -1026,6 +1027,7 @@ where
             Either::Left(ConnectionHandler::new(
                 ConnectionMonitor::new(self.observation_window_clock_provider.interval_stream()),
                 self.protocol_name.clone(),
+                (peer_id, connection_id),
             ))
         } else {
             tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with edge peer {peer_id:?}.");
