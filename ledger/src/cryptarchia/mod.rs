@@ -1339,6 +1339,37 @@ pub mod tests {
     }
 
     #[test]
+    fn test_invalid_double_spend_transfer() {
+        let note_sk = ZkKey::from(BigUint::from(1u8));
+        let output_note_sk = ZkKey::from(BigUint::from(2u8));
+        let input_note = Note::new(100, note_sk.to_public_key());
+        let input_utxo = Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: input_note,
+        };
+
+        let output_note = Note::new(200, output_note_sk.to_public_key());
+
+        let locked_notes = LockedNotes::new();
+        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
+        let (tx, transfer_op, transfer_sig) = create_tx_with_transfer(
+            &[(&note_sk, &input_utxo), (&note_sk, &input_utxo)],
+            vec![output_note],
+        );
+
+        let _fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
+        let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
+            &locked_notes,
+            &transfer_op,
+            &transfer_sig,
+            tx.hash(),
+        );
+
+        assert!(!result.is_ok());
+    }
+
+    #[test]
     fn test_tx_processing_valid_transaction() {
         let note_sk = ZkKey::from(BigUint::from(1u8));
         let output_note1_sk = ZkKey::from(BigUint::from(2u8));
