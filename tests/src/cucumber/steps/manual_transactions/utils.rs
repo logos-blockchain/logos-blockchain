@@ -1413,7 +1413,7 @@ async fn collect_multiple_wallets_utxos(
 
         for tx in block.transactions() {
             for transfer in tx.mantle_tx.transfers() {
-                for utxo in transfer.utxos() {
+                for utxo in transfer.outputs.utxos(&transfer) {
                     if let Some(wallet_name) = wallets_by_pk.get(&utxo.note.pk)
                         && let Some(owned) = owned_per_wallet.get_mut(wallet_name)
                     {

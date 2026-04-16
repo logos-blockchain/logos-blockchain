@@ -4,6 +4,7 @@ use futures::{StreamExt as _, future::join_all};
 use lb_common_http_client::CommonHttpClient;
 use lb_core::mantle::{
     MantleTx, Note, NoteId, Op, OpProof, Value,
+    ledger::Outputs,
     ops::{
         channel::{ChannelId, deposit::DepositOp},
         transfer::TransferOp,
@@ -612,12 +613,15 @@ async fn test_subscribe_to_finalized_deposit() {
     wait_for_zone_block(&indexer, msg1, Duration::from_secs(60)).await;
 
     // Now, submit a deposit directly to Bedrock
+    let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
+    let (note_id, _) = get_note(validator, pk, 1u64)
+        .await
+        .expect("should find a note with sufficient balance for deposit");
     let deposit = DepositOp {
         channel_id,
-        amount: 1,
+        inputs: vec![note_id],
         metadata: b"Mint 1 to Alice in Zone".to_vec(),
     };
-    let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
     let body = ChannelDepositRequestBody {
         tip: None,
         deposit: deposit.clone(),
@@ -704,23 +708,32 @@ async fn test_atomic_deposit_inscription() {
     wait_for_zone_block(&indexer, msg1, Duration::from_secs(60)).await;
 
     // Now, prepare a tx for deposit (from user) + inscription (from sequencer)
-    let deposit = DepositOp {
-        channel_id,
-        amount: 1,
-        metadata: b"Mint 1 to Alice in Zone".to_vec(),
-    };
+    let deposit_amount = 1u64;
     let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
-    let (note_id, note_value) = get_note(validator, pk, deposit.amount)
+    let deposit_note = Note::new(deposit_amount, pk);
+    let (note_id, note_value) = get_note(validator, pk, deposit_amount)
         .await
         .expect("should find a note with sufficient balance for deposit");
-    let change = note_value.checked_sub(deposit.amount).unwrap();
+
+    let change = note_value.checked_sub(deposit_amount).unwrap();
     let transfer = TransferOp {
         inputs: vec![note_id],
         outputs: if change > 0 {
-            vec![Note::new(change, pk)]
+            Outputs::new(vec![deposit_note, Note::new(change, pk)])
         } else {
-            vec![]
+            Outputs::new(vec![deposit_note])
         },
+    };
+    let deposit = DepositOp {
+        channel_id,
+        inputs: vec![
+            transfer
+                .outputs
+                .utxo_by_index(0, &transfer)
+                .expect("the first note of the transfer is the deposit_note")
+                .id(),
+        ],
+        metadata: b"Mint 1 to Alice in Zone".to_vec(),
     };
     let inscription_data = b"Mint 1 to Alice".to_vec();
     let (tx, msg_id, sequencer_sig) = handle
@@ -738,7 +751,7 @@ async fn test_atomic_deposit_inscription() {
     let signed_tx = SignedMantleTx::new(
         tx,
         vec![
-            OpProof::NoProof,
+            OpProof::ZkSig(user_transfer_sig.clone()),
             OpProof::ZkSig(user_transfer_sig),
             OpProof::Ed25519Sig(sequencer_sig),
         ],
@@ -835,12 +848,12 @@ async fn wait_for_deposit(
                         last_zone_block = Some((block.id, slot));
                     }
                     ZoneMessage::Deposit(deposit) => {
-                        if deposit.amount == expected.amount
+                        if deposit.inputs == expected.inputs
                             && deposit.metadata == expected.metadata
                         {
                             println!(
-                                "Found expected deposit in indexer: amount={} metadata={:?}",
-                                deposit.amount, deposit.metadata
+                                "Found expected deposit in indexer: amount={:?} metadata={:?}",
+                                deposit.inputs, deposit.metadata
                             );
                             return;
                         }
