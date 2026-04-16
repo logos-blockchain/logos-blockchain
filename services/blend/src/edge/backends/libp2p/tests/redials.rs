@@ -1,4 +1,5 @@
 use core::slice::from_ref;
+use std::collections::HashSet;
 
 use lb_blend::{
     message::crypto::key_ext::Ed25519SecretKeyExt as _,
@@ -68,9 +69,17 @@ async fn edge_redial_same_peer() {
             .await;
     }
 
-    // All attempts exhausted. Storage map should be cleared up, and since there
-    // is no other peer, no new peer is dialed.
-    assert!(swarm.pending_dials().is_empty());
+    // All attempts exhausted. Since there is only one peer in the membership,
+    // the failed peers memory is cleared and the same peer is retried from scratch.
+    assert!(
+        !swarm.pending_dials().is_empty(),
+        "Peer should be retried after failed peers memory is cleared"
+    );
+    assert_eq!(
+        swarm.failed_peers_for(&random_peer_id),
+        Some(&HashSet::new()),
+        "Failed peers memory should be empty after reset"
+    );
 }
 
 #[test(tokio::test)]
@@ -120,6 +129,144 @@ async fn edge_redial_different_peer_after_redial_limit() {
         core_swarm_incoming_message_receiver.recv().await.unwrap();
     assert_eq!(received_message, message.into_inner().into());
     assert_eq!(received_message_session, 1);
+}
+
+/// Verifies that when a peer fails all dial attempts, it is added to the failed
+/// peers set, preventing it from being chosen again on the next attempt.
+#[test(tokio::test)]
+async fn edge_remembers_failed_peers_across_retries() {
+    let unreachable_peer_1 = PeerId::random();
+    let unreachable_peer_2 = PeerId::random();
+    let empty_multiaddr: Multiaddr = Protocol::Memory(0).into();
+
+    let membership = Membership::new_without_local(&[
+        Node {
+            address: empty_multiaddr.clone(),
+            id: unreachable_peer_1,
+            public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
+        },
+        Node {
+            address: empty_multiaddr.clone(),
+            id: unreachable_peer_2,
+            public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
+        },
+    ]);
+
+    // Use max_dial_attempts=1 and replication_factor=1 so each peer fails immediately
+    // and only one peer is chosen at a time.
+    let EdgeTestSwarm { mut swarm, .. } = EdgeSwarmBuilder::new(membership)
+        .with_max_dial_attempts(1)
+        .with_replication_factor(1)
+        .build();
+
+    let message = TestEncapsulatedMessage::new(b"test-payload");
+    swarm.send_message(&message);
+
+    // Determine which peer was chosen first.
+    let first_peer = swarm
+        .pending_dials()
+        .keys()
+        .next()
+        .expect("should have a pending dial")
+        .0;
+    let second_peer = if first_peer == unreachable_peer_1 {
+        unreachable_peer_2
+    } else {
+        unreachable_peer_1
+    };
+
+    // The first dial has no failed peers memory.
+    assert_eq!(
+        swarm.failed_peers_for(&first_peer),
+        Some(&HashSet::new()),
+    );
+
+    // Let the first peer fail.
+    swarm
+        .poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(first_peer)
+        })
+        .await;
+
+    // The second peer should now be dialed, with the first peer in the failed set.
+    assert!(
+        swarm.pending_dials().keys().any(|(pid, _)| *pid == second_peer),
+        "Second peer should be dialed after first peer failed"
+    );
+    assert_eq!(
+        swarm.failed_peers_for(&second_peer),
+        Some(&HashSet::from([first_peer])),
+    );
+}
+
+/// Verifies that when all peers have been tried and failed, the failed peers
+/// memory is cleared and peers are retried from scratch.
+#[test(tokio::test)]
+async fn edge_clears_failed_peers_memory_when_all_exhausted() {
+    let unreachable_peer_1 = PeerId::random();
+    let unreachable_peer_2 = PeerId::random();
+    let empty_multiaddr: Multiaddr = Protocol::Memory(0).into();
+
+    let membership = Membership::new_without_local(&[
+        Node {
+            address: empty_multiaddr.clone(),
+            id: unreachable_peer_1,
+            public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
+        },
+        Node {
+            address: empty_multiaddr.clone(),
+            id: unreachable_peer_2,
+            public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
+        },
+    ]);
+
+    let EdgeTestSwarm { mut swarm, .. } = EdgeSwarmBuilder::new(membership)
+        .with_max_dial_attempts(1)
+        .with_replication_factor(1)
+        .build();
+
+    let message = TestEncapsulatedMessage::new(b"test-payload");
+    swarm.send_message(&message);
+
+    // Fail the first peer.
+    let first_peer = swarm.pending_dials().keys().next().unwrap().0;
+    swarm
+        .poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(first_peer)
+        })
+        .await;
+
+    // Fail the second peer.
+    let second_peer = swarm.pending_dials().keys().next().unwrap().0;
+    assert_ne!(first_peer, second_peer);
+    swarm
+        .poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(second_peer)
+        })
+        .await;
+
+    // Both peers have been tried. The memory should be cleared and a new dial
+    // should be attempted (one of the two peers picked again with an empty
+    // failed_peers set).
+    assert!(
+        !swarm.pending_dials().is_empty(),
+        "A new dial should be attempted after clearing failed peers memory"
+    );
+    let retried_peer = swarm.pending_dials().keys().next().unwrap().0;
+    assert_eq!(
+        swarm.failed_peers_for(&retried_peer),
+        Some(&HashSet::new()),
+        "Failed peers memory should be cleared after all peers have been tried"
+    );
 }
 
 /// Verifies that retries use exponential backoff by measuring the elapsed time
