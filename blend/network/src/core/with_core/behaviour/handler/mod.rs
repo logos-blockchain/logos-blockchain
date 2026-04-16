@@ -202,7 +202,13 @@ where
                     self.pending_events_to_behaviour
                         .push_back(ToBehaviour::HealthyPeer);
                 }
-                None => panic!("Connection monitor stream was closed."),
+                None => {
+                    tracing::debug!(
+                        target: LOG_TARGET,
+                        "Connection monitor stream closed unexpectedly. Closing substreams proactively."
+                    );
+                    self.close_substreams();
+                }
             }
         }
 

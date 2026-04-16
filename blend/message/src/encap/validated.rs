@@ -30,13 +30,17 @@ pub struct EncapsulatedMessageWithVerifiedSignature {
 }
 
 impl EncapsulatedMessageWithVerifiedSignature {
-    #[must_use]
-    pub fn new(
+    pub fn try_new(
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
-    ) -> Self {
-        EncapsulatedMessageWithVerifiedPublicHeader::new(inputs, payload_type, payload_body).into()
+    ) -> Result<Self, Error> {
+        Ok(EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+            inputs,
+            payload_type,
+            payload_body,
+        )?
+        .into())
     }
 
     #[must_use]
@@ -120,18 +124,17 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
         )
     }
 
-    #[must_use]
-    pub fn new(
+    pub fn try_new(
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         // Create the encapsulated part.
         let (part, signing_key, proof_of_quota) = inputs.iter().enumerate().fold(
             (
                 // Start with an initialized encapsulated part,
                 // a random signing key, and proof of quota.
-                EncapsulatedPart::initialize(inputs, payload_type, payload_body),
+                EncapsulatedPart::try_initialize(inputs, payload_type, payload_body)?,
                 UnsecuredEd25519Key::generate_with_blake_rng(),
                 VerifiedProofOfQuota::from_bytes_unchecked(random_sized_bytes()),
             ),
@@ -157,10 +160,10 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
             part.sign(&signing_key),
         );
 
-        Self {
+        Ok(Self {
             validated_public_header,
             encapsulated_part: part,
-        }
+        })
     }
 
     #[must_use]

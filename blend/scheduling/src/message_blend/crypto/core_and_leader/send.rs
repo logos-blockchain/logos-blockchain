@@ -207,11 +207,12 @@ where
             })
             .collect::<Vec<_>>();
 
-        Ok(EncapsulatedMessageWithVerifiedPublicHeader::new(
+        Ok(EncapsulatedMessageWithVerifiedPublicHeader::try_new(
             &inputs,
             payload_type,
             validated_payload,
-        ))
+        )
+        .expect("Number of encapsulation layers is greater than 0."))
     }
 }
 

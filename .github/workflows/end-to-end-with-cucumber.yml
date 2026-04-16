@@ -185,6 +185,7 @@ jobs:
           CUCUMBER_LOG_LEVEL: debug
           CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
           USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
+          CUCUMBER_VERBOSE_CONSOLE: true
         with:
           command: test
           args: >-

@@ -4,7 +4,7 @@ services:
 
   cfgsync:
     container_name: cfgsync
-    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
@@ -16,7 +16,7 @@ services:
 
   client-0:
     container_name: client_0
-    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
@@ -32,7 +32,7 @@ services:
 
   client-1:
     container_name: client_1
-    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
@@ -48,7 +48,7 @@ services:
 
   client-2:
     container_name: client_2
-    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
@@ -64,7 +64,7 @@ services:
 
   client-3:
     container_name: client_3
-    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
@@ -80,7 +80,7 @@ services:
 
   nginx:
     container_name: nginx
-    image: ghcr.io/logos-blockchain/logos-blockchain:devnet
+    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
     ports:
       - "13000:13000"
       - "13001:13001"
