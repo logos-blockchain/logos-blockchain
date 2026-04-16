@@ -66,60 +66,8 @@ pub async fn run(args: InscribeArgs) {
     loop {
         tokio::select! {
             event = sequencer.next_event() => {
-                let Some(event) = event else {
-                    continue;
-                };
-
-                match event {
-                    Event::Ready => {
-                        if let Some(tx) = ready_tx.take() {
-                            let _ = tx.send(());
-                        }
-                        println!("Ready.");
-                        println!();
-                        println!("Type a message and press Enter to publish.");
-                        println!("Press Ctrl-D or type an empty line to exit.");
-                        println!();
-                        ui::render_state(&state);
-                        ui::prompt();
-                    }
-                    Event::ChannelUpdate {
-                        invalidated,
-                        adopted,
-                        ..
-                    } => {
-                        if invalidated.is_empty() && adopted.is_empty() {
-                            continue;
-                        }
-
-                        let to_republish =
-                            resolve_conflicts(&mut state, &invalidated, &adopted);
-
-                        for msg in to_republish {
-                            if let Err(e) = handle.publish_message(msg.to_bytes()).await {
-                                error!("failed to re-publish: {e}");
-                                break;
-                            }
-                        }
-
-                        ui::render_state(&state);
-                        ui::prompt();
-                    }
-                    Event::TxsFinalized { inscriptions, .. } => {
-                        let payloads: Vec<Vec<u8>> =
-                            inscriptions.iter().map(|i| i.payload.clone()).collect();
-                        state.finalize(&payloads);
-                        ui::render_state(&state);
-                        ui::prompt();
-                    }
-                    Event::Published { checkpoint, .. } => {
-                        state.save_checkpoint(checkpoint);
-                    }
-                    Event::FinalizedInscriptions { inscriptions } => {
-                        let payloads: Vec<Vec<u8>> =
-                            inscriptions.iter().map(|i| i.payload.clone()).collect();
-                        state.finalize(&payloads);
-                    }
+                if let Some(event) = event {
+                    handle_event(event, &mut state, &handle, &mut ready_tx).await;
                 }
             }
 
@@ -146,6 +94,62 @@ pub async fn run(args: InscribeArgs) {
     }
 
     println!("Goodbye!");
+}
+
+async fn handle_event(
+    event: Event,
+    state: &mut InMemoryZoneState,
+    handle: &lb_zone_sdk::sequencer::SequencerHandle<NodeHttpClient>,
+    ready_tx: &mut Option<tokio::sync::oneshot::Sender<()>>,
+) {
+    match event {
+        Event::Ready => {
+            if let Some(tx) = ready_tx.take() {
+                let _ = tx.send(());
+            }
+            println!("Ready.");
+            println!();
+            println!("Type a message and press Enter to publish.");
+            println!("Press Ctrl-D or type an empty line to exit.");
+            println!();
+            ui::render_state(state);
+            ui::prompt();
+        }
+        Event::ChannelUpdate {
+            invalidated,
+            adopted,
+            ..
+        } => {
+            if invalidated.is_empty() && adopted.is_empty() {
+                return;
+            }
+
+            let to_republish = resolve_conflicts(state, &invalidated, &adopted);
+
+            for msg in to_republish {
+                if let Err(e) = handle.publish_message(msg.to_bytes()).await {
+                    error!("failed to re-publish: {e}");
+                    break;
+                }
+            }
+
+            ui::render_state(state);
+            ui::prompt();
+        }
+        Event::TxsFinalized { inscriptions, .. } => {
+            let payloads: Vec<Vec<u8>> = inscriptions.iter().map(|i| i.payload.clone()).collect();
+            state.finalize(&payloads);
+            ui::render_state(state);
+            ui::prompt();
+        }
+        Event::Published { checkpoint, .. } => {
+            state.save_checkpoint(checkpoint);
+        }
+        Event::FinalizedInscriptions { inscriptions } => {
+            let payloads: Vec<Vec<u8>> = inscriptions.iter().map(|i| i.payload.clone()).collect();
+            state.finalize(&payloads);
+        }
+    }
 }
 
 fn load_or_create_signing_key(path: &Path) -> Ed25519Key {

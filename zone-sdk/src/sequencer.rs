@@ -718,6 +718,10 @@ where
 
     /// Ensure the blocks stream is connected. Returns `false` if not yet
     /// ready (caller should return `None`).
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn ensure_connected(&mut self) -> bool {
         if self.blocks_stream.is_some() {
             return true;
@@ -1198,6 +1202,10 @@ where
 /// Uses `state.lib()` during replay to avoid premature finalization.
 /// The caller is responsible for triggering finalization after backfill
 /// completes.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: address this in a dedicated refactor"
+)]
 async fn backfill_canonical<Node>(
     state: &mut TxState,
     missing_parent: HeaderId,
