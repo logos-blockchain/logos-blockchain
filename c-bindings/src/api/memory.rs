@@ -6,7 +6,7 @@ use crate::{OperationStatus, return_error_if_null_pointer};
 ///
 /// # Arguments
 ///
-/// * `pointer` - A pointer to the memory to be freed.
+/// - `pointer`: A pointer to the memory to be freed.
 pub fn free<Type>(pointer: *mut Type) -> OperationStatus {
     if pointer.is_null() {
         return OperationStatus::NullPointer;
@@ -15,13 +15,23 @@ pub fn free<Type>(pointer: *mut Type) -> OperationStatus {
     OperationStatus::Ok
 }
 
+/// Frees a C string allocated by this library.
+///
+/// # Arguments
+///
+/// - `pointer`: A pointer to a C string previously allocated by this library.
+///
+/// # Returns
+///
+/// An [`OperationStatus`] indicating success or failure.
+///
 /// # Safety
-/// It's up to the caller to pass a proper pointer, if somehow from c/c++ side
-/// this is called with a type which doesn't come from a returned `CString` it
-/// will cause a segfault.
+///
+/// The pointer must originate from a [`CString`] allocated by this library.
+/// Passing a pointer from any other source will cause undefined behavior.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn free_cstring(block: *mut c_char) -> OperationStatus {
-    return_error_if_null_pointer!("free_cstring", block);
-    drop(unsafe { CString::from_raw(block) });
+pub unsafe extern "C" fn free_cstring(pointer: *mut c_char) -> OperationStatus {
+    return_error_if_null_pointer!("free_cstring", pointer);
+    drop(unsafe { CString::from_raw(pointer) });
     OperationStatus::Ok
 }

@@ -3,9 +3,10 @@ use std::ffi::{CString, c_char};
 use lb_node::{RocksBackend, RuntimeServiceId, SignedMantleTx};
 
 use crate::{
-    LogosBlockchainNode, PointerResult,
+    LogosBlockchainNode,
     api::cryptarchia::{HeaderId, TxHash, into_tx_hash},
     errors::OperationStatus,
+    result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
 };
 
@@ -27,7 +28,7 @@ use crate::{
 pub(crate) fn get_block_sync(
     node: &LogosBlockchainNode,
     header_id: HeaderId,
-) -> Result<CString, OperationStatus> {
+) -> StatusResult<CString> {
     let runtime_handle = node.get_runtime_handle();
     let overwatch_handle = node.get_overwatch_handle();
 
@@ -59,7 +60,7 @@ pub(crate) fn get_block_sync(
 
 /// Result type for `get_block`. On success, `value` is a pointer to a
 /// NUL-terminated C string containing the JSON-serialized block.
-pub type GetBlockResult = PointerResult<c_char, OperationStatus>;
+pub type FfiGetBlockResult = FfiStatusResult<*mut c_char>;
 
 /// Get a block by its header ID as a JSON string.
 ///
@@ -72,7 +73,7 @@ pub type GetBlockResult = PointerResult<c_char, OperationStatus>;
 ///
 /// # Returns
 ///
-/// A [`GetBlockResult`] containing a pointer to an allocated C string (JSON
+/// A [`FfiGetBlockResult`] containing a pointer to an allocated C string (JSON
 /// block) on success, or an [`OperationStatus`] error on failure. Returns
 /// [`OperationStatus::NotFound`] if no block with the given header ID exists.
 ///
@@ -91,14 +92,14 @@ pub type GetBlockResult = PointerResult<c_char, OperationStatus>;
 pub unsafe extern "C" fn get_block(
     node: *const LogosBlockchainNode,
     header_id: *const HeaderId,
-) -> GetBlockResult {
+) -> FfiGetBlockResult {
     return_error_if_null_pointer!("get_block", node);
     return_error_if_null_pointer!("get_block", header_id);
 
     let header_id = unsafe { *header_id };
     let node = unsafe { &*node };
     let json_cstring = unwrap_or_return_error!(get_block_sync(node, header_id));
-    GetBlockResult::from_pointer(json_cstring.into_raw())
+    FfiGetBlockResult::ok(json_cstring.into_raw())
 }
 
 /// Gets a transaction by its hash as a JSON string.
@@ -119,7 +120,7 @@ pub unsafe extern "C" fn get_block(
 pub(crate) fn get_transaction_sync(
     node: &LogosBlockchainNode,
     tx_hash: lb_core::mantle::TxHash,
-) -> Result<CString, OperationStatus> {
+) -> StatusResult<CString> {
     let runtime_handle = node.get_runtime_handle();
     let overwatch_handle = node.get_overwatch_handle();
 
@@ -148,7 +149,7 @@ pub(crate) fn get_transaction_sync(
 
 /// Result type for `get_transaction`. On success, `value` is a pointer to a
 /// NUL-terminated C string containing the JSON-serialized transaction.
-pub type GetTransactionResult = PointerResult<c_char, OperationStatus>;
+pub type FfiGetTransactionResult = FfiStatusResult<*mut c_char>;
 
 /// Get a transaction by its hash as a JSON string.
 ///
@@ -162,7 +163,7 @@ pub type GetTransactionResult = PointerResult<c_char, OperationStatus>;
 ///
 /// # Returns
 ///
-/// A [`GetTransactionResult`] containing a pointer to an allocated C string
+/// A [`FfiGetTransactionResult`] containing a pointer to an allocated C string
 /// (JSON transaction) on success, or an [`OperationStatus`] error on failure.
 /// Returns [`OperationStatus::NotFound`] if no transaction with the given hash
 /// exists.
@@ -182,7 +183,7 @@ pub type GetTransactionResult = PointerResult<c_char, OperationStatus>;
 pub unsafe extern "C" fn get_transaction(
     node: *const LogosBlockchainNode,
     tx_hash: *const TxHash,
-) -> GetTransactionResult {
+) -> FfiGetTransactionResult {
     return_error_if_null_pointer!("get_transaction", node);
     return_error_if_null_pointer!("get_transaction", tx_hash);
 
@@ -191,7 +192,7 @@ pub unsafe extern "C" fn get_transaction(
         log::error!("[get_transaction] Invalid `tx_hash`. Exiting.");
     });
     let json_cstring = unwrap_or_return_error!(get_transaction_sync(node, tx_hash));
-    GetTransactionResult::from_pointer(json_cstring.into_raw())
+    FfiGetTransactionResult::ok(json_cstring.into_raw())
 }
 
 /// Gets blocks in a slot range as a JSON array string.
@@ -213,7 +214,7 @@ pub(crate) fn get_blocks_sync(
     node: &LogosBlockchainNode,
     from_slot: usize,
     to_slot: usize,
-) -> Result<CString, OperationStatus> {
+) -> StatusResult<CString> {
     let runtime_handle = node.get_runtime_handle();
     let overwatch_handle = node.get_overwatch_handle();
 
@@ -241,7 +242,7 @@ pub(crate) fn get_blocks_sync(
 
 /// Result type for `get_blocks`. On success, `value` is a pointer to a
 /// NUL-terminated C string containing a JSON array of blocks.
-pub type GetBlocksResult = PointerResult<c_char, OperationStatus>;
+pub type FfiGetBlocksResult = FfiStatusResult<*mut c_char>;
 
 /// Get blocks in a slot range as a JSON array string.
 ///
@@ -256,7 +257,7 @@ pub type GetBlocksResult = PointerResult<c_char, OperationStatus>;
 ///
 /// # Returns
 ///
-/// A [`GetBlocksResult`] containing a pointer to an allocated C string (JSON
+/// A [`FfiGetBlocksResult`] containing a pointer to an allocated C string (JSON
 /// array) on success, or an [`OperationStatus`] error on failure.
 ///
 /// # Safety
@@ -274,19 +275,19 @@ pub unsafe extern "C" fn get_blocks(
     node: *const LogosBlockchainNode,
     from_slot: u64,
     to_slot: u64,
-) -> GetBlocksResult {
+) -> FfiGetBlocksResult {
     return_error_if_null_pointer!("get_blocks", node);
 
     let Ok(from_slot) = usize::try_from(from_slot) else {
         log::error!("[get_blocks] from_slot overflow");
-        return GetBlocksResult::from_error(OperationStatus::ValidationError);
+        return FfiGetBlocksResult::err(OperationStatus::ValidationError);
     };
     let Ok(to_slot) = usize::try_from(to_slot) else {
         log::error!("[get_blocks] to_slot overflow");
-        return GetBlocksResult::from_error(OperationStatus::ValidationError);
+        return FfiGetBlocksResult::err(OperationStatus::ValidationError);
     };
 
     let node = unsafe { &*node };
     let json_cstring = unwrap_or_return_error!(get_blocks_sync(node, from_slot, to_slot));
-    GetBlocksResult::from_pointer(json_cstring.into_raw())
+    FfiGetBlocksResult::ok(json_cstring.into_raw())
 }

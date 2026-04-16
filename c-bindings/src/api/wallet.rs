@@ -1,24 +1,3 @@
-//! ```rust
-//! A module for performing wallet transactions and operations in the Logos Blockchain network.
-//!
-//! Gets the known wallet addresses from the wallet service.
-//!
-//! This function queries the known addresses synchronously by using the wallet API.
-//!
-//! # Arguments
-//!
-//! - `node`: A reference to an instance of [`LogosBlockchainNode`].
-//!
-//! # Returns
-//!
-//! A `Result` containing a vector of [`ZkPublicKey`] on success, or an [`OperationStatus`] error
-//! on failure.
-//!
-//! # Errors
-//!
-//! - Returns [`OperationStatus::NotFound`] if the wallet addresses cannot be retrieved.
-//! pub
-
 use core::ptr;
 
 use lb_api_service::http::mempool;
@@ -29,52 +8,32 @@ use lb_wallet_service::{WalletService, api::WalletApi};
 use num_bigint::BigUint;
 
 use crate::{
-    LogosBlockchainNode, ValueResult,
+    LogosBlockchainNode,
     api::{
         cryptarchia::{Hash, HeaderId, get_cryptarchia_info_sync},
-        free,
-        types::value::Value,
+        types::{known_addresses::KnownAddresses, value::Value},
     },
     errors::OperationStatus,
+    result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
 };
 
-/// ```rust
-/// 
-/// Fetches the list of known addresses from the `LogosBlockchainNode`.
+/// Gets the known wallet addresses from the wallet service.
 ///
-/// # Parameters
-/// - `node`: A reference to the `LogosBlockchainNode` instance from which the known addresses are to be retrieved.
+/// This is a synchronous wrapper around [`WalletApi::get_known_addresses`].
+///
+/// # Arguments
+///
+/// - `node`: A [`LogosBlockchainNode`] instance.
 ///
 /// # Returns
-/// This function returns a `Result`:
-/// - `Ok(Vec<ZkPublicKey>)`: A vector containing the known zero-knowledge public keys (`ZkPublicKey`).
-/// - `Err(OperationStatus)`: An error status (`OperationStatus::NotFound`) if the operation fails.
 ///
-/// # Errors
-/// This function will return `OperationStatus::NotFound` in case of an error during communication with the Wallet API or if the addresses cannot be fetched.
-///
-/// # Implementation Details
-/// - The function asynchronously interacts with the `WalletApi` via the runtime handle of the provided `node`.
-/// - Any errors encountered during the retrieval are logged to the standard error stream (`eprintln`).
-///
-/// # Example
-/// ```rust
-/// let node = LogosBlockchainNode::new(); // Assume LogosBlockchainNode is
-/// initialized match get_known_addresses(&node) {
-///     Ok(addresses) => println!("Known Addresses: {:?}", addresses),
-///     Err(status) => eprintln!("Failed to fetch addresses: {:?}", status),
-/// }
-/// ```
-/// 
-/// # Notes
-/// - This function utilizes the runtime's `block_on` method to execute the asynchronous operations in a blocking manner.
-/// - The returned public keys represent a set of addresses known to the Wallet API.
-/// ```
+/// A [`Result`] containing a vector of [`ZkPublicKey`] on success, or an
+/// [`OperationStatus`] error on failure.
 pub(crate) fn get_known_addresses_sync(
     node: &LogosBlockchainNode,
-) -> Result<Vec<ZkPublicKey>, OperationStatus> {
-    let runtime_handle = node.get_overwatch_handle().runtime();
+) -> StatusResult<Vec<ZkPublicKey>> {
+    let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let api = WalletApi::<WalletService<_, _, _, _, _>, _>::from_overwatch_handle(
             node.get_overwatch_handle(),
@@ -87,22 +46,7 @@ pub(crate) fn get_known_addresses_sync(
     })
 }
 
-#[repr(C)]
-pub struct KnownAddresses {
-    pub addresses: *mut *mut u8,
-    pub len: usize,
-}
-
-pub type KnownAddressesResult = ValueResult<KnownAddresses, OperationStatus>;
-
-impl Default for KnownAddresses {
-    fn default() -> Self {
-        Self {
-            addresses: ptr::null_mut(),
-            len: 0,
-        }
-    }
-}
+pub type FfiKnownAddressesResult = FfiStatusResult<KnownAddresses>;
 
 /// Retrieves the list of known wallet addresses from the Logos Blockchain node.
 ///
@@ -112,12 +56,12 @@ impl Default for KnownAddresses {
 ///
 /// # Arguments
 ///
-/// * `node` - A non-null pointer to a [`LogosBlockchainNode`] instance from
+/// - `node`: A non-null pointer to a [`LogosBlockchainNode`] instance from
 ///   which the known addresses will be retrieved.
 ///
 /// # Returns
 ///
-/// Returns a [`KnownAddressesResult`] containing:
+/// Returns a [`FfiKnownAddressesResult`] containing:
 /// - On success: A [`KnownAddresses`] struct with an array of pointers to
 ///   32-byte address representations and the array length.
 /// - On failure: An [`OperationStatus`] error indicating the reason for
@@ -173,7 +117,7 @@ impl Default for KnownAddresses {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_known_addresses(
     node: *const LogosBlockchainNode,
-) -> KnownAddressesResult {
+) -> FfiKnownAddressesResult {
     return_error_if_null_pointer!("get_known_addresses", node);
 
     let node = unsafe { &*node };
@@ -189,7 +133,7 @@ pub unsafe extern "C" fn get_known_addresses(
     let len = address_pointers.len();
     let addresses_ptr = Box::leak(address_pointers.into_boxed_slice()).as_mut_ptr();
 
-    KnownAddressesResult::from_value(KnownAddresses {
+    FfiKnownAddressesResult::ok(KnownAddresses {
         addresses: addresses_ptr,
         len,
     })
@@ -207,7 +151,7 @@ pub unsafe extern "C" fn get_known_addresses(
 ///
 /// # Arguments
 ///
-/// * `addresses` - A [`KnownAddresses`] structure previously returned by
+/// - `addresses`: A [`KnownAddresses`] structure previously returned by
 ///   [`get_known_addresses`]. This structure will be consumed and all its
 ///   associated memory will be freed.
 ///
@@ -282,13 +226,9 @@ pub(crate) fn get_balance_sync(
     node: &LogosBlockchainNode,
     tip: lb_core::header::HeaderId,
     wallet_address: ZkPublicKey,
-) -> Result<Option<Value>, OperationStatus> {
-    let Ok(runtime) = tokio::runtime::Runtime::new() else {
-        log::error!("[Failed]to create tokio runtime. Aborting.");
-        return Err(OperationStatus::RuntimeError);
-    };
-
-    runtime
+) -> StatusResult<Option<Value>> {
+    let runtime_handle = node.get_runtime_handle();
+    runtime_handle
         .block_on(async {
             let api = WalletApi::<WalletService<_, _, _, _, _>, _>::from_overwatch_handle(
                 node.get_overwatch_handle(),
@@ -301,7 +241,7 @@ pub(crate) fn get_balance_sync(
         .map_err(|_| OperationStatus::DynError)
 }
 
-pub type BalanceResult = ValueResult<Value, OperationStatus>;
+pub type FfiBalanceResult = FfiStatusResult<Value>;
 
 /// Get the balance of a wallet address
 ///
@@ -315,7 +255,7 @@ pub type BalanceResult = ValueResult<Value, OperationStatus>;
 ///
 /// # Returns
 ///
-/// A [`ValueResult`] containing the balance on success, or an
+/// A [`FfiStatusResult`] containing the balance on success, or an
 /// [`OperationStatus`] error on failure.
 ///
 /// # Safety
@@ -327,7 +267,7 @@ pub unsafe extern "C" fn get_balance(
     node: *const LogosBlockchainNode,
     wallet_address: *const u8,
     optional_tip: *const HeaderId,
-) -> BalanceResult {
+) -> FfiBalanceResult {
     return_error_if_null_pointer!("get_balance", node);
     return_error_if_null_pointer!("get_balance", wallet_address);
     let node = unsafe { &*node };
@@ -347,9 +287,9 @@ pub unsafe extern "C" fn get_balance(
     );
 
     match get_balance_sync(node, tip, wallet_address) {
-        Ok(Some(balance)) => BalanceResult::from_value(balance),
-        Ok(None) => BalanceResult::from_error(OperationStatus::NotFound),
-        Err(status) => BalanceResult::from_error(status),
+        Ok(Some(balance)) => FfiBalanceResult::ok(balance),
+        Ok(None) => FfiBalanceResult::err(OperationStatus::NotFound),
+        Err(status) => FfiBalanceResult::err(status),
     }
 }
 
@@ -436,13 +376,9 @@ pub(crate) fn transfer_funds_sync(
     funding_public_keys: Vec<ZkPublicKey>,
     recipient_public_key: ZkPublicKey,
     amount: u64,
-) -> Result<SignedMantleTx, OperationStatus> {
-    let Ok(runtime) = tokio::runtime::Runtime::new() else {
-        log::error!("[transfer_funds_sync] Failed to create tokio runtime. Aborting.");
-        return Err(OperationStatus::RuntimeError);
-    };
-
-    runtime.block_on(async {
+) -> StatusResult<SignedMantleTx> {
+    let runtime_handle = node.get_runtime_handle();
+    runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
         let api = WalletApi::<WalletService<_, _, _, _, _>, _>::from_overwatch_handle(handle).await;
 
@@ -471,7 +407,7 @@ pub(crate) fn transfer_funds_sync(
     })
 }
 
-pub type TransferFundsResult = ValueResult<Hash, OperationStatus>;
+pub type FfiTransferFundsResult = FfiStatusResult<Hash>;
 
 /// Transfer funds from some addresses to another.
 ///
@@ -483,31 +419,25 @@ pub type TransferFundsResult = ValueResult<Hash, OperationStatus>;
 ///
 /// # Returns
 ///
-/// A [`TransferFundsResult`] containing a pointer to a [`Hash`] where the
-/// transaction hash will be written on success, or an [`OperationStatus`] error
-/// on failure. The hash will be written in little-endian format.
+/// A [`FfiTransferFundsResult`] containing the transaction [`Hash`] on success,
+/// or an [`OperationStatus`] error on failure. The hash is in little-endian
+/// format.
 ///
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that all pointers are valid.
-///
-/// # Memory Management
-///
-/// This function allocates memory for the output [`CryptarchiaInfo`] struct.
-/// The caller must free this memory using the [`free_cryptarchia_info`]
-/// function.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn transfer_funds(
     node: *const LogosBlockchainNode,
     arguments: *const TransferFundsArguments,
-) -> TransferFundsResult {
+) -> FfiTransferFundsResult {
     return_error_if_null_pointer!("transfer_funds", node);
     return_error_if_null_pointer!("transfer_funds", arguments);
     let arguments = unsafe { &*arguments };
     if let Err((error_message, status)) = unsafe { arguments.validate() } {
         log::error!("[transfer_funds] {error_message} Exiting.");
-        return TransferFundsResult::from_error(status);
+        return FfiTransferFundsResult::err(status);
     }
 
     let node = unsafe { &*node };
@@ -516,7 +446,7 @@ pub unsafe extern "C" fn transfer_funds(
             Ok(cryptarchia_info) => cryptarchia_info.tip,
             Err(status) => {
                 log::error!("[transfer_funds] Failed to get cryptarchia info. Aborting.");
-                return TransferFundsResult::from_error(status);
+                return FfiTransferFundsResult::err(status);
             }
         }
     } else {
@@ -561,17 +491,7 @@ pub unsafe extern "C" fn transfer_funds(
     let transaction_hash = transaction.hash().as_signing_bytes();
     let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
         log::error!("[transfer_funds] Failed to convert transaction hash to array. Exiting.");
-        return TransferFundsResult::from_error(OperationStatus::RuntimeError);
+        return FfiTransferFundsResult::err(OperationStatus::RuntimeError);
     };
-    TransferFundsResult::from_value(transaction_hash_array)
-}
-
-/// Frees the memory allocated for a [`Hash`] value.
-///
-/// # Arguments
-///
-/// - `pointer`: A pointer to the [`Hash`] to be freed.
-#[unsafe(no_mangle)]
-pub extern "C" fn free_transfer_funds(pointer: *mut Hash) -> OperationStatus {
-    free::<Hash>(pointer)
+    FfiTransferFundsResult::ok(transaction_hash_array)
 }

@@ -1,13 +1,10 @@
-use crate::{
-    errors::OperationStatus,
-    result::{PointerResult, ValueResult},
-};
+use crate::{errors::OperationStatus, result::FfiResult};
 
 /// Checks if a pointer is null, logs an error, and returns from the calling
 /// function.
 ///
 /// Works with any return type that implements [`FfiReturn`], including
-/// [`ValueResult`], [`PointerResult`], [`OperationStatus`], and `()`.
+/// [`FfiResult`], [`OperationStatus`], and `()`.
 ///
 /// # Arguments
 ///
@@ -23,7 +20,7 @@ macro_rules! return_error_if_null_pointer {
                 $context,
                 stringify!($pointer)
             );
-            return <_ as $crate::macros::FfiReturn>::from_operation_error(
+            return <_ as $crate::macros::FfiReturn>::from_operation_status(
                 $crate::errors::OperationStatus::NullPointer,
             );
         }
@@ -34,7 +31,7 @@ macro_rules! return_error_if_null_pointer {
 /// into the function's return type and returning early.
 ///
 /// Works with any return type that implements [`FfiReturn`], including
-/// [`ValueResult`], [`PointerResult`], [`OperationStatus`], and `()`.
+/// [`FfiResult`], [`OperationStatus`], and `()`.
 ///
 /// # Arguments
 ///
@@ -49,7 +46,7 @@ macro_rules! unwrap_or_return_error {
             Ok(value) => value,
             Err(error) => {
                 $on_err(&error);
-                return <_ as $crate::macros::FfiReturn>::from_operation_error(error);
+                return <_ as $crate::macros::FfiReturn>::from_operation_status(error);
             }
         }
     };
@@ -58,28 +55,22 @@ macro_rules! unwrap_or_return_error {
 /// Implemented by FFI return types that can be constructed from an
 /// [`OperationStatus`] error, enabling the `return_error_if_null_pointer!` and
 /// `unwrap_or_return_error!` macros to work across all return types.
-pub trait FfiReturn: Sized {
-    fn from_operation_error(status: OperationStatus) -> Self;
+pub trait FfiReturn {
+    fn from_operation_status(status: OperationStatus) -> Self;
 }
 
-impl<Type: Default> FfiReturn for ValueResult<Type, OperationStatus> {
-    fn from_operation_error(status: OperationStatus) -> Self {
-        Self::from_error(status)
-    }
-}
-
-impl<Type> FfiReturn for PointerResult<Type, OperationStatus> {
-    fn from_operation_error(status: OperationStatus) -> Self {
-        Self::from_error(status)
+impl<Type: Default> FfiReturn for FfiResult<Type, OperationStatus> {
+    fn from_operation_status(status: OperationStatus) -> Self {
+        Self::err(status)
     }
 }
 
 impl FfiReturn for OperationStatus {
-    fn from_operation_error(status: OperationStatus) -> Self {
+    fn from_operation_status(status: OperationStatus) -> Self {
         status
     }
 }
 
 impl FfiReturn for () {
-    fn from_operation_error(_status: OperationStatus) -> Self {}
+    fn from_operation_status(_status: OperationStatus) -> Self {}
 }
