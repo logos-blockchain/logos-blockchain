@@ -135,8 +135,8 @@ fn should_skip(message: &ZoneMessage, slot: Slot, skip_until: &mut Option<(MsgId
                 *skip_until = None;
             }
         }
-        // Deposits have no ID, so keep skipping.
-        ZoneMessage::Deposit(_) => {}
+        // Deposits/withdraws have no ID, so keep skipping.
+        ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => {}
     }
     true
 }
