@@ -1,14 +1,12 @@
-use std::sync::LazyLock;
-
-use lb_groth16::{Fr, fr_from_bytes, fr_from_bytes_unchecked};
-use lb_poseidon2::Digest;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTES_SIZE, Hash, Hasher, ZkHasher},
+    crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        NoteId, Transaction, TransactionHasher, TxHash, encoding::encode_transfer_op,
-        ledger::Outputs, ops::OpId,
+        NoteId,
+        encoding::encode_transfer_op,
+        ledger::Outputs,
+        ops::{OPERATION_ID_V1, OpId},
     },
 };
 
@@ -18,44 +16,18 @@ pub struct TransferOp {
     pub outputs: Outputs,
 }
 
-static TRANSFER_HASH_V1_FR: LazyLock<Fr> =
-    LazyLock::new(|| fr_from_bytes(b"TRANSFER_HASH_V1").expect("Constant should be valid Fr"));
-
 impl TransferOp {
     #[must_use]
     pub const fn new(inputs: Vec<NoteId>, outputs: Outputs) -> Self {
         Self { inputs, outputs }
     }
-
-    #[must_use]
-    pub fn as_signing_frs(&self) -> Vec<Fr> {
-        // constants and structure as defined in the Mantle spec:
-        // <https://www.notion.so/nomos-tech/v1-3-Mantle-Specification-31e261aa09df818f9327ee87e5a6d433#31e261aa09df80aea7cff4eb98d61b6e>
-        let encoded_bytes = encode_transfer_op(self);
-        let first_blake_hash = Hasher::digest(encoded_bytes);
-        let frs = first_blake_hash
-            .as_slice()
-            .chunks(HALF_BLAKE_DIGEST_BYTES_SIZE)
-            .map(fr_from_bytes_unchecked);
-        std::iter::once(*TRANSFER_HASH_V1_FR).chain(frs).collect()
-    }
 }
 
 impl OpId for TransferOp {
     fn op_id(&self) -> Hash {
-        let mut encoded_bytes: Vec<u8> = b"OPERATION_ID_V1".into();
+        let mut encoded_bytes: Vec<u8> = OPERATION_ID_V1.clone();
         encoded_bytes.extend(encode_transfer_op(self));
         Hasher::digest(&encoded_bytes).into()
-    }
-}
-
-impl Transaction for TransferOp {
-    const HASHER: TransactionHasher<Self> =
-        |op| <ZkHasher as Digest>::digest(&op.as_signing_frs()).into();
-    type Hash = TxHash;
-
-    fn as_signing_frs(&self) -> Vec<Fr> {
-        Self::as_signing_frs(self)
     }
 }
 
@@ -63,6 +35,7 @@ impl Transaction for TransferOp {
 mod test {
 
     use lb_key_management_system_keys::keys::ZkPublicKey;
+    use lb_poseidon2::Fr;
     use num_bigint::BigUint;
 
     use super::*;

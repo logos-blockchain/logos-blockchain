@@ -6,6 +6,8 @@ pub mod sdp;
 mod serde_;
 pub mod transfer;
 
+use std::sync::LazyLock;
+
 use channel::{
     deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp, withdraw::ChannelWithdrawOp,
 };
@@ -37,6 +39,7 @@ use crate::{
         channel_withdraw_proof::ChannelWithdrawProof, leader_claim_proof::Groth16LeaderClaimProof,
     },
 };
+static OPERATION_ID_V1: LazyLock<Vec<u8>> = LazyLock::new(|| b"OPERATION_ID_V1".to_vec());
 
 pub trait OpId {
     fn op_id(&self) -> Hash;

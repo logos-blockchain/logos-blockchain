@@ -7,7 +7,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     crypto::{Digest as _, Hash, Hasher, ZkHasher},
-    mantle::{Note, Utxo, Value, encoding::encode_leader_claim, ops::OpId},
+    mantle::{
+        Note, Utxo, Value,
+        encoding::encode_leader_claim,
+        ops::{OPERATION_ID_V1, OpId},
+    },
 };
 
 static REWARD_VOUCHER: LazyLock<Fr> = LazyLock::new(|| {
@@ -53,7 +57,7 @@ impl LeaderClaimOp {
 
 impl OpId for LeaderClaimOp {
     fn op_id(&self) -> Hash {
-        let mut encoded_bytes: Vec<u8> = b"OPERATION_ID_V1".into();
+        let mut encoded_bytes = OPERATION_ID_V1.clone();
         encoded_bytes.extend(encode_leader_claim(self));
         Hasher::digest(&encoded_bytes).into()
     }

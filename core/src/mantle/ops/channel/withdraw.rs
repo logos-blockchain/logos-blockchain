@@ -5,7 +5,7 @@ use crate::{
     mantle::{
         encoding::encode_channel_withdraw,
         ledger::Outputs,
-        ops::{OpId, channel::ChannelId},
+        ops::{OPERATION_ID_V1, OpId, channel::ChannelId},
     },
 };
 
@@ -18,7 +18,7 @@ pub struct ChannelWithdrawOp {
 
 impl OpId for ChannelWithdrawOp {
     fn op_id(&self) -> Hash {
-        let mut encoded_bytes: Vec<u8> = b"OPERATION_ID_V1".into();
+        let mut encoded_bytes = OPERATION_ID_V1.clone();
         encoded_bytes.extend(encode_channel_withdraw(self));
         Hasher::digest(&encoded_bytes).into()
     }
