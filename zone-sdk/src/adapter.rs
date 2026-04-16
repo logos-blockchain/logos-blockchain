@@ -156,7 +156,7 @@ fn op_to_zone_message(op: &Op, channel_id: ChannelId) -> Option<ZoneMessage> {
         }
         Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
             Some(ZoneMessage::Withdraw(Withdraw {
-                amount: withdraw.amount,
+                outputs: withdraw.outputs.clone(),
             }))
         }
         _ => None,

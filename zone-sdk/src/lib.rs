@@ -5,7 +5,7 @@ pub mod state;
 
 pub use lb_common_http_client::{CommonHttpClient, Slot};
 pub use lb_core::mantle::ops::channel::Ed25519PublicKey;
-use lb_core::mantle::{NoteId, ops::channel::MsgId};
+use lb_core::mantle::{NoteId, ledger::Outputs, ops::channel::MsgId};
 
 /// A message from a zone channel, included/finalized in Bedrock
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,5 +40,5 @@ pub struct Deposit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Withdraw {
     /// Amount of the withdrawal
-    pub amount: Value,
+    pub outputs: Outputs,
 }

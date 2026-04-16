@@ -1366,7 +1366,7 @@ pub mod tests {
             tx.hash(),
         );
 
-        assert!(!result.is_ok());
+        assert!(result.is_err());
     }
 
     #[test]

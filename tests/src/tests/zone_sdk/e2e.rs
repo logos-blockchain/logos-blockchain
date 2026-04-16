@@ -5,6 +5,7 @@ use lb_common_http_client::CommonHttpClient;
 use lb_core::{
     mantle::{
         MantleTx, Note, NoteId, Op, OpProof, Value,
+        ledger::Outputs,
         ops::{
             channel::{ChannelId, deposit::DepositOp, withdraw::ChannelWithdrawOp},
             transfer::TransferOp,
@@ -807,12 +808,15 @@ async fn test_subscribe_to_finalized_withdraw() {
     wait_for_zone_block(&indexer, msg1, Duration::from_secs(60)).await;
 
     // Deposit 3 into the channel
+    let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
+    let (deposit_note_id, _) = get_note(validator, pk, 3)
+        .await
+        .expect("should find a note with sufficient balance for deposit");
     let deposit = DepositOp {
         channel_id,
-        amount: 3,
+        inputs: vec![deposit_note_id],
         metadata: b"Mint 3 to Alice in Zone".to_vec(),
     };
-    let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
     submit_deposit(validator, deposit.clone(), pk).await;
 
     // Wait for the deposit to be finalized and detected by the ZoneIndexer
@@ -821,33 +825,20 @@ async fn test_subscribe_to_finalized_withdraw() {
     // Withdraw 1 from the channel
     let withdraw = ChannelWithdrawOp {
         channel_id,
-        amount: 2,
-    };
-    // Prepare a transfer op to send the withdrawn fund to a certain note.
-    // `inputs` is not required actually, but signing tx with 0 key is not support.
-    // So, we're setting a input note. It'll be necessary anyway once we set
-    // non-zero gas price.
-    let (note_id, note_value) = get_note(validator, pk, 1)
-        .await
-        .expect("should find a note with sufficient balance for deposit");
-    let transfer = TransferOp {
-        inputs: vec![note_id],
-        outputs: vec![Note::new(note_value, pk), Note::new(withdraw.amount, pk)],
+        outputs: Outputs::new(vec![Note::new(2, pk)]),
+        withdraw_nonce: 0,
     };
     let inscription_data = b"Burn 2".to_vec();
     let (tx, msg_id, inscription_proof) = handle
         .prepare_tx(
-            vec![
-                Op::ChannelWithdraw(withdraw.clone()),
-                Op::Transfer(transfer),
-            ],
+            vec![Op::ChannelWithdraw(withdraw.clone())],
             inscription_data.clone(),
         )
         .await
         .unwrap();
 
     // For this channel, a single sequencer signature is sufficient for withdraw,
-    // because withdraw_threhold is 1.
+    // because withdraw_threshold is 1.
     // We can actually reuse `inscription_proof`, but here we use
     // `SequencerHandle::sign_tx` to show how to sign tx built by other sequencers.
     let withdraw_proof = ChannelWithdrawProof::new(vec![WithdrawSignature::new(
@@ -856,15 +847,11 @@ async fn test_subscribe_to_finalized_withdraw() {
     )])
     .unwrap();
 
-    // Sign tx for transfer op
-    let transfer_proof = sign_tx_zk(validator, &tx, vec![pk]).await;
-
     // Build a signed tx using signatures from user and sequencer
     let signed_tx = SignedMantleTx::new(
         tx,
         vec![
             OpProof::ChannelWithdrawProof(withdraw_proof),
-            OpProof::ZkSig(transfer_proof),
             OpProof::Ed25519Sig(inscription_proof),
         ],
     )
@@ -998,10 +985,10 @@ async fn wait_for_withdraw(
                         last_zone_block = Some((block.id, slot));
                     }
                     ZoneMessage::Withdraw(withdraw) => {
-                        if withdraw.amount == expected.amount {
+                        if withdraw.outputs == expected.outputs {
                             println!(
-                                "Found expected withdraw in indexer: amount={}",
-                                withdraw.amount,
+                                "Found expected withdraw in indexer: amount={:?}",
+                                withdraw.outputs,
                             );
                             return;
                         }
