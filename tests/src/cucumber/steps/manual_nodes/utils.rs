@@ -292,6 +292,21 @@ pub(crate) fn parse_wallet_resources_table_row(
     ))
 }
 
+pub(crate) fn ensure_fee_sponsorship_and_fork_groups_are_not_mixed(
+    world: &CucumberWorld,
+    step_value: &str,
+) -> StepResult {
+    if world.fee_state.sponsored_genesis_account.is_some() && !world.node_groups.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: format!(
+                "Step `{step_value}` error: sponsored fee accounts cannot be combined with distinct node groups in the same scenario"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
     world: &CucumberWorld,
     step: &str,
@@ -1343,6 +1358,73 @@ pub async fn nodes_converged(
         sleep(Duration::from_millis(100)).await;
         count += 1;
     }
+}
+
+pub async fn ensure_all_nodes_agree_on_lib(
+    world: &CucumberWorld,
+    step: &str,
+    time_out_seconds: u64,
+) -> StepResult {
+    let start = Instant::now();
+    let time_out = Duration::from_secs(time_out_seconds);
+    let mut count = 0usize;
+
+    loop {
+        let snapshots = try_join_all(world.nodes_info.values().map(async |node| {
+            let consensus = node.started_node.client.consensus_info().await?;
+            Ok::<_, StepError>((
+                node.name.clone(),
+                consensus.height,
+                consensus.lib.encode_hex::<String>(),
+            ))
+        }))
+        .await?;
+
+        let libs = snapshots
+            .iter()
+            .map(|(_, _, lib)| lib.clone())
+            .collect::<HashSet<_>>();
+
+        if libs.len() == 1 {
+            info!(
+                target: TARGET,
+                "All nodes agree on LIB in {:.2?}",
+                start.elapsed()
+            );
+            return Ok(());
+        }
+
+        if count.is_multiple_of(50) {
+            let status = format_lib_agreement_status(&snapshots);
+
+            info!(
+                target: TARGET,
+                "Waiting for all nodes to agree on LIB - elapsed {:.2?}, {status}",
+                start.elapsed()
+            );
+        }
+
+        if start.elapsed() >= time_out {
+            let status = format_lib_agreement_status(&snapshots);
+
+            return Err(StepError::StepFail {
+                message: format!(
+                    "Step `{step}` error: Nodes did not agree on LIB in {time_out_seconds} s ({status})"
+                ),
+            });
+        }
+
+        sleep(Duration::from_millis(100)).await;
+        count += 1;
+    }
+}
+
+fn format_lib_agreement_status(snapshots: &[(String, u64, String)]) -> String {
+    snapshots
+        .iter()
+        .map(|(node_name, height, lib)| format!("{node_name}: {height}/{}", truncate_hash(lib, 16)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub async fn poll_all_nodes_and_update_consensus_cache<S: ::std::hash::BuildHasher>(

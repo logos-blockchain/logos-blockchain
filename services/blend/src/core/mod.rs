@@ -1574,7 +1574,7 @@ fn handle_incoming_blend_message_from_old_session<
             }
         }
         Err(e) => {
-            if matches!(e, MessageError::MessageDeserializationFailed) {
+            if matches!(e, MessageError::PrivateHeaderDeserializationFailed) {
                 tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message from old session due to deserialization error. This can happen when the message was intended for another node or when the message is malformed. Ignoring...");
             } else {
                 tracing::debug!(target: LOG_TARGET, "Failed to decapsulate received message from old session: {e:?}");
@@ -1869,7 +1869,7 @@ where
 
     // Release all messages concurrently, and wait for all of them to be sent.
     join_all(message_futures).await;
-    tracing::debug!(
+    tracing::trace!(
         target: LOG_TARGET,
         "Sent out {data_count} data, {processed_count} processed and {cover_count} cover messages at this release window."
     );
@@ -1901,7 +1901,7 @@ async fn handle_release_round_for_old_session<NodeId, Rng, Backend, NetAdapter, 
     // Release all messages concurrently, and wait for all of them to be sent.
     let num_futures = futures.len();
     join_all(futures).await;
-    tracing::debug!(
+    tracing::trace!(
         target: LOG_TARGET,
         "Sent out {num_futures} processed messages at this release window for the old session"
     );

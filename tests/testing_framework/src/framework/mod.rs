@@ -166,6 +166,7 @@ pub fn apply_wallet_config_to_deployment(deployment: &mut DeploymentPlan, wallet
     let genesis_tx = postprocess::apply_wallet_genesis_overrides(
         &mut node_configs,
         &base_genesis_tx,
+        deployment.config.blend_core_nodes,
         &wallet_accounts,
         key_id_for_preload_backend,
         deployment.config.test_context.as_deref(),

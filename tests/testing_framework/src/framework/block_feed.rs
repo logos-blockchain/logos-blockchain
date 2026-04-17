@@ -303,7 +303,7 @@ impl BlockScanner {
             }
 
             let block = client
-                .storage_block(&cursor)
+                .block(&cursor)
                 .await?
                 .context("missing block while catching up")?;
             let parent = block.header().parent();

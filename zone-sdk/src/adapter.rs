@@ -10,7 +10,7 @@ use lb_core::{
 };
 use reqwest::Url;
 
-use crate::{Deposit, ZoneBlock, ZoneMessage};
+use crate::{Deposit, Withdraw, ZoneBlock, ZoneMessage};
 
 #[async_trait]
 pub trait Node {
@@ -72,7 +72,7 @@ impl Node for NodeHttpClient {
     }
 
     async fn block(&self, id: HeaderId) -> Result<Option<Block<SignedMantleTx>>, Error> {
-        self.client.get_block(self.base_url.clone(), id).await
+        self.client.get_block_by_id(self.base_url.clone(), id).await
     }
 
     async fn blocks(&self, slot_from: Slot, slot_to: Slot) -> Result<Vec<ApiBlock>, Error> {
@@ -92,7 +92,7 @@ impl Node for NodeHttpClient {
     ) -> Result<impl Stream<Item = ZoneMessage>, Error> {
         let transactions = self
             .client
-            .get_block(self.base_url.clone(), id)
+            .get_block_by_id(self.base_url.clone(), id)
             .await?
             .map_or_else(|| Vec::with_capacity(0), Block::into_transactions);
 
@@ -152,6 +152,11 @@ fn op_to_zone_message(op: &Op, channel_id: ChannelId) -> Option<ZoneMessage> {
             Some(ZoneMessage::Deposit(Deposit {
                 amount: deposit.amount,
                 metadata: deposit.metadata.clone(),
+            }))
+        }
+        Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
+            Some(ZoneMessage::Withdraw(Withdraw {
+                amount: withdraw.amount,
             }))
         }
         _ => None,

@@ -1,6 +1,6 @@
 use lb_blend_proofs::quota::{self, ProofOfQuota, VerifiedProofOfQuota};
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{Error, MessageIdentifier, encap::ProofsVerifier};
 
@@ -9,10 +9,25 @@ const LATEST_BLEND_MESSAGE_VERSION: u8 = 1;
 // A public header that is revealed to all nodes.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PublicHeader {
+    #[serde(deserialize_with = "deserialize_version_number")]
     version: u8,
     signing_pubkey: Ed25519PublicKey,
     proof_of_quota: ProofOfQuota,
     signature: Ed25519Signature,
+}
+
+fn deserialize_version_number<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let version = u8::deserialize(deserializer)?;
+    if version == LATEST_BLEND_MESSAGE_VERSION {
+        Ok(version)
+    } else {
+        Err(de::Error::custom(format!(
+            "Unsupported message version: {version}",
+        )))
+    }
 }
 
 impl PublicHeader {
@@ -278,5 +293,18 @@ mod tests {
 
         let deserialized_as_unverified = PublicHeader::from_bytes(&serialized_header).unwrap();
         assert_eq!(deserialized_as_unverified, verified_header.into());
+    }
+
+    #[test]
+    fn serde_invalid_version_number() {
+        let header_with_invalid_version = PublicHeader {
+            version: 2,
+            signing_pubkey: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+            proof_of_quota: [1; _].try_into().unwrap(),
+            signature: [2; _].into(),
+        };
+
+        let serialized_header = header_with_invalid_version.to_bytes().unwrap();
+        PublicHeader::from_bytes(&serialized_header).unwrap_err();
     }
 }

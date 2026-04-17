@@ -6,27 +6,33 @@ use lb_testing_framework::{DeploymentBuilder, LbcLocalDeployer, TopologyConfig};
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
-use crate::cucumber::{
-    error::{StepError, StepResult},
-    steps::{
-        TARGET,
-        manual_cluster::{build_manual_cluster_deployment, stop_active_manual_cluster},
-        manual_nodes::{
-            config_override::set_user_config_override,
-            snapshots::{save_named_blockchain_snapshot, validate_snapshot_path_component},
-            utils::{
-                NodesToStartUnordered, create_snapshots_all_nodes, get_cryptarchia_info_all_nodes,
-                nodes_converged, parse_genesis_wallet_tokens_row, parse_url,
-                parse_wallet_resources_table_row, poll_all_nodes_and_update_consensus_cache,
-                restart_node, start_node, start_nodes_order_respecting_dependencies,
-                verify_genesis_wallet_resources_table_indexes,
-                verify_node_wallet_resources_table_indexes,
-                wait_for_all_nodes_to_be_synced_to_chain,
+use crate::{
+    cucumber::{
+        error::{StepError, StepResult},
+        steps::{
+            TARGET,
+            manual_cluster::{build_manual_cluster_deployment, stop_active_manual_cluster},
+            manual_nodes::{
+                config_override::set_user_config_override,
+                snapshots::{save_named_blockchain_snapshot, validate_snapshot_path_component},
+                utils::{
+                    NodesToStartUnordered, create_snapshots_all_nodes,
+                    ensure_all_nodes_agree_on_lib,
+                    ensure_fee_sponsorship_and_fork_groups_are_not_mixed,
+                    get_cryptarchia_info_all_nodes, nodes_converged,
+                    parse_genesis_wallet_tokens_row, parse_url, parse_wallet_resources_table_row,
+                    poll_all_nodes_and_update_consensus_cache, restart_node, start_node,
+                    start_nodes_order_respecting_dependencies,
+                    verify_genesis_wallet_resources_table_indexes,
+                    verify_node_wallet_resources_table_indexes,
+                    wait_for_all_nodes_to_be_synced_to_chain,
+                },
             },
         },
+        utils::resolve_literal_or_env,
+        world::{CucumberWorld, GenesisTokens, NodeSnapshot, PublicCryptarchiaEndpointPeer},
     },
-    utils::resolve_literal_or_env,
-    world::{CucumberWorld, GenesisTokens, NodeSnapshot, PublicCryptarchiaEndpointPeer},
+    non_zero,
 };
 
 const PUBLIC_CRYPTARCHIA_ENDPOINT: &str = "public_cryptarchia_endpoint";
@@ -111,6 +117,25 @@ fn step_cluster_has_wallet_resources(world: &mut CucumberWorld, step: &Step) -> 
         });
     }
 
+    Ok(())
+}
+
+#[given(expr = "we have a sponsored genesis fee account with {int} tokens of {int} value each")]
+#[when(expr = "we have a sponsored genesis fee account with {int} tokens of {int} value each")]
+fn step_sponsored_genesis_fee_account(
+    world: &mut CucumberWorld,
+    step: &Step,
+    token_count: usize,
+    token_value: u64,
+) -> StepResult {
+    ensure_fee_sponsorship_and_fork_groups_are_not_mixed(world, step.value.as_str())?;
+
+    let token_count = non_zero!("genesis fee token count", token_count)?;
+    let token_value = non_zero!("genesis fee token value", token_value)?;
+
+    world
+        .fee_state
+        .set_sponsored_genesis_account(token_count, token_value);
     Ok(())
 }
 
@@ -201,6 +226,8 @@ const fn step_we_join_external_network(world: &mut CucumberWorld) {
 #[given(expr = "we will have distinct node groups to query wallet balances:")]
 #[when(expr = "we will have distinct node groups to query wallet balances:")]
 fn step_define_node_groups(world: &mut CucumberWorld, step: &Step) -> Result<(), StepError> {
+    ensure_fee_sponsorship_and_fork_groups_are_not_mixed(world, &step.value)?;
+
     let table = step.table.as_ref().ok_or(StepError::LogicalError {
         message: "Expected a data table".to_owned(),
     })?;
@@ -262,6 +289,18 @@ fn step_set_user_config_setting(
     setting_value: String,
 ) -> StepResult {
     set_user_config_override(world, &step.value, &setting_path, &setting_value)
+}
+
+#[given(expr = "the first {int} nodes are declared as blend providers")]
+#[when(expr = "the first {int} nodes are declared as blend providers")]
+const fn step_blend_provider_count(world: &mut CucumberWorld, provider_count: usize) {
+    world.blend_core_nodes = Some(provider_count);
+}
+
+#[given(expr = "no nodes are declared as blend providers")]
+#[when(expr = "no nodes are declared as blend providers")]
+const fn step_no_blend_providers(world: &mut CucumberWorld) {
+    world.blend_core_nodes = Some(0);
 }
 
 #[given(expr = "I will create a blockchain snapshot {string} of all nodes when stopping")]
@@ -642,6 +681,20 @@ async fn step_all_nodes_reached_min_height_and_converged(
         time_out_seconds,
     )
     .await
+}
+
+#[when(expr = "all nodes agree on LIB in {int} seconds")]
+#[then(expr = "all nodes agree on LIB in {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_all_nodes_agree_on_lib(
+    world: &mut CucumberWorld,
+    step: &Step,
+    time_out_seconds: u64,
+) -> StepResult {
+    ensure_all_nodes_agree_on_lib(world, &step.value, time_out_seconds).await
 }
 
 #[when("I wait for all nodes to be synced to the chain")]

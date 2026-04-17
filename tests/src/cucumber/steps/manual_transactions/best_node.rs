@@ -474,7 +474,7 @@ async fn is_tip_still_on_canonical_chain(
     let mut remaining_steps = live_consensus.height - selected_height;
 
     while remaining_steps > 0 {
-        let Some(block) = client.storage_block(&current_header_id).await? else {
+        let Some(block) = client.block(&current_header_id).await? else {
             return Ok(false);
         };
         current_header_id = block.header().parent();

@@ -8,7 +8,7 @@ use test_log::test;
 use tokio::{select, time::sleep};
 
 use crate::core::{
-    tests::utils::{TestEncapsulatedMessage, TestSwarm},
+    tests::utils::{TestEncapsulatedMessage, TestEncapsulatedMessageWithSession, TestSwarm},
     with_core::{
         behaviour::{
             Event, NegotiatedPeerState, SpamReason,
@@ -113,7 +113,10 @@ async fn undeserializable_message_received() {
 
     dialing_swarm
         .behaviour_mut()
-        .force_send_serialized_message_to_peer(b"msg".to_vec(), *listening_swarm.local_peer_id())
+        .force_send_serialized_message_to_current_session_peer(
+            b"msg".to_vec(),
+            *listening_swarm.local_peer_id(),
+        )
         .unwrap();
 
     let mut events_to_match = 2u8;
@@ -187,7 +190,10 @@ async fn duplicate_message_received_from_same_peer() {
     // This is a duplicate message, so the listener will mark the dialer as spammy.
     dialing_swarm
         .behaviour_mut()
-        .force_send_message_to_peer(&test_message.into_inner(), *listening_swarm.local_peer_id())
+        .force_send_message_to_current_session_peer(
+            &test_message.into_inner(),
+            *listening_swarm.local_peer_id(),
+        )
         .unwrap();
 
     let mut events_to_match = 2u8;
@@ -291,7 +297,7 @@ async fn invalid_signature_message_received() {
     let invalid_public_header_message = TestEncapsulatedMessage::new_with_invalid_signature(b"");
     dialing_swarm
         .behaviour_mut()
-        .force_send_message_to_peer(
+        .force_send_message_to_current_session_peer(
             &invalid_public_header_message.as_ref().clone(),
             *listening_swarm.local_peer_id(),
         )
@@ -365,7 +371,10 @@ async fn message_already_forwarded_silently_ignored_when_received_from_peer() {
     // silently dropped - no event, no spam marking.
     node_b
         .behaviour_mut()
-        .force_send_message_to_peer(&test_message.into_inner(), *node_a.local_peer_id())
+        .force_send_message_to_current_session_peer(
+            &test_message.into_inner(),
+            *node_a.local_peer_id(),
+        )
         .unwrap();
 
     let mut node_a_got_message = false;
@@ -399,7 +408,7 @@ async fn message_already_forwarded_silently_ignored_when_received_from_peer() {
 }
 
 #[test(tokio::test)]
-async fn duplicate_message_in_old_session_does_not_disconnect_peer() {
+async fn duplicate_message_in_old_session_disconnects_peer_without_swarm_notification() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
     let mut sender = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id).with_membership(&nodes).build()
@@ -446,31 +455,181 @@ async fn duplicate_message_in_old_session_does_not_disconnect_peer() {
 
     // Sender sends X again, bypassing its own `Forwarded` guard. From
     // receiver's point of view this arrives over the old-session connection.
-    // The old-session handler detects a duplicate from the same peer and
-    // returns `Err(DuplicateMessageFromPeer)`, but it currently must NOT close the
-    // connection as spammy.
+    // The old-session handler detects a duplicate from the same peer,
+    // closes the connection, but must NOT emit a `PeerDisconnected` event.
     sender
         .behaviour_mut()
-        .force_send_message_to_peer(&test_message.into_inner(), *receiver.local_peer_id())
+        .force_send_message_to_current_session_peer(
+            &test_message.into_inner(),
+            *receiver.local_peer_id(),
+        )
         .unwrap();
 
-    let mut peer_disconnected = false;
+    let mut peer_disconnected_event = false;
+    let mut connection_closed = false;
     loop {
         select! {
-            () = sleep(Duration::from_secs(3)) => { break; }
+            () = sleep(Duration::from_secs(15)) => { break; }
             _ = sender.select_next_some() => {}
             event = receiver.select_next_some() => {
-                if let SwarmEvent::Behaviour(Event::PeerDisconnected(..)) = event {
-                    peer_disconnected = true;
+                println!("Received event: {event:?}");
+                match event {
+                    SwarmEvent::Behaviour(Event::PeerDisconnected(..)) => {
+                        peer_disconnected_event = true;
+                    }
+                    SwarmEvent::ConnectionClosed { peer_id, .. } if peer_id == *sender.local_peer_id() => {
+                        connection_closed = true;
+                    }
+                    _ => {}
                 }
             }
         }
     }
 
     assert!(
-        !peer_disconnected,
-        "Receiver must not disconnect sender for a duplicate message received over the old-session connection"
+        connection_closed,
+        "Connection with spammy old-session peer must be closed"
     );
+    assert!(
+        !peer_disconnected_event,
+        "No PeerDisconnected event must be emitted for a spammy old-session peer"
+    );
+}
+
+#[test(tokio::test)]
+async fn undeserializable_message_in_old_session_closes_connection_without_swarm_notification() {
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+    let mut sender = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut receiver = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+
+    receiver.listen().with_memory_addr_external().await;
+    sender.connect_and_wait_for_upgrade(&mut receiver).await;
+
+    // Receiver starts a new session. Sender's connection moves to the old
+    // session.
+    let memberships = build_memberships(&[&sender, &receiver]);
+    receiver
+        .behaviour_mut()
+        .start_new_session((memberships[1].clone(), 1));
+
+    // Sender sends garbage data over the old-session connection.
+    sender
+        .behaviour_mut()
+        .force_send_serialized_message_to_current_session_peer(
+            b"garbage".to_vec(),
+            *receiver.local_peer_id(),
+        )
+        .unwrap();
+
+    let mut peer_disconnected_event = false;
+    let mut connection_closed = false;
+    loop {
+        select! {
+            () = sleep(Duration::from_secs(15)) => { break; }
+            _ = sender.select_next_some() => {}
+            event = receiver.select_next_some() => {
+                match event {
+                    SwarmEvent::Behaviour(Event::PeerDisconnected(..)) => {
+                        peer_disconnected_event = true;
+                    }
+                    SwarmEvent::ConnectionClosed { .. } => {
+                        connection_closed = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    assert!(
+        connection_closed,
+        "Connection with spammy old-session peer must be closed"
+    );
+    assert!(
+        !peer_disconnected_event,
+        "No PeerDisconnected event must be emitted for a spammy old-session peer"
+    );
+}
+
+#[test(tokio::test)]
+async fn spammy_old_session_peer_does_not_affect_current_session() {
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+    let mut sender = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut receiver = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+
+    receiver.listen().with_memory_addr_external().await;
+    sender.connect_and_wait_for_upgrade(&mut receiver).await;
+
+    // Receiver starts a new session. Sender's connection moves to the old
+    // session.
+    let memberships = build_memberships(&[&sender, &receiver]);
+    receiver
+        .behaviour_mut()
+        .start_new_session((memberships[1].clone(), 1));
+
+    // Re-connect for the new session.
+    sender
+        .behaviour_mut()
+        .start_new_session((memberships[0].clone(), 1));
+    sender.connect_and_wait_for_upgrade(&mut receiver).await;
+
+    // Sender sends garbage over the old-session connection. This should
+    // close the old-session connection but NOT mark the peer as spammy in
+    // the current session.
+    sender
+        .behaviour_mut()
+        .force_send_serialized_message_to_peer_at_session(
+            b"garbage".to_vec(),
+            *receiver.local_peer_id(),
+            0,
+        )
+        .unwrap();
+
+    // Wait for the old-session connection to close.
+    loop {
+        select! {
+            () = sleep(Duration::from_secs(15)) => {
+                panic!("Timed out waiting for old-session connection to close");
+            }
+            _ = sender.select_next_some() => {}
+            event = receiver.select_next_some() => {
+                if let SwarmEvent::ConnectionClosed { .. } = event {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Now verify the current session connection is healthy by sending a
+    // valid message through it.
+    let test_message = TestEncapsulatedMessageWithSession::new(1, b"after-spam");
+    sender
+        .behaviour_mut()
+        .publish_message_with_validated_header(test_message.clone(), 1)
+        .unwrap();
+
+    loop {
+        select! {
+            () = sleep(Duration::from_secs(15)) => {
+                panic!("Timed out waiting for message on current session - current session connection was incorrectly affected by old session spam");
+            }
+            _ = sender.select_next_some() => {}
+            event = receiver.select_next_some() => {
+                if let SwarmEvent::Behaviour(Event::Message { message, .. }) = event {
+                    assert_eq!(message.id(), test_message.id());
+                    break;
+                }
+            }
+        }
+    }
 }
 
 #[test(tokio::test)]

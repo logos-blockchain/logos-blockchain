@@ -1,3 +1,5 @@
+pub mod genesis;
+
 use core::fmt::Debug;
 
 use ::serde::{Deserialize, Serialize, de::DeserializeOwned};

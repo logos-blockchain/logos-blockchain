@@ -10,6 +10,7 @@ use tracing::warn;
 
 use crate::cucumber::{
     error::{StepError, StepResult},
+    fee_reserve::create_scenario_fee_wallet_account,
     steps::TARGET,
     world::{CucumberWorld, NodeInfo, WalletInfo, WalletType},
 };
@@ -22,6 +23,17 @@ pub fn build_manual_cluster_deployment(
         .with_allow_multiple_genesis_tokens(true)
         .with_allow_zero_value_genesis_tokens(true)
         .with_test_context(world.test_context.clone());
+
+    let blend_core_nodes = world.blend_core_nodes.unwrap_or(nodes_count);
+
+    if blend_core_nodes > nodes_count {
+        return Err(StepError::InvalidArgument {
+            message: format!(
+                "Blend provider count ({blend_core_nodes}) must be <= cluster capacity ({nodes_count})"
+            ),
+        });
+    }
+    config = config.with_blend_core_nodes(blend_core_nodes);
 
     for genesis_token in &world.genesis_tokens {
         let wallet_account = WalletAccount::deterministic(
@@ -37,6 +49,22 @@ pub fn build_manual_cluster_deployment(
             config.wallet_config.accounts.push(wallet_account.clone());
         }
     }
+
+    world.fee_state.wallet_account = match world.fee_state.sponsored_genesis_account {
+        Some(sponsored_genesis_account) => {
+            let scenario_fee_wallet_account =
+                create_scenario_fee_wallet_account(sponsored_genesis_account.token_value)?;
+
+            for _ in 0..sponsored_genesis_account.token_count.get() {
+                config
+                    .wallet_config
+                    .accounts
+                    .push(scenario_fee_wallet_account.clone());
+            }
+            Some(scenario_fee_wallet_account)
+        }
+        None => None,
+    };
 
     let deployment =
         DeploymentBuilder::new(config)
