@@ -5184,6 +5184,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-tools"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "clap",
+ "logos-blockchain-core",
+ "logos-blockchain-node",
+ "serde",
+ "serde_json",
+ "serde_yml",
+]
+
+[[package]]
 name = "logos-blockchain-tracing"
 version = "0.1.2"
 dependencies = [
@@ -8743,19 +8756,6 @@ dependencies = [
  "bytes",
  "prost 0.14.3",
  "tonic 0.14.5",
-]
-
-[[package]]
-name = "tools"
-version = "0.1.2"
-dependencies = [
- "anyhow",
- "clap",
- "logos-blockchain-core",
- "logos-blockchain-node",
- "serde",
- "serde_json",
- "serde_yml",
 ]
 
 [[package]]
