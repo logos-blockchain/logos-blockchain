@@ -454,7 +454,10 @@ mod tests {
 
         let genesis = HeaderId::from([0; 32]);
 
-        let genesis_ledger = LedgerState::from_utxos([], &ledger_config());
+        let genesis_ledger = LedgerState::from_utxos(
+            [Utxo::new(tx_hash(0), 0, Note::new(1, pk(999)))],
+            &ledger_config(),
+        );
 
         let mut wallet = Wallet::<_, TestVoucherId>::from_lib(
             [(alice, 1), (bob, 2)],
@@ -597,7 +600,10 @@ mod tests {
     #[test]
     fn test_fund_tx_zero_funds() {
         let alice = pk(1);
-        let ledger_state = LedgerState::from_utxos([], &ledger_config());
+        let ledger_state = LedgerState::from_utxos(
+            [Utxo::new(tx_hash(0), 0, Note::new(1, pk(999)))],
+            &ledger_config(),
+        );
 
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);

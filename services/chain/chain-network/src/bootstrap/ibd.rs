@@ -425,22 +425,24 @@ pub enum Error {
 mod tests {
     use std::{
         collections::HashMap,
-        iter::empty,
         num::{NonZero, NonZeroU64},
         sync::Arc,
     };
 
     use lb_core::{
         block::Proposal,
+        mantle::{Note, ops::transfer::TransferOp},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::{EpochConfig, Slot};
+    use lb_key_management_system_keys::keys::ZkKey;
     use lb_ledger::{
         LedgerState,
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+    use num_bigint::BigUint;
     use overwatch::{
         overwatch::OverwatchHandle,
         services::{ServiceData, relay::OutboundRelay},
@@ -1109,13 +1111,20 @@ mod tests {
         let ledger_config = ledger_config();
         lb_chain_service::Cryptarchia::from_lib(
             [GENESIS_ID; 32].into(),
-            LedgerState::from_utxos(empty(), &ledger_config),
+            LedgerState::from_utxos([genesis_utxo()], &ledger_config),
             [GENESIS_ID; 32].into(),
             ledger_config,
             lb_cryptarchia_engine::State::Bootstrapping,
             0.into(),
             0,
         )
+    }
+
+    fn genesis_utxo() -> lb_core::mantle::ledger::Utxo {
+        let zk_sk = ZkKey::from(BigUint::from(1u64));
+        TransferOp::new(vec![], vec![Note::new(1, zk_sk.to_public_key())])
+            .utxo_by_index(0)
+            .expect("genesis transfer should create one UTXO")
     }
 
     #[must_use]

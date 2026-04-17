@@ -110,10 +110,15 @@ mod tests {
         sync::Arc,
     };
 
-    use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
+    use lb_core::{
+        mantle::{Note, ops::transfer::TransferOp},
+        sdp::{MinStake, ServiceParameters, ServiceType},
+    };
     use lb_cryptarchia_engine::State::Bootstrapping;
+    use lb_key_management_system_keys::keys::ZkKey;
     use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+    use num_bigint::BigUint;
 
     use super::*;
 
@@ -221,7 +226,7 @@ mod tests {
         // Empty ledger state.
         let ledger_state = lb_ledger::Ledger::new(
             cryptarchia_engine.lib(),
-            LedgerState::from_utxos([], &ledger_config),
+            LedgerState::from_utxos([genesis_utxo()], &ledger_config),
             ledger_config,
         );
 
@@ -329,7 +334,7 @@ mod tests {
             consensus: engine.clone(),
             ledger: lb_ledger::Ledger::new(
                 lib_id,
-                LedgerState::from_utxos([], &ledger_config),
+                LedgerState::from_utxos([genesis_utxo()], &ledger_config),
                 ledger_config.clone(),
             ),
             genesis_id: genesis_header_id,
@@ -383,5 +388,12 @@ mod tests {
             "Height must be preserved across restart: before={}, after={}",
             info_before.height, info_after.height
         );
+    }
+
+    fn genesis_utxo() -> lb_core::mantle::ledger::Utxo {
+        let zk_sk = ZkKey::from(BigUint::from(1u64));
+        TransferOp::new(vec![], vec![Note::new(1, zk_sk.to_public_key())])
+            .utxo_by_index(0)
+            .expect("genesis transfer should create one UTXO")
     }
 }

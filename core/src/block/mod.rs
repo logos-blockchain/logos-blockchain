@@ -235,7 +235,7 @@ impl<Tx: Clone + Eq + Serialize + DeserializeOwned> TryFrom<Block<Tx>> for Bytes
 
 #[cfg(test)]
 mod tests {
-    use std::iter;
+    use std::{iter, num::NonZeroU64};
 
     use ark_ff::Field as _;
     use lb_groth16::Fr;
@@ -275,7 +275,7 @@ mod tests {
 
         let (lottery_0, lottery_1) =
             LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
-                .compute_lottery_values(1000);
+                .compute_lottery_values(NonZeroU64::new(1000).unwrap());
 
         // We grind the nonce here to find a winning PoL
         let public_inputs = {

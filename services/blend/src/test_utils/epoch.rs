@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use async_trait::async_trait;
 use futures::{Stream, future::ready, stream::once};
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
@@ -15,7 +17,7 @@ pub fn default_epoch_state() -> EpochState {
     EpochState {
         epoch: 1.into(),
         nonce: ZkHash::ZERO,
-        total_stake: 1_000,
+        total_stake: NonZeroU64::new(1_000).unwrap(),
         utxos: UtxoTree::new(),
         lottery_0: Fr::ZERO,
         lottery_1: Fr::ZERO,

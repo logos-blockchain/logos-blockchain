@@ -358,7 +358,8 @@ mod tests {
     }
 
     fn rand_inputs(lottery_constants: &LotteryConstants) -> (LeaderPublic, Fr, Fr) {
-        let (lottery_0, lottery_1) = lottery_constants.compute_lottery_values(1);
+        let (lottery_0, lottery_1) =
+            lottery_constants.compute_lottery_values(1.try_into().unwrap());
         let mut rng = rand::thread_rng();
         let public = LeaderPublic::new(
             Fr::ZERO,

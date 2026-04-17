@@ -117,7 +117,7 @@ pub fn verify(proof: &PoQProof, public_inputs: PoQVerifierInput) -> Result<bool,
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
+    use std::{num::NonZeroU64, str::FromStr as _};
 
     use lb_pol::LotteryConstants;
     use lb_utils::math::NonNegativeRatio;
@@ -220,7 +220,7 @@ mod tests {
         };
         let (lottery_0, lottery_1) =
             LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
-                .compute_lottery_values(5000);
+                .compute_lottery_values(NonZeroU64::new(5000).unwrap());
         let chain_data = PoQChainInputsData {
             session: 150,
             core_root: BigUint::from_str(
@@ -282,7 +282,7 @@ mod tests {
     fn test_leader_full_flow() {
         let (lottery_0, lottery_1) =
             LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
-                .compute_lottery_values(5000);
+                .compute_lottery_values(NonZeroU64::new(5000).unwrap());
         let chain_data = PoQChainInputsData {
             session: 150,
             core_root: BigUint::from_str(

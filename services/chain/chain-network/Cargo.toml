@@ -37,9 +37,11 @@ tracing                 = { workspace = true }
 tracing-futures         = { default-features = false, version = "0.2" }
 
 [dev-dependencies]
-lb-core            = { features = ["mock"], workspace = true }
-lb-network-service = { features = ["mock"], workspace = true }
-lb-utils           = { workspace = true }
+lb-core                       = { features = ["mock"], workspace = true }
+lb-key-management-system-keys = { workspace = true }
+lb-network-service            = { features = ["mock"], workspace = true }
+lb-utils                      = { workspace = true }
+num-bigint                    = { default-features = false, version = "0.4" }
 
 [features]
 default = []

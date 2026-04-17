@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use lb_core::{
     crypto::ZkHash,
     sdp::{Declaration, DeclarationId, ProviderId, ServiceParameters, ServiceType, SessionNumber},
@@ -60,7 +62,7 @@ pub fn dummy_epoch_state_with(epoch: u32, nonce: u64) -> EpochState {
         epoch: epoch.into(),
         nonce: ZkHash::from(BigUint::from(nonce)),
         utxos: UtxoTree::default(),
-        total_stake: 0,
+        total_stake: NonZeroU64::new(1).unwrap(),
         lottery_0: Fr::ZERO,
         lottery_1: Fr::ZERO,
     }
