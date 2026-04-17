@@ -235,4 +235,4 @@ jobs:
         with:
           name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
           include-hidden-files: true
-          path: tests/.tmp*
+          path: tests/.run_*
