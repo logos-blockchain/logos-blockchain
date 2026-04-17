@@ -93,6 +93,10 @@ impl TryMapAddress {
             local_address: addr_to_map,
         }
     }
+
+    pub const fn addr_to_map(&self) -> &Multiaddr {
+        &self.addr_to_map
+    }
 }
 
 /// The address of the node is known, it is not publicly reachable, but it

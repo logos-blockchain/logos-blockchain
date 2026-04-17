@@ -1,3 +1,5 @@
+use tracing::debug;
+
 use crate::behaviour::nat::state_machine::{
     Command, CommandTx, OnEvent, State, event::Event, states::TryMapAddress,
 };
@@ -16,6 +18,10 @@ impl OnEvent for State<TryMapAddress> {
                 local_address,
                 external_address,
             } => {
+                debug!(
+                    "State<TryMapAddress>: Mapping succeeded for {local_address} (was tracking {}), transitioning to TestIfMappedPublic with {external_address}.",
+                    self.state.addr_to_map(),
+                );
                 command_tx.force_send(Command::NewExternalAddrCandidate(external_address.clone()));
                 self.boxed(|state| {
                     state
@@ -24,6 +30,10 @@ impl OnEvent for State<TryMapAddress> {
                 })
             }
             Event::AddressMappingFailed(addr) => {
+                debug!(
+                    "State<TryMapAddress>: Mapping failed for {addr} (was tracking {}), transitioning to Private.",
+                    self.state.addr_to_map(),
+                );
                 self.boxed(|state| state.retarget(addr).into_private())
             }
             Event::DefaultGatewayChanged { local_address, .. } => {
