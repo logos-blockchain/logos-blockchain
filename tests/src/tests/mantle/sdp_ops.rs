@@ -273,7 +273,7 @@ async fn large_inscription_e2e() {
         topology.wait_network_ready().await;
 
         let validator = &topology.validators()[0];
-        let height_timeout = Duration::from_secs(60);
+        let height_timeout = Duration::from_mins(1);
         validator
             .wait_for_height(1, height_timeout)
             .await
@@ -299,7 +299,7 @@ async fn large_inscription_e2e() {
             .await
             .expect("submit mantle transaction");
 
-        let inclusion_timeout = Duration::from_secs(60);
+        let inclusion_timeout = Duration::from_mins(1);
         let results = validator
             .wait_for_transactions_inclusion(vec![tx_hash], inclusion_timeout)
             .await;

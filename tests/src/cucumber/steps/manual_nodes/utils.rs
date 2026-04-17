@@ -48,7 +48,7 @@ pub(crate) type NodesToStartUnordered = HashMap<String, (Vec<WalletStartInfo>, V
 type NodesToStartOrdered = Vec<(String, Vec<WalletStartInfo>, Vec<String>)>;
 
 const CHAIN_SYNC_POLL_INTERVAL: Duration = Duration::from_secs(5);
-const CHAIN_SYNC_STATUS_LOG_INTERVAL: Duration = Duration::from_secs(120);
+const CHAIN_SYNC_STATUS_LOG_INTERVAL: Duration = Duration::from_mins(2);
 
 // Returns the root directory for a named snapshot.
 
@@ -280,7 +280,7 @@ pub(crate) fn parse_wallet_resources_table_row(
         .get(CONNECTED_TO_IDX)
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .map(str::to_string);
+        .map(str::to_owned);
 
     Ok((
         node_name,
@@ -975,7 +975,7 @@ async fn verify_online(
     started_node_name: &str,
     time_out: Option<Duration>,
 ) -> StepResult {
-    let time_out = time_out.unwrap_or_else(|| Duration::from_secs(60));
+    let time_out = time_out.unwrap_or_else(|| Duration::from_mins(1));
     let start = Instant::now();
     let mut count = 0usize;
     loop {
@@ -1030,7 +1030,7 @@ async fn verify_reponsive_and_network_ready(
     started_node_name: &str,
 ) -> StepResult {
     let start = Instant::now();
-    let time_out = Duration::from_secs(60);
+    let time_out = Duration::from_mins(1);
     let mut count = 0usize;
     let mut can_provide_consensus_info;
     let mut is_network_ready;

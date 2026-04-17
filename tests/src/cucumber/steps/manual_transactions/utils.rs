@@ -1244,7 +1244,7 @@ fn collect_multiple_sync_wallet_info(
         };
         if *existing_pk != *wallet_pk {
             return Err(StepError::LogicalError {
-                message: format!("Conflicting public keys in requests for wallet '{wallet_name}'",),
+                message: format!("Conflicting public keys in requests for wallet '{wallet_name}'"),
             });
         }
     }

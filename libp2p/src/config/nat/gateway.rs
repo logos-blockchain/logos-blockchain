@@ -9,7 +9,7 @@ pub struct Settings {
 }
 
 const fn default_check_interval() -> Duration {
-    Duration::from_secs(300)
+    Duration::from_mins(5)
 }
 
 impl Default for Settings {

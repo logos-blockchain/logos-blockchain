@@ -23,7 +23,7 @@ use crate::{TopologyConfig, framework::LbcEnv, workloads::LbcBlockFeedEnv};
 
 const MIN_INCLUSION_RATIO: f64 = 0.5;
 const CATCHUP_POLL_INTERVAL: Duration = Duration::from_secs(1);
-const MAX_CATCHUP_WAIT: Duration = Duration::from_secs(60);
+const MAX_CATCHUP_WAIT: Duration = Duration::from_mins(1);
 
 #[derive(Clone)]
 pub struct TxInclusionExpectation<E = LbcEnv> {

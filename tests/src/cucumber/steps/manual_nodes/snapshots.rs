@@ -108,7 +108,7 @@ fn sanitize_path_and_clear_dir(path: &Path) -> StepResult {
 fn sanitize_path_as_dir(path: &Path) -> StepResult {
     if !path.exists() {
         return Err(StepError::LogicalError {
-            message: format!("Path does '{}' not exist", path.display(),),
+            message: format!("Path does '{}' not exist", path.display()),
         });
     }
     if !path.is_dir() {

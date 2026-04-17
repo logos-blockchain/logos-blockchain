@@ -112,7 +112,7 @@ where
         _ancestor_hint: BlockId,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, MempoolError> {
         let keys: BTreeSet<Key> = self.pending_items.iter().cloned().collect();
-        self.get_items_by_keys(keys.into_iter()).await
+        self.get_items_by_keys(keys).await
     }
 
     async fn get_items_by_keys<I>(

@@ -35,7 +35,7 @@ where
     {
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_secs(60)),
+            Some(Duration::from_mins(1)),
             NetworkService
         )
         .await?;

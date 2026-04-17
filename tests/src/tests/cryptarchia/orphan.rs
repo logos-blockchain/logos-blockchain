@@ -69,7 +69,7 @@ async fn test_orphan_handling() {
     // a new block and it is delivered to the behind node.
     // We set a timeout long enough, since there is a non-zero probability that the
     // behind node also proposes blocks (which wouldn't trigger orphan handling).
-    tokio::time::timeout(Duration::from_secs(300), async {
+    tokio::time::timeout(Duration::from_mins(5), async {
         loop {
             let initial_nodes_info: Vec<_> = stream::iter(&validators)
                 .then(async |n| n.consensus_info(false).await)

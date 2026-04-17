@@ -34,7 +34,7 @@ fn run_k8s_smoke() -> TestResult {
         let mut scenario = ScenarioBuilder::deployment_with(|topology| {
             topology.nodes(2).scenario_base_dir(std::env::temp_dir())
         })
-        .with_run_duration(Duration::from_secs(180))
+        .with_run_duration(Duration::from_mins(3))
         .expect_consensus_liveness()
         .build()
         .map_err(|err| -> Box<dyn Error + Send + Sync> { err.into() })?;

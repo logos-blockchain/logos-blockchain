@@ -326,7 +326,7 @@ trait ReadinessCheck<'a> {
     fn timeout_message(&self, data: Self::Data) -> String;
 
     async fn wait(&'a self) {
-        let timeout = tokio::time::timeout(Duration::from_secs(60), async {
+        let timeout = tokio::time::timeout(Duration::from_mins(1), async {
             loop {
                 let data = self.collect().await;
                 if self.is_ready(&data) {

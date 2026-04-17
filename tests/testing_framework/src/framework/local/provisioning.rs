@@ -571,8 +571,8 @@ fn build_cryptarchia_user_config(
             bootstrap: service::BootstrapConfig {
                 force_bootstrap: false,
                 offline_grace_period: service::OfflineGracePeriodConfig {
-                    grace_period: Duration::from_secs(20 * 60),
-                    state_recording_interval: Duration::from_secs(60),
+                    grace_period: Duration::from_mins(20),
+                    state_recording_interval: Duration::from_mins(1),
                 },
                 prolonged_bootstrap_period: consensus.prolonged_bootstrap_period,
             },

@@ -19,10 +19,10 @@ use crate::{
     workloads::LbcBlockFeedEnv,
 };
 
-const DEFAULT_TIP_STALL_THRESHOLD: Duration = Duration::from_secs(180);
-const DEFAULT_NODE_TIP_STALL_THRESHOLD: Duration = Duration::from_secs(360);
-const DEFAULT_LIB_STALL_THRESHOLD: Duration = Duration::from_secs(360);
-const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(60);
+const DEFAULT_TIP_STALL_THRESHOLD: Duration = Duration::from_mins(3);
+const DEFAULT_NODE_TIP_STALL_THRESHOLD: Duration = Duration::from_mins(6);
+const DEFAULT_LIB_STALL_THRESHOLD: Duration = Duration::from_mins(6);
+const PROGRESS_LOG_INTERVAL: Duration = Duration::from_mins(1);
 const BROADCAST_LATENCY: Duration = Duration::from_secs(1);
 
 /// Monitors a running cluster and fails the scenario as soon as nodes disagree

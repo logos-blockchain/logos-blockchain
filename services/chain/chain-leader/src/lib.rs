@@ -353,7 +353,7 @@ where
         // (except Chain and ChainLeader)
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_secs(60)),
+            Some(Duration::from_mins(1)),
             BlendService,
             TxMempoolService<_, _, _, _>,
             TimeService<_, _>,

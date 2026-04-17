@@ -195,7 +195,7 @@ pub fn extract_child_dir_name(
 
     let mut matching_dirs = Vec::new();
     for entry in entries.filter_map(Result::ok) {
-        if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+        if !entry.file_type().is_ok_and(|ft| ft.is_dir()) {
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
@@ -212,7 +212,7 @@ pub fn extract_child_dir_name(
             message: format!("No directory found starting with {prefix}"),
         }),
         _ => Err(StepError::LogicalError {
-            message: format!("Ambiguous: multiple dirs match {prefix}: {matching_dirs:?}",),
+            message: format!("Ambiguous: multiple dirs match {prefix}: {matching_dirs:?}"),
         }),
     }
 }
@@ -227,7 +227,7 @@ pub fn matching_child_dirs(partial_persist_dir: &Path, prefix: &str) -> Vec<Stri
         |entries| {
             entries
                 .filter_map(Result::ok)
-                .filter(|entry| entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+                .filter(|entry| entry.file_type().is_ok_and(|ft| ft.is_dir()))
                 .filter_map(|entry| {
                     let name = entry.file_name().to_string_lossy().to_string();
                     name.starts_with(prefix).then_some(name)

@@ -57,7 +57,7 @@ impl BestNodeInfo {
     }
 }
 
-const BEST_NODE_SELECTION_TIMEOUT: Duration = Duration::from_secs(180);
+const BEST_NODE_SELECTION_TIMEOUT: Duration = Duration::from_mins(3);
 const BEST_NODE_SELECTION_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const BEST_NODE_SELECTION_LOG_INTERVAL: Duration = Duration::from_secs(5);
 const BEST_NODE_QUERY_TIMEOUT: Duration = Duration::from_secs(2);

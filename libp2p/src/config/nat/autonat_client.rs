@@ -24,7 +24,7 @@ pub struct Settings {
 }
 
 const fn default_retest_interval() -> Duration {
-    Duration::from_secs(60)
+    Duration::from_mins(1)
 }
 
 impl Settings {
