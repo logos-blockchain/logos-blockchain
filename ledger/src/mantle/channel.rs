@@ -37,6 +37,8 @@ pub enum Error {
     BalanceOverflow,
     #[error("The withdraw nonce doesn't correspond to the channel state")]
     InvalidWithdrawNonce,
+    #[error("Withdraw Nonce overflow")]
+    WithdrawNonceOverflow,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -188,7 +190,10 @@ impl Channels {
                     .balance
                     .checked_sub(amount)
                     .ok_or(Error::InsufficientFunds)?;
-                channel.withdraw_threshold += 1;
+                channel.withdraw_nonce = channel
+                    .withdraw_nonce
+                    .checked_add(1)
+                    .ok_or(Error::WithdrawNonceOverflow)?;
                 Ok(self)
             } else {
                 Err(Error::InvalidWithdrawNonce)

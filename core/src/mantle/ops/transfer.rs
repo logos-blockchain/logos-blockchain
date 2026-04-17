@@ -1,14 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    crypto::{Digest as _, Hash, Hasher},
-    mantle::{
-        NoteId,
-        encoding::encode_transfer_op,
-        ledger::Outputs,
-        ops::{OPERATION_ID_V1, OpId},
-    },
-};
+use crate::mantle::{NoteId, encoding::encode_transfer_op, ledger::Outputs, ops::OpId};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TransferOp {
@@ -24,10 +16,8 @@ impl TransferOp {
 }
 
 impl OpId for TransferOp {
-    fn op_id(&self) -> Hash {
-        let mut encoded_bytes: Vec<u8> = OPERATION_ID_V1.clone();
-        encoded_bytes.extend(encode_transfer_op(self));
-        Hasher::digest(&encoded_bytes).into()
+    fn op_bytes(&self) -> Vec<u8> {
+        encode_transfer_op(self)
     }
 }
 
