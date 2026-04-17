@@ -72,6 +72,7 @@ members = [
   "tests",
   "tests/testing_framework",
   "tools/config",
+  "tools",
   "tracing",
   "utils",
   "utxotree",
