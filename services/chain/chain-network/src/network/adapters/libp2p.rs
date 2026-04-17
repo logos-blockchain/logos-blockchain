@@ -13,7 +13,7 @@ use lb_network_service::{
     NetworkService,
     backends::libp2p::{
         ChainSyncCommand, Command, DiscoveryCommand, Libp2p, NetworkCommand, PeerId,
-        PubSubCommand::Subscribe,
+        PubSubCommand::Subscribe, TopicHash,
     },
     message::{ChainSyncEvent, NetworkMsg},
 };
@@ -147,17 +147,21 @@ where
         {
             return Err(Box::new(e));
         }
+        let topic_hash = TopicHash::from_raw(self.settings.topic.clone());
         let stream = receiver.await.map_err(Box::new)?;
-        Ok(Box::new(stream.filter_map(|message| match message {
-            Ok(message) => NetworkMessage::from_bytes(&message.data).map_or_else(
-                |_| {
-                    tracing::trace!("unrecognized gossipsub message");
-                    None
-                },
-                |msg| match msg {
-                    NetworkMessage::Proposal(proposal) => Some(proposal),
-                },
-            ),
+        Ok(Box::new(stream.filter_map(move |message| match message {
+            Ok(message) if message.topic == topic_hash => {
+                NetworkMessage::from_bytes(&message.data).map_or_else(
+                    |_| {
+                        tracing::debug!("unrecognized gossipsub message");
+                        None
+                    },
+                    |msg| match msg {
+                        NetworkMessage::Proposal(proposal) => Some(proposal),
+                    },
+                )
+            }
+            Ok(_) => None,
             Err(BroadcastStreamRecvError::Lagged(n)) => {
                 tracing::error!("lagged messages: {n}");
                 None

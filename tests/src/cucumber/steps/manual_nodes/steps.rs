@@ -17,6 +17,7 @@ use crate::{
                 snapshots::{save_named_blockchain_snapshot, validate_snapshot_path_component},
                 utils::{
                     NodesToStartUnordered, create_snapshots_all_nodes,
+                    ensure_all_nodes_agree_on_lib,
                     ensure_fee_sponsorship_and_fork_groups_are_not_mixed,
                     get_cryptarchia_info_all_nodes, nodes_converged,
                     parse_genesis_wallet_tokens_row, parse_url, parse_wallet_resources_table_row,
@@ -288,6 +289,18 @@ fn step_set_user_config_setting(
     setting_value: String,
 ) -> StepResult {
     set_user_config_override(world, &step.value, &setting_path, &setting_value)
+}
+
+#[given(expr = "the first {int} nodes are declared as blend providers")]
+#[when(expr = "the first {int} nodes are declared as blend providers")]
+const fn step_blend_provider_count(world: &mut CucumberWorld, provider_count: usize) {
+    world.blend_core_nodes = Some(provider_count);
+}
+
+#[given(expr = "no nodes are declared as blend providers")]
+#[when(expr = "no nodes are declared as blend providers")]
+const fn step_no_blend_providers(world: &mut CucumberWorld) {
+    world.blend_core_nodes = Some(0);
 }
 
 #[given(expr = "I will create a blockchain snapshot {string} of all nodes when stopping")]
@@ -668,6 +681,20 @@ async fn step_all_nodes_reached_min_height_and_converged(
         time_out_seconds,
     )
     .await
+}
+
+#[when(expr = "all nodes agree on LIB in {int} seconds")]
+#[then(expr = "all nodes agree on LIB in {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_all_nodes_agree_on_lib(
+    world: &mut CucumberWorld,
+    step: &Step,
+    time_out_seconds: u64,
+) -> StepResult {
+    ensure_all_nodes_agree_on_lib(world, &step.value, time_out_seconds).await
 }
 
 #[when("I wait for all nodes to be synced to the chain")]

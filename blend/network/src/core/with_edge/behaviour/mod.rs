@@ -198,7 +198,7 @@ impl NetworkBehaviour for Behaviour {
             tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer:?} because membership size is too small.");
             Either::Right(DummyConnectionHandler)
         } else if self.current_membership.contains(&peer) {
-            tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with core peer {peer:?}.");
+            tracing::trace!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with core peer {peer:?}.");
             Either::Right(DummyConnectionHandler)
         } else {
             tracing::debug!(target: LOG_TARGET, "Upgrading inbound connection {connection_id:?} with edge peer {peer:?}.");

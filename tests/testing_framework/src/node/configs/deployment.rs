@@ -41,6 +41,7 @@ pub enum TopologyBuildError {
 #[derive(Clone)]
 pub struct TopologyConfig {
     pub n_nodes: usize,
+    pub blend_core_nodes: usize,
     pub network_params: Arc<NetworkParams>,
     pub wallet_config: WalletConfig,
     pub scenario_base_dir: PathBuf,
@@ -58,6 +59,7 @@ impl TopologyConfig {
     fn with_node_count(nodes: usize) -> Self {
         Self {
             n_nodes: nodes,
+            blend_core_nodes: nodes,
             ..Self::default()
         }
     }
@@ -91,6 +93,12 @@ impl TopologyConfig {
     }
 
     #[must_use]
+    pub const fn with_blend_core_nodes(mut self, blend_core_nodes: usize) -> Self {
+        self.blend_core_nodes = blend_core_nodes;
+        self
+    }
+
+    #[must_use]
     pub fn node_config_override(&self, index: usize) -> Option<&RunConfig> {
         self.node_config_overrides.get(&index)
     }
@@ -100,6 +108,7 @@ impl Default for TopologyConfig {
     fn default() -> Self {
         Self {
             n_nodes: 0,
+            blend_core_nodes: 0,
             network_params: Arc::new(NetworkParams::default()),
             wallet_config: WalletConfig::default(),
             scenario_base_dir: std::env::temp_dir(),
@@ -188,13 +197,19 @@ impl DeploymentBuilder {
             return Ok(DeploymentPlan::new(self.config, Vec::new()));
         }
 
+        assert!(
+            self.config.blend_core_nodes <= node_count,
+            "blend_core_nodes({}) must be <= n_nodes({node_count})",
+            self.config.blend_core_nodes
+        );
+
         let ids = generate_node_ids(node_count, self.seed.as_ref());
 
         let blend_ports = allocate_blend_ports(node_count)?;
         let (mut node_configs, base_genesis_tx) = create_node_configs_from_ids(
             &ids,
             &blend_ports,
-            node_count,
+            self.config.blend_core_nodes,
             self.config.network_params.as_ref(),
             self.config.test_context.as_deref(),
         );
@@ -210,6 +225,7 @@ impl DeploymentBuilder {
         let genesis_tx = postprocess::apply_wallet_genesis_overrides(
             &mut node_configs,
             &base_genesis_tx,
+            self.config.blend_core_nodes,
             &wallet_accounts,
             key_id_for_preload_backend,
             self.config.test_context.as_deref(),

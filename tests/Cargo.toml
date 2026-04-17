@@ -73,18 +73,6 @@ name = "blend_devnet_setup"
 path = "src/tests/blend/devnet.rs"
 
 [[test]]
-name = "test_blend_core_mode"
-path = "src/tests/blend/core.rs"
-
-[[test]]
-name = "test_blend_edge_mode"
-path = "src/tests/blend/edge.rs"
-
-[[test]]
-name = "test_blend_broadcast_mode"
-path = "src/tests/blend/broadcast.rs"
-
-[[test]]
 name = "test_cryptarchia_happy_path"
 path = "src/tests/cryptarchia/happy.rs"
 

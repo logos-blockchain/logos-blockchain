@@ -1,4 +1,4 @@
-use std::ffi::{CString, c_char};
+use std::ffi::c_char;
 
 use lb_api_service::http::storage::StorageAdapter as _;
 use lb_chain_service::api::CryptarchiaServiceApi;
@@ -7,24 +7,14 @@ use lb_node::{
     ApiStorageAdapter, RuntimeServiceId, SignedMantleTx, StorageService,
     generic_services::CryptarchiaService,
 };
+use log::warn;
 
-use crate::LogosBlockchainNode;
-
-#[repr(C)]
-pub struct Block(CString); // JSON representation of a block
-
-impl From<CoreBlock<SignedMantleTx>> for Block {
-    fn from(value: CoreBlock<SignedMantleTx>) -> Self {
-        Self(
-            CString::new(
-                serde_json::to_string(&value)
-                    .expect("Serialization of a block should always succeed")
-                    .into_bytes(),
-            )
-            .expect("Block CString should be valid utf8"),
-        )
-    }
-}
+use crate::{
+    LogosBlockchainNode, OperationStatus,
+    api::types::block::Block,
+    callbacks::{BoxedCallback, CCallback, into_boxed_callback},
+    return_error_if_null_pointer,
+};
 
 pub fn subscribe_to_new_blocks_sync(
     node: &LogosBlockchainNode,
@@ -51,25 +41,18 @@ pub fn subscribe_to_new_blocks_sync(
         match api.subscribe_new_blocks().await {
             Ok(mut block_stream) => {
                 runtime_handler.spawn(async move {
-                    loop {
+                    while let Ok(event) = block_stream.recv().await {
                         let relay = storage_relay.clone();
-                        if let Ok(event) = block_stream.recv().await {
-                            let res: Result<Option<CoreBlock<SignedMantleTx>>, _> =
-                                ApiStorageAdapter::<RuntimeServiceId>::get_block(
-                                    relay,
-                                    event.block_id,
-                                )
+                        let res: Result<Option<CoreBlock<SignedMantleTx>>, _> =
+                            ApiStorageAdapter::<RuntimeServiceId>::get_block(relay, event.block_id)
                                 .await;
-                            if let Ok(Some(block)) = res {
-                                callback_per_block(Block::from(block).0.as_ptr());
-                            } else {
-                                log::error!(
-                                    "Failed to get block {:?} from storage",
-                                    event.block_id
-                                );
-                            }
+                        if let Ok(Some(block)) = res {
+                            callback_per_block(Block::from(block).as_ptr());
+                        } else {
+                            log::error!("Failed to get block {:?} from storage", event.block_id);
                         }
                     }
+                    warn!("Block stream closed, subscription to new blocks ended.");
                 });
             }
             Err(e) => {
@@ -79,26 +62,32 @@ pub fn subscribe_to_new_blocks_sync(
     });
 }
 
-type CCallback<T> = unsafe extern "C" fn(data: T);
-type BoxedCallback<T> = Box<dyn FnMut(T) + Send + Sync>;
-
-fn per_block_wrapper<T: 'static>(callback: CCallback<T>) -> BoxedCallback<T> {
-    Box::new(move |block: T| {
-        // Safety: The callback is declared as unsafe extern "C"
-        unsafe { callback(block) }
-    })
-}
-
+/// Subscribes to new blocks on the blockchain and calls the provided callback
+/// for each new block.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
+/// - `callback_per_block`: A callback function that will be called with a
+///   pointer to a C string containing the JSON representation of each new
+///   block. The callback is declared as unsafe extern "C" and must be
+///   thread-safe.
+///
+/// # Returns
+///
+/// An [`OperationStatus`] indicating success or failure.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn subscribe_to_new_blocks(
     node: *const LogosBlockchainNode,
     callback_per_block: CCallback<*const c_char>,
-) {
-    if node.is_null() {
-        log::error!("Received a null `node` pointer. Exiting.");
-        return;
-    }
+) -> OperationStatus {
+    return_error_if_null_pointer!("subscribe_to_new_blocks", node);
     let node = unsafe { &*node };
-    let callback_per_block = per_block_wrapper(callback_per_block);
+    let callback_per_block = into_boxed_callback(callback_per_block);
     subscribe_to_new_blocks_sync(node, callback_per_block);
+    OperationStatus::Ok
 }

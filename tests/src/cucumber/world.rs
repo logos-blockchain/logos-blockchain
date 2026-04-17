@@ -191,6 +191,9 @@ pub struct CucumberWorld {
     pub node_groups: HashMap<String, BTreeSet<String>>,
     /// Manual: `node_name` -> `group_name` reverse lookup.
     pub node_to_group: HashMap<String, String>,
+    /// Manual: Number of leading nodes declared as blend providers in the
+    /// generated deployment. Defaults to all nodes when unset.
+    pub blend_core_nodes: Option<usize>,
     /// Manual: Whether to populate the IBD peers for each node after starting
     /// them,
     pub populate_ibd_peers_from_initial_peers: Option<bool>,
@@ -330,6 +333,7 @@ impl Debug for CucumberWorld {
             .field("node_peer_ids", &self.node_peer_ids.len())
             .field("node_groups", &self.node_groups.len())
             .field("node_to_group", &self.node_to_group.len())
+            .field("blend_core_nodes", &self.blend_core_nodes)
             .field(
                 "initial_override_peers_display",
                 &initial_peers_override_display(self.initial_peers_override.as_ref()),
@@ -1013,6 +1017,7 @@ impl CucumberWorld {
             .field("node_peer_ids", &node_peer_ids_display(&self.node_peer_ids))
             .field("node_groups", &self.node_groups)
             .field("node_to_group", &self.node_to_group)
+            .field("blend_core_nodes", &format!("{:?}", self.blend_core_nodes))
             .field(
                 "initial_override_peers_display",
                 &initial_peers_override_display(self.initial_peers_override.as_ref()),
