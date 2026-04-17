@@ -71,6 +71,7 @@ members = [
   "testnet/l2-sequencer-archival-demo/sequencer",
   "tests",
   "tests/testing_framework",
+  "tools",
   "tracing",
   "utils",
   "utxotree",

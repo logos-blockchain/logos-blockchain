@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use lb_core::block::genesis::GenesisBlock;
 use lb_node::config::{
     TracingConfig,
     deployment::{DeploymentSettings, WellKnownDeployment},
@@ -147,7 +148,8 @@ impl ConfigRepo {
             );
             let devnet_settings = {
                 let mut default_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
-                default_settings.cryptarchia.genesis_state = genesis_tx;
+                // TODO: This will be fixed from different PR
+                default_settings.cryptarchia.genesis_block = GenesisBlock::genesis(genesis_tx);
                 default_settings.cryptarchia.faucet_pk = faucet_pk;
                 default_settings.time.chain_start_time = self.chain_start_time;
                 default_settings
