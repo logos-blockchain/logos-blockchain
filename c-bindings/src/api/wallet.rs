@@ -442,13 +442,10 @@ pub unsafe extern "C" fn transfer_funds(
 
     let node = unsafe { &*node };
     let tip = if arguments.optional_tip.is_null() {
-        match get_cryptarchia_info_sync(node) {
-            Ok(cryptarchia_info) => cryptarchia_info.tip,
-            Err(status) => {
-                log::error!("[transfer_funds] Failed to get cryptarchia info. Aborting.");
-                return FfiTransferFundsResult::err(status);
-            }
-        }
+        unwrap_or_return_error!(get_cryptarchia_info_sync(node), |_| {
+            log::error!("[transfer_funds] Failed to get cryptarchia info. Aborting.");
+        })
+        .tip
     } else {
         lb_core::header::HeaderId::from(unsafe { *arguments.optional_tip })
     };
