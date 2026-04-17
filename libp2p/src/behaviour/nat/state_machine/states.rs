@@ -79,15 +79,19 @@ impl TryMapAddress {
         }
     }
 
+    #[expect(
+        clippy::unused_self,
+        reason = "The aim of the pattern is to consume self."
+    )]
+    pub fn retarget(self, addr_to_map: Multiaddr) -> Self {
+        Self { addr_to_map }
+    }
+
     pub fn into_private(self) -> Private {
         let Self { addr_to_map } = self;
         Private {
             local_address: addr_to_map,
         }
-    }
-
-    pub const fn addr_to_map(&self) -> &Multiaddr {
-        &self.addr_to_map
     }
 }
 
