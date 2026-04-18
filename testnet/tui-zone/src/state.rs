@@ -15,11 +15,11 @@ pub trait ZoneState {
     fn apply(&mut self, msg: AppMessage);
 
     /// Revert a message from canonical state (orphaned by reorg).
-    fn revert(&mut self, tx_id: &Uuid);
+    fn revert(&mut self, tx_uuid: &Uuid);
 
-    /// Check if a message with this `tx_id` exists in canonical or finalized
+    /// Check if a message with this `tx_uuid` exists in canonical or finalized
     /// state.
-    fn contains(&self, tx_id: &Uuid) -> bool;
+    fn contains(&self, tx_uuid: &Uuid) -> bool;
 
     /// Move inscriptions to finalized state by their payload.
     fn finalize(&mut self, payloads: &[Vec<u8>]);
@@ -47,25 +47,25 @@ pub struct InMemoryZoneState {
 
 impl ZoneState for InMemoryZoneState {
     fn apply(&mut self, msg: AppMessage) {
-        if !self.contains(&msg.tx_id) {
+        if !self.contains(&msg.tx_uuid) {
             self.canonical.push(msg);
         }
     }
 
-    fn revert(&mut self, tx_id: &Uuid) {
-        self.canonical.retain(|m| &m.tx_id != tx_id);
+    fn revert(&mut self, tx_uuid: &Uuid) {
+        self.canonical.retain(|m| &m.tx_uuid != tx_uuid);
     }
 
-    fn contains(&self, tx_id: &Uuid) -> bool {
-        self.canonical.iter().any(|m| &m.tx_id == tx_id)
-            || self.finalized.iter().any(|m| &m.tx_id == tx_id)
+    fn contains(&self, tx_uuid: &Uuid) -> bool {
+        self.canonical.iter().any(|m| &m.tx_uuid == tx_uuid)
+            || self.finalized.iter().any(|m| &m.tx_uuid == tx_uuid)
     }
 
     fn finalize(&mut self, payloads: &[Vec<u8>]) {
         for payload in payloads {
             if let Some(msg) = AppMessage::from_bytes(payload) {
-                self.canonical.retain(|m| m.tx_id != msg.tx_id);
-                if !self.finalized.iter().any(|m| m.tx_id == msg.tx_id) {
+                self.canonical.retain(|m| m.tx_uuid != msg.tx_uuid);
+                if !self.finalized.iter().any(|m| m.tx_uuid == msg.tx_uuid) {
                     self.finalized.push(msg);
                 }
             }
@@ -95,8 +95,8 @@ impl ZoneState for InMemoryZoneState {
 /// This is the core of conflict resolution:
 /// 1. Revert all invalidated inscriptions from our state
 /// 2. Apply all adopted inscriptions to our state
-/// 3. For each invalidated message whose `tx_id` is NOT in our state after the
-///    update — it was truly lost and needs re-publishing
+/// 3. For each invalidated message whose `tx_uuid` is NOT in our state after
+///    the update — it was truly lost and needs re-publishing
 ///
 /// A real sequencer might add additional checks here (e.g., skip re-publishing
 /// if a swap became unprofitable on the new branch).
@@ -108,7 +108,7 @@ pub fn resolve_conflicts(
     // Step 1: revert invalidated
     for inv in invalidated {
         if let Some(msg) = AppMessage::from_bytes(&inv.payload) {
-            state.revert(&msg.tx_id);
+            state.revert(&msg.tx_uuid);
         }
     }
 
@@ -123,7 +123,7 @@ pub fn resolve_conflicts(
     let mut to_republish = Vec::new();
     for inv in invalidated {
         if let Some(msg) = AppMessage::from_bytes(&inv.payload)
-            && !state.contains(&msg.tx_id)
+            && !state.contains(&msg.tx_uuid)
         {
             to_republish.push(msg);
         }

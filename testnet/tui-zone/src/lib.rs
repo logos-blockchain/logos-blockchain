@@ -14,7 +14,7 @@ use lb_zone_sdk::{
 };
 use reqwest::Url;
 use tokio::sync::mpsc;
-use tracing::error;
+use tracing::{debug, error, info};
 
 use crate::{
     message::AppMessage,
@@ -34,13 +34,6 @@ pub struct InscribeArgs {
 }
 
 pub async fn run(args: InscribeArgs) {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
-        .init();
-
     let node_url: Url = args.node_url.parse().expect("invalid node URL");
     let signing_key = load_or_create_signing_key(Path::new(&args.key_path));
     let channel_id = ChannelId::from(signing_key.public_key().to_bytes());
@@ -78,6 +71,7 @@ pub async fn run(args: InscribeArgs) {
                 };
 
                 let msg = AppMessage::new(text);
+                debug!(tx_uuid = %msg.tx_uuid, text = %msg.text, "Publishing message");
                 if let Err(e) = handle.publish_message(msg.to_bytes()).await {
                     error!("failed to publish: {e}");
                     break;
@@ -103,52 +97,92 @@ async fn handle_event(
     ready_tx: &mut Option<tokio::sync::oneshot::Sender<()>>,
 ) {
     match event {
-        Event::Ready => {
-            if let Some(tx) = ready_tx.take() {
-                let _ = tx.send(());
-            }
-            println!("Ready.");
-            println!();
-            println!("Type a message and press Enter to publish.");
-            println!("Press Ctrl-D or type an empty line to exit.");
-            println!();
-            ui::render_state(state);
-            ui::prompt();
-        }
+        Event::Ready => handle_ready(state, ready_tx),
         Event::ChannelUpdate {
             invalidated,
             adopted,
             ..
-        } => {
-            if invalidated.is_empty() && adopted.is_empty() {
-                return;
-            }
-
-            let to_republish = resolve_conflicts(state, &invalidated, &adopted);
-
-            for msg in to_republish {
-                if let Err(e) = handle.publish_message(msg.to_bytes()).await {
-                    error!("failed to re-publish: {e}");
-                    break;
-                }
-            }
-
-            ui::render_state(state);
-            ui::prompt();
-        }
+        } => handle_channel_update(state, handle, &invalidated, &adopted).await,
         Event::TxsFinalized { inscriptions, .. } => {
-            let payloads: Vec<Vec<u8>> = inscriptions.iter().map(|i| i.payload.clone()).collect();
-            state.finalize(&payloads);
-            ui::render_state(state);
-            ui::prompt();
+            finalize_inscriptions(state, &inscriptions, true);
         }
         Event::Published { checkpoint, .. } => {
+            debug!("Inscription published, checkpoint saved");
             state.save_checkpoint(checkpoint);
         }
         Event::FinalizedInscriptions { inscriptions } => {
-            let payloads: Vec<Vec<u8>> = inscriptions.iter().map(|i| i.payload.clone()).collect();
-            state.finalize(&payloads);
+            finalize_inscriptions(state, &inscriptions, false);
         }
+    }
+}
+
+fn handle_ready(
+    state: &InMemoryZoneState,
+    ready_tx: &mut Option<tokio::sync::oneshot::Sender<()>>,
+) {
+    info!("Sequencer ready");
+    if let Some(tx) = ready_tx.take() {
+        let _ = tx.send(());
+    }
+    println!("Ready.");
+    println!();
+    println!("Type a message and press Enter to publish.");
+    println!("Press Ctrl-D or type an empty line to exit.");
+    println!();
+    ui::render_state(state);
+    ui::prompt();
+}
+
+async fn handle_channel_update(
+    state: &mut InMemoryZoneState,
+    handle: &lb_zone_sdk::sequencer::SequencerHandle<NodeHttpClient>,
+    invalidated: &[lb_zone_sdk::state::InscriptionInfo],
+    adopted: &[lb_zone_sdk::state::InscriptionInfo],
+) {
+    if invalidated.is_empty() && adopted.is_empty() {
+        return;
+    }
+
+    debug!(
+        invalidated = invalidated.len(),
+        adopted = adopted.len(),
+        "Channel update"
+    );
+
+    let to_republish = resolve_conflicts(state, invalidated, adopted);
+    republish(handle, to_republish).await;
+
+    ui::render_state(state);
+    ui::prompt();
+}
+
+async fn republish(
+    handle: &lb_zone_sdk::sequencer::SequencerHandle<NodeHttpClient>,
+    messages: Vec<AppMessage>,
+) {
+    if messages.is_empty() {
+        return;
+    }
+    info!(count = messages.len(), "Re-publishing after conflict");
+    for msg in messages {
+        if let Err(e) = handle.publish_message(msg.to_bytes()).await {
+            error!("failed to re-publish: {e}");
+            break;
+        }
+    }
+}
+
+fn finalize_inscriptions(
+    state: &mut InMemoryZoneState,
+    inscriptions: &[lb_zone_sdk::state::InscriptionInfo],
+    render: bool,
+) {
+    debug!(count = inscriptions.len(), "Inscriptions finalized");
+    let payloads: Vec<Vec<u8>> = inscriptions.iter().map(|i| i.payload.clone()).collect();
+    state.finalize(&payloads);
+    if render {
+        ui::render_state(state);
+        ui::prompt();
     }
 }
 
