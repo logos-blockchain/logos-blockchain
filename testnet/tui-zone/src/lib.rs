@@ -1,4 +1,8 @@
-use std::{collections::HashSet, fs, io::Write as _, path::Path};
+mod message;
+mod state;
+mod ui;
+
+use std::{fs, path::Path};
 
 use clap::Parser;
 use lb_core::mantle::ops::channel::ChannelId;
@@ -6,9 +10,16 @@ use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key
 use lb_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
-    sequencer::{Event, SequencerCheckpoint, ZoneSequencer},
+    sequencer::{Event, ZoneSequencer},
 };
 use reqwest::Url;
+use tokio::sync::mpsc;
+use tracing::{debug, error, info};
+
+use crate::{
+    message::AppMessage,
+    state::{InMemoryZoneState, ZoneState as _, resolve_conflicts},
+};
 
 #[derive(Parser, Debug)]
 #[command(about = "Terminal UI zone sequencer - publish text inscriptions")]
@@ -20,18 +31,159 @@ pub struct InscribeArgs {
     /// Path to the signing key file (created if it doesn't exist)
     #[arg(long, default_value = "sequencer.key", env = "KEY_PATH")]
     key_path: String,
-
-    /// Path to the checkpoint file for crash recovery
-    #[arg(long, default_value = "sequencer.checkpoint", env = "CHECKPOINT_PATH")]
-    checkpoint_path: String,
 }
 
-fn load_checkpoint(path: &Path) -> Option<SequencerCheckpoint> {
-    if !path.exists() {
-        return None;
+pub async fn run(args: InscribeArgs) {
+    let node_url: Url = args.node_url.parse().expect("invalid node URL");
+    let signing_key = load_or_create_signing_key(Path::new(&args.key_path));
+    let channel_id = ChannelId::from(signing_key.public_key().to_bytes());
+
+    println!("TUI Zone Sequencer");
+    println!("  Node:       {node_url}");
+    println!("  Key:        {}", args.key_path);
+    println!("  Channel ID: {}", hex::encode(channel_id.as_ref()));
+    println!();
+
+    let mut state = InMemoryZoneState::default();
+    let checkpoint = state.load_checkpoint().cloned();
+
+    let node = NodeHttpClient::new(CommonHttpClient::new(None), node_url);
+    let (mut sequencer, handle) = ZoneSequencer::init(channel_id, signing_key, node, checkpoint);
+
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let mut stdin_rx = spawn_stdin_reader(ready_rx);
+    let mut ready_tx = Some(ready_tx);
+
+    println!("Bootstrapping sequencer...");
+
+    loop {
+        tokio::select! {
+            event = sequencer.next_event() => {
+                if let Some(event) = event {
+                    handle_event(event, &mut state, &handle, &mut ready_tx).await;
+                }
+            }
+
+            input = stdin_rx.recv() => {
+                let Some(text) = input else {
+                    println!();
+                    break;
+                };
+
+                let msg = AppMessage::new(text);
+                debug!(tx_uuid = %msg.tx_uuid, text = %msg.text, "Publishing message");
+                if let Err(e) = handle.publish_message(msg.to_bytes()).await {
+                    error!("failed to publish: {e}");
+                    break;
+                }
+                eprintln!("  \x1b[90mpending...\x1b[0m");
+                ui::prompt();
+            }
+
+            _ = tokio::signal::ctrl_c() => {
+                println!();
+                break;
+            }
+        }
     }
-    let data = fs::read(path).expect("failed to read checkpoint file");
-    Some(serde_json::from_slice(&data).expect("failed to deserialize checkpoint"))
+
+    println!("Goodbye!");
+}
+
+async fn handle_event(
+    event: Event,
+    state: &mut InMemoryZoneState,
+    handle: &lb_zone_sdk::sequencer::SequencerHandle<NodeHttpClient>,
+    ready_tx: &mut Option<tokio::sync::oneshot::Sender<()>>,
+) {
+    match event {
+        Event::Ready => handle_ready(state, ready_tx),
+        Event::ChannelUpdate {
+            invalidated,
+            adopted,
+            ..
+        } => handle_channel_update(state, handle, &invalidated, &adopted).await,
+        Event::TxsFinalized { inscriptions, .. } => {
+            finalize_inscriptions(state, &inscriptions, true);
+        }
+        Event::Published { checkpoint, .. } => {
+            debug!("Inscription published, checkpoint saved");
+            state.save_checkpoint(checkpoint);
+        }
+        Event::FinalizedInscriptions { inscriptions } => {
+            finalize_inscriptions(state, &inscriptions, false);
+        }
+    }
+}
+
+fn handle_ready(
+    state: &InMemoryZoneState,
+    ready_tx: &mut Option<tokio::sync::oneshot::Sender<()>>,
+) {
+    info!("Sequencer ready");
+    if let Some(tx) = ready_tx.take() {
+        let _ = tx.send(());
+    }
+    println!("Ready.");
+    println!();
+    println!("Type a message and press Enter to publish.");
+    println!("Press Ctrl-D or type an empty line to exit.");
+    println!();
+    ui::render_state(state);
+    ui::prompt();
+}
+
+async fn handle_channel_update(
+    state: &mut InMemoryZoneState,
+    handle: &lb_zone_sdk::sequencer::SequencerHandle<NodeHttpClient>,
+    invalidated: &[lb_zone_sdk::state::InscriptionInfo],
+    adopted: &[lb_zone_sdk::state::InscriptionInfo],
+) {
+    if invalidated.is_empty() && adopted.is_empty() {
+        return;
+    }
+
+    debug!(
+        invalidated = invalidated.len(),
+        adopted = adopted.len(),
+        "Channel update"
+    );
+
+    let to_republish = resolve_conflicts(state, invalidated, adopted);
+    republish(handle, to_republish).await;
+
+    ui::render_state(state);
+    ui::prompt();
+}
+
+async fn republish(
+    handle: &lb_zone_sdk::sequencer::SequencerHandle<NodeHttpClient>,
+    messages: Vec<AppMessage>,
+) {
+    if messages.is_empty() {
+        return;
+    }
+    info!(count = messages.len(), "Re-publishing after conflict");
+    for msg in messages {
+        if let Err(e) = handle.publish_message(msg.to_bytes()).await {
+            error!("failed to re-publish: {e}");
+            break;
+        }
+    }
+}
+
+fn finalize_inscriptions(
+    state: &mut InMemoryZoneState,
+    inscriptions: &[lb_zone_sdk::state::InscriptionInfo],
+    render: bool,
+) {
+    debug!(count = inscriptions.len(), "Inscriptions finalized");
+    let payloads: Vec<Vec<u8>> = inscriptions.iter().map(|i| i.payload.clone()).collect();
+    state.finalize(&payloads);
+    if render {
+        ui::render_state(state);
+        ui::prompt();
+    }
 }
 
 fn load_or_create_signing_key(path: &Path) -> Ed25519Key {
@@ -54,105 +206,28 @@ fn load_or_create_signing_key(path: &Path) -> Ed25519Key {
     }
 }
 
-pub async fn run(args: InscribeArgs) {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
-        .init();
+fn spawn_stdin_reader(ready: tokio::sync::oneshot::Receiver<()>) -> mpsc::Receiver<String> {
+    let (tx, rx) = mpsc::channel(16);
+    std::thread::spawn(move || {
+        // Wait until the sequencer is ready before accepting input
+        if ready.blocking_recv().is_err() {
+            return;
+        }
 
-    let node_url: Url = args.node_url.parse().expect("invalid node URL");
-    let signing_key = load_or_create_signing_key(Path::new(&args.key_path));
-    let channel_id = ChannelId::from(signing_key.public_key().to_bytes());
-
-    println!("TUI Zone Sequencer");
-    println!("  Node:       {node_url}");
-    println!("  Key:        {}", args.key_path);
-    println!("  Channel ID: {}", hex::encode(channel_id.as_ref()));
-    println!();
-
-    let checkpoint_path = Path::new(&args.checkpoint_path);
-    let checkpoint = load_checkpoint(checkpoint_path);
-    if checkpoint.is_some() {
-        println!("  Restored checkpoint from {}", args.checkpoint_path);
-    }
-
-    let node = NodeHttpClient::new(CommonHttpClient::new(None), node_url);
-    let (sequencer, mut handle) = ZoneSequencer::init(channel_id, signing_key, node, checkpoint);
-    sequencer.spawn();
-
-    // Handle reorgs by re-publishing invalidated inscriptions that
-    // weren't adopted on the new branch.
-    let mut events = handle.subscribe();
-    let reorg_handle = handle.clone();
-    tokio::spawn(async move {
+        let stdin = std::io::stdin();
+        let mut line = String::new();
         loop {
-            match events.recv().await {
-                Ok(Event::ChannelUpdate {
-                    invalidated,
-                    adopted,
-                    ..
-                }) => {
-                    let adopted_payloads: HashSet<Vec<u8>> =
-                        adopted.into_iter().map(|a| a.payload).collect();
-                    for inv in invalidated {
-                        if !adopted_payloads.contains(&inv.payload)
-                            && let Err(e) = reorg_handle.publish_message(inv.payload).await
-                        {
-                            eprintln!("  Failed to re-publish after reorg: {e}");
-                        }
+            line.clear();
+            match stdin.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    let text = line.trim_end().to_owned();
+                    if text.is_empty() || tx.blocking_send(text).is_err() {
+                        break;
                     }
                 }
-                Ok(_) => {}
-                Err(_) => break,
             }
         }
     });
-
-    // Wait for sequencer to be ready before accepting input
-    let mut input_handle = handle.clone();
-    input_handle.wait_ready().await;
-
-    println!();
-    println!("Connecting to node...");
-    handle.wait_ready().await;
-    println!("Sequencer ready.");
-    println!();
-    println!("Type a message and press Enter to publish it as a zone block.");
-    println!("Press Ctrl-D or type an empty line to exit.");
-    println!();
-
-    let stdin = std::io::stdin();
-    let mut line = String::new();
-
-    loop {
-        print!("> ");
-        std::io::stdout().flush().expect("failed to flush stdout");
-
-        line.clear();
-        let bytes_read = stdin.read_line(&mut line).expect("failed to read line");
-
-        if bytes_read == 0 {
-            // EOF
-            println!();
-            break;
-        }
-
-        let msg = line.trim_end();
-        if msg.is_empty() {
-            break;
-        }
-
-        // Tag payload with a random ID so we can identify our inscriptions
-        // during reorg handling (avoids duplicate re-publishing).
-        let id: u64 = rand::random();
-        let tagged_payload = format!("{id:016x}:{msg}");
-
-        if let Err(e) = handle.publish_message(tagged_payload.into_bytes()).await {
-            eprintln!("  error: {e}");
-        }
-    }
-
-    println!("Goodbye!");
+    rx
 }

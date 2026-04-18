@@ -593,34 +593,7 @@ where
                 None
             }
             maybe_event = stream.next() => {
-                if let Some(ref block_event) = maybe_event {
-                    let result = handle_block_event(
-                        block_event,
-                        &mut self.state,
-                        &mut self.current_tip,
-                        &mut self.lib_slot,
-                        self.channel_id,
-                        &self.node
-                    )
-                    .await;
-
-                    // Signal readiness after first block event when no
-                    // pending startup backfill remains.
-                    if !self.is_ready()
-                        && self.backfill_from.is_none()
-                        && self.backfill_to.is_none()
-                    {
-                        let _ = self.ready_tx.send(true);
-                        drop(self.event_tx.send(Event::Ready));
-                    }
-
-                    self.apply_block_result(result)
-                } else {
-                    warn!("Blocks stream disconnected, will reconnect on next call");
-                    self.blocks_stream = None;
-                    let _ = self.ready_tx.send(false);
-                    None
-                }
+                self.handle_stream_item(maybe_event).await
             }
             Some(inflight_result) = self.in_flight.next(), if !self.in_flight.is_empty() => {
                 handle_inflight(inflight_result, &mut self.resubmit_active);
@@ -636,6 +609,62 @@ where
                 );
                 None
             }
+        }
+    }
+
+    /// Handle a single item from the blocks stream. `None` means the stream
+    /// disconnected; any other value is processed as a block event.
+    async fn handle_stream_item(
+        &mut self,
+        maybe_event: Option<ProcessedBlockEvent>,
+    ) -> Option<Event> {
+        let Some(block_event) = maybe_event else {
+            warn!("Blocks stream disconnected, will reconnect on next call");
+            self.blocks_stream = None;
+            let _ = self.ready_tx.send(false);
+            return None;
+        };
+
+        let result = handle_block_event(
+            &block_event,
+            &mut self.state,
+            &mut self.current_tip,
+            &mut self.lib_slot,
+            self.channel_id,
+            &self.node,
+        )
+        .await;
+
+        let became_ready = self.maybe_signal_ready();
+        let block_event = self.apply_block_result(result);
+
+        if became_ready {
+            if let Some(event) = block_event {
+                self.buffered_event = Some(event);
+            }
+            Some(Event::Ready)
+        } else {
+            block_event
+        }
+    }
+
+    /// If not yet ready and startup backfill is complete, mark ready and
+    /// broadcast `Event::Ready`. Returns true iff readiness transitioned.
+    fn maybe_signal_ready(&self) -> bool {
+        if self.is_ready() {
+            return false;
+        }
+        if self.backfill_from.is_none() && self.backfill_to.is_none() {
+            debug!("Sequencer ready (backfill complete, first block processed)");
+            let _ = self.ready_tx.send(true);
+            drop(self.event_tx.send(Event::Ready));
+            true
+        } else {
+            debug!(
+                "Not yet ready: backfill_from={:?}, backfill_to={:?}",
+                self.backfill_from, self.backfill_to
+            );
+            false
         }
     }
 
@@ -698,6 +727,8 @@ where
             return true;
         }
 
+        debug!("ensure_connected: connecting...");
+
         // Initialize state from consensus info if needed
         if self.state.is_none() {
             match self.node.consensus_info().await {
@@ -717,8 +748,10 @@ where
             }
         }
 
+        debug!("ensure_connected: opening blocks stream...");
         match self.node.block_stream().await {
             Ok(stream) => {
+                debug!("ensure_connected: blocks stream connected");
                 self.blocks_stream = Some(Box::pin(stream));
             }
             Err(e) => {
@@ -791,11 +824,12 @@ where
             adopted: u.adopted,
             new_channel_tip: u.new_channel_tip,
         });
-        let finalized_event =
-            (!result.finalized_tx_hashes.is_empty()).then_some(Event::TxsFinalized {
-                tx_hashes: result.finalized_tx_hashes,
-                inscriptions: result.finalized_inscriptions,
-            });
+        let finalized_event = (!result.finalized_tx_hashes.is_empty()
+            || !result.finalized_inscriptions.is_empty())
+        .then_some(Event::TxsFinalized {
+            tx_hashes: result.finalized_tx_hashes,
+            inscriptions: result.finalized_inscriptions,
+        });
 
         // Emit one event now, buffer the other if both exist
         match (channel_event, finalized_event) {
