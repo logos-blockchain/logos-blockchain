@@ -7,6 +7,7 @@ no-default-features = true
 
 [advisories]
 ignore = [
+  { crate = "core2@0.4.0", reason = "`multihash 0.19.3` still resolves to this yanked release." },
   { id = "RUSTSEC-2024-0370", reason = "`proc-macro-error` is unmaintained; consider using an alternative. Use `cargo tree -p proc-macro-error -i > tmp.txt` to check the dependency tree." },
   { id = "RUSTSEC-2024-0388", reason = "`derivative` is unmaintained; consider using an alternative. Use `cargo tree -p derivative -i > tmp.txt` to check the dependency tree." },
   { id = "RUSTSEC-2024-0436", reason = "`paste` has a security vulnerability; consider using an alternative. Use `cargo tree -p paste -i > tmp.txt` to check the dependency tree." },

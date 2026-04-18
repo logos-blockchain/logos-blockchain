@@ -1,5 +1,5 @@
 use core::fmt::Debug;
-use std::{fmt::Display, num::NonZeroUsize, ops::RangeInclusive};
+use std::{collections::BTreeSet, fmt::Display, num::NonZeroUsize, ops::RangeInclusive};
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt as _, future::join_all};
@@ -367,6 +367,127 @@ where
         .collect::<Vec<_>>();
 
     Ok(blocks)
+}
+
+/// Fetch a single block by its header ID.
+///
+/// # Arguments
+///
+/// - `handle`: A reference to the `OverwatchHandle` to interact with the
+///   runtime and storage service.
+/// - `header_id`: The `HeaderId` of the block to fetch.
+///
+/// # Returns
+///
+/// If successful, returns `Some(Block<Transaction>)` if the block exists, or
+/// `None` if no block with the given header ID was found. Returns a boxed
+/// `DynError` if any error occurs during processing.
+pub async fn get_block<Transaction, StorageBackend, RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+    header_id: HeaderId,
+) -> Result<Option<Block<Transaction>>, super::DynError>
+where
+    Transaction: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + Send
+        + Sync
+        + 'static
+        + lb_core::mantle::Transaction<Hash = TxHash>,
+    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
+    <StorageBackend as StorageChainApi>::Block:
+        TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
+    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    RuntimeServiceId:
+        Debug + Sync + Display + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+{
+    let relay = handle.relay().await?;
+    let storage_adapter = StorageAdapter::<_, _, RuntimeServiceId>::new(relay).await;
+    Ok(storage_adapter.get_block(&header_id).await)
+}
+
+/// Fetch transactions by their hashes.
+///
+/// # Arguments
+///
+/// - `handle`: A reference to the `OverwatchHandle` to interact with the
+///   runtime and storage service.
+/// - `tx_hashes`: The set of [`TxHash`]es to fetch.
+///
+/// # Returns
+///
+/// If successful, returns a stream of matching [`Transaction`]s.
+/// Returns a boxed `DynError` if any error occurs during processing.
+pub async fn get_transactions<Transaction, StorageBackend, RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+    tx_hashes: BTreeSet<TxHash>,
+) -> Result<
+    impl Stream<Item = Transaction> + use<Transaction, StorageBackend, RuntimeServiceId>,
+    super::DynError,
+>
+where
+    Transaction: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + Send
+        + Sync
+        + 'static
+        + lb_core::mantle::Transaction<Hash = TxHash>,
+    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
+    <StorageBackend as StorageChainApi>::Block:
+        TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
+    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    RuntimeServiceId:
+        Debug + Sync + Display + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+{
+    let relay = handle.relay().await?;
+    let storage_adapter = StorageAdapter::<_, _, RuntimeServiceId>::new(relay).await;
+    storage_adapter.get_transactions(tx_hashes).await
+}
+
+/// Fetch a single transaction by its hash.
+///
+/// # Arguments
+///
+/// - `handle`: A reference to the `OverwatchHandle` to interact with the
+///   runtime and storage service.
+/// - `tx_hash`: The [`TxHash`] of the transaction to fetch.
+///
+/// # Returns
+///
+/// - `Ok(Some(tx))`: Found transaction.
+/// - `Ok(None)`: No transaction with the given hash was found.
+/// - `Err(_)`: An error occurred during processing.
+pub async fn get_transaction<Transaction, StorageBackend, RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+    tx_hash: TxHash,
+) -> Result<Option<Transaction>, super::DynError>
+where
+    Transaction: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + Send
+        + Sync
+        + 'static
+        + lb_core::mantle::Transaction<Hash = TxHash>,
+    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
+    <StorageBackend as StorageChainApi>::Block:
+        TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
+    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    RuntimeServiceId:
+        Debug + Sync + Display + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+{
+    let mut stream = get_transactions::<Transaction, StorageBackend, RuntimeServiceId>(
+        handle,
+        BTreeSet::from([tx_hash]),
+    )
+    .await?;
+
+    // Assume only one transaction is returned
+    Ok(stream.next().await)
 }
 
 pub async fn get_sdp_declarations<RuntimeServiceId>(

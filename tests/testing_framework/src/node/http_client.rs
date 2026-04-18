@@ -70,11 +70,10 @@ impl NodeHttpClient {
         }
     }
 
-    pub async fn storage_block(
-        &self,
-        id: &HeaderId,
-    ) -> Result<Option<Block<SignedMantleTx>>, Error> {
-        self.http_client.get_block(self.base_url.clone(), *id).await
+    pub async fn block(&self, id: &HeaderId) -> Result<Option<Block<SignedMantleTx>>, Error> {
+        self.http_client
+            .get_block_by_id(self.base_url.clone(), *id)
+            .await
     }
 
     /// Opens a processed-block stream from the node HTTP API.

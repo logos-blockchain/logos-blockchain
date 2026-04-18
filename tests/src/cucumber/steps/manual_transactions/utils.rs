@@ -403,7 +403,7 @@ pub async fn wait_for_transactions_inclusion(
         let mut found = HashSet::new();
 
         loop {
-            let Some(block) = client.storage_block(&current).await? else {
+            let Some(block) = client.block(&current).await? else {
                 break;
             };
 
@@ -1354,7 +1354,7 @@ async fn collect_multiple_wallets_utxos(
     let mut cached_ancestor_header_id: Option<String> = None;
     let mut current = best_consensus.tip;
     loop {
-        let Some(block) = best_node_client.storage_block(&current).await? else {
+        let Some(block) = best_node_client.block(&current).await? else {
             reached_chain_start = true;
             break;
         };
@@ -1559,7 +1559,7 @@ async fn collect_wallet_utxos(
     let mut reached_chain_start = false;
     let mut cached_ancestor_header_id: Option<String> = None;
     loop {
-        let Some(block) = node.started_node.client.storage_block(&current).await? else {
+        let Some(block) = node.started_node.client.block(&current).await? else {
             reached_chain_start = true;
             break;
         };

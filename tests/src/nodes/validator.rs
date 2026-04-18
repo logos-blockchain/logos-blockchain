@@ -17,7 +17,7 @@ use lb_core::{
     sdp::Declaration,
 };
 use lb_http_api_common::paths::{
-    CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, MANTLE_SDP_DECLARATIONS, NETWORK_INFO, STORAGE_BLOCK,
+    BLOCKS_DETAIL, CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, MANTLE_SDP_DECLARATIONS, NETWORK_INFO,
 };
 use lb_key_management_system_service::keys::secured_key::SecuredKey as _;
 use lb_network_service::backends::libp2p::Libp2pInfo;
@@ -278,10 +278,9 @@ impl Validator {
     }
 
     pub async fn get_block(&self, id: HeaderId) -> Option<Block<SignedMantleTx>> {
+        let path = BLOCKS_DETAIL.replace(":id", &id.to_string());
         CLIENT
-            .post(format!("http://{}{}", self.addr, STORAGE_BLOCK))
-            .header("Content-Type", "application/json")
-            .body(serde_json::to_string(&id).unwrap())
+            .get(format!("http://{}{}", self.addr, path))
             .send()
             .await
             .unwrap()
