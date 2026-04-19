@@ -10,10 +10,12 @@ Feature: Cryptarchia
 
   @cryptarchia_ci
   Scenario: IBD staggered start
-    Given I have a cluster with capacity of 4 nodes
+    Given I have a cluster with capacity of 5 nodes
+    And no nodes are declared as blend providers
     And we use IBD peers
     And all peers must be mode online after startup in 30 seconds
     And I start node "NODE_1"
+    And I start peer node "NODE_1B" connected to node "NODE_1"
     When node "NODE_1" is at height 1 in 300 seconds
     And I start peer node "NODE_2" connected to node "NODE_1"
     When node "NODE_2" is at height 2 in 300 seconds
@@ -25,8 +27,10 @@ Feature: Cryptarchia
 
   @cryptarchia_ci
   Scenario: Orphan staggered start
-    Given I have a cluster with capacity of 4 nodes
+    Given I have a cluster with capacity of 5 nodes
+    And no nodes are declared as blend providers
     And I start node "NODE_1"
+    And I start peer node "NODE_1B" connected to node "NODE_1"
     When node "NODE_1" is at height 1 in 300 seconds
     And I start peer node "NODE_2" connected to node "NODE_1"
     When node "NODE_2" is at height 2 in 300 seconds

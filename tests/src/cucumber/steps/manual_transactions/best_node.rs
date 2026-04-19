@@ -477,7 +477,7 @@ async fn is_tip_still_on_canonical_chain(
         let Some(block) = client.block(&current_header_id).await? else {
             return Ok(false);
         };
-        current_header_id = block.header().parent();
+        current_header_id = block.header.parent_block;
         remaining_steps -= 1;
     }
 

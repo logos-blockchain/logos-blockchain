@@ -407,13 +407,13 @@ pub async fn wait_for_transactions_inclusion(
                 break;
             };
 
-            for tx in block.transactions() {
+            for tx in &block.transactions {
                 let hash = tx.hash();
                 if tx_hashes.contains(&hash) {
                     found.insert(hash);
                 }
             }
-            current = block.header().parent();
+            current = block.header.parent_block;
         }
 
         if tx_hashes.iter().all(|hash| found.contains(hash)) {
@@ -1359,7 +1359,7 @@ async fn collect_multiple_wallets_utxos(
             break;
         };
 
-        let header_id = block.header().id().to_string();
+        let header_id = block.header.id.to_string();
 
         // Cache represents the post-state after evaluating this block.
         refresh_owned_per_wallet_from_cache(world, &header_id, &wallet_pks, &mut owned_per_wallet);
@@ -1374,7 +1374,7 @@ async fn collect_multiple_wallets_utxos(
             break;
         }
 
-        let parent = block.header().parent();
+        let parent = block.header.parent_block;
         tail_blocks.push(block);
         current = parent;
     }
@@ -1392,7 +1392,7 @@ async fn collect_multiple_wallets_utxos(
         reached_chain_start,
     );
     for (i, block) in tail_blocks.iter().enumerate() {
-        let header_id = block.header().id().to_string();
+        let header_id = block.header.id.to_string();
         let height = base_height + i as u64;
         record_header_height(
             &mut world.node_header_heights,
@@ -1407,11 +1407,11 @@ async fn collect_multiple_wallets_utxos(
                 "Evaluating block {height_prefix}{height} for {} wallets on `{best_node_name}`: \
                 {header_id}, transactions len: {}",
                 wallet_pks.len(),
-                block.transactions().len(),
+                block.transactions.len(),
             );
         }
 
-        for tx in block.transactions() {
+        for tx in &block.transactions {
             for transfer in tx.mantle_tx.transfers() {
                 for utxo in transfer.utxos() {
                     if let Some(wallet_name) = wallets_by_pk.get(&utxo.note.pk)
@@ -1564,7 +1564,7 @@ async fn collect_wallet_utxos(
             break;
         };
 
-        let header_id = block.header().id().to_string();
+        let header_id = block.header.id.to_string();
 
         // Cache represents the post-state after evaluating this block.
         refresh_owned_from_cache_single_wallet(world, &header_id, wallet_name, &mut wallet_owned);
@@ -1574,7 +1574,7 @@ async fn collect_wallet_utxos(
             break;
         }
 
-        let parent = block.header().parent();
+        let parent = block.header.parent_block;
         tail_blocks.push(block);
         current = parent;
     }
@@ -1594,7 +1594,7 @@ async fn collect_wallet_utxos(
         reached_chain_start,
     );
     for (i, block) in tail_blocks.iter().enumerate() {
-        let header_id = block.header().id().to_string();
+        let header_id = block.header.id.to_string();
         let height = base_height + i as u64;
         record_header_height(
             &mut world.node_header_heights,
@@ -1609,11 +1609,11 @@ async fn collect_wallet_utxos(
                 "Evaluating block {height_prefix}{height} for `{wallet_name}/{wallet_node_name}`: \
                 {}, transactions len: {}",
                 header_id,
-                block.transactions().len(),
+                block.transactions.len(),
             );
         }
 
-        for tx in block.transactions() {
+        for tx in &block.transactions {
             // Unspent outputs
             for transfer in tx.mantle_tx.transfers() {
                 for utxo in transfer.utxos() {

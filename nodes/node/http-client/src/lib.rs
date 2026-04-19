@@ -4,7 +4,6 @@ use futures::{Stream, StreamExt as _};
 pub use lb_chain_broadcast_service::BlockInfo;
 pub use lb_chain_service::{CryptarchiaInfo, Slot, State};
 use lb_core::{
-    block::Block,
     header::{ContentId, HeaderId},
     mantle::SignedMantleTx,
     proofs::leader_proof::Groth16LeaderProof,
@@ -188,12 +187,31 @@ impl CommonHttpClient {
         &self,
         base_url: Url,
         id: HeaderId,
-    ) -> Result<Option<Block<SignedMantleTx>>, Error> {
+    ) -> Result<Option<ApiBlock>, Error> {
         let path = BLOCKS_DETAIL
             .trim_start_matches('/')
             .replace(":id", &id.to_string());
         let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
-        self.get(request_url, None::<&()>).await
+
+        let mut request = self.client.get(request_url);
+        if let Some(basic_auth) = &self.basic_auth {
+            request = request.basic_auth(&basic_auth.username, basic_auth.password.as_deref());
+        }
+
+        let response = request.send().await.map_err(Error::Request)?;
+        let status = response.status();
+        let body = response.text().await.map_err(Error::Request)?;
+
+        match status {
+            StatusCode::OK => serde_json::from_str::<ApiBlock>(&body)
+                .map(Some)
+                .map_err(|e| Error::Server(format!("Failed to parse response: {e}"))),
+            StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server(body)),
+            _ => Err(Error::Server(format!(
+                "Unexpected response [{status}]: {body}",
+            ))),
+        }
     }
 
     pub async fn post_transaction<Tx>(&self, base_url: Url, transaction: Tx) -> Result<(), Error>

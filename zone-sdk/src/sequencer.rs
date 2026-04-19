@@ -909,7 +909,7 @@ async fn backfill_canonical<Node>(
     while !state.has_block(&current) && current != lib {
         match node.block(current).await {
             Ok(Some(block)) => {
-                let parent = block.header().parent_block();
+                let parent = block.header.parent_block;
                 blocks_to_process.push(block);
                 current = parent;
             }
@@ -930,11 +930,12 @@ async fn backfill_canonical<Node>(
     // Process blocks in forward order (oldest first)
     blocks_to_process.reverse();
     for block in blocks_to_process {
-        let block_id = block.header().id();
-        let parent_id = block.header().parent_block();
+        let block_id = block.header.id;
+        let parent_id = block.header.parent_block;
 
         let our_txs: Vec<TxHash> = block
-            .transactions()
+            .transactions
+            .iter()
             .filter(|tx| matches_channel(tx, channel_id))
             .map(|tx| tx.mantle_tx.hash())
             .collect();
@@ -1102,7 +1103,6 @@ mod tests {
     use futures::Stream;
     use lb_common_http_client::{ApiBlock, ApiHeader, BlockInfo, CryptarchiaInfo, State};
     use lb_core::{
-        block::Block,
         header::ContentId,
         mantle::{
             Note, Utxo,
@@ -1254,7 +1254,7 @@ mod tests {
         async fn block(
             &self,
             _id: HeaderId,
-        ) -> Result<Option<Block<SignedMantleTx>>, lb_common_http_client::Error> {
+        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
             unimplemented!()
         }
 

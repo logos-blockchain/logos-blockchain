@@ -10,10 +10,8 @@ use std::{
 };
 
 use async_trait::async_trait;
-use lb_core::{
-    block::Block,
-    mantle::{AuthenticatedMantleTx as _, SignedMantleTx},
-};
+use common_http_client::ApiBlock;
+use lb_core::mantle::AuthenticatedMantleTx as _;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::HeaderId;
 use testing_framework_core::scenario::{DynError, Expectation, RunContext};
@@ -106,7 +104,7 @@ where
                 match receiver.recv().await {
                     Ok(record) => {
                         for observed in &record.new_blocks {
-                            if observed.block.header().parent() == genesis_parent {
+                            if observed.block.header.parent_block == genesis_parent {
                                 continue;
                             }
 
@@ -233,11 +231,11 @@ fn catchup_wait_budget<E: LbcBlockFeedEnv>(ctx: &RunContext<E>) -> Duration {
 }
 
 fn capture_tx_outputs(
-    block: &Block<SignedMantleTx>,
+    block: &ApiBlock,
     tracked_accounts: &HashSet<ZkPublicKey>,
     observed: &AtomicU64,
 ) {
-    for tx in block.transactions() {
+    for tx in &block.transactions {
         for transfer in &tx.mantle_tx().transfers() {
             for note in &transfer.outputs {
                 if tracked_accounts.contains(&note.pk) {

@@ -284,7 +284,7 @@ impl<'a, E: LbcScenarioEnv + LbcBlockFeedEnv> InscriptionRunner<'a, E> {
 
     fn process_block(&mut self, block: &BlockRecord) {
         for observed in &block.new_blocks {
-            for tx in observed.block.transactions() {
+            for tx in &observed.block.transactions {
                 let tx_hash = tx.hash();
                 let Some(channel_idx) = self.pending_by_hash.remove(&tx_hash) else {
                     continue;

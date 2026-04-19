@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{Context as _, Result};
-use lb_core::{block::Block, mantle::SignedMantleTx};
+use common_http_client::ApiBlock;
 use lb_node::HeaderId;
 use testing_framework_core::scenario::{DynError, Feed, FeedRuntime, NodeClients};
 use tokio::{
@@ -73,7 +73,7 @@ pub struct ObservedBlock {
     /// Parent header identifier referenced by this block.
     pub parent: HeaderId,
     /// Full block body with transactions.
-    pub block: Arc<Block<SignedMantleTx>>,
+    pub block: Arc<ApiBlock>,
 }
 
 /// Fork-agnostic feed emission.
@@ -187,7 +187,7 @@ struct BackfillEntry {
     source_node: String,
     header: HeaderId,
     height: u64,
-    block: Block<SignedMantleTx>,
+    block: ApiBlock,
 }
 
 impl BlockScanner {
@@ -306,7 +306,7 @@ impl BlockScanner {
                 .block(&cursor)
                 .await?
                 .context("missing block while catching up")?;
-            let parent = block.header().parent();
+            let parent = block.header.parent_block;
 
             stack.push(BackfillEntry {
                 source_node: source_node.to_owned(),
@@ -340,7 +340,7 @@ impl BlockScanner {
             block,
         }) = backfill.pop()
         {
-            let parent = block.header().parent();
+            let parent = block.header.parent_block;
             self.parents.insert(header, parent);
             self.seen.insert(header);
             self.heights.insert(header, height);
@@ -522,9 +522,9 @@ pub struct BlockStats {
 }
 
 impl BlockStats {
-    fn record_block(&self, block: &Block<SignedMantleTx>) {
+    fn record_block(&self, block: &ApiBlock) {
         self.total_transactions
-            .fetch_add(block.transactions().len() as u64, Ordering::Relaxed);
+            .fetch_add(block.transactions.len() as u64, Ordering::Relaxed);
     }
 
     #[must_use]
