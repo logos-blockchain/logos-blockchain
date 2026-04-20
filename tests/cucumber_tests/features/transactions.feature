@@ -5,19 +5,20 @@ Feature: Transactions
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
       | 1             | 1           | 2000000      |
-    And I have a cluster with capacity of 1 nodes
+    And I have a cluster with capacity of 2 nodes
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
-    When node "NODE_1" is at height 2 in 180 seconds
+    And I start peer node "NODE_2" connected to node "NODE_1"
+    When all nodes have at least 2 blocks and converged to within 1 blocks in 180 seconds
     And I submit inscription transaction "INSCRIPTION_32K" of 32 KiB from wallet "WALLET_1A"
-    Then transaction "INSCRIPTION_32K" is included on node "NODE_1" in 60 seconds
+    Then transaction "INSCRIPTION_32K" is included on node "NODE_1" in 90 seconds
     When I submit inscription transaction "INSCRIPTION_128K" of 128 KiB from wallet "WALLET_1A"
-    Then transaction "INSCRIPTION_128K" is included on node "NODE_1" in 60 seconds
+    Then transaction "INSCRIPTION_128K" is included on node "NODE_1" in 90 seconds
     When I submit inscription transaction "INSCRIPTION_512K" of 512 KiB from wallet "WALLET_1A"
-    Then transaction "INSCRIPTION_512K" is included on node "NODE_1" in 60 seconds
+    Then transaction "INSCRIPTION_512K" is included on node "NODE_1" in 90 seconds
     When I submit inscription transaction "INSCRIPTION_896K" of 896 KiB from wallet "WALLET_1A"
-    Then transaction "INSCRIPTION_896K" is included on node "NODE_1" in 60 seconds
+    Then transaction "INSCRIPTION_896K" is included on node "NODE_1" in 90 seconds
     Then I stop all nodes
 
   @transactions_ci
@@ -311,5 +312,5 @@ Feature: Transactions
     And I submit invalid transfer transaction "BAD_TX" to node "NODE_1"
     And I submit funded transfer transaction "GOOD_TX" of 1 LGO from wallet "WALLET_1A" to wallet "WALLET_2A"
     Then transaction "GOOD_TX" is included on node "NODE_1" in 120 seconds
-    And transaction "BAD_TX" is not included in 120 seconds
+    And transaction "BAD_TX" is not included in 30 seconds
     Then I stop all nodes

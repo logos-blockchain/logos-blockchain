@@ -81,6 +81,18 @@ pub struct ManualNodeConfigOverrides {
     pub prolonged_bootstrap_period: Option<Duration>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ManualClusterKind {
+    Generated,
+    Devnet,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ManualClusterSpec {
+    pub kind: ManualClusterKind,
+    pub capacity: usize,
+}
+
 impl ManualNodeConfigOverrides {
     pub const fn apply_to(&self, config: &mut RunConfig) {
         if let Some(security_param) = self.cryptarchia_security_param {
@@ -227,6 +239,9 @@ pub struct CucumberWorld {
     /// Manual: Number of leading nodes declared as blend providers in the
     /// generated deployment. Defaults to all nodes when unset.
     pub blend_core_nodes: Option<usize>,
+    /// Manual: Pending manual-cluster build recipe used to rebuild the local
+    /// cluster when deployment-shape steps change before any nodes start.
+    pub manual_cluster_spec: Option<ManualClusterSpec>,
     /// Manual: Whether to populate the IBD peers for each node after starting
     /// them,
     pub populate_ibd_peers_from_initial_peers: Option<bool>,
@@ -375,6 +390,7 @@ impl Debug for CucumberWorld {
             .field("node_groups", &self.node_groups.len())
             .field("node_to_group", &self.node_to_group.len())
             .field("blend_core_nodes", &self.blend_core_nodes)
+            .field("manual_cluster_spec", &self.manual_cluster_spec)
             .field(
                 "manual_node_config_overrides",
                 &self.manual_node_config_overrides,

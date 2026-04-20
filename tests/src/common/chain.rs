@@ -71,7 +71,7 @@ pub async fn wait_for_transactions_inclusion(
                 &mut scanned_blocks,
                 async |header_id| {
                     client
-                        .storage_block(&header_id)
+                        .block(&header_id)
                         .await
                         .expect("fetching storage block should succeed")
                 },

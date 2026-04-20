@@ -164,7 +164,7 @@ async fn transaction_is_in_chain(
     scan_chain_until(
         consensus.tip,
         &mut scanned_blocks,
-        async |header_id| client.storage_block(&header_id).await.ok().flatten(),
+        async |header_id| client.block(&header_id).await.ok().flatten(),
         |block| {
             block
                 .transactions()

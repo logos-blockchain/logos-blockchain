@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use cucumber::gherkin::Step;
 use hex::ToHex as _;
 use lb_chain_service::CryptarchiaInfo;
 use tokio::time::{Instant, sleep};
@@ -19,6 +20,7 @@ use crate::cucumber::{
 )]
 async fn step_all_nodes_share_lib_at_or_above_height(
     world: &mut CucumberWorld,
+    step: &Step,
     min_height: u64,
     timeout_secs: u64,
 ) -> StepResult {
@@ -32,7 +34,8 @@ async fn step_all_nodes_share_lib_at_or_above_height(
             if Instant::now() >= deadline {
                 warn!(
                     target: TARGET,
-                    "Step `all nodes share the same LIB at or above height {min_height} in {timeout_secs} seconds` error: {err}"
+                    "Step `{}` error: {err}",
+                    step.value
                 );
                 return Err(err);
             }
@@ -89,7 +92,7 @@ async fn resolve_lib_height(
             return Ok(current_height);
         }
 
-        let Some(block) = client.storage_block(&current).await? else {
+        let Some(block) = client.block(&current).await? else {
             return Err(StepError::LogicalError {
                 message: format!(
                     "node `{node_name}` could not resolve block `{}` while tracing LIB `{}` \

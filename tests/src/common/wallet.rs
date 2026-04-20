@@ -48,7 +48,7 @@ pub async fn current_utxos_for_public_key(
         &mut scanned_blocks,
         async |header_id| {
             client
-                .storage_block(&header_id)
+                .block(&header_id)
                 .await
                 .expect("fetching storage block should succeed")
         },

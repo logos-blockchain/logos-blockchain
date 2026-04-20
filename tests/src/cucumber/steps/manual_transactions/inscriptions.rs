@@ -1,18 +1,25 @@
 use std::time::Duration;
 
 use cucumber::{gherkin::Step, when};
-use lb_core::mantle::Transaction as _;
 use lb_key_management_system_service::keys::Ed25519Key;
 use tracing::{info, warn};
 
 use crate::{
     common::{
         chain::wait_for_transactions_inclusion,
-        mantle_inscription::{build_funded_inscription_transaction, channel_id_for_payload_size},
+        mantle_inscription::{
+            build_inscription_tx_builder, channel_id_for_payload_size, inscription_signature_proof,
+        },
     },
     cucumber::{
         error::{StepError, StepResult},
-        steps::TARGET,
+        steps::{
+            TARGET,
+            manual_transactions::utils::{
+                prepare_user_wallet_built_transaction_submission,
+                submit_prepared_user_wallet_transaction,
+            },
+        },
         world::{CucumberWorld, WalletType},
     },
 };
@@ -25,12 +32,50 @@ async fn step_submit_inscription_transaction(
     payload_kib: usize,
     wallet_name: String,
 ) -> StepResult {
+    let payload_size = payload_kib * 1024;
+    submit_inscription_transaction(
+        world,
+        step,
+        transaction_alias,
+        vec![0xAB; payload_size],
+        wallet_name,
+    )
+    .await
+}
+
+#[when(
+    expr = "I submit inscription transaction {string} with payload {string} from wallet {string}"
+)]
+async fn step_submit_inscription_transaction_with_payload(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    payload: String,
+    wallet_name: String,
+) -> StepResult {
+    submit_inscription_transaction(
+        world,
+        step,
+        transaction_alias,
+        payload.into_bytes(),
+        wallet_name,
+    )
+    .await
+}
+
+async fn submit_inscription_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    payload: Vec<u8>,
+    wallet_name: String,
+) -> StepResult {
     let wallet = world.resolve_wallet(&wallet_name).inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step.value);
     })?;
 
-    let wallet_account = match &wallet.wallet_type {
-        WalletType::User { wallet_account } => wallet_account,
+    match &wallet.wallet_type {
+        WalletType::User { .. } => {}
         WalletType::Funding { .. } => {
             return Err(StepError::InvalidArgument {
                 message: format!(
@@ -38,37 +83,42 @@ async fn step_submit_inscription_transaction(
                 ),
             });
         }
-    };
+    }
 
-    let node = world
-        .resolve_node_http_client(&wallet.node_name)
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-        })?;
-
-    let payload_size = payload_kib * 1024;
-
+    let payload_size = payload.len();
     let signing_key = Ed25519Key::from_bytes(&[0u8; 32]);
 
-    let transaction = build_funded_inscription_transaction(
-        &node,
-        &world.genesis_block_utxos,
-        &wallet_account.secret_key,
-        vec![0xAB; payload_size],
+    let tx_builder = build_inscription_tx_builder(
+        payload,
         &signing_key,
         channel_id_for_payload_size(payload_size),
         None,
+    );
+    let prepared = prepare_user_wallet_built_transaction_submission(
+        world,
+        &step.value,
+        &wallet_name,
+        tx_builder,
+        0,
+        None,
     )
     .await;
+    let prepared = prepared.inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
+    let tx_hash = prepared.tx_hash;
 
-    let tx_hash = transaction.hash();
-
-    world
-        .submit_transaction(&wallet, &transaction, &node)
-        .await
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-        })?;
+    let tx_hash = submit_prepared_user_wallet_transaction(
+        world,
+        &step.value,
+        prepared,
+        vec![inscription_signature_proof(tx_hash, &signing_key)],
+        None,
+    )
+    .await;
+    let tx_hash = tx_hash.inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
 
     world.remember_submitted_transaction(transaction_alias.clone(), tx_hash);
 

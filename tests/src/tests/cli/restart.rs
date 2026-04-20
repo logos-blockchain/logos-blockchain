@@ -20,7 +20,10 @@ async fn node_restart_with_initial_peer_override() {
     let base = build_local_manual_cluster(
         "manual-cluster-restart",
         "tf-manual-restart",
-        DeploymentBuilder::new(TfTopologyConfig::with_node_numbers(3)),
+        DeploymentBuilder::new(
+            TfTopologyConfig::with_node_numbers(3)
+                .with_test_context(Some("node_restart_with_initial_peer_override".to_owned())),
+        ),
     );
 
     let node0_multiaddr = node_multiaddr(&base.deployment, 0);
