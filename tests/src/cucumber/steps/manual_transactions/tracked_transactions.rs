@@ -1,5 +1,6 @@
 use std::{collections::HashSet, time::Duration};
 
+use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
     MantleTx, Note, Op, OpProof, SignedMantleTx, Transaction as _, TxHash,
     genesis_tx::GENESIS_STORAGE_GAS_PRICE, ops::transfer::TransferOp,
@@ -165,9 +166,10 @@ async fn transaction_is_in_chain(
         consensus.tip,
         &mut scanned_blocks,
         async |header_id| client.block(&header_id).await.ok().flatten(),
-        |block| {
+        |block: &ApiBlock| {
             block
-                .transactions()
+                .transactions
+                .iter()
                 .any(|tx| tx.hash() == tx_hash)
                 .then_some(())
         },

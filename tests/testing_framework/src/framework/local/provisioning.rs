@@ -150,7 +150,9 @@ impl LocalDeployerEnv for LbcEnv {
         Ok(build_node_launch_spec(dir, user_yaml, deployment_yaml))
     }
 
-    fn node_endpoints(config: &<Self as Application>::NodeConfig) -> NodeEndpoints {
+    fn node_endpoints(
+        config: &<Self as Application>::NodeConfig,
+    ) -> Result<NodeEndpoints, DynError> {
         let mut endpoints = NodeEndpoints {
             api: config.user.api.backend.listen_address,
             ..Default::default()
@@ -158,7 +160,7 @@ impl LocalDeployerEnv for LbcEnv {
 
         add_endpoint_ports(&mut endpoints, config);
 
-        endpoints
+        Ok(endpoints)
     }
 
     fn node_peer_port(node: &Node<Self>) -> u16 {
@@ -167,12 +169,12 @@ impl LocalDeployerEnv for LbcEnv {
             .unwrap_or_else(|| node.config().user.network.backend.swarm.port)
     }
 
-    fn node_client(endpoints: &NodeEndpoints) -> Self::NodeClient {
+    fn node_client(endpoints: &NodeEndpoints) -> Result<Self::NodeClient, DynError> {
         let testing_api = endpoints
             .port(&NodeEndpointPort::TestingApi)
             .map(|port| (endpoints.api.ip(), port).into());
 
-        NodeHttpClient::new(endpoints.api, testing_api)
+        Ok(NodeHttpClient::new(endpoints.api, testing_api))
     }
 
     fn readiness_endpoint_path() -> &'static str {

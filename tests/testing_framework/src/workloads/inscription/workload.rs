@@ -164,7 +164,7 @@ impl<'a, E: LbcScenarioEnv + LbcBlockFeedEnv> InscriptionRunner<'a, E> {
         Ok(Self {
             channels,
             pending_by_hash: HashMap::new(),
-            feed: E::block_feed_subscription(ctx),
+            feed: E::block_feed_subscription(ctx)?,
             ctx,
             payload_bytes: workload.payload_bytes.get(),
             min_confirmed: workload.min_confirmed,
@@ -284,7 +284,7 @@ impl<'a, E: LbcScenarioEnv + LbcBlockFeedEnv> InscriptionRunner<'a, E> {
     }
 
     fn process_block(&mut self, block: &BlockRecord) {
-        for observed in &block.new_blocks {
+        for observed in &block.events {
             for tx in &observed.block.transactions {
                 let tx_hash = tx.hash();
                 let Some(channel_idx) = self.pending_by_hash.remove(&tx_hash) else {

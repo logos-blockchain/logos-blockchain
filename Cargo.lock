@@ -1205,7 +1205,7 @@ dependencies = [
 [[package]]
 name = "cfgsync-adapter"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=5b8610a#5b8610a9370de0ddce2c40d7ad8f781f7c53085d"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=d3bb6348#d3bb6348e52a42a5b24eaf6b531dd5aa57610f52"
 dependencies = [
  "cfgsync-artifacts",
  "cfgsync-core",
@@ -1216,7 +1216,7 @@ dependencies = [
 [[package]]
 name = "cfgsync-artifacts"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=5b8610a#5b8610a9370de0ddce2c40d7ad8f781f7c53085d"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=d3bb6348#d3bb6348e52a42a5b24eaf6b531dd5aa57610f52"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -1225,7 +1225,7 @@ dependencies = [
 [[package]]
 name = "cfgsync-core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=5b8610a#5b8610a9370de0ddce2c40d7ad8f781f7c53085d"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=d3bb6348#d3bb6348e52a42a5b24eaf6b531dd5aa57610f52"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -8220,7 +8220,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=5b8610a#5b8610a9370de0ddce2c40d7ad8f781f7c53085d"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=d3bb6348#d3bb6348e52a42a5b24eaf6b531dd5aa57610f52"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8242,7 +8242,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-compose"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=5b8610a#5b8610a9370de0ddce2c40d7ad8f781f7c53085d"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=d3bb6348#d3bb6348e52a42a5b24eaf6b531dd5aa57610f52"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8263,7 +8263,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-k8s"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=5b8610a#5b8610a9370de0ddce2c40d7ad8f781f7c53085d"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=d3bb6348#d3bb6348e52a42a5b24eaf6b531dd5aa57610f52"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8272,6 +8272,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -8287,7 +8288,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-local"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=5b8610a#5b8610a9370de0ddce2c40d7ad8f781f7c53085d"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=d3bb6348#d3bb6348e52a42a5b24eaf6b531dd5aa57610f52"
 dependencies = [
  "async-trait",
  "fs_extra",

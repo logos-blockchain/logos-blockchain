@@ -1,3 +1,4 @@
+use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{Utxo, gas::MainnetGasConstants, tx_builder::MantleTxBuilder};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_testing_framework::NodeHttpClient;
@@ -39,6 +40,9 @@ pub async fn current_utxos_for_public_key(
         .consensus_info()
         .await
         .expect("fetching consensus info should succeed");
+    if consensus.height == 0 {
+        return owned.into_values().collect();
+    }
 
     let mut blocks = Vec::new();
     let mut scanned_blocks = std::collections::HashSet::new();
@@ -52,7 +56,7 @@ pub async fn current_utxos_for_public_key(
                 .await
                 .expect("fetching storage block should succeed")
         },
-        |block| {
+        |block: &ApiBlock| {
             blocks.push(block.clone());
 
             None
@@ -61,7 +65,7 @@ pub async fn current_utxos_for_public_key(
     .await;
 
     for block in blocks.into_iter().rev() {
-        for tx in block.transactions() {
+        for tx in &block.transactions {
             for transfer in tx.mantle_tx.transfers() {
                 for input in &transfer.inputs {
                     owned.remove(input);

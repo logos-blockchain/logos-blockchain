@@ -1,9 +1,9 @@
 use std::{collections::HashSet, hash::BuildHasher, time::Duration};
 
+use lb_common_http_client::ApiBlock;
 use lb_core::{
-    block::Block,
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction as _, TxHash},
+    mantle::{Transaction as _, TxHash},
 };
 use lb_testing_framework::NodeHttpClient;
 use tokio::time::{sleep, timeout};
@@ -19,8 +19,8 @@ pub async fn scan_chain_until<F, Fut, Visit, R, S>(
 where
     S: BuildHasher,
     F: FnMut(HeaderId) -> Fut,
-    Fut: Future<Output = Option<Block<SignedMantleTx>>>,
-    Visit: FnMut(&Block<SignedMantleTx>) -> Option<R>,
+    Fut: Future<Output = Option<ApiBlock>>,
+    Visit: FnMut(&ApiBlock) -> Option<R>,
 {
     let mut current = Some(start);
     let genesis = HeaderId::from([0; 32]);
@@ -38,7 +38,7 @@ where
             return Some(result);
         }
 
-        let parent = block.header().parent();
+        let parent = block.header.parent_block;
         if parent == genesis {
             break;
         }
@@ -62,6 +62,11 @@ pub async fn wait_for_transactions_inclusion(
                 .consensus_info()
                 .await
                 .expect("fetching consensus info should succeed");
+            if consensus.height == 0 {
+                sleep(Duration::from_millis(500)).await;
+
+                continue;
+            }
 
             let mut scanned_blocks = HashSet::new();
             let mut found = HashSet::new();
@@ -75,8 +80,8 @@ pub async fn wait_for_transactions_inclusion(
                         .await
                         .expect("fetching storage block should succeed")
                 },
-                |block| {
-                    for tx in block.transactions() {
+                |block: &ApiBlock| {
+                    for tx in &block.transactions {
                         let hash = tx.hash();
                         if expected.contains(&hash) {
                             found.insert(hash);

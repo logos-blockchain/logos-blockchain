@@ -113,7 +113,7 @@ async fn resolve_lib_height(
             });
         }
 
-        current = block.header().parent();
+        current = block.header.parent_block;
         current_height -= 1;
     }
 }

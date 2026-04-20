@@ -92,7 +92,7 @@ where
         );
 
         let observed = Arc::new(AtomicU64::new(0));
-        let mut receiver = E::block_feed_subscription(ctx);
+        let mut receiver = E::block_feed_subscription(ctx)?;
         let tracked_accounts = Arc::new(tracked_accounts);
         let captured_observed = Arc::clone(&observed);
 
@@ -103,7 +103,7 @@ where
             loop {
                 match receiver.recv().await {
                     Ok(record) => {
-                        for observed in &record.new_blocks {
+                        for observed in &record.events {
                             if observed.block.header.parent_block == genesis_parent {
                                 continue;
                             }

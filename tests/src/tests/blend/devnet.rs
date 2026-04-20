@@ -37,7 +37,7 @@ async fn blend_devnet_setup() {
         .expect("manual cluster should become ready");
 
     for node in &nodes {
-        wait_for_manual_cluster_height(&node.client, 2, Duration::from_secs(180))
+        wait_for_manual_cluster_height(&node.client, 2, Duration::from_mins(3))
             .await
             .unwrap_or_else(|_| panic!("{} should reach height 2", node.name));
     }

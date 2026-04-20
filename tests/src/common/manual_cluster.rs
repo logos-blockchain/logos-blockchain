@@ -4,12 +4,15 @@ use std::{
     time::Duration,
 };
 
+use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::Multiaddr;
-use lb_node::UserConfig;
+use lb_node::{UserConfig, config::RunConfig};
 use lb_testing_framework::{
-    DeploymentBuilder, LbcLocalDeployer, LbcManualCluster, NodeHttpClient, USER_CONFIG_FILE,
-    internal::DeploymentPlan,
+    DeploymentBuilder, LbcEnv, LbcLocalDeployer, LbcManualCluster, NodeHttpClient,
+    USER_CONFIG_FILE, internal::DeploymentPlan,
 };
+use reqwest::Url;
+use testing_framework_core::scenario::{DynError, PeerSelection, StartNodeOptions, StartedNode};
 use tokio::time::error::Elapsed;
 
 use crate::nodes::get_exe_path;
@@ -18,6 +21,11 @@ pub struct LocalManualClusterHarnessBase {
     pub scenario_base_dir: PathBuf,
     pub deployment: DeploymentPlan,
     pub cluster: LbcManualCluster,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ManualNodeLayout {
+    SelectNodeSeed(usize),
 }
 
 #[must_use]
@@ -43,11 +51,106 @@ pub fn build_local_manual_cluster(
     }
 }
 
+pub async fn start_local_manual_cluster_with_layout<F>(
+    test_name: &str,
+    prefix: &str,
+    builder: DeploymentBuilder,
+    node_count: usize,
+    layout: ManualNodeLayout,
+    config_patch: F,
+) -> (LocalManualClusterHarnessBase, Vec<StartedNode<LbcEnv>>)
+where
+    F: Fn(RunConfig) -> Result<RunConfig, DynError> + Clone + Send + Sync + 'static,
+{
+    let base = build_local_manual_cluster(test_name, prefix, builder);
+
+    let nodes = start_manual_nodes_with_layout(
+        &base.cluster,
+        &base.scenario_base_dir,
+        node_count,
+        layout,
+        config_patch,
+    )
+    .await;
+
+    base.cluster
+        .wait_network_ready()
+        .await
+        .expect("manual cluster should become ready");
+
+    (base, nodes)
+}
+
 pub fn ensure_local_node_binary_env() {
     // SAFETY: Tests set this process-local env var before spawning node processes.
     // We do not read-modify-write shared data through references here.
     unsafe {
         std::env::set_var("LOGOS_BLOCKCHAIN_NODE_BIN", get_exe_path());
+    }
+}
+
+pub async fn start_manual_nodes_with_layout<F>(
+    cluster: &LbcManualCluster,
+    scenario_base_dir: &Path,
+    node_count: usize,
+    layout: ManualNodeLayout,
+    config_patch: F,
+) -> Vec<StartedNode<LbcEnv>>
+where
+    F: Fn(RunConfig) -> Result<RunConfig, DynError> + Clone + Send + Sync + 'static,
+{
+    let mut nodes: Vec<StartedNode<LbcEnv>> = Vec::with_capacity(node_count);
+    let start_order = start_order(node_count, layout);
+
+    for (start_position, node_index) in start_order.into_iter().enumerate() {
+        let peers = peers_for_node(&nodes, start_position, layout);
+
+        nodes.push(
+            Box::pin(
+                cluster.start_node_with(
+                    &node_index.to_string(),
+                    StartNodeOptions::default()
+                        .with_peers(peers)
+                        .with_persist_dir(scenario_base_dir.join(format!("node-{node_index}")))
+                        .create_patch(config_patch.clone()),
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("starting node-{node_index} should succeed")),
+        );
+    }
+
+    nodes
+}
+
+fn start_order(node_count: usize, layout: ManualNodeLayout) -> Vec<usize> {
+    match layout {
+        ManualNodeLayout::SelectNodeSeed(seed_index) => {
+            assert!(
+                seed_index < node_count,
+                "seed node index {seed_index} is out of range for {node_count} nodes",
+            );
+
+            std::iter::once(seed_index)
+                .chain((0..node_count).filter(move |node_index| *node_index != seed_index))
+                .collect()
+        }
+    }
+}
+
+fn peers_for_node(
+    nodes: &[StartedNode<LbcEnv>],
+    start_position: usize,
+    layout: ManualNodeLayout,
+) -> PeerSelection {
+    match layout {
+        ManualNodeLayout::SelectNodeSeed(_) => {
+            if start_position == 0 {
+                PeerSelection::None
+            } else {
+                PeerSelection::Named(vec![nodes[0].name.clone()])
+            }
+        }
     }
 }
 
@@ -62,6 +165,7 @@ pub async fn wait_for_height(
                 .consensus_info()
                 .await
                 .expect("fetching consensus info should succeed");
+
             if info.height >= target_height {
                 return;
             }
@@ -70,6 +174,47 @@ pub async fn wait_for_height(
         }
     })
     .await
+}
+
+pub async fn wait_for_nodes_height(
+    nodes: &[&NodeHttpClient],
+    target_height: u64,
+    duration: Duration,
+) {
+    for node in nodes {
+        wait_for_height(node, target_height, duration)
+            .await
+            .unwrap_or_else(|_| panic!("node should reach height {target_height}"));
+    }
+}
+
+pub async fn get_wallet_balance(node: &NodeHttpClient, pk: ZkPublicKey) -> u64 {
+    let pk_hex = hex::encode(lb_groth16::fr_to_bytes(&pk.into()));
+    let url = api_url(node, &format!("wallet/{pk_hex}/balance"));
+
+    for _ in 0..5 {
+        let response = reqwest::Client::new()
+            .get(url.clone())
+            .send()
+            .await
+            .expect("balance request should not fail");
+
+        if response.status().is_success() {
+            let body: serde_json::Value = response.json().await.unwrap();
+            return body["balance"].as_u64().unwrap_or(0);
+        }
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    panic!("failed to get wallet balance after retries");
+}
+
+#[must_use]
+pub fn api_url(node: &NodeHttpClient, path: &str) -> Url {
+    node.base_url()
+        .join(path)
+        .expect("manual-cluster client base URL should join API path")
 }
 
 #[must_use]

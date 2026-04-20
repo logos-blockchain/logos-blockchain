@@ -124,21 +124,28 @@ impl NodeHttpClient {
         self.testing_url.as_ref()
     }
 
+    /// Fetches network info from one explicit base URL.
     async fn network_info_at(&self, base_url: Url) -> Result<Libp2pInfo, Error> {
-        let request_url = base_url
-            .join(NETWORK_INFO.trim_start_matches('/'))
-            .map_err(Error::Url)?;
+        let request_url = Self::join_path(&base_url, NETWORK_INFO)?;
+
         self.http_client
             .get::<(), Libp2pInfo>(request_url, None)
             .await
     }
 
+    /// Fetches testing-only SDP declarations from one explicit base URL.
     async fn get_sdp_declarations_at(&self, base_url: Url) -> Result<Vec<Declaration>, Error> {
-        let request_url = base_url
-            .join(MANTLE_SDP_DECLARATIONS.trim_start_matches('/'))
-            .map_err(Error::Url)?;
+        let request_url = Self::join_path(&base_url, MANTLE_SDP_DECLARATIONS)?;
+
         self.http_client
             .get::<(), Vec<Declaration>>(request_url, None)
             .await
+    }
+
+    /// Joins one static API path against a base URL.
+    fn join_path(base_url: &Url, path: &str) -> Result<Url, Error> {
+        base_url
+            .join(path.trim_start_matches('/'))
+            .map_err(Error::Url)
     }
 }
