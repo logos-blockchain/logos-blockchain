@@ -40,11 +40,11 @@ use utoipa::OpenApi as _;
 use utoipa_swagger_ui::SwaggerUi;
 
 use super::handlers::{
-    add_tx, block, blocks, blocks_stream, cryptarchia_headers, cryptarchia_info,
+    add_tx, blend_info, block, blocks, blocks_stream, cryptarchia_headers, cryptarchia_info,
     cryptarchia_lib_stream, libp2p_info, mantle_metrics, mantle_status, transaction, wallet,
 };
 use crate::{
-    WalletService,
+    BlendBroadcastSettings, BlendService, WalletService,
     api::{
         handlers::{
             channel, channel_deposit, leader_claim, post_activity, post_declaration,
@@ -153,7 +153,8 @@ where
             >,
         >
         + AsServiceId<WalletService>
-        + AsServiceId<ChainLeader>,
+        + AsServiceId<ChainLeader>
+        + AsServiceId<BlendService>,
 {
     type Error = std::io::Error;
     type Settings = AxumBackendSettings;
@@ -209,6 +210,10 @@ where
             .route(
                 paths::NETWORK_INFO,
                 routing::get(libp2p_info::<RuntimeServiceId>),
+            )
+            .route(
+                paths::BLEND_NETWORK_INFO,
+                routing::get(blend_info::<BlendService, BlendBroadcastSettings, RuntimeServiceId>),
             )
             .route(
                 paths::MEMPOOL_ADD_TX,

@@ -902,13 +902,21 @@ where
 
     loop {
         tokio::select! {
-            Some(ServiceMessage::Blend(message_payload)) = inbound_relay.next() => {
-                // We serialize here, outside of the handler function, so that we can serialize only once for all replicas.
-                let serialized_data_message = NetworkMessage::<NetAdapter::BroadcastSettings>::to_bytes(&message_payload).expect("NetworkMessage should be able to be serialized");
+            Some(msg) = inbound_relay.next() => {
+                match msg {
+                    ServiceMessage::Blend(message_payload) => {
+                        // We serialize here, outside of the handler function, so that we can serialize only once for all replicas.
+                        let serialized_data_message = NetworkMessage::<NetAdapter::BroadcastSettings>::to_bytes(&message_payload).expect("NetworkMessage should be able to be serialized");
 
-                let message_copies = blend_config.data_replication_factor.checked_add(1).unwrap();
-                for _ in 0..message_copies {
-                    recovery_checkpoint = handle_serialized_local_data_message(&serialized_data_message, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
+                        let message_copies = blend_config.data_replication_factor.checked_add(1).unwrap();
+                        for _ in 0..message_copies {
+                            recovery_checkpoint = handle_serialized_local_data_message(&serialized_data_message, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
+                        }
+                    }
+                    ServiceMessage::NetworkInfo { reply } => {
+                        let info = backend.network_info().await;
+                        let _ = reply.send(info);
+                    }
                 }
             }
             Some(incoming_message) = blend_messages.next() => {

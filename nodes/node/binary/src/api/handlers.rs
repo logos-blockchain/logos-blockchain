@@ -8,7 +8,7 @@ use axum::{
 };
 use futures::FutureExt as _;
 use lb_api_service::http::{
-    DynError,
+    DynError, blend,
     consensus::{self, Cryptarchia},
     libp2p, mantle, mempool,
     storage::StorageAdapter,
@@ -273,6 +273,28 @@ where
         >,
 {
     make_request_and_return_response!(libp2p::libp2p_info::<RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    get,
+    path = paths::BLEND_NETWORK_INFO,
+    responses(
+        (status = 200, description = "Query the blend network information", body = Option<lb_blend_service::message::BlendNetworkInfo>),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn blend_info<S, BroadcastSettings, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    S: ServiceData<Message = lb_blend_service::message::ServiceMessage<BroadcastSettings>>
+        + 'static,
+    BroadcastSettings: Send + 'static,
+    RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<S>,
+{
+    make_request_and_return_response!(blend::blend_info::<S, BroadcastSettings, RuntimeServiceId>(
+        &handle
+    ))
 }
 
 #[utoipa::path(

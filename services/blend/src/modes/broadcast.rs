@@ -62,11 +62,21 @@ where
             + Sync
             + 'static,
     {
-        let (payload, broadcast_settings) = message.into_components();
-        self.adapter
-            .broadcast(payload.into(), broadcast_settings.into())
-            .await;
-        Ok(())
+        // If this is a network info request, respond with None (broadcast mode
+        // has no blend peers).
+        match message.try_into_network_info_request() {
+            Ok(reply) => {
+                let _ = reply.send(None);
+                return Ok(());
+            }
+            Err(message) => {
+                let (payload, broadcast_settings) = message.into_components();
+                self.adapter
+                    .broadcast(payload.into(), broadcast_settings.into())
+                    .await;
+                Ok(())
+            }
+        }
     }
 }
 

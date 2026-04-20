@@ -189,6 +189,11 @@ impl OldSession {
             .is_some_and(|&id| id == *connection_id)
     }
 
+    /// Returns the peer IDs of all negotiated peers in the old session.
+    pub fn negotiated_peer_ids(&self) -> impl Iterator<Item = &PeerId> {
+        self.negotiated_peers.keys()
+    }
+
     /// Should be called when a connection is detected as closed.
     ///
     /// It removes the connection from the states and returns [`true`]

@@ -256,11 +256,20 @@ where
         }
         .await;
 
-        let messages_to_blend_stream = inbound_relay.map(|ServiceMessage::Blend(message)| {
-            NetworkMessage::<BroadcastSettings>::to_bytes(&message)
-                .expect("NetworkMessage should be able to be serialized")
-                .to_vec()
-        });
+        let messages_to_blend_stream = Box::pin(inbound_relay.filter_map(|msg| async {
+            match msg {
+                ServiceMessage::Blend(message) => Some(
+                    NetworkMessage::<BroadcastSettings>::to_bytes(&message)
+                        .expect("NetworkMessage should be able to be serialized")
+                        .to_vec(),
+                ),
+                ServiceMessage::NetworkInfo { reply } => {
+                    // Edge nodes don't have blend peer info.
+                    let _ = reply.send(None);
+                    None
+                }
+            }
+        }));
 
         let epoch_handler = async {
             let chain_service = CryptarchiaServiceApi::<ChainService, _>::new(

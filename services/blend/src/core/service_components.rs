@@ -1,4 +1,5 @@
 use lb_utils::blake_rng::BlakeRng;
+use tokio::sync::oneshot;
 
 use crate::{
     core::{BlendService, backends::BlendBackend},
@@ -59,11 +60,22 @@ pub type NetworkBackendOfService<Service, RuntimeServiceId> = <<Service as Servi
 pub type BlendBackendSettingsOfService<Service, RuntimeServiceId> =
     <Service as ServiceComponents<RuntimeServiceId>>::BackendSettings;
 
+use crate::message::BlendNetworkInfo;
+
 pub trait MessageComponents {
     type Payload;
     type BroadcastSettings;
 
     fn into_components(self) -> (Self::Payload, Self::BroadcastSettings);
+
+    /// Try to extract a network info request from the message.
+    /// Returns `Ok(sender)` if the message is a `NetworkInfo` request,
+    /// or `Err(self)` if it is not.
+    fn try_into_network_info_request(
+        self,
+    ) -> Result<oneshot::Sender<Option<BlendNetworkInfo>>, Self>
+    where
+        Self: Sized;
 }
 
 impl<BroadcastSettings> MessageComponents for ServiceMessage<BroadcastSettings> {
@@ -71,7 +83,22 @@ impl<BroadcastSettings> MessageComponents for ServiceMessage<BroadcastSettings> 
     type BroadcastSettings = BroadcastSettings;
 
     fn into_components(self) -> (Self::Payload, Self::BroadcastSettings) {
-        let Self::Blend(network_message) = self;
-        (network_message.message, network_message.broadcast_settings)
+        match self {
+            Self::Blend(network_message) => {
+                (network_message.message, network_message.broadcast_settings)
+            }
+            Self::NetworkInfo { .. } => {
+                panic!("NetworkInfo messages should be handled before calling into_components")
+            }
+        }
+    }
+
+    fn try_into_network_info_request(
+        self,
+    ) -> Result<oneshot::Sender<Option<BlendNetworkInfo>>, Self> {
+        match self {
+            Self::NetworkInfo { reply } => Ok(reply),
+            other => Err(other),
+        }
     }
 }

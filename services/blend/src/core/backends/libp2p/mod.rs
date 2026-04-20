@@ -134,6 +134,20 @@ where
                 .filter_map(async |event| event.ok()),
         )
     }
+
+    async fn network_info(&self) -> Option<crate::message::BlendNetworkInfo> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        if self
+            .swarm_message_sender
+            .send(BlendSwarmMessage::NetworkInfo { reply: sender })
+            .await
+            .is_err()
+        {
+            tracing::error!(target: LOG_TARGET, "Failed to send NetworkInfo request to BlendSwarm");
+            return None;
+        }
+        receiver.await.unwrap_or(None)
+    }
 }
 
 impl Drop for Libp2pBlendBackend {

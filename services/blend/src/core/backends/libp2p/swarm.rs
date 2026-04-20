@@ -42,6 +42,7 @@ use crate::{
         },
         settings::RunningBlendConfig as BlendConfig,
     },
+    message::BlendNetworkInfo,
     metrics,
 };
 
@@ -53,6 +54,9 @@ pub enum BlendSwarmMessage {
     },
     StartNewSession(SessionInfo<PeerId>),
     CompleteSessionTransition,
+    NetworkInfo {
+        reply: tokio::sync::oneshot::Sender<Option<BlendNetworkInfo>>,
+    },
 }
 
 pub struct DialAttempt {
@@ -247,6 +251,22 @@ where
         self.check_and_dial_new_peers_except(HashSet::from([peer_id]));
     }
 
+    fn collect_network_info(&self) -> BlendNetworkInfo {
+        let with_core = self.swarm.behaviour().blend.with_core();
+        let current_session_peers = with_core
+            .negotiated_peers()
+            .keys()
+            .map(|p| p.to_string())
+            .collect();
+        let old_session_peers = with_core
+            .old_session_peer_ids()
+            .map(|peers| peers.into_iter().map(|p| p.to_string()).collect());
+        BlendNetworkInfo {
+            current_session_peers,
+            old_session_peers,
+        }
+    }
+
     fn handle_unhealthy_peer(&mut self, peer_id: PeerId) {
         tracing::trace!(target: LOG_TARGET, "Peer {peer_id} is unhealthy");
         self.check_and_dial_new_peers_except(HashSet::from([peer_id]));
@@ -384,6 +404,10 @@ where
             }
             BlendSwarmMessage::CompleteSessionTransition => {
                 self.swarm.behaviour_mut().blend.finish_session_transition();
+            }
+            BlendSwarmMessage::NetworkInfo { reply } => {
+                let info = self.collect_network_info();
+                let _ = reply.send(Some(info));
             }
         }
     }

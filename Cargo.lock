@@ -4189,6 +4189,7 @@ dependencies = [
  "bytes",
  "futures",
  "hyper",
+ "logos-blockchain-blend-service",
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-service",
