@@ -95,11 +95,12 @@ pub mod tests {
             state::{NoOperator, NoState},
         },
     };
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, oneshot};
     use tokio_stream::wrappers::BroadcastStream;
     use tracing::{debug, info};
 
     use super::*;
+    use crate::message::NetworkInfo;
 
     #[test_log::test(test)]
     fn broadcast_mode() {
@@ -271,12 +272,21 @@ pub mod tests {
     #[derive(Debug)]
     pub struct TestMessage(Vec<u8>);
 
-    impl MessageComponents for TestMessage {
+    impl<NodeId> MessageComponents<NodeId> for TestMessage {
         type Payload = Vec<u8>;
         type BroadcastSettings = ();
 
         fn into_components(self) -> (Self::Payload, Self::BroadcastSettings) {
             (self.0, ())
+        }
+
+        fn try_into_network_info_request(
+            self,
+        ) -> Result<oneshot::Sender<Option<NetworkInfo<NodeId>>>, Self>
+        where
+            Self: Sized,
+        {
+            Err(self)
         }
     }
 
