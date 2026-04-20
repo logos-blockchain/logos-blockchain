@@ -1,7 +1,7 @@
-use core::{future::ready, pin::Pin};
+use core::pin::Pin;
 
 use async_trait::async_trait;
-use futures::{Stream, StreamExt as _, stream};
+use futures::stream::{self, Stream, StreamExt as _};
 use lb_blend_message::crypto::{
     key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
 };
@@ -15,17 +15,21 @@ use lb_blend_proofs::{
     },
     selection::VerifiedProofOfSelection,
 };
+use lb_cryptarchia_engine::Epoch;
+use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
-use tokio::task::spawn_blocking;
-use tokio_util::sync::CancellationToken;
+use lb_utils::tokio::stream::Buffered;
+use tokio::{task::spawn_blocking, time::Instant};
 
-use crate::message_blend::provers::{BlendLayerProof, ProofsGeneratorSettings};
+use crate::message_blend::{
+    buffer_size,
+    provers::{BlendLayerProof, ProofsGeneratorSettings},
+};
 
 #[cfg(test)]
 mod tests;
 
 const LOG_TARGET: &str = "blend::scheduling::proofs::leader";
-const PROOFS_GENERATOR_BUFFER_SIZE: usize = 10;
 
 /// A `PoQ` generator that deals only with leadership proofs, suitable for edge
 /// nodes.
@@ -41,6 +45,7 @@ pub trait LeaderProofsGenerator: Sized {
         &mut self,
         new_epoch_public: LeaderInputs,
         new_private_inputs: ProofOfLeadershipQuotaInputs,
+        new_epoch: Epoch,
     );
     /// Get the next leadership proof.
     async fn get_next_proof(&mut self) -> BlendLayerProof;
@@ -48,8 +53,8 @@ pub trait LeaderProofsGenerator: Sized {
 
 pub struct RealLeaderProofsGenerator {
     pub(super) settings: ProofsGeneratorSettings,
-    proof_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send + Sync>>,
-    cancellation_token: CancellationToken,
+    private_inputs: ProofOfLeadershipQuotaInputs,
+    proofs_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send + Sync>>,
 }
 
 #[async_trait]
@@ -58,16 +63,14 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
         settings: ProofsGeneratorSettings,
         private_inputs: ProofOfLeadershipQuotaInputs,
     ) -> Self {
-        let cancellation_token = CancellationToken::new();
-
         Self {
-            proof_stream: Box::pin(create_leadership_proof_stream(
+            settings,
+            private_inputs: private_inputs.clone(),
+            proofs_stream: Box::pin(create_proof_stream(
                 settings.public_inputs,
                 private_inputs,
-                cancellation_token.clone(),
+                buffer_size(settings.public_inputs.leader.message_quota as usize),
             )),
-            settings,
-            cancellation_token,
         }
     }
 
@@ -75,59 +78,56 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
         &mut self,
         new_epoch_public: LeaderInputs,
         new_private: ProofOfLeadershipQuotaInputs,
+        new_epoch: Epoch,
     ) {
         tracing::info!(target: LOG_TARGET, "Rotating epoch...");
 
         // On epoch rotation, we maintain the current session info and only change the
         // PoL relevant parts.
         self.settings.public_inputs.leader = new_epoch_public;
+        self.settings.epoch = new_epoch;
+        self.private_inputs = new_private;
 
         // Compute new proofs with the updated settings.
-        self.generate_new_proofs_stream(new_private);
+        self.generate_new_proofs_stream();
     }
 
     async fn get_next_proof(&mut self) -> BlendLayerProof {
+        let start = Instant::now();
         let proof = self
-            .proof_stream
+            .proofs_stream
             .next()
             .await
-            .expect("Underlying proof generation stream should always yield items.");
-        tracing::trace!(target: LOG_TARGET, "Generated leadership Blend layer proof with key nullifier {:?} addressed to node at index {:?}", proof.proof_of_quota.key_nullifier(), proof.proof_of_selection.expected_index(self.settings.membership_size));
+            .expect("Underlying proof generation task should always yield items.");
+        tracing::trace!(target: LOG_TARGET, "Generated leadership Blend layer proof with key nullifier {:?} addressed to node at index {:?} in {:?} ms.", hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), proof.proof_of_selection.expected_index(self.settings.membership_size), start.elapsed().as_millis());
         proof
     }
 }
 
 impl RealLeaderProofsGenerator {
-    fn generate_new_proofs_stream(&mut self, private_inputs: ProofOfLeadershipQuotaInputs) {
-        self.cancellation_token.cancel();
-
-        let new_cancellation_token = CancellationToken::new();
-        self.cancellation_token = new_cancellation_token.clone();
-
-        self.proof_stream = Box::pin(create_leadership_proof_stream(
+    fn generate_new_proofs_stream(&mut self) {
+        self.proofs_stream = Box::pin(create_proof_stream(
             self.settings.public_inputs,
-            private_inputs,
-            new_cancellation_token,
+            self.private_inputs.clone(),
+            buffer_size(self.settings.public_inputs.leader.message_quota as usize),
         ));
+    }
+
+    pub(super) const fn current_epoch(&self) -> Epoch {
+        self.settings.epoch
     }
 }
 
-fn create_leadership_proof_stream(
+fn create_proof_stream(
     public_inputs: PoQVerificationInputsMinusSigningKey,
     private_inputs: ProofOfLeadershipQuotaInputs,
-    cancellation_token: CancellationToken,
-) -> impl Stream<Item = BlendLayerProof> {
+    buffer_size: usize,
+) -> impl Stream<Item = BlendLayerProof> + Send {
     let message_quota = public_inputs.leader.message_quota;
+    tracing::debug!(target: LOG_TARGET, "Generating leadership quota proofs starting with public inputs: {public_inputs:?}.");
 
-    stream::iter(0u64..)
-        // Stop producing new items once cancelled
-        .take_while({
-            let token = cancellation_token.clone();
-            move |_| {
-                let is_active = !token.is_cancelled();
-                async move { is_active }
-            }
-        })
+    Buffered::new(
+        stream::iter(0u64..)
         .map(move |current_index| {
             // This represents the total number of encapsulations sent out for each message.
             // E.g., for a session with data message replication factor of `1`, we get
@@ -142,45 +142,42 @@ fn create_leadership_proof_stream(
             // message scheduler.
             let message_release_index = current_index % message_quota;
             let private_inputs = private_inputs.clone();
-            let token = cancellation_token.clone();
+
+            // Spawn eagerly here (outside `async move`) so the blocking task starts as
+            // soon as the stream buffer slot is filled, not when the future is first polled.
+            // Without this, `spawn_blocking` would only be called when `FuturesOrdered`
+            // first polls the future — which only happens when the consumer polls the
+            // stream — causing avoidable latency when the consumer is idle.
+            let task = spawn_blocking(move || {
+                let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
+                let (proof_of_quota, secret_selection_randomness) = VerifiedProofOfQuota::new(
+                    &PublicInputs {
+                        signing_key: ephemeral_signing_key.public_key().into_inner(),
+                        core: public_inputs.core,
+                        leader: public_inputs.leader,
+                        session: public_inputs.session,
+                    },
+                    PrivateInputs::new_proof_of_leadership_quota_inputs(
+                        message_release_index,
+                        private_inputs,
+                    ),
+                )
+                .expect("Leadership PoQ proof creation should not fail.");
+                let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
+                BlendLayerProof {
+                    proof_of_quota,
+                    proof_of_selection,
+                    ephemeral_signing_key,
+                }
+            });
 
             async move {
-                let token_clone = token.clone();
-                let leadership_proof = spawn_blocking(move || {
-                    if token_clone.is_cancelled() {
-                        tracing::debug!(target: LOG_TARGET, "Leadership proof generation cancelled before starting.");
-                        return None;
-                    }
+                let leadership_proof = task.await.expect("Spawning task for leadership proof generation should not fail.");
 
-                    let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
-                    let (proof_of_quota, secret_selection_randomness) = VerifiedProofOfQuota::new(
-                        &PublicInputs {
-                            signing_key: ephemeral_signing_key.public_key().into_inner(),
-                            core: public_inputs.core,
-                            leader: public_inputs.leader,
-                            session: public_inputs.session,
-                        },
-                        PrivateInputs::new_proof_of_leadership_quota_inputs(
-                            message_release_index,
-                            private_inputs,
-                        ),
-                    )
-                    .expect("Leadership PoQ proof creation should not fail.");
-                    let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
-                    Some(BlendLayerProof {
-                        proof_of_quota,
-                        proof_of_selection,
-                        ephemeral_signing_key,
-                    })
-                }).await.expect("Spawning task for leadership proof generation should not fail.");
-
-                if token.is_cancelled() {
-                    tracing::debug!(target: LOG_TARGET, "Leadership proof generation cancelled after completion.");
-                    return None;
-                }
+                tracing::trace!(target: LOG_TARGET, "Generated leadership PoQ within the stream for message release index {message_release_index:?} with key nullifier {:?}  and public key {:?}.", hex::encode(fr_to_bytes(&leadership_proof.proof_of_quota.key_nullifier())), leadership_proof.ephemeral_signing_key.public_key());
                 leadership_proof
             }
-        })
-        .buffered(PROOFS_GENERATOR_BUFFER_SIZE)
-        .filter_map(ready)
+        }),
+        buffer_size,
+    )
 }

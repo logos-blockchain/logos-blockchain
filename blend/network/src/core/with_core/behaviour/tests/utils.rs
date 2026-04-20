@@ -6,14 +6,8 @@ use std::{
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _, select};
-use lb_blend_message::{
-    crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
-    encap,
-};
-use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
+use lb_blend_message::crypto::key_ext::Ed25519SecretKeyExt as _;
 use lb_blend_scheduling::membership::{Membership, Node};
-use lb_core::{crypto::ZkHash, sdp::SessionNumber};
-use lb_groth16::Field as _;
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_libp2p::{NetworkBehaviour, SwarmEvent};
 use libp2p::{
@@ -21,12 +15,12 @@ use libp2p::{
     identity::{PublicKey, ed25519},
 };
 use libp2p_swarm_test::SwarmExt as _;
-use tokio::time::interval;
+use tokio::time::{MissedTickBehavior, interval};
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::core::{
     tests::utils::{PROTOCOL_NAME, TestSwarm},
-    with_core::behaviour::{Behaviour, Event, IntervalStreamProvider},
+    with_core::behaviour::{Behaviour, Event, IntervalStreamProvider, message_cache::MessageCache},
 };
 
 #[derive(Clone)]
@@ -38,7 +32,13 @@ impl IntervalStreamProvider for IntervalProvider {
 
     fn interval_stream(&self) -> Self::IntervalStream {
         let range = self.1.clone();
-        Box::new(IntervalStream::new(interval(self.0)).map(move |_| range.clone()))
+        let interval = {
+            let mut interval = interval(self.0);
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+            interval
+        };
+        Box::new(IntervalStream::new(interval).map(move |_| range.clone()))
     }
 }
 
@@ -87,7 +87,6 @@ pub struct BehaviourBuilder {
     provider: Option<IntervalProvider>,
     peering_degree: Option<RangeInclusive<usize>>,
     minimum_network_size: Option<NonZeroUsize>,
-    poq_verification_inputs: Option<PoQVerificationInputsMinusSigningKey>,
 }
 
 impl BehaviourBuilder {
@@ -98,7 +97,6 @@ impl BehaviourBuilder {
             provider: None,
             peering_degree: None,
             minimum_network_size: None,
-            poq_verification_inputs: None,
         }
     }
 
@@ -126,34 +124,20 @@ impl BehaviourBuilder {
         self
     }
 
-    pub fn with_poq_verification_inputs(
-        mut self,
-        poq_verification_inputs: PoQVerificationInputsMinusSigningKey,
-    ) -> Self {
-        assert!(
-            self.poq_verification_inputs.is_none(),
-            "poq_verification_inputs already set."
-        );
-        self.poq_verification_inputs = Some(poq_verification_inputs);
-        self
-    }
-
-    pub fn build<ProofsVerifier>(self) -> Behaviour<ProofsVerifier, IntervalProvider>
-    where
-        ProofsVerifier: encap::ProofsVerifier,
-    {
+    pub fn build(self) -> Behaviour<IntervalProvider> {
         Behaviour {
             negotiated_peers: HashMap::new(),
             connections_waiting_upgrade: HashMap::new(),
             events: VecDeque::new(),
             waker: None,
-            exchanged_message_identifiers: HashMap::new(),
             observation_window_clock_provider: self
                 .provider
                 .unwrap_or_else(|| IntervalProviderBuilder::default().build()),
-            current_membership: self
-                .membership
-                .unwrap_or_else(|| Membership::new_without_local(&[])),
+            current_session_info: (
+                self.membership
+                    .unwrap_or_else(|| Membership::new_without_local(&[])),
+                0,
+            ),
             peering_degree: self.peering_degree.unwrap_or(1..=1),
             local_peer_id: PublicKey::from(self.local_public_key).into(),
             protocol_name: PROTOCOL_NAME,
@@ -161,29 +145,8 @@ impl BehaviourBuilder {
                 .minimum_network_size
                 .unwrap_or_else(|| 1usize.try_into().unwrap()),
             old_session: None,
-            poq_verifier: ProofsVerifier::new(
-                self.poq_verification_inputs
-                    .unwrap_or_else(|| default_poq_verification_inputs_for_session(0)),
-            ),
+            message_cache: MessageCache::new(),
         }
-    }
-}
-
-pub fn default_poq_verification_inputs_for_session(
-    session: SessionNumber,
-) -> PoQVerificationInputsMinusSigningKey {
-    PoQVerificationInputsMinusSigningKey {
-        session,
-        core: CoreInputs {
-            zk_root: ZkHash::ZERO,
-            quota: 0,
-        },
-        leader: LeaderInputs {
-            pol_ledger_aged: ZkHash::ZERO,
-            pol_epoch_nonce: ZkHash::ZERO,
-            message_quota: 0,
-            total_stake: 0,
-        },
     }
 }
 
@@ -197,10 +160,7 @@ pub trait SwarmExt: libp2p_swarm_test::SwarmExt {
 }
 
 #[async_trait]
-impl<ProofsVerifier> SwarmExt for Swarm<Behaviour<ProofsVerifier, IntervalProvider>>
-where
-    ProofsVerifier: encap::ProofsVerifier + Send + 'static,
-{
+impl SwarmExt for Swarm<Behaviour<IntervalProvider>> {
     async fn connect_and_wait_for_upgrade<ListenerBehaviour>(
         &mut self,
         listener: &mut Swarm<ListenerBehaviour>,

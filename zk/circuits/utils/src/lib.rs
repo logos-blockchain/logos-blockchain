@@ -1,7 +1,13 @@
-use std::path::PathBuf;
+use std::{fs::read_to_string, path::PathBuf};
 
 const LOGOS_BLOCKCHAIN_CIRCUITS_ENV_VAR: &str = "LOGOS_BLOCKCHAIN_CIRCUITS";
 const LOGOS_BLOCKCHAIN_CIRCUITS_DEFAULT_DIR: &str = ".logos-blockchain-circuits";
+const EXPECTED_CIRCUITS_VERSION: &str = "v0.4.2";
+
+#[cfg(target_os = "windows")]
+const BINARY_NAME: &str = "witness_generator.exe";
+#[cfg(not(target_os = "windows"))]
+const BINARY_NAME: &str = "witness_generator";
 
 /// Get the logos-blockchain-circuits base directory.
 ///
@@ -10,7 +16,8 @@ const LOGOS_BLOCKCHAIN_CIRCUITS_DEFAULT_DIR: &str = ".logos-blockchain-circuits"
 ///
 /// # Panics
 ///
-/// Panics if a logos-blockchain-circuits directory is not found
+/// Panics if a logos-blockchain-circuits directory is not found or if the
+/// circuits version does not match the expected one.
 #[must_use]
 pub fn circuits_dir() -> PathBuf {
     // Check LOGOS_BLOCKCHAIN_CIRCUITS env var first
@@ -30,6 +37,16 @@ pub fn circuits_dir() -> PathBuf {
         .join(LOGOS_BLOCKCHAIN_CIRCUITS_DEFAULT_DIR);
 
     if path.is_dir() {
+        let circuits_version = read_to_string(path.join("VERSION"))
+            .unwrap()
+            .trim()
+            .to_owned();
+        assert_eq!(
+            circuits_version,
+            EXPECTED_CIRCUITS_VERSION,
+            "The logos-blockchain-circuits directory at '{}' is version '{circuits_version}', but version '{EXPECTED_CIRCUITS_VERSION}' is expected. Please update your circuits directory or set the {LOGOS_BLOCKCHAIN_CIRCUITS_ENV_VAR} environment variable to point to a compatible circuits directory.",
+            path.display()
+        );
         path
     } else {
         panic!(
@@ -53,7 +70,7 @@ pub fn circuits_dir() -> PathBuf {
 #[must_use]
 pub fn witness_generator_path(circuit_name: &str) -> PathBuf {
     let base_dir = circuits_dir();
-    let witness_gen_path = base_dir.join(circuit_name).join("witness_generator");
+    let witness_gen_path = base_dir.join(circuit_name).join(BINARY_NAME);
 
     if witness_gen_path.is_file() {
         witness_gen_path

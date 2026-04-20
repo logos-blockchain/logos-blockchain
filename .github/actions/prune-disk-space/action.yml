@@ -1,0 +1,114 @@
+name: Prune disk space (cache-aware, self-hosted)
+description: Frees disk space from previous run leftovers on self-hosted runners (Linux + macOS)
+
+runs:
+  using: composite
+  steps:
+    - name: Prune disk space
+      if: always()
+      shell: bash
+      run: |
+        set -uo pipefail
+
+        echo "Disk before:"
+        df -h || true
+
+        avail_kb() { df -Pk . | awk 'NR==2 {print $4}'; }
+
+        # --- 1) macOS: remove big, known-safe Xcode junk (keep it surgical)
+        if [ "${RUNNER_OS}" = "macOS" ]; then
+          rm -rf ~/Library/Developer/Xcode/DerivedData 2>/dev/null || true
+          rm -rf ~/Library/Caches/com.apple.python 2>/dev/null || true
+          rm -rf ~/Library/Caches/gmp-mpfr-sys 2>/dev/null || true
+        fi
+
+        # --- 2) Repo-local reproducible bloat
+        find . -type d -name node_modules -prune -exec rm -rf {} + 2>/dev/null || true
+        find . -type d -name dist         -prune -exec rm -rf {} + 2>/dev/null || true
+        find . -type d -name build        -prune -exec rm -rf {} + 2>/dev/null || true
+        find . -type d -name .cache       -prune -exec rm -rf {} + 2>/dev/null || true
+        find . -type d -name .vite        -prune -exec rm -rf {} + 2>/dev/null || true
+        find . -type d -name __pycache__  -prune -exec rm -rf {} + 2>/dev/null || true
+        find . -not -path './target/*' -name "*.pyc" -delete 2>/dev/null || true
+
+        # npm/pip cache cleanup — safe to run always; no-ops if not installed/used
+        npm cache clean --force 2>/dev/null || true
+        pip cache purge 2>/dev/null || true
+
+        # NOTE: Do NOT prune ~/.cargo here in normal mode.
+        # The workflow restores ~/.cargo via actions/cache; pruning it here defeats caching and can cause refetch storms.
+
+        # --- 3) Target thinning: keep cache value, remove worst disk hogs
+        # (incremental + fingerprints + build-script outputs). Do NOT delete deps in normal mode.
+        if [ -d "target" ]; then
+          echo "Target before:"
+          du -sh target 2>/dev/null || true
+
+          find target -type d -name incremental   -prune -exec rm -rf {} + 2>/dev/null || true
+          find target -type d -name .fingerprint  -prune -exec rm -rf {} + 2>/dev/null || true
+          find target -type d -name build         -prune -exec rm -rf {} + 2>/dev/null || true
+
+          echo "Target after:"
+          du -sh target 2>/dev/null || true
+        fi
+
+        # --- 4) Diagnostics: show biggest offenders (cheap, useful)
+        echo "Top workspace dirs (largest 30):"
+        (
+          du -xh -d 2 . 2>/dev/null | sort -rh 2>/dev/null
+        ) || (
+          du -xh -d 2 . 2>/dev/null | sort -r
+        ) | head -n 30 || true
+
+        echo "npm cache:        $(du -sh ~/.npm 2>/dev/null || echo 'n/a')"
+        echo "cargo registry:   $(du -sh ~/.cargo/registry 2>/dev/null || echo 'n/a')"
+        echo "cargo git:        $(du -sh ~/.cargo/git 2>/dev/null || echo 'n/a')"
+
+        if [ -d target ]; then
+          echo "Top target dirs (largest 30):"
+          (
+            du -xh -d 2 target 2>/dev/null | sort -rh 2>/dev/null
+          ) || (
+            du -xh -d 2 target 2>/dev/null | sort -r
+          ) | head -n 30 || true
+        fi
+
+        # --- 5) Runner diag trimming: robust globbing across Linux + macOS runner layouts
+        # Use nullglob so non-matching globs expand to nothing (no noisy literal patterns).
+        (
+          shopt -s nullglob
+          for d in /github-runner/*/_diag /Users/*/github-runner-node-*/_diag; do
+            [ -d "$d" ] || continue
+            echo "Diag before ($d):"
+            du -sh "$d" 2>/dev/null || true
+            # Keep recent logs; delete older ones
+            find "$d" -type f -mtime +1 -delete 2>/dev/null || true
+            echo "Diag after ($d):"
+            du -sh "$d" 2>/dev/null || true
+          done
+        )
+
+        # --- 6) Emergency mode: if still low disk, apply stronger pruning (rebuildable)
+        # 15 GB threshold
+        free_now=$(avail_kb 2>/dev/null || echo 999999999)
+        if [ "$free_now" -lt $((15*1024*1024)) ]; then
+          echo "Low disk (<15GB). Applying emergency pruning..."
+
+          # In emergency, it's acceptable to drop deps to prevent runner death.
+          if [ -d target ]; then
+            for profile in debug release; do
+              if [ -d "target/$profile" ]; then
+                find "target/$profile" -maxdepth 1 -type d \
+                  \( -name deps -o -name build -o -name .fingerprint -o -name incremental \) \
+                  -exec rm -rf {} + 2>/dev/null || true
+              fi
+            done
+          fi
+
+          # As a last resort, prune old cargo *download* artifacts only (least harmful),
+          # but keep this very conservative and best-effort.
+          find ~/.cargo/registry/cache -type f -name "*.crate" -mtime +14 -delete 2>/dev/null || true
+        fi
+
+        echo "Disk after:"
+        df -h || true

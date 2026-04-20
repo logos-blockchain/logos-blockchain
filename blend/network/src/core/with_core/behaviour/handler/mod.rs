@@ -6,10 +6,10 @@ use std::{collections::VecDeque, io};
 
 use futures::{FutureExt as _, future::BoxFuture};
 use libp2p::{
-    Stream, StreamProtocol,
+    PeerId, Stream, StreamProtocol,
     core::upgrade::ReadyUpgrade,
     swarm::{
-        ConnectionHandlerEvent, SubstreamProtocol,
+        ConnectionHandlerEvent, ConnectionId, SubstreamProtocol,
         handler::{
             ConnectionEvent, DialUpgradeError, FullyNegotiatedInbound, FullyNegotiatedOutbound,
         },
@@ -41,6 +41,7 @@ pub struct ConnectionHandler<ConnectionWindowClock> {
     monitor: ConnectionMonitor<ConnectionWindowClock>,
     protocol_name: StreamProtocol,
     waker: Option<Waker>,
+    connection_details: (PeerId, ConnectionId),
 }
 
 type MsgSendFuture = BoxFuture<'static, Result<Stream, io::Error>>;
@@ -68,8 +69,9 @@ impl<ConnectionWindowClock> ConnectionHandler<ConnectionWindowClock> {
     pub fn new(
         monitor: ConnectionMonitor<ConnectionWindowClock>,
         protocol_name: StreamProtocol,
+        connection_details: (PeerId, ConnectionId),
     ) -> Self {
-        tracing::trace!(target: LOG_TARGET, "Initializing core->core connection handler.");
+        tracing::trace!(target: LOG_TARGET, "Initializing core->core connection handler for connection {connection_details:?}.");
         Self {
             inbound_substream: None,
             outbound_substream: None,
@@ -78,6 +80,7 @@ impl<ConnectionWindowClock> ConnectionHandler<ConnectionWindowClock> {
             monitor,
             protocol_name,
             waker: None,
+            connection_details,
         }
     }
 
@@ -157,14 +160,18 @@ where
 
     #[expect(deprecated, reason = "Self::OutboundOpenInfo is deprecated")]
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     fn poll(
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<
         ConnectionHandlerEvent<Self::OutboundProtocol, Self::OutboundOpenInfo, Self::ToBehaviour>,
     > {
-        tracing::info!(gauge.pending_outbound_messages = self.outbound_msgs.len() as u64,);
-        tracing::info!(
+        tracing::trace!(gauge.pending_outbound_messages = self.outbound_msgs.len() as u64,);
+        tracing::trace!(
             gauge.pending_events_to_behaviour = self.pending_events_to_behaviour.len() as u64,
         );
 
@@ -184,7 +191,9 @@ where
         if let Poll::Ready(output) = self.monitor.poll(cx) {
             match output {
                 Some(ConnectionMonitorOutput::Spammy) => {
-                    self.close_substreams();
+                    // TODO: Re-enable this once we have fixed Blend observation
+                    // window range values.
+                    // self.close_substreams();
                     self.pending_events_to_behaviour
                         .push_back(ToBehaviour::SpammyPeer);
                 }
@@ -196,7 +205,14 @@ where
                     self.pending_events_to_behaviour
                         .push_back(ToBehaviour::HealthyPeer);
                 }
-                None => panic!("Connection monitor stream was closed."),
+                None => {
+                    tracing::debug!(
+                        target: LOG_TARGET,
+                        "Connection monitor for connection {:?} closed unexpectedly. Closing substreams proactively.",
+                        self.connection_details
+                    );
+                    self.close_substreams();
+                }
             }
         }
 
@@ -213,7 +229,11 @@ where
                 .poll_unpin(cx)
             {
                 Poll::Ready(Ok((stream, msg))) => {
-                    tracing::debug!(target: LOG_TARGET, "Received message from inbound stream. Notifying behaviour...");
+                    tracing::trace!(
+                        target: LOG_TARGET,
+                        "Received message from inbound stream {:?}; notifying behaviour",
+                        self.connection_details
+                    );
 
                     // Record the message to the monitor.
                     self.monitor.record_message();
@@ -227,7 +247,7 @@ where
                     ));
                 }
                 Poll::Ready(Err(e)) => {
-                    tracing::error!(target: LOG_TARGET, "Failed to receive message from inbound stream: {e:?}. Dropping both inbound/outbound substreams");
+                    tracing::error!(target: LOG_TARGET, "Failed to receive message from inbound stream {:?}: {e:?}. Dropping both inbound/outbound substreams", self.connection_details);
                     self.close_substreams();
                     return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
                         ToBehaviour::IOError(e),
@@ -256,7 +276,7 @@ where
                 // If the substream is idle, and if it's time to send a message, send it.
                 Some(OutboundSubstreamState::Idle(stream)) => {
                     if let Some(msg) = self.outbound_msgs.pop_front() {
-                        tracing::debug!(target: LOG_TARGET, "Sending message to outbound stream.");
+                        tracing::trace!(target: LOG_TARGET, "Sending message to outbound stream {:?}", self.connection_details);
                         self.outbound_substream = Some(OutboundSubstreamState::PendingSend(
                             send_msg(stream, msg).boxed(),
                         ));
@@ -270,11 +290,11 @@ where
                 Some(OutboundSubstreamState::PendingSend(mut msg_send_fut)) => {
                     match msg_send_fut.poll_unpin(cx) {
                         Poll::Ready(Ok(stream)) => {
-                            tracing::debug!(target: LOG_TARGET, "Message sent to outbound stream");
+                            tracing::trace!(target: LOG_TARGET, "Message sent to outbound stream {:?}", self.connection_details);
                             self.outbound_substream = Some(OutboundSubstreamState::Idle(stream));
                         }
                         Poll::Ready(Err(e)) => {
-                            tracing::error!(target: LOG_TARGET, "Failed to send message to outbound stream: {e:?}. Dropping both inbound and outbound substreams");
+                            tracing::error!(target: LOG_TARGET, "Failed to send message to outbound stream {:?}: {e:?}. Dropping both inbound and outbound substreams", self.connection_details);
                             self.close_substreams();
                             return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
                                 ToBehaviour::IOError(e),
@@ -289,13 +309,16 @@ where
                     }
                 }
                 Some(OutboundSubstreamState::Dropped) => {
-                    tracing::debug!(target: LOG_TARGET, "Outbound substream has been dropped proactively");
+                    tracing::trace!(target: LOG_TARGET, "Outbound substream {:?} dropped proactively", self.connection_details);
                     self.outbound_substream = Some(OutboundSubstreamState::Dropped);
                     return Poll::Pending;
                 }
                 // If there is no outbound substream, request to open a new one.
                 None => {
-                    tracing::debug!(target: LOG_TARGET, "Outbound substream is not initialized yet. Requesting the swarm to open one.");
+                    tracing::trace!(
+                        target: LOG_TARGET,
+                        "Outbound substream {:?} not initialized yet; requesting swarm to open one", self.connection_details
+                    );
                     self.outbound_substream = Some(OutboundSubstreamState::PendingOpenSubstream);
                     return Poll::Ready(ConnectionHandlerEvent::OutboundSubstreamRequest {
                         protocol: SubstreamProtocol::new(
@@ -323,6 +346,10 @@ where
         deprecated,
         reason = "Self::InboundOpenInfo and Self::OutboundOpenInfo are deprecated"
     )]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     fn on_connection_event(
         &mut self,
         event: ConnectionEvent<
@@ -337,7 +364,7 @@ where
                 protocol: stream,
                 ..
             }) => {
-                tracing::debug!(target: LOG_TARGET, "FullyNegotiatedInbound: Creating inbound substream");
+                tracing::trace!(target: LOG_TARGET, "Fully negotiated inbound for connection {:?}; creating inbound substream", self.connection_details);
                 self.inbound_substream =
                     Some(InboundSubstreamState::PendingRecv(recv_msg(stream).boxed()));
                 self.pending_events_to_behaviour
@@ -348,26 +375,26 @@ where
                 protocol: stream,
                 ..
             }) => {
-                tracing::debug!(target: LOG_TARGET, "FullyNegotiatedOutbound: Creating outbound substream");
+                tracing::trace!(target: LOG_TARGET, "Fully negotiated outbound for connection {:?}; creating outbound substream", self.connection_details);
                 self.outbound_substream = Some(OutboundSubstreamState::Idle(stream));
                 self.pending_events_to_behaviour
                     .push_back(ToBehaviour::FullyNegotiatedOutbound);
                 VALUE_FULLY_NEGOTIATED_OUTBOUND
             }
             ConnectionEvent::DialUpgradeError(e) => {
-                tracing::error!(target: LOG_TARGET, "DialUpgradeError: {:?}", e);
+                tracing::error!(target: LOG_TARGET, "DialUpgradeError for connection {:?}: {:?}", self.connection_details, e);
                 self.pending_events_to_behaviour
                     .push_back(ToBehaviour::DialUpgradeError(e));
                 self.close_substreams();
                 VALUE_DIAL_UPGRADE_ERROR
             }
             event => {
-                tracing::debug!(target: LOG_TARGET, "Ignoring connection event: {:?}", event);
+                tracing::trace!(target: LOG_TARGET, ?event, "Ignoring connection event");
                 VALUE_IGNORED
             }
         };
 
-        tracing::info!(counter.connection_event = 1, event = event_name);
+        tracing::trace!(counter.connection_event = 1, event = event_name);
         self.try_wake();
     }
 }

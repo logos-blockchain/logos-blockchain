@@ -1,6 +1,8 @@
 use std::num::{NonZero, NonZeroU64};
 
 use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_pol::LotteryConstants;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
@@ -8,35 +10,71 @@ pub struct Config {
     pub epoch_config: lb_cryptarchia_engine::EpochConfig,
     pub consensus_config: lb_cryptarchia_engine::Config,
     pub sdp_config: crate::mantle::sdp::Config,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub faucet_pk: Option<ZkPublicKey>,
 }
 
 impl Config {
+    #[must_use]
+    pub const fn lottery_constants(&self) -> &LotteryConstants {
+        self.consensus_config.lottery_constants()
+    }
+
     #[must_use]
     pub const fn base_period_length(&self) -> NonZero<u64> {
         self.consensus_config.base_period_length()
     }
 
     #[must_use]
-    pub fn epoch_length(&self) -> u64 {
+    pub const fn epoch_length(&self) -> u64 {
         self.epoch_config
             .epoch_length(self.consensus_config.base_period_length())
     }
 
+    /// The slot at which the nonce for a given epoch is snapshotted
+    ///
+    /// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
+    /// the nonce for epoch 1 will be snapshotted at slot 60, which is the 1st
+    /// slot of the last phase of epoch 0.
     #[must_use]
     pub fn nonce_snapshot(&self, epoch: Epoch) -> Slot {
-        let offset = self.base_period_length().get().saturating_mul(
+        let offset = self.nonce_contribution_period();
+        let base =
+            u64::from(u32::from(epoch).saturating_sub(1)).saturating_mul(self.epoch_length());
+        base.saturating_add(offset).into()
+    }
+
+    /// The number of slots in Stake Distribution Snapshot + Buffer phases
+    #[must_use]
+    pub fn nonce_contribution_period(&self) -> u64 {
+        self.base_period_length().get().saturating_mul(
             u64::from(NonZeroU64::from(
                 self.epoch_config.epoch_period_nonce_buffer,
             ))
             .saturating_add(u64::from(NonZeroU64::from(
                 self.epoch_config.epoch_stake_distribution_stabilization,
             ))),
-        );
-        let base =
-            u64::from(u32::from(epoch).saturating_sub(1)).saturating_mul(self.epoch_length());
-        base.saturating_add(offset).into()
+        )
     }
 
+    /// The slot at which the total stake for a given epoch is snapshotted
+    ///
+    /// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
+    /// the total stake for epoch 1 will be snapshotted at slot 60, which is the
+    /// 1st slot of the last phase of epoch 0.
+    #[must_use]
+    pub fn total_stake_snapshot(&self, epoch: Epoch) -> Slot {
+        self.nonce_snapshot(epoch)
+    }
+
+    /// The number of slots in Stake Distribution Snapshot + Buffer phases
+    #[must_use]
+    pub fn total_stake_inference_period(&self) -> u64 {
+        self.nonce_contribution_period()
+    }
+
+    /// The slot at which the stake distribution for a given epoch is
+    /// snapshotted, i.e., the first slot of the previous epoch.
     #[must_use]
     pub fn stake_distribution_snapshot(&self, epoch: Epoch) -> Slot {
         (u64::from(u32::from(epoch) - 1) * self.epoch_length()).into()
@@ -58,7 +96,7 @@ mod tests {
 
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
     use lb_cryptarchia_engine::EpochConfig;
-    use lb_utils::math::NonNegativeF64;
+    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
     use crate::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
 
@@ -72,7 +110,7 @@ mod tests {
             },
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(5).unwrap(),
-                0.5,
+                NonNegativeRatio::new(1, 2.try_into().unwrap()),
                 1f64.try_into().expect("1 > 0"),
             ),
             sdp_config: crate::mantle::sdp::Config {
@@ -104,10 +142,13 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            faucet_pk: None,
         };
         assert_eq!(config.epoch_length(), 100);
         assert_eq!(config.nonce_snapshot(1.into()), 60.into());
         assert_eq!(config.nonce_snapshot(2.into()), 160.into());
+        assert_eq!(config.total_stake_snapshot(1.into()), 60.into());
+        assert_eq!(config.total_stake_snapshot(2.into()), 160.into());
         assert_eq!(config.stake_distribution_snapshot(1.into()), 0.into());
         assert_eq!(config.stake_distribution_snapshot(2.into()), 100.into());
     }
@@ -122,7 +163,7 @@ mod tests {
             },
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(5).unwrap(),
-                0.5,
+                NonNegativeRatio::new(1, 2.try_into().unwrap()),
                 1f64.try_into().expect("1 > 0"),
             ),
             sdp_config: crate::mantle::sdp::Config {
@@ -154,6 +195,7 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            faucet_pk: None,
         };
         assert_eq!(config.epoch(1.into()), 0.into());
         assert_eq!(config.epoch(100.into()), 1.into());

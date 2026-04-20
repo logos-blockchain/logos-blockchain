@@ -1,0 +1,65 @@
+name: Run cucumber suite
+description: Run a tagged cucumber suite and upload suite artifacts on failure
+
+inputs:
+  suite_tag:
+    description: Cucumber tag expression without the broken/undefined filter
+    required: true
+  suite_name:
+    description: Short suite name used in step output and artifact naming
+    required: true
+  artifact_subdir:
+    description: Subdirectory under tests/cucumber_tests/temp/cucumber_artefacts
+    required: true
+  verbose_console:
+    description: Whether to set CUCUMBER_VERBOSE_CONSOLE=true
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Run cucumber - ${{ inputs.suite_tag }}
+      id: run_suite
+      continue-on-error: true
+      if: ${{ inputs.verbose_console != 'true' }}
+      uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+      env:
+        CUCUMBER_LOG_LEVEL: debug
+        CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
+        USE_LOCAL_HOST_NTP_TIME_CONFIG: true
+      with:
+        command: test
+        args: >-
+          --locked -p logos-blockchain-tests --features cucumber
+          --test cucumber -- --tags "${{ inputs.suite_tag }} and not (@broken or @undefined_behaviour)"
+
+    - name: Run cucumber - ${{ inputs.suite_tag }} (verbose)
+      id: run_suite_verbose
+      continue-on-error: true
+      if: ${{ inputs.verbose_console == 'true' }}
+      uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+      env:
+        CUCUMBER_LOG_LEVEL: debug
+        CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
+        USE_LOCAL_HOST_NTP_TIME_CONFIG: true
+        CUCUMBER_VERBOSE_CONSOLE: true
+      with:
+        command: test
+        args: >-
+          --locked -p logos-blockchain-tests --features cucumber
+          --test cucumber -- --tags "${{ inputs.suite_tag }} and not (@broken or @undefined_behaviour)"
+
+    - name: Upload cucumber logs on failure
+      if: ${{ steps.run_suite.outcome == 'failure' || steps.run_suite_verbose.outcome == 'failure' }}
+      continue-on-error: true
+      uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
+      with:
+        name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-${{ inputs.suite_name }}
+        include-hidden-files: true
+        path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/${{ inputs.artifact_subdir }}/**
+
+    - name: Fail suite
+      if: ${{ steps.run_suite.outcome == 'failure' || steps.run_suite_verbose.outcome == 'failure' }}
+      shell: bash
+      run: exit 1

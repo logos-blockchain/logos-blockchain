@@ -7,6 +7,9 @@ use std::{
 use lb_circuits_utils::circuits_dir;
 use tempfile::NamedTempFile;
 
+#[cfg(target_os = "windows")]
+const BINARY_NAME: &str = "prover.exe";
+#[cfg(not(target_os = "windows"))]
 const BINARY_NAME: &str = "prover";
 
 /// Path to the prover binary in the `LOGOS_BLOCKCHAIN_CIRCUITS` directory.
@@ -19,12 +22,7 @@ fn prover_binary() -> PathBuf {
     let circuits_dir = circuits_dir();
 
     // Check for prover binary at the root of logos-blockchain-circuits directory
-    let binary_name = if cfg!(windows) {
-        &format!("{BINARY_NAME}{}", std::env::consts::EXE_SUFFIX)
-    } else {
-        BINARY_NAME
-    };
-    let prover_path = circuits_dir.join(binary_name);
+    let prover_path = circuits_dir.join(BINARY_NAME);
     if prover_path.is_file() {
         return prover_path;
     }

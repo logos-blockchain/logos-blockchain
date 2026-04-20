@@ -1,11 +1,9 @@
 use std::sync::Arc;
 
 use futures::{Stream, StreamExt as _};
-use lb_chain_broadcast_service::BlockInfo;
-use lb_chain_service::CryptarchiaInfo;
-pub use lb_chain_service::Slot;
+pub use lb_chain_broadcast_service::BlockInfo;
+pub use lb_chain_service::{CryptarchiaInfo, Slot, State};
 use lb_core::{
-    block::Block,
     header::{ContentId, HeaderId},
     mantle::SignedMantleTx,
     proofs::leader_proof::Groth16LeaderProof,
@@ -17,10 +15,11 @@ use lb_http_api_common::{
         transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
     },
     paths::{
-        BLOCKS, BLOCKS_STREAM, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX,
-        STORAGE_BLOCK,
+        BLOCKS, BLOCKS_DETAIL, BLOCKS_STREAM, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM,
+        MEMPOOL_ADD_TX,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
+    settings::default_max_body_size,
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
@@ -51,7 +50,9 @@ pub struct ApiBlock {
 pub struct ProcessedBlockEvent {
     pub block: ApiBlock,
     pub tip: HeaderId,
+    pub tip_slot: Slot,
     pub lib: HeaderId,
+    pub lib_slot: Slot,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -88,7 +89,10 @@ pub struct CommonHttpClient {
 impl CommonHttpClient {
     #[must_use]
     pub fn new(basic_auth: Option<BasicAuthCredentials>) -> Self {
+        let initial_stream_window_size: u32 =
+            u32::try_from(6 * default_max_body_size() / 10).unwrap_or(4 * 1025);
         let client = ClientBuilder::new()
+            .http2_initial_stream_window_size(initial_stream_window_size)
             .build()
             .expect("Client from default settings should be able to build");
         Self {
@@ -175,22 +179,39 @@ impl CommonHttpClient {
         match status {
             StatusCode::OK => Ok(lib_stream),
             StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server("Error".to_owned())),
-            _ => Err(Error::Server(format!("Unexpected response [{status}]",))),
+            _ => Err(Error::Server(format!("Unexpected response [{status}]"))),
         }
     }
 
-    pub async fn get_block_by_id<HeaderId>(
+    pub async fn get_block_by_id(
         &self,
         base_url: Url,
-        header_id: HeaderId,
-    ) -> Result<Option<Block<SignedMantleTx>>, Error>
-    where
-        HeaderId: Serialize + Send + Sync,
-    {
-        let request_url = base_url
-            .join(STORAGE_BLOCK.trim_start_matches('/'))
-            .map_err(Error::Url)?;
-        self.post(request_url, &header_id).await
+        id: HeaderId,
+    ) -> Result<Option<ApiBlock>, Error> {
+        let path = BLOCKS_DETAIL
+            .trim_start_matches('/')
+            .replace(":id", &id.to_string());
+        let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
+
+        let mut request = self.client.get(request_url);
+        if let Some(basic_auth) = &self.basic_auth {
+            request = request.basic_auth(&basic_auth.username, basic_auth.password.as_deref());
+        }
+
+        let response = request.send().await.map_err(Error::Request)?;
+        let status = response.status();
+        let body = response.text().await.map_err(Error::Request)?;
+
+        match status {
+            StatusCode::OK => serde_json::from_str::<ApiBlock>(&body)
+                .map(Some)
+                .map_err(|e| Error::Server(format!("Failed to parse response: {e}"))),
+            StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server(body)),
+            _ => Err(Error::Server(format!(
+                "Unexpected response [{status}]: {body}",
+            ))),
+        }
     }
 
     pub async fn post_transaction<Tx>(&self, base_url: Url, transaction: Tx) -> Result<(), Error>
@@ -209,18 +230,6 @@ impl CommonHttpClient {
             .join(CRYPTARCHIA_INFO.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.get::<(), CryptarchiaInfo>(request_url, None).await
-    }
-
-    /// Get a block by its header ID
-    pub async fn get_block(
-        &self,
-        base_url: Url,
-        header_id: HeaderId,
-    ) -> Result<Option<Block<SignedMantleTx>>, Error> {
-        let request_url = base_url
-            .join(STORAGE_BLOCK.trim_start_matches('/'))
-            .map_err(Error::Url)?;
-        self.post(request_url, &header_id).await
     }
 
     /// Get blocks in a slot range.
@@ -245,7 +254,7 @@ impl CommonHttpClient {
     pub async fn get_blocks_stream(
         &self,
         base_url: Url,
-    ) -> Result<impl Stream<Item = ProcessedBlockEvent>, Error> {
+    ) -> Result<impl Stream<Item = ProcessedBlockEvent> + use<>, Error> {
         let request_url = base_url
             .join(BLOCKS_STREAM.trim_start_matches('/'))
             .map_err(Error::Url)?;
@@ -265,7 +274,7 @@ impl CommonHttpClient {
         match status {
             StatusCode::OK => Ok(blocks_stream),
             StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server("Error".to_owned())),
-            _ => Err(Error::Server(format!("Unexpected response [{status}]",))),
+            _ => Err(Error::Server(format!("Unexpected response [{status}]"))),
         }
     }
 

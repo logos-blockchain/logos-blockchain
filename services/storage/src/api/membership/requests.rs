@@ -7,10 +7,8 @@ use lb_core::{
 use tokio::sync::oneshot::Sender;
 
 use crate::{
-    StorageMsg, StorageServiceError,
-    api::{
-        StorageApiRequest, StorageBackendApi, StorageOperation, membership::StorageMembershipApi,
-    },
+    StorageServiceError,
+    api::{StorageBackendApi, StorageOperation, membership::StorageMembershipApi},
     backends::StorageBackend,
 };
 
@@ -162,80 +160,4 @@ async fn handle_load_forming_session<Backend: StorageBackend + StorageMembership
         });
     }
     Ok(())
-}
-
-impl<Backend: StorageBackend> StorageMsg<Backend> {
-    #[must_use]
-    pub const fn save_active_session_request(
-        service_type: ServiceType,
-        session_id: SessionNumber,
-        providers: HashMap<ProviderId, BTreeSet<Locator>>,
-    ) -> Self {
-        Self::Api {
-            request: StorageApiRequest::Membership(MembershipApiRequest::SaveActiveSession {
-                service_type,
-                session_id,
-                providers,
-            }),
-        }
-    }
-
-    #[must_use]
-    pub const fn load_active_session_request(
-        service_type: ServiceType,
-        response_tx: SessionSender,
-    ) -> Self {
-        Self::Api {
-            request: StorageApiRequest::Membership(MembershipApiRequest::LoadActiveSession {
-                service_type,
-                response_tx,
-            }),
-        }
-    }
-
-    #[must_use]
-    pub const fn save_latest_block_request(block_number: BlockNumber) -> Self {
-        Self::Api {
-            request: StorageApiRequest::Membership(MembershipApiRequest::SaveLatestBlock {
-                block_number,
-            }),
-        }
-    }
-
-    #[must_use]
-    pub const fn load_latest_block_request(response_tx: Sender<Option<BlockNumber>>) -> Self {
-        Self::Api {
-            request: StorageApiRequest::Membership(MembershipApiRequest::LoadLatestBlock {
-                response_tx,
-            }),
-        }
-    }
-
-    #[must_use]
-    pub const fn save_forming_session_request(
-        service_type: ServiceType,
-        session_id: SessionNumber,
-        providers: HashMap<ProviderId, BTreeSet<Locator>>,
-    ) -> Self {
-        Self::Api {
-            request: StorageApiRequest::Membership(MembershipApiRequest::SaveFormingSession {
-                service_type,
-                session_id,
-                providers,
-            }),
-        }
-    }
-
-    #[must_use]
-    pub const fn load_forming_session_request(
-        service_type: ServiceType,
-        response_tx: SessionSender,
-    ) -> Self {
-        Self::Api {
-            request: StorageApiRequest::Membership(MembershipApiRequest::LoadFormingSession {
-                service_type,
-                response_tx,
-            }),
-        }
-    }
 }

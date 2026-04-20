@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use super::Status;
 use crate::{
     backend::{MemPool, MempoolError, RecoverableMempool},
+    metrics,
     storage::MempoolStorageAdapter,
 };
 
@@ -100,6 +101,9 @@ where
         self.pending_items.insert(key);
         self.last_item_timestamp = timestamp;
 
+        metrics::mempool_transactions_added();
+        metrics::mempool_transactions_pending(self.pending_items.len());
+
         Ok(())
     }
 
@@ -108,7 +112,7 @@ where
         _ancestor_hint: BlockId,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, MempoolError> {
         let keys: BTreeSet<Key> = self.pending_items.iter().cloned().collect();
-        self.get_items_by_keys(keys.into_iter()).await
+        self.get_items_by_keys(keys).await
     }
 
     async fn get_items_by_keys<I>(
@@ -126,9 +130,13 @@ where
     }
 
     async fn remove(&mut self, keys: &[Self::Key]) {
+        let removed_count = keys.len();
         for key in keys {
             self.pending_items.remove(key);
         }
+
+        metrics::mempool_transactions_removed(removed_count);
+        metrics::mempool_transactions_pending(self.pending_items.len());
 
         if let Err(e) = self.storage_adapter.remove_items(keys).await {
             tracing::warn!("Failed to remove items from storage: {e:?}");

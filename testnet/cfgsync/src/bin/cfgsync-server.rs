@@ -23,6 +23,8 @@ struct Args {
     mode: Option<CfgsyncMode>,
     #[arg(short, long, env = "CFG_SERVER_STORAGE_PATH")]
     storage_path: Option<PathBuf>,
+    #[arg(short, long, env = "ENTROPY_FILE")]
+    entropy_file: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -40,6 +42,10 @@ async fn main() {
 
     if let Some(storage_path) = cli.storage_path {
         config.deployment_settings_storage_path = storage_path;
+    }
+
+    if let Some(entropy_file) = cli.entropy_file {
+        config.entropy_file = entropy_file;
     }
 
     if let Some(mode) = cli.mode {

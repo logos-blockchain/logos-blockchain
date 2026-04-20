@@ -10,9 +10,9 @@ use core::{
 use fork_stream::StreamExt as _;
 use futures::{Stream, StreamExt as _};
 use rand::RngCore;
-use tokio::time::interval;
+use tokio::time::{MissedTickBehavior, interval};
 use tokio_stream::wrappers::IntervalStream;
-use tracing::{info, trace};
+use tracing::trace;
 
 use crate::{
     cover_traffic::SessionCoverTraffic,
@@ -60,8 +60,14 @@ where
     DataMessage: Debug + Unpin,
 {
     pub fn new(session_info: SessionInfo, rng: Rng, settings: Settings) -> Self {
+        let interval = {
+            let mut interval = interval(settings.round_duration);
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+            interval
+        };
         let round_clock = Box::new(
-            IntervalStream::new(interval(settings.round_duration))
+            IntervalStream::new(interval)
                 .enumerate()
                 .map(|(round, _)| (round as u128).into()),
         )
@@ -93,6 +99,10 @@ where
             data_messages: Vec::new(),
             round_clock: Box::new(round_clock) as RoundClock,
         }
+    }
+
+    pub fn consume(self) -> OldSessionMessageScheduler<Rng, ProcessedMessage> {
+        OldSessionMessageScheduler(self.release_delayer)
     }
 
     pub fn rotate_session(
@@ -223,7 +233,12 @@ where
                 }
             }
         };
-        info!(target: LOG_TARGET, "Emitting new round info {round_info:?}.");
+        trace!(
+            target: LOG_TARGET,
+            data_messages = round_info.data_messages.len(),
+            release_type = ?round_info.release_type,
+            "emitting new round info"
+        );
         Poll::Ready(Some(round_info))
     }
 }

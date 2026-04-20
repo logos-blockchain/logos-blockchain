@@ -15,6 +15,7 @@ use crate::{config::NetworkConfig, message::BackendNetworkMsg};
 pub mod backends;
 pub mod config;
 pub mod message;
+mod metrics;
 
 pub struct NetworkService<Backend, RuntimeServiceId>
 where

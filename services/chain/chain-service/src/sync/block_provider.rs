@@ -568,6 +568,7 @@ mod tests {
         StorageService,
         backends::rocksdb::{RocksBackend, RocksBackendSettings},
     };
+    use lb_utils::math::NonNegativeRatio;
     use lb_utxotree::UtxoTree;
     use num_bigint::BigUint;
     use overwatch::{derive_services, overwatch::OverwatchRunner};
@@ -697,8 +698,11 @@ mod tests {
     impl TestEnv {
         async fn new() -> Self {
             let (service, storage_relay) = Self::setup_storage().await;
-            let cryptarchia = Self::new_cryptarchia(HeaderId::from([0; 32]));
-            let proof = Self::make_test_proof();
+            let cryptarchia = Self::new_cryptarchia(
+                HeaderId::from([0; 32]),
+                NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            );
+            let proof = Self::make_test_proof(&cryptarchia);
             let provider = BlockProvider::new(storage_relay.clone());
 
             Self {
@@ -795,15 +799,16 @@ mod tests {
 
             for (i, (block, header_id, prev_header, slot)) in blocks.iter().enumerate() {
                 if i == 0 {
-                    self.cryptarchia = Self::new_cryptarchia(*header_id);
+                    self.cryptarchia = Self::new_cryptarchia(
+                        *header_id,
+                        self.cryptarchia.config().slot_activation_coeff(),
+                    );
                 }
 
                 if i > 0 {
-                    self.cryptarchia = self
-                        .cryptarchia
+                    self.cryptarchia
                         .receive_block(*header_id, *prev_header, *slot)
-                        .expect("Failed to add block to cryptarchia")
-                        .cryptarchia;
+                        .expect("Failed to add block to cryptarchia");
                 }
 
                 // Store in storage but NOT as immutable storage
@@ -837,20 +842,20 @@ mod tests {
             prev_header: HeaderId,
             slot: Slot,
         ) {
-            self.cryptarchia = self
-                .cryptarchia
+            self.cryptarchia
                 .receive_block(header_id, prev_header, slot)
-                .expect("Failed to add block to cryptarchia")
-                .cryptarchia;
+                .expect("Failed to add block to cryptarchia");
 
             self.store_block_in_storage(block, header_id, slot).await;
         }
 
         async fn store_block_only(&self, block: &Block<SignedMantleTx>, header_id: HeaderId) {
+            let parent_id = block.header().parent();
             let store_result: Result<_, _> = block.clone().try_into();
             self.storage_relay
                 .send(StorageMsg::store_block_request(
                     header_id,
+                    parent_id,
                     store_result.unwrap(),
                 ))
                 .await
@@ -946,23 +951,35 @@ mod tests {
             );
         }
 
-        fn make_test_proof() -> lb_core::proofs::leader_proof::Groth16LeaderProof {
+        fn make_test_proof(
+            cryptarchia: &lb_cryptarchia_engine::Cryptarchia<HeaderId>,
+        ) -> lb_core::proofs::leader_proof::Groth16LeaderProof {
             let leader_sk = UnsecuredZkKey::zero();
             let utxo = Utxo {
-                tx_hash: Fr::from(BigUint::from(1u8)).into(),
+                transfer_hash: Fr::from(BigUint::from(1u8)).into(),
                 output_index: 0,
                 note: Note::new(1000, leader_sk.to_public_key()),
             };
             let utxo_tree = UtxoTree::<_, _, ZkHasher>::new().insert(utxo.id(), utxo).0;
             let utxo_tree_root = utxo_tree.root();
             let utxo_merkle_path = utxo_tree.path(&utxo.id()).expect("note must exist in tree");
+            let (lottery_0, lottery_1) = cryptarchia
+                .config()
+                .lottery_constants()
+                .compute_lottery_values(1000);
 
             // We grind the nonce here to find a winning PoL
             let public_inputs = {
                 let mut nonce = 0;
                 while nonce < 1000 {
-                    let inputs =
-                        LeaderPublic::new(utxo_tree_root, utxo_tree_root, Fr::from(nonce), 0, 1000);
+                    let inputs = LeaderPublic::new(
+                        utxo_tree_root,
+                        utxo_tree_root,
+                        Fr::from(nonce),
+                        0,
+                        lottery_0,
+                        lottery_1,
+                    );
 
                     if inputs.check_winning(utxo.note.value, *utxo.id().as_fr(), *leader_sk.as_fr())
                     {
@@ -971,7 +988,14 @@ mod tests {
 
                     nonce += 1;
                 }
-                LeaderPublic::new(utxo_tree_root, utxo_tree_root, Fr::from(nonce), 0, 1000)
+                LeaderPublic::new(
+                    utxo_tree_root,
+                    utxo_tree_root,
+                    Fr::from(nonce),
+                    0,
+                    lottery_0,
+                    lottery_1,
+                )
             };
 
             let private_inputs = LeaderPrivate::new(
@@ -990,12 +1014,15 @@ mod tests {
             .expect("Proof generation should succeed")
         }
 
-        fn new_cryptarchia(lib: HeaderId) -> lb_cryptarchia_engine::Cryptarchia<HeaderId> {
+        fn new_cryptarchia(
+            lib: HeaderId,
+            slot_activation_coeff: NonNegativeRatio,
+        ) -> lb_cryptarchia_engine::Cryptarchia<HeaderId> {
             <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib,
                 Config::new(
                     NonZero::new(1).unwrap(),
-                    1.0,
+                    slot_activation_coeff,
                     1f64.try_into().expect("1 > 0"),
                 ),
                 lb_cryptarchia_engine::State::Bootstrapping,

@@ -431,6 +431,10 @@ impl NetworkBehaviour for Behaviour {
             .on_connection_handler_event(peer_id, conn_id, event);
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     fn poll(
         &mut self,
         cx: &mut Context<'_>,
@@ -950,7 +954,7 @@ mod tests {
 
     fn new_swarm_with_quic() -> Swarm<Behaviour> {
         let config = Config {
-            peer_response_timeout: Duration::from_millis(1000),
+            peer_response_timeout: Duration::from_secs(1),
         };
         let keypair = libp2p::identity::Keypair::generate_ed25519();
         libp2p::SwarmBuilder::with_existing_identity(keypair)

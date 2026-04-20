@@ -1,5 +1,6 @@
 use core::{convert::Infallible, str::FromStr};
 use std::{
+    collections::HashMap,
     io::Read,
     net::{IpAddr, SocketAddr, ToSocketAddrs as _},
     path::{Path, PathBuf},
@@ -9,9 +10,11 @@ use ::tracing::{Level, warn};
 use clap::{Parser, Subcommand, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
+use lb_tracing::filter::envfilter::default_envfilter_config;
 use serde::Deserialize;
+use tracing::serde::filter::{EnvConfig, Layer};
 
-use crate::config::tracing::serde::logger::{FileConfig, GelfConfig, Layer};
+use crate::config::tracing::serde::logger::{FileConfig, GelfConfig};
 pub use crate::config::{
     api::serde::Config as ApiConfig,
     blend::serde::Config as BlendConfig,
@@ -44,8 +47,36 @@ pub mod wallet;
 #[cfg(test)]
 mod tests;
 
+fn long_version() -> String {
+    let head_commit_hash = env!("HEAD_COMMIT_HASH");
+    let head_tag_name = env!("HEAD_TAG_NAME");
+    let pkg_version = env!("PKG_VERSION");
+    let target = env!("TARGET");
+    let profile = env!("PROFILE");
+    let rustc_version = env!("RUSTC_VERSION");
+
+    let commit_line = match (head_commit_hash, head_tag_name) {
+        (commit_hash, tag_name) if !commit_hash.is_empty() && !tag_name.is_empty() => {
+            format!("commit:  {commit_hash} (tag {tag_name})")
+        }
+        (commit_hash, _) if !commit_hash.is_empty() => {
+            format!("commit:  {commit_hash}")
+        }
+        _ => "commit:  unknown".to_owned(),
+    };
+
+    format!(
+        "\
+{pkg_version}
+{commit_line}
+target:  {target}
+profile: {profile}
+rustc:   {rustc_version}"
+    )
+}
+
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None,
+#[command(author, version, long_version = long_version(), about, long_about = None,
           args_conflicts_with_subcommands = true,
           subcommand_negates_reqs = true)]
 pub struct CliArgs {
@@ -113,16 +144,15 @@ pub struct InitArgs {
     #[clap(long = "external-address")]
     pub external_address: Option<Multiaddr>,
 
-    /// Skip automatic public IP detection
-    #[clap(long = "no-public-ip-check")]
-    pub no_public_ip_check: bool,
-
-    /// Deployment configuration (well-known name or path to custom config)
-    #[clap(long = "deployment", default_value = DeploymentType::default())]
-    pub deployment: DeploymentType,
-
     #[clap(long = "state-path")]
     pub state_path: Option<PathBuf>,
+}
+
+#[cfg(feature = "config-gen")]
+impl Default for InitArgs {
+    fn default() -> Self {
+        Self::parse_from::<Vec<String>, String>(vec![])
+    }
 }
 
 impl CliArgs {
@@ -196,6 +226,11 @@ pub struct LogArgs {
 
     #[clap(long = "log-level", env = "LOG_LEVEL")]
     level: Option<String>,
+
+    /// Per-target log filter directives, e.g.
+    /// `libp2p_gossipsub=info,h2=warn`
+    #[clap(long = "log-filter", env = "LOG_FILTER")]
+    filter: Option<String>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -386,37 +421,105 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
         directory,
         prefix,
         level,
+        filter,
     } = tracing_args;
 
-    // Override the file config with the one from env variables.
-    if let Some(backend) = backend {
-        tracing.logger = match backend {
-            LoggerLayerType::Gelf => Layer::Gelf(GelfConfig {
-                addr: addr
-                    .ok_or_else(|| eyre!("Gelf backend requires an address."))?
-                    .to_socket_addrs()?
-                    .next()
-                    .ok_or_else(|| eyre!("Invalid gelf address"))?,
-            }),
-            LoggerLayerType::File => Layer::File(FileConfig {
-                directory: directory.ok_or_else(|| eyre!("File backend requires a directory."))?,
-                prefix,
-            }),
-            LoggerLayerType::Stdout => Layer::Stdout,
-            LoggerLayerType::Stderr => Layer::Stderr,
-        };
+    if let Some(backend_type) = backend {
+        match backend_type {
+            LoggerLayerType::Gelf => {
+                tracing.logger.gelf = Some(GelfConfig {
+                    addr: addr
+                        .ok_or_else(|| eyre!("Gelf backend requires an address."))?
+                        .to_socket_addrs()?
+                        .next()
+                        .ok_or_else(|| eyre!("Invalid gelf address"))?,
+                });
+            }
+            LoggerLayerType::File => {
+                tracing.logger.file = Some(FileConfig {
+                    directory: directory
+                        .ok_or_else(|| eyre!("File backend requires a directory."))?,
+                    prefix,
+                });
+            }
+            LoggerLayerType::Stdout => {
+                tracing.logger.stdout = true;
+            }
+            LoggerLayerType::Stderr => {
+                tracing.logger.stderr = true;
+            }
+        }
     }
 
     if let Some(level_str) = level {
-        tracing.level = match level_str.as_str() {
+        tracing.level = match level_str.to_uppercase().as_str() {
+            "TRACE" => Level::TRACE,
             "DEBUG" => Level::DEBUG,
             "INFO" => Level::INFO,
             "ERROR" => Level::ERROR,
             "WARN" => Level::WARN,
-            _ => return Err(eyre!("Invalid log level provided.")),
+            _ => return Err(eyre!("Invalid log level provided: {}", level_str)),
         };
     }
+
+    if let Some(filter_string) = filter {
+        tracing.filter = parse_log_filter_layer(&filter_string)?;
+    } else {
+        apply_default_debug_log_filter(tracing);
+    }
+
     Ok(())
+}
+
+/// Parses CLI/env filter overrides into the typed filter config form.
+fn parse_log_filter_layer(raw: &str) -> Result<Layer> {
+    let filters = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|directive| !directive.is_empty())
+        .map(parse_log_filter_directive)
+        .collect::<Result<HashMap<_, _>>>()?;
+
+    if filters.is_empty() {
+        return Err(eyre!("Invalid log filter provided: {}", raw));
+    }
+
+    Ok(Layer::Env(EnvConfig { filters }))
+}
+
+/// Applies the built-in verbose filter policy only when no explicit filter was
+/// configured.
+fn apply_default_debug_log_filter(tracing: &mut TracingConfig) {
+    if !matches!(tracing.filter, Layer::None) {
+        return;
+    }
+
+    if let Some(filter) = default_envfilter_config(tracing.level) {
+        tracing.filter = Layer::Env(EnvConfig {
+            filters: filter.filters,
+        });
+    }
+}
+
+/// Parses a single filter directive of the form `target=level` or a bare
+/// global level such as `warn`.
+fn parse_log_filter_directive(directive: &str) -> Result<(String, Level)> {
+    if let Some((target, level)) = directive.split_once('=') {
+        let target = target.trim();
+        let level = level.trim();
+
+        if target.is_empty() || level.is_empty() {
+            return Err(eyre!("Invalid log filter directive: {}", directive));
+        }
+
+        return Ok((target.to_owned(), parse_log_filter_level(level)?));
+    }
+
+    Ok(("*".to_owned(), parse_log_filter_level(directive)?))
+}
+
+fn parse_log_filter_level(level: &str) -> Result<Level> {
+    Level::from_str(level.trim()).map_err(|_| eyre!("Invalid log filter level provided: {}", level))
 }
 
 pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) -> Result<()> {

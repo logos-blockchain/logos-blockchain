@@ -12,7 +12,10 @@ use lb_blend::{
             ProofsVerifier as ProofsVerifierTrait,
             decapsulated::{DecapsulatedMessage, DecapsulationOutput},
             encapsulated::EncapsulatedMessage,
-            validated::EncapsulatedMessageWithVerifiedPublicHeader,
+            validated::{
+                EncapsulatedMessageWithVerifiedPublicHeader,
+                EncapsulatedMessageWithVerifiedSignature,
+            },
         },
         reward::BlendingToken,
     },
@@ -27,6 +30,7 @@ use lb_blend::{
         },
     },
 };
+use lb_chain_service::Epoch;
 
 pub struct CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>(
     SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
@@ -44,6 +48,7 @@ where
         settings: SessionCryptographicProcessorSettings,
         public_info: PoQVerificationInputsMinusSigningKey,
         core_proof_of_quota_generator: CorePoQGenerator,
+        epoch: Epoch,
     ) -> Result<Self, Error>
     where
         NodeId: Eq + Hash,
@@ -58,6 +63,7 @@ where
                 settings,
                 public_info,
                 core_proof_of_quota_generator,
+                epoch,
             ))
         }
     }
@@ -67,12 +73,14 @@ where
         settings: SessionCryptographicProcessorSettings,
         public_info: PoQVerificationInputsMinusSigningKey,
         core_proof_of_quota_generator: CorePoQGenerator,
+        epoch: Epoch,
     ) -> Self {
         Self(SessionCryptographicProcessor::new(
             settings,
             membership,
             public_info,
             core_proof_of_quota_generator,
+            epoch,
         ))
     }
 }
@@ -123,6 +131,22 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 where
     ProofsVerifier: ProofsVerifierTrait,
 {
+    /// Validate the public header of an [`EncapsulatedMessage`].
+    pub fn validate_message_header(
+        &self,
+        message: EncapsulatedMessage,
+    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, InnerError> {
+        message.verify_public_header(self.verifier())
+    }
+
+    /// Validate the `PoQ` of an [`EncapsulatedMessageWithVerifiedSignature`].
+    pub fn validate_message_poq(
+        &self,
+        message: EncapsulatedMessageWithVerifiedSignature,
+    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, InnerError> {
+        message.verify_proof_of_quota(self.verifier())
+    }
+
     /// Semantically similar to the underlying
     /// [`SessionCryptographicProcessor::decapsulate_message`], but it does not
     /// stop after decapsulating the outermost layer. It stops only when a layer
@@ -141,6 +165,11 @@ where
         &self,
         message: EncapsulatedMessageWithVerifiedPublicHeader,
     ) -> Result<MultiLayerDecapsulationOutput, InnerError> {
+        tracing::trace!(
+            "Attempt at batch-decapsulating message with PoQ nullifier and key: ({:?}, {:?})",
+            message.public_header().signing_key(),
+            message.public_header().proof_of_quota().key_nullifier()
+        );
         let mut decapsulation_output = self.0.decapsulate_message(message)?;
 
         let mut collected_blending_tokens = Vec::new();
@@ -240,7 +269,9 @@ mod tests {
         },
         scheduling::message_blend::crypto::SessionCryptographicProcessorSettings,
     };
+    use lb_chain_service::Epoch;
     use lb_core::crypto::ZkHash;
+    use lb_groth16::Fr;
     use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 
     use crate::{
@@ -264,7 +295,8 @@ mod tests {
                 pol_ledger_aged: ZkHash::ZERO,
                 pol_epoch_nonce: ZkHash::ZERO,
                 message_quota: 1,
-                total_stake: 1,
+                lottery_0: Fr::ZERO,
+                lottery_1: Fr::ZERO,
             },
         }
     }
@@ -278,7 +310,8 @@ mod tests {
             NonZeroU64::new(1).unwrap(),
             settings(local_id),
             mock_verification_inputs(),
-            ()
+            (),
+            Epoch::new(0)
         )
         .unwrap();
     }
@@ -298,6 +331,7 @@ mod tests {
             settings(local_id),
             mock_verification_inputs(),
             (),
+            Epoch::new(0),
         );
         assert!(matches!(result, Err(Error::NetworkIsTooSmall(1))));
     }
@@ -317,6 +351,7 @@ mod tests {
             settings(local_id),
             mock_verification_inputs(),
             (),
+            Epoch::new(0),
         );
         assert!(matches!(result, Err(Error::LocalIsNotCoreNode)));
     }
@@ -342,6 +377,7 @@ mod tests {
             settings(local_id),
             mock_verification_inputs(),
             (),
+            Epoch::new(0),
         );
         assert!(matches!(
             processor.decapsulate_message_recursive(mock_message),
@@ -372,6 +408,7 @@ mod tests {
             settings(local_id),
             mock_verification_inputs(),
             (),
+            Epoch::new(0),
         );
         StaticFetchVerifier::set_remaining_valid_poq_proofs(1);
         let decapsulation_output = processor
@@ -406,6 +443,7 @@ mod tests {
             settings(local_id),
             mock_verification_inputs(),
             (),
+            Epoch::new(0),
         );
         StaticFetchVerifier::set_remaining_valid_poq_proofs(2);
         let decapsulation_output = processor
@@ -440,6 +478,7 @@ mod tests {
             settings(local_id),
             mock_verification_inputs(),
             (),
+            Epoch::new(0),
         );
         StaticFetchVerifier::set_remaining_valid_poq_proofs(3);
         let decapsulation_output = processor
@@ -457,20 +496,22 @@ mod tests {
         recipient_signing_pubkey: &Ed25519PublicKey,
     ) -> EncapsulatedMessageWithVerifiedPublicHeader {
         let inputs = std::iter::repeat_with(|| {
-            EncapsulationInput::new(
+            EncapsulationInput::try_new(
                 UnsecuredEd25519Key::generate_with_blake_rng(),
                 recipient_signing_pubkey,
                 VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
                 VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
             )
+            .unwrap()
         })
         .take(3)
         .collect::<Vec<_>>();
-        EncapsulatedMessageWithVerifiedPublicHeader::new(
+        EncapsulatedMessageWithVerifiedPublicHeader::try_new(
             &inputs,
             PayloadType::Cover,
             b"".as_slice().try_into().unwrap(),
         )
+        .unwrap()
     }
 
     fn settings(local_id: NodeId) -> SessionCryptographicProcessorSettings {

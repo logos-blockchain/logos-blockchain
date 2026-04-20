@@ -1,0 +1,59 @@
+input,
+select {
+  width: 100%;
+  padding: 8px;
+  margin-top: 5px;
+  box-sizing: border-box;
+  background-color: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+button {
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  border: none;
+  margin-top: 5px;
+  padding: 10px 15px;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 1rem;
+  transition: background 0.1s ease;
+}
+
+button:hover {
+  background: var(--btn-hover);
+}
+
+button:active {
+  background: var(--btn-active);
+  transform: translateY(1px);
+}
+
+button:disabled {
+  background: var(--btn-disabled);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+}
+
+#response {
+  margin-top: 20px;
+  padding: 15px;
+  border-radius: 4px;
+  display: none;
+  word-break: break-all;
+}
+
+.success {
+  background: var(--success-bg);
+  color: var(--success-text);
+  border: 1px solid var(--success-border);
+}
+
+.error {
+  background: var(--error-bg);
+  color: var(--error-text);
+  border: 1px solid var(--error-border);
+}

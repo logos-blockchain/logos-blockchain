@@ -8,14 +8,17 @@ use lb_blend_message::{
 use lb_blend_proofs::quota::inputs::prove::{
     private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
 };
+use lb_cryptarchia_engine::Epoch;
 
 use crate::{
     membership::Membership,
     message_blend::{
-        crypto::EncapsulatedMessageWithVerifiedPublicHeader,
+        crypto::{
+            EncapsulatedMessageWithVerifiedPublicHeader,
+            serialize_encapsulated_message_with_verified_public_header,
+        },
         provers::{ProofsGeneratorSettings, leader::LeaderProofsGenerator},
     },
-    serialize_encapsulated_message,
 };
 
 /// [`SessionCryptographicProcessor`] is responsible for only wrapping data
@@ -41,11 +44,14 @@ where
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
         private_info: ProofOfLeadershipQuotaInputs,
+        epoch: Epoch,
     ) -> Self {
         let generator_settings = ProofsGeneratorSettings {
             local_node_index: membership.local_index(),
             membership_size: membership.size(),
             public_inputs: public_info,
+            encapsulation_layers: num_blend_layers,
+            epoch,
         };
         Self {
             num_blend_layers,
@@ -58,9 +64,10 @@ where
         &mut self,
         new_epoch_public: LeaderInputs,
         new_private_inputs: ProofOfLeadershipQuotaInputs,
+        new_epoch: Epoch,
     ) {
         self.proofs_generator
-            .rotate_epoch(new_epoch_public, new_private_inputs);
+            .rotate_epoch(new_epoch_public, new_private_inputs, new_epoch);
     }
 }
 
@@ -94,7 +101,7 @@ where
             })
             .enumerate()
             .inspect(|(layer, (_, node_index))| {
-                tracing::debug!("Encapsulating layer {layer:?} of data message for node at index {node_index:?}.");
+                tracing::trace!("Encapsulating layer {layer:?} of data message for node at index {node_index:?}.");
             })
             // Map retrieved indices to the nodes' public keys.
             .map(|(_, (proof, node_index))| {
@@ -110,27 +117,29 @@ where
         let inputs = proofs_and_signing_keys
             .into_iter()
             .map(|(proof, receiver_non_ephemeral_signing_key)| {
-                EncapsulationInput::new(
+                EncapsulationInput::try_new(
                     proof.ephemeral_signing_key,
                     &receiver_non_ephemeral_signing_key,
                     proof.proof_of_quota,
                     proof.proof_of_selection,
                 )
+                .expect("Layer proof signing key assumed not to be identity")
             })
             .collect::<Vec<_>>();
 
-        Ok(EncapsulatedMessageWithVerifiedPublicHeader::new(
+        Ok(EncapsulatedMessageWithVerifiedPublicHeader::try_new(
             &inputs,
             PayloadType::Data,
             validated_payload,
-        ))
+        )
+        .expect("Number of encapsulation layers is greater than 0."))
     }
 
     pub async fn encapsulate_and_serialize_data_payload(
         &mut self,
         payload: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        Ok(serialize_encapsulated_message(
+        Ok(serialize_encapsulated_message_with_verified_public_header(
             &self.encapsulate_data_payload(payload).await?,
         ))
     }
@@ -146,7 +155,8 @@ mod test {
         public::{CoreInputs, LeaderInputs},
     };
     use lb_core::crypto::ZkHash;
-    use lb_groth16::Field as _;
+    use lb_cryptarchia_engine::Epoch;
+    use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
     use libp2p::{Multiaddr, PeerId};
 
@@ -177,7 +187,8 @@ mod test {
                         message_quota: 1,
                         pol_epoch_nonce: ZkHash::ZERO,
                         pol_ledger_aged: ZkHash::ZERO,
-                        total_stake: 1,
+                        lottery_0: Fr::ZERO,
+                        lottery_1: Fr::ZERO,
                     },
                 },
                 ProofOfLeadershipQuotaInputs {
@@ -188,13 +199,15 @@ mod test {
                     slot: 1,
                     transaction_hash: ZkHash::ZERO,
                 },
+                Epoch::new(0),
             );
 
         let new_leader_inputs = LeaderInputs {
             pol_ledger_aged: ZkHash::ONE,
             pol_epoch_nonce: ZkHash::ONE,
             message_quota: 2,
-            total_stake: 2,
+            lottery_0: Fr::ONE,
+            lottery_1: Fr::ONE,
         };
         let new_private_inputs = ProofOfLeadershipQuotaInputs {
             aged_path_and_selectors: [(ZkHash::ONE, true); _],
@@ -205,12 +218,12 @@ mod test {
             transaction_hash: ZkHash::ONE,
         };
 
-        processor.rotate_epoch(new_leader_inputs, new_private_inputs.clone());
+        processor.rotate_epoch(new_leader_inputs, new_private_inputs.clone(), Epoch::new(1));
 
         assert_eq!(
             processor.proofs_generator.0.public_inputs.leader,
             new_leader_inputs
         );
-        assert_eq!(processor.proofs_generator.1, new_private_inputs);
+        assert!(processor.proofs_generator.1 == new_private_inputs);
     }
 }

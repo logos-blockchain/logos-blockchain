@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::{OpProof, SignedMantleTx, ops::sdp::SDPDeclareOp};
+#[cfg(feature = "mock")]
+use crate::mantle::tx::MantleTxContext;
 use crate::{
     crypto::ZkHasher,
     mantle::{
@@ -13,13 +15,31 @@ use crate::{
             decode_field_element, decode_uint64, decode_unix_timestamp, decode_utf8_string,
             encode_field_element, encode_string, encode_uint64, encode_unix_timestamp,
         },
-        gas::{Gas, GasConstants, GasCost},
+        gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
+            transfer::TransferOp,
         },
     },
 };
+
+/// Initial storage gas price at genesis
+///
+/// [Spec](https://www.notion.so/nomos-tech/v1-1-Storage-Markets-Specification-326261aa09df804ab483f573f522baf5?source=copy_link#326261aa09df804280b1fd5da1120a14):
+/// `P_STR(0)` = 1 LGO/gas
+//
+// TODO: This is currently set to 0 because zone-sdk and most of e2e tests are
+// not paying fees. This must be updated to the correct value defined in the
+// spec above.
+pub const GENESIS_STORAGE_GAS_PRICE: GasPrice = GasPrice::new(0);
+
+/// Initial execution gas price at genesis
+//
+// TODO: This is currently set to 0 because zone-sdk and most of e2e tests are
+// not paying fees. This must be updated to the correct value once the spec is
+// finalized.
+pub const GENESIS_EXECUTION_GAS_PRICE: GasPrice = GasPrice::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenesisTx {
@@ -32,11 +52,13 @@ pub enum Error {
     #[error("Genesis transaction must have gas price of zero")]
     InvalidGenesisGasPrice,
     #[error("Genesis transaction should not have any inputs")]
-    UnepectedInput,
+    UnexpectedInput,
     #[error("Genesis block cannot contain this op: {0:?}")]
     UnsupportedGenesisOp(Vec<Op>),
-    #[error("Expected exactly one inscription in genesis block")]
-    MissingInscription,
+    #[error(
+        "Genesis transaction must have a transfer and an inscription as the two first operations"
+    )]
+    MissingTransferAndInscription,
     #[error("Invalid genesis inscription: {0:?}")]
     InvalidInscription(Box<Op>),
     #[error("Invalid cryptarchia inscription: {0}")]
@@ -47,31 +69,41 @@ impl GenesisTx {
     pub fn from_tx(signed_mantle_tx: SignedMantleTx) -> Result<Self, Error> {
         let mantle_tx = &signed_mantle_tx.mantle_tx;
 
-        // Genesis transactions must have gas prices of zero
-        if mantle_tx.execution_gas_price != 0 || mantle_tx.storage_gas_price != 0 {
+        // Genesis transactions must have execution gas price and storage gas price
+        // matching the expected genesis values
+        if mantle_tx.execution_gas_price != GENESIS_EXECUTION_GAS_PRICE
+            || mantle_tx.storage_gas_price != GENESIS_STORAGE_GAS_PRICE
+        {
             return Err(Error::InvalidGenesisGasPrice);
         }
 
-        // Genesis transactions should not have any inputs
-        if !mantle_tx.ledger_tx.inputs.is_empty() {
-            return Err(Error::UnepectedInput);
-        }
+        // Genesis transactions must contain exactly one transfer as the first op,
+        // one inscription as the second op, and then may contain other SDP declarations
+        let cryptarchia_parameter = match mantle_tx.ops.as_slice() {
+            [
+                Op::Transfer(transfer),
+                Op::ChannelInscribe(inscription),
+                rest @ ..,
+            ] => {
+                if !transfer.inputs.is_empty() {
+                    return Err(Error::UnexpectedInput);
+                }
+                let cryptarchia_parameter = valid_cryptarchia_inscription(inscription)?;
 
-        // Genesis transactions must contain exactly one inscription as the first op
-        // and then may contain other SDP declarations
-        let mut ops = mantle_tx.ops.iter();
-        let cryptarchia_parameter = match ops.next() {
-            Some(Op::ChannelInscribe(op)) => valid_cryptarchia_inscription(op)?,
-            _ => return Err(Error::MissingInscription),
+                let unsupported_ops = rest
+                    .iter()
+                    .filter(|op| !matches!(op, Op::SDPDeclare(_)))
+                    .cloned()
+                    .collect::<Vec<_>>();
+
+                if !unsupported_ops.is_empty() {
+                    return Err(Error::UnsupportedGenesisOp(unsupported_ops));
+                }
+
+                cryptarchia_parameter
+            }
+            _ => return Err(Error::MissingTransferAndInscription),
         };
-
-        let unsupported_ops = ops
-            .filter(|op| !matches!(op, Op::SDPDeclare(_)))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !unsupported_ops.is_empty() {
-            return Err(Error::UnsupportedGenesisOp(unsupported_ops));
-        }
 
         Ok(Self {
             tx: signed_mantle_tx,
@@ -81,30 +113,32 @@ impl GenesisTx {
 
     #[cfg(feature = "mock")]
     #[must_use]
-    pub fn new_mocked() -> Self {
-        use lb_groth16::{CompressedGroth16Proof, Field as _};
-        use lb_key_management_system_keys::keys::ZkSignature;
+    pub fn new_mocked(context: MantleTxContext) -> Self {
+        use lb_groth16::Field as _;
 
         use crate::mantle::{ops::channel::Ed25519PublicKey, tx_builder::MantleTxBuilder};
+
+        let mock_transfer = TransferOp::new(vec![], vec![]);
 
         let cryptarchia_parameter = CryptarchiaParameter {
             chain_id: "mock-chain-id".to_owned(),
             genesis_time: OffsetDateTime::now_utc(),
             epoch_nonce: Fr::ZERO,
         };
-        let inscription_op = InscriptionOp {
+        let inscription = InscriptionOp {
             channel_id: ChannelId::from([0; 32]),
             inscription: cryptarchia_parameter.encode(),
             parent: MsgId::root(),
             signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         };
+
         Self {
             tx: SignedMantleTx::new_unverified(
-                MantleTxBuilder::new()
-                    .push_op(Op::ChannelInscribe(inscription_op))
+                MantleTxBuilder::new(context)
+                    .push_op(Op::Transfer(mock_transfer))
+                    .push_op(Op::ChannelInscribe(inscription))
                     .build(),
-                vec![OpProof::NoProof],
-                ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0; _])),
+                vec![],
             ),
             cryptarchia_parameter,
         }
@@ -144,19 +178,50 @@ impl Transaction for GenesisTx {
     }
 }
 
-impl GasCost for GenesisTx {
-    fn gas_cost<Constants: GasConstants>(&self) -> Gas {
+impl GasCalculator for GenesisTx {
+    type Context = ();
+
+    fn total_gas_cost<Constants: GasConstants>(
+        &self,
+        _context: &Self::Context,
+    ) -> Result<GasCost, GasOverflow> {
         // Genesis transactions have zero gas cost as per spec
-        0
+        Ok(0.into())
+    }
+
+    fn storage_gas_cost(&self, _context: &Self::Context) -> Result<GasCost, GasOverflow> {
+        // Genesis transactions have zero gas cost as per spec
+        Ok(0.into())
+    }
+
+    fn execution_gas_consumption<Constants: GasConstants>(
+        &self,
+        _context: &Self::Context,
+    ) -> Result<Gas, GasOverflow> {
+        // Genesis transactions have zero gas cost as per spec
+        Ok(0.into())
+    }
+
+    fn storage_gas_consumption(&self, _context: &Self::Context) -> Result<Gas, GasOverflow> {
+        // Genesis transactions have zero gas cost as per spec
+        Ok(0.into())
     }
 }
 
 impl crate::mantle::GenesisTx for GenesisTx {
     fn genesis_inscription(&self) -> &InscriptionOp {
         // Safe to unwrap because we validated this in from_tx
-        match &self.mantle_tx().ops[0] {
+        match &self.mantle_tx().ops[1] {
             Op::ChannelInscribe(op) => op,
-            _ => unreachable!("GenesisTx always has a valid inscription as first op"),
+            _ => unreachable!("GenesisTx always has a valid inscription as second op"),
+        }
+    }
+
+    fn genesis_transfer(&self) -> &TransferOp {
+        // Safe to unwrap because we validated this in from_tx
+        match &self.mantle_tx().ops[0] {
+            Op::Transfer(op) => op,
+            _ => unreachable!("GenesisTx always has a valid transfer as first op"),
         }
     }
 
@@ -263,7 +328,7 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            ledger::{Note, Tx as LedgerTx, Utxo, Value},
+            ledger::{Note, Utxo, Value},
             ops::channel::Ed25519PublicKey,
         },
         sdp::{ProviderId, ServiceType},
@@ -312,18 +377,22 @@ mod tests {
 
     // Helper function to create a basic signed transaction
     // Genesis transactions don't need verified proofs for Blob/Inscription ops
-    fn create_tx(ops: Vec<Op>, ops_proofs: Vec<OpProof>) -> SignedMantleTx {
-        let ledger_tx = LedgerTx::new(vec![], vec![create_test_note(1000)]);
+    fn create_tx(mut ops: Vec<Op>, mut ops_proofs: Vec<OpProof>) -> SignedMantleTx {
+        let transfer_op = TransferOp::new(vec![], vec![create_test_note(1000)]);
+        let mut new_ops = vec![Op::Transfer(transfer_op)];
+        new_ops.append(&mut ops);
         let mantle_tx = MantleTx {
-            ops,
-            ledger_tx,
-            execution_gas_price: 0,
-            storage_gas_price: 0,
+            ops: new_ops,
+            execution_gas_price: GENESIS_EXECUTION_GAS_PRICE,
+            storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
         };
+        let mut new_op_proofs = vec![OpProof::ZkSig(
+            ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap(),
+        )];
+        new_op_proofs.append(&mut ops_proofs);
         SignedMantleTx {
-            mantle_tx: mantle_tx.clone(),
-            ops_proofs,
-            ledger_tx_proof: ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap(),
+            mantle_tx,
+            ops_proofs: new_op_proofs,
         }
     }
 
@@ -401,7 +470,7 @@ mod tests {
         // Test cases: (operations, expected_error)
         let test_cases = [
             // no inscription -> error
-            (vec![], Some(Error::MissingInscription)),
+            (vec![], Some(Error::MissingTransferAndInscription)),
             // one inscription -> ok
             (vec![Op::ChannelInscribe(inscription_op())], None),
             // two inscriptions -> error
@@ -450,7 +519,7 @@ mod tests {
             // SDP without inscription
             (
                 vec![Op::SDPDeclare(sdp_declare_op_helper(utxo1, 0))],
-                Some(Error::MissingInscription),
+                Some(Error::MissingTransferAndInscription),
             ),
             // Valid SDP combinations
             (
@@ -484,7 +553,8 @@ mod tests {
 
     #[test]
     fn test_genesis_fees() {
-        // Should succeed with zero gas prices
+        // Should succeed with execution_gas_price=GENESIS_EXECUTION_GAS_PRICE
+        // and storage_gas_price=GENESIS_STORAGE_GAS_PRICE
         let mut signed_mantle_tx = create_tx(
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
@@ -496,20 +566,24 @@ mod tests {
         );
         assert!(GenesisTx::from_tx(signed_mantle_tx.clone()).is_ok());
 
-        // Test with non-zero execution gas price
-        signed_mantle_tx.mantle_tx.execution_gas_price = 1;
+        // Test with wrong execution gas price
+        signed_mantle_tx.mantle_tx.execution_gas_price =
+            (GENESIS_EXECUTION_GAS_PRICE.into_inner() + 1).into();
         let result = GenesisTx::from_tx(signed_mantle_tx.clone());
         assert_eq!(result, Err(Error::InvalidGenesisGasPrice));
 
-        // test with non-zero storage gas price
-        signed_mantle_tx.mantle_tx.storage_gas_price = 1;
-        signed_mantle_tx.mantle_tx.execution_gas_price = 0;
+        // Test with wrong storage gas price
+        signed_mantle_tx.mantle_tx.storage_gas_price =
+            (GENESIS_STORAGE_GAS_PRICE.into_inner() + 1).into();
+        signed_mantle_tx.mantle_tx.execution_gas_price = 0.into();
         let result = GenesisTx::from_tx(signed_mantle_tx.clone());
         assert_eq!(result, Err(Error::InvalidGenesisGasPrice));
 
-        // test with both gas prices non-zero
-        signed_mantle_tx.mantle_tx.storage_gas_price = 1;
-        signed_mantle_tx.mantle_tx.execution_gas_price = 1;
+        // Test with wrong storage/execution gas prices
+        signed_mantle_tx.mantle_tx.storage_gas_price =
+            (GENESIS_STORAGE_GAS_PRICE.into_inner() + 1).into();
+        signed_mantle_tx.mantle_tx.execution_gas_price =
+            (GENESIS_EXECUTION_GAS_PRICE.into_inner() + 1).into();
         let result = GenesisTx::from_tx(signed_mantle_tx);
         assert_eq!(result, Err(Error::InvalidGenesisGasPrice));
     }

@@ -1,3 +1,5 @@
+use core::fmt::{self, Debug, Formatter};
+
 use blake2::Digest as _;
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::fr_to_bytes;
@@ -14,14 +16,32 @@ use crate::{
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Copy, Hash, PartialOrd, Ord)]
+#[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord)]
 pub struct HeaderId([u8; 32]);
 
-#[derive(Clone, Debug, Eq, PartialEq, Copy, Hash)]
+impl Debug for HeaderId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "HeaderId({})", hex::encode(self.0))
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Copy, Hash)]
 pub struct ContentId([u8; 32]);
 
-#[derive(Clone, Debug, Eq, PartialEq, Copy)]
+impl Debug for ContentId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "ContentId({})", hex::encode(self.0))
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Copy)]
 pub struct Nonce([u8; 32]);
+
+impl Debug for Nonce {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "Nonce({})", hex::encode(self.0))
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Copy, Serialize, Deserialize)]
 #[repr(u8)]
@@ -173,9 +193,11 @@ impl From<ContentId> for [u8; 32] {
 
 display_hex_bytes_newtype!(HeaderId);
 display_hex_bytes_newtype!(ContentId);
+display_hex_bytes_newtype!(Nonce);
 
 serde_bytes_newtype!(HeaderId, 32);
 serde_bytes_newtype!(ContentId, 32);
+serde_bytes_newtype!(Nonce, 32);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

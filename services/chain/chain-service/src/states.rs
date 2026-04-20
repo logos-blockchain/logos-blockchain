@@ -115,7 +115,7 @@ mod tests {
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
     use lb_cryptarchia_engine::State::Bootstrapping;
     use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
-    use lb_utils::math::NonNegativeF64;
+    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
     use super::*;
 
@@ -127,7 +127,7 @@ mod tests {
         let security_param: NonZero<u32> = 2.try_into().unwrap();
         let cryptarchia_engine_config = lb_cryptarchia_engine::Config::new(
             security_param,
-            1f64,
+            NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
         );
         let ledger_config = lb_ledger::Config {
@@ -136,7 +136,7 @@ mod tests {
                 epoch_period_nonce_buffer: 1.try_into().unwrap(),
                 epoch_period_nonce_stabilization: 1.try_into().unwrap(),
             },
-            consensus_config: cryptarchia_engine_config,
+            consensus_config: cryptarchia_engine_config.clone(),
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(
@@ -166,6 +166,7 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            faucet_pk: None,
         };
 
         let (cryptarchia_engine, pruned_blocks) = {
@@ -187,39 +188,34 @@ mod tests {
             //
             // Add 3 more blocks to canonical chain. `b0`, `b1`, `b2`, and `b3` represent
             // the canonical chain now.
-            cryptarchia = cryptarchia
+            cryptarchia
                 .receive_block([1; 32].into(), genesis_header_id, 1.into())
-                .expect("Block 1 to be added successfully on top of block 0.")
-                .cryptarchia
+                .expect("Block 1 to be added successfully on top of block 0.");
+            cryptarchia
                 .receive_block([2; 32].into(), [1; 32].into(), 2.into())
-                .expect("Block 2 to be added successfully on top of block 1.")
-                .cryptarchia
+                .expect("Block 2 to be added successfully on top of block 1.");
+            cryptarchia
                 .receive_block([3; 32].into(), [2; 32].into(), 3.into())
-                .expect("Block 3 to be added successfully on top of block 2.")
-                .cryptarchia;
+                .expect("Block 3 to be added successfully on top of block 2.");
             // Add a 2-block fork from genesis
-            cryptarchia = cryptarchia
+            cryptarchia
                 .receive_block([4; 32].into(), genesis_header_id, 1.into())
-                .expect("Block 4 to be added successfully on top of block 0.")
-                .cryptarchia
+                .expect("Block 4 to be added successfully on top of block 0.");
+            cryptarchia
                 .receive_block([5; 32].into(), [4; 32].into(), 2.into())
-                .expect("Block 5 to be added successfully on top of block 4.")
-                .cryptarchia;
+                .expect("Block 5 to be added successfully on top of block 4.");
             // Add a second single-block fork from genesis
-            cryptarchia = cryptarchia
+            cryptarchia
                 .receive_block([6; 32].into(), genesis_header_id, 1.into())
-                .expect("Block 6 to be added successfully on top of block 0.")
-                .cryptarchia;
+                .expect("Block 6 to be added successfully on top of block 0.");
             // Add a single-block fork from the block after genesis (block `1`)
-            cryptarchia = cryptarchia
+            cryptarchia
                 .receive_block([7; 32].into(), [1; 32].into(), 2.into())
-                .expect("Block 7 to be added successfully on top of block 1.")
-                .cryptarchia;
+                .expect("Block 7 to be added successfully on top of block 1.");
             // Add a single-block fork from the second block after genesis (block `2`)
-            cryptarchia = cryptarchia
+            cryptarchia
                 .receive_block([8; 32].into(), [2; 32].into(), 3.into())
-                .expect("Block 8 to be added successfully on top of block 2.")
-                .cryptarchia;
+                .expect("Block 8 to be added successfully on top of block 2.");
 
             cryptarchia.online()
         };
@@ -261,7 +257,7 @@ mod tests {
         let security_param: NonZero<u32> = 2.try_into().unwrap();
         let cryptarchia_engine_config = lb_cryptarchia_engine::Config::new(
             security_param,
-            1f64,
+            NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
         );
         let ledger_config = lb_ledger::Config {
@@ -270,7 +266,7 @@ mod tests {
                 epoch_period_nonce_buffer: 1.try_into().unwrap(),
                 epoch_period_nonce_stabilization: 1.try_into().unwrap(),
             },
-            consensus_config: cryptarchia_engine_config,
+            consensus_config: cryptarchia_engine_config.clone(),
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(
@@ -300,6 +296,7 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            faucet_pk: None,
         };
 
         // Build a chain: b0 (genesis) - b1 - b2 - b3 - b4 - b5
@@ -315,10 +312,9 @@ mod tests {
         let mut parent = genesis_header_id;
         for (i, &block_id) in block_ids.iter().enumerate() {
             let slot = (i as u64 + 1).into();
-            engine = engine
+            engine
                 .receive_block(block_id, parent, slot)
-                .unwrap_or_else(|_| panic!("Block {block_id} should be added successfully"))
-                .cryptarchia;
+                .unwrap_or_else(|_| panic!("Block {block_id} should be added successfully"));
             parent = block_id;
         }
 
@@ -373,11 +369,10 @@ mod tests {
         blocks_to_replay.reverse();
         for (block_id, slot) in blocks_to_replay {
             let parent_id = engine.branches().get(&block_id).unwrap().parent();
-            restored.consensus = restored
+            restored
                 .consensus
                 .receive_block(block_id, parent_id, slot)
-                .unwrap_or_else(|_| panic!("Replay of {block_id} should succeed"))
-                .cryptarchia;
+                .unwrap_or_else(|_| panic!("Replay of {block_id} should succeed"));
         }
 
         let info_after = restored.info();

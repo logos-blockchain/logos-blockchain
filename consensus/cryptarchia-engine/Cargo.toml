@@ -18,14 +18,15 @@ workspace = true
 
 [dependencies]
 cfg_eval   = { optional = true, version = "0.1" }
-lb-utils   = { features = ["serde", "time"], workspace = true }
+lb-pol     = { workspace = true }
+lb-utils   = { workspace = true }
 serde      = { optional = true, workspace = true }
 serde_with = { features = ["macros"], optional = true, workspace = true }
 thiserror  = "1"
 time       = { workspace = true }
-tokio      = { default-features = false, features = ["time"], optional = true, version = "1" }
+tokio      = { features = ["time"], optional = true, workspace = true }
 tracing    = { workspace = true }
 
 [features]
-serde = ["dep:cfg_eval", "dep:serde", "dep:serde_with"]
+serde = ["dep:cfg_eval", "dep:serde", "dep:serde_with", "lb-utils/serde", "lb-utils/time"]
 tokio = ["dep:tokio"]

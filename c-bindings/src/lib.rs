@@ -4,7 +4,12 @@
 )]
 
 pub mod api;
+mod callbacks;
 mod errors;
+mod macros;
 mod node;
+mod result;
+
 pub use errors::OperationStatus;
 pub use node::LogosBlockchainNode;
+pub use result::{FfiResult, FfiStatusResult, StatusResult};

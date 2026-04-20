@@ -6,8 +6,11 @@ use lb_blend::{
     message::{
         crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
         encap::{
-            ProofsVerifier, encapsulated::EncapsulatedMessage,
-            validated::EncapsulatedMessageWithVerifiedPublicHeader,
+            ProofsVerifier,
+            validated::{
+                EncapsulatedMessageWithVerifiedPublicHeader,
+                EncapsulatedMessageWithVerifiedSignature,
+            },
         },
         reward,
     },
@@ -33,8 +36,9 @@ use lb_blend::{
         message_scheduler::{self, session_info::SessionInfo as SchedulerSessionInfo},
     },
 };
+use lb_chain_service::Epoch;
 use lb_core::{crypto::ZkHash, sdp::SessionNumber};
-use lb_groth16::Field as _;
+use lb_groth16::{Field as _, Fr};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_network_service::{NetworkService, backends::NetworkBackend};
 use lb_poq::CorePathAndSelectors;
@@ -52,7 +56,7 @@ use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 
 use crate::{
     core::{
-        backends::{BlendBackend, EpochInfo, PublicInfo, SessionInfo},
+        backends::{BlendBackend, PublicInfo, SessionInfo},
         kms::KmsPoQAdapter,
         network::NetworkAdapter,
         processor::CoreCryptographicProcessor,
@@ -63,6 +67,7 @@ use crate::{
         state::RecoveryServiceState,
         tests::RuntimeServiceId,
     },
+    message::NetworkInfo,
     settings::TimingSettings,
     test_utils,
 };
@@ -155,8 +160,7 @@ pub struct TestBlendBackend {
 }
 
 #[async_trait]
-impl<NodeId, Rng, ProofsVerifier> BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId>
-    for TestBlendBackend
+impl<NodeId, Rng> BlendBackend<NodeId, Rng, RuntimeServiceId> for TestBlendBackend
 where
     NodeId: Send + 'static,
 {
@@ -173,7 +177,12 @@ where
     }
 
     fn shutdown(self) {}
-    async fn publish(&self, _msg: EncapsulatedMessage) {}
+    async fn publish(
+        &self,
+        _msg: EncapsulatedMessageWithVerifiedPublicHeader,
+        _intended_session: u64,
+    ) {
+    }
     async fn rotate_session(&mut self, _new_session_info: SessionInfo<NodeId>) {}
 
     async fn complete_session_transition(&mut self) {
@@ -183,12 +192,13 @@ where
             .unwrap();
     }
 
-    async fn rotate_epoch(&mut self, _new_epoch_public_info: EpochInfo) {}
-    async fn complete_epoch_transition(&mut self) {}
-
     fn listen_to_incoming_messages(
         &mut self,
-    ) -> Pin<Box<dyn Stream<Item = EncapsulatedMessageWithVerifiedPublicHeader> + Send>> {
+    ) -> Pin<Box<dyn Stream<Item = (EncapsulatedMessageWithVerifiedSignature, u64)> + Send>> {
+        unimplemented!()
+    }
+
+    async fn network_info(&self) -> Option<NetworkInfo<NodeId>> {
         unimplemented!()
     }
 }
@@ -316,6 +326,7 @@ pub fn new_crypto_processor<CorePoQGenerator>(
             leader: public_info.epoch,
         },
         core_poq_generator,
+        Epoch::new(0),
     )
     .expect("crypto processor must be created successfully")
 }
@@ -339,7 +350,8 @@ pub fn new_public_info<BackendSettings>(
             pol_ledger_aged: ZkHash::ZERO,
             pol_epoch_nonce: ZkHash::ZERO,
             message_quota: settings.session_leadership_quota(),
-            total_stake: 10,
+            lottery_0: Fr::ZERO,
+            lottery_1: Fr::ZERO,
         },
     }
 }
@@ -380,8 +392,8 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
         Self(settings.public_inputs.session)
     }
 
-    fn rotate_epoch(&mut self, _: LeaderInputs) {}
-    fn set_epoch_private(&mut self, _: ProofOfLeadershipQuotaInputs) {}
+    fn rotate_epoch(&mut self, _: LeaderInputs, _: Epoch) {}
+    fn set_epoch_private(&mut self, _: ProofOfLeadershipQuotaInputs, _: LeaderInputs, _: Epoch) {}
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
         Some(session_based_dummy_proofs(self.0))

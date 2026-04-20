@@ -4,7 +4,11 @@ pub mod leader_claim;
 pub mod opcode;
 pub mod sdp;
 mod serde_;
-use channel::{inscribe::InscriptionOp, set_keys::SetKeysOp};
+pub mod transfer;
+
+use channel::{
+    deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp, withdraw::ChannelWithdrawOp,
+};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -12,16 +16,25 @@ use super::{
     gas::{Gas, GasConstants},
     ops::{
         leader_claim::LeaderClaimOp,
-        opcode::{INSCRIBE, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, SET_CHANNEL_KEYS},
+        opcode::{
+            INSCRIBE, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, SET_CHANNEL_KEYS,
+            TRANSFER,
+        },
         sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     },
 };
 use crate::{
     mantle::{
         encoding::{decode_op, encode_op},
-        ops::internal::{OpDe, OpSer},
+        ops::{
+            internal::{OpDe, OpSer},
+            opcode::{CHANNEL_DEPOSIT, CHANNEL_WITHDRAW},
+            transfer::TransferOp,
+        },
     },
-    proofs::leader_claim_proof::Groth16LeaderClaimProof,
+    proofs::{
+        channel_withdraw_proof::ChannelWithdrawProof, leader_claim_proof::Groth16LeaderClaimProof,
+    },
 };
 
 /// Core set of supported Mantle operations.
@@ -35,14 +48,17 @@ use crate::{
 /// `#[serde(untagged)]` enums, binary deserialization is routed through
 /// [`OpWireVisitor`], which correctly handles `opcode` to select the
 /// appropriate variant.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Op {
     ChannelInscribe(InscriptionOp),
     ChannelSetKeys(SetKeysOp),
+    ChannelDeposit(DepositOp),
+    ChannelWithdraw(ChannelWithdrawOp),
     SDPDeclare(SDPDeclareOp),
     SDPWithdraw(SDPWithdrawOp),
     SDPActive(SDPActiveOp),
     LeaderClaim(LeaderClaimOp),
+    Transfer(TransferOp),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +71,7 @@ pub enum OpProof {
         ed25519_sig: Ed25519Signature,
     },
     PoC(Groth16LeaderClaimProof),
+    ChannelWithdrawProof(ChannelWithdrawProof),
 }
 
 /// Delegates serialization through the [`OpInternal`] representation.
@@ -105,10 +122,13 @@ impl Op {
         match self {
             Self::ChannelInscribe(_) => "ChannelInscribe",
             Self::ChannelSetKeys(_) => "ChannelSetKeys",
+            Self::ChannelDeposit(_) => "ChannelDeposit",
+            Self::ChannelWithdraw(_) => "ChannelWithdraw",
             Self::SDPDeclare(_) => "SDPDeclare",
             Self::SDPWithdraw(_) => "SDPWithdraw",
             Self::SDPActive(_) => "SDPActive",
             Self::LeaderClaim(_) => "LeaderClaim",
+            Self::Transfer(_) => "Transfer",
         }
     }
     #[must_use]
@@ -116,10 +136,13 @@ impl Op {
         match self {
             Self::ChannelInscribe(_) => INSCRIBE,
             Self::ChannelSetKeys(_) => SET_CHANNEL_KEYS,
+            Self::ChannelDeposit(_) => CHANNEL_DEPOSIT,
+            Self::ChannelWithdraw(_) => CHANNEL_WITHDRAW,
             Self::SDPDeclare(_) => SDP_DECLARE,
             Self::SDPWithdraw(_) => SDP_WITHDRAW,
             Self::SDPActive(_) => SDP_ACTIVE,
             Self::LeaderClaim(_) => LEADER_CLAIM,
+            Self::Transfer(_) => TRANSFER,
         }
     }
 
@@ -128,10 +151,13 @@ impl Op {
         match self {
             Self::ChannelInscribe(_) => Constants::CHANNEL_INSCRIBE,
             Self::ChannelSetKeys(_) => Constants::CHANNEL_SET_KEYS,
+            Self::ChannelDeposit(_) => Constants::CHANNEL_DEPOSIT,
+            Self::ChannelWithdraw(_) => Constants::CHANNEL_WITHDRAW,
             Self::SDPDeclare(_) => Constants::SDP_DECLARE,
             Self::SDPWithdraw(_) => Constants::SDP_WITHDRAW,
             Self::SDPActive(_) => Constants::SDP_ACTIVE,
             Self::LeaderClaim(_) => Constants::LEADER_CLAIM,
+            Self::Transfer(_) => Constants::TRANSFER,
         }
     }
 }

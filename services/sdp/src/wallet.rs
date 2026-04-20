@@ -1,5 +1,9 @@
 use lb_core::{
-    mantle::{SignedMantleTx, Value, tx_builder::MantleTxBuilder},
+    mantle::{
+        SignedMantleTx,
+        gas::{GasCost, GasOverflow},
+        tx_builder::MantleTxBuilder,
+    },
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -13,13 +17,15 @@ pub enum SdpWalletError {
     #[error(transparent)]
     WalletApi(DynError),
     #[error("Transaction fee exceeded the configured max fee. tx_fee={tx_fee} > max_fee={max_fee}")]
-    TxFeeExceedsMaxFee { max_fee: Value, tx_fee: Value },
+    TxFeeExceedsMaxFee { max_fee: GasCost, tx_fee: GasCost },
+    #[error(transparent)]
+    GasOverflow(#[from] GasOverflow),
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SdpWalletConfig {
     // Hard cap on the transaction fee initiated by SDP.
-    pub max_tx_fee: Value,
+    pub max_tx_fee: GasCost,
 
     // The key to use for paying SDP transaction fees.
     // Change notes will be returned to this same funding pk.

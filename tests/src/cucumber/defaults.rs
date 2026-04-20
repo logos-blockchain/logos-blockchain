@@ -1,5 +1,6 @@
 use std::{fs, path::PathBuf};
 
+use lb_testing_framework::LOGOS_BLOCKCHAIN_LOG_LEVEL;
 use tracing::warn;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -13,14 +14,20 @@ const CONTAINER_NODE_LOG_DIR: &str = "/tmp/node_logs";
 
 const TARGET: &str = "cucumber_defaults";
 
-const LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS: &str = "LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS";
 const LOGOS_BLOCKCHAIN_TESTS_TRACING: &str = "LOGOS_BLOCKCHAIN_TESTS_TRACING";
+const TF_KEEP_LOGS: &str = "TF_KEEP_LOGS";
 const CUCUMBER_LOG_LEVEL: &str = "CUCUMBER_LOG_LEVEL";
-const LOGOS_BLOCKCHAIN_LOG_LEVEL: &str = "LOGOS_BLOCKCHAIN_LOG_LEVEL";
 const RUST_LOG: &str = "RUST_LOG";
 const LOGOS_BLOCKCHAIN_LOG_DIR: &str = "LOGOS_BLOCKCHAIN_LOG_DIR";
 const CUCUMBER_RETRIES: &str = "CUCUMBER_RETRIES";
 pub const LOGOS_BLOCKCHAIN_NODE_BIN: &str = "LOGOS_BLOCKCHAIN_NODE_BIN";
+pub const CUCUMBER_NODE_CONFIG_OVERRIDE: &str = "CUCUMBER_NODE_CONFIG_OVERRIDE";
+pub const CUCUMBER_VERBOSE_CONSOLE: &str = "CUCUMBER_VERBOSE_CONSOLE";
+const SNAPSHOTS_DIR_REL: &str = "cucumber_tests/temp/cucumber_artefacts/snapshots";
+pub const SNAPSHOT_STATE_SUBDIRS: [&str; 2] = ["db", "recovery"];
+pub const CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: &str = "CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL";
+pub const CUCUMBER_DEPLOYER_COMPOSE: &str = "CUCUMBER_DEPLOYER_COMPOSE";
+pub const CUCUMBER_DEPLOYER_K8S: &str = "CUCUMBER_DEPLOYER_K8S";
 
 /// Set an environment variable to a default value if it is not already set.
 pub fn set_default_env(key: &str, value: &str) {
@@ -34,8 +41,8 @@ pub fn set_default_env(key: &str, value: &str) {
 }
 
 pub fn init_logging_defaults() {
-    set_default_env(LOGOS_BLOCKCHAIN_TESTS_KEEP_LOGS, "true");
-    set_default_env(LOGOS_BLOCKCHAIN_TESTS_TRACING, "true");
+    set_default_env(LOGOS_BLOCKCHAIN_TESTS_TRACING, "false");
+    set_default_env(TF_KEEP_LOGS, "true");
     // Always keep RUST_LOG at info for console output
     set_default_env(RUST_LOG, "info");
 
@@ -62,38 +69,36 @@ pub fn init_logging_defaults() {
 }
 
 pub fn init_node_log_dir_defaults(deployer: &DeployerKind, log_dir: Option<&PathBuf>) {
-    let host_dir = match deployer {
-        DeployerKind::Local => log_dir.as_ref().map_or_else(
-            || {
-                std::env::var_os(LOGOS_BLOCKCHAIN_LOG_DIR).map_or_else(
-                    || {
-                        let dir = PathBuf::from(SCENARIO_OUTPUT_DIR_REL).join(ARTEFACTS);
-                        set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
-                        dir
-                    },
-                    |dir| {
-                        let dir = dir.to_string_lossy().as_ref().to_owned();
-                        PathBuf::from(dir)
-                    },
-                )
-            },
-            |dir| {
-                set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
-                PathBuf::from(dir)
-            },
-        ),
-        DeployerKind::Compose => std::env::var_os(LOGOS_BLOCKCHAIN_LOG_DIR).map_or_else(
-            || {
-                set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, CONTAINER_NODE_LOG_DIR);
-                PathBuf::from(CONTAINER_NODE_LOG_DIR)
-            },
-            |dir| {
-                let dir = dir.to_string_lossy().as_ref().to_owned();
-                PathBuf::from(dir)
-            },
-        ),
+    let host_dir = if deployer.uses_host_log_dir() {
+        resolve_host_log_dir(log_dir)
+    } else {
+        resolve_compose_log_dir()
     };
+
     fs::create_dir_all(&host_dir).expect("should succeed");
+}
+
+fn resolve_host_log_dir(log_dir: Option<&PathBuf>) -> PathBuf {
+    log_dir.cloned().unwrap_or_else(|| {
+        std::env::var_os(LOGOS_BLOCKCHAIN_LOG_DIR).map_or_else(
+            || {
+                let dir = PathBuf::from(SCENARIO_OUTPUT_DIR_REL).join(ARTEFACTS);
+                set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
+                dir
+            },
+            PathBuf::from,
+        )
+    })
+}
+
+fn resolve_compose_log_dir() -> PathBuf {
+    std::env::var_os(LOGOS_BLOCKCHAIN_LOG_DIR).map_or_else(
+        || {
+            set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, CONTAINER_NODE_LOG_DIR);
+            PathBuf::from(CONTAINER_NODE_LOG_DIR)
+        },
+        PathBuf::from,
+    )
 }
 
 pub fn init_tracing() {
@@ -136,6 +141,7 @@ pub fn get_retries() -> Result<Option<usize>, String> {
     )
 }
 
+/// Creates the output directory for the current scenario and returns its path.
 #[must_use]
 pub fn create_scenario_output_dir() -> PathBuf {
     let current_dir = std::env::current_dir().expect("should exist");
@@ -146,6 +152,7 @@ pub fn create_scenario_output_dir() -> PathBuf {
     output_dir
 }
 
+/// Returns the path to the features directory, panicking if it does not exist.
 #[must_use]
 pub fn get_feature_path() -> PathBuf {
     let feature_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FEATURES_DIR_REL);
@@ -155,4 +162,11 @@ pub fn get_feature_path() -> PathBuf {
         panic!("Feature path does not exist: {}", feature_path.display());
     }
     feature_path
+}
+
+/// Returns the path to the snapshots root directory, which is where named
+/// snapshots are stored.
+#[must_use]
+pub fn snapshots_root_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(SNAPSHOTS_DIR_REL)
 }

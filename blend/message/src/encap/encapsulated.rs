@@ -17,7 +17,9 @@ use crate::{
     encap::{
         ProofsVerifier,
         decapsulated::{PartDecapsulationOutput, PrivateHeaderDecapsulationOutput},
-        validated::EncapsulatedMessageWithVerifiedPublicHeader,
+        validated::{
+            EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
+        },
     },
     input::EncapsulationInput,
     message::{
@@ -55,6 +57,21 @@ impl EncapsulatedMessage {
     #[must_use]
     pub fn into_components(self) -> (PublicHeader, EncapsulatedPart) {
         (self.public_header, self.encapsulated_part)
+    }
+
+    /// Verify the message public header signature.
+    pub fn verify_header_signature(
+        self,
+    ) -> Result<EncapsulatedMessageWithVerifiedSignature, Error> {
+        let public_header_with_verified_signature =
+            self.public_header.verify_signature(&signing_body(
+                &self.encapsulated_part.private_header,
+                &self.encapsulated_part.payload,
+            ))?;
+        Ok(EncapsulatedMessageWithVerifiedSignature::from_components(
+            public_header_with_verified_signature,
+            self.encapsulated_part,
+        ))
     }
 
     /// Verify the message public header.
@@ -107,17 +124,32 @@ pub struct EncapsulatedPart {
 }
 
 impl EncapsulatedPart {
-    /// Initializes the encapsulated part as preparation for actual
-    /// encapsulations.
-    pub(super) fn initialize(
+    #[cfg(test)]
+    #[must_use]
+    pub fn new_unchecked(
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
     ) -> Self {
         Self {
-            private_header: EncapsulatedPrivateHeader::initialize(inputs),
+            private_header: EncapsulatedPrivateHeader::new_unchecked(inputs),
             payload: EncapsulatedPayload::initialize(&Payload::new(payload_type, payload_body)),
         }
+    }
+
+    /// Initializes the encapsulated part as preparation for actual
+    /// encapsulations.
+    ///
+    /// It returns an error if the slice of inputs is empty.
+    pub(super) fn try_initialize(
+        inputs: &[EncapsulationInput],
+        payload_type: PayloadType,
+        payload_body: PaddedPayloadBody,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            private_header: EncapsulatedPrivateHeader::try_initialize(inputs)?,
+            payload: EncapsulatedPayload::initialize(&Payload::new(payload_type, payload_body)),
+        })
     }
 
     /// Add a layer of encapsulation.
@@ -232,6 +264,7 @@ where
 {
     verify_last_reconstructed_public_header(public_header, private_header, payload)?;
     // Verify the proof of quota in the reconstructed public header
+    tracing::trace!("Verifying proof of quota of intermediate reconstructed public header.");
     public_header.verify_proof_of_quota(verifier)?;
     Ok(())
 }
@@ -271,19 +304,34 @@ fn signing_body(
 pub(super) struct EncapsulatedPrivateHeader(Vec<EncapsulatedBlendingHeader>);
 
 impl EncapsulatedPrivateHeader {
+    #[cfg(test)]
+    pub fn new_unchecked(inputs: &[EncapsulationInput]) -> Self {
+        Self::from_inputs(inputs)
+    }
+
     /// Initializes the private header as preparation for actual encapsulations.
-    fn initialize(inputs: &[EncapsulationInput]) -> Self {
-        // Randomize the private header in the reconstructable way,
-        // so that the corresponding signatures can be verified later.
-        // Plus, encapsulate the last `inputs.len()` blending headers.
-        //
-        // Example: for 2 inputs,
-        // BlendingHeaders[0]: Enc(inputs[1], Enc(inputs[0], RND(inputs[1])))
-        // BlendingHeaders[1]:               Enc(inputs[0], RND(inputs[0]))
-        //
-        // Notation:
-        // - RND(seed): Pseudo-random bytes generated from `seed` with the `HEADER` DST
-        // - Enc(key, data): Encrypt `data` by XOR-ing with RND(key)
+    ///
+    /// It returns an error if the slice of inputs is empty.
+    fn try_initialize(inputs: &[EncapsulationInput]) -> Result<Self, Error> {
+        if inputs.is_empty() {
+            return Err(Error::EmptyEncapsulationInputs);
+        }
+
+        Ok(Self::from_inputs(inputs))
+    }
+
+    // Randomize the private header in the reconstructable way,
+    // so that the corresponding signatures can be verified later.
+    // Plus, encapsulate the last `inputs.len()` blending headers.
+    //
+    // Example: for 2 inputs,
+    // BlendingHeaders[0]: Enc(inputs[1], Enc(inputs[0], RND(inputs[1])))
+    // BlendingHeaders[1]:               Enc(inputs[0], RND(inputs[0]))
+    //
+    // Notation:
+    // - RND(seed): Pseudo-random bytes generated from `seed` with the `HEADER` DST
+    // - Enc(key, data): Encrypt `data` by XOR-ing with RND(key)
+    fn from_inputs(inputs: &[EncapsulationInput]) -> Self {
         Self(
             inputs
                 .iter()
@@ -352,6 +400,12 @@ impl EncapsulatedPrivateHeader {
     where
         Verifier: ProofsVerifier,
     {
+        // We call a bunch of `.expect()`s in the following code, so we need to check we
+        // are dealing with a message with at least one layer.
+        if self.0.is_empty() {
+            return Err(Error::EmptyEncapsulationInputs);
+        }
+
         // Decrypt all blending headers
         self.0.iter_mut().for_each(|header| {
             let mut header_cipher = key.cipher(domains::HEADER);

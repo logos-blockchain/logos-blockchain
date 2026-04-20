@@ -1,3 +1,5 @@
+use lb_pol::LotteryConstants;
+use lb_utils::math::NonNegativeRatio;
 use num_bigint::BigUint;
 
 use crate::quota::{
@@ -19,6 +21,9 @@ pub fn valid_proof_of_core_quota_inputs(
     signing_key: Ed25519PublicKey,
     core_quota: u64,
 ) -> (PublicInputs, ProofOfCoreQuotaInputs) {
+    let (lottery_0, lottery_1) =
+        LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+            .compute_lottery_values(1);
     let public_inputs = PublicInputs {
         signing_key,
         core: CoreInputs {
@@ -35,7 +40,8 @@ pub fn valid_proof_of_core_quota_inputs(
             pol_epoch_nonce: BigUint::from(1u64).into(),
             pol_ledger_aged: BigUint::from(1u64).into(),
             message_quota: 1,
-            total_stake: 1,
+            lottery_0,
+            lottery_1,
         },
     };
 
@@ -134,11 +140,17 @@ pub fn valid_proof_of_core_quota_inputs(
 
 // Reference values taken from the tests within the `poq` crate.
 #[must_use]
-#[expect(clippy::too_many_lines, reason = "This fixture is simply too long.")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Fixture function. Only used for tests."
+)]
 pub fn valid_proof_of_leadership_quota_inputs(
     signing_key: Ed25519PublicKey,
     leader_quota: u64,
 ) -> (PublicInputs, ProofOfLeadershipQuotaInputs) {
+    let (lottery_0, lottery_1) =
+        LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+            .compute_lottery_values(1);
     let public_inputs = PublicInputs {
         signing_key,
         leader: LeaderInputs {
@@ -153,7 +165,8 @@ pub fn valid_proof_of_leadership_quota_inputs(
                     .unwrap()
                     .into(),
             message_quota: leader_quota,
-            total_stake: 1,
+            lottery_0,
+            lottery_1,
         },
         // Not relevant for leadership quota proofs
         session: 1,

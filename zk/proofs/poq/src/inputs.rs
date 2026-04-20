@@ -1,5 +1,4 @@
 use lb_groth16::{Field as _, Fr, Groth16Input, Groth16InputDeser};
-use lb_pol::compute_lottery_values;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -106,7 +105,8 @@ pub struct PoQVerifierInputData {
     pub k_part_one: Fr,
     pub k_part_two: Fr,
     pub pol_epoch_nonce: Fr,
-    pub total_stake: u64,
+    pub lottery_0: Fr,
+    pub lottery_1: Fr,
     pub pol_ledger_aged: Fr,
 }
 
@@ -164,8 +164,6 @@ impl PoQVerifierInput {
 
 impl From<PoQVerifierInputData> for PoQVerifierInput {
     fn from(value: PoQVerifierInputData) -> Self {
-        let (lottery_0, lottery_1) = compute_lottery_values(value.total_stake);
-
         Self {
             core_quota: Groth16Input::new(value.core_quota.into()),
             core_root: value.core_root.into(),
@@ -175,8 +173,8 @@ impl From<PoQVerifierInputData> for PoQVerifierInput {
             leader_quota: Groth16Input::new(value.leader_quota.into()),
             pol_epoch_nonce: value.pol_epoch_nonce.into(),
             pol_ledger_aged: value.pol_ledger_aged.into(),
-            pol_t0: Groth16Input::new(lottery_0.into()),
-            pol_t1: Groth16Input::new(lottery_1.into()),
+            pol_t0: Groth16Input::new(value.lottery_0),
+            pol_t1: Groth16Input::new(value.lottery_1),
             session: Groth16Input::new(value.session.into()),
         }
     }

@@ -10,18 +10,21 @@ use core::fmt::Debug;
 use std::{fmt::Display, iter, pin::Pin, time::Duration};
 
 use futures::{StreamExt as _, stream};
-use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use lb_chain_network_service::api::ChainNetworkServiceData;
+use lb_chain_service::{
+    Epoch,
+    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
+};
 use lb_core::{
-    block::{Block, Error as BlockError, MAX_TRANSACTIONS},
+    block::{Block, Error as BlockError, MAX_BLOCK_TRANSACTIONS},
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, SignedMantleTx, Transaction, TxHash, TxSelect,
         gas::MainnetGasConstants, ops::leader_claim::LeaderClaimOp,
     },
-    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
+    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
 };
-use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
 use lb_ledger::LedgerState;
 use lb_services_utils::wait_until_services_are_ready;
@@ -40,7 +43,7 @@ use overwatch::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::sync::{oneshot, watch};
-use tracing::{Level, debug, error, info, instrument, span};
+use tracing::{Level, debug, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
 
 pub use crate::wallet::LeaderWalletConfig;
@@ -53,11 +56,11 @@ use crate::{
     wallet::{LeaderWalletError, fund_and_sign_leader_claim_tx},
 };
 
-pub(crate) type WinningPolInfo = (LeaderPrivate, Epoch);
+pub(crate) type WinningPolInfo = (LeaderPrivate, LeaderPublic, Epoch);
 
-const LEADER_ID: &str = "Leader";
+const SERVICE_ID: &str = "ChainLeader";
 
-pub(crate) const LOG_TARGET: &str = "cryptarchia::leader";
+pub(crate) const LOG_TARGET: &str = "chain_leader::service";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -72,7 +75,7 @@ pub enum Error {
     #[error("Failed to create valid block during proposal: {0}")]
     BlockCreation(#[from] BlockError),
     #[error("Wallet API error: {0}")]
-    Wallet(#[from] WalletApiError),
+    Wallet(#[from] Box<WalletApiError>),
     #[error("Leader wallet error: {0}")]
     LeaderWallet(#[from] LeaderWalletError),
     #[error("Mempool error: {0}")]
@@ -83,6 +86,12 @@ pub enum Error {
     NoClaimableVoucher,
     #[error("Ledger state not found for {0:?}")]
     LedgerStateNotFound(HeaderId),
+}
+
+impl From<WalletApiError> for Error {
+    fn from(error: WalletApiError) -> Self {
+        Self::Wallet(Box::new(error))
+    }
 }
 
 #[derive(Debug)]
@@ -219,8 +228,11 @@ impl<
     >
 where
     BlendService: ServiceData<
-            Message = lb_blend_service::message::ServiceMessage<BlendService::BroadcastSettings>,
-        > + lb_blend_service::ServiceComponents
+            Message = lb_blend_service::message::ServiceMessage<
+                BlendService::BroadcastSettings,
+                BlendService::NodeId,
+            >,
+        > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
         + Sync
         + 'static,
@@ -302,14 +314,6 @@ where
                 .expect("Failed to estabilish connection with Cryptarchia"),
         );
 
-        let chain_network_api = ChainNetworkServiceApi::<ChainNetwork, RuntimeServiceId>::new(
-            self.service_resources_handle
-                .overwatch_handle
-                .relay::<ChainNetwork>()
-                .await
-                .expect("Failed to estabilish connection with ChainNetwork"),
-        );
-
         let LeaderSettings {
             config: ledger_config,
             transaction_selector_settings,
@@ -348,25 +352,24 @@ where
             blend_broadcast_settings.clone(),
         );
 
-        // Wait for other service (except ChainLeader) to become ready, with timeout.
+        // Wait for other services to become ready, with timeout.
+        // (except Chain and ChainLeader)
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_secs(60)),
+            Some(Duration::from_mins(1)),
             BlendService,
             TxMempoolService<_, _, _, _>,
             TimeService<_, _>,
-            CryptarchiaService,
-            ChainNetwork,
             Wallet,
             PreloadKmsService<_>
         )
         .await?;
-        // Wait for ChainLeader service to become ready.
-        // No timeout since it becomes ready only after IBD is complete.
+        // Wait for Chain and ChainLeader services to become ready, without timeout
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             None,
-            ChainNetwork
+            CryptarchiaService, // becomes ready after recoverying blocks
+            ChainNetwork        // becomes ready after IBD
         )
         .await?;
 
@@ -399,7 +402,7 @@ where
             loop {
                 tokio::select! {
                     Some(SlotTick { slot, epoch }) = slot_timer.next() => {
-                        info!("Received SlotTick for slot {}, ep {}", u64::from(slot), u32::from(epoch));
+                        trace!("Received SlotTick for slot {}, ep {}", u64::from(slot), u32::from(epoch));
                         let (tip, tip_state) = match Self::get_tip_ledger_state(&cryptarchia_api).await {
                             Ok(output) => output,
                             Err(e) => {
@@ -412,13 +415,13 @@ where
                         let latest_tree = tip_state.latest_utxos();
 
                         let epoch_state = match cryptarchia_api.get_epoch_state(slot).await {
-                            Ok(Some(state)) => state,
-                            Ok(None) => {
-                                error!("trying to propose a block for slot {} but epoch state is not available", u64::from(slot));
+                            Ok(Ok(state)) => state,
+                            Ok(Err(e)) => {
+                                error!("trying to propose a block for slot {} but epoch state is not available: {e}", u64::from(slot));
                                 continue;
                             }
                             Err(e) => {
-                                error!("Failed to get epoch state: {:?}", e);
+                                error!("Failed to get epoch state: {e}");
                                 continue;
                             }
                         };
@@ -431,10 +434,16 @@ where
                             }
                         };
 
-                        // If it's a new epoch or the service just started, pre-compute the first winning slot and notify consumers.
-                        winning_pol_slot_notifier.process_epoch(&eligible_utxos.response, latest_tree, &epoch_state, &kms_api).await;
+                        let eligible: Vec<_> = match &ledger_config.faucet_pk {
+                            Some(fpk) => eligible_utxos.response.into_iter()
+                                .filter(|u| u.utxo.note.pk != *fpk).collect(),
+                            None => eligible_utxos.response,
+                        };
 
-                       if let Some((proof, signing_key)) = build_proof_for(&eligible_utxos.response, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier, &wallet_api, &kms_api).await {
+                        // If it's a new epoch or the service just started, pre-compute the first winning slot and notify consumers.
+                        winning_pol_slot_notifier.process_epoch(&eligible, latest_tree, &epoch_state, &kms_api).await;
+
+                       if let Some((proof, signing_key)) = build_proof_for(&eligible, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier, &wallet_api, &kms_api).await {
                             // TODO: spawn as a separate task?
                             match Self::propose_block(
                                 parent,
@@ -449,7 +458,7 @@ where
                             .await
                             {
                                 Ok(block) => {
-                                    Self::apply_and_publish_block_proposal(block, &chain_network_api, &blend_adapter).await;
+                                    Self::publish_block_proposal(block, &blend_adapter).await;
                                 }
                                 Err(e) => {
                                     error!(target: LOG_TARGET, "{e}");
@@ -465,14 +474,14 @@ where
             }
         };
 
-        // It sucks to use `LEADER_ID` when we have `<RuntimeServiceId as
+        // It sucks to use `SERVICE_ID` when we have `<RuntimeServiceId as
         // AsServiceId<Self>>::SERVICE_ID`.
         // Somehow it just does not let us use it.
         //
         // Hypothesis:
         // 1. Probably related to too many generics.
         // 2. It seems `span` requires a `const` string literal.
-        async_loop.instrument(span!(Level::TRACE, LEADER_ID)).await;
+        async_loop.instrument(span!(Level::TRACE, SERVICE_ID)).await;
 
         Ok(())
     }
@@ -502,8 +511,11 @@ impl<
     >
 where
     BlendService: ServiceData<
-            Message = lb_blend_service::message::ServiceMessage<BlendService::BroadcastSettings>,
-        > + lb_blend_service::ServiceComponents
+            Message = lb_blend_service::message::ServiceMessage<
+                BlendService::BroadcastSettings,
+                BlendService::NodeId,
+            >,
+        > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
         + Sync
         + 'static,
@@ -548,7 +560,7 @@ where
     )]
     #[instrument(
         level = "debug",
-        skip(tx_selector, relays, ledger_state, ledger_config)
+        skip(tx_selector, relays, ledger_state, ledger_config, proof, signing_key)
     )]
     async fn propose_block(
         parent: HeaderId,
@@ -614,7 +626,10 @@ where
 
         let valid_tx_stream = stream::iter(valid_txs);
         let selected_txs_stream = tx_selector.select_tx_from(valid_tx_stream);
-        let txs: Vec<_> = selected_txs_stream.take(MAX_TRANSACTIONS).collect().await;
+        let txs: Vec<_> = selected_txs_stream
+            .take(MAX_BLOCK_TRANSACTIONS)
+            .collect()
+            .await;
 
         let block = Block::create(parent, slot, proof, txs, signing_key)?;
 
@@ -628,21 +643,18 @@ where
         Ok(block)
     }
 
-    /// Apply our own proposed block to the chain and publish it to the blend
-    /// network.
-    async fn apply_and_publish_block_proposal(
+    /// Publish our own proposed block to the blend network.
+    async fn publish_block_proposal(
         block: Block<Mempool::Item>,
-        chain_network_api: &ChainNetworkServiceApi<ChainNetwork, RuntimeServiceId>,
         blend_adapter: &BlendAdapter<BlendService>,
     ) {
-        if let Err(e) = chain_network_api
-            .apply_block_and_reconcile_mempool(block.clone())
-            .await
-        {
-            error!(target: LOG_TARGET, "Failed to apply our own proposed block {:?}: {e:?}", block.header().id());
-            return;
-        }
-        debug!(target: LOG_TARGET, "Successfully applied our own proposed block. Publishing it to the blend network: {:?}", block.header().id());
+        // TODO: enable this once we elimnate sessions from Blend and so on
+        // Now we're disabling this to avoid a case which a proposing node
+        // transitions to a new session much earlier than other nodes.
+        debug!(
+            target: LOG_TARGET, header_id = ?block.header().id(),
+            "skipping self-applying block and just publishing it",
+        );
 
         blend_adapter.publish_proposal(block.to_proposal()).await;
     }
@@ -697,11 +709,13 @@ where
             .ok_or(Error::NoClaimableVoucher)?
             .nullifier;
 
+        let reward_amount = ledger_state.mantle_ledger().leader_reward_amount();
         let signed_tx = fund_and_sign_leader_claim_tx(
             LeaderClaimOp {
                 rewards_root: ledger_state.mantle_ledger().claimable_vouchers_root(),
                 voucher_nullifier,
             },
+            reward_amount,
             tip,
             wallet,
             config,

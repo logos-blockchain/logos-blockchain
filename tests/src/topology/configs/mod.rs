@@ -3,6 +3,7 @@ pub mod blend;
 pub mod consensus;
 pub mod deployment;
 pub mod network;
+pub mod sdp;
 pub mod time;
 pub mod tracing;
 
@@ -13,16 +14,18 @@ use lb_core::{
     sdp::{Locator, ServiceType},
 };
 use lb_node::config::{KmsConfig, kms::serde::PreloadKmsBackendSettings};
-use lb_utils::net::get_available_udp_port;
-use network::GeneralNetworkConfig;
+use lb_testing_framework::get_reserved_available_udp_port;
+use network::{GeneralNetworkConfig, NetworkParams};
 use rand::{Rng as _, thread_rng};
 use tracing::GeneralTracingConfig;
 
 use crate::{
     common::kms::key_id_for_preload_backend,
     topology::configs::{
-        api::GeneralApiConfig, consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD, network::NetworkParams,
-        time::GeneralTimeConfig,
+        api::GeneralApiConfig,
+        consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD,
+        sdp::{GeneralSdpConfig, create_sdp_configs},
+        time::{GeneralTimeConfig, set_time_config},
     },
 };
 
@@ -35,19 +38,24 @@ pub struct GeneralConfig {
     pub tracing_config: GeneralTracingConfig,
     pub time_config: GeneralTimeConfig,
     pub kms_config: KmsConfig,
+    pub sdp_config: GeneralSdpConfig,
 }
 
 #[must_use]
-pub fn create_general_configs(n_nodes: usize) -> (Vec<GeneralConfig>, GenesisTx) {
-    create_general_configs_with_network(n_nodes, &NetworkParams::default())
+pub fn create_general_configs(
+    n_nodes: usize,
+    test_context: Option<&str>,
+) -> (Vec<GeneralConfig>, GenesisTx) {
+    create_general_configs_with_network(n_nodes, &NetworkParams::default(), test_context)
 }
 
 #[must_use]
 pub fn create_general_configs_with_network(
     n_nodes: usize,
     network_params: &NetworkParams,
+    test_context: Option<&str>,
 ) -> (Vec<GeneralConfig>, GenesisTx) {
-    create_general_configs_with_blend_core_subset(n_nodes, n_nodes, network_params)
+    create_general_configs_with_blend_core_subset(n_nodes, n_nodes, network_params, test_context)
 }
 
 #[must_use]
@@ -57,6 +65,7 @@ pub fn create_general_configs_with_blend_core_subset(
     // That would be also useful for non-even token distributions: https://github.com/logos-blockchain/logos-blockchain/issues/1888
     n_blend_core_nodes: usize,
     network_params: &NetworkParams,
+    test_context: Option<&str>,
 ) -> (Vec<GeneralConfig>, GenesisTx) {
     assert!(
         n_blend_core_nodes <= n_nodes,
@@ -70,16 +79,16 @@ pub fn create_general_configs_with_blend_core_subset(
 
     for id in &mut ids {
         thread_rng().fill(id);
-        blend_ports.push(get_available_udp_port().unwrap());
+        blend_ports.push(get_reserved_available_udp_port().unwrap());
     }
 
     let (consensus_configs, genesis_tx) =
-        consensus::create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
+        consensus::create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD, test_context);
     let network_configs = network::create_network_configs(&ids, network_params);
     let api_configs = api::create_api_configs(&ids);
     let blend_configs = blend::create_blend_configs(&ids, &blend_ports);
     let tracing_configs = tracing::create_tracing_configs(&ids);
-    let time_config = time::default_time_config();
+    let time_config = set_time_config();
 
     let providers: Vec<_> = blend_configs
         .iter()
@@ -91,12 +100,14 @@ pub fn create_general_configs_with_blend_core_subset(
                 provider_sk: private_key.clone(),
                 zk_sk: secret_zk_key.clone(),
                 locator: Locator(blend_conf.core.backend.listening_address.clone()),
-                note: consensus_configs[0].blend_notes[i].clone(),
+                note: consensus_configs[i].blend_note.clone(),
             },
         )
         .collect();
-    let ledger_tx = genesis_tx.mantle_tx().ledger_tx.clone();
-    let genesis_tx_with_declarations = create_genesis_tx_with_declarations(ledger_tx, providers);
+    let transfer_op = genesis_tx.genesis_transfer().clone();
+    let genesis_tx_with_declarations =
+        create_genesis_tx_with_declarations(transfer_op, providers, test_context);
+    let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations, n_nodes);
 
     // Set note keys and Blend keys in KMS of each node config.
     let kms_configs: Vec<_> = blend_configs
@@ -112,6 +123,12 @@ pub fn create_general_configs_with_blend_core_subset(
                     (
                         blend_conf.core.zk.secret_key_kms_id.clone(),
                         zk_secret_key.clone().into(),
+                    ),
+                    (
+                        key_id_for_preload_backend(
+                            &consensus_configs[i].blend_note.sk.clone().into(),
+                        ),
+                        consensus_configs[i].blend_note.sk.clone().into(),
                     ),
                     (
                         key_id_for_preload_backend(&consensus_configs[i].known_key.clone().into()),
@@ -139,6 +156,7 @@ pub fn create_general_configs_with_blend_core_subset(
             tracing_config: tracing_configs[i].clone(),
             time_config: time_config.clone(),
             kms_config: kms_configs[i].clone(),
+            sdp_config: sdp_configs[i].clone(),
         });
     }
 

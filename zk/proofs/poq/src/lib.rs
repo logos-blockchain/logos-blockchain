@@ -18,11 +18,10 @@ pub use inputs::{PoQVerifierInput, PoQVerifierInputData, PoQWitnessInputs};
 use lb_groth16::{
     CompressedGroth16Proof, Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser,
 };
+pub use lb_pol::AGED_NOTE_MERKLE_TREE_HEIGHT;
 use thiserror::Error;
 use tracing::error;
-pub use wallet_inputs::{
-    AGED_NOTE_MERKLE_TREE_HEIGHT, NotePathAndSelectors, PoQWalletInputs, PoQWalletInputsData,
-};
+pub use wallet_inputs::{AgedNotePathAndSelectors, PoQWalletInputs, PoQWalletInputsData};
 pub use witness::Witness;
 
 use crate::{inputs::PoQVerifierInputJson, proving_key::POQ_PROVING_KEY_PATH};
@@ -120,6 +119,8 @@ pub fn verify(proof: &PoQProof, public_inputs: PoQVerifierInput) -> Result<bool,
 mod tests {
     use std::str::FromStr as _;
 
+    use lb_pol::LotteryConstants;
+    use lb_utils::math::NonNegativeRatio;
     use num_bigint::BigUint;
 
     use super::*;
@@ -217,6 +218,9 @@ mod tests {
             ]
             .map(|(value, selector)| (BigUint::from_str(value).unwrap().into(), selector)),
         };
+        let (lottery_0, lottery_1) =
+            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+                .compute_lottery_values(5000);
         let chain_data = PoQChainInputsData {
             session: 150,
             core_root: BigUint::from_str(
@@ -234,7 +238,8 @@ mod tests {
             )
             .unwrap()
             .into(),
-            total_stake: 5000,
+            lottery_0,
+            lottery_1,
         };
         let common_data = PoQCommonInputsData {
             core_quota: 15,
@@ -266,7 +271,8 @@ mod tests {
             pol_epoch_nonce: chain_data.pol_epoch_nonce,
             pol_ledger_aged: chain_data.pol_ledger_aged,
             session: chain_data.session,
-            total_stake: chain_data.total_stake,
+            lottery_0: chain_data.lottery_0,
+            lottery_1: chain_data.lottery_1,
         };
         assert!(verify(&proof, recomputed_verify_inputs.into()).unwrap());
     }
@@ -274,6 +280,9 @@ mod tests {
     #[expect(clippy::too_many_lines, reason = "For the sake of the test let it be")]
     #[test]
     fn test_leader_full_flow() {
+        let (lottery_0, lottery_1) =
+            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+                .compute_lottery_values(5000);
         let chain_data = PoQChainInputsData {
             session: 150,
             core_root: BigUint::from_str(
@@ -291,7 +300,8 @@ mod tests {
             )
             .unwrap()
             .into(),
-            total_stake: 5000,
+            lottery_0,
+            lottery_1,
         };
         let common_data = PoQCommonInputsData {
             core_quota: 15,
@@ -469,7 +479,8 @@ mod tests {
             pol_epoch_nonce: chain_data.pol_epoch_nonce,
             pol_ledger_aged: chain_data.pol_ledger_aged,
             session: chain_data.session,
-            total_stake: chain_data.total_stake,
+            lottery_0: chain_data.lottery_0,
+            lottery_1: chain_data.lottery_1,
         };
         assert!(verify(&proof, recomputed_verify_inputs.into()).unwrap());
     }

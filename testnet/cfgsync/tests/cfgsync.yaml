@@ -3,17 +3,20 @@ n_hosts: 4
 timeout: 10
 
 faucet_settings:
-  note_count: 3
-  note_value: 10000000
+  enabled: true
 
 deployment_settings_storage_path:
   deployment-settings.yaml
+
+entropy_file: tests/test_entropy
 
 mode: Run
 
 # Tracing
 tracing_settings:
-  logger: !Stdout
+  logger:
+    stdout: true
+    stderr: false
   tracing: None
   filter: None
   metrics: None

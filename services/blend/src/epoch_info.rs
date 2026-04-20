@@ -1,24 +1,40 @@
-use core::{fmt::Debug, marker::PhantomData, num::NonZeroU64, ops::Deref};
+use core::{
+    fmt::{self, Debug, Formatter},
+    marker::PhantomData,
+    num::NonZeroU64,
+    ops::Deref,
+};
 
 use async_trait::async_trait;
 use futures::Stream;
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
-use lb_core::crypto::ZkHash;
+use lb_core::{crypto::ZkHash, proofs::leader_proof::LeaderPublic};
 use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_groth16::Fr;
 use lb_ledger::EpochState;
 use lb_time_service::SlotTick;
 use overwatch::overwatch::OverwatchHandle;
 
 /// Secret `PoL` info associated to an epoch, as returned by the `PoL` info
 /// provider.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PolEpochInfo {
-    /// Epoch nonce.
-    pub nonce: ZkHash,
+    pub epoch: Epoch,
+    pub poq_public_inputs: LeaderPublic,
     /// The `PoL` secret inputs that are found to be winning at least one slot
     /// in the current epoch.
     pub poq_private_inputs: ProofOfLeadershipQuotaInputs,
+}
+
+impl Debug for PolEpochInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PolEpochInfo")
+            .field("epoch", &self.epoch)
+            .field("poq_public_inputs", &self.poq_public_inputs)
+            .field("poq_private_inputs", &"<redacted>")
+            .finish()
+    }
 }
 
 #[async_trait]
@@ -36,7 +52,7 @@ const LOG_TARGET: &str = "blend::service::epoch";
 /// fetch the epoch state for a given slot.
 #[async_trait]
 pub trait ChainApi<RuntimeServiceId> {
-    async fn get_epoch_state_for_slot(&self, slot: Slot) -> EpochState;
+    async fn get_epoch_state_for_slot(&self, slot: Slot) -> Option<EpochState>;
 }
 
 #[async_trait]
@@ -46,11 +62,18 @@ where
     Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
     RuntimeServiceId: Send + Sync,
 {
-    async fn get_epoch_state_for_slot(&self, slot: Slot) -> EpochState {
-        self.get_epoch_state(slot)
-            .await
-            .expect("Failed to get epoch state for slot.")
-            .expect("State for slot in current epoch should always be available")
+    async fn get_epoch_state_for_slot(&self, slot: Slot) -> Option<EpochState> {
+        match self.get_epoch_state(slot).await {
+            Ok(Ok(val)) => Some(val),
+            Ok(Err(e)) => {
+                tracing::error!(target: LOG_TARGET, "Get epoch state error: {e:?}.");
+                None
+            }
+            Err(e) => {
+                tracing::error!(target: LOG_TARGET, "Get epoch state API error: {e:?}.");
+                None
+            }
+        }
     }
 }
 
@@ -59,22 +82,25 @@ where
 pub struct LeaderInputsMinusQuota {
     pub pol_ledger_aged: ZkHash,
     pub pol_epoch_nonce: ZkHash,
-    pub total_stake: u64,
+    pub lottery_0: Fr,
+    pub lottery_1: Fr,
 }
 
 impl From<EpochState> for LeaderInputsMinusQuota {
     fn from(
         EpochState {
             nonce,
-            total_stake,
             utxos,
+            lottery_0,
+            lottery_1,
             ..
         }: EpochState,
     ) -> Self {
         Self {
             pol_epoch_nonce: nonce,
             pol_ledger_aged: utxos.root(),
-            total_stake,
+            lottery_0,
+            lottery_1,
         }
     }
 }
@@ -84,7 +110,7 @@ impl From<EpochState> for LeaderInputsMinusQuota {
 pub enum EpochEvent {
     /// A new epoch is available, which is either ongoing (if the handler is
     /// started mid-epoch) or has just started.
-    NewEpoch(LeaderInputsMinusQuota),
+    NewEpoch((LeaderInputsMinusQuota, Epoch)),
     /// The information about the previous epoch the handler was tracking can
     /// now be discarded since its transition period has elapsed.
     OldEpochTransitionPeriodExpired,
@@ -103,13 +129,7 @@ pub enum EpochEvent {
     /// the epoch that can now be discarded, while `rotate_epoch`
     /// would move from the previous epoch to the new one that is notified about
     /// in this event.
-    NewEpochAndOldEpochTransitionExpired(LeaderInputsMinusQuota),
-}
-
-impl From<LeaderInputsMinusQuota> for EpochEvent {
-    fn from(value: LeaderInputsMinusQuota) -> Self {
-        Self::NewEpoch(value)
-    }
+    NewEpochAndOldEpochTransitionExpired((LeaderInputsMinusQuota, Epoch)),
 }
 
 /// A slot tick whose values against the previous tick have been validated.
@@ -229,6 +249,10 @@ where
     ChainService: ChainApi<RuntimeServiceId> + Sync,
     RuntimeServiceId: Sync,
 {
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     pub async fn tick(&mut self, new_tick: SlotTick) -> Option<EpochEvent> {
         // We try to validate the new tick, else we restore the last valid one that we
         // had.
@@ -257,11 +281,16 @@ where
             return None;
         }
 
-        tracing::debug!(target: LOG_TARGET, "Found epoch unseen before. Retrieving for its state...");
-        let epoch_state = self
+        tracing::debug!(target: LOG_TARGET, "Found epoch unseen before. Retrieving its state...");
+        let Some(epoch_state) = self
             .chain_service
             .get_epoch_state_for_slot(new_tick.slot)
-            .await;
+            .await
+        else {
+            tracing::warn!(target: LOG_TARGET, "Failed to get epoch state for slot.  Skipping...");
+            return None;
+        };
+        tracing::debug!(target: LOG_TARGET, "Retrieved epoch state for unseen epoch: {:?}.", epoch_state);
 
         // This is true if epochs are shorter than transition periods. It's not likely
         // to happen in production, but we must still account for this
@@ -294,9 +323,9 @@ where
         let epoch_event = if should_notify_about_two_epochs_back
             || self.check_and_consume_past_epoch_transition_period(validated_slot_tick)
         {
-            EpochEvent::NewEpochAndOldEpochTransitionExpired(epoch_state.into())
+            EpochEvent::NewEpochAndOldEpochTransitionExpired((epoch_state.into(), new_tick.epoch))
         } else {
-            EpochEvent::NewEpoch(epoch_state.into())
+            EpochEvent::NewEpoch((epoch_state.into(), new_tick.epoch))
         };
 
         Some(epoch_event)
@@ -373,7 +402,10 @@ mod tests {
         );
         assert_eq!(
             next_tick,
-            Some(LeaderInputsMinusQuota::from(default_epoch_state()).into())
+            Some(EpochEvent::NewEpoch((
+                LeaderInputsMinusQuota::from(default_epoch_state()),
+                1.into()
+            )))
         );
         assert_eq!(
             stream.epoch_tracking_state,
@@ -417,7 +449,10 @@ mod tests {
         );
         assert_eq!(
             next_tick,
-            Some(LeaderInputsMinusQuota::from(default_epoch_state()).into())
+            Some(EpochEvent::NewEpoch((
+                LeaderInputsMinusQuota::from(default_epoch_state()),
+                2.into()
+            )))
         );
         assert_eq!(
             stream.epoch_tracking_state,
@@ -461,7 +496,10 @@ mod tests {
         let next_tick = stream.tick(ticks_iter.next().unwrap()).await;
         assert_eq!(
             next_tick,
-            Some(LeaderInputsMinusQuota::from(default_epoch_state()).into())
+            Some(EpochEvent::NewEpoch((
+                LeaderInputsMinusQuota::from(default_epoch_state()),
+                1.into()
+            )))
         );
         assert_eq!(
             stream.epoch_tracking_state,
@@ -484,9 +522,10 @@ mod tests {
         let next_tick = stream.tick(ticks_iter.next().unwrap()).await;
         assert_eq!(
             next_tick,
-            Some(EpochEvent::NewEpochAndOldEpochTransitionExpired(
-                default_epoch_state().into()
-            ))
+            Some(EpochEvent::NewEpochAndOldEpochTransitionExpired((
+                LeaderInputsMinusQuota::from(default_epoch_state()),
+                2.into()
+            )))
         );
         assert_eq!(
             stream.epoch_tracking_state,
@@ -500,9 +539,10 @@ mod tests {
         let next_tick = stream.tick(ticks_iter.next().unwrap()).await;
         assert_eq!(
             next_tick,
-            Some(EpochEvent::NewEpochAndOldEpochTransitionExpired(
-                default_epoch_state().into()
-            ))
+            Some(EpochEvent::NewEpochAndOldEpochTransitionExpired((
+                LeaderInputsMinusQuota::from(default_epoch_state()),
+                3.into()
+            )))
         );
         assert_eq!(
             stream.epoch_tracking_state,
@@ -561,7 +601,10 @@ mod tests {
         let next_tick = stream.tick(ticks_iter.next().unwrap()).await;
         assert_eq!(
             next_tick,
-            Some(LeaderInputsMinusQuota::from(default_epoch_state()).into())
+            Some(EpochEvent::NewEpoch((
+                LeaderInputsMinusQuota::from(default_epoch_state()),
+                1.into()
+            )))
         );
         assert_eq!(
             stream.epoch_tracking_state,
@@ -584,7 +627,10 @@ mod tests {
         let next_tick = stream.tick(ticks_iter.next().unwrap()).await;
         assert_eq!(
             next_tick,
-            Some(EpochEvent::NewEpoch(default_epoch_state().into()))
+            Some(EpochEvent::NewEpoch((
+                LeaderInputsMinusQuota::from(default_epoch_state()),
+                2.into()
+            )))
         );
         assert_eq!(
             stream.epoch_tracking_state,
@@ -610,7 +656,10 @@ mod tests {
         let next_tick = stream.tick(ticks_iter.next().unwrap()).await;
         assert_eq!(
             next_tick,
-            Some(EpochEvent::NewEpoch(default_epoch_state().into()))
+            Some(EpochEvent::NewEpoch((
+                LeaderInputsMinusQuota::from(default_epoch_state()),
+                3.into()
+            )))
         );
         assert_eq!(
             stream.epoch_tracking_state,
@@ -625,9 +674,10 @@ mod tests {
         let next_tick = stream.tick(ticks_iter.next().unwrap()).await;
         assert_eq!(
             next_tick,
-            Some(EpochEvent::NewEpochAndOldEpochTransitionExpired(
-                default_epoch_state().into()
-            ))
+            Some(EpochEvent::NewEpochAndOldEpochTransitionExpired((
+                LeaderInputsMinusQuota::from(default_epoch_state()),
+                4.into()
+            )))
         );
         assert_eq!(
             stream.epoch_tracking_state,

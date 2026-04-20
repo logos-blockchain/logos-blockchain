@@ -7,7 +7,7 @@ use lb_blend_message::crypto::proofs::RealProofsVerifier;
 use lb_core::{
     block::BlockNumber,
     mantle::{
-        Note, NoteId, OpProof, TxHash, Utxo,
+        Note, NoteId, OpProof, TxHash, Utxo, Value,
         ops::sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     },
     sdp::{
@@ -18,6 +18,7 @@ use lb_core::{
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
 use locked_notes::LockedNotes;
 use rewards::{Error as RewardsError, Rewards};
+use tracing::{info, warn};
 
 use crate::{EpochState, UtxoTree, mantle::sdp::rewards::blend};
 
@@ -129,8 +130,13 @@ pub enum Error {
     DeclarationNotFound(DeclarationId),
     #[error("Locked period did not pass yet")]
     WithdrawalWhileLocked,
-    #[error("Invalid sdp message nonce: {0:?}")]
-    InvalidNonce(Nonce),
+    #[error(
+        "Invalid sdp message nonce: message_nonce={message_nonce:?}, declaration_nonce={declaration_nonce:?}"
+    )]
+    InvalidNonce {
+        message_nonce: Nonce,
+        declaration_nonce: Nonce,
+    },
     #[error("Service not found: {0:?}")]
     ServiceNotFound(ServiceType),
     #[error("Duplicate sdp declaration id: {0:?}")]
@@ -184,7 +190,7 @@ struct ServiceState<R: Rewards> {
     // config.session_duration
     forming: SessionState,
     // rewards calculation and tracking for this service
-    rewards: R,
+    pub rewards: R,
 }
 
 impl SessionState {
@@ -232,7 +238,18 @@ impl<R: Rewards> ServiceState<R> {
             self.declarations = self
                 .declarations
                 .iter()
-                .filter(|(_id, declaration)| is_active(declaration, block_number, config))
+                .filter(|(_id, declaration)| {
+                    let active = is_active(declaration, block_number, config);
+                    if !active {
+                        warn!(
+                            provider_id = ?declaration.provider_id,
+                            latest_active_block = declaration.active,
+                            current_block = block_number,
+                            "removing declaration due to inactivity+retention"
+                        );
+                    }
+                    active
+                })
                 .map(|(id, declaration)| (*id, declaration.clone()))
                 .collect();
 
@@ -266,6 +283,10 @@ impl<R: Rewards> ServiceState<R> {
         Ok(())
     }
 
+    fn add_income(&mut self, income: Value) {
+        self.rewards = self.rewards.add_income(income);
+    }
+
     fn active(
         &mut self,
         active: &SDPActiveOp,
@@ -279,9 +300,20 @@ impl<R: Rewards> ServiceState<R> {
         };
 
         if active.nonce <= declaration.nonce {
-            return Err(Error::InvalidNonce(active.nonce));
+            return Err(Error::InvalidNonce {
+                message_nonce: active.nonce,
+                declaration_nonce: declaration.nonce,
+            });
         }
         declaration.active = block_number;
+        declaration.nonce = active.nonce;
+        info!(
+            provider_id = ?declaration.provider_id,
+            active = declaration.active,
+            nonce = declaration.nonce,
+            "updated declaration with active message"
+        );
+
         let note = locked_notes
             .get(&declaration.locked_note_id)
             .ok_or(Error::LockingError(locked_notes::Error::NoteNotLocked(
@@ -311,12 +343,21 @@ impl<R: Rewards> ServiceState<R> {
         tx_hash: TxHash,
         config: &ServiceParameters,
     ) -> Result<(), Error> {
-        let Some(declaration) = self.declarations.get(&withdraw.declaration_id) else {
+        let Some(declaration) = self.declarations.get_mut(&withdraw.declaration_id) else {
             return Err(Error::DeclarationNotFound(withdraw.declaration_id));
         };
         if withdraw.nonce <= declaration.nonce {
-            return Err(Error::InvalidNonce(withdraw.nonce));
+            return Err(Error::InvalidNonce {
+                message_nonce: withdraw.nonce,
+                declaration_nonce: declaration.nonce,
+            });
         }
+        declaration.nonce = withdraw.nonce;
+        info!(
+            provider_id = ?declaration.provider_id,
+            nonce = declaration.nonce,
+            "updated declaration with withdraw message"
+        );
 
         if declaration.created + config.lock_period >= block_number {
             return Err(Error::WithdrawalWhileLocked);
@@ -336,6 +377,10 @@ impl<R: Rewards> ServiceState<R> {
     }
 }
 
+/// A SDP state of the mantle ledger
+///
+/// NOTE: Most collection fields in this struct should use `rpds`
+/// since we keep a copy of this state for each block.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SdpLedger {
@@ -441,7 +486,7 @@ impl SdpLedger {
                     service_state
                         .clone()
                         .try_apply_header(block_number, epoch_state, config);
-                all_reward_utxos.extend(reward_utxos.into_iter());
+                all_reward_utxos.extend(reward_utxos);
                 Ok::<_, Error>((*service, new_state))
             })
             .collect::<Result<_, _>>()?;
@@ -527,6 +572,14 @@ impl SdpLedger {
         )?;
 
         Ok(self)
+    }
+
+    pub fn add_blend_income(&mut self, income: Value) {
+        if let Some(Service::BlendNetwork(state)) =
+            self.services.get_mut(&ServiceType::BlendNetwork)
+        {
+            state.add_income(income);
+        }
     }
 
     #[must_use]
@@ -717,6 +770,8 @@ mod tests {
             nonce: ZkHash::ZERO,
             utxos: UtxoTree::default(),
             total_stake: 100,
+            lottery_0: Fr::ZERO,
+            lottery_1: Fr::ZERO,
         }
     }
 

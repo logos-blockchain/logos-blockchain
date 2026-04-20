@@ -2,8 +2,8 @@ use std::{collections::HashSet, time::Duration};
 
 use lb_common_http_client::CommonHttpClient;
 use lb_core::mantle::{
-    MantleTx, Note, SignedMantleTx, Transaction as _, TxHash, ledger::Tx as LedgerTx,
-    ops::channel::ChannelId,
+    MantleTx, Note, Op, OpProof, SignedMantleTx, Transaction as _, TxHash,
+    ops::{channel::ChannelId, transfer::TransferOp},
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use logos_blockchain_tests::{
@@ -23,7 +23,11 @@ use serial_test::serial;
 #[tokio::test]
 #[serial]
 async fn invalid_transactions_are_handled() {
-    let topology = Topology::spawn(TopologyConfig::two_validators()).await;
+    let topology = Topology::spawn(
+        TopologyConfig::two_validators(),
+        Some("invalid_transactions_are_handled"),
+    )
+    .await;
     let validator = &topology.validators()[0];
 
     let validator_url = Url::parse(
@@ -45,7 +49,7 @@ async fn invalid_transactions_are_handled() {
         .expect("Invalid transaction should be accepted by mempool for later pruning");
     let invalid_tx_hashes = [invalid_hash];
 
-    let first_valid_tx = create_inscription_transaction_with_id(ChannelId::from([1u8; 32]));
+    let first_valid_tx = create_inscription_transaction_with_id(ChannelId::from([1u8; 32]), None);
     let first_valid_hash = first_valid_tx.hash();
     client
         .post_transaction(validator_url.clone(), first_valid_tx)
@@ -68,7 +72,7 @@ async fn invalid_transactions_are_handled() {
     .await
     .expect("first transaction processing timed out");
 
-    let second_valid_tx = create_inscription_transaction_with_id(ChannelId::from([2u8; 32]));
+    let second_valid_tx = create_inscription_transaction_with_id(ChannelId::from([2u8; 32]), None);
     let second_valid_hash = second_valid_tx.hash();
     client
         .post_transaction(validator_url.clone(), second_valid_tx)
@@ -150,17 +154,18 @@ fn create_invalid_transaction_with_id(id: usize) -> SignedMantleTx {
         1000 + id as u64,
         ZkPublicKey::new(BigUint::from(1u8).into()),
     );
+    let transfer_op = TransferOp::new(vec![], vec![output_note]);
 
     let mantle_tx = MantleTx {
-        ops: Vec::new(),
-        ledger_tx: LedgerTx::new(vec![], vec![output_note]),
-        storage_gas_price: 0,
-        execution_gas_price: 0,
+        ops: vec![Op::Transfer(transfer_op)],
+        storage_gas_price: 0.into(),
+        execution_gas_price: 0.into(),
     };
 
+    let transfer_proof = ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap();
+
     SignedMantleTx {
-        ops_proofs: Vec::new(),
-        ledger_tx_proof: ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap(),
+        ops_proofs: vec![OpProof::ZkSig(transfer_proof)],
         mantle_tx,
     }
 }

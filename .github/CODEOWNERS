@@ -1,21 +1,21 @@
 # Consensus
-/consensus/ @youngjoon-lee @danielSanchezQ
-/services/chain @youngjoon-lee @danielSanchezQ
+/consensus/ @youngjoon-lee @danielSanchezQ @davidrusu
+/services/chain @youngjoon-lee @danielSanchezQ @davidrusu
 
 # Mantle
-/ledger/ @danielSanchezQ @youngjoon-lee @bacv
+/ledger/ @danielSanchezQ @youngjoon-lee @bacv @davidrusu
 
 # Blend
-/blend/  @youngjoon-lee @ntn-x2 @danielSanchezQ
-/services/blend @youngjoon-lee @ntn-x2 @danielSanchezQ
+/blend/  @youngjoon-lee @ntn-x2 @danielSanchezQ @davidrusu
+/services/blend @youngjoon-lee @ntn-x2 @danielSanchezQ @davidrusu
 
 # DA
-/da/ @danielSanchezQ @bacv @pradovic
-/services/data-availability @danielSanchezQ @bacv @pradovic
+/da/ @danielSanchezQ @bacv @pradovic @davidrusu
+/services/data-availability @danielSanchezQ @bacv @pradovic @davidrusu
 
 # SDP
-/sdp/ @bacv @pradovic @danielSanchezQ
-/services/sdp @bacv @pradovic @danielSanchezQ
+/sdp/ @bacv @pradovic @danielSanchezQ @davidrusu
+/services/sdp @bacv @pradovic @danielSanchezQ @davidrusu
 
 # This file
-/.github/CODEOWNERS @danielSanchezQ
+/.github/CODEOWNERS @danielSanchezQ @davidrusu

@@ -3,21 +3,31 @@ n_hosts: 4
 timeout: 10
 
 faucet_settings:
-  note_count: 3
-  note_value: 10000000
+  enabled: true
 
 deployment_settings_storage_path:
   deployment-settings.yaml
+
+entropy_file: /etc/logos-blockchain/entropy
 
 mode: Run
 
 # Tracing
 tracing_settings:
-  logger: Stdout
+  logger:
+    otlp:
+      endpoint: "http://otel:4317"
+      service_name: "init_node"
+    stdout: false
+    stderr: false
+    file:
+      directory: "./state/logs"
+    loki: null
+    gelf: null
   tracing: None
   filter: None
   metrics: !Otlp
-    endpoint: http://prometheus:9090/api/v1/otlp/v1/metrics
-    host_identifier: node
+    endpoint: "http://otel:4317"
+    host_identifier: "init_node"
   console: None
-  level: DEBUG
+  level: "DEBUG"

@@ -3,10 +3,10 @@ pub mod common;
 pub mod cucumber;
 pub mod nodes;
 pub mod topology;
-
 use std::{env, sync::LazyLock};
 
 use lb_libp2p::{Multiaddr, PeerId, multiaddr};
+pub use lb_testing_framework::{get_reserved_available_tcp_port, get_reserved_available_udp_port};
 
 /// Global flag indicating whether debug tracing configuration is enabled to
 /// send traces to local grafana stack.
@@ -19,7 +19,8 @@ pub const BIN_PATH_DEBUG: &str = "../target/debug/logos-blockchain-node";
 /// The default path to the node binary for release builds.
 pub const BIN_PATH_RELEASE: &str = "../target/release/logos-blockchain-node";
 
-fn node_address_from_port(port: u16) -> Multiaddr {
+#[must_use]
+pub fn node_address_from_port(port: u16) -> Multiaddr {
     multiaddr(std::net::Ipv4Addr::LOCALHOST, port)
 }
 

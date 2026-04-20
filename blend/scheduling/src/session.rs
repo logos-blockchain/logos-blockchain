@@ -54,7 +54,7 @@ where
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum SessionEvent<Session> {
     NewSession(Session),
     TransitionPeriodExpired,

@@ -19,8 +19,7 @@ sim_config.json
 null
 
 # Integration test temp dirs
-tests/.tmp*
-/.tmp*
+tests/.run_*
 
 # Wildcard for any file that contains ignore
 *ignore*
@@ -38,3 +37,7 @@ result
 
 # Docker
 tempo-data/
+
+# Python
+**.pyc
+

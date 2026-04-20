@@ -1,0 +1,55 @@
+services:
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:latest
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor traceQLStreaming metricsSummary
+    env_file:
+      - ./tracing/grafana/plugins.env
+    volumes:
+      - ./tracing/grafana/grafana.ini:/etc/grafana/grafana.ini:z
+      - ./tracing/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:z
+      - ./tracing/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:z
+      - ./tracing/grafana/dashboards:/var/lib/grafana/dashboards/:z
+    ports:
+      - 9091:3000
+    restart: on-failure
+    depends_on:
+      - prometheus
+      - loki
+
+  otel:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./tracing/otel.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "0.0.0.0:3100:4317"
+      - "14318:4318"
+
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "23100:3100"
+      - "24317:4317"
+      - "24318:4318"
+    volumes:
+      - ./tracing/loki.yaml:/etc/loki/local-config.yaml
+    command: -config.file=/etc/loki/local-config.yaml
+
+  prometheus:
+    container_name: prometheus
+    image: docker.io/prom/prometheus:v3.0.1
+    volumes:
+      - ./tracing/prometheus.yaml:/etc/prometheus/prometheus.yml:z
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-otlp-receiver
+    ports:
+      - "0.0.0.0:9090:9090"
+    restart: on-failure

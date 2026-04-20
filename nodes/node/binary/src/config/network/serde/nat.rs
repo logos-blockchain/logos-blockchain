@@ -82,7 +82,7 @@ impl Default for AutonatClientConfig {
         Self {
             max_candidates: None,
             probe_interval_millisecs: None,
-            retest_successful_external_addresses_interval: Duration::from_secs(60),
+            retest_successful_external_addresses_interval: Duration::from_mins(1),
         }
     }
 }

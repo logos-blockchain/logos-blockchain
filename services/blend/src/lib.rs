@@ -41,6 +41,7 @@ pub mod edge;
 pub mod epoch_info;
 pub mod membership;
 pub mod message;
+pub(crate) mod metrics;
 pub mod session;
 pub mod settings;
 
@@ -83,16 +84,20 @@ where
 impl<CoreService, EdgeService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
     for BlendService<CoreService, EdgeService, RuntimeServiceId>
 where
-    CoreService: ServiceData<Message: MessageComponents<Payload: Into<Vec<u8>>> + Send + Sync + 'static>
-        + CoreServiceComponents<
+    CoreService: ServiceData<
+            Message: MessageComponents<CoreService::NodeId, Payload: Into<Vec<u8>>>
+                         + Send
+                         + Sync
+                         + 'static,
+        > + CoreServiceComponents<
             RuntimeServiceId,
             NetworkAdapter: NetworkAdapterTrait<
                 RuntimeServiceId,
-                BroadcastSettings = BroadcastSettings<CoreService>,
+                BroadcastSettings = BroadcastSettings<CoreService, RuntimeServiceId>,
             > + Send
                                 + Sync
                                 + 'static,
-            NodeId: Clone + Hash + Eq + Send + Sync + 'static,
+            NodeId: Clone + Debug + Hash + Eq + Send + Sync + 'static,
             BackendSettings: Clone + Send + Sync,
         > + Send
         + 'static,
@@ -150,7 +155,7 @@ where
 
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_secs(60)),
+            Some(Duration::from_mins(1)),
             MembershipService<EdgeService>,
             PreloadKmsService<_>
         )
@@ -192,8 +197,8 @@ where
 
         info!(
             target: LOG_TARGET,
-            "The current membership is ready: {} nodes.",
-            membership.size()
+            members = membership.size(),
+            "current membership is ready",
         );
 
         let mut instance = Instance::<CoreService, EdgeService, RuntimeServiceId>::new(
@@ -212,7 +217,7 @@ where
         loop {
             tokio::select! {
                 Some(session_event) = remaining_session_stream.next() => {
-                    debug!(target: LOG_TARGET, "Received a new session event");
+                    debug!(target: LOG_TARGET, ?session_event, "received session event");
                     instance = instance.handle_session_event(session_event, overwatch_handle, minimal_network_size).await?;
                 },
                 Some(message) = inbound_relay.next() => {
@@ -225,8 +230,10 @@ where
     }
 }
 
-type BroadcastSettings<CoreService> =
-    <<CoreService as ServiceData>::Message as MessageComponents>::BroadcastSettings;
+type BroadcastSettings<CoreService, RuntimeServiceId> =
+    <<CoreService as ServiceData>::Message as MessageComponents<
+        <CoreService as CoreServiceComponents<RuntimeServiceId>>::NodeId,
+    >>::BroadcastSettings;
 
 type MembershipAdapter<EdgeService> = <EdgeService as edge::ServiceComponents>::MembershipAdapter;
 

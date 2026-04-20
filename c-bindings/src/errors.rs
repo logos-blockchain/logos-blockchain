@@ -13,6 +13,8 @@ pub enum OperationStatus {
     DynError = 0x8,
     InitializationError = 0x9,
     StopError = 0xA,
+    ConfigurationError = 0xB,
+    ValidationError = 0xC,
 }
 
 impl OperationStatus {
@@ -20,5 +22,11 @@ impl OperationStatus {
     #[unsafe(no_mangle)]
     pub extern "C" fn is_ok(&self) -> bool {
         *self == Self::Ok
+    }
+
+    #[must_use]
+    #[unsafe(no_mangle)]
+    pub extern "C" fn is_error(&self) -> bool {
+        !self.is_ok()
     }
 }

@@ -43,12 +43,13 @@ use lb_groth16::{
 };
 use thiserror::Error;
 use tracing::error;
-pub use wallet_inputs::{PolWalletInputs, PolWalletInputsData};
+pub use wallet_inputs::{
+    AGED_NOTE_MERKLE_TREE_HEIGHT, LATEST_NOTE_MERKLE_TREE_HEIGHT, PolWalletInputs,
+    PolWalletInputsData,
+};
 pub use witness::Witness;
 
-pub use crate::lottery::{
-    P, T0_CONSTANT, T1_CONSTANT, compute_lottery_values, slot_activation_coefficient,
-};
+pub use crate::lottery::{LotteryConstants, P};
 use crate::{inputs::PolVerifierInputJson, proving_key::POL_PROVING_KEY_PATH};
 
 pub type PoLProof = CompressedGroth16Proof;
@@ -145,6 +146,7 @@ mod tests {
     use std::str::FromStr as _;
 
     use lb_groth16::Fr;
+    use lb_utils::math::NonNegativeRatio;
     use num_bigint::BigUint;
 
     use super::*;
@@ -152,10 +154,15 @@ mod tests {
     #[expect(clippy::too_many_lines, reason = "For the sake of the test let it be")]
     #[test]
     fn test_full_flow() {
+        let (lottery_0, lottery_1) =
+            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+                .compute_lottery_values(5000);
+
         let chain_data = PolChainInputsData {
             slot_number: 135,
             epoch_nonce: Fr::from(510u64),
-            total_stake: 5000,
+            lottery_0,
+            lottery_1,
             aged_root: BigUint::from_str(
                 "16524395010779500501330992017298834046369952285388149958144954382059764408785",
             )
@@ -213,20 +220,12 @@ mod tests {
                 "20716527055704913432992003250600357730017309147012913323969779133930909800072",
                 "14787709838677865776105327831675542255717739581860994014618609782788824576885",
             ]
-            .into_iter()
-            .map(|value| BigUint::from_str(value).unwrap().into())
-            .collect(),
-            aged_selector: [
-                "0", "1", "1", "0", "1", "1", "0", "1", "0", "0", "1", "0", "1", "0", "0", "1",
-                "0", "1", "1", "1", "1", "0", "1", "1", "1", "0", "0", "0", "0", "1", "1", "1",
-            ]
-            .into_iter()
-            .map(|s| match s {
-                "1" => true,
-                "0" => false,
-                _ => panic!("Invalid value for aged_selector"),
-            })
-            .collect(),
+            .map(|value| BigUint::from_str(value).unwrap().into()),
+            aged_selectors: [
+                false, true, true, false, true, true, false, true, false, false, true, false, true,
+                false, false, true, false, true, true, true, true, false, true, true, true, false,
+                false, false, false, true, true, true,
+            ],
             latest_path: [
                 "11709948088963960065647371537879293701565786386460016885512089239291870378840",
                 "2120901090324525908662474041962168618570906102338290469215218624292046179330",
@@ -261,20 +260,12 @@ mod tests {
                 "18200637942483578342976888834386216643273358976477818116888783794758722873887",
                 "15874955117141602197688150287249257989589905293755369275305245316881887378284",
             ]
-            .into_iter()
-            .map(|value| BigUint::from_str(value).unwrap().into())
-            .collect(),
-            latest_selector: [
-                "0", "1", "0", "0", "1", "1", "0", "0", "0", "0", "1", "0", "0", "1", "1", "1",
-                "1", "1", "1", "0", "0", "1", "0", "1", "0", "0", "1", "1", "1", "1", "1", "0",
-            ]
-            .into_iter()
-            .map(|s| match s {
-                "1" => true,
-                "0" => false,
-                _ => panic!("Invalid value for aged_selector"),
-            })
-            .collect(),
+            .map(|value| BigUint::from_str(value).unwrap().into()),
+            latest_selectors: [
+                false, true, false, false, true, true, false, false, false, false, true, false,
+                false, true, true, true, true, true, true, false, false, true, false, true, false,
+                false, true, true, true, true, true, false,
+            ],
             secret_key: BigUint::from_str(
                 "7897218687652577456193628084912129251352759708723100638805247670738317482408",
             )

@@ -253,7 +253,7 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Mock {
     async fn process(&self, msg: Self::Message) {
         match msg {
             MockBackendMessage::BootProducer { spawner } => {
-                tracing::info!("booting producer");
+                tracing::debug!("booting producer");
                 let this = self.clone();
                 match (spawner)(Box::pin(async move { this.run_producer_handler().await })) {
                     Ok(()) => {}
@@ -263,7 +263,7 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Mock {
                 }
             }
             MockBackendMessage::Broadcast { topic, msg } => {
-                tracing::info!("processed normal message");
+                tracing::debug!("processed normal message");
                 self.messages
                     .lock()
                     .unwrap()
@@ -273,15 +273,15 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Mock {
                 drop(self.pubsub_events_tx.send(NetworkEvent::RawMessage(msg)));
             }
             MockBackendMessage::RelaySubscribe { topic } => {
-                tracing::info!("processed relay subscription for topic: {topic}");
+                tracing::debug!("processed relay subscription for topic: {topic}");
                 self.subscribed_topics.lock().unwrap().insert(topic);
             }
             MockBackendMessage::RelayUnSubscribe { topic } => {
-                tracing::info!("processed relay unsubscription for topic: {topic}");
+                tracing::debug!("processed relay unsubscription for topic: {topic}");
                 self.subscribed_topics.lock().unwrap().remove(&topic);
             }
             MockBackendMessage::Query { topic, tx } => {
-                tracing::info!("processed query");
+                tracing::debug!("processed query");
                 let msgs = self
                     .messages
                     .lock()

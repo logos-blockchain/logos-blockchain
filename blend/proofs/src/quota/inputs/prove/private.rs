@@ -1,6 +1,12 @@
-use lb_poq::NotePathAndSelectors;
+use core::fmt::{self, Debug, Formatter};
 
-use crate::{CorePathAndSelectors, ZkHash};
+use lb_poq::AgedNotePathAndSelectors;
+use zeroize::ZeroizeOnDrop;
+
+use crate::{
+    CorePathAndSelectors, ZkHash,
+    quota::{SelectionRandomnessSecretInput, inputs::prove::PublicInputs},
+};
 
 /// Private inputs for all types of Proof of Quota. Spec: <https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#215261aa09df81a18576f67b910d34d4>.
 #[derive(Debug, Clone)]
@@ -40,20 +46,40 @@ impl Inputs {
 
     /// Return the right `sk` for a Proof of Quota depending on the proof type, as per the spec: <https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#25a261aa09df80e0a410f708190ac802>.
     #[must_use]
-    pub fn get_secret_selection_randomness_sk(&self) -> ZkHash {
+    pub fn get_secret_selection_randomness_sk(
+        &self,
+        PublicInputs { session, .. }: &PublicInputs,
+    ) -> SelectionRandomnessSecretInput {
         match &self.proof_type {
-            ProofType::CoreQuota(core_quota_private_inputs) => core_quota_private_inputs.core_sk,
+            ProofType::CoreQuota(core_quota_private_inputs) => {
+                SelectionRandomnessSecretInput::Core {
+                    session_number: *session,
+                    sk: core_quota_private_inputs.core_sk,
+                }
+            }
             ProofType::LeadershipQuota(leadership_quota_private_inputs) => {
-                leadership_quota_private_inputs.secret_key
+                SelectionRandomnessSecretInput::Leadership {
+                    note_secret_key: leadership_quota_private_inputs.secret_key,
+                    slot_number: leadership_quota_private_inputs.slot,
+                }
             }
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum ProofType {
     CoreQuota(Box<ProofOfCoreQuotaInputs>),
     LeadershipQuota(Box<ProofOfLeadershipQuotaInputs>),
+}
+
+impl Debug for ProofType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CoreQuota(_) => f.write_str("ProofType::CoreQuota"),
+            Self::LeadershipQuota(_) => f.write_str("ProofType::LeadershipQuota"),
+        }
+    }
 }
 
 impl ProofType {
@@ -66,7 +92,7 @@ impl ProofType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, ZeroizeOnDrop)]
 pub struct ProofOfCoreQuotaInputs {
     pub core_sk: ZkHash,
     pub core_path_and_selectors: CorePathAndSelectors,
@@ -78,13 +104,13 @@ impl From<ProofOfCoreQuotaInputs> for ProofType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, ZeroizeOnDrop)]
 pub struct ProofOfLeadershipQuotaInputs {
     pub slot: u64,
     pub note_value: u64,
     pub transaction_hash: ZkHash,
     pub output_number: u64,
-    pub aged_path_and_selectors: NotePathAndSelectors,
+    pub aged_path_and_selectors: AgedNotePathAndSelectors,
     pub secret_key: ZkHash,
 }
 

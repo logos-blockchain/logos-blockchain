@@ -9,7 +9,7 @@ use lb_node::config::{
     blend::deployment::{
         CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
         CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings,
-        Settings as BlendDeploymentSettings, TimingSettings,
+        Settings as BlendDeploymentSettings,
     },
     cryptarchia::deployment::{
         EpochConfig, ServiceParameters, Settings as CryptarchiaDeploymentSettings,
@@ -19,15 +19,14 @@ use lb_node::config::{
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
-use lb_utils::math::NonNegativeF64;
+use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
-use crate::topology::configs::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
+use super::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
 #[must_use]
 pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> DeploymentSettings {
     let slot_duration_in_secs = std::env::var(CONSENSUS_SLOT_TIME_VAR)
-        .map(|s| s.parse::<u64>().unwrap())
-        .unwrap_or(DEFAULT_SLOT_TIME_IN_SECS);
+        .map_or(DEFAULT_SLOT_TIME_IN_SECS, |s| s.parse::<u64>().unwrap());
 
     DeploymentSettings {
         blend: BlendDeploymentSettings {
@@ -36,20 +35,6 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
                     .expect("Minimum network size cannot be zero."),
                 num_blend_layers: NonZeroU64::try_from(3)
                     .expect("Number of blend layers cannot be zero."),
-                timing: TimingSettings {
-                    round_duration: Duration::from_secs(1),
-                    rounds_per_interval: NonZeroU64::try_from(30u64)
-                        .expect("Rounds per interval cannot be zero."),
-                    // (21,600 blocks * 30s per block) / 1s per round = 648,000 rounds
-                    rounds_per_session: NonZeroU64::try_from(648_000u64)
-                        .expect("Rounds per session cannot be zero."),
-                    rounds_per_observation_window: NonZeroU64::try_from(30u64)
-                        .expect("Rounds per observation window cannot be zero."),
-                    rounds_per_session_transition_period: NonZeroU64::try_from(30u64)
-                        .expect("Rounds per session transition period cannot be zero."),
-                    epoch_transition_period_in_slots: NonZeroU64::try_from(2_600)
-                        .expect("Epoch transition period in slots cannot be zero."),
-                },
                 protocol_name: StreamProtocol::new("/blend/integration-tests"),
                 data_replication_factor: 0,
             },
@@ -66,7 +51,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
                             .expect("Message frequency per round cannot be negative."),
                     },
                     delayer: MessageDelayerSettings {
-                        maximum_release_delay_in_rounds: NonZeroU64::try_from(1u64)
+                        maximum_release_delay_in_rounds: NonZeroU64::try_from(3u64)
                             .expect("Maximum release delay between rounds cannot be zero."),
                     },
                 },
@@ -89,7 +74,8 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
             // Setting the security parameter to some value > 1 ensures
             // nodes have some time to sync before deciding on the
             // longest chain.
-            security_param: NonZero::new(10).unwrap(),
+            security_param: NonZero::new(20).unwrap(),
+            slot_activation_coeff: NonNegativeRatio::new(1, 10.try_into().unwrap()),
             epoch_config: EpochConfig {
                 epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
                 epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
@@ -112,7 +98,8 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
                 },
             },
             genesis_state: genesis_tx,
-            learning_rate: 1f64.try_into().expect("1 > 0"),
+            learning_rate: 0.1f64.try_into().expect("1 > 0"),
+            faucet_pk: None,
         },
         time: TimeDeploymentSettings {
             slot_duration: Duration::from_secs(slot_duration_in_secs),

@@ -5,7 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     rust-overlay = {
-      url = "github:oxalica/rust-overlay";
+      url = "github:oxalica/rust-overlay/8087ff1f47fff983a1fba70fa88b759f2fd8ae97";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -40,19 +40,25 @@
           inherit system;
           overlays = [ rust-overlay.overlays.default ];
         };
+
+      rustVersion = "1.95.0";
     in
     {
       packages = forAll (
         system:
         let
-          src = craneLib.cleanCargoSource ./.;
           pkgs = mkPkgs system;
-
-          rustToolchain = pkgs.rust-bin.stable.latest.default;
+          rustToolchain = pkgs.rust-bin.stable.${rustVersion}.default;
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+          src = craneLib.cleanCargoSource ./.;
 
           commonArgs = {
+            pname = "logos-blockchain-c";
+            cargoExtraArgs = "-p logos-blockchain-c";
+            version = "0.2.1";
+
             inherit src;
+
             buildInputs = [ pkgs.openssl ]
               ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.libiconv ];
             nativeBuildInputs = [
@@ -66,28 +72,22 @@
             RUSTFLAGS = "-L ${pkgs.libiconv}/lib";
           };
 
-          logosBlockchainDependencies = craneLib.buildDepsOnly (
-            commonArgs
-            // {
-              pname = "logos-blockchain";
-              version = "0.1.0";
-            }
-          );
+          logosBlockchainDependencies = craneLib.buildDepsOnly (commonArgs);
 
           logosBlockChainC = craneLib.buildPackage (
             commonArgs
             // {
               inherit logosBlockchainDependencies;
-              pname = "logos-blockchain-c";
-              version = "0.1.0";
-              cargoExtraArgs = "-p logos-blockchain-c";
 
               postInstall = ''
-                mkdir -p $out/include
-                mkdir -p $out/circuits
+                mkdir -p $out/circuits $out/include
                 cp -r ${logos-blockchain-circuits.packages.${system}.default}/* $out/circuits/
-                chmod -R u+w $out/circuits
                 cp c-bindings/logos_blockchain.h $out/include/
+
+                # Files copied from the Nix store are read-only.
+                # Crane modifies files in $out after install, so they must be writable during the build.
+                # Nix makes the final output read-only again, so this is safe.
+                chmod -R u+w $out/circuits
               '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
                 install_name_tool -id @rpath/liblogos_blockchain.dylib $out/lib/liblogos_blockchain.dylib
               '';
@@ -110,7 +110,7 @@
             name = "research";
             buildInputs = [
               pkgs.pkg-config
-              pkgs.rust-bin.stable.latest.default
+              pkgs.rust-bin.stable.${rustVersion}.default
               pkgs.clang
               pkgs.llvmPackages.libclang
               pkgs.openssl.dev

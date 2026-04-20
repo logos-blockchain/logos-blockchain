@@ -15,3 +15,10 @@ pub trait CoreProofOfQuotaGenerator {
         key_index: u64,
     ) -> impl Future<Output = Result<(VerifiedProofOfQuota, ZkHash), quota::Error>> + Send + Sync;
 }
+
+const fn buffer_size(encapsulation_layers: usize) -> usize {
+    // We need to keep "warm" the first proof of the next cycle, so that when the
+    // stream is polled the first time for a new set of proofs, all proofs, from
+    // first to last, are ready.
+    encapsulation_layers + 1
+}

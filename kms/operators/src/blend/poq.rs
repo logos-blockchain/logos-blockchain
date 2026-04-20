@@ -13,7 +13,7 @@ use lb_key_management_system_keys::keys::{
     secured_key::{SecureKeyOperator, SecuredKey},
 };
 use tokio::{sync::oneshot, task::spawn_blocking};
-use tracing::error;
+use tracing::trace;
 
 pub struct PoQOperator {
     core_path_and_selectors: CorePathAndSelectors,
@@ -65,9 +65,9 @@ impl SecureKeyOperator for PoQOperator {
             spawn_blocking(move || VerifiedProofOfQuota::new(&public_inputs, private_inputs))
                 .await
                 .map_err(Self::Error::FailedOperatorCall)?;
-        if let Err(e) = self.response_channel.send(poq_result) {
-            error!("Error building proof of quota: {e:?}");
-        }
+        drop(self.response_channel.send(poq_result).inspect_err(|_| {
+            trace!("Error sending generated proof of quota, most likely due to a session or epoch rotation that discarded the receiver side of the channel.");
+        }));
         Ok(())
     }
 }

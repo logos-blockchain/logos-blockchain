@@ -1,4 +1,5 @@
 use core::ops::{Deref, DerefMut};
+use std::num::NonZeroU32;
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Debug)]
 #[cfg_attr(feature = "serde", derive(::serde::Serialize, ::serde::Deserialize))]
@@ -249,6 +250,28 @@ impl TryFrom<u64> for F64Ge1 {
     /// Returns an error if precision would be lost or the value is < 1.0.
     fn try_from(value: u64) -> Result<Self, Self::Error> {
         PositiveF64::try_from(value)?.try_into()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(::serde::Serialize, ::serde::Deserialize))]
+pub struct NonNegativeRatio {
+    pub numerator: u32,
+    pub denominator: NonZeroU32,
+}
+
+impl NonNegativeRatio {
+    #[must_use]
+    pub const fn new(numerator: u32, denominator: NonZeroU32) -> Self {
+        Self {
+            numerator,
+            denominator,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_f64(&self) -> f64 {
+        self.numerator as f64 / self.denominator.get() as f64
     }
 }
 

@@ -6,6 +6,7 @@ use lb_blend_message::{
 use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
 use lb_core::{
     crypto::ZkHash,
+    mantle::Value,
     sdp::{ProviderId, SessionNumber},
 };
 use lb_cryptarchia_engine::Epoch;
@@ -51,6 +52,8 @@ pub struct CurrentSessionTracker {
     /// session. These will be used to create proof verifiers after the next
     /// session update.
     leader_inputs: HashTrieMapSync<Epoch, LeaderInputs>,
+    /// Collecting service rewards over the session
+    session_income: Value,
 }
 
 impl CurrentSessionTracker {
@@ -61,6 +64,7 @@ impl CurrentSessionTracker {
                 settings.leader_inputs(first_epoch_state),
             ))
             .collect(),
+            session_income: Value::default(),
         }
     }
 
@@ -69,6 +73,14 @@ impl CurrentSessionTracker {
             leader_inputs: self
                 .leader_inputs
                 .insert(epoch_state.epoch, settings.leader_inputs(epoch_state)),
+            session_income: self.session_income,
+        }
+    }
+
+    pub(crate) fn add_block_rewards(&self, block_rewards: Value) -> Self {
+        Self {
+            leader_inputs: self.leader_inputs.clone(),
+            session_income: self.session_income + block_rewards,
         }
     }
 
@@ -120,6 +132,7 @@ impl CurrentSessionTracker {
                 providers,
                 token_evaluation,
                 proof_verifiers,
+                self.session_income,
             ),
             current_session_state: CurrentSessionState::new(SessionRandomness::new(
                 last_active_session_state.session_n + 1,

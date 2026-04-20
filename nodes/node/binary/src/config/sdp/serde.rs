@@ -1,5 +1,5 @@
 use lb_core::{
-    mantle::{NoteId, Value},
+    mantle::{Value, gas::GasCost},
     sdp::DeclarationId,
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -7,27 +7,22 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
+    /// Declaration ID (if set, full declaration info will be fetched from
+    /// ledger on startup).
     #[serde(default)]
-    pub declaration: Option<Declaration>,
+    pub declaration_id: Option<DeclarationId>,
     pub wallet: WalletConfig,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Declaration {
-    pub id: DeclarationId,
-    pub zk_id: ZkPublicKey,
-    pub locked_note_id: NoteId,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct WalletConfig {
     #[serde(default = "default_max_tx_fee")]
-    pub max_tx_fee: Value,
+    pub max_tx_fee: GasCost,
     pub funding_pk: ZkPublicKey,
 }
 
-const fn default_max_tx_fee() -> Value {
-    Value::MAX
+const fn default_max_tx_fee() -> GasCost {
+    GasCost::new(Value::MAX)
 }
 
 pub struct RequiredValues {
@@ -42,7 +37,7 @@ impl Config {
                 funding_pk,
                 max_tx_fee: default_max_tx_fee(),
             },
-            declaration: None,
+            declaration_id: None,
         }
     }
 }

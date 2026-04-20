@@ -3,7 +3,11 @@ use std::{fs, io::Write as _, path::Path};
 use clap::Parser;
 use lb_core::mantle::ops::channel::ChannelId;
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
-use lb_zone_sdk::sequencer::{SequencerCheckpoint, ZoneSequencer};
+use lb_zone_sdk::{
+    CommonHttpClient,
+    adapter::NodeHttpClient,
+    sequencer::{SequencerCheckpoint, ZoneSequencer},
+};
 use reqwest::Url;
 
 #[derive(Parser, Debug)]
@@ -79,8 +83,14 @@ pub async fn run(args: InscribeArgs) {
         println!("  Restored checkpoint from {}", args.checkpoint_path);
     }
 
-    let sequencer = ZoneSequencer::init(channel_id, signing_key, node_url, None, checkpoint);
+    let node = NodeHttpClient::new(CommonHttpClient::new(None), node_url);
+    let (sequencer, mut handle) = ZoneSequencer::init(channel_id, signing_key, node, checkpoint);
+    sequencer.spawn();
 
+    println!();
+    println!("Connecting to node...");
+    handle.wait_ready().await;
+    println!("Sequencer ready.");
     println!();
     println!("Type a message and press Enter to publish it as a zone block.");
     println!("Press Ctrl-D or type an empty line to exit.");
@@ -107,7 +117,7 @@ pub async fn run(args: InscribeArgs) {
             break;
         }
 
-        match sequencer.publish(msg.as_bytes().to_vec()).await {
+        match handle.publish_message(msg.as_bytes().to_vec()).await {
             Ok(result) => {
                 let tx_hash: [u8; 32] = result.inscription_id.into();
                 println!("  published: {}", hex::encode(tx_hash));

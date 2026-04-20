@@ -13,8 +13,9 @@ use lb_tests::topology::configs::GeneralConfig;
 use tokio::{sync::oneshot::Sender, time::timeout};
 
 use crate::{
-    FaucetSettings, Host,
+    Entropy, FaucetSettings, Host,
     config::{create_node_config_from_template, create_node_configs},
+    load_entropy,
     server::CfgSyncConfig,
 };
 
@@ -29,6 +30,7 @@ pub struct ConfigRepo {
     deployment_settings: Mutex<Option<DeploymentSettings>>,
     pub deployment_settings_storage_path: PathBuf,
     n_hosts: usize,
+    entropy: Entropy,
     faucet_settings: FaucetSettings,
     tracing_settings: TracingConfig,
     timeout_duration: Duration,
@@ -36,8 +38,10 @@ pub struct ConfigRepo {
 
 impl From<CfgSyncConfig> for Arc<ConfigRepo> {
     fn from(config: CfgSyncConfig) -> Self {
+        let entropy = load_entropy(&config.entropy_file).expect("Failed to load entropy file");
         ConfigRepo::new(
             config.n_hosts,
+            entropy,
             config.faucet_settings(),
             config.tracing_settings(),
             Duration::from_secs(config.timeout),
@@ -50,6 +54,7 @@ impl ConfigRepo {
     #[must_use]
     pub fn new(
         n_hosts: usize,
+        entropy: Entropy,
         faucet_settings: FaucetSettings,
         tracing_settings: TracingConfig,
         timeout_duration: Duration,
@@ -61,6 +66,7 @@ impl ConfigRepo {
             deployment_settings: Mutex::new(None),
             deployment_settings_storage_path,
             n_hosts,
+            entropy,
             faucet_settings,
             tracing_settings,
             timeout_duration,
@@ -126,11 +132,16 @@ impl ConfigRepo {
             let mut waiting_hosts = self.waiting_hosts.lock().unwrap();
             let hosts = waiting_hosts.keys().cloned().collect();
 
-            let (configs, genesis_tx) =
-                create_node_configs(&self.faucet_settings, &self.tracing_settings, hosts);
+            let (configs, genesis_tx, faucet_pk) = create_node_configs(
+                &self.entropy,
+                &self.faucet_settings,
+                &self.tracing_settings,
+                hosts,
+            );
             let devnet_settings = {
                 let mut default_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
                 default_settings.cryptarchia.genesis_state = genesis_tx;
+                default_settings.cryptarchia.faucet_pk = faucet_pk;
                 default_settings
             };
 

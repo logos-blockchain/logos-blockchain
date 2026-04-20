@@ -1,3 +1,5 @@
+use core::fmt::{self, Debug, Formatter};
+
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SignatureError, Verifier as _, VerifyingKey};
 use lb_utils::serde::{deserialize_bytes_array, serialize_bytes_array};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
@@ -6,7 +8,7 @@ use crate::keys::{Ed25519Signature, X25519PublicKey};
 
 pub const KEY_SIZE: usize = PUBLIC_KEY_LENGTH;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PublicKey(VerifyingKey);
 
 impl Serialize for PublicKey {
@@ -15,6 +17,12 @@ impl Serialize for PublicKey {
         S: Serializer,
     {
         serialize_bytes_array::<KEY_SIZE, _>(self.0.to_bytes(), serializer)
+    }
+}
+
+impl Debug for PublicKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "PublicKey({})", hex::encode(self.0.as_bytes()))
     }
 }
 

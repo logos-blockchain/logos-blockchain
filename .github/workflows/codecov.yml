@@ -42,7 +42,7 @@ jobs:
         if: failure()
         with:
           name: integration-test-artifacts
-          path: tests/.tmp*
+          path: tests/.run_*
       - name: Run codecov analysis
         uses: codecov/codecov-action@ea99328d1c4d5f39fda7cbffe104afd6906c50b0  # Version 5.4.0
         with:

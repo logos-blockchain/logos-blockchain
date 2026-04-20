@@ -50,7 +50,7 @@ type KmsKeyOperations<Kms> = <<Kms as KmsServiceData>::Backend as KMSBackend>::K
 impl<Kms, RuntimeServiceId> KmsServiceApi<Kms, RuntimeServiceId>
 where
     Kms: KmsServiceData,
-    Kms::Backend: KMSBackend<KeyId: Send, Key: Send, Error: Send>,
+    Kms::Backend: KMSBackend<KeyId: Send, Key: Send, Error: Send + Debug>,
     KmsBackendKey<Kms>: SecuredKey<Payload: Send, PublicKey: Send, Signature: Send>,
     KmsKeyOperations<Kms>: Send,
     RuntimeServiceId: AsServiceId<Kms> + Debug + Display + Sync,
@@ -146,7 +146,7 @@ where
         Ok(rx
             .await
             .map_err(|_| "Failed to receive sign_multiple response")?
-            .map_err(|_| "Failed to get multiple signature.")?)
+            .map_err(|e| format!("Failed to get multiple signature: {e:?}"))?)
     }
 
     pub async fn execute(

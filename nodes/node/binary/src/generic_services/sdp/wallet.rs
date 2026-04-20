@@ -45,7 +45,7 @@ where
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
             .response;
 
-        let tx_fee = funded.gas_cost::<MainnetGasConstants>();
+        let tx_fee = funded.gas_cost::<MainnetGasConstants>()?;
         if tx_fee > config.max_tx_fee {
             return Err(SdpWalletError::TxFeeExceedsMaxFee {
                 tx_fee,
@@ -78,7 +78,7 @@ where
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
             .response;
 
-        let tx_fee = funded.gas_cost::<MainnetGasConstants>();
+        let tx_fee = funded.gas_cost::<MainnetGasConstants>()?;
         if tx_fee > config.max_tx_fee {
             return Err(SdpWalletError::TxFeeExceedsMaxFee {
                 tx_fee,
@@ -111,7 +111,7 @@ where
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
             .response;
 
-        let tx_fee = funded.gas_cost::<MainnetGasConstants>();
+        let tx_fee = funded.gas_cost::<MainnetGasConstants>()?;
         if tx_fee > config.max_tx_fee {
             return Err(SdpWalletError::TxFeeExceedsMaxFee {
                 tx_fee,

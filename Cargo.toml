@@ -6,7 +6,7 @@ keywords    = ["blockchain", "privacy"]
 license     = "MIT or Apache-2.0"
 readme      = "README.md"
 repository  = "https://github.com/logos-blockchain/logos-blockchain"
-version     = "0.1.0"
+version     = "0.2.1"
 
 [profile.release]
 codegen-units = 1     # (Much) slower build time, much better performances
@@ -17,6 +17,14 @@ strip         = true  # Remove symbols to reduce binary size
 # LTO cannot be overridden for downstream dependencies.
 codegen-units = 1
 opt-level     = 3
+
+[profile.bench]
+inherits = "release"
+
+[profile.release-profiling]
+debug    = true      # Include debug symbols for profiling
+inherits = "release"
+strip    = "none"    # Don't strip symbols to allow for better profiling results
 
 [workspace]
 # Make sure any excluded crates are still clipped in our CI. Also, make sure they use the same Clippy and rustc lints we specify in this file down below.
@@ -61,8 +69,8 @@ members = [
   "testnet/faucet",
   "testnet/l2-sequencer-archival-demo/archiver",
   "testnet/l2-sequencer-archival-demo/sequencer",
-  "testnet/tui-zone",
   "tests",
+  "tests/testing_framework",
   "tracing",
   "utils",
   "utxotree",
@@ -84,6 +92,10 @@ resolver = "2"
 
 [workspace.dependencies]
 # Internal
+cfgsync-adapter                    = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "f731791" }
+cfgsync-artifacts                  = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "f731791" }
+cfgsync-core                       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "f731791" }
+common-http-client                 = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
 lb-api-service                     = { default-features = false, package = "logos-blockchain-api-service", path = "./services/api" }
 lb-blend                           = { default-features = false, package = "logos-blockchain-blend", path = "./blend/core" }
 lb-blend-crypto                    = { default-features = false, package = "logos-blockchain-blend-crypto", path = "./blend/crypto" }
@@ -126,6 +138,7 @@ lb-sdp-service                     = { default-features = false, package = "logo
 lb-services-utils                  = { default-features = false, package = "logos-blockchain-services-utils", path = "./services/utils" }
 lb-storage-service                 = { default-features = false, package = "logos-blockchain-storage-service", path = "./services/storage" }
 lb-system-sig-service              = { default-features = false, package = "logos-blockchain-system-sig-service", path = "./services/system-sig" }
+lb-testing-framework               = { default-features = false, package = "testing_framework", path = "./tests/testing_framework" }
 lb-tests                           = { default-features = false, package = "logos-blockchain-tests", path = "./tests" }
 lb-time-service                    = { default-features = false, package = "logos-blockchain-time-service", path = "./services/time" }
 lb-tracing                         = { default-features = false, package = "logos-blockchain-tracing", path = "./tracing" }
@@ -139,19 +152,30 @@ lb-wallet-service                  = { default-features = false, package = "logo
 lb-witness-generator               = { default-features = false, package = "logos-blockchain-witness-generator", path = "./zk/circuits/witness-generator" }
 lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
 lb-zone-sdk                        = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
+lb_network                         = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
+testing-framework-core             = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "f731791" }
+testing-framework-runner-compose   = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "f731791" }
+testing-framework-runner-k8s       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "f731791" }
+testing-framework-runner-local     = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "f731791" }
 
 # External
+async-trait       = { default-features = false, version = "0.1" }
 blake2            = { default-features = false, version = "0.10" }
 bytes             = { default-features = false, version = "1.3" }
 cached            = { default-features = false, version = "0.55.1" }
 cfg-if            = { default-features = false, version = "1.0.4" }
+divan             = { default-features = false, version = "0.1" }
 ed25519-dalek     = { default-features = false, version = "2" }
 fork_stream       = { default-features = false, version = "0.1.0" }
+futures           = { default-features = false, version = "0.3.32" }
+futures-util      = { default-features = false, version = "0.3.32" }
 hex               = { default-features = false, version = "0.4" }
+kube              = { default-features = false, features = ["client", "rustls-tls"], version = "0.87" }
 libp2p            = { default-features = false, version = "0.55" }
 libp2p-stream     = { default-features = false, version = "0.3.0-alpha" }
-overwatch         = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "f5a9902" }
-overwatch-derive  = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "f5a9902" }
+log               = { default-features = false, version = "0.4" }
+overwatch         = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
+overwatch-derive  = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
 rand              = { default-features = false, version = "0.8" }
 reqwest           = { default-features = false, version = "0.12" }
 serde             = { default-features = false, version = "1.0" }
@@ -165,9 +189,11 @@ tempfile          = { default-features = false, version = "3" }
 thiserror         = { default-features = false, version = "2.0" }
 time              = { default-features = false, version = "0.3" }
 tokio             = { default-features = false, version = "1" }
+tokio-stream      = { default-features = false, version = "0.1.18" }
 tracing           = { default-features = false, version = "0.1" }
 utoipa            = { default-features = false, version = "4.0" }
 utoipa-swagger-ui = { default-features = false, version = "7.0" }
+uuid              = { default-features = false, features = ["v4"], version = "1" }
 x25519-dalek      = { default-features = false, version = "2" }
 zeroize           = { default-features = false, version = "1" }
 

@@ -3,7 +3,9 @@ use std::fmt::{Debug, Display};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Value, gas::MainnetGasConstants, ops::leader_claim::LeaderClaimOp,
+        Note, Op, SignedMantleTx, Value,
+        gas::{GasCost, GasOverflow, MainnetGasConstants},
+        ops::leader_claim::LeaderClaimOp,
         tx_builder::MantleTxBuilder,
     },
 };
@@ -15,7 +17,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeaderWalletConfig {
     // Hard cap on the transaction fee for LEADER_CLAIM
-    pub max_tx_fee: Value,
+    pub max_tx_fee: GasCost,
 
     // The key to use for paying transaction fees for LEADER_CLAIM.
     // Change notes will be returned to this same funding pk.
@@ -24,6 +26,7 @@ pub struct LeaderWalletConfig {
 
 pub async fn fund_and_sign_leader_claim_tx<Wallet, RuntimeServiceId>(
     op: LeaderClaimOp,
+    reward_amount: Value,
     tip: HeaderId,
     wallet: &WalletApi<Wallet, RuntimeServiceId>,
     config: &LeaderWalletConfig,
@@ -32,7 +35,13 @@ where
     Wallet: WalletServiceData,
     RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<Wallet>,
 {
-    let tx_builder = MantleTxBuilder::new().push_op(Op::LeaderClaim(op));
+    let tx_context = wallet
+        .get_tx_context(Some(tip))
+        .await
+        .map_err(|error| LeaderWalletError::WalletApi(Box::new(error)))?;
+    let tx_builder = MantleTxBuilder::new(tx_context)
+        .push_op(Op::LeaderClaim(op))
+        .add_ledger_output(Note::new(reward_amount, config.funding_pk));
     let funded_tx_builder = wallet
         .fund_tx(
             Some(tip),
@@ -44,7 +53,14 @@ where
         .map_err(|e| LeaderWalletError::WalletApi(Box::new(e)))?
         .response;
 
-    let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>();
+    let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>()?;
+    tracing::debug!(
+        net_balance = funded_tx_builder.net_balance(),
+        gas_cost = ?tx_fee,
+        reward_amount,
+        n_inputs = funded_tx_builder.ledger_inputs().len(),
+        "leader claim tx builder state after funding"
+    );
     if tx_fee > config.max_tx_fee {
         return Err(LeaderWalletError::TxFeeExceedsMaxFee {
             tx_fee,
@@ -64,5 +80,7 @@ pub enum LeaderWalletError {
     #[error(transparent)]
     WalletApi(#[from] Box<WalletApiError>),
     #[error("Transaction fee exceeded the configured max fee. tx_fee={tx_fee} > max_fee={max_fee}")]
-    TxFeeExceedsMaxFee { max_fee: Value, tx_fee: Value },
+    TxFeeExceedsMaxFee { max_fee: GasCost, tx_fee: GasCost },
+    #[error(transparent)]
+    GasOverflow(#[from] GasOverflow),
 }

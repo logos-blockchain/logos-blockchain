@@ -15,27 +15,34 @@ pub struct EncapsulationInput {
     proof_of_selection: VerifiedProofOfSelection,
 }
 
+#[derive(Debug, Clone)]
+pub enum Error {
+    InvalidSharedSecret,
+}
+
 impl EncapsulationInput {
     /// Creates a new [`EncapsulationInput`]
     ///
     /// To derive the shared key, the `signing_key` and `blend_node_signing_key`
     /// are converted into encryptions keys.
-    #[must_use]
-    pub fn new(
+    pub fn try_new(
         ephemeral_signing_key: UnsecuredEd25519Key,
         blend_node_signing_key: &Ed25519PublicKey,
         proof_of_quota: VerifiedProofOfQuota,
         proof_of_selection: VerifiedProofOfSelection,
-    ) -> Self {
-        let ephemeral_encryption_key = ephemeral_signing_key
+    ) -> Result<Self, Error> {
+        let Some(ephemeral_encryption_key) = ephemeral_signing_key
             .derive_x25519()
-            .derive_shared_key(&blend_node_signing_key.derive_x25519());
-        Self {
+            .derive_shared_key(&blend_node_signing_key.derive_x25519())
+        else {
+            return Err(Error::InvalidSharedSecret);
+        };
+        Ok(Self {
             ephemeral_signing_key,
             shared_key: ephemeral_encryption_key,
             proof_of_quota,
             proof_of_selection,
-        }
+        })
     }
 
     #[must_use]

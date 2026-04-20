@@ -1,8 +1,10 @@
 use core::{
     fmt::{self, Display, Formatter},
     str::FromStr,
+    time::Duration,
 };
 
+use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
@@ -13,7 +15,7 @@ use crate::config::{
     time::deployment::Settings as TimeDeploymentSettings,
 };
 
-mod devnet;
+pub mod devnet;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
 pub enum WellKnownDeployment {
@@ -60,6 +62,18 @@ impl From<WellKnownDeployment> for DeploymentSettings {
             )
             .expect("Devnet deployment config is valid."),
         }
+    }
+}
+
+impl DeploymentSettings {
+    #[must_use]
+    pub const fn blend_round_duration(&self) -> Duration {
+        self.blend.round_duration(&self.time.slot_duration)
+    }
+
+    #[must_use]
+    pub fn blend_reward_params(&self) -> RewardsParameters {
+        self.blend.rewards_params(&self.cryptarchia, &self.time)
     }
 }
 

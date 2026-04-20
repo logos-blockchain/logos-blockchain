@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Display};
 
+use ::libp2p::PeerId;
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -8,7 +9,7 @@ use axum::{
 };
 use futures::FutureExt as _;
 use lb_api_service::http::{
-    DynError,
+    DynError, blend,
     consensus::{self, Cryptarchia},
     libp2p, mantle, mempool,
     storage::StorageAdapter,
@@ -19,12 +20,18 @@ use lb_chain_service::ConsensusMsg;
 use lb_core::{
     block::Block,
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction},
+    mantle::{
+        Op, SignedMantleTx, Transaction, TxHash, gas::MainnetGasConstants, ops::channel::ChannelId,
+        tx_builder::MantleTxBuilder,
+    },
 };
 use lb_http_api_common::{
-    bodies::wallet::{
-        balance::WalletBalanceResponseBody,
-        transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+    bodies::{
+        channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
+        wallet::{
+            balance::WalletBalanceResponseBody,
+            transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+        },
     },
     paths,
 };
@@ -50,7 +57,10 @@ use crate::api::{
     openapi::schema,
     queries::BlockRangeQuery,
     responses::{self, overwatch::get_relay_or_500},
-    serializers::blocks::{ApiBlock, ApiProcessedBlockEvent},
+    serializers::{
+        blocks::{ApiBlock, ApiProcessedBlockEvent},
+        transactions::ApiSignedTransactionRef,
+    },
 };
 
 #[macro_export]
@@ -118,16 +128,6 @@ where
         StorageAdapter,
         RuntimeServiceId,
     >(&handle))
-}
-
-pub async fn get_sdp_declarations<RuntimeServiceId>(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-) -> Response
-where
-    RuntimeServiceId:
-        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
-{
-    make_request_and_return_response!(mantle::get_sdp_declarations::<RuntimeServiceId>(&handle))
 }
 
 #[utoipa::path(
@@ -277,27 +277,27 @@ where
 }
 
 #[utoipa::path(
-    post,
-    path = paths::STORAGE_BLOCK,
+    get,
+    path = paths::BLEND_NETWORK_INFO,
     responses(
-        (status = 200, description = "Get the block by block id", body = HeaderId),
+        (status = 200, description = "Query the blend network information", body = Option<lb_blend_service::message::BlendNetworkInfo>),
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn block<HttpStorageAdapter, RuntimeServiceId>(
+pub async fn blend_info<BlendService, BroadcastSettings, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(id): Json<HeaderId>,
 ) -> Response
 where
-    HttpStorageAdapter: StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
-    RuntimeServiceId:
-        AsServiceId<StorageService<RocksBackend, RuntimeServiceId>> + Debug + Sync + Display,
+    BlendService: ServiceData<Message = lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>>
+        + 'static,
+    BroadcastSettings: Send + 'static,
+    RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
 {
-    let relay = match get_relay_or_500(&handle).await {
-        Ok(relay) => relay,
-        Err(error_response) => return error_response,
-    };
-    make_request_and_return_response!(HttpStorageAdapter::get_block::<SignedMantleTx>(relay, id))
+    make_request_and_return_response!(blend::blend_info::<
+        BlendService,
+        BroadcastSettings,
+        RuntimeServiceId,
+    >(&handle))
 }
 
 #[utoipa::path(
@@ -361,6 +361,121 @@ where
 }
 
 #[utoipa::path(
+    get,
+    path = paths::CHANNEL,
+    responses(
+        (status = 200, description = "Channel state"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn channel<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(id): Path<ChannelId>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    make_request_and_return_response!(mantle::channel::<RuntimeServiceId>(&handle, id))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::CHANNEL_DEPOSIT,
+    responses(
+        (status = 200, description = "Submit a channel deposit"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn channel_deposit<WalletService, StorageAdapter, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<ChannelDepositRequestBody>,
+) -> Response
+where
+    WalletService: WalletServiceData,
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+            RuntimeServiceId,
+            Item = SignedMantleTx,
+            Key = <SignedMantleTx as Transaction>::Hash,
+        > + Send
+        + Sync
+        + Clone
+        + 'static,
+    StorageAdapter::Error: Debug,
+    RuntimeServiceId: Debug
+        + Display
+        + Send
+        + Sync
+        + 'static
+        + AsServiceId<WalletService>
+        + AsServiceId<
+            TxMempoolService<
+                MempoolNetworkAdapter<
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    RuntimeServiceId,
+                >,
+                Mempool<
+                    HeaderId,
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+                StorageAdapter,
+                RuntimeServiceId,
+            >,
+        >,
+{
+    make_request_and_return_response!(async {
+        let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+            handle.relay::<WalletService>().await?,
+        );
+
+        let tx_context = wallet.get_tx_context(None).await?;
+        let tx_builder = MantleTxBuilder::new(tx_context).push_op(Op::ChannelDeposit(req.deposit));
+        let lb_wallet_service::TipResponse {
+            tip,
+            response: funded_tx_builder,
+        } = wallet
+            .fund_tx(
+                None,
+                tx_builder,
+                req.change_public_key,
+                req.funding_public_keys,
+            )
+            .await?;
+
+        let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>()?;
+        if tx_fee > req.max_tx_fee {
+            return Err(overwatch::DynError::from(format!(
+                "tx_fee({tx_fee}) exceeds max_tx_fee({})",
+                req.max_tx_fee
+            )));
+        }
+
+        let signed_tx = wallet.sign_tx(Some(tip), funded_tx_builder).await?.response;
+        let tx_hash = signed_tx.hash();
+
+        mempool::add_tx::<
+            Libp2pNetworkBackend,
+            MempoolNetworkAdapter<
+                SignedMantleTx,
+                <SignedMantleTx as Transaction>::Hash,
+                RuntimeServiceId,
+            >,
+            StorageAdapter,
+            SignedMantleTx,
+            <SignedMantleTx as Transaction>::Hash,
+            RuntimeServiceId,
+        >(&handle, signed_tx, Transaction::hash)
+        .await?;
+
+        Ok(ChannelDepositResponseBody { hash: tx_hash })
+    })
+}
+
+#[utoipa::path(
     post,
     path = paths::SDP_POST_DECLARATION,
     responses(
@@ -368,23 +483,33 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn post_declaration<MempoolAdapter, WalletAdapter, RuntimeServiceId>(
+pub async fn post_declaration<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(declaration): Json<lb_core::sdp::DeclarationMessage>,
 ) -> Response
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
+    ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
         + Display
         + 'static
-        + AsServiceId<lb_sdp_service::SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>>,
+        + AsServiceId<ChainService>
+        + AsServiceId<
+            lb_sdp_service::SdpService<
+                MempoolAdapter,
+                WalletAdapter,
+                ChainService,
+                RuntimeServiceId,
+            >,
+        >,
 {
     make_request_and_return_response!(lb_api_service::http::sdp::post_declaration_handler::<
         MempoolAdapter,
         WalletAdapter,
+        ChainService,
         RuntimeServiceId,
     >(handle, declaration))
 }
@@ -397,23 +522,33 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn post_activity<MempoolAdapter, WalletAdapter, RuntimeServiceId>(
+pub async fn post_activity<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(metadata): Json<lb_core::sdp::ActivityMetadata>,
 ) -> Response
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
+    ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
         + Display
         + 'static
-        + AsServiceId<lb_sdp_service::SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>>,
+        + AsServiceId<ChainService>
+        + AsServiceId<
+            lb_sdp_service::SdpService<
+                MempoolAdapter,
+                WalletAdapter,
+                ChainService,
+                RuntimeServiceId,
+            >,
+        >,
 {
     make_request_and_return_response!(lb_api_service::http::sdp::post_activity_handler::<
         MempoolAdapter,
         WalletAdapter,
+        ChainService,
         RuntimeServiceId,
     >(handle, metadata))
 }
@@ -426,23 +561,33 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn post_withdrawal<MempoolAdapter, WalletAdapter, RuntimeServiceId>(
+pub async fn post_withdrawal<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(declaration_id): Json<lb_core::sdp::DeclarationId>,
 ) -> Response
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
+    ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
         + Display
         + 'static
-        + AsServiceId<lb_sdp_service::SdpService<MempoolAdapter, WalletAdapter, RuntimeServiceId>>,
+        + AsServiceId<ChainService>
+        + AsServiceId<
+            lb_sdp_service::SdpService<
+                MempoolAdapter,
+                WalletAdapter,
+                ChainService,
+                RuntimeServiceId,
+            >,
+        >,
 {
     make_request_and_return_response!(lb_api_service::http::sdp::post_withdrawal_handler::<
         MempoolAdapter,
         WalletAdapter,
+        ChainService,
         RuntimeServiceId,
     >(handle, declaration_id))
 }
@@ -498,6 +643,39 @@ where
 }
 
 #[utoipa::path(
+    post,
+    path = paths::BLOCKS_DETAIL,
+    responses(
+        (status = 200, description = "Block found"),
+        (status = 404, description = "Block not found"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn block<HttpStorageAdapter, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(id): Path<HeaderId>,
+) -> Response
+where
+    HttpStorageAdapter: StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
+    RuntimeServiceId:
+        AsServiceId<StorageService<RocksBackend, RuntimeServiceId>> + Debug + Sync + Display,
+{
+    let relay = match get_relay_or_500(&handle).await {
+        Ok(relay) => relay,
+        Err(error_response) => return error_response,
+    };
+    let block = HttpStorageAdapter::get_block::<SignedMantleTx>(relay, id).await;
+    match block {
+        Ok(Some(block)) => {
+            let api_block = ApiBlock::from(block);
+            (StatusCode::OK, Json(api_block)).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND,).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response(),
+    }
+}
+
+#[utoipa::path(
     get,
     path = paths::BLOCKS_STREAM,
     responses(
@@ -531,7 +709,53 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = paths::TRANSACTION,
+    responses(
+        (status = 200, description = "Transaction found"),
+        (status = 404, description = "Transaction not found"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn transaction<HttpStorageAdapter, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(id): Path<TxHash>,
+) -> Response
+where
+    HttpStorageAdapter: StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
+    RuntimeServiceId:
+        AsServiceId<StorageService<RocksBackend, RuntimeServiceId>> + Debug + Sync + Display,
+{
+    let relay = match get_relay_or_500(&handle).await {
+        Ok(relay) => relay,
+        Err(error_response) => return error_response,
+    };
+    let Ok(transactions) = HttpStorageAdapter::get_transactions::<SignedMantleTx>(relay, id).await
+    else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response();
+    };
+    match transactions.as_slice() {
+        [] => (StatusCode::NOT_FOUND,).into_response(),
+        [transaction] => {
+            let api_transaction = ApiSignedTransactionRef::from(transaction);
+            (StatusCode::OK, Json(api_transaction)).into_response()
+        }
+        _ => {
+            let error_body = serde_json::json!({
+                "error": "Multiple transactions found",
+                "len": transactions.len()
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_body)).into_response()
+        }
+    }
+}
+
 pub mod wallet {
+    use lb_http_api_common::bodies::wallet::sign::{
+        WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody, WalletSignTxZkRequestBody,
+        WalletSignTxZkResponseBody,
+    };
     use lb_key_management_system_service::keys::ZkPublicKey;
 
     use super::*;
@@ -573,7 +797,8 @@ pub mod wallet {
                 response: Some(balance),
             }) => WalletBalanceResponseBody {
                 tip,
-                balance,
+                balance: balance.balance,
+                notes: balance.notes,
                 address,
             }
             .into_response(),
@@ -679,5 +904,121 @@ pub mod wallet {
             }
             Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
         }
+    }
+
+    #[utoipa::path(
+        post,
+        path = paths::wallet::SIGN_TX_ED25519,
+        responses(
+            (status = 200, description = "Signed transaction"),
+            (status = 500, description = "Internal server error", body = String),
+        )
+    )]
+    pub async fn sign_tx_ed25519<WalletService, StorageAdapter, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Json(req): Json<WalletSignTxEd25519RequestBody>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData,
+        StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+                RuntimeServiceId,
+                Item = SignedMantleTx,
+                Key = <SignedMantleTx as Transaction>::Hash,
+            > + Send
+            + Sync
+            + Clone
+            + 'static,
+        StorageAdapter::Error: Debug,
+        RuntimeServiceId: Debug
+            + Display
+            + Send
+            + Sync
+            + 'static
+            + AsServiceId<WalletService>
+            + AsServiceId<
+                TxMempoolService<
+                    MempoolNetworkAdapter<
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        RuntimeServiceId,
+                    >,
+                    Mempool<
+                        HeaderId,
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        StorageAdapter,
+                        RuntimeServiceId,
+                    >,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+            >,
+    {
+        make_request_and_return_response!(async {
+            let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+                handle.relay::<WalletService>().await?,
+            );
+
+            let sig = wallet.sign_tx_with_ed25519(req.tx_hash, req.pk).await?;
+            Ok::<_, DynError>(WalletSignTxEd25519ResponseBody { sig })
+        })
+    }
+
+    #[utoipa::path(
+        post,
+        path = paths::wallet::SIGN_TX_ZK,
+        responses(
+            (status = 200, description = "Signed transaction"),
+            (status = 500, description = "Internal server error", body = String),
+        )
+    )]
+    pub async fn sign_tx_zk<WalletService, StorageAdapter, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Json(req): Json<WalletSignTxZkRequestBody>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData,
+        StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+                RuntimeServiceId,
+                Item = SignedMantleTx,
+                Key = <SignedMantleTx as Transaction>::Hash,
+            > + Send
+            + Sync
+            + Clone
+            + 'static,
+        StorageAdapter::Error: Debug,
+        RuntimeServiceId: Debug
+            + Display
+            + Send
+            + Sync
+            + 'static
+            + AsServiceId<WalletService>
+            + AsServiceId<
+                TxMempoolService<
+                    MempoolNetworkAdapter<
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        RuntimeServiceId,
+                    >,
+                    Mempool<
+                        HeaderId,
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        StorageAdapter,
+                        RuntimeServiceId,
+                    >,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+            >,
+    {
+        make_request_and_return_response!(async {
+            let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+                handle.relay::<WalletService>().await?,
+            );
+
+            let sig = wallet.sign_tx_with_zk(req.tx_hash, req.pks).await?;
+            Ok::<_, DynError>(WalletSignTxZkResponseBody { sig })
+        })
     }
 }

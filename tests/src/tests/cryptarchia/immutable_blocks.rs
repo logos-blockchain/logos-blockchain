@@ -15,7 +15,7 @@ const TARGET_IMMUTABLE_BLOCK_COUNT: u32 = 5;
 #[tokio::test]
 #[serial]
 async fn immutable_blocks_two_nodes() {
-    let (configs, genesis_tx) = create_general_configs(2);
+    let (configs, genesis_tx) = create_general_configs(2, Some("immutable_blocks_two_nodes"));
     let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
     let configs = configs
         .into_iter()

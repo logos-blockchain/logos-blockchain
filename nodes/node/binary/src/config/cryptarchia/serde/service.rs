@@ -46,7 +46,7 @@ impl Default for OfflineGracePeriodConfig {
     fn default() -> Self {
         Self {
             grace_period: Duration::from_mins(20),
-            state_recording_interval: Duration::from_secs(60),
+            state_recording_interval: Duration::from_mins(1),
         }
     }
 }

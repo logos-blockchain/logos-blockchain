@@ -1,9 +1,14 @@
 pub mod balance {
+    use std::collections::HashMap;
+
     use axum::{
         http::StatusCode,
         response::{IntoResponse, Response},
     };
-    use lb_core::{header::HeaderId, mantle::Value};
+    use lb_core::{
+        header::HeaderId,
+        mantle::{NoteId, Value},
+    };
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use serde::{Deserialize, Serialize};
     use tracing::error;
@@ -12,6 +17,7 @@ pub mod balance {
     pub struct WalletBalanceResponseBody {
         pub tip: HeaderId,
         pub balance: Value,
+        pub notes: HashMap<NoteId, Value>,
         pub address: ZkPublicKey,
     }
 
@@ -77,5 +83,35 @@ pub mod transfer_funds {
 
             (StatusCode::CREATED, json).into_response()
         }
+    }
+}
+
+pub mod sign {
+    use lb_core::mantle::TxHash;
+    use lb_key_management_system_keys::keys::{
+        Ed25519Key, ZkPublicKey, ZkSignature, secured_key::SecuredKey,
+    };
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletSignTxEd25519RequestBody {
+        pub tx_hash: TxHash,
+        pub pk: <Ed25519Key as SecuredKey>::PublicKey,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletSignTxEd25519ResponseBody {
+        pub sig: <Ed25519Key as SecuredKey>::Signature,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletSignTxZkRequestBody {
+        pub tx_hash: TxHash,
+        pub pks: Vec<ZkPublicKey>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletSignTxZkResponseBody {
+        pub sig: ZkSignature,
     }
 }

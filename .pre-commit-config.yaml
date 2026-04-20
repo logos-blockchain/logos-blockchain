@@ -6,10 +6,13 @@ repos:
         # We're running `fmt` with `--all` and `pass_filenames: false` to format the entire workspace at once.
         # Otherwise, `pre-commit` passes staged files one by one, which can lead to inconsistent results
         # due to, presumably, the lack of full workspace context.
-        entry: cargo +nightly-2025-12-05 fmt
+        entry: cargo +nightly-2026-02-28 fmt
         pass_filenames: false
       - id: clippy
-        args: ["--all", "--all-targets", "--all-features", "--", "-D", "warnings"]
+        name: cargo clippy
+        args:
+          ["--all", "--all-targets", "--all-features", "--", "-D", "warnings"]
+        pass_filenames: false
   - repo: https://github.com/EmbarkStudios/cargo-deny
     rev: 09faadcea2d0d1742492e6872b743d1e4d151a27 # 0.19.0
     hooks:

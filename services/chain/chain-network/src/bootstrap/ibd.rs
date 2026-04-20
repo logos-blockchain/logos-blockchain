@@ -13,7 +13,7 @@ use lb_core::{
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_tx_service::backend::RecoverableMempool;
 use overwatch::DynError;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     Error as ChainError, IbdConfig,
@@ -127,6 +127,7 @@ where
             return Ok(self.block_processor);
         }
 
+        info!("starting IBD with {} peers", config.peers.len());
         let downloads = self.initiate_downloads(config).await?;
         self.proceed_downloads(downloads).await
     }
@@ -171,6 +172,10 @@ where
     /// download for the tip, no download is initiated and [`None`] is returned.
     ///
     /// If communication fails, an [`Error`] is returned.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn initiate_download(
         &mut self,
         peer: NetAdapter::PeerId,
@@ -202,6 +207,11 @@ where
         let initial_cryptarchia_info = self.block_processor.info().await?;
 
         // Request a block stream.
+        debug!(
+            ?target, local_tip = ?initial_cryptarchia_info.tip, local_tip_height = initial_cryptarchia_info.height,
+            local_lib = ?initial_cryptarchia_info.lib, ?peer,
+            "requesting blocks from peer",
+        );
         let stream = self
             .network
             .request_blocks_from_peer(
@@ -212,7 +222,11 @@ where
                 latest_downloaded_block.map_or_else(HashSet::new, |id| HashSet::from([id])),
             )
             .await
+            .inspect_err(|_e| {
+                crate::metrics::chainsync_observe_download_blocks_err();
+            })
             .map_err(Error::BlockProvider)?;
+        debug!(?peer, ?target, "a download initiated");
 
         Ok(Some(Download::new(peer, target, stream)))
     }
@@ -275,6 +289,7 @@ where
                 self.handle_download_completed(download, downloads).await
             }
             DownloadsOutput::Error { error, download } => {
+                crate::metrics::chainsync_observe_download_blocks_err();
                 error!("Download failed from {:?}: {}", download.peer(), error);
                 Err(Error::BlockProvider(error))
             }
@@ -292,11 +307,7 @@ where
         NetAdapter::PeerId: 'a,
         NetAdapter::Block: 'a,
     {
-        debug!(
-            "Handling a block received from {:?}: {:?}",
-            download.peer(),
-            block
-        );
+        debug!("Handling a block received from {:?}", download.peer());
 
         self.block_processor
             .process_block(block)
@@ -326,6 +337,12 @@ where
             "A download completed for {:?}. Try a new download",
             download.peer()
         );
+
+        crate::metrics::chainsync_observe_download_blocks_ok(
+            download.started_at().elapsed(),
+            download.blocks_downloaded(),
+        );
+
         self.try_initiate_download(*download.peer(), download.last(), downloads)
             .await
     }
@@ -417,13 +434,13 @@ mod tests {
         block::Proposal,
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use lb_cryptarchia_engine::{EpochConfig, Slot, UpdatedCryptarchia};
+    use lb_cryptarchia_engine::{EpochConfig, Slot};
     use lb_ledger::{
         LedgerState,
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
-    use lb_utils::math::NonNegativeF64;
+    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
     use overwatch::{
         overwatch::OverwatchHandle,
         services::{ServiceData, relay::OutboundRelay},
@@ -861,11 +878,7 @@ mod tests {
             // Add the block only to the consensus, not to the ledger state
             // because the mocked block doesn't have a proof.
             // It's enough because the tests doesn't check the ledger state.
-            let UpdatedCryptarchia {
-                cryptarchia: consensus,
-                ..
-            } = self
-                .cryptarchia
+            self.cryptarchia
                 .consensus
                 .receive_block(block.id, block.parent, block.slot)
                 .map_err(|e| {
@@ -873,8 +886,6 @@ mod tests {
                         "Consensus error: {e:?}"
                     )))
                 })?;
-
-            self.cryptarchia.consensus = consensus;
             Ok(())
         }
 
@@ -1117,7 +1128,7 @@ mod tests {
             },
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(1).unwrap(),
-                1.0,
+                NonNegativeRatio::new(1, 10.try_into().unwrap()),
                 1f64.try_into().expect("1 > 0"),
             ),
             sdp_config: lb_ledger::mantle::sdp::Config {
@@ -1149,6 +1160,7 @@ mod tests {
                     timestamp: 0,
                 },
             },
+            faucet_pk: None,
         }
     }
 }

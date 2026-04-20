@@ -2,12 +2,12 @@
 # check=skip=SecretsUsedInArgOrEnv
 # Ignore warnings about sensitive information as this is test data.
 
-ARG VERSION=v0.4.1
+ARG VERSION=v0.4.2
 
 # ===========================
 # BUILD IMAGE
 # ===========================
-FROM rust:1.93.0-slim-bookworm AS builder
+FROM rust:1.95.0-slim-bookworm AS builder
 
 ARG VERSION
 
@@ -16,7 +16,7 @@ COPY . .
 
 # Install dependencies needed for building RocksDB.
 RUN apt-get update && apt-get install -yq \
-    git gcc g++ clang libssl-dev pkg-config ca-certificates curl unzip
+    build-essential git clang libssl-dev pkg-config ca-certificates curl unzip
 
 # Install Bun for L2 demo frontend.
 RUN curl -fsSL https://bun.sh/install | bash
@@ -31,7 +31,7 @@ RUN VITE_SEQUENCER_URL=/api/sequencer VITE_ARCHIVER_URL=/api/archiver bun run bu
 WORKDIR /logos-blockchain
 ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 RUN scripts/setup-logos-blockchain-circuits.sh "$VERSION" "$LOGOS_BLOCKCHAIN_CIRCUITS"
-RUN cargo build --locked --release --all-features
+RUN cargo build --locked --release
 
 # ===========================
 # NODE IMAGE
@@ -45,19 +45,9 @@ LABEL maintainer="augustinas@status.im" \
     description="Logos Blockchain node and other binaries image"
 
 RUN apt-get update && apt-get install -yq \
-    libstdc++6 libssl3 ca-certificates nginx \
+    libstdc++6 libssl3 ca-certificates \
     python3 python3-pip curl git \
     && rm -rf /var/lib/apt/lists/*
-
-# Install Block Explorer
-ENV UV_INSTALL_DIR=/usr/local/bin
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-RUN git clone https://github.com/logos-blockchain/logos-blockchain-block-explorer-template.git /opt/explorer \
-    && cd /opt/explorer \
-    && git checkout 46fa934148829a7f880de81b3ec6b76a277ddc14 \
-    && uv venv /opt/explorer/.venv \
-    && uv pip compile pyproject.toml -o requirements.txt \
-    && uv pip install --python /opt/explorer/.venv/bin/python -r requirements.txt
 
 # Copy Circuits
 COPY --from=builder /opt/circuits /opt/circuits
