@@ -1,9 +1,11 @@
 use std::{net::SocketAddr, pin::Pin};
 
-use common_http_client::{BasicAuthCredentials, CommonHttpClient, Error, ProcessedBlockEvent};
+use common_http_client::{
+    ApiBlock, BasicAuthCredentials, CommonHttpClient, Error, ProcessedBlockEvent,
+};
 use futures::Stream;
 use lb_chain_service::CryptarchiaInfo;
-use lb_core::{block::Block, header::HeaderId, mantle::SignedMantleTx};
+use lb_core::{header::HeaderId, mantle::SignedMantleTx};
 use lb_http_api_common::{
     bodies::wallet::transfer_funds::{
         WalletTransferFundsRequestBody, WalletTransferFundsResponseBody,
@@ -70,7 +72,7 @@ impl NodeHttpClient {
         }
     }
 
-    pub async fn block(&self, id: &HeaderId) -> Result<Option<Block<SignedMantleTx>>, Error> {
+    pub async fn block(&self, id: &HeaderId) -> Result<Option<ApiBlock>, Error> {
         self.http_client
             .get_block_by_id(self.base_url.clone(), *id)
             .await

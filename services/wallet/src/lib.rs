@@ -267,7 +267,7 @@ where
         // Wait for services (except Chain) to become ready, with timeout
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
-            Some(Duration::from_secs(60)),
+            Some(Duration::from_mins(1)),
             lb_storage_service::StorageService<_, _>,
             Kms
         )
@@ -508,7 +508,7 @@ where
                 pks,
                 resp_tx,
             } => {
-                let result = Self::sign_zksig(tx_hash, pks.into_iter(), kms).await;
+                let result = Self::sign_zksig(tx_hash, pks, kms).await;
                 if resp_tx.send(result).is_err() {
                     error!("Failed to respond to SignTxWithZk");
                 }

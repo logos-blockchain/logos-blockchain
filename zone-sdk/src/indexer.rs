@@ -145,7 +145,7 @@ fn should_skip(message: &ZoneMessage, slot: Slot, skip_until: &mut Option<(MsgId
 mod tests {
     use async_trait::async_trait;
     use lb_common_http_client::{ApiBlock, BlockInfo, CryptarchiaInfo, ProcessedBlockEvent};
-    use lb_core::{block::Block, header::HeaderId, mantle::SignedMantleTx};
+    use lb_core::{header::HeaderId, mantle::SignedMantleTx};
 
     use super::*;
     use crate::{Deposit, ZoneBlock};
@@ -365,7 +365,7 @@ mod tests {
         async fn block(
             &self,
             _id: HeaderId,
-        ) -> Result<Option<Block<SignedMantleTx>>, lb_common_http_client::Error> {
+        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
             Ok(None)
         }
 

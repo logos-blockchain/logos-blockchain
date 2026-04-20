@@ -57,7 +57,7 @@ impl BestNodeInfo {
     }
 }
 
-const BEST_NODE_SELECTION_TIMEOUT: Duration = Duration::from_secs(180);
+const BEST_NODE_SELECTION_TIMEOUT: Duration = Duration::from_mins(3);
 const BEST_NODE_SELECTION_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const BEST_NODE_SELECTION_LOG_INTERVAL: Duration = Duration::from_secs(5);
 const BEST_NODE_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -477,7 +477,7 @@ async fn is_tip_still_on_canonical_chain(
         let Some(block) = client.block(&current_header_id).await? else {
             return Ok(false);
         };
-        current_header_id = block.header().parent();
+        current_header_id = block.header.parent_block;
         remaining_steps -= 1;
     }
 

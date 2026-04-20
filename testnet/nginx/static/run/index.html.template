@@ -18,36 +18,36 @@
         <li>
             <span class="node-label">Node 0:</span>
             <div class="node-links">
-                <a href="https://devnet.blockchain.logos.co/node/0/cryptarchia/info" target="_blank">Cryptarchia Info</a>
+                <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/0/cryptarchia/info" target="_blank">Cryptarchia Info</a>
                 <span class="divider">|</span>
-                <a href="https://devnet.blockchain.logos.co/node/0/network/info" target="_blank">Network Info</a>
+                <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/0/network/info" target="_blank">Network Info</a>
             </div>
         </li>
 
         <li>
             <span class="node-label">Node 1:</span>
             <div class="node-links">
-                <a href="https://devnet.blockchain.logos.co/node/1/cryptarchia/info" target="_blank">Cryptarchia Info</a>
+                <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/1/cryptarchia/info" target="_blank">Cryptarchia Info</a>
                 <span class="divider">|</span>
-                <a href="https://devnet.blockchain.logos.co/node/1/network/info" target="_blank">Network Info</a>
+                <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/1/network/info" target="_blank">Network Info</a>
             </div>
         </li>
 
         <li>
             <span class="node-label">Node 2:</span>
             <div class="node-links">
-                <a href="https://devnet.blockchain.logos.co/node/2/cryptarchia/info" target="_blank">Cryptarchia Info</a>
+                <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/2/cryptarchia/info" target="_blank">Cryptarchia Info</a>
                 <span class="divider">|</span>
-                <a href="https://devnet.blockchain.logos.co/node/2/network/info" target="_blank">Network Info</a>
+                <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/2/network/info" target="_blank">Network Info</a>
             </div>
         </li>
 
         <li>
             <span class="node-label">Node 3:</span>
             <div class="node-links">
-                <a href="https://devnet.blockchain.logos.co/node/3/cryptarchia/info" target="_blank">Cryptarchia Info</a>
+                <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/3/cryptarchia/info" target="_blank">Cryptarchia Info</a>
                 <span class="divider">|</span>
-                <a href="https://devnet.blockchain.logos.co/node/3/network/info" target="_blank">Network Info</a>
+                <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/3/network/info" target="_blank">Network Info</a>
             </div>
         </li>
     </ul>
@@ -55,16 +55,16 @@
     <h2>Tools</h2>
     <ul>
         <li>
-            <a href="https://devnet.blockchain.logos.co/web/explorer/" target="_blank">Explorer</a>
+            <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/web/explorer/" target="_blank">Explorer</a>
         </li>
         <li>
-            <a href="https://devnet.blockchain.logos.co/web/cfgsync/deployment-settings" target="_blank">Deployment Settings</a>
+            <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/web/cfgsync/deployment-settings" target="_blank">Deployment Settings</a>
         </li>
         <li>
-            <a href="https://devnet.blockchain.logos.co/web/faucet/" target="_blank">Faucet</a>
+            <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/web/faucet/" target="_blank">Faucet</a>
         </li>
         <li>
-            <a href="https://devnet.blockchain.logos.co/internal/node-data/" target="_blank">Node Data</a>
+            <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/internal/node-data/" target="_blank">Node Data</a>
         </li>
     </ul>
 

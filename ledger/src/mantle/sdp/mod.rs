@@ -486,7 +486,7 @@ impl SdpLedger {
                     service_state
                         .clone()
                         .try_apply_header(block_number, epoch_state, config);
-                all_reward_utxos.extend(reward_utxos.into_iter());
+                all_reward_utxos.extend(reward_utxos);
                 Ok::<_, Error>((*service, new_state))
             })
             .collect::<Result<_, _>>()?;

@@ -1,3 +1,5 @@
+use tracing::debug;
+
 use crate::behaviour::nat::state_machine::{
     Command, CommandTx, OnEvent, State, event::Event, states::TryMapAddress,
 };
@@ -6,44 +8,39 @@ use crate::behaviour::nat::state_machine::{
 /// to a public-facing address on the NAT-box. If the mapping is successful, it
 /// transitions to the `TestIfMappedPublic` state to verify if the mapped
 /// address is indeed public. If the mapping fails, it transitions to the
-/// `Private` state.
-///
-/// ### Panics
-///
-/// This state will panic if it receives a mapping event (success or failure)
-/// that does not match the expected address to map.
+/// `Private` state. If the address mapper resolves a different local address
+/// than the one currently tracked, the state machine adopts that mapper result
+/// so it can move forward instead of panicking.
 impl OnEvent for State<TryMapAddress> {
     fn on_event(self: Box<Self>, event: Event, command_tx: &CommandTx) -> Box<dyn OnEvent> {
         match event {
             Event::NewExternalMappedAddress {
                 local_address,
                 external_address,
-            } if &local_address == self.state.addr_to_map() => {
+            } => {
+                debug!(
+                    "State<TryMapAddress>: Mapping succeeded for {local_address} (was tracking {}), transitioning to TestIfMappedPublic with {external_address}.",
+                    self.state.addr_to_map(),
+                );
                 command_tx.force_send(Command::NewExternalAddrCandidate(external_address.clone()));
-                self.boxed(|state| state.into_test_if_mapped_public(external_address))
+                self.boxed(|state| {
+                    state
+                        .retarget(local_address)
+                        .into_test_if_mapped_public(external_address)
+                })
             }
-            Event::AddressMappingFailed(addr) if self.state.addr_to_map() == &addr => {
-                self.boxed(TryMapAddress::into_private)
+            Event::AddressMappingFailed(addr) => {
+                debug!(
+                    "State<TryMapAddress>: Mapping failed for {addr} (was tracking {}), transitioning to Private.",
+                    self.state.addr_to_map(),
+                );
+                self.boxed(|state| state.retarget(addr).into_private())
             }
             Event::DefaultGatewayChanged { local_address, .. } => {
                 if let Some(addr) = local_address {
                     command_tx.force_send(Command::MapAddress(addr));
                 }
                 self
-            }
-            Event::AddressMappingFailed(addr) => {
-                panic!(
-                    "State<TryMapAddress>: Address mapper reported failure for address {}, but {} was expected",
-                    addr,
-                    self.state.addr_to_map(),
-                );
-            }
-            Event::NewExternalMappedAddress { local_address, .. } => {
-                panic!(
-                    "State<TryMapAddress>: Address mapper reported success for address {}, but {} was expected",
-                    local_address,
-                    self.state.addr_to_map(),
-                );
             }
             _ => self,
         }
@@ -59,7 +56,7 @@ mod tests {
         StateMachine,
         states::{Private, TestIfMappedPublic, TryMapAddress},
         transitions::fixtures::{
-            ADDR, all_events, default_gateway_changed, mapping_failed,
+            ADDR, ADDR_1, all_events, default_gateway_changed, mapping_failed,
             mapping_failed_address_mismatch, mapping_ok, mapping_ok_address_mismatch,
         },
     };
@@ -95,34 +92,35 @@ mod tests {
         assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
     }
 
-    #[should_panic = "State<TryMapAddress>: Address mapper reported failure for address /memory/1, but /memory/0 was expected"]
     #[test]
-    fn address_mismatch_causes_panic() {
-        let (tx, _) = unbounded_channel();
+    fn address_mapping_failed_address_mismatch_transitions_to_private_for_failed_address() {
+        let (tx, mut rx) = unbounded_channel();
         let mut state_machine = StateMachine::new(tx);
         state_machine.inner = Some(TryMapAddress::for_test(ADDR.clone()));
         let event = mapping_failed_address_mismatch();
         state_machine.on_test_event(event);
+        assert_eq!(
+            state_machine.inner.as_ref().unwrap(),
+            &Private::for_test(ADDR_1.clone())
+        );
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
     }
 
-    #[should_panic = "State<TryMapAddress>: Address mapper reported success for address /memory/1, but /memory/0 was expected"]
     #[test]
-    fn mapping_success_address_mismatch_causes_panic() {
-        let (tx, _) = unbounded_channel();
+    fn mapping_success_address_mismatch_transitions_to_test_if_mapped_public() {
+        let (tx, mut rx) = unbounded_channel();
         let mut state_machine = StateMachine::new(tx);
         state_machine.inner = Some(TryMapAddress::for_test(ADDR.clone()));
         let event = mapping_ok_address_mismatch();
         state_machine.on_test_event(event);
-    }
-
-    #[should_panic = "State<TryMapAddress>: Address mapper reported success for address /memory/1, but /memory/0 was expected"]
-    #[test]
-    fn mapping_ok_address_mismatch_causes_panic() {
-        let (tx, _) = unbounded_channel();
-        let mut state_machine = StateMachine::new(tx);
-        state_machine.inner = Some(TryMapAddress::for_test(ADDR.clone()));
-        let event = mapping_ok_address_mismatch();
-        state_machine.on_test_event(event);
+        assert_eq!(
+            state_machine.inner.as_ref().unwrap(),
+            &TestIfMappedPublic::for_test(ADDR_1.clone(), ADDR.clone())
+        );
+        assert_eq!(
+            rx.try_recv(),
+            Ok(Command::NewExternalAddrCandidate(ADDR.clone()))
+        );
     }
 
     #[test]

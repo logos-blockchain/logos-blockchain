@@ -67,7 +67,7 @@ async fn leader_claim() {
         &validators,
         lb_cryptarchia_engine::State::Online,
         target_slot.into(),
-        Duration::from_secs(300),
+        Duration::from_mins(5),
     )
     .await;
 

@@ -481,11 +481,11 @@ mod tests {
                 .await
                 .expect("Failed to send dump command");
 
-                let routing_table = dump_rx.await.expect("Failed to receive routing table dump");
-
-                let routing_table = routing_table
-                    .into_iter()
-                    .flat_map(|(_, peers)| peers)
+                let routing_table = dump_rx
+                    .await
+                    .expect("Failed to receive routing table dump")
+                    .into_values()
+                    .flatten()
                     .collect::<Vec<_>>();
 
                 if routing_table.len() >= NODE_COUNT - 1 {
