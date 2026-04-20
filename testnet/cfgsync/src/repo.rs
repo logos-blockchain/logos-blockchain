@@ -5,7 +5,6 @@ use std::{
     time::Duration,
 };
 
-use lb_core::mantle::GenesisTx as _;
 use lb_node::config::{
     TracingConfig,
     deployment::{DeploymentSettings, WellKnownDeployment},
@@ -131,8 +130,6 @@ impl ConfigRepo {
                 create_node_configs(&self.faucet_settings, &self.tracing_settings, hosts);
             let devnet_settings = {
                 let mut default_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
-                default_settings.time.genesis_time =
-                    genesis_tx.cryptarchia_parameter().genesis_time;
                 default_settings.cryptarchia.genesis_state = genesis_tx;
                 default_settings
             };
