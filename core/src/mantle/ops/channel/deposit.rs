@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use crate::mantle::{NoteId, ops::channel::ChannelId};
+use crate::mantle::{ledger::Inputs, ops::channel::ChannelId};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct DepositOp {
     pub channel_id: ChannelId,
-    pub inputs: Vec<NoteId>,
+    pub inputs: Inputs,
     pub metadata: Vec<u8>,
 }

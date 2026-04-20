@@ -1,19 +1,59 @@
-use std::sync::LazyLock;
+use std::{collections::HashSet, sync::LazyLock};
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
+use lb_utxotree::UtxoTree;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::{
     crypto::{Hash, ZkHasher},
     mantle::ops::OpId,
+    sdp::locked_notes::LockedNotes,
 };
 
+pub trait Operation {
+    type ValidationContext<'a>
+    where
+        Self: 'a;
+    type ExecutionContext<'a>
+    where
+        Self: 'a;
+    type Error;
+    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error>;
+    fn execute(
+        &self,
+        ctx: Self::ExecutionContext<'_>,
+    ) -> Result<Self::ExecutionContext<'_>, Self::Error>;
+}
+
+pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
+
 pub type Value = u64;
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum InputsError {
+    #[error("Note: {0:?} isn't in the ledger")]
+    InexistingNote(NoteId),
+    #[error("Locked note: {0:?}")]
+    LockedNote(NoteId),
+    #[error("Inputs contain try to double spend the same NoteId")]
+    DoubleSpend,
+    #[error("Sum of input values overflows")]
+    InputsOverflow,
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum OutputsError {
+    #[error("Zero value note")]
+    ZeroValueNote,
+    #[error("Sum of output values overflows")]
+    OutputsOverflow,
+}
 
 #[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Outputs(Vec<Note>);
@@ -39,6 +79,33 @@ impl Outputs {
             note: *note,
         })
     }
+
+    pub fn validate(&self) -> Result<(), OutputsError> {
+        // Check that there is no duplicate
+        for note in &self.0 {
+            if note.value == 0 {
+                return Err(OutputsError::ZeroValueNote);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn execute<O: OpId>(&self, mut utxos: Utxos, op: &O) -> Utxos {
+        for utxo in self.utxos(op) {
+            utxos = utxos.insert(utxo.id(), utxo).0;
+        }
+        utxos
+    }
+
+    pub fn amount(&self) -> Result<Value, OutputsError> {
+        let mut amount: Value = 0;
+        for output in &self.0 {
+            amount = amount
+                .checked_add(output.value)
+                .ok_or(OutputsError::OutputsOverflow)?;
+        }
+        Ok(amount)
+    }
 }
 
 impl std::ops::Deref for Outputs {
@@ -50,6 +117,83 @@ impl std::ops::Deref for Outputs {
 
 impl std::ops::DerefMut for Outputs {
     fn deref_mut(&mut self) -> &mut Vec<Note> {
+        &mut self.0
+    }
+}
+
+#[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize)]
+pub struct Inputs(Vec<NoteId>);
+
+impl Inputs {
+    #[must_use]
+    pub const fn new(note_ids: Vec<NoteId>) -> Self {
+        Self(note_ids)
+    }
+
+    pub fn validate(&self, locked_notes: &LockedNotes, utxos: &Utxos) -> Result<(), InputsError> {
+        // Check that there is no duplicate
+        let unique: HashSet<_> = self.0.iter().collect();
+        if unique.len() != self.0.len() {
+            return Err(InputsError::DoubleSpend);
+        }
+        // Check each note is spendable
+        for input in &self.0 {
+            // Check the note isn't locked
+            if locked_notes.contains(input) {
+                return Err(InputsError::LockedNote(*input));
+            }
+            // Check the note exist in the ledger
+            if !utxos.contains(input) {
+                return Err(InputsError::InexistingNote(*input));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn execute(&self, mut utxos: Utxos) -> Result<Utxos, InputsError> {
+        // Remove notes from the ledger one by one
+        for input in &self.0 {
+            (utxos, _) = utxos
+                .remove(input)
+                .map_err(|_| InputsError::InexistingNote(*input))?;
+        }
+        Ok(utxos)
+    }
+
+    pub fn amount(&self, utxos: &Utxos) -> Result<Value, InputsError> {
+        let mut amount: Value = 0;
+        for input in &self.0 {
+            let utxo = utxos
+                .get(input)
+                .ok_or(InputsError::InexistingNote(*input))?;
+            amount = amount
+                .checked_add(utxo.note.value)
+                .ok_or(InputsError::InputsOverflow)?;
+        }
+        Ok(amount)
+    }
+
+    pub fn get_pk(&self, utxos: &Utxos) -> Result<Vec<ZkPublicKey>, InputsError> {
+        let mut pks: Vec<ZkPublicKey> = vec![];
+        for input in &self.0 {
+            let utxo = utxos
+                .get(input)
+                .ok_or(InputsError::InexistingNote(*input))?;
+            pks.push(utxo.note.pk);
+        }
+        Ok(pks)
+    }
+}
+
+impl std::ops::Deref for Inputs {
+    type Target = Vec<NoteId>;
+    fn deref(&self) -> &Vec<NoteId> {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Inputs {
+    fn deref_mut(&mut self) -> &mut Vec<NoteId> {
         &mut self.0
     }
 }

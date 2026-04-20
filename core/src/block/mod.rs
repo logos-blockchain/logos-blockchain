@@ -2,10 +2,10 @@ pub mod genesis;
 
 use core::fmt::Debug;
 
-use ::serde::{Deserialize, Serialize, de::DeserializeOwned};
 use bytes::Bytes;
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
     codec::{DeserializeOp as _, SerializeOp as _},

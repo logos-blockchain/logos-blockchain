@@ -1,4 +1,3 @@
-pub mod locked_notes;
 pub mod rewards;
 
 use std::collections::HashMap;
@@ -12,11 +11,10 @@ use lb_core::{
     },
     sdp::{
         Declaration, DeclarationId, MinStake, Nonce, ProviderId, ProviderInfo, ServiceParameters,
-        ServiceType, SessionNumber,
+        ServiceType, SessionNumber, locked_notes, locked_notes::LockedNotes,
     },
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
-use locked_notes::LockedNotes;
 use rewards::{Error as RewardsError, Rewards};
 use tracing::{info, warn};
 

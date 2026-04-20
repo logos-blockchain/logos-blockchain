@@ -167,7 +167,7 @@ impl WalletState {
         // Process each transaction in the block
         for transfer in &block.transfers {
             // Remove spent UTXOs (inputs)
-            for spent_id in &transfer.inputs {
+            for spent_id in &*transfer.inputs {
                 if let Some(utxo) = utxos.get(spent_id) {
                     let pk = utxo.note.pk;
                     utxos = utxos.remove(spent_id);
@@ -353,7 +353,7 @@ mod tests {
         mantle::{
             Note, Op,
             gas::MainnetGasConstants as Gas,
-            ledger::Outputs,
+            ledger::{Inputs, Outputs},
             ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
             tx::MantleTxContext,
         },
@@ -467,7 +467,7 @@ mod tests {
         // Block 1
         // - alice is minted 104 NMO in two notes (100 NMO and 4 NMO)
         let transfer1 = TransferOp {
-            inputs: vec![],
+            inputs: Inputs::new(vec![]),
             outputs: Outputs::new(vec![Note::new(100, alice), Note::new(4, alice)]),
         };
 
@@ -487,7 +487,7 @@ mod tests {
             id: HeaderId::from([2; 32]),
             parent: block_1.id,
             transfers: vec![TransferOp {
-                inputs: vec![alice_100_nmo_utxo.id()],
+                inputs: Inputs::new(vec![alice_100_nmo_utxo.id()]),
                 outputs: Outputs::new(vec![Note::new(20, bob), Note::new(80, alice)]),
             }],
         };
@@ -542,7 +542,7 @@ mod tests {
 
         if let Op::Transfer(transfer_op) = &funded_tx.ops[funded_tx.ops.len() - 1] {
             // ensure alices utxo was used to pay the fee
-            assert_eq!(transfer_op.inputs, vec![alice_utxo.id()]);
+            assert_eq!(transfer_op.inputs, Inputs::new(vec![alice_utxo.id()]));
             // ensure change was returned to alice
             assert_eq!(
                 transfer_op.outputs,

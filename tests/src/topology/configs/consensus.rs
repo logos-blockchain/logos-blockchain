@@ -4,7 +4,7 @@ use lb_core::{
     mantle::{
         MantleTx, Note, NoteId, OpProof, Utxo,
         genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GenesisTx},
-        ledger::Outputs,
+        ledger::{Inputs, Outputs},
         ops::{
             Op, OpId as _,
             channel::{ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp},
@@ -82,7 +82,7 @@ pub fn create_genesis_tx(utxos: &[Utxo], test_context: Option<&str>) -> GenesisT
 
     // Create transfer op with the utxos as outputs
     let outputs: Vec<Note> = utxos.iter().map(|u| u.note).collect();
-    let transfer_op = TransferOp::new(vec![], Outputs::new(outputs));
+    let transfer_op = TransferOp::new(Inputs::new(vec![]), Outputs::new(outputs));
 
     // Create the mantle transaction
     let mantle_tx = MantleTx {

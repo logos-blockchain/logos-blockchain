@@ -5,7 +5,7 @@ use lb_common_http_client::CommonHttpClient;
 use lb_core::{
     mantle::{
         MantleTx, Note, NoteId, Op, OpProof, Value,
-        ledger::Outputs,
+        ledger::{Inputs, Outputs},
         ops::{
             channel::{ChannelId, deposit::DepositOp, withdraw::ChannelWithdrawOp},
             transfer::TransferOp,
@@ -622,7 +622,7 @@ async fn test_subscribe_to_finalized_deposit() {
         .expect("should find a note with sufficient balance for deposit");
     let deposit = DepositOp {
         channel_id,
-        inputs: vec![note_id],
+        inputs: Inputs::new(vec![note_id]),
         metadata: b"Mint 1 to Alice in Zone".to_vec(),
     };
     let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
@@ -700,7 +700,7 @@ async fn test_atomic_deposit_inscription() {
 
     let change = note_value.checked_sub(deposit_amount).unwrap();
     let transfer = TransferOp {
-        inputs: vec![note_id],
+        inputs: Inputs::new(vec![note_id]),
         outputs: if change > 0 {
             Outputs::new(vec![deposit_note, Note::new(change, pk)])
         } else {
@@ -709,13 +709,13 @@ async fn test_atomic_deposit_inscription() {
     };
     let deposit = DepositOp {
         channel_id,
-        inputs: vec![
+        inputs: Inputs::new(vec![
             transfer
                 .outputs
                 .utxo_by_index(0, &transfer)
                 .expect("the first note of the transfer is the deposit_note")
                 .id(),
-        ],
+        ]),
         metadata: b"Mint 1 to Alice in Zone".to_vec(),
     };
     let inscription_data = b"Mint 1 to Alice".to_vec();
@@ -814,7 +814,7 @@ async fn test_subscribe_to_finalized_withdraw() {
         .expect("should find a note with sufficient balance for deposit");
     let deposit = DepositOp {
         channel_id,
-        inputs: vec![deposit_note_id],
+        inputs: Inputs::new(vec![deposit_note_id]),
         metadata: b"Mint 3 to Alice in Zone".to_vec(),
     };
     submit_deposit(validator, deposit.clone(), pk).await;

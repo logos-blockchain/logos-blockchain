@@ -310,20 +310,21 @@ fn decode_note(input: &[u8]) -> IResult<&[u8], Note> {
     Ok((input, Note::new(value, pk)))
 }
 
-fn decode_inputs(input: &[u8]) -> IResult<&[u8], Vec<NoteId>> {
+fn decode_inputs(input: &[u8]) -> IResult<&[u8], Inputs> {
     // Inputs = InputCount *NoteId
     let (input, input_count) = decode_byte(input)?;
 
-    count(map(decode_field_element, NoteId), input_count as usize).parse(input)
+    let (input, note_ids) =
+        count(map(decode_field_element, NoteId), input_count as usize).parse(input)?;
+    Ok((input, Inputs::new(note_ids)))
 }
 
 fn decode_outputs(input: &[u8]) -> IResult<&[u8], Outputs> {
     // Outputs = OutputCount *Note
     let (input, output_count) = decode_byte(input)?;
+    let (input, notes) = count(decode_note, output_count as usize).parse(input)?;
 
-    count(decode_note, output_count as usize)
-        .parse(input)
-        .map(|(bytes, notes)| (bytes, Outputs::new(notes)))
+    Ok((input, Outputs::new(notes)))
 }
 
 fn decode_transfer(input: &[u8]) -> IResult<&[u8], TransferOp> {
@@ -518,7 +519,7 @@ use super::ops::opcode;
 use crate::{
     block::MAX_BLOCK_SIZE,
     mantle::{
-        ledger::Outputs,
+        ledger::{Inputs, Outputs},
         ops::channel::{ChannelKeyIndex, withdraw::ChannelWithdrawOp},
         tx::MantleTxGasContext,
     },
@@ -1194,7 +1195,7 @@ mod tests {
         let pk = ZkPublicKey::from(BigUint::from(42u64));
         let note = Note::new(1000, pk);
         let note_id = NoteId(BigUint::from(123u64).into());
-        let transfer_op = TransferOp::new(vec![note_id], Outputs::new(vec![note]));
+        let transfer_op = TransferOp::new(Inputs::new(vec![note_id]), Outputs::new(vec![note]));
 
         let original_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op)],
@@ -1530,7 +1531,7 @@ mod tests {
         let note_id3 = NoteId(BigUint::from(333u64).into());
 
         let transfer_op = TransferOp::new(
-            vec![note_id1, note_id2, note_id3],
+            Inputs::new(vec![note_id1, note_id2, note_id3]),
             Outputs::new(vec![note1, note2]),
         );
 
@@ -1577,7 +1578,7 @@ mod tests {
 
         let locked_note_sk = ZkKey::from(BigUint::from(1u64));
         let transfer_op = TransferOp {
-            inputs: vec![NoteId(BigUint::from(777u64).into())],
+            inputs: Inputs::new(vec![NoteId(BigUint::from(777u64).into())]),
             outputs: Outputs::new(vec![Note::new(5000, locked_note_sk.to_public_key())]),
         };
 

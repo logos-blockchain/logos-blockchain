@@ -77,8 +77,6 @@ pub enum LedgerError<Id> {
     ParentNotFound(Id),
     #[error("Invalid leader proof")]
     InvalidProof,
-    #[error("Invalid note: {0:?}")]
-    InvalidNote(NoteId),
     #[error("Insufficient balance")]
     InsufficientBalance,
     #[error("Applying this transaction would cause a balance overflow")]
@@ -87,12 +85,12 @@ pub enum LedgerError<Id> {
     UnbalancedTransaction,
     #[error(transparent)]
     GasOverflow(#[from] GasOverflow),
-    #[error("Zero value note")]
-    ZeroValueNote,
     #[error("Mantle error: {0}")]
     Mantle(#[from] mantle::Error),
-    #[error("Locked note: {0:?}")]
-    LockedNote(NoteId),
+    #[error("Inputs error: {0}")]
+    Inputs(#[from] lb_core::mantle::ledger::InputsError),
+    #[error("Mantle error: {0}")]
+    Outputs(#[from] lb_core::mantle::ledger::OutputsError),
     #[error("Input note in genesis block: {0:?}")]
     InputInGenesis(NoteId),
     #[error("The first Transfer Operation is missing in genesis tx")]
@@ -107,8 +105,6 @@ pub enum LedgerError<Id> {
     InvalidStoragePrice,
     #[error("Verification error: {0}")]
     VerificationError(#[from] VerificationError),
-    #[error("The Transfer Operation doesn't have any input")]
-    NoInputTransfer,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -641,7 +637,7 @@ mod tests {
             MantleTx, Note, SignedMantleTx, Transaction as _,
             gas::{GasPrice, MainnetGasConstants},
             genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
-            ledger::Outputs,
+            ledger::{Inputs, Outputs},
             ops::{
                 channel::{
                     ChannelId, MsgId, deposit::DepositOp, inscribe::InscriptionOp,
@@ -671,7 +667,7 @@ mod tests {
         execution_price: GasPrice,
         storage_price: GasPrice,
     ) -> SignedMantleTx {
-        let transfer_op = TransferOp::new(inputs, Outputs::new(outputs));
+        let transfer_op = TransferOp::new(Inputs::new(inputs), Outputs::new(outputs));
         let mantle_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op)],
             execution_gas_price: execution_price,
@@ -917,7 +913,7 @@ mod tests {
         // Submit a deposit operation
         let deposit = DepositOp {
             channel_id,
-            inputs: vec![utxo.id()],
+            inputs: Inputs::new(vec![utxo.id()]),
             metadata: vec![5, 6, 7, 8],
         };
         let ops = vec![Op::ChannelDeposit(deposit)];
@@ -958,7 +954,7 @@ mod tests {
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            inputs: vec![utxo.id()],
+            inputs: Inputs::new(vec![utxo.id()]),
             metadata: vec![5, 6, 7, 8],
         };
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
@@ -1050,7 +1046,7 @@ mod tests {
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            inputs: vec![utxo.id()],
+            inputs: Inputs::new(vec![utxo.id()]),
             metadata: vec![],
         };
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];

@@ -7,7 +7,7 @@ use crate::{
     mantle::{
         NoteId,
         gas::{GasCost, GasOverflow, GasPrice},
-        ledger::Outputs,
+        ledger::{Inputs, Outputs},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
         tx::MantleTxContext,
     },
@@ -35,7 +35,7 @@ impl MantleTxBuilder {
                 storage_gas_price: 0.into(),
             },
             ledger_inputs: vec![],
-            pending_transfer: TransferOp::new(vec![], Outputs::new(vec![])),
+            pending_transfer: TransferOp::new(Inputs::new(vec![]), Outputs::new(vec![])),
             channel_withdraw_proofs: HashMap::new(),
             context,
         }
@@ -243,7 +243,7 @@ mod tests {
         // Build an operation
         let op = DepositOp {
             channel_id: [0; 32].into(),
-            inputs: vec![NoteId(Fr::ZERO)],
+            inputs: Inputs::new(vec![NoteId(Fr::ZERO)]),
             metadata: b"Mint 1 to Alice in Zone".to_vec(),
         };
 
@@ -358,7 +358,7 @@ mod tests {
             }))
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id,
-                inputs: vec![NoteId(Fr::ZERO)],
+                inputs: Inputs::new(vec![NoteId(Fr::ZERO)]),
                 metadata: b"Mint 10 to Alice in Zone".to_vec(),
             }))
             .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {

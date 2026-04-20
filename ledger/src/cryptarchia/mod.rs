@@ -10,13 +10,15 @@ use lb_core::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasPrice},
         genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
+        ledger::Operation as _,
         ops::{
             channel::{deposit::DepositOp, withdraw::ChannelWithdrawOp},
             leader_claim::LeaderClaimOp,
-            transfer::TransferOp,
+            transfer::{TransferOp, TransferValidationContext},
         },
     },
     proofs::leader_proof::{self, LeaderPublic},
+    sdp::locked_notes::LockedNotes,
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Fr, fr_from_bytes};
@@ -49,8 +51,8 @@ const STORAGE_MARKET_CLAMP_DOWN_NUMERATOR: u128 = 7;
 const STORAGE_MARKET_CLAMP_UP_NUMERATOR: u128 = 9;
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
-use super::{Balance, Config, LedgerError};
-use crate::{WINDOW_SIZE, mantle::sdp::locked_notes::LockedNotes};
+use super::{Balance, Config, LedgerError, mantle};
+use crate::WINDOW_SIZE;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -415,24 +417,16 @@ impl LedgerState {
         channel_deposit_sig: &ZkSignature,
         tx_hash: TxHash,
     ) -> Result<(Self, Value), LedgerError<Id>> {
-        let mut amount_deposited: Value = 0;
-        let mut pks: Vec<ZkPublicKey> = vec![];
-        for input in &channel_deposit_op.inputs {
-            if locked_notes.contains(input) {
-                return Err(LedgerError::LockedNote(*input));
-            }
-            let utxo;
-            (self.utxos, utxo) = self
-                .utxos
-                .remove(input)
-                .map_err(|_| LedgerError::InvalidNote(*input))?;
-            amount_deposited += utxo.note.value;
-            pks.push(utxo.note.pk);
-        }
-
+        channel_deposit_op
+            .inputs
+            .validate(locked_notes, &self.utxos)
+            .map_err(LedgerError::Inputs)?;
+        let pks = channel_deposit_op.inputs.get_pk(&self.utxos)?;
+        let amount_deposited = channel_deposit_op.inputs.amount(&self.utxos)?;
         if !ZkPublicKey::verify_multi(&pks, &tx_hash.0, channel_deposit_sig) {
             return Err(LedgerError::InvalidProof);
         }
+        self.utxos = channel_deposit_op.inputs.execute(self.utxos)?;
 
         Ok((self, amount_deposited))
     }
@@ -441,15 +435,12 @@ impl LedgerState {
         mut self,
         withdraw_op: &ChannelWithdrawOp,
     ) -> Result<(Self, Value), LedgerError<Id>> {
-        let mut amount_withdrawed: Value = 0;
-
-        for utxo in withdraw_op.outputs.utxos(withdraw_op) {
-            if utxo.note.value == 0 {
-                return Err(LedgerError::ZeroValueNote);
-            }
-            amount_withdrawed += utxo.note.value;
-            self.utxos = self.utxos.insert(utxo.id(), utxo).0;
-        }
+        withdraw_op
+            .outputs
+            .validate()
+            .map_err(LedgerError::Outputs)?;
+        let amount_withdrawed = withdraw_op.outputs.amount()?;
+        self.utxos = withdraw_op.outputs.execute(self.utxos, withdraw_op);
         Ok((self, amount_withdrawed))
     }
 
@@ -470,39 +461,25 @@ impl LedgerState {
         transfer_sig: &ZkSignature,
         tx_hash: TxHash,
     ) -> Result<(Self, Balance), LedgerError<Id>> {
-        let mut balance: i128 = 0;
-        let mut pks: Vec<ZkPublicKey> = vec![];
-        if transfer_op.inputs.is_empty() {
-            return Err(LedgerError::NoInputTransfer);
-        }
-        for input in &transfer_op.inputs {
-            if locked_notes.contains(input) {
-                return Err(LedgerError::LockedNote(*input));
-            }
-            let utxo;
-            (self.utxos, utxo) = self
-                .utxos
-                .remove(input)
-                .map_err(|_| LedgerError::InvalidNote(*input))?;
-            balance = balance
-                .checked_add(utxo.note.value.into())
-                .ok_or(LedgerError::BalanceOverflow)?;
-            pks.push(utxo.note.pk);
-        }
+        //validate the transfer
+        transfer_op
+            .validate(&TransferValidationContext {
+                locked_notes,
+                utxos: &self.utxos,
+                tx_hash: &tx_hash,
+                transfer_sig,
+            })
+            .map_err(mantle::Error::Transfer)?;
 
-        if !ZkPublicKey::verify_multi(&pks, &tx_hash.0, transfer_sig) {
-            return Err(LedgerError::InvalidProof);
-        }
+        // Compute the balance
+        let balance = transfer_op
+            .balance(&self.utxos)
+            .map_err(mantle::Error::Transfer)?;
 
-        for utxo in transfer_op.outputs.utxos(transfer_op) {
-            if utxo.note.value == 0 {
-                return Err(LedgerError::ZeroValueNote);
-            }
-            balance = balance
-                .checked_sub(utxo.note.value.into())
-                .ok_or(LedgerError::BalanceOverflow)?;
-            self.utxos = self.utxos.insert(utxo.id(), utxo).0;
-        }
+        //execute the transfer
+        self.utxos = transfer_op
+            .execute(self.utxos)
+            .map_err(mantle::Error::Transfer)?;
         Ok((self, balance))
     }
 
@@ -724,8 +701,11 @@ pub mod tests {
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
-            AuthenticatedMantleTx, MantleTx, Note, Op, OpProof::ZkSig, SignedMantleTx,
-            Transaction as _, gas::MainnetGasConstants, ledger::Outputs,
+            AuthenticatedMantleTx, MantleTx, Note, Op,
+            OpProof::ZkSig,
+            SignedMantleTx, Transaction as _,
+            gas::MainnetGasConstants,
+            ledger::{Inputs, Outputs},
             ops::leader_claim::VoucherCm,
         },
         sdp::ServiceParameters,
@@ -895,7 +875,7 @@ pub mod tests {
                 NonNegativeRatio::new(1, 10.try_into().unwrap()),
                 1f64.try_into().expect("1 > 0"),
             ),
-            sdp_config: crate::mantle::sdp::Config {
+            sdp_config: mantle::sdp::Config {
                 service_params: Arc::new(service_params),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
@@ -966,8 +946,7 @@ pub mod tests {
     }
 
     fn full_ledger_state(cryptarchia_ledger: LedgerState, config: &Config) -> crate::LedgerState {
-        let mantle_ledger =
-            crate::mantle::LedgerState::new(config, cryptarchia_ledger.epoch_state());
+        let mantle_ledger = mantle::LedgerState::new(config, cryptarchia_ledger.epoch_state());
         crate::LedgerState {
             block_number: 0,
             cryptarchia_ledger,
@@ -1321,7 +1300,7 @@ pub mod tests {
             .map(|(sk, _)| (*sk).clone())
             .collect::<Vec<_>>();
         let inputs = inputs.iter().map(|(_, utxo)| utxo.id()).collect::<Vec<_>>();
-        let transfer_op = TransferOp::new(inputs, Outputs::new(outputs));
+        let transfer_op = TransferOp::new(Inputs::new(inputs), Outputs::new(outputs));
         let mantle_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op.clone())],
             execution_gas_price: GENESIS_EXECUTION_GAS_PRICE,
@@ -1490,7 +1469,7 @@ pub mod tests {
                     &transfer_sig,
                     tx.hash(),
                 );
-            assert!(matches!(result, Err(LedgerError::InvalidNote(_))));
+            assert!(matches!(result, Err(LedgerError::Inputs(_))));
         }
     }
 
@@ -1591,7 +1570,7 @@ pub mod tests {
             &transfer_sig,
             tx.hash(),
         );
-        assert!(matches!(result, Err(LedgerError::ZeroValueNote)));
+        assert!(matches!(result, Err(LedgerError::Outputs(_))));
     }
 
     #[test]

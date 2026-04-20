@@ -14,7 +14,7 @@ use lb_core::{
     mantle::{SignedMantleTx, Transaction, TxHash, ops::channel::ChannelId},
     sdp::Declaration,
 };
-use lb_ledger::mantle::channel::ChannelState;
+use lb_core::mantle::channel::ChannelState;
 use lb_storage_service::{
     StorageMsg, StorageService,
     api::{

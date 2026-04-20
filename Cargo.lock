@@ -4603,6 +4603,7 @@ dependencies = [
  "nom 8.0.0",
  "num-bigint",
  "rand 0.8.5",
+ "rpds",
  "serde",
  "serde_json",
  "strum",

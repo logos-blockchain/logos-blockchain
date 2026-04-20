@@ -765,7 +765,7 @@ where
                 Op::ChannelDeposit(deposit_op) => {
                     Self::sign_channel_deposit(
                         tx_hash,
-                        deposit_op.inputs.clone(),
+                        deposit_op.inputs.to_vec(),
                         kms,
                         tx_builder.clone(),
                     )
@@ -792,7 +792,7 @@ where
                 Op::Transfer(transfer_op) => {
                     Self::sign_transfer(
                         tx_hash,
-                        transfer_op.inputs.clone(),
+                        transfer_op.inputs.to_vec(),
                         kms,
                         tx_builder.clone(),
                     )

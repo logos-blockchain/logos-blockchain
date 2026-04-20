@@ -1,4 +1,4 @@
-pub mod channel;
+pub use lb_core::mantle::channel;
 pub mod helpers;
 pub mod leader;
 pub mod sdp;
@@ -16,13 +16,17 @@ use lb_core::{
             },
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
+            transfer::TransferError,
         },
     },
-    sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
+    sdp::{
+        Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber,
+        locked_notes::LockedNotes,
+    },
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use lb_utxotree::MerklePath;
-use sdp::{Error as SdpLedgerError, locked_notes::LockedNotes};
+use sdp::Error as SdpLedgerError;
 use tracing::error;
 
 use crate::{Config, EpochState, UtxoTree};
@@ -37,6 +41,8 @@ pub enum Error {
     Leader(#[from] leader::Error),
     #[error("Sdp ledger error: {0:?}")]
     Sdp(#[from] SdpLedgerError),
+    #[error(transparent)]
+    Transfer(#[from] TransferError),
     #[error("Note not found: {0:?}")]
     NoteNotFound(NoteId),
 }

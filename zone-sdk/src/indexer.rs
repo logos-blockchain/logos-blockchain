@@ -148,7 +148,7 @@ mod tests {
     use lb_core::{
         block::Block,
         header::HeaderId,
-        mantle::{NoteId, SignedMantleTx},
+        mantle::{NoteId, SignedMantleTx, ledger::Inputs},
     };
     use lb_groth16::Fr;
 
@@ -169,7 +169,7 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(vec![NoteId::from(Fr::from(10u32))], &[10]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
                 Slot::new(0),
             ),
             (block_msg(2, &[2]), Slot::new(1)),
@@ -189,7 +189,7 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(vec![NoteId::from(Fr::from(10u32))], &[10]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
                 Slot::new(1),
             ),
             (block_msg(2, &[2]), Slot::new(2)), // after LIB
@@ -208,12 +208,12 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(vec![NoteId::from(Fr::from(10u32))], &[10]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
                 Slot::new(0),
             ),
             (block_msg(2, &[2]), Slot::new(1)),
             (
-                deposit_msg(vec![NoteId::from(Fr::from(11u32))], &[11]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), &[11]),
                 Slot::new(2),
             ),
             (block_msg(3, &[3]), Slot::new(2)),
@@ -236,12 +236,12 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(vec![NoteId::from(Fr::from(10u32))], &[10]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
                 Slot::new(0),
             ),
             (block_msg(2, &[2]), Slot::new(1)),
             (
-                deposit_msg(vec![NoteId::from(Fr::from(11u32))], &[11]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), &[11]),
                 Slot::new(2),
             ),
             (block_msg(4, &[4]), Slot::new(2)),
@@ -265,7 +265,7 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(vec![NoteId::from(Fr::from(10u32))], &[10]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
                 Slot::new(0),
             ),
             (block_msg(2, &[2]), Slot::new(1)),
@@ -287,7 +287,7 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(vec![NoteId::from(Fr::from(10u32))], &[10]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
                 BATCH_SIZE,
             ),
             (
@@ -299,7 +299,7 @@ mod tests {
                 BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
             ),
             (
-                deposit_msg(vec![NoteId::from(Fr::from(11u32))], &[11]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), &[11]),
                 BATCH_SIZE.into_inner().checked_mul(3).unwrap().into(),
             ),
             (
@@ -344,7 +344,7 @@ mod tests {
         })
     }
 
-    fn deposit_msg(inputs: Vec<NoteId>, metadata: &[u8]) -> ZoneMessage {
+    fn deposit_msg(inputs: Inputs, metadata: &[u8]) -> ZoneMessage {
         ZoneMessage::Deposit(Deposit {
             inputs,
             metadata: metadata.to_vec(),

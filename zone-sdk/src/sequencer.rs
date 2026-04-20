@@ -1104,7 +1104,7 @@ mod tests {
     use lb_core::{
         block::Block,
         header::ContentId,
-        mantle::{Note, Utxo, ops::channel::deposit::DepositOp},
+        mantle::{Note, Utxo, ledger::Inputs, ops::channel::deposit::DepositOp},
         proofs::leader_proof::Groth16LeaderProof,
     };
     use lb_key_management_system_service::keys::ZkKey;
@@ -1142,7 +1142,7 @@ mod tests {
         let (sk, utxo) = utxo_with_sk();
         let deposit_op = DepositOp {
             channel_id,
-            inputs: vec![utxo.id()],
+            inputs: Inputs::new(vec![utxo.id()]),
             metadata: "to Alice".into(),
         };
 

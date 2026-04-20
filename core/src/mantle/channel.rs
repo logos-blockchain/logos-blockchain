@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use lb_core::mantle::{
+use lb_key_management_system_keys::keys::Ed25519Signature;
+use serde::{Deserialize, Serialize};
+
+use crate::mantle::{
     TxHash, Value,
     ops::channel::{
         ChannelId, ChannelKeyIndex, Ed25519PublicKey as PublicKey, MsgId, deposit::DepositOp,
@@ -8,9 +11,6 @@ use lb_core::mantle::{
     },
     tx::MantleTxGasContext,
 };
-use lb_key_management_system_keys::keys::Ed25519Signature;
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -41,8 +41,7 @@ pub enum Error {
     WithdrawNonceOverflow,
 }
 
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Channels {
     pub channels: rpds::HashTrieMapSync<ChannelId, ChannelState>,
 }
@@ -58,8 +57,7 @@ impl From<&Channels> for MantleTxGasContext {
     }
 }
 
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelState {
     pub tip: MsgId,
     // avoid cloning the keys every new message
@@ -220,9 +218,13 @@ impl Channels {
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{Note, NoteId, ledger::Outputs};
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
+
+    use crate::mantle::{
+        Note, NoteId,
+        ledger::{Inputs, Outputs},
+    };
 
     use super::*;
 
@@ -294,7 +296,7 @@ mod tests {
             .deposit(
                 &DepositOp {
                     channel_id,
-                    inputs: vec![NoteId(Fr::from(0u32))],
+                    inputs: Inputs::new(vec![NoteId(Fr::from(0u32))]),
                     metadata: vec![],
                 },
                 6,
