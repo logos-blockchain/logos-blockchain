@@ -568,7 +568,7 @@ async fn test_subscribe_to_finalized_deposit() {
     // Setup network with faster block production
     let validators = spawn_validators(
         Some("test_subscribe_to_finalized_deposit"),
-        1,
+        2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
@@ -635,7 +635,7 @@ async fn test_atomic_deposit_inscription() {
     // Setup network with faster block production
     let validators = spawn_validators(
         Some("test_atomic_deposit_inscription"),
-        1,
+        2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
@@ -743,7 +743,7 @@ async fn test_subscribe_to_finalized_withdraw() {
     // Setup network with faster block production
     let validators = spawn_validators(
         Some("test_subscribe_to_finalized_withdraw"),
-        1,
+        2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config

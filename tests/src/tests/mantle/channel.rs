@@ -32,10 +32,10 @@ async fn channel_deposit() {
         "channel-deposit",
         "mantle-channel",
         DeploymentBuilder::new(
-            TfTopologyConfig::with_node_numbers(1)
+            TfTopologyConfig::with_node_numbers(2)
                 .with_test_context(Some("channel_deposit".to_owned())),
         ),
-        1,
+        2,
         ManualNodeLayout::SelectNodeSeed(0),
         |config| Ok::<_, DynError>(channel_test_config(config)),
     )
