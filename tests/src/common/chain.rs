@@ -1,6 +1,7 @@
 use std::{collections::HashSet, hash::BuildHasher};
 
-use lb_core::{block::Block, header::HeaderId, mantle::SignedMantleTx};
+use lb_common_http_client::ApiBlock;
+use lb_core::header::HeaderId;
 
 /// Walk the chain backwards from `start`, visiting each block exactly once
 /// until either `visit_block` breaks or we reach genesis.
@@ -13,8 +14,8 @@ pub async fn scan_chain_until<F, Fut, Visit, R, S>(
 where
     S: BuildHasher,
     F: FnMut(HeaderId) -> Fut,
-    Fut: Future<Output = Option<Block<SignedMantleTx>>>,
-    Visit: FnMut(&Block<SignedMantleTx>) -> Option<R>,
+    Fut: Future<Output = Option<ApiBlock>>,
+    Visit: FnMut(&ApiBlock) -> Option<R>,
 {
     let mut current = Some(start);
     let genesis = HeaderId::from([0; 32]);
@@ -32,7 +33,7 @@ where
             return Some(result);
         }
 
-        let parent = block.header().parent();
+        let parent = block.header.parent_block;
         if parent == genesis {
             break;
         }

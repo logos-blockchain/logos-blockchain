@@ -35,7 +35,6 @@ use tokio::time::{sleep, timeout};
 /// proofs.
 #[tokio::test]
 #[serial]
-#[ignore = "Transaction not being included in blocks - needs investigation"]
 async fn sdp_ops_e2e() {
     let note_sk = ZkKey::from(BigUint::from(42u64));
     let spare_note = Note::new(1, note_sk.to_public_key());
@@ -113,7 +112,7 @@ async fn sdp_ops_e2e() {
         .expect("submit declare transaction");
 
     let declare_results = validator
-        .wait_for_transactions_inclusion(vec![declare_hash], inclusion_timeout)
+        .wait_for_transactions_inclusion(&[declare_hash], inclusion_timeout)
         .await;
 
     assert!(
@@ -167,7 +166,7 @@ async fn sdp_ops_e2e() {
         .expect("submit withdraw transaction");
 
     let withdraw_results = validator
-        .wait_for_transactions_inclusion(vec![withdraw_hash], inclusion_timeout)
+        .wait_for_transactions_inclusion(&[withdraw_hash], inclusion_timeout)
         .await;
 
     assert!(
@@ -224,18 +223,11 @@ async fn sdp_declaration_restoration_e2e() {
         .await
         .expect("validator should restart successfully");
 
-    sleep(Duration::from_secs(5)).await;
-
-    let post_restart_declarations = validator.get_sdp_declarations().await;
-    assert!(
-        !post_restart_declarations.is_empty(),
-        "declarations should be visible after restart"
-    );
-
-    let restored_declaration = post_restart_declarations
-        .iter()
-        .find(|d| d.locked_note_id == target_locked_note)
-        .expect("original declaration should still exist after restart");
+    let restored_declaration = wait_for_declaration(validator, Duration::from_secs(30), {
+        move |decl| decl.locked_note_id == target_locked_note
+    })
+    .await
+    .expect("original declaration should be visible after restart");
 
     assert_eq!(
         restored_declaration.service_type, initial_declaration.service_type,
@@ -259,58 +251,55 @@ async fn large_inscription_e2e() {
     // The largest payload must leave room for transaction encoding overhead
     // (signatures, headers, etc.) to fit within MAX_BLOCK_SIZE.
     let max_payload = MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize;
-    for payload_size in [
+    // Spawn the topology once and reuse it across all payload sizes.
+    // Previously the topology was re-spawned per iteration which took ~120s
+    // each, causing the test to exceed its time budget (4 x ~120s = ~480s).
+    let topology = Topology::spawn(
+        TopologyConfig::two_validators(),
+        Some("large_inscription_e2e"),
+    )
+    .await;
+    topology.wait_network_ready().await;
+    let validator = &topology.validators()[0];
+    let height_timeout = Duration::from_secs(60);
+    validator
+        .wait_for_height(1, height_timeout)
+        .await
+        .unwrap_or_else(|| {
+            panic!("validator should produce the first block - timed out at {height_timeout:.2?}")
+        });
+    let validator_url = validator.url();
+    let client = CommonHttpClient::new(None);
+    for (index, payload_size) in [
         max_payload / 256,
         max_payload / 64,
         max_payload / 2,
         max_payload,
-    ] {
-        let topology = Topology::spawn(
-            TopologyConfig::two_validators(),
-            Some("large_inscription_e2e"),
-        )
-        .await;
-        topology.wait_network_ready().await;
-
-        let validator = &topology.validators()[0];
-        let height_timeout = Duration::from_secs(60);
-        validator
-            .wait_for_height(1, height_timeout)
-            .await
-            .unwrap_or_else(|| {
-                panic!(
-                    "validator should produce the first block - timed out at {height_timeout:.2?}"
-                )
-            });
-
-        let validator_url = validator.url();
-        let client = CommonHttpClient::new(None);
-
+    ]
+    .into_iter()
+    .enumerate()
+    {
         println!("\nTesting inscription with payload size: {payload_size} bytes\n");
         let large_inscription = vec![0xAB; payload_size];
         let mantle_tx = create_inscription_transaction_with_id(
-            ChannelId::from([1u8; 32]),
+            ChannelId::from([(index + 1) as u8; 32]),
             Some(large_inscription),
         );
         let tx_hash = mantle_tx.hash();
-
         client
             .post_transaction(validator_url.clone(), mantle_tx)
             .await
             .expect("submit mantle transaction");
-
         let inclusion_timeout = Duration::from_secs(60);
         let results = validator
-            .wait_for_transactions_inclusion(vec![tx_hash], inclusion_timeout)
+            .wait_for_transactions_inclusion(&[tx_hash], inclusion_timeout)
             .await;
-
         assert!(
             results.first().is_some_and(Option::is_some),
-            "large inscription transaction should be included"
+            "large inscription ({payload_size} bytes) should be included in a block"
         );
     }
 }
-
 async fn wait_for_declaration<F>(
     validator: &Validator,
     duration: Duration,

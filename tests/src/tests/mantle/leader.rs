@@ -18,7 +18,7 @@ use tokio::time::sleep;
 
 /// End-to-end test for the leader claim flow:
 ///
-/// 1. Spawn one validators that produce blocks (generating vouchers).
+/// 1. Spawn two validators that produce blocks (generating vouchers).
 /// 2. Wait for enough blocks so that at least one epoch transition occurs,
 ///    flushing pending vouchers into the MMR and distributing merkle paths to
 ///    wallets.
@@ -29,8 +29,8 @@ use tokio::time::sleep;
 #[tokio::test]
 #[serial]
 async fn leader_claim() {
-    // Spwan a validator with a short epoch length
-    let (configs, genesis_tx) = create_general_configs(1, Some("leader_claim"));
+    // Spawn a two-validator network with a short epoch length.
+    let (configs, genesis_tx) = create_general_configs(2, Some("leader_claim"));
     let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
     let configs: Vec<_> = configs
         .into_iter()

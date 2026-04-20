@@ -20,8 +20,8 @@ use tokio::time::sleep;
 
 /// End-to-end test for the channel deposit flow:
 ///
-/// 1. Spawn one validators that produce blocks.
-/// 2. Call the POST `/channel/deposit` HTTP endpoint on the validator.
+/// 1. Spawn two validators that produce blocks.
+/// 2. Call the POST `/channel/deposit` HTTP endpoint on the primary validator.
 /// 4. Verify the API call succeeds (the endpoint returns 200).
 /// 5. Wait for the transaction to be included in a block.
 /// 6. Verify the funding key's wallet balanceting has decreased due to the
@@ -29,8 +29,8 @@ use tokio::time::sleep;
 #[tokio::test]
 #[serial]
 async fn channel_deposit() {
-    // Spwan a validator
-    let (configs, genesis_tx) = create_general_configs(1, None);
+    // Spawn a two-validator network with fast block production.
+    let (configs, genesis_tx) = create_general_configs(2, None);
     let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx.clone());
     let configs: Vec<_> = configs
         .into_iter()

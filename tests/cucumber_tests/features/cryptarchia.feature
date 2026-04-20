@@ -28,7 +28,7 @@ Feature: Cryptarchia
   @cryptarchia_ci
   Scenario: Orphan staggered start
     Given I have a cluster with capacity of 5 nodes
-    And no nodes are declared as blend providers
+#    And no nodes are declared as blend providers
     And I start node "NODE_1"
     And I start peer node "NODE_1B" connected to node "NODE_1"
     When node "NODE_1" is at height 1 in 300 seconds

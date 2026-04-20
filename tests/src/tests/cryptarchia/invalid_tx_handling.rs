@@ -105,7 +105,7 @@ async fn wait_for_transactions_processing(
             &mut scanned_blocks,
             |header_id| validator.get_block(header_id),
             |block| {
-                for tx in block.transactions() {
+                for tx in &block.transactions {
                     let hash = lb_core::mantle::Transaction::hash(tx);
                     if valid_tx_hashes.contains(&hash) {
                         found_valid_txs.insert(hash);

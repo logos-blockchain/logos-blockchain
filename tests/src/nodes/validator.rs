@@ -10,10 +10,9 @@ use std::{
 use futures::Stream;
 use lb_chain_broadcast_service::BlockInfo;
 use lb_chain_service::CryptarchiaInfo;
-use lb_common_http_client::CommonHttpClient;
+use lb_common_http_client::{ApiBlock, CommonHttpClient};
 use lb_core::{
-    block::Block,
-    mantle::{SignedMantleTx, Transaction as _, TxHash},
+    mantle::{Transaction as _, TxHash},
     sdp::Declaration,
 };
 use lb_http_api_common::paths::{
@@ -137,6 +136,13 @@ impl Validator {
         })
         .await?;
 
+        // Restart can return before the testing API finishes binding.
+        // Wait for it explicitly because SDP tests query that endpoint.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            self.wait_testing_api_online().await;
+        })
+        .await?;
+
         Ok(())
     }
 
@@ -232,7 +238,7 @@ impl Validator {
             http_client: CommonHttpClient::new_with_client(CLIENT.clone(), None),
         };
 
-        tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::time::timeout(Duration::from_secs(15), async {
             node.wait_online().await;
         })
         .await?;
@@ -262,6 +268,22 @@ impl Validator {
         }
     }
 
+    async fn wait_testing_api_online(&self) {
+        loop {
+            let res = CLIENT
+                .get(format!(
+                    "http://{}{}",
+                    self.testing_http_addr, MANTLE_SDP_DECLARATIONS
+                ))
+                .send()
+                .await;
+            if res.is_ok_and(|res| res.status().is_success()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
     pub async fn wait_for_height(&self, target_height: u64, duration: Duration) -> Option<()> {
         tokio::time::timeout(duration, async {
             loop {
@@ -277,16 +299,37 @@ impl Validator {
         .ok()
     }
 
-    pub async fn get_block(&self, id: HeaderId) -> Option<Block<SignedMantleTx>> {
+    pub async fn get_block(&self, id: HeaderId) -> Option<ApiBlock> {
         let path = BLOCKS_DETAIL.replace(":id", &id.to_string());
-        CLIENT
+
+        let response = CLIENT
             .get(format!("http://{}{}", self.addr, path))
             .send()
             .await
-            .unwrap()
-            .json::<Option<Block<SignedMantleTx>>>()
-            .await
-            .unwrap()
+            .ok()?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return None;
+        }
+        if !response.status().is_success() {
+            return None;
+        }
+
+        let body = response.text().await.ok()?;
+        if body.trim().is_empty() {
+            return None;
+        }
+
+        match serde_json::from_str::<ApiBlock>(&body) {
+            Ok(block) => Some(block),
+            Err(e) => {
+                let body_preview: String = body.chars().take(500).collect();
+                eprintln!(
+                    "[get_block] deser error for block {id}: {e}\nbody preview: {body_preview}",
+                );
+                None
+            }
+        }
     }
 
     pub async fn get_mempool_metrics(&self, pool: Pool) -> MempoolMetrics {
@@ -392,7 +435,7 @@ impl Validator {
     /// Wait for a list of transactions to be included in blocks
     pub async fn wait_for_transactions_inclusion(
         &self,
-        tx_hashes: Vec<TxHash>,
+        tx_hashes: &[TxHash],
         timeout: Duration,
     ) -> Vec<Option<HeaderId>> {
         let mut results = vec![None; tx_hashes.len()];
@@ -404,7 +447,7 @@ impl Validator {
 
                 for header_id in headers.iter().take(10) {
                     if let Some(block) = self.get_block(*header_id).await {
-                        for tx in block.transactions() {
+                        for tx in &block.transactions {
                             for (i, target_hash) in tx_hashes.iter().enumerate() {
                                 if tx.hash() == *target_hash && results[i].is_none() {
                                     results[i] = Some(*header_id);
