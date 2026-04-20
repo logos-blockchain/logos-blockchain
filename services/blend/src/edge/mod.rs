@@ -263,8 +263,8 @@ where
                         .expect("NetworkMessage should be able to be serialized")
                         .to_vec(),
                 ),
-                ServiceMessage::NetworkInfo { reply } => {
-                    // Edge nodes don't have blend peer info.
+                ServiceMessage::GetNetworkInfo { reply } => {
+                    // Edge nodes don't return any Blend peer info.
                     drop(reply.send(None));
                     None
                 }

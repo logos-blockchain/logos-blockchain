@@ -89,7 +89,7 @@ impl<BroadcastSettings, NodeId> MessageComponents<NodeId>
             Self::Blend(network_message) => {
                 (network_message.message, network_message.broadcast_settings)
             }
-            Self::NetworkInfo { .. } => {
+            Self::GetNetworkInfo { .. } => {
                 panic!("NetworkInfo messages should be handled before calling into_components")
             }
         }
@@ -99,7 +99,7 @@ impl<BroadcastSettings, NodeId> MessageComponents<NodeId>
         self,
     ) -> Result<oneshot::Sender<Option<NetworkInfo<NodeId>>>, Self> {
         match self {
-            Self::NetworkInfo { reply } => Ok(reply),
+            Self::GetNetworkInfo { reply } => Ok(reply),
             other @ Self::Blend(_) => Err(other),
         }
     }

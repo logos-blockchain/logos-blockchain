@@ -4,8 +4,7 @@ use lb_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHe
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
-/// Information about the curren
-/// t blend network peers.
+/// Information about the current Blend network peers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkInfo<NodeId> {
     /// Negotiated peers for the current session, with a flag indicating whether
@@ -23,7 +22,7 @@ pub enum ServiceMessage<BroadcastSettings, NodeId> {
     Blend(NetworkMessage<BroadcastSettings>),
     /// Request the current blend network info (connected peers).
     /// The reply will be `None` if the node is not in core mode.
-    NetworkInfo {
+    GetNetworkInfo {
         reply: oneshot::Sender<Option<NetworkInfo<NodeId>>>,
     },
 }
@@ -35,7 +34,7 @@ where
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Blend(msg) => f.debug_tuple("Blend").field(msg).finish(),
-            Self::NetworkInfo { .. } => f.debug_struct("NetworkInfo").finish(),
+            Self::GetNetworkInfo { .. } => f.debug_struct("GetNetworkInfo").finish(),
         }
     }
 }

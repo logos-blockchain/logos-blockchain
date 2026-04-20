@@ -142,7 +142,7 @@ where
         let (sender, receiver) = oneshot::channel();
         if self
             .swarm_message_sender
-            .send(BlendSwarmMessage::NetworkInfo { reply: sender })
+            .send(BlendSwarmMessage::GetNetworkInfo { reply: sender })
             .await
             .is_err()
         {

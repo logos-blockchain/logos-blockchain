@@ -54,7 +54,7 @@ pub enum BlendSwarmMessage {
     },
     StartNewSession(SessionInfo<PeerId>),
     CompleteSessionTransition,
-    NetworkInfo {
+    GetNetworkInfo {
         reply: oneshot::Sender<Option<NetworkInfo<PeerId>>>,
     },
 }
@@ -252,15 +252,15 @@ where
     }
 
     fn collect_network_info(&self) -> NetworkInfo<PeerId> {
-        let with_core = self.swarm.behaviour().blend.with_core();
-        let current_session_peers = with_core
+        let core_behaviour = self.swarm.behaviour().blend.with_core();
+        let current_session_peers = core_behaviour
             .negotiated_peers()
             .iter()
             .map(|(peer_id, peer_state)| (*peer_id, peer_state.negotiated_state().is_healthy()))
             .collect();
-        let old_session_peers = with_core
+        let old_session_peers = core_behaviour
             .old_session_peer_ids()
-            .map(|peers| peers.into_iter().collect());
+            .map(|peers| peers.copied().collect());
         NetworkInfo {
             current_session_peers,
             old_session_peers,
@@ -405,7 +405,7 @@ where
             BlendSwarmMessage::CompleteSessionTransition => {
                 self.swarm.behaviour_mut().blend.finish_session_transition();
             }
-            BlendSwarmMessage::NetworkInfo { reply } => {
+            BlendSwarmMessage::GetNetworkInfo { reply } => {
                 let info = self.collect_network_info();
                 drop(reply.send(Some(info)));
             }

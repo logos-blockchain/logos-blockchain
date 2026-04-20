@@ -817,6 +817,10 @@ where
 //
 // Returns the old session components when the node is no longer a core node.
 #[expect(clippy::too_many_arguments, reason = "categorize args")]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: address this at some point"
+)]
 async fn run_event_loop<
     NodeId,
     Backend,
@@ -915,7 +919,7 @@ where
                             recovery_checkpoint = handle_serialized_local_data_message(&serialized_data_message, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
                         }
                     }
-                    ServiceMessage::NetworkInfo { reply } => {
+                    ServiceMessage::GetNetworkInfo { reply } => {
                         let info = backend.network_info().await;
                         drop(reply.send(info));
                     }

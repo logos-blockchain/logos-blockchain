@@ -284,18 +284,20 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn blend_info<S, BroadcastSettings, RuntimeServiceId>(
+pub async fn blend_info<BlendService, BroadcastSettings, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
-    S: ServiceData<Message = lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>>
+    BlendService: ServiceData<Message = lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>>
         + 'static,
     BroadcastSettings: Send + 'static,
-    RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<S>,
+    RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
 {
-    make_request_and_return_response!(blend::blend_info::<S, BroadcastSettings, RuntimeServiceId>(
-        &handle
-    ))
+    make_request_and_return_response!(blend::blend_info::<
+        BlendService,
+        BroadcastSettings,
+        RuntimeServiceId,
+    >(&handle))
 }
 
 #[utoipa::path(
