@@ -13,7 +13,7 @@ use lb_blend::{
 };
 use overwatch::overwatch::handle::OverwatchHandle;
 
-use crate::{core::settings::RunningBlendConfig as BlendConfig, message::BlendNetworkInfo};
+use crate::{core::settings::RunningBlendConfig as BlendConfig, message::NetworkInfo};
 
 #[cfg(feature = "libp2p")]
 pub mod libp2p;
@@ -148,5 +148,5 @@ pub trait BlendBackend<NodeId, Rng, RuntimeServiceId> {
 
     /// Return network info about the current blend peers.
     /// Returns `None` if the backend does not support this operation.
-    async fn network_info(&self) -> Option<BlendNetworkInfo>;
+    async fn network_info(&self) -> Option<NetworkInfo<NodeId>>;
 }

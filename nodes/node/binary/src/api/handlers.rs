@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Display};
 
+use ::libp2p::PeerId;
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -287,7 +288,7 @@ pub async fn blend_info<S, BroadcastSettings, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
-    S: ServiceData<Message = lb_blend_service::message::ServiceMessage<BroadcastSettings>>
+    S: ServiceData<Message = lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>>
         + 'static,
     BroadcastSettings: Send + 'static,
     RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<S>,

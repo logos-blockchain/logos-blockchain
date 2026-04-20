@@ -197,7 +197,7 @@ where
             StartingBlendConfig<Backend::Settings>,
         >,
     >;
-    type Message = ServiceMessage<Network::BroadcastSettings>;
+    type Message = ServiceMessage<Network::BroadcastSettings, NodeId>;
 }
 
 #[async_trait]
@@ -828,7 +828,9 @@ async fn run_event_loop<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    mut inbound_relay: impl Stream<Item = ServiceMessage<NetAdapter::BroadcastSettings>> + Send + Unpin,
+    mut inbound_relay: impl Stream<Item = ServiceMessage<NetAdapter::BroadcastSettings, NodeId>>
+    + Send
+    + Unpin,
     blend_messages: &mut (
              impl Stream<Item = (EncapsulatedMessageWithVerifiedSignature, u64)> + Send + Unpin + 'static
          ),
@@ -915,7 +917,7 @@ where
                     }
                     ServiceMessage::NetworkInfo { reply } => {
                         let info = backend.network_info().await;
-                        let _ = reply.send(info);
+                        drop(reply.send(info));
                     }
                 }
             }

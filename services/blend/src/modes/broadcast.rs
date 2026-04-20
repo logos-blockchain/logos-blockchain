@@ -16,12 +16,12 @@ use crate::{
     modes::Error,
 };
 
-pub struct BroadcastMode<Adapter, RuntimeServiceId> {
+pub struct BroadcastMode<Adapter, NodeId, RuntimeServiceId> {
     adapter: Adapter,
-    _phantom: PhantomData<RuntimeServiceId>,
+    _phantom: PhantomData<(NodeId, RuntimeServiceId)>,
 }
 
-impl<Adapter, RuntimeServiceId> BroadcastMode<Adapter, RuntimeServiceId>
+impl<Adapter, NodeId, RuntimeServiceId> BroadcastMode<Adapter, NodeId, RuntimeServiceId>
 where
     Adapter: NetworkAdapter<RuntimeServiceId> + Send + Sync,
 {
@@ -48,14 +48,16 @@ where
     }
 }
 
-impl<Adapter, RuntimeServiceId> BroadcastMode<Adapter, RuntimeServiceId>
+impl<Adapter, NodeId, RuntimeServiceId> BroadcastMode<Adapter, NodeId, RuntimeServiceId>
 where
     Adapter: NetworkAdapter<RuntimeServiceId> + Send + Sync + 'static,
+    NodeId: Send + Sync,
     RuntimeServiceId: Send + Sync + 'static,
 {
     pub async fn handle_inbound_message<Message>(&self, message: Message) -> Result<(), Error>
     where
         Message: MessageComponents<
+                NodeId,
                 Payload: Into<Vec<u8>>,
                 BroadcastSettings: Into<Adapter::BroadcastSettings>,
             > + Send
@@ -66,8 +68,8 @@ where
         // has no blend peers).
         match message.try_into_network_info_request() {
             Ok(reply) => {
-                let _ = reply.send(None);
-                return Ok(());
+                drop(reply.send(None));
+                Ok(())
             }
             Err(message) => {
                 let (payload, broadcast_settings) = message.into_components();
@@ -114,7 +116,7 @@ pub mod tests {
             .unwrap();
 
             // Create the BroadcastMode
-            let mut mode = BroadcastMode::<TestNetworkAdapter, RuntimeServiceId>::new::<
+            let mut mode = BroadcastMode::<TestNetworkAdapter, (), RuntimeServiceId>::new::<
                 TestNetworkService,
             >(app.handle())
             .await
@@ -134,7 +136,7 @@ pub mod tests {
             );
 
             // Check if the mode can be created again.
-            let mut mode = BroadcastMode::<TestNetworkAdapter, RuntimeServiceId>::new::<
+            let mut mode = BroadcastMode::<TestNetworkAdapter, (), RuntimeServiceId>::new::<
                 TestNetworkService,
             >(app.handle())
             .await

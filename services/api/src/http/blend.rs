@@ -1,14 +1,15 @@
 use std::fmt::{Debug, Display};
 
-use lb_blend_service::message::{BlendNetworkInfo, ServiceMessage};
+use lb_blend_service::message::{NetworkInfo, ServiceMessage};
+use lb_network_service::backends::libp2p::PeerId;
 use overwatch::services::{AsServiceId, ServiceData};
 use tokio::sync::oneshot;
 
 pub async fn blend_info<S, BroadcastSettings, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-) -> Result<Option<BlendNetworkInfo>, overwatch::DynError>
+) -> Result<Option<NetworkInfo<PeerId>>, overwatch::DynError>
 where
-    S: ServiceData<Message = ServiceMessage<BroadcastSettings>>,
+    S: ServiceData<Message = ServiceMessage<BroadcastSettings, PeerId>>,
     RuntimeServiceId: AsServiceId<S> + Debug + Sync + Display + 'static,
     BroadcastSettings: Send + 'static,
 {

@@ -29,7 +29,7 @@ use lb_blend::{
 use lb_libp2p::{DialOpts, SwarmEvent};
 use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, swarm::dial_opts::PeerCondition};
 use rand::RngCore;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::{
     core::{
@@ -42,7 +42,7 @@ use crate::{
         },
         settings::RunningBlendConfig as BlendConfig,
     },
-    message::BlendNetworkInfo,
+    message::NetworkInfo,
     metrics,
 };
 
@@ -55,7 +55,7 @@ pub enum BlendSwarmMessage {
     StartNewSession(SessionInfo<PeerId>),
     CompleteSessionTransition,
     NetworkInfo {
-        reply: tokio::sync::oneshot::Sender<Option<BlendNetworkInfo>>,
+        reply: oneshot::Sender<Option<NetworkInfo<PeerId>>>,
     },
 }
 
@@ -251,17 +251,17 @@ where
         self.check_and_dial_new_peers_except(HashSet::from([peer_id]));
     }
 
-    fn collect_network_info(&self) -> BlendNetworkInfo {
+    fn collect_network_info(&self) -> NetworkInfo<PeerId> {
         let with_core = self.swarm.behaviour().blend.with_core();
         let current_session_peers = with_core
             .negotiated_peers()
-            .keys()
-            .map(|p| p.to_string())
+            .iter()
+            .map(|(peer_id, peer_state)| (*peer_id, peer_state.negotiated_state().is_healthy()))
             .collect();
         let old_session_peers = with_core
             .old_session_peer_ids()
-            .map(|peers| peers.into_iter().map(|p| p.to_string()).collect());
-        BlendNetworkInfo {
+            .map(|peers| peers.into_iter().collect());
+        NetworkInfo {
             current_session_peers,
             old_session_peers,
         }
@@ -407,7 +407,7 @@ where
             }
             BlendSwarmMessage::NetworkInfo { reply } => {
                 let info = self.collect_network_info();
-                let _ = reply.send(Some(info));
+                drop(reply.send(Some(info)));
             }
         }
     }

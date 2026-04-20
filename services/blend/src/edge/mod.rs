@@ -122,7 +122,7 @@ where
     type Settings = StartingBlendConfig<Backend::Settings>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
-    type Message = ServiceMessage<BroadcastSettings>;
+    type Message = ServiceMessage<BroadcastSettings, NodeId>;
 }
 
 #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
@@ -256,7 +256,7 @@ where
         }
         .await;
 
-        let messages_to_blend_stream = Box::pin(inbound_relay.filter_map(|msg| async {
+        let messages_to_blend_stream = Box::pin(inbound_relay.filter_map(async |msg| {
             match msg {
                 ServiceMessage::Blend(message) => Some(
                     NetworkMessage::<BroadcastSettings>::to_bytes(&message)
@@ -265,7 +265,7 @@ where
                 ),
                 ServiceMessage::NetworkInfo { reply } => {
                     // Edge nodes don't have blend peer info.
-                    let _ = reply.send(None);
+                    drop(reply.send(None));
                     None
                 }
             }

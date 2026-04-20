@@ -60,9 +60,9 @@ pub type NetworkBackendOfService<Service, RuntimeServiceId> = <<Service as Servi
 pub type BlendBackendSettingsOfService<Service, RuntimeServiceId> =
     <Service as ServiceComponents<RuntimeServiceId>>::BackendSettings;
 
-use crate::message::BlendNetworkInfo;
+use crate::message::NetworkInfo;
 
-pub trait MessageComponents {
+pub trait MessageComponents<NodeId> {
     type Payload;
     type BroadcastSettings;
 
@@ -73,12 +73,14 @@ pub trait MessageComponents {
     /// or `Err(self)` if it is not.
     fn try_into_network_info_request(
         self,
-    ) -> Result<oneshot::Sender<Option<BlendNetworkInfo>>, Self>
+    ) -> Result<oneshot::Sender<Option<NetworkInfo<NodeId>>>, Self>
     where
         Self: Sized;
 }
 
-impl<BroadcastSettings> MessageComponents for ServiceMessage<BroadcastSettings> {
+impl<BroadcastSettings, NodeId> MessageComponents<NodeId>
+    for ServiceMessage<BroadcastSettings, NodeId>
+{
     type Payload = Vec<u8>;
     type BroadcastSettings = BroadcastSettings;
 
@@ -95,10 +97,10 @@ impl<BroadcastSettings> MessageComponents for ServiceMessage<BroadcastSettings> 
 
     fn try_into_network_info_request(
         self,
-    ) -> Result<oneshot::Sender<Option<BlendNetworkInfo>>, Self> {
+    ) -> Result<oneshot::Sender<Option<NetworkInfo<NodeId>>>, Self> {
         match self {
             Self::NetworkInfo { reply } => Ok(reply),
-            other => Err(other),
+            other @ Self::Blend(_) => Err(other),
         }
     }
 }
