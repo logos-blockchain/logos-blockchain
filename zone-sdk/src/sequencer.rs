@@ -410,9 +410,6 @@ where
     ///
     /// Returns the sequencer (to drive via [`next_event`](Self::next_event))
     /// and a handle (for submitting requests from other tasks).
-    ///
-    /// For a simpler API that spawns the sequencer automatically, see
-    /// [`spawn`](Self::spawn).
     #[must_use]
     pub fn init(
         channel_id: ChannelId,
