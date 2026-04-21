@@ -5,7 +5,7 @@ use lb_node::config::network::serde as network;
 
 use crate::unique::get_reserved_available_udp_port;
 
-const CHAIN_SYNC_PEER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
+const CHAIN_SYNC_PEER_RESPONSE_TIMEOUT: Duration = Duration::from_mins(1);
 
 #[derive(Default)]
 pub enum Libp2pNetworkLayout {

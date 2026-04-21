@@ -4,11 +4,13 @@ pub mod consensus;
 pub mod deployment;
 pub mod kms;
 pub mod network;
+pub mod release;
 pub mod sdp;
 pub mod time;
 pub mod tracing;
 mod unique;
 
+use core::time::Duration;
 use std::sync::LazyLock;
 
 use blend::GeneralBlendConfig;
@@ -86,12 +88,46 @@ pub fn create_general_configs_with_blend_core_subset(
         blend_ports.push(unique::get_reserved_available_udp_port().unwrap());
     }
 
+    create_general_configs_from_ids(
+        &ids,
+        &blend_ports,
+        n_blend_core_nodes,
+        network_params,
+        SHORT_PROLONGED_BOOTSTRAP_PERIOD,
+        test_context,
+    )
+}
+
+#[must_use]
+pub fn create_general_configs_from_ids(
+    ids: &[[u8; 32]],
+    blend_ports: &[u16],
+    n_blend_core_nodes: usize,
+    network_params: &NetworkParams,
+    prolonged_bootstrap_period: Duration,
+    test_context: Option<&str>,
+) -> (Vec<GeneralConfig>, GenesisTx) {
+    let n_nodes = ids.len();
+
+    assert_eq!(
+        ids.len(),
+        blend_ports.len(),
+        "blend_ports({}) must match ids({})",
+        blend_ports.len(),
+        ids.len()
+    );
+    assert!(
+        n_blend_core_nodes <= ids.len(),
+        "n_blend_core_nodes({n_blend_core_nodes}) must be less than or equal to ids.len()({})",
+        ids.len()
+    );
+
     let (consensus_configs, genesis_tx) =
-        consensus::create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD, test_context);
-    let network_configs = network::create_network_configs(&ids, network_params);
-    let api_configs = api::create_api_configs(&ids);
-    let blend_configs = blend::create_blend_configs(&ids, &blend_ports);
-    let tracing_configs = tracing::create_tracing_configs(&ids);
+        consensus::create_consensus_configs(ids, prolonged_bootstrap_period, test_context);
+    let network_configs = network::create_network_configs(ids, network_params);
+    let api_configs = api::create_api_configs(ids);
+    let blend_configs = blend::create_blend_configs(ids, blend_ports);
+    let tracing_configs = tracing::create_tracing_configs(ids);
     let time_config = set_time_config();
 
     let providers: Vec<_> = blend_configs

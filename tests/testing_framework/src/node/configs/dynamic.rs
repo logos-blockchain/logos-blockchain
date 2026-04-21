@@ -111,9 +111,7 @@ fn build_kms_config_for_node(
                     Key::Zk(secret_zk_key.clone()),
                 ),
                 (
-                    key_id_for_preload_backend(&Key::Zk(
-                        consensus_config.blend_note.sk.clone(),
-                    )),
+                    key_id_for_preload_backend(&Key::Zk(consensus_config.blend_note.sk.clone())),
                     Key::Zk(consensus_config.blend_note.sk.clone()),
                 ),
                 (

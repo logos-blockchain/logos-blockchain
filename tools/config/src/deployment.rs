@@ -23,7 +23,10 @@ use lb_node::config::{
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use time::OffsetDateTime;
 
-use crate::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
+use crate::{
+    release::ProtocolIdentity,
+    time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS},
+};
 
 static CHAIN_START_TIME: OnceLock<OffsetDateTime> = OnceLock::new();
 
@@ -39,11 +42,11 @@ const COVER_MESSAGE_FREQUENCY_PER_ROUND: f64 = 1.0;
 const MAXIMUM_RELEASE_DELAY_IN_ROUNDS: u64 = 3;
 const ACTIVITY_THRESHOLD_SENSITIVITY: u64 = 1;
 
-const IDENTIFY_PROTOCOL_NAME: &str = "/integration/logos-blockchain/identify/1.0.0";
-const KADEMLIA_PROTOCOL_NAME: &str = "/integration/logos-blockchain/kad/1.0.0";
-const CHAIN_SYNC_PROTOCOL_NAME: &str = "/integration/logos-blockchain/chainsync/1.0.0";
+const IDENTIFY_PROTOCOL_SUFFIX: &str = "identify/1.0.0";
+const KADEMLIA_PROTOCOL_SUFFIX: &str = "kad/1.0.0";
+const CHAIN_SYNC_PROTOCOL_SUFFIX: &str = "chainsync/1.0.0";
+const GOSSIPSUB_PROTOCOL_SUFFIX: &str = "cryptarchia/proto/1.0.0";
 
-const GOSSIPSUB_PROTOCOL_NAME: &str = "/integration/logos-blockchain/cryptarchia/proto/1.0.0";
 const SECURITY_PARAM: u32 = 20;
 const SLOT_ACTIVATION_COEFF_NUMERATOR: u32 = 1;
 const SLOT_ACTIVATION_COEFF_DENOMINATOR: u32 = 10;
@@ -69,6 +72,8 @@ fn get_or_init_chain_start_time() -> OffsetDateTime {
 pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> DeploymentSettings {
     let slot_duration_in_secs = std::env::var(CONSENSUS_SLOT_TIME_VAR)
         .map_or(DEFAULT_SLOT_TIME_IN_SECS, |s| s.parse::<u64>().unwrap());
+
+    let protocol_identity = ProtocolIdentity::from_env();
 
     DeploymentSettings {
         blend: BlendDeploymentSettings {
@@ -105,12 +110,12 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
             },
         },
         network: NetworkDeploymentSettings {
-            identify_protocol_name: StreamProtocol::new(IDENTIFY_PROTOCOL_NAME),
-            kademlia_protocol_name: StreamProtocol::new(KADEMLIA_PROTOCOL_NAME),
-            chain_sync_protocol_name: StreamProtocol::new(CHAIN_SYNC_PROTOCOL_NAME),
+            identify_protocol_name: protocol_identity.stream_protocol(IDENTIFY_PROTOCOL_SUFFIX),
+            kademlia_protocol_name: protocol_identity.stream_protocol(KADEMLIA_PROTOCOL_SUFFIX),
+            chain_sync_protocol_name: protocol_identity.stream_protocol(CHAIN_SYNC_PROTOCOL_SUFFIX),
         },
         cryptarchia: CryptarchiaDeploymentSettings {
-            gossipsub_protocol: GOSSIPSUB_PROTOCOL_NAME.to_owned(),
+            gossipsub_protocol: protocol_identity.protocol_name(GOSSIPSUB_PROTOCOL_SUFFIX),
             security_param: NonZero::new(SECURITY_PARAM).unwrap(),
             slot_activation_coeff: NonNegativeRatio::new(
                 SLOT_ACTIVATION_COEFF_NUMERATOR,
