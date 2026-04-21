@@ -23,10 +23,10 @@ Generate a default configuration by connecting to the bootstrap peers.
 
 ```bash
 ./logos-blockchain-node init \
-    -p /ip4/65.109.51.37/udp/3000/quic-v1/p2p/{TODO} \
-    -p /ip4/65.109.51.37/udp/3001/quic-v1/p2p/{TODO} \
-    -p /ip4/65.109.51.37/udp/3002/quic-v1/p2p/{TODO} \
-    -p /ip4/65.109.51.37/udp/3003/quic-v1/p2p/{TODO}
+    -p /ip4/65.108.203.235/udp/3000/quic-v1/p2p/{TODO} \
+    -p /ip4/65.108.203.235/udp/3001/quic-v1/p2p/{TODO} \
+    -p /ip4/65.108.203.235/udp/3002/quic-v1/p2p/{TODO} \
+    -p /ip4/65.108.203.235/udp/3003/quic-v1/p2p/{TODO}
 ```
 
 #### Testnet peers
