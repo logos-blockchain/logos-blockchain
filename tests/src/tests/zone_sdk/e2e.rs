@@ -258,24 +258,30 @@ fn spawn_drive(
 /// Drive the sequencer with republish-on-conflict behavior.
 ///
 /// Use for multi-sequencer tests where conflicts are expected.
+///
+/// Tracks all known payloads (adopted + already republished) to avoid
+/// publishing the same payload twice.
 fn spawn_drive_republish(
     mut sequencer: ZoneSequencer<Node>,
     handle: SequencerHandle<Node>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let mut state: HashSet<Vec<u8>> = HashSet::new();
         loop {
             if let Some(Event::ChannelUpdate {
                 orphaned, adopted, ..
             }) = sequencer.next_event().await
             {
-                let adopted_payloads: HashSet<Vec<u8>> =
-                    adopted.into_iter().map(|a| a.payload).collect();
+                for a in &adopted {
+                    state.insert(a.payload.clone());
+                }
                 for inv in orphaned {
-                    if !adopted_payloads.contains(&inv.payload) {
+                    if !state.contains(&inv.payload) {
                         debug!(
                             "Re-publishing orphaned: {:?}",
                             String::from_utf8_lossy(&inv.payload)
                         );
+                        state.insert(inv.payload.clone());
                         if let Err(e) = handle.publish_message(inv.payload).await {
                             debug!("Failed to re-publish: {e}");
                         }
@@ -406,13 +412,9 @@ async fn test_sequential_multi_sequencer() {
         .map(|c| {
             let mut config = create_validator_config(c, deployment_settings.clone());
             config.deployment.time.slot_duration = Duration::from_secs(1);
-            config
-                .user
-                .cryptarchia
-                .service
-                .bootstrap
-                .prolonged_bootstrap_period = Duration::ZERO;
-            config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
+            config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
+            config.deployment.cryptarchia.slot_activation_coeff =
+                NonNegativeRatio::new(1, 2.try_into().unwrap());
             config
         })
         .collect();
@@ -543,13 +545,9 @@ async fn test_concurrent_multi_sequencer() {
         .map(|c| {
             let mut config = create_validator_config(c, deployment_settings.clone());
             config.deployment.time.slot_duration = Duration::from_secs(1);
-            config
-                .user
-                .cryptarchia
-                .service
-                .bootstrap
-                .prolonged_bootstrap_period = Duration::ZERO;
-            config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
+            config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
+            config.deployment.cryptarchia.slot_activation_coeff =
+                NonNegativeRatio::new(1, 2.try_into().unwrap());
             config
         })
         .collect();
@@ -819,13 +817,9 @@ async fn test_sorted_conflict_resolution() {
         .map(|c| {
             let mut config = create_validator_config(c, deployment_settings.clone());
             config.deployment.time.slot_duration = Duration::from_secs(1);
-            config
-                .user
-                .cryptarchia
-                .service
-                .bootstrap
-                .prolonged_bootstrap_period = Duration::ZERO;
-            config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
+            config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
+            config.deployment.cryptarchia.slot_activation_coeff =
+                NonNegativeRatio::new(1, 2.try_into().unwrap());
             config
         })
         .collect();
@@ -1068,13 +1062,9 @@ async fn test_sequencer_stale_checkpoint_resume() {
         2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
-            config
-                .user
-                .cryptarchia
-                .service
-                .bootstrap
-                .prolonged_bootstrap_period = Duration::ZERO;
-            config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
+            config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
+            config.deployment.cryptarchia.slot_activation_coeff =
+                NonNegativeRatio::new(1, 2.try_into().unwrap());
             config
         },
         3,
