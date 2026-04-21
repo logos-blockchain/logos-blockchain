@@ -78,14 +78,13 @@ cryptarchia:
       - opcode: 17
         payload:
           channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
-          inscription:
-          - 103
-          - 101
-          - 110
-          - 101
-          - 115
-          - 105
-          - 115
+          inscription: [  # CryptarchiaParameter
+            12, 0, 0, 0, 0, 0, 0, 0,                                    # chain_id_len = 12 (little-endian u64)
+            108, 111, 103, 111, 115, 45, 100, 101, 118, 110, 101, 116,  # logos-devnet (UTF-8)
+            44, 4, 98, 105, 0, 0, 0, 0,                                 # genesis_time = 2026-01-10T07:47:56Z (little-endian u64)
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,             # epoch_nonce = [0u8; 32]
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+          ]
           parent: '0000000000000000000000000000000000000000000000000000000000000000'
           signer: '0000000000000000000000000000000000000000000000000000000000000000'
       - opcode: 32
@@ -934,7 +933,6 @@ cryptarchia:
   faucet_pk: faf8a7e44e9f45d35efcd9043c4a55095339e229c4115dbeb6231e2b8422f610
 time:
   slot_duration: '1.000000000'
-  chain_start_time: 2026-03-03 14:49:11.0 +00:00:00
 mempool:
   pubsub_topic: /logos-blockchain-devnet/mempool/1.0.0
 ";
