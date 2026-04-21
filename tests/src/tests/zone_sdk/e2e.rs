@@ -272,6 +272,9 @@ fn spawn_drive_republish(
                 orphaned, adopted, ..
             }) = sequencer.next_event().await
             {
+                for inv in &orphaned {
+                    state.remove(&inv.payload);
+                }
                 for a in &adopted {
                     state.insert(a.payload.clone());
                 }
@@ -281,7 +284,6 @@ fn spawn_drive_republish(
                             "Re-publishing orphaned: {:?}",
                             String::from_utf8_lossy(&inv.payload)
                         );
-                        state.insert(inv.payload.clone());
                         if let Err(e) = handle.publish_message(inv.payload).await {
                             debug!("Failed to re-publish: {e}");
                         }
