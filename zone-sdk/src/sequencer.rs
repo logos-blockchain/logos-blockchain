@@ -1475,18 +1475,21 @@ mod tests {
             )],
         };
 
-        // Prepare a `MantleTx` — drive sequencer to process the request
-        let prepare_result = tokio::select! {
-            result = handle.prepare_tx(
-                vec![
-                    Op::ChannelDeposit(deposit_op.clone()),
-                    Op::Transfer(transfer_op.clone()),
-                ],
-                "Mint 10 to Alice".into(),
-            ) => result.unwrap(),
-            _ = sequencer.next_event() => panic!("sequencer should not end"),
+        // Prepare a `MantleTx` — drive sequencer concurrently to process the request
+        let prepare_fut = handle.prepare_tx(
+            vec![
+                Op::ChannelDeposit(deposit_op.clone()),
+                Op::Transfer(transfer_op.clone()),
+            ],
+            "Mint 10 to Alice".into(),
+        );
+        tokio::pin!(prepare_fut);
+        let (tx, msg_id, inscription_sig) = loop {
+            tokio::select! {
+                result = &mut prepare_fut => break result.unwrap(),
+                _ = sequencer.next_event() => {}
+            }
         };
-        let (tx, msg_id, inscription_sig) = prepare_result;
         assert_eq!(tx.ops.len(), 3);
         assert_eq!(&tx.ops[0], &Op::ChannelDeposit(deposit_op));
         assert_eq!(&tx.ops[1], &Op::Transfer(transfer_op));
@@ -1504,10 +1507,14 @@ mod tests {
         )
         .unwrap();
 
-        // Submit the signed tx — drive sequencer to process
-        let result = tokio::select! {
-            result = handle.submit_signed_tx(signed_tx.clone(), msg_id) => result.unwrap(),
-            _ = sequencer.next_event() => panic!("sequencer should not end"),
+        // Submit the signed tx — drive sequencer concurrently to process
+        let submit_fut = handle.submit_signed_tx(signed_tx.clone(), msg_id);
+        tokio::pin!(submit_fut);
+        let result = loop {
+            tokio::select! {
+                result = &mut submit_fut => break result.unwrap(),
+                _ = sequencer.next_event() => {}
+            }
         };
         assert_eq!(result.inscription_id, signed_tx.mantle_tx.hash());
         assert_eq!(result.checkpoint.last_msg_id, msg_id);
