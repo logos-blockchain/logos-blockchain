@@ -31,6 +31,7 @@ use lb_zone_sdk::{
 
 type Node = NodeHttpClient;
 use logos_blockchain_tests::{
+    common::{sync::wait_for_validators_mode_and_height, time::max_block_propagation_time},
     nodes::{Validator, create_validator_config},
     topology::configs::{
         create_general_configs, deployment::e2e_deployment_settings_with_genesis_tx,
@@ -93,7 +94,7 @@ async fn test_sequencer_publish_and_indexer_read() {
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
             config
         },
-        1,
+        3,
     )
     .await;
     let validator = &validators[0];
@@ -131,7 +132,7 @@ async fn test_sequencer_publish_and_indexer_read() {
     );
 
     let expected: HashSet<Vec<u8>> = test_data.iter().cloned().collect();
-    wait_for_indexer(&indexer, &expected, Duration::from_mins(6)).await;
+    wait_for_indexer_unordered(&indexer, &expected, Duration::from_mins(6)).await;
 
     // Test set_keys: update channel's accredited keys
     let second_pk = keygen().public_key();
@@ -167,7 +168,7 @@ async fn test_sequencer_checkpoint_resume() {
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
             config
         },
-        1,
+        3,
     )
     .await;
     let validator = &validators[0];
@@ -233,11 +234,11 @@ async fn test_sequencer_checkpoint_resume() {
         channel_id,
         NodeHttpClient::new(CommonHttpClient::new(None), node_url),
     );
-    let all_test_data: HashSet<Vec<u8>> = test_data_phase1
+    let all_test_data: Vec<Vec<u8>> = test_data_phase1
         .into_iter()
         .chain(test_data_phase2)
         .collect();
-    wait_for_indexer(&indexer, &all_test_data, Duration::from_mins(6)).await;
+    wait_for_indexer_ordered(&indexer, &all_test_data, Duration::from_mins(6)).await;
 
     drive_task.abort();
 }
@@ -309,14 +310,12 @@ async fn publish_all(handle: &mut SequencerHandle<Node>, payloads: &[Vec<u8>]) {
     }
 }
 
-/// Helper: wait for all expected payloads to appear in the indexer.
-async fn wait_for_indexer(
+/// Wait for all expected payloads to appear in the indexer (any order).
+async fn wait_for_indexer_unordered(
     indexer: &ZoneIndexer<Node>,
     expected: &HashSet<Vec<u8>>,
     timeout_duration: Duration,
 ) {
-    use futures::StreamExt as _;
-
     let mut seen: HashSet<Vec<u8>> = HashSet::new();
     let mut last_zone_block = None;
     let start = std::time::Instant::now();
@@ -348,6 +347,54 @@ async fn wait_for_indexer(
 
         sleep(Duration::from_millis(500)).await;
     }
+}
+
+/// Wait for expected payloads to appear in the indexer in exact order.
+async fn wait_for_indexer_ordered(
+    indexer: &ZoneIndexer<Node>,
+    expected: &[Vec<u8>],
+    timeout_duration: Duration,
+) {
+    let mut received: Vec<Vec<u8>> = Vec::new();
+    let expected_set: HashSet<&Vec<u8>> = expected.iter().collect();
+    let mut last_zone_block = None;
+    let start = std::time::Instant::now();
+
+    loop {
+        assert!(
+            start.elapsed() <= timeout_duration,
+            "Timeout waiting for indexer to return all messages in order"
+        );
+
+        let stream = indexer
+            .next_messages(last_zone_block)
+            .await
+            .expect("next_messages should succeed");
+        futures::pin_mut!(stream);
+
+        while let Some((msg, slot)) = stream.next().await {
+            if let ZoneMessage::Block(block) = msg {
+                if expected_set.contains(&block.data) {
+                    received.push(block.data.clone());
+                    debug!(
+                        "Found payload ({}/{}): {}",
+                        received.len(),
+                        expected.len(),
+                        String::from_utf8_lossy(&block.data)
+                    );
+                }
+                last_zone_block = Some((block.id, slot));
+            }
+        }
+
+        if received.len() >= expected.len() {
+            break;
+        }
+
+        sleep(Duration::from_millis(500)).await;
+    }
+
+    assert_eq!(received, expected, "Messages should match expected order");
 }
 
 /// Helper: tag a message with a random ID for reorg deduplication.
@@ -422,7 +469,7 @@ async fn test_sequential_multi_sequencer() {
         NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
     );
     let expected_phase1: HashSet<Vec<u8>> = phase1_data.iter().cloned().collect();
-    wait_for_indexer(&indexer, &expected_phase1, Duration::from_mins(6)).await;
+    wait_for_indexer_unordered(&indexer, &expected_phase1, Duration::from_mins(6)).await;
 
     // --- SeqA adds SeqB's key via set_keys ---
     let (_result, finalized) = handle_a
@@ -453,7 +500,7 @@ async fn test_sequential_multi_sequencer() {
 
     let mut expected_phase2 = expected_phase1.clone();
     expected_phase2.extend(phase2_data.iter().cloned());
-    wait_for_indexer(&indexer, &expected_phase2, Duration::from_mins(6)).await;
+    wait_for_indexer_unordered(&indexer, &expected_phase2, Duration::from_mins(6)).await;
 
     // Stop SeqB
     poll_b.abort();
@@ -473,44 +520,14 @@ async fn test_sequential_multi_sequencer() {
     let phase3_data: Vec<Vec<u8>> = vec![tag_payload("a4"), tag_payload("a5"), tag_payload("a6")];
     publish_all(&mut handle_a, &phase3_data).await;
 
-    let mut expected_all = expected_phase2;
-    expected_all.extend(phase3_data.iter().cloned());
-    wait_for_indexer(&indexer, &expected_all, Duration::from_mins(6)).await;
-
-    // Verify all 9 inscriptions are on chain in the expected order:
+    // Verify all 9 inscriptions on chain in expected order:
     // a1, a2, a3 (SeqA phase1), b1, b2, b3 (SeqB phase2), a4, a5, a6 (SeqA phase3)
     let expected_order: Vec<Vec<u8>> = phase1_data
-        .iter()
-        .chain(phase2_data.iter())
-        .chain(phase3_data.iter())
-        .cloned()
+        .into_iter()
+        .chain(phase2_data)
+        .chain(phase3_data)
         .collect();
-    let mut last_zone_block = None;
-    let mut on_chain_order = Vec::new();
-    loop {
-        let stream = indexer
-            .next_messages(last_zone_block)
-            .await
-            .expect("next_messages should succeed");
-        futures::pin_mut!(stream);
-        let mut got_any = false;
-        while let Some((msg, slot)) = stream.next().await {
-            got_any = true;
-            if let ZoneMessage::Block(block) = msg {
-                if expected_all.contains(&block.data) {
-                    on_chain_order.push(block.data.clone());
-                }
-                last_zone_block = Some((block.id, slot));
-            }
-        }
-        if !got_any {
-            break;
-        }
-    }
-    assert_eq!(
-        on_chain_order, expected_order,
-        "Inscriptions should appear in expected sequential order"
-    );
+    wait_for_indexer_ordered(&indexer, &expected_order, Duration::from_mins(6)).await;
 
     // Clean up
     poll_a.abort();
@@ -682,7 +699,7 @@ async fn test_concurrent_multi_sequencer() {
     expected_all.extend(data_c.iter().cloned());
     assert_eq!(expected_all.len(), 9);
 
-    wait_for_indexer(&indexer, &expected_all, Duration::from_mins(20)).await;
+    wait_for_indexer_unordered(&indexer, &expected_all, Duration::from_mins(20)).await;
 
     // Wait for enough blocks so any late re-published duplicates would have
     // landed. With k=5 and 1s slots, finality is ~5 blocks. We wait 30s
@@ -1068,7 +1085,7 @@ async fn test_sequencer_stale_checkpoint_resume() {
             config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
             config
         },
-        1,
+        3,
     )
     .await;
     let validator = &validators[0];
@@ -1319,7 +1336,7 @@ async fn test_subscribe_to_finalized_deposit() {
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
             config
         },
-        1,
+        3,
     )
     .await;
     let validator = &validators[0];
@@ -1383,7 +1400,7 @@ async fn test_atomic_deposit_inscription() {
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
             config
         },
-        1,
+        3,
     )
     .await;
     let validator = &validators[0];
@@ -1487,7 +1504,7 @@ async fn test_subscribe_to_finalized_withdraw() {
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
             config
         },
-        1,
+        3,
     )
     .await;
     let validator = &validators[0];
@@ -1615,9 +1632,19 @@ async fn spawn_validators(
         .collect::<Result<Vec<_>, _>>()
         .expect("Failed to spawn validators");
 
-    // Wait for the chain to produce at least one block.
-    // Use generous timeout since leader election is probabilistic.
-    assert!(wait_for_height(&validators[0], target_block, Duration::from_mins(2)).await);
+    let timeout_duration = max_block_propagation_time(
+        target_block as u32,
+        validators.len() as u64,
+        &validators[0].config().deployment,
+        3.0,
+    );
+    wait_for_validators_mode_and_height(
+        &validators,
+        lb_cryptarchia_engine::State::Online,
+        target_block,
+        timeout_duration,
+    )
+    .await;
 
     validators
 }
