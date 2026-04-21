@@ -9,8 +9,10 @@ labels: release
 
 **READ THIS BEFORE STARTING WITH THE RELEASE**
 
-* If any changes other than release-specific ones are needed, e.g. a bugfix or some ceremony-related fix that is useful also for future releases, they should be merged with a PR against `master` and not pushed to the release branch. Then, a new release process must start by forking off from `master` using the same branch name as before (by force-pushing the branch to point to the new fork of `master`).
-* If the release candidate process needs to start over again for any reason, restart from the checklist point that makes most sense, by documenting why we needed a new release candidate.
+* If any changes other than release-specific ones are needed, e.g. a bugfix or some ceremony-related fix that is useful also for future releases, they should be merged with a PR against `master` and not pushed to the release branch. Then, there are two possible strategies:
+    * the release continues with a new release candidate, in which case the fix is cherry-picked from `master` into the release branch
+    * the release is aborted if favor of a new version forked from `master`: in this case the release branch is merged into master to update any devnet-related changes, before starting the process for the new release with the next logical release version
+* If the release candidate process needs to start over again for any reason without starting a whole new release, restart from the checklist point that makes most sense, by documenting why we needed a new release candidate.
 * Progress on the checklist must be provided as comments to the issue.
 
 ---
@@ -62,7 +64,25 @@ labels: release
 
 ## Release publication
 
+- [ ] Bump the Cargo workspace version to match the new release version `X.Y.Z`
+- [ ] Bump the version value for the C bindings (`logos-blockchain-c`) in the root `flake.nix` file to match the new release version `X.Y.Z`
+- [ ] Verify the HEAD of the release branch has green CI ✅
+- [ ] Tag the commit with `X.Y.Z` and push the tag
+- [ ] Manually trigger the [bundling workflow][release-bundling-workflow] from the `X.Y.Z` tag on GitHub
+- [ ] Post the link to the workflow run to this issue for easier review
+- [ ] Wait for the bundling workflow to complete and generate a draft GitHub pre-release. While the release is in progress, follow the steps in the [Testnet deployment][testnet-deployment-section] section below.
+- [ ] Address checklist of the generated GitHub release
+- [ ] Publish release
+- [ ] Post the link to the published release to this issue for easier review
+
 ## Testnet deployment
+
+- [ ] Checkout `testnet` branch again and change the `compose.static.yml` symlink to now point to `compose.run.yml`
+- [ ] Commit and push the changes to trigger environment re-deployment. Environment is now live.
+- [ ] Wait around 1 minute for deployment to be updated
+- [ ] If needed, at any time you can download fleet nodes' configs and logs from [https://testnet.blockchain.logos.co/internal/node-data/](https://testnet.blockchain.logos.co/internal/node-data/)
+- [ ] Go back to the [GitHub Release][github-release-section] section and finalize the release
+- [ ] Merge the release branch into `master`. Make sure the diff between the two (minus any commits that landed on `master` in the meanwhile) show only release-relevant changes. I.e., make sure no unrelated changes, e.g., bug-fixes have landed on the release branch instead of landing on `master`.
 
 ## Post-Release
 
@@ -74,4 +94,5 @@ labels: release
 [build-logos-tools-docker-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/build-logos-tools.yml 
 [release-bundling-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/prepare-release.yml
 [devnet-deployment-section]: #devnet-deployment
+[testnet-deployment-section]: #testnet-deployment
 [github-release-section]: #github-release
