@@ -17,8 +17,7 @@
 
 ### ⚙️ Initialize Your Node
 
-Generate a default configuration by connecting to the testnet bootstrap peers.
-
+Generate a default configuration by connecting to the bootstrap peers.
 
 #### Devnet peers
 
@@ -64,7 +63,7 @@ curl -w "\n" http://localhost:8080/cryptarchia/info
 
 Your node should be in `Bootstrapping` mode for a few minutes, with both `slot` and `height` steadily increasing.
 
-After boostrapping is complete, your node will move to `Online` mode.
+After bootstrapping is complete, your node will move to `Online` mode.
 If you have joined the devnet, you can compare against the fleet nodes at the [Logos devnet dashboard][devnet-dashboard].
 For testnet, you can check the [Logos testnet dashboard][testnet-dashboard].
 
@@ -141,7 +140,7 @@ Having issues? Reach out to the Logos Blockchain team on [Discord][testnet-disco
 - [ ] Replace `{TODO}` peer IDs for both devnet and testnet:
     * For a release candidate (for devnet), copy-paste the new devnet addresses from the [devnet dashboard][devnet-dashboard] and the existing testnet addresses from the [testnet dashboard][testnet-dashboard]
     * For a release (for testnet), copy-paste the addresses of the latest deployed devnet from the [devnet dashboard][devnet-dashboard] and the new testnet addresses from the [testnet dashboard][testnet-dashboard]
-- [ ] Set the release type: mark the release as **pre-release** if a devnet release (i.e. release candidate), or set the release as **latest** if a testnet release (i.e. regular release)
+- [ ] Set the release type: mark the release as **pre-release** for release candidates (`X.Y.Z-rc.N`), **latest** for final releases (`X.Y.Z`)
 - [ ] Delete this checklist and publish
 
 [release-notion]: https://www.notion.so/nomos-tech/Internal-Devnet-Launch-February-2026-2fe261aa09df8025ad94e380933b4cf9#2ff261aa09df8058935ecb85aa587564
