@@ -278,13 +278,13 @@ fn spawn_drive_republish(
                 for a in &adopted {
                     state.insert(a.payload.clone());
                 }
-                for inv in orphaned {
+                for inv in &orphaned {
                     if !state.contains(&inv.payload) {
                         debug!(
                             "Re-publishing orphaned: {:?}",
                             String::from_utf8_lossy(&inv.payload)
                         );
-                        if let Err(e) = handle.publish_message(inv.payload).await {
+                        if let Err(e) = handle.publish_message(inv.payload.clone()).await {
                             debug!("Failed to re-publish: {e}");
                         }
                     }
