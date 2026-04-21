@@ -266,25 +266,20 @@ fn spawn_drive_republish(
     handle: SequencerHandle<Node>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut state: HashSet<Vec<u8>> = HashSet::new();
         loop {
             if let Some(Event::ChannelUpdate {
                 orphaned, adopted, ..
             }) = sequencer.next_event().await
             {
-                for inv in &orphaned {
-                    state.remove(&inv.payload);
-                }
-                for a in &adopted {
-                    state.insert(a.payload.clone());
-                }
-                for inv in &orphaned {
-                    if !state.contains(&inv.payload) {
+                let adopted_payloads: HashSet<Vec<u8>> =
+                    adopted.into_iter().map(|a| a.payload).collect();
+                for inv in orphaned {
+                    if !adopted_payloads.contains(&inv.payload) {
                         debug!(
                             "Re-publishing orphaned: {:?}",
                             String::from_utf8_lossy(&inv.payload)
                         );
-                        if let Err(e) = handle.publish_message(inv.payload.clone()).await {
+                        if let Err(e) = handle.publish_message(inv.payload).await {
                             debug!("Failed to re-publish: {e}");
                         }
                     }
