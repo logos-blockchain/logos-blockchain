@@ -556,8 +556,7 @@ where
 
         tokio::select! {
             Some(request) = self.request_rx.recv() => {
-                self.handle_request(request).await;
-                None
+                self.handle_request(request).await
             }
             maybe_event = stream.next() => {
                 self.handle_stream_item(maybe_event).await
@@ -813,14 +812,14 @@ where
         }
     }
 
-    async fn handle_request(&mut self, request: ActorRequest) {
+    async fn handle_request(&mut self, request: ActorRequest) -> Option<Event> {
         if !self.is_ready() {
             reject_not_ready(request);
-            return;
+            return None;
         }
 
         match request {
-            ActorRequest::PublishMessage { data } => self.handle_publish(data).await,
+            ActorRequest::PublishMessage { data } => Some(self.handle_publish(data).await),
             ActorRequest::PrepareTx { ops, msg, reply } => {
                 let result = prepare_tx(
                     ops,
@@ -831,16 +830,19 @@ where
                 );
                 // do not update last_msg_id since tx is not submitted yet
                 drop(reply.send(Ok(result)));
+                None
             }
             ActorRequest::SignTx { tx_hash, reply } => {
                 let signature = sign_tx(tx_hash, &self.signing_key);
                 drop(reply.send(Ok(signature)));
+                None
             }
             ActorRequest::SubmitSignedTx { tx, msg_id, reply } => {
                 // Safe to unwrap — is_ready() guarantees state is initialized
                 let s = self.state.as_mut().unwrap();
                 let result = submit_signed_tx(s, tx, msg_id, &mut self.last_msg_id, self.lib_slot);
                 drop(reply.send(Ok(result)));
+                None
             }
             ActorRequest::SetKeys { keys, reply } => {
                 // Safe to unwrap — is_ready() guarantees state is initialized
@@ -853,11 +855,12 @@ where
                     checkpoint,
                 };
                 drop(reply.send(Ok((signed_tx, result))));
+                None
             }
         }
     }
 
-    async fn handle_publish(&mut self, data: Vec<u8>) {
+    async fn handle_publish(&mut self, data: Vec<u8>) -> Event {
         // Safe to unwrap — handle_request checks is_ready() first
         let s = self.state.as_mut().unwrap();
 
@@ -884,10 +887,12 @@ where
         }
 
         let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
-        drop(self.event_tx.send(Event::Published {
+        let event = Event::Published {
             inscription_id: id,
             checkpoint,
-        }));
+        };
+        drop(self.event_tx.send(event.clone()));
+        event
     }
 }
 

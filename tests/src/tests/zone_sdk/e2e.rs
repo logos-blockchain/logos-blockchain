@@ -80,15 +80,9 @@ async fn test_sequencer_publish_and_indexer_read() {
     init_tracing();
     let validators = spawn_validators(
         Some("test_sequencer_publish_and_indexer_read"),
-        1,
+        2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
-            config
-                .user
-                .cryptarchia
-                .service
-                .bootstrap
-                .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
@@ -131,8 +125,7 @@ async fn test_sequencer_publish_and_indexer_read() {
         NodeHttpClient::new(CommonHttpClient::new(None), node_url),
     );
 
-    let expected: HashSet<Vec<u8>> = test_data.iter().cloned().collect();
-    wait_for_indexer_unordered(&indexer, &expected, Duration::from_mins(6)).await;
+    wait_for_indexer_ordered(&indexer, &test_data, Duration::from_mins(6)).await;
 
     // Test set_keys: update channel's accredited keys
     let second_pk = keygen().public_key();
@@ -154,15 +147,9 @@ async fn test_sequencer_checkpoint_resume() {
     init_tracing();
     let validators = spawn_validators(
         Some("test_sequencer_checkpoint_resume"),
-        1,
+        2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
-            config
-                .user
-                .cryptarchia
-                .service
-                .bootstrap
-                .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
@@ -1325,12 +1312,6 @@ async fn test_subscribe_to_finalized_deposit() {
         2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
-            config
-                .user
-                .cryptarchia
-                .service
-                .bootstrap
-                .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
@@ -1389,12 +1370,6 @@ async fn test_atomic_deposit_inscription() {
         2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
-            config
-                .user
-                .cryptarchia
-                .service
-                .bootstrap
-                .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
@@ -1493,12 +1468,6 @@ async fn test_subscribe_to_finalized_withdraw() {
         2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
-            config
-                .user
-                .cryptarchia
-                .service
-                .bootstrap
-                .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
