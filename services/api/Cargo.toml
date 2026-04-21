@@ -24,6 +24,7 @@ instrumentation = []
 async-trait                = "0.1"
 bytes                      = { workspace = true }
 futures                    = { workspace = true }
+lb-blend-service           = { features = ["libp2p"], workspace = true }
 lb-chain-broadcast-service = { workspace = true }
 lb-chain-leader-service    = { workspace = true }
 lb-chain-service           = { features = ["libp2p"], workspace = true }

@@ -43,3 +43,6 @@ pub type BlendService<RuntimeServiceId> = lb_blend_service::BlendService<
     BlendEdgeService<RuntimeServiceId>,
     RuntimeServiceId,
 >;
+
+pub type BlendBroadcastSettings<RuntimeServiceId> =
+    <lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::BroadcastSettings;

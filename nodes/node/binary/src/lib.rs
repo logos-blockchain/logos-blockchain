@@ -72,6 +72,8 @@ pub(crate) type NetworkService =
 pub(crate) type BlendCoreService = generic_services::blend::BlendCoreService<RuntimeServiceId>;
 pub(crate) type BlendEdgeService = generic_services::blend::BlendEdgeService<RuntimeServiceId>;
 pub(crate) type BlendService = generic_services::blend::BlendService<RuntimeServiceId>;
+pub(crate) type BlendBroadcastSettings =
+    generic_services::blend::BlendBroadcastSettings<RuntimeServiceId>;
 
 pub(crate) type BlockBroadcastService =
     lb_chain_broadcast_service::BlockBroadcastService<RuntimeServiceId>;

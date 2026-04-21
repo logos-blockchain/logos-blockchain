@@ -228,8 +228,11 @@ impl<
     >
 where
     BlendService: ServiceData<
-            Message = lb_blend_service::message::ServiceMessage<BlendService::BroadcastSettings>,
-        > + lb_blend_service::ServiceComponents
+            Message = lb_blend_service::message::ServiceMessage<
+                BlendService::BroadcastSettings,
+                BlendService::NodeId,
+            >,
+        > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
         + Sync
         + 'static,
@@ -508,8 +511,11 @@ impl<
     >
 where
     BlendService: ServiceData<
-            Message = lb_blend_service::message::ServiceMessage<BlendService::BroadcastSettings>,
-        > + lb_blend_service::ServiceComponents
+            Message = lb_blend_service::message::ServiceMessage<
+                BlendService::BroadcastSettings,
+                BlendService::NodeId,
+            >,
+        > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
         + Sync
         + 'static,

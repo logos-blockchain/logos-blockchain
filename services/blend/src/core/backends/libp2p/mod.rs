@@ -11,18 +11,21 @@ use lb_blend::message::encap::validated::{
 use libp2p::PeerId;
 use overwatch::overwatch::handle::OverwatchHandle;
 use rand::RngCore;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::BroadcastStream;
 
-use crate::core::{
-    backends::{
-        BlendBackend, PublicInfo, SessionInfo,
-        libp2p::{
-            swarm::{BlendSwarm, BlendSwarmMessage, SwarmParams},
-            tokio_provider::ObservationWindowTokioIntervalProvider,
+use crate::{
+    core::{
+        backends::{
+            BlendBackend, PublicInfo, SessionInfo,
+            libp2p::{
+                swarm::{BlendSwarm, BlendSwarmMessage, SwarmParams},
+                tokio_provider::ObservationWindowTokioIntervalProvider,
+            },
         },
+        settings::RunningBlendConfig as BlendConfig,
     },
-    settings::RunningBlendConfig as BlendConfig,
+    message::NetworkInfo,
 };
 
 const LOG_TARGET: &str = "blend::backend::libp2p";
@@ -133,6 +136,20 @@ where
             BroadcastStream::new(self.incoming_message_sender.subscribe())
                 .filter_map(async |event| event.ok()),
         )
+    }
+
+    async fn network_info(&self) -> Option<NetworkInfo<PeerId>> {
+        let (sender, receiver) = oneshot::channel();
+        if self
+            .swarm_message_sender
+            .send(BlendSwarmMessage::GetNetworkInfo { reply: sender })
+            .await
+            .is_err()
+        {
+            tracing::error!(target: LOG_TARGET, "Failed to send NetworkInfo request to BlendSwarm");
+            return None;
+        }
+        receiver.await.unwrap_or(None)
     }
 }
 

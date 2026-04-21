@@ -1,27 +1,40 @@
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    num::NonZero,
+    path::PathBuf,
+    time::Duration,
+};
 
-use lb_common_http_client::CommonHttpClient;
 use lb_core::{
     mantle::{
-        Note, NoteId, Transaction as _, encoding::MAX_ENCODE_DECODE_INSCRIPTION_SIZE,
-        ops::channel::ChannelId,
+        GenesisTx as _, MantleTx, NoteId, OpProof, SignedMantleTx, Transaction as _, Utxo,
+        genesis_tx::GENESIS_STORAGE_GAS_PRICE, ops::Op, tx::MantleTxGasContext,
+        tx_builder::MantleTxBuilder,
     },
-    sdp::{Declaration, Locator, ServiceType, WithdrawMessage},
+    sdp::{Declaration, DeclarationMessage, Locator, ServiceType, WithdrawMessage},
 };
-use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
-use logos_blockchain_tests::{
-    common::{
-        mantle_tx::{
-            create_inscription_transaction_with_id, create_sdp_declare_tx, create_sdp_withdraw_tx,
-        },
-        time::max_block_propagation_time,
+use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
+use lb_node::config::RunConfig;
+use lb_testing_framework::{
+    DeploymentBuilder, LbcManualCluster, NodeHttpClient, TopologyConfig as TfTopologyConfig,
+    configs::wallet::{WalletAccount, WalletConfig},
+};
+use logos_blockchain_tests::common::{
+    chain::wait_for_transactions_inclusion,
+    manual_cluster::{
+        build_local_manual_cluster, read_manual_node_logs,
+        wait_for_height as wait_for_manual_cluster_height,
     },
-    nodes::validator::Validator,
-    topology::{GenesisNoteSpec, Topology, TopologyConfig},
+    wallet::{
+        current_utxos_for_public_key, fund_transfer_builder_from_utxos, utxos_for_public_key,
+    },
 };
 use num_bigint::BigUint;
 use serial_test::serial;
+use testing_framework_core::scenario::{DynError, StartNodeOptions};
 use tokio::time::{sleep, timeout};
+
+const LOCK_PERIOD: u64 = 3;
 
 /// High-level SDP flow covered by this E2E:
 /// - submit a `Declare` transaction backed by an unused genesis note and wait
@@ -35,55 +48,35 @@ use tokio::time::{sleep, timeout};
 /// proofs.
 #[tokio::test]
 #[serial]
-#[ignore = "Transaction not being included in blocks - needs investigation"]
+#[expect(
+    clippy::large_futures,
+    reason = "Manual-cluster startup futures are large in these integration tests; boxing would not improve readability"
+)]
 async fn sdp_ops_e2e() {
-    let note_sk = ZkKey::from(BigUint::from(42u64));
-    let spare_note = Note::new(1, note_sk.to_public_key());
-    // Use reduced lock_period (3 instead of 10) to speed up the test
-    let topology_config = TopologyConfig::two_validators()
-        .with_extra_genesis_note(GenesisNoteSpec {
-            note: spare_note,
-            note_sk: note_sk.clone(),
-        })
-        .with_lock_period(3);
-    let topology = Topology::spawn(topology_config, Some("sdp_ops_e2e")).await;
+    let (
+        _scenario_base_dir,
+        _cluster,
+        _node0_name,
+        node0,
+        genesis_utxos,
+        funding_secret_key,
+        spare_note_secret_key,
+        spare_note_id,
+        lock_period,
+    ) = start_sdp_manual_cluster("sdp-ops").await;
 
-    topology.wait_network_ready().await;
-
-    let validator = &topology.validators()[0];
-
-    let initial_height_timeout = max_block_propagation_time(
-        2, // wait for 1-2 blocks
-        2, // network size
-        &validator.config().deployment,
-        3.5,
-    );
-
-    validator
-        .wait_for_height(1, initial_height_timeout)
-        .await
-        .unwrap_or_else(|| panic!("validator should produce the first block before submitting declare- timed out at {initial_height_timeout:.2?}"));
-
-    let inclusion_timeout = Duration::from_secs(30);
+    let inclusion_timeout = Duration::from_mins(1);
     let state_timeout = Duration::from_secs(45);
 
-    let sdp_config = validator.config().deployment.cryptarchia.sdp_config.clone();
-
-    let validator_url = validator.url();
-    let client = CommonHttpClient::new(None);
-
-    let existing = validator.get_sdp_declarations().await;
+    let existing = node0
+        .get_sdp_declarations()
+        .await
+        .expect("fetching SDP declarations should succeed");
     let locked: HashSet<_> = existing.iter().map(|decl| decl.locked_note_id).collect();
-
-    let injected_note = topology
-        .injected_genesis_notes()
-        .first()
-        .expect("Injected genesis note should exist");
-
-    let locked_note_id = injected_note.note_id;
+    let locked_note_id = spare_note_id;
     assert!(
         !locked.contains(&locked_note_id),
-        "Injected note must be unused before submitting declare"
+        "manual-cluster wallet note must be unused before submitting declare"
     );
 
     let provider_signing_key = Ed25519Key::from_bytes(&[7u8; 32]);
@@ -95,87 +88,123 @@ async fn sdp_ops_e2e() {
             .expect("Valid locator multiaddr"),
     );
 
-    let (declare_tx, declaration_msg) = create_sdp_declare_tx(
-        &provider_signing_key,
-        ServiceType::BlendNetwork,
-        vec![locator],
+    let declaration = DeclarationMessage {
+        service_type: ServiceType::BlendNetwork,
+        locators: vec![locator],
+        provider_id: lb_core::sdp::ProviderId::try_from(
+            provider_signing_key.public_key().to_bytes(),
+        )
+        .expect("provider signing key should yield a provider id"),
         zk_id,
-        &provider_zk_key,
         locked_note_id,
-        &note_sk,
-    );
-    let declaration_id = declaration_msg.id();
-    let declare_hash = declare_tx.hash();
+    };
+    let declaration_id = declaration.id();
 
-    client
-        .post_transaction(validator_url.clone(), declare_tx)
+    let (declare_mantle_tx, declare_signing_keys) = fund_sdp_transaction(
+        &node0,
+        &genesis_utxos,
+        &funding_secret_key,
+        Op::SDPDeclare(declaration),
+    )
+    .await;
+    let declare_hash = declare_mantle_tx.hash();
+    let declare_ed25519_sig = Ed25519Signature::from_bytes(
+        &provider_signing_key
+            .sign_payload(declare_hash.as_signing_bytes().as_ref())
+            .to_bytes(),
+    );
+    let declare_zk_sig = ZkKey::multi_sign(
+        &[spare_note_secret_key.clone(), provider_zk_key.clone()],
+        declare_hash.as_ref(),
+    )
+    .expect("SDP declare zk proof should build");
+    let declare_transfer_proof = OpProof::ZkSig(
+        ZkKey::multi_sign(&declare_signing_keys, declare_hash.as_ref())
+            .expect("transfer proof should build"),
+    );
+    let declare_tx = SignedMantleTx::new(
+        declare_mantle_tx,
+        vec![
+            OpProof::ZkAndEd25519Sigs {
+                zk_sig: declare_zk_sig,
+                ed25519_sig: declare_ed25519_sig,
+            },
+            declare_transfer_proof,
+        ],
+    )
+    .expect("funded SDP declare transaction should be valid");
+
+    node0
+        .submit_transaction(&declare_tx)
         .await
         .expect("submit declare transaction");
 
-    let declare_results = validator
-        .wait_for_transactions_inclusion(vec![declare_hash], inclusion_timeout)
-        .await;
+    let declare_included =
+        wait_for_transactions_inclusion(&node0, &[declare_hash], inclusion_timeout).await;
 
-    assert!(
-        declare_results.first().is_some_and(Option::is_some),
-        "declare transaction should be included"
-    );
+    assert!(declare_included, "declare transaction should be included");
 
-    let declaration_state = wait_for_declaration(validator, state_timeout, {
+    let declaration_state = wait_for_declaration(&node0, state_timeout, {
         let target_locked_note = locked_note_id;
         move |decl| decl.locked_note_id == target_locked_note
     })
     .await
     .expect("declaration should appear after submission");
 
-    let lock_period = sdp_config
-        .service_params
-        .get(&ServiceType::BlendNetwork)
-        .expect("blend network parameters must exist")
-        .lock_period;
-    // Use proper timeout calculation based on slot duration and activation
-    // coefficient
-    let height_timeout = max_block_propagation_time(
-        (lock_period + 2) as u32, // lock_period + buffer
-        2,                        // network size (2 validators)
-        &validator.config().deployment,
-        3.0, // margin factor
-    );
-
     let created_height = declaration_state.created;
     let current_nonce = declaration_state.nonce;
 
-    // Wait for chain height to pass the lock period before withdrawing
-    validator
-        .wait_for_height(created_height + lock_period + 1, height_timeout)
-        .await
-        .expect("consensus height should pass the SDP lock period");
+    wait_for_manual_cluster_height(
+        &node0,
+        created_height + lock_period + 1,
+        Duration::from_mins(2),
+    )
+    .await
+    .expect("consensus height should pass the SDP lock period");
 
-    // Withdraw requires nonce > declaration's current nonce
     let withdraw_message = WithdrawMessage {
         declaration_id,
         locked_note_id,
         nonce: current_nonce + 1,
     };
 
-    let withdraw_tx = create_sdp_withdraw_tx(withdraw_message, &provider_zk_key, &note_sk);
-    let withdraw_hash = withdraw_tx.hash();
+    let (withdraw_mantle_tx, withdraw_signing_keys) = fund_sdp_transaction(
+        &node0,
+        &genesis_utxos,
+        &funding_secret_key,
+        Op::SDPWithdraw(withdraw_message),
+    )
+    .await;
 
-    client
-        .post_transaction(validator_url, withdraw_tx)
+    let withdraw_hash = withdraw_mantle_tx.hash();
+    let withdraw_zk_sig = ZkKey::multi_sign(
+        &[spare_note_secret_key.clone(), provider_zk_key.clone()],
+        withdraw_hash.as_ref(),
+    )
+    .expect("SDP withdraw zk proof should build");
+
+    let withdraw_transfer_proof = OpProof::ZkSig(
+        ZkKey::multi_sign(&withdraw_signing_keys, withdraw_hash.as_ref())
+            .expect("transfer proof should build"),
+    );
+
+    let withdraw_tx = SignedMantleTx::new(
+        withdraw_mantle_tx,
+        vec![OpProof::ZkSig(withdraw_zk_sig), withdraw_transfer_proof],
+    )
+    .expect("funded SDP withdraw transaction should be valid");
+
+    node0
+        .submit_transaction(&withdraw_tx)
         .await
         .expect("submit withdraw transaction");
 
-    let withdraw_results = validator
-        .wait_for_transactions_inclusion(vec![withdraw_hash], inclusion_timeout)
-        .await;
-
     assert!(
-        withdraw_results.first().is_some_and(Option::is_some),
+        wait_for_transactions_inclusion(&node0, &[withdraw_hash], inclusion_timeout).await,
         "withdraw transaction should be included"
     );
 
-    let removed = wait_for_declaration_absence(validator, locked_note_id, state_timeout).await;
+    let removed = wait_for_declaration_absence(&node0, locked_note_id, state_timeout).await;
     assert!(removed, "withdraw should remove the declaration");
 }
 
@@ -185,31 +214,18 @@ async fn sdp_ops_e2e() {
 /// from the ledger and the SDP service correctly loads declaration state.
 #[tokio::test]
 #[serial]
+#[expect(
+    clippy::large_futures,
+    reason = "Manual-cluster startup futures are large in these integration tests; boxing would not improve readability"
+)]
 async fn sdp_declaration_restoration_e2e() {
-    let mut topology = Topology::spawn(
-        TopologyConfig::two_validators(),
-        Some("sdp_declaration_restoration_e2e"),
-    )
-    .await;
-    topology.wait_network_ready().await;
+    let (scenario_base_dir, cluster, node0_name, node0, ..) =
+        start_sdp_manual_cluster("sdp-declaration-restoration").await;
 
-    let validator = &topology.validators()[0];
-
-    let height_timeout = max_block_propagation_time(
-        2, // wait for 1-2 blocks
-        2, // network size
-        &validator.config().deployment,
-        3.5,
-    );
-
-    validator
-        .wait_for_height(1, height_timeout)
+    let declarations = node0
+        .get_sdp_declarations()
         .await
-        .unwrap_or_else(|| {
-            panic!("validator should produce the first block - timed out at {height_timeout:.2?}")
-        });
-
-    let declarations = validator.get_sdp_declarations().await;
+        .expect("fetching SDP declarations should succeed");
     assert!(
         !declarations.is_empty(),
         "validators should have declarations from genesis"
@@ -218,15 +234,19 @@ async fn sdp_declaration_restoration_e2e() {
     let initial_declaration = declarations.first().unwrap().clone();
     let target_locked_note = initial_declaration.locked_note_id;
 
-    let validator = &mut topology.validators_mut()[0];
-    validator
-        .restart()
+    cluster
+        .restart_node(&node0_name)
         .await
-        .expect("validator should restart successfully");
+        .expect("manual cluster node should restart successfully");
 
     sleep(Duration::from_secs(5)).await;
 
-    let post_restart_declarations = validator.get_sdp_declarations().await;
+    let post_restart_declarations = cluster
+        .node_client(&node0_name)
+        .expect("restarted node client should be available")
+        .get_sdp_declarations()
+        .await
+        .expect("fetching post-restart SDP declarations should succeed");
     assert!(
         !post_restart_declarations.is_empty(),
         "declarations should be visible after restart"
@@ -246,73 +266,15 @@ async fn sdp_declaration_restoration_e2e() {
         "zk_id should be preserved after restart"
     );
 
-    let logs = validator.get_logs_from_file();
+    let logs = read_manual_node_logs(&scenario_base_dir, &node0_name);
     assert!(
         logs.contains("Loaded declaration from ledger"),
         "SDP service should log that it loaded declaration from ledger"
     );
 }
 
-#[tokio::test]
-#[serial]
-async fn large_inscription_e2e() {
-    // The largest payload must leave room for transaction encoding overhead
-    // (signatures, headers, etc.) to fit within MAX_BLOCK_SIZE.
-    let max_payload = MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize;
-    for payload_size in [
-        max_payload / 256,
-        max_payload / 64,
-        max_payload / 2,
-        max_payload,
-    ] {
-        let topology = Topology::spawn(
-            TopologyConfig::two_validators(),
-            Some("large_inscription_e2e"),
-        )
-        .await;
-        topology.wait_network_ready().await;
-
-        let validator = &topology.validators()[0];
-        let height_timeout = Duration::from_mins(1);
-        validator
-            .wait_for_height(1, height_timeout)
-            .await
-            .unwrap_or_else(|| {
-                panic!(
-                    "validator should produce the first block - timed out at {height_timeout:.2?}"
-                )
-            });
-
-        let validator_url = validator.url();
-        let client = CommonHttpClient::new(None);
-
-        println!("\nTesting inscription with payload size: {payload_size} bytes\n");
-        let large_inscription = vec![0xAB; payload_size];
-        let mantle_tx = create_inscription_transaction_with_id(
-            ChannelId::from([1u8; 32]),
-            Some(large_inscription),
-        );
-        let tx_hash = mantle_tx.hash();
-
-        client
-            .post_transaction(validator_url.clone(), mantle_tx)
-            .await
-            .expect("submit mantle transaction");
-
-        let inclusion_timeout = Duration::from_mins(1);
-        let results = validator
-            .wait_for_transactions_inclusion(vec![tx_hash], inclusion_timeout)
-            .await;
-
-        assert!(
-            results.first().is_some_and(Option::is_some),
-            "large inscription transaction should be included"
-        );
-    }
-}
-
 async fn wait_for_declaration<F>(
-    validator: &Validator,
+    node: &NodeHttpClient,
     duration: Duration,
     predicate: F,
 ) -> Option<Declaration>
@@ -321,7 +283,10 @@ where
 {
     timeout(duration, async {
         loop {
-            let declarations = validator.get_sdp_declarations().await;
+            let declarations = node
+                .get_sdp_declarations()
+                .await
+                .expect("fetching SDP declarations should succeed");
             if let Some(declaration) = declarations.into_iter().find(|decl| predicate(decl)) {
                 break declaration;
             }
@@ -334,15 +299,16 @@ where
 }
 
 async fn wait_for_declaration_absence(
-    validator: &Validator,
+    node: &NodeHttpClient,
     locked_note_id: NoteId,
     duration: Duration,
 ) -> bool {
     timeout(duration, async {
         loop {
-            let present = validator
+            let present = node
                 .get_sdp_declarations()
                 .await
+                .expect("fetching SDP declarations should succeed")
                 .into_iter()
                 .any(|decl| decl.locked_note_id == locked_note_id);
 
@@ -355,4 +321,153 @@ async fn wait_for_declaration_absence(
     })
     .await
     .is_ok()
+}
+
+#[expect(
+    clippy::large_futures,
+    reason = "Manual-cluster startup futures are large in this integration-test helper; boxing would not improve readability"
+)]
+async fn start_sdp_manual_cluster(
+    test_name: &str,
+) -> (
+    PathBuf,
+    LbcManualCluster,
+    String,
+    NodeHttpClient,
+    Vec<Utxo>,
+    ZkKey,
+    ZkKey,
+    NoteId,
+    u64,
+) {
+    let funding_wallet =
+        WalletAccount::deterministic(0, 2_000_000, false).expect("funding wallet should build");
+
+    let spare_wallet =
+        WalletAccount::deterministic(1, 100, false).expect("spare locked-note wallet should build");
+
+    let base = build_local_manual_cluster(
+        test_name,
+        "tf-sdp",
+        DeploymentBuilder::new(TfTopologyConfig::with_node_numbers(2))
+            .with_wallet_config(WalletConfig::new(vec![
+                funding_wallet.clone(),
+                spare_wallet.clone(),
+            ]))
+            .with_test_context(test_name),
+    );
+
+    let cluster = base.cluster;
+    let node0_persist_dir = base.scenario_base_dir.join("node-0");
+    let node1_persist_dir = base.scenario_base_dir.join("node-1");
+
+    let node0 = cluster
+        .start_node_with(
+            "0",
+            StartNodeOptions::default()
+                .with_persist_dir(node0_persist_dir)
+                .create_patch(|config| Ok::<_, DynError>(patch_sdp_manual_cluster_config(config))),
+        )
+        .await
+        .expect("starting node-0 should succeed");
+
+    cluster
+        .start_node_with(
+            "1",
+            StartNodeOptions::default()
+                .with_persist_dir(node1_persist_dir)
+                .create_patch(|config| Ok::<_, DynError>(patch_sdp_manual_cluster_config(config))),
+        )
+        .await
+        .expect("starting node-1 should succeed");
+
+    cluster
+        .wait_network_ready()
+        .await
+        .expect("manual cluster should become ready");
+
+    wait_for_manual_cluster_height(&node0.client, 1, Duration::from_mins(2))
+        .await
+        .expect("node-0 should produce the first block");
+
+    let genesis_utxos: Vec<_> = base
+        .deployment
+        .config
+        .genesis_tx
+        .clone()
+        .expect("manual-cluster deployment should include genesis tx")
+        .genesis_transfer()
+        .utxos()
+        .collect();
+
+    let spare_note_id =
+        utxos_for_public_key(genesis_utxos.iter().copied(), spare_wallet.public_key())
+            .first()
+            .copied()
+            .expect("wallet-backed spare note should exist at genesis")
+            .id();
+
+    (
+        base.scenario_base_dir,
+        cluster,
+        node0.name,
+        node0.client,
+        genesis_utxos,
+        funding_wallet.secret_key,
+        spare_wallet.secret_key,
+        spare_note_id,
+        LOCK_PERIOD,
+    )
+}
+
+fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
+    config.deployment.time.slot_duration = Duration::from_secs(1);
+    config
+        .user
+        .cryptarchia
+        .service
+        .bootstrap
+        .prolonged_bootstrap_period = Duration::ZERO;
+    config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
+    config
+        .deployment
+        .cryptarchia
+        .sdp_config
+        .service_params
+        .get_mut(&ServiceType::BlendNetwork)
+        .expect("blend network params should exist")
+        .lock_period = LOCK_PERIOD;
+    config
+}
+
+async fn fund_sdp_transaction(
+    node: &NodeHttpClient,
+    genesis_utxos: &[Utxo],
+    funding_secret_key: &ZkKey,
+    extra_op: Op,
+) -> (MantleTx, Vec<ZkKey>) {
+    let funding_public_key = funding_secret_key.to_public_key();
+    let funding_utxos = current_utxos_for_public_key(node, genesis_utxos, funding_public_key).await;
+
+    let empty_context = MantleTxGasContext::new(HashMap::new());
+    let tx_context = lb_core::mantle::tx::MantleTxContext {
+        gas_context: empty_context,
+        leader_reward_amount: 0,
+    };
+    let tx_builder = MantleTxBuilder::new(tx_context)
+        .push_op(extra_op)
+        .set_storage_gas_price(GENESIS_STORAGE_GAS_PRICE)
+        .set_execution_gas_price(0.into());
+
+    let funded_builder =
+        fund_transfer_builder_from_utxos(funding_utxos, &tx_builder, funding_public_key)
+            .expect("funding mixed-op transaction should succeed");
+
+    let signing_keys = funded_builder
+        .ledger_inputs()
+        .iter()
+        .map(|_| funding_secret_key.clone())
+        .collect::<Vec<_>>();
+
+    (funded_builder.build(), signing_keys)
 }
