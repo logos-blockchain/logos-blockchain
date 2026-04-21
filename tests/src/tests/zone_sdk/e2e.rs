@@ -321,7 +321,12 @@ async fn wait_for_indexer_unordered(
 
         while let Some((msg, slot)) = stream.next().await {
             if let ZoneMessage::Block(block) = msg {
-                if expected.contains(&block.data) && seen.insert(block.data.clone()) {
+                if expected.contains(&block.data) {
+                    assert!(
+                        seen.insert(block.data.clone()),
+                        "Duplicate inscription on chain: {:?}",
+                        String::from_utf8_lossy(&block.data)
+                    );
                     debug!("Found payload: {}", String::from_utf8_lossy(&block.data));
                 }
                 last_zone_block = Some((block.id, slot));
