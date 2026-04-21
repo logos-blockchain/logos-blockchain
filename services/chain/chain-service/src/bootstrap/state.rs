@@ -4,13 +4,14 @@ use lb_core::header::HeaderId;
 use tracing::warn;
 
 use crate::{
-    BootstrapConfig, OfflineGracePeriodConfig, bootstrap::LOG_TARGET, states::LastEngineState,
+    BootstrapConfig, OfflineGracePeriodConfig, Slot, bootstrap::LOG_TARGET, states::LastEngineState,
 };
 
 pub fn choose_engine_state(
     lib_id: HeaderId,
     genesis_id: HeaderId,
     config: &BootstrapConfig,
+    current_slot: Slot,
     last_engine_state: Option<&LastEngineState>,
 ) -> lb_cryptarchia_engine::State {
     if lib_id == genesis_id || config.force_bootstrap {

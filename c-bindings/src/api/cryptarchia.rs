@@ -10,6 +10,7 @@ use crate::{
 pub enum State {
     Bootstrapping = 0x0,
     Online = 0x1,
+    NotStarted = 0x2,
 }
 
 impl From<lb_cryptarchia_engine::State> for State {
@@ -17,6 +18,7 @@ impl From<lb_cryptarchia_engine::State> for State {
         match value {
             lb_cryptarchia_engine::State::Bootstrapping => Self::Bootstrapping,
             lb_cryptarchia_engine::State::Online => Self::Online,
+            lb_cryptarchia_engine::State::NotStarted => Self::NotStarted,
         }
     }
 }

@@ -15,11 +15,17 @@ pub(crate) const LOG_TARGET: &str = "cryptarchia::engine";
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum State {
+    NotStarted,
     Bootstrapping,
     Online,
 }
 
 impl State {
+    #[must_use]
+    pub const fn is_not_started(&self) -> bool {
+        matches!(self, Self::NotStarted)
+    }
+
     #[must_use]
     pub const fn is_bootstrapping(&self) -> bool {
         matches!(self, Self::Bootstrapping)
@@ -36,6 +42,7 @@ impl State {
         Id: Eq + Hash + Copy,
     {
         match cryptarchia.state {
+            Self::NotStarted => (cryptarchia.local_chain, cryptarchia.local_chain),
             Self::Bootstrapping => {
                 let k = cryptarchia.config.security_param().get().into();
                 let s_gen = cryptarchia.config.s_gen();
@@ -53,7 +60,7 @@ impl State {
         Id: Eq + Hash + Copy,
     {
         match cryptarchia.state {
-            Self::Bootstrapping => cryptarchia.branches.lib,
+            Self::Bootstrapping | Self::NotStarted => cryptarchia.branches.lib,
             Self::Online => cryptarchia
                 .branches
                 .nth_ancestor(
@@ -339,6 +346,20 @@ impl<Id> Cryptarchia<Id>
 where
     Id: Eq + Hash + Copy + Debug,
 {
+    pub fn from_genesis(genesis_id: Id, config: Config) -> Self {
+        Self {
+            local_chain: Branch {
+                id: genesis_id,
+                parent: genesis_id,
+                slot: 0.into(),
+                length: 0,
+            },
+            branches: Branches::from_lib(genesis_id, 0.into(), 0),
+            config,
+            state: State::NotStarted,
+        }
+    }
+
     pub fn from_lib(id: Id, config: Config, state: State, slot: Slot, length: u64) -> Self {
         Self {
             branches: Branches::from_lib(id, slot, length),

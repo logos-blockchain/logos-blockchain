@@ -404,6 +404,10 @@ impl Cryptarchia {
         (cryptarchia, pruned_blocks)
     }
 
+    const fn is_not_started(&self) -> bool {
+        self.consensus.state().is_not_started()
+    }
+
     const fn is_boostrapping(&self) -> bool {
         self.consensus.state().is_bootstrapping()
     }
@@ -1191,6 +1195,7 @@ where
             lib_id,
             genesis_id,
             bootstrap_config,
+            current_slot,
             self.state.last_engine_state.as_ref(),
         );
         let mut cryptarchia = Cryptarchia::from_lib(
