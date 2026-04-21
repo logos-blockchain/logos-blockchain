@@ -4,6 +4,8 @@ use std::{
     time::Duration,
 };
 
+use hex::ToHex as _;
+use lb_core::codec::SerializeOp as _;
 use lb_libp2p::{PeerId, identity, identity::ed25519};
 use lb_node::UserConfig;
 use lb_testing_framework::{CoreBuilderExt as _, ScenarioBuilder};
@@ -162,24 +164,11 @@ fn user_config_from_node_yaml(path: &Path) -> Result<UserConfig, StepError> {
     Ok(config)
 }
 
-/// Reads a node YAML user config file and extracts the funding wallet public
-/// key. Returns the key from `wallet.known_keys` that is not the
-/// `voucher_master_key_id`.
+/// Reads a node YAML user config file and extracts the configured SDP funding
+/// wallet public key.
 pub fn funding_wallet_pk_from_node_yaml(path: &Path) -> Result<String, StepError> {
     let config = user_config_from_node_yaml(path)?;
-
-    config
-        .wallet
-        .known_keys
-        .keys()
-        .find(|&key| key != &config.wallet.voucher_master_key_id)
-        .cloned()
-        .ok_or_else(|| StepError::LogicalError {
-            message: format!(
-                "No wallet public key found in 'wallet.known_keys' (other than voucher_master_key_id) in '{}'",
-                path.display()
-            ),
-        })
+    Ok(config.sdp.wallet.funding_pk.to_bytes()?.encode_hex())
 }
 
 /// Extracts the child directory name that starts with a known prefix,

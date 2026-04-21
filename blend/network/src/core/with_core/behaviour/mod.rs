@@ -378,6 +378,14 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
         &self.negotiated_peers
     }
 
+    /// Returns the peer IDs of the old session's negotiated peers, if a
+    /// session transition is in progress.
+    pub fn old_session_peer_ids(&self) -> Option<impl Iterator<Item = &PeerId> + '_> {
+        self.old_session
+            .as_ref()
+            .map(OldSession::negotiated_peer_ids)
+    }
+
     fn try_wake(&mut self) {
         if let Some(waker) = self.waker.take() {
             waker.wake();

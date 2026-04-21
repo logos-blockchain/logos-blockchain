@@ -49,6 +49,7 @@ libp2p                           = "0.55.0"
 num-bigint                       = { default-features = false, version = "0.4" }
 rand                             = { workspace = true }
 reqwest                          = { features = ["json"], workspace = true }
+rpds                             = { default-features = false, version = "1.1.1" }
 serde_json                       = "1.0"
 serde_yaml                       = "0.9"
 serial_test                      = "3.1.1"
@@ -73,28 +74,8 @@ name = "blend_devnet_setup"
 path = "src/tests/blend/devnet.rs"
 
 [[test]]
-name = "test_cryptarchia_happy_path"
-path = "src/tests/cryptarchia/happy.rs"
-
-[[test]]
-name = "test_cryptarchia_bootstrap"
-path = "src/tests/cryptarchia/bootstrap.rs"
-
-[[test]]
-name = "test_orphan_handling"
-path = "src/tests/cryptarchia/orphan.rs"
-
-[[test]]
-name = "test_immutable_blocks"
-path = "src/tests/cryptarchia/immutable_blocks.rs"
-
-[[test]]
-name = "test_invalid_tx_handling"
-path = "src/tests/cryptarchia/invalid_tx_handling.rs"
-
-[[test]]
-name = "test_mempool_api"
-path = "src/tests/mempool/api.rs"
+name = "test_cli_restart"
+path = "src/tests/cli/restart.rs"
 
 [[test]]
 name = "test_mantle_channel"
@@ -107,10 +88,6 @@ path = "src/tests/mantle/sdp_ops.rs"
 [[test]]
 name = "test_mantle_leader"
 path = "src/tests/mantle/leader.rs"
-
-[[test]]
-name = "test_cli_restart"
-path = "src/tests/cli/restart.rs"
 
 [[test]]
 name              = "test_testing_framework_smoke_local"

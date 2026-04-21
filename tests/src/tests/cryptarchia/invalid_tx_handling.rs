@@ -3,6 +3,7 @@ use std::{collections::HashSet, time::Duration};
 use lb_common_http_client::CommonHttpClient;
 use lb_core::mantle::{
     MantleTx, Note, Op, OpProof, SignedMantleTx, Transaction as _, TxHash,
+    genesis_tx::GENESIS_STORAGE_GAS_PRICE,
     ops::{channel::ChannelId, transfer::TransferOp},
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
@@ -105,7 +106,7 @@ async fn wait_for_transactions_processing(
             &mut scanned_blocks,
             |header_id| validator.get_block(header_id),
             |block| {
-                for tx in block.transactions() {
+                for tx in &block.transactions {
                     let hash = lb_core::mantle::Transaction::hash(tx);
                     if valid_tx_hashes.contains(&hash) {
                         found_valid_txs.insert(hash);
@@ -158,7 +159,7 @@ fn create_invalid_transaction_with_id(id: usize) -> SignedMantleTx {
 
     let mantle_tx = MantleTx {
         ops: vec![Op::Transfer(transfer_op)],
-        storage_gas_price: 0.into(),
+        storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
         execution_gas_price: 0.into(),
     };
 

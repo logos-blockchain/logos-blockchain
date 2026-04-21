@@ -1,8 +1,8 @@
 use std::{env as std_env, error::Error, time::Duration};
 
 use lb_testing_framework::{
-    DeploymentBuilder, LbcLocalDeployer, ScenarioBuilder, ScenarioBuilderExt as _, TopologyConfig,
-    configs::network::NetworkLayout, env,
+    CoreBuilderExt as _, DeploymentBuilder, LbcLocalDeployer, ScenarioBuilder,
+    ScenarioBuilderExt as _, TopologyConfig, configs::network::NetworkLayout, env,
 };
 use testing_framework_core::scenario::Deployer as _;
 
@@ -36,6 +36,7 @@ async fn cluster_fork_detector() -> Result<(), Box<dyn Error + Send + Sync>> {
         .scenario_base_dir(std_env::temp_dir());
 
     let mut scenario = ScenarioBuilder::new(Box::new(deployment_builder))
+        .with_block_feed()
         .with_run_duration(run_duration)
         .expect_cluster_fork_monitor()
         .build()?;

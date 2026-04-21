@@ -8,7 +8,7 @@ use std::sync::Arc;
 pub use consensus_liveness::ConsensusLiveness;
 pub use fork_monitor::ClusterForkMonitor;
 pub use inscription::*;
-use testing_framework_core::scenario::{Application, RunContext};
+use testing_framework_core::scenario::{Application, DynError, RunContext};
 use tokio::sync::broadcast;
 
 use crate::{BlockFeed, BlockRecord, NodeHttpClient, framework::LbcEnv, node::DeploymentPlan};
@@ -25,17 +25,17 @@ impl LbcScenarioEnv for LbcEnv {}
 
 /// Extension trait for environments that expose block feed views.
 pub trait LbcBlockFeedEnv: LbcScenarioEnv + Sized {
-    fn block_feed_subscription(ctx: &RunContext<Self>) -> BlockFeedSubscription;
+    fn block_feed_subscription(ctx: &RunContext<Self>) -> Result<BlockFeedSubscription, DynError>;
 
-    fn block_feed(ctx: &RunContext<Self>) -> BlockFeed;
+    fn block_feed(ctx: &RunContext<Self>) -> Result<BlockFeed, DynError>;
 }
 
 impl LbcBlockFeedEnv for LbcEnv {
-    fn block_feed_subscription(ctx: &RunContext<Self>) -> BlockFeedSubscription {
-        ctx.feed().subscribe()
+    fn block_feed_subscription(ctx: &RunContext<Self>) -> Result<BlockFeedSubscription, DynError> {
+        Self::block_feed(ctx).map(|feed| feed.subscribe())
     }
 
-    fn block_feed(ctx: &RunContext<Self>) -> BlockFeed {
-        ctx.feed()
+    fn block_feed(ctx: &RunContext<Self>) -> Result<BlockFeed, DynError> {
+        ctx.require_extension::<BlockFeed>()
     }
 }

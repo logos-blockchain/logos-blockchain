@@ -155,6 +155,12 @@ impl<'a> SnapshotAnalysis<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HeaderAtHeight {
+    header: HeaderId,
+    height: u64,
+}
+
 /// Shared progress-tracking logic for cluster-wide tip/LIB movement.
 #[derive(Clone, Copy)]
 struct ClusterProgressState {
@@ -354,7 +360,7 @@ where
     }
 
     async fn check_during_capture(&mut self, ctx: &RunContext<E>) -> Result<(), DynError> {
-        let snapshot = E::block_feed(ctx).snapshot().await;
+        let snapshot = E::block_feed(ctx)?.snapshot();
         let analysis = SnapshotAnalysis::new(&snapshot.node_heads, &snapshot.parent_edges);
 
         self.observe_snapshot(&analysis)?;
@@ -364,7 +370,7 @@ where
     }
 
     async fn evaluate(&mut self, ctx: &RunContext<E>) -> Result<(), DynError> {
-        let snapshot = E::block_feed(ctx).snapshot().await;
+        let snapshot = E::block_feed(ctx)?.snapshot();
         let analysis = SnapshotAnalysis::new(&snapshot.node_heads, &snapshot.parent_edges);
 
         self.observe_snapshot(&analysis)?;
@@ -618,12 +624,6 @@ fn distinct_lib_headers(node_heads: &[NodeHeadSnapshot]) -> Vec<HeaderId> {
         .collect::<HashSet<_>>()
         .into_iter()
         .collect()
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct HeaderAtHeight {
-    header: HeaderId,
-    height: u64,
 }
 
 /// Computes the distance between the highest and lowest observed heights.

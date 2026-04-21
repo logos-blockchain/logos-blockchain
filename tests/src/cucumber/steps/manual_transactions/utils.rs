@@ -82,6 +82,36 @@ struct PreparedUserWalletTransaction {
     signing_keys: Vec<ZkKey>,
 }
 
+pub(crate) struct PreparedUserWalletSubmission {
+    wallet: WalletInfo,
+    funded_builder: MantleTxBuilder,
+    pub(crate) tx_hash: TxHash,
+    transfer_proof: OpProof,
+    newly_encumbered: Vec<Utxo>,
+    newly_encumbered_fee: Vec<Utxo>,
+}
+
+pub async fn submit_user_wallet_built_transaction(
+    world: &mut CucumberWorld,
+    step: &str,
+    sender_wallet_name: &str,
+    tx_builder: MantleTxBuilder,
+    sender_output_total: u64,
+    best_node_info: Option<&BestNodeInfo>,
+) -> Result<TxHash, StepError> {
+    let prepared = prepare_user_wallet_built_transaction_submission(
+        world,
+        step,
+        sender_wallet_name,
+        tx_builder,
+        sender_output_total,
+        best_node_info,
+    )
+    .await?;
+
+    submit_prepared_user_wallet_transaction(world, step, prepared, Vec::new(), best_node_info).await
+}
+
 pub async fn create_and_submit_transaction(
     world: &mut CucumberWorld,
     step: &str,
@@ -89,22 +119,43 @@ pub async fn create_and_submit_transaction(
     receivers: &[(ZkPublicKey, u64)],
     best_node_info: Option<&BestNodeInfo>,
 ) -> Result<String, StepError> {
+    let tx_hashes = create_and_submit_transaction_hashes(
+        world,
+        step,
+        sender_wallet_name,
+        receivers,
+        best_node_info,
+    )
+    .await?;
+
+    let tx_hashes_hex: String = tx_hashes
+        .iter()
+        .map(|h| {
+            h.to_bytes()
+                .unwrap()
+                .to_ascii_lowercase()
+                .encode_hex::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Ok(tx_hashes_hex)
+}
+
+pub async fn create_and_submit_transaction_hashes(
+    world: &mut CucumberWorld,
+    step: &str,
+    sender_wallet_name: &str,
+    receivers: &[(ZkPublicKey, u64)],
+    best_node_info: Option<&BestNodeInfo>,
+) -> Result<Vec<TxHash>, StepError> {
     let wallet = world.resolve_wallet(sender_wallet_name).inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step);
     })?;
 
     let tx_hashes = match wallet.wallet_type {
-        WalletType::User { ref wallet_account } => vec![
-            submit_user_wallet_transaction(
-                world,
-                step,
-                sender_wallet_name,
-                &wallet,
-                wallet_account,
-                receivers,
-                best_node_info,
-            )
-            .await?,
+        WalletType::User { .. } => vec![
+            submit_user_wallet_transaction(world, step, &wallet, receivers, best_node_info).await?,
         ],
         WalletType::Funding { .. } => {
             let mut tx_hashes = Vec::with_capacity(receivers.len());
@@ -128,29 +179,52 @@ pub async fn create_and_submit_transaction(
         }
     };
 
-    let tx_hashes_hex: String = tx_hashes
-        .iter()
-        .map(|h| {
-            h.to_bytes()
-                .unwrap()
-                .to_ascii_lowercase()
-                .encode_hex::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    Ok(tx_hashes_hex)
+    Ok(tx_hashes)
 }
 
 async fn submit_user_wallet_transaction(
     world: &mut CucumberWorld,
     step: &str,
-    sender_wallet_name: &str,
     wallet: &WalletInfo,
-    wallet_account: &WalletAccount,
     receivers: &[(ZkPublicKey, u64)],
     best_node_info: Option<&BestNodeInfo>,
 ) -> Result<TxHash, StepError> {
+    let prepared = prepare_user_wallet_built_transaction_submission(
+        world,
+        step,
+        &wallet.wallet_name,
+        base_user_wallet_transaction(receivers),
+        receivers.iter().map(|(_, value)| *value).sum(),
+        best_node_info,
+    )
+    .await?;
+
+    submit_prepared_user_wallet_transaction(world, step, prepared, Vec::new(), best_node_info).await
+}
+
+pub(crate) async fn prepare_user_wallet_built_transaction_submission(
+    world: &mut CucumberWorld,
+    step: &str,
+    sender_wallet_name: &str,
+    tx_builder: MantleTxBuilder,
+    sender_output_total: u64,
+    best_node_info: Option<&BestNodeInfo>,
+) -> Result<PreparedUserWalletSubmission, StepError> {
+    let wallet = world.resolve_wallet(sender_wallet_name).inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step);
+    })?;
+
+    let wallet_account = match &wallet.wallet_type {
+        WalletType::User { wallet_account } => wallet_account,
+        WalletType::Funding { .. } => {
+            return Err(StepError::InvalidArgument {
+                message: format!(
+                    "Wallet `{sender_wallet_name}` must be a user wallet for this step"
+                ),
+            });
+        }
+    };
+
     let available_utxos =
         update_wallet_balance_all_user_wallets(world, step, best_node_info).await?;
     let sender_available_utxos =
@@ -168,29 +242,59 @@ async fn submit_user_wallet_transaction(
         newly_encumbered,
         newly_encumbered_fee,
         signing_keys,
-    } = prepare_user_wallet_transaction(
+    } = prepare_built_user_wallet_transaction(
         step,
-        receivers,
+        tx_builder,
+        sender_output_total,
         sender_available_utxos,
         scenario_fee_state,
         wallet_account,
     )?;
 
-    let mantle_tx = funded_builder.build();
+    let mantle_tx = funded_builder.clone().build();
     let tx_hash = mantle_tx.hash();
     let transfer_proof = ZkKey::multi_sign(&signing_keys, tx_hash.as_ref()).inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step);
     })?;
 
-    let signed_tx = SignedMantleTx::new(mantle_tx, vec![OpProof::ZkSig(transfer_proof)])
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step);
-        })?;
+    Ok(PreparedUserWalletSubmission {
+        wallet,
+        funded_builder,
+        tx_hash,
+        transfer_proof: OpProof::ZkSig(transfer_proof),
+        newly_encumbered,
+        newly_encumbered_fee,
+    })
+}
+
+pub(crate) async fn submit_prepared_user_wallet_transaction(
+    world: &mut CucumberWorld,
+    step: &str,
+    prepared: PreparedUserWalletSubmission,
+    mut extra_op_proofs: Vec<OpProof>,
+    best_node_info: Option<&BestNodeInfo>,
+) -> Result<TxHash, StepError> {
+    let PreparedUserWalletSubmission {
+        wallet,
+        funded_builder,
+        tx_hash,
+        transfer_proof,
+        newly_encumbered,
+        newly_encumbered_fee,
+    } = prepared;
+    let sender_wallet_name = wallet.wallet_name.as_str();
+
+    let mantle_tx = funded_builder.build();
+    extra_op_proofs.push(transfer_proof);
+
+    let signed_tx = SignedMantleTx::new(mantle_tx, extra_op_proofs).inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step);
+    })?;
 
     let (_, best_node_client, _) =
         sanitize_best_node_info(world, &wallet.wallet_name, best_node_info).await?;
     world
-        .submit_transaction(wallet, &signed_tx, best_node_client)
+        .submit_transaction(&wallet, &signed_tx, best_node_client)
         .await
         .inspect_err(|e| {
             warn!(target: TARGET, "Step `{}` error: {e}", step);
@@ -226,9 +330,10 @@ async fn submit_user_wallet_transaction(
     Ok(tx_hash)
 }
 
-fn prepare_user_wallet_transaction(
+fn prepare_built_user_wallet_transaction(
     step: &str,
-    receivers: &[(ZkPublicKey, u64)],
+    tx_builder: MantleTxBuilder,
+    sender_output_total: u64,
     sender_utxos: Vec<Utxo>,
     scenario_fee_state: Option<(WalletAccount, Vec<Utxo>)>,
     wallet_account: &WalletAccount,
@@ -236,10 +341,11 @@ fn prepare_user_wallet_transaction(
     let sender_pk = wallet_account.public_key();
     let (funded_builder_result, fee_pk, fee_signing_key) = match scenario_fee_state {
         Some((fee_wallet_account, fee_utxos)) => (
-            build_sponsored_user_wallet_transaction(
-                receivers,
-                sender_utxos,
+            fund_sponsored_user_wallet_transaction(
+                tx_builder,
+                sender_output_total,
                 fee_utxos,
+                sender_utxos,
                 wallet_account,
                 &fee_wallet_account,
             ),
@@ -247,7 +353,7 @@ fn prepare_user_wallet_transaction(
             Some(fee_wallet_account.secret_key.clone()),
         ),
         None => (
-            build_unsponsored_user_wallet_transaction(receivers, sender_utxos, wallet_account),
+            fund_unsponsored_user_wallet_transaction(&tx_builder, sender_utxos, wallet_account),
             None,
             None,
         ),
@@ -660,35 +766,6 @@ fn log_wallet_balance(
     );
 }
 
-/// Builds and funds a user wallet transaction using a scenario fee sponsor.
-fn build_sponsored_user_wallet_transaction(
-    receivers: &[(ZkPublicKey, u64)],
-    sender_utxos: Vec<Utxo>,
-    fee_utxos: Vec<Utxo>,
-    wallet_account: &WalletAccount,
-    fee_wallet_account: &WalletAccount,
-) -> Result<MantleTxBuilder, WalletError> {
-    let tx_builder = base_user_wallet_transaction(receivers);
-    fund_sponsored_user_wallet_transaction(
-        tx_builder,
-        receivers.iter().map(|(_, value)| *value).sum(),
-        sender_utxos,
-        wallet_account.public_key(),
-        fee_utxos,
-        fee_wallet_account.public_key(),
-    )
-}
-
-/// Builds and funds a user wallet transaction from the wallet's own UTXOs.
-fn build_unsponsored_user_wallet_transaction(
-    receivers: &[(ZkPublicKey, u64)],
-    sender_utxos: Vec<Utxo>,
-    wallet_account: &WalletAccount,
-) -> Result<MantleTxBuilder, WalletError> {
-    let tx_builder = base_user_wallet_transaction(receivers);
-    fund_user_wallet_transaction(&tx_builder, sender_utxos, wallet_account.public_key())
-}
-
 fn base_user_wallet_transaction(receivers: &[(ZkPublicKey, u64)]) -> MantleTxBuilder {
     let empty_context = MantleTxContext {
         gas_context: MantleTxGasContext::new(HashMap::new()),
@@ -704,27 +781,35 @@ fn base_user_wallet_transaction(receivers: &[(ZkPublicKey, u64)]) -> MantleTxBui
     tx_builder
 }
 
-fn fund_user_wallet_transaction(
+fn fund_unsponsored_user_wallet_transaction(
     tx_builder: &MantleTxBuilder,
     mut sender_utxos: Vec<Utxo>,
-    sender_change_pk: ZkPublicKey,
+    wallet_account: &WalletAccount,
 ) -> Result<MantleTxBuilder, WalletError> {
     sender_utxos.sort_by_key(|utxo| Reverse(utxo.note.value));
-    fund_builder_from_ordered_utxos(tx_builder, &sender_utxos, sender_change_pk)
+    fund_builder_from_ordered_utxos(tx_builder, &sender_utxos, wallet_account.public_key())
 }
 
 fn fund_sponsored_user_wallet_transaction(
     tx_builder: MantleTxBuilder,
     output_total: u64,
-    sender_utxos: Vec<Utxo>,
-    sender_change_pk: ZkPublicKey,
     fee_utxos: Vec<Utxo>,
-    fee_change_pk: ZkPublicKey,
+    sender_utxos: Vec<Utxo>,
+    wallet_account: &WalletAccount,
+    fee_wallet_account: &WalletAccount,
 ) -> Result<MantleTxBuilder, WalletError> {
-    let builder_with_sender =
-        add_sender_inputs_and_change(tx_builder, output_total, sender_utxos, sender_change_pk)?;
+    let builder_with_sender = add_sender_inputs_and_change(
+        tx_builder,
+        output_total,
+        sender_utxos,
+        wallet_account.public_key(),
+    )?;
 
-    fund_with_fee_inputs(builder_with_sender, fee_utxos, fee_change_pk)
+    fund_with_fee_inputs(
+        builder_with_sender,
+        fee_utxos,
+        fee_wallet_account.public_key(),
+    )
 }
 
 fn add_sender_inputs_and_change(
@@ -1204,7 +1289,7 @@ fn get_last_known_height<'a>(
         |&cached_header_id| {
             let cached_height = node_header_heights
                 .get(wallet_node_name)
-                .and_then(|m| m.get(cached_header_id))
+                .and_then(|m: &HashMap<String, u64>| m.get(cached_header_id))
                 .copied();
 
             cached_height.map_or((1, "~"), |h| (h + 1, ""))

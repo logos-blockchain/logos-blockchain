@@ -39,8 +39,8 @@ use crate::cucumber::{
         matching_child_dirs, peer_id_from_node_yaml, track_progress, truncate_hash,
     },
     world::{
-        ChainInfoMap, CucumberWorld, NodeInfo, PublicCryptarchiaEndpointPeer, UserConfigOverride,
-        WalletInfo, WalletInfoMap, WalletType,
+        ChainInfoMap, CucumberWorld, ManualNodeConfigOverrides, NodeInfo,
+        PublicCryptarchiaEndpointPeer, UserConfigOverride, WalletInfo, WalletInfoMap, WalletType,
     },
 };
 
@@ -620,7 +620,8 @@ pub async fn start_node(
                     prepare_config_patch(
                         &mut config,
                         startup_settings.join_external_network,
-                        &startup_settings.deployment_override,
+                        startup_settings.deployment_override.as_ref(),
+                        &startup_settings.config_overrides,
                         startup_settings.initial_peers_override.as_ref(),
                         &startup_settings.ibd_peers,
                         &startup_settings.user_config_overrides,
@@ -836,7 +837,8 @@ struct StartupSettings {
     is_bootstrap_node: bool,
     initial_peers_override: Option<Vec<Multiaddr>>,
     join_external_network: bool,
-    deployment_override: DeploymentSettings,
+    deployment_override: Option<DeploymentSettings>,
+    config_overrides: ManualNodeConfigOverrides,
     user_config_overrides: Vec<UserConfigOverride>,
 }
 
@@ -867,11 +869,11 @@ fn get_startup_settings(
     let is_bootstrap_node = initial_peers.is_empty();
     let initial_peers_override = world.initial_peers_override.clone();
     let join_external_network = world.join_external_network.unwrap_or_default();
-    let deployment_override = if let Some(path) = world.deployment_config_override_path.clone() {
-        load_run_config(&path)?
-    } else {
-        DeploymentSettings::from(WellKnownDeployment::Devnet)
-    };
+    let deployment_override = world
+        .deployment_config_override_path
+        .clone()
+        .map(|path| load_run_config(&path))
+        .transpose()?;
     let user_config_overrides = world.user_config_overrides.clone();
 
     Ok(StartupSettings {
@@ -881,6 +883,7 @@ fn get_startup_settings(
         initial_peers_override,
         join_external_network,
         deployment_override,
+        config_overrides: world.manual_node_config_overrides.clone(),
         user_config_overrides,
     })
 }
@@ -888,14 +891,22 @@ fn get_startup_settings(
 fn prepare_config_patch(
     config: &mut RunConfig,
     join_external_network: bool,
-    deployment_override: &DeploymentSettings,
+    deployment_override: Option<&DeploymentSettings>,
+    config_overrides: &ManualNodeConfigOverrides,
     initial_peers_override: Option<&Vec<Multiaddr>>,
     ibd_peers: &HashSet<PeerId>,
     user_config_overrides: &[UserConfigOverride],
 ) -> Result<(), StepError> {
     if join_external_network {
+        config.deployment = deployment_override
+            .cloned()
+            .unwrap_or_else(|| DeploymentSettings::from(WellKnownDeployment::Devnet));
+    } else if let Some(deployment_override) = deployment_override {
         config.deployment = deployment_override.clone();
     }
+
+    config_overrides.apply_to(config);
+
     if let Some(initial_peers) = &initial_peers_override {
         config
             .user

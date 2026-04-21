@@ -40,6 +40,16 @@ Feature: Cryptarchia
     Then all nodes have at least 4 blocks and converged to within 1 blocks in 300 seconds
     Then I stop all nodes
 
+  @cryptarchia_ci
+  Scenario: Two nodes immutable blocks
+    Given I have a cluster with capacity of 2 nodes
+    And the cluster uses cryptarchia security parameter 5
+    And the cluster uses prolonged bootstrap period of 0 seconds
+    And I start node "NODE_1"
+    And I start peer node "NODE_2" connected to node "NODE_1"
+    Then all nodes share the same LIB at or above height 5 in 300 seconds
+    Then I stop all nodes
+
   @cryptarchia_ci @undefined_behaviour
   Scenario: Orphan staggered fork start 1
     Given I have a cluster with capacity of 7 nodes
