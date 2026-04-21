@@ -1,4 +1,4 @@
-use std::{pin::Pin, time::Duration};
+use std::time::Duration;
 
 use futures::{StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
 use lb_common_http_client::{ProcessedBlockEvent, Slot};
@@ -91,13 +91,13 @@ pub enum Event {
     },
     /// Channel state changed.
     ///
-    /// When `invalidated` is empty, this is a simple extension — new
+    /// When `orphaned` is empty, this is a simple extension — new
     /// inscriptions appeared without conflicting with our pending chain.
-    /// When `invalidated` is non-empty, a competing inscription or L1 reorg
-    /// invalidated some of our pending inscriptions.
+    /// When `orphaned` is non-empty, a competing inscription or L1 reorg
+    /// orphaned some of our pending inscriptions.
     ChannelUpdate {
         /// Our pending inscriptions that are now invalid (parent taken).
-        invalidated: Vec<InscriptionInfo>,
+        orphaned: Vec<InscriptionInfo>,
         /// New inscriptions that appeared on chain since the last common
         /// message.
         adopted: Vec<InscriptionInfo>,
@@ -170,24 +170,6 @@ impl<Node> SequencerHandle<Node>
 where
     Node: adapter::Node + Sync,
 {
-    /// Subscribe to sequencer events.
-    ///
-    /// Use this with [`spawn`](ZoneSequencer::spawn) to react to events
-    /// without driving the event loop manually:
-    ///
-    /// ```ignore
-    /// let (sequencer, handle) = ZoneSequencer::init(channel_id, key, url, None, None);
-    /// sequencer.spawn();
-    /// let mut events = handle.subscribe();
-    /// while let Ok(event) = events.recv().await {
-    ///     // handle event
-    /// }
-    /// ```
-    #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.event_tx.subscribe()
-    }
-
     /// Wait until the sequencer is connected and ready to accept requests.
     pub async fn wait_ready(&mut self) {
         while !*self.ready_rx.borrow_and_update() {
@@ -398,7 +380,7 @@ pub struct ZoneSequencer<Node> {
     last_msg_id: MsgId,
 
     // Block stream
-    blocks_stream: Option<Pin<Box<dyn futures::Stream<Item = ProcessedBlockEvent> + Send>>>,
+    blocks_stream: Option<adapter::BoxStream<ProcessedBlockEvent>>,
 
     // Resubmission
     resubmit_interval: tokio::time::Interval,
@@ -448,6 +430,9 @@ where
     }
 
     /// Create a new sequencer with custom configuration.
+    ///
+    /// Returns immediately. The sequencer emits [`Event::Ready`] once it has
+    /// connected and completed backfill.
     ///
     /// Returns the sequencer (to drive via [`next_event`](Self::next_event))
     /// and a handle (for submitting requests from other tasks).
@@ -543,24 +528,6 @@ where
         self.state
             .as_ref()
             .map(|s| build_checkpoint(s, self.last_msg_id, self.lib_slot))
-    }
-
-    /// Spawn the event loop in a background task, consuming the sequencer.
-    ///
-    /// Use after [`init`](Self::init) or
-    /// [`init_with_config`](Self::init_with_config):
-    ///
-    /// ```ignore
-    /// let (sequencer, handle) = ZoneSequencer::init(channel_id, key, url, None, None);
-    /// sequencer.spawn();
-    /// handle.publish(b"hello".to_vec()).await?;
-    /// ```
-    pub fn spawn(mut self) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
-            loop {
-                self.next_event().await;
-            }
-        })
     }
 
     /// Drive the sequencer and return the next event.
@@ -752,7 +719,7 @@ where
         match self.node.block_stream().await {
             Ok(stream) => {
                 debug!("ensure_connected: blocks stream connected");
-                self.blocks_stream = Some(Box::pin(stream));
+                self.blocks_stream = Some(stream);
             }
             Err(e) => {
                 warn!("Failed to connect to blocks stream: {e}");
@@ -792,8 +759,8 @@ where
         // Apply channel update to local publish head
         if let Some(ref update) = result.channel_update {
             debug!(
-                "ChannelUpdate: invalidated={}, adopted={}, new_tip={:?}",
-                update.invalidated.len(),
+                "ChannelUpdate: orphaned={}, adopted={}, new_tip={:?}",
+                update.orphaned.len(),
                 update.adopted.len(),
                 update.new_channel_tip,
             );
@@ -802,10 +769,10 @@ where
                 .as_ref()
                 .is_some_and(TxState::has_pending_inscriptions);
 
-            if !update.invalidated.is_empty() {
+            if !update.orphaned.is_empty() {
                 self.last_msg_id = update.new_channel_tip;
                 if let Some(s) = self.state.as_mut() {
-                    for inv in &update.invalidated {
+                    for inv in &update.orphaned {
                         debug!(
                             "Invalidated: payload={:?}",
                             String::from_utf8_lossy(&inv.payload)
@@ -820,7 +787,7 @@ where
 
         // Build events
         let channel_event = result.channel_update.map(|u| Event::ChannelUpdate {
-            invalidated: u.invalidated,
+            orphaned: u.orphaned,
             adopted: u.adopted,
             new_channel_tip: u.new_channel_tip,
         });
@@ -1077,10 +1044,10 @@ where
                 None
             } else {
                 let adopted = s.collect_inscriptions_on_branch(tip);
-                let invalidated = s.collect_pending_suffix(s.finalized_msg());
-                (!adopted.is_empty() || !invalidated.is_empty()).then_some(
+                let orphaned = s.collect_pending_suffix(s.finalized_msg());
+                (!adopted.is_empty() || !orphaned.is_empty()).then_some(
                     crate::state::ChannelUpdateInfo {
-                        invalidated,
+                        orphaned,
                         adopted,
                         new_channel_tip: channel_tip,
                     },
@@ -1113,13 +1080,13 @@ fn merge_stale_pending(
     }
     if let Some(update) = channel_update {
         let existing: std::collections::HashSet<TxHash> =
-            update.invalidated.iter().map(|i| i.tx_hash).collect();
+            update.orphaned.iter().map(|i| i.tx_hash).collect();
         update
-            .invalidated
+            .orphaned
             .extend(stale.into_iter().filter(|i| !existing.contains(&i.tx_hash)));
     } else {
         *channel_update = Some(crate::state::ChannelUpdateInfo {
-            invalidated: stale,
+            orphaned: stale,
             adopted: Vec::new(),
             new_channel_tip: s.channel_tip_at(tip),
         });
@@ -1451,7 +1418,6 @@ fn sign_tx(tx_hash: TxHash, signing_key: &Ed25519Key) -> Ed25519Signature {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use futures::Stream;
     use lb_common_http_client::{ApiBlock, ApiHeader, BlockInfo, CryptarchiaInfo, State};
     use lb_core::{
         header::ContentId,
@@ -1473,9 +1439,14 @@ mod tests {
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
         let (node, mut posted_txs) = MockNode::new();
-        let (sequencer, mut handle) = ZoneSequencer::init(channel_id, sequencer_key, node, None);
-        let _join_handle = sequencer.spawn();
-        handle.wait_ready().await;
+        let (mut sequencer, handle) = ZoneSequencer::init(channel_id, sequencer_key, node, None);
+
+        // Drive sequencer until ready
+        loop {
+            if matches!(sequencer.next_event().await, Some(Event::Ready)) {
+                break;
+            }
+        }
 
         // Prepare a deposit op and a transfer op using a depositer's key.
         // The transfer op burns the same amount of tokens as the deposit amount.
@@ -1499,25 +1470,24 @@ mod tests {
             )],
         };
 
-        // Prepare a `MantleTx` with two operations prepared and a inscribe op
-        // that presents the zone state transition corresponding to the operations.
-        let (tx, msg_id, inscription_sig) = handle
-            .prepare_tx(
+        // Prepare a `MantleTx` — drive sequencer to process the request
+        let prepare_result = tokio::select! {
+            result = handle.prepare_tx(
                 vec![
                     Op::ChannelDeposit(deposit_op.clone()),
                     Op::Transfer(transfer_op.clone()),
                 ],
                 "Mint 10 to Alice".into(),
-            )
-            .await
-            .unwrap();
+            ) => result.unwrap(),
+            _ = sequencer.next_event() => panic!("sequencer should not end"),
+        };
+        let (tx, msg_id, inscription_sig) = prepare_result;
         assert_eq!(tx.ops.len(), 3);
         assert_eq!(&tx.ops[0], &Op::ChannelDeposit(deposit_op));
         assert_eq!(&tx.ops[1], &Op::Transfer(transfer_op));
         assert!(matches!(&tx.ops[2], &Op::ChannelInscribe(_)));
 
-        // Sign the `MantleTx` with the depositer's key, and put the signature in the
-        // 2nd position of proofs since the transfer op is the 2nd op.
+        // Sign the `MantleTx` with the depositer's key
         let transfer_sig = depositer_key.sign_payload(tx.hash().as_ref()).unwrap();
         let signed_tx = SignedMantleTx::new(
             tx,
@@ -1529,11 +1499,11 @@ mod tests {
         )
         .unwrap();
 
-        // Submit the signed tx
-        let result = handle
-            .submit_signed_tx(signed_tx.clone(), msg_id)
-            .await
-            .unwrap();
+        // Submit the signed tx — drive sequencer to process
+        let result = tokio::select! {
+            result = handle.submit_signed_tx(signed_tx.clone(), msg_id) => result.unwrap(),
+            _ = sequencer.next_event() => panic!("sequencer should not end"),
+        };
         assert_eq!(result.inscription_id, signed_tx.mantle_tx.hash());
         assert_eq!(result.checkpoint.last_msg_id, msg_id);
         assert_eq!(posted_txs.recv().await.unwrap(), signed_tx);
@@ -1571,35 +1541,34 @@ mod tests {
 
         async fn block_stream(
             &self,
-        ) -> Result<
-            impl Stream<Item = ProcessedBlockEvent> + Send + 'static,
-            lb_common_http_client::Error,
-        > {
-            Ok(futures::stream::once(async {
-                ProcessedBlockEvent {
-                    block: ApiBlock {
-                        header: ApiHeader {
-                            id: HeaderId::from([1; 32]),
-                            parent_block: HeaderId::from([0; 32]),
-                            slot: 1.into(),
-                            block_root: ContentId::from([0; 32]),
-                            proof_of_leadership: Groth16LeaderProof::genesis(),
+        ) -> Result<adapter::BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
+            Ok(Box::pin(
+                futures::stream::once(async {
+                    ProcessedBlockEvent {
+                        block: ApiBlock {
+                            header: ApiHeader {
+                                id: HeaderId::from([1; 32]),
+                                parent_block: HeaderId::from([0; 32]),
+                                slot: 1.into(),
+                                block_root: ContentId::from([0; 32]),
+                                proof_of_leadership: Groth16LeaderProof::genesis(),
+                            },
+                            transactions: Vec::new(),
                         },
-                        transactions: Vec::new(),
-                    },
-                    tip: HeaderId::from([1; 32]),
-                    tip_slot: 1.into(),
-                    lib: HeaderId::from([0; 32]),
-                    lib_slot: Slot::genesis(),
-                }
-            })
-            .chain(futures::stream::pending()))
+                        tip: HeaderId::from([1; 32]),
+                        tip_slot: 1.into(),
+                        lib: HeaderId::from([0; 32]),
+                        lib_slot: Slot::genesis(),
+                    }
+                })
+                .chain(futures::stream::pending()),
+            ))
         }
 
         async fn lib_stream(
             &self,
-        ) -> Result<impl Stream<Item = BlockInfo> + Send, lb_common_http_client::Error> {
-            Ok(futures::stream::pending())
+        ) -> Result<adapter::BoxStream<BlockInfo>, lb_common_http_client::Error> {
+            Ok(Box::pin(futures::stream::pending()))
         }
 
         async fn block(
@@ -1621,8 +1590,8 @@ mod tests {
             &self,
             _id: HeaderId,
             _channel_id: ChannelId,
-        ) -> Result<impl Stream<Item = ZoneMessage>, lb_common_http_client::Error> {
-            Ok(futures::stream::pending())
+        ) -> Result<adapter::BoxStream<ZoneMessage>, lb_common_http_client::Error> {
+            Ok(Box::pin(futures::stream::pending()))
         }
 
         async fn zone_messages_in_blocks(
@@ -1630,8 +1599,8 @@ mod tests {
             _slot_from: Slot,
             _slot_to: Slot,
             _channel_id: ChannelId,
-        ) -> Result<impl Stream<Item = (ZoneMessage, Slot)>, lb_common_http_client::Error> {
-            Ok(futures::stream::pending())
+        ) -> Result<adapter::BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
+            Ok(Box::pin(futures::stream::pending()))
         }
 
         async fn post_transaction(

@@ -89,24 +89,24 @@ impl ZoneState for InMemoryZoneState {
     }
 }
 
-/// Process a channel update event: revert invalidated messages, apply adopted
+/// Process a channel update event: revert orphaned messages, apply adopted
 /// ones, and return the list of messages that need to be re-published.
 ///
 /// This is the core of conflict resolution:
-/// 1. Revert all invalidated inscriptions from our state
+/// 1. Revert all orphaned inscriptions from our state
 /// 2. Apply all adopted inscriptions to our state
-/// 3. For each invalidated message whose `tx_uuid` is NOT in our state after
-///    the update — it was truly lost and needs re-publishing
+/// 3. For each orphaned message whose `tx_uuid` is NOT in our state after the
+///    update — it was truly lost and needs re-publishing
 ///
 /// A real sequencer might add additional checks here (e.g., skip re-publishing
 /// if a swap became unprofitable on the new branch).
 pub fn resolve_conflicts(
     state: &mut dyn ZoneState,
-    invalidated: &[InscriptionInfo],
+    orphaned: &[InscriptionInfo],
     adopted: &[InscriptionInfo],
 ) -> Vec<AppMessage> {
-    // Step 1: revert invalidated
-    for inv in invalidated {
+    // Step 1: revert orphaned
+    for inv in orphaned {
         if let Some(msg) = AppMessage::from_bytes(&inv.payload) {
             state.revert(&msg.tx_uuid);
         }
@@ -121,7 +121,7 @@ pub fn resolve_conflicts(
 
     // Step 3: collect messages that need re-publishing
     let mut to_republish = Vec::new();
-    for inv in invalidated {
+    for inv in orphaned {
         if let Some(msg) = AppMessage::from_bytes(&inv.payload)
             && !state.contains(&msg.tx_uuid)
         {

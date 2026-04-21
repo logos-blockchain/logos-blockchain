@@ -99,10 +99,8 @@ async fn handle_event(
     match event {
         Event::Ready => handle_ready(state, ready_tx),
         Event::ChannelUpdate {
-            invalidated,
-            adopted,
-            ..
-        } => handle_channel_update(state, handle, &invalidated, &adopted).await,
+            orphaned, adopted, ..
+        } => handle_channel_update(state, handle, &orphaned, &adopted).await,
         Event::TxsFinalized { inscriptions, .. } => {
             finalize_inscriptions(state, &inscriptions, true);
         }
@@ -136,20 +134,20 @@ fn handle_ready(
 async fn handle_channel_update(
     state: &mut InMemoryZoneState,
     handle: &lb_zone_sdk::sequencer::SequencerHandle<NodeHttpClient>,
-    invalidated: &[lb_zone_sdk::state::InscriptionInfo],
+    orphaned: &[lb_zone_sdk::state::InscriptionInfo],
     adopted: &[lb_zone_sdk::state::InscriptionInfo],
 ) {
-    if invalidated.is_empty() && adopted.is_empty() {
+    if orphaned.is_empty() && adopted.is_empty() {
         return;
     }
 
     debug!(
-        invalidated = invalidated.len(),
+        orphaned = orphaned.len(),
         adopted = adopted.len(),
         "Channel update"
     );
 
-    let to_republish = resolve_conflicts(state, invalidated, adopted);
+    let to_republish = resolve_conflicts(state, orphaned, adopted);
     republish(handle, to_republish).await;
 
     ui::render_state(state);

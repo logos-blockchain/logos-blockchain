@@ -22,13 +22,13 @@ pub struct InscriptionInfo {
 /// Result of channel update detection.
 ///
 /// - `adopted`: newly canonical inscriptions since the last common message.
-/// - `invalidated`: local pending inscriptions whose parent is no longer
+/// - `orphaned`: local pending inscriptions whose parent is no longer
 ///   canonical.
-/// - When `invalidated` is empty, this is an extension-only update.
+/// - When `orphaned` is empty, this is an extension-only update.
 #[derive(Debug)]
 pub struct ChannelUpdateInfo {
     /// Our pending inscriptions that are now invalid (parent taken).
-    pub invalidated: Vec<InscriptionInfo>,
+    pub orphaned: Vec<InscriptionInfo>,
     /// New inscriptions that appeared on chain (from LCM to new tip).
     pub adopted: Vec<InscriptionInfo>,
     /// The new channel tip `MsgId`.
@@ -36,11 +36,11 @@ pub struct ChannelUpdateInfo {
 }
 
 impl ChannelUpdateInfo {
-    /// Returns true if this update invalidated pending inscriptions,
+    /// Returns true if this update orphaned pending inscriptions,
     /// meaning a competing inscription or L1 reorg broke our pending chain.
     #[must_use]
     pub const fn is_conflict(&self) -> bool {
-        !self.invalidated.is_empty()
+        !self.orphaned.is_empty()
     }
 }
 
@@ -484,7 +484,7 @@ impl TxState {
         // Invalidated: on reorg, the entire pending suffix from LCM is
         // orphaned. On extension, local pending suffixes can STILL become
         // stale if a competing inscription consumed the same parent.
-        let invalidated = if extends {
+        let orphaned = if extends {
             // Extension: find pending inscriptions whose parent was consumed
             // by a COMPETING inscription (not our own). An adopted inscription
             // that matches one of our pending txs (same tx_hash) is ours —
@@ -506,22 +506,22 @@ impl TxState {
             stale_roots.sort_by_key(|m| <[u8; 32]>::from(*m));
             stale_roots.dedup();
             // Collect all dependent suffixes, dedup by tx_hash
-            let mut all_invalidated = Vec::new();
+            let mut all_orphaned = Vec::new();
             let mut seen = std::collections::HashSet::new();
             for root in stale_roots {
                 for inv in self.collect_pending_suffix(root) {
                     if seen.insert(inv.tx_hash) {
-                        all_invalidated.push(inv);
+                        all_orphaned.push(inv);
                     }
                 }
             }
-            all_invalidated
+            all_orphaned
         } else {
             self.collect_pending_suffix(lcm)
         };
 
         Some(ChannelUpdateInfo {
-            invalidated,
+            orphaned,
             adopted,
             new_channel_tip,
         })
@@ -844,12 +844,8 @@ mod tests {
         assert!(update.is_some(), "should detect channel update");
         let update = update.unwrap();
 
-        // All 3 local pending inscriptions should be invalidated
-        assert_eq!(
-            update.invalidated.len(),
-            3,
-            "entire suffix should be invalidated"
-        );
+        // All 3 local pending inscriptions should be orphaned
+        assert_eq!(update.orphaned.len(), 3, "entire suffix should be orphaned");
         // Adopted should contain c1
         assert_eq!(update.adopted.len(), 1);
         assert_eq!(update.adopted[0].this_msg, c1_msg);
@@ -858,7 +854,7 @@ mod tests {
     #[test]
     fn extension_invalidates_multiple_stale_roots() {
         // Two independent pending inscriptions both target root as parent.
-        // Competing c1 lands consuming root. Both should be invalidated.
+        // Competing c1 lands consuming root. Both should be orphaned.
         let genesis = header_id(0);
         let block1 = header_id(1);
         let block2 = header_id(2);
@@ -881,8 +877,8 @@ mod tests {
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
         let update = state.detect_channel_update(block1, block2).unwrap();
-        // Both b1 and d1 should be invalidated
-        assert_eq!(update.invalidated.len(), 2);
+        // Both b1 and d1 should be orphaned
+        assert_eq!(update.orphaned.len(), 2);
     }
 
     #[test]
