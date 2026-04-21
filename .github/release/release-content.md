@@ -138,7 +138,9 @@ Having issues? Reach out to the Logos Blockchain team on [Discord][testnet-disco
     * If this is an actual release, then the previous tag is the latest release. E.g., `0.1.3` compares against `0.1.2`
 - [ ] Verify binaries are present for **Mac** and **Linux**
 - [ ] Verify circuits of the expected version are present for **Mac** and **Linux**
-- [ ] Replace `{TODO}` peer IDs by visiting the [testnet dashboard][testnet-dashboard] and copying each node's address + peer ID from their network info
+- [ ] Replace `{TODO}` peer IDs for both devnet and testnet depending on the release type.
+    * For a release candidate (for devnet), copy-paste the new addresses from the [devnet dashboard][devnet-dashboard] and the existing testnet addresses from the [testnet dashboard][testnet-dashboard]
+    * For a release (for testnet), copy-paste the addresses of the latest deployed devnet by taking them from the [devnet dashboard][devnet-dashboard] and the new testnet addresses from the [testnet dashboard][testnet-dashboard]
 - [ ] Set the release type: mark the release as **pre-release** if a devnet release (i.e. release candidate) while set the release as **latest** if a testnet release (i.e. regular release)
 - [ ] Delete this checklist and publish
 
