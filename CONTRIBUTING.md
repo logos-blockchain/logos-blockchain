@@ -36,6 +36,8 @@ pre-commit install
 
 Use log levels consistently so logs are easier to read and easier to filter by target.
 
+- Log entries should use the correct target for the subsystem they belong to, and new logs should follow the existing target structure.
+
 - `error`
   - Use when something failed that should normally work.
   - If this log appears, someone should probably look at it.
