@@ -32,7 +32,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
-use lb_cryptarchia_sync::{GetTipResponse, ProviderResponse};
+use lb_cryptarchia_sync::{BlocksUnavailableReason, GetTipResponse, ProviderResponse};
 pub use lb_ledger::EpochState;
 use lb_ledger::LedgerState;
 use lb_network_service::message::ChainSyncEvent;
@@ -1341,7 +1341,14 @@ where
         debug!(target: LOG_TARGET, "Received chainsync event while in bootstrapping state. Ignoring it.");
         match event {
             ChainSyncEvent::ProvideBlocksRequest { reply_sender, .. } => {
-                Self::send_chain_sync_rejection(reply_sender).await;
+                let response = ProviderResponse::Unavailable {
+                    reason: BlocksUnavailableReason::Unknown(
+                        "Node is not in online mode".to_owned(),
+                    ),
+                };
+                if let Err(e) = reply_sender.send(response).await {
+                    error!("Failed to send chain sync response: {e}");
+                }
             }
             ChainSyncEvent::ProvideTipRequest { reply_sender } => {
                 Self::send_chain_sync_rejection(reply_sender).await;

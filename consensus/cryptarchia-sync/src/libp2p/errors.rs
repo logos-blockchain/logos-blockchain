@@ -2,7 +2,7 @@ use libp2p::PeerId;
 use thiserror::Error;
 use tokio::time::error::Elapsed;
 
-use crate::libp2p::packing::PackingError;
+use crate::{BlocksUnavailableReason, libp2p::packing::PackingError};
 
 #[derive(Debug, Error)]
 pub enum ChainSyncErrorKind {
@@ -29,6 +29,9 @@ pub enum ChainSyncErrorKind {
 
     #[error("Block provider error: {0}")]
     ReceivingBlocksError(String),
+
+    #[error("Block provider unavailable: {0}")]
+    BlockProviderUnavailable(BlocksUnavailableReason),
 
     #[error("Timeout waiting response from peer: {0}")]
     Timeout(#[from] Elapsed),
@@ -109,7 +112,15 @@ impl Clone for ChainSyncErrorKind {
                     Self::PackingError(PackingError::Serialization(e.clone()))
                 }
             },
-            err => err.clone(),
+            Self::RequestBlocksDownloadError(s) => Self::RequestBlocksDownloadError(s.clone()),
+            Self::RequestTipError(s) => Self::RequestTipError(s.clone()),
+            Self::ChannelReceiveError(s) => Self::ChannelReceiveError(s.clone()),
+            Self::ChannelSendError(s) => Self::ChannelSendError(s.clone()),
+            Self::ReceivingBlocksError(s) => Self::ReceivingBlocksError(s.clone()),
+            Self::BlockProviderUnavailable(reason) => {
+                Self::BlockProviderUnavailable(reason.clone())
+            }
+            Self::Timeout(_e) => Self::RequestBlocksDownloadError("timeout".to_owned()),
         }
     }
 }

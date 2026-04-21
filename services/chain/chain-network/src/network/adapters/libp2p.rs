@@ -8,7 +8,9 @@ use lb_core::{
     header::HeaderId,
     mantle::AuthenticatedMantleTx,
 };
-use lb_cryptarchia_sync::GetTipResponse;
+use lb_cryptarchia_sync::{
+    BlocksUnavailableReason, ChainSyncError, ChainSyncErrorKind, GetTipResponse,
+};
 use lb_network_service::{
     NetworkService,
     backends::libp2p::{
@@ -61,6 +63,70 @@ impl<Tx, RuntimeServiceId> LibP2pAdapter<Tx, RuntimeServiceId>
 where
     Tx: Clone + Eq + Serialize,
 {
+    // Returns `true` when the error is a typed provider-side `BlockNotFound`.
+    //
+    // We treat this case as retryable peer selection noise rather than a hard
+    // failure for the whole request.
+    fn is_block_not_found(err: &DynError) -> bool {
+        err.downcast_ref::<ChainSyncError>().is_some_and(|err| {
+            matches!(
+                err.kind,
+                ChainSyncErrorKind::BlockProviderUnavailable(
+                    BlocksUnavailableReason::BlockNotFound(_)
+                )
+            )
+        })
+    }
+
+    // Requests a blocks stream from a single peer and validates the first item
+    // before this peer is considered a successful candidate by `select_ok`.
+    //
+    // Behavior:
+    // - If the first item is a typed
+    //   `ChainSyncErrorKind::BlockProviderUnavailable(BlocksUnavailableReason::BlockNotFound(_))`,
+    //   returns `Err` so this peer is excluded from winner selection.
+    // - Otherwise, returns a reconstructed stream where the first item is put
+    //   back (`iter([first_item]).chain(stream)`) so downstream consumers see
+    //   the full original stream.
+    // - If the stream is immediately exhausted (`None`), returns it unchanged.
+    async fn request_validated_blocks_stream_from_peer(
+        &self,
+        peer: PeerId,
+        target_block: HeaderId,
+        local_tip: HeaderId,
+        latest_immutable_block: HeaderId,
+        additional_blocks: HashSet<HeaderId>,
+    ) -> Result<BoxedStream<Result<(HeaderId, Block<Tx>), DynError>>, DynError>
+    where
+        Tx: AuthenticatedMantleTx
+            + Serialize
+            + DeserializeOwned
+            + Clone
+            + Eq
+            + Send
+            + Sync
+            + 'static,
+    {
+        let mut stream = self
+            .request_blocks_from_peer(
+                peer,
+                target_block,
+                local_tip,
+                latest_immutable_block,
+                additional_blocks,
+            )
+            .await?;
+
+        match stream.next().await {
+            Some(Err(err)) if Self::is_block_not_found(&err) => Err(err),
+            Some(first_item) => {
+                let rebuilt = tokio_stream::iter([first_item]).chain(stream);
+                Ok(Box::new(rebuilt))
+            }
+            None => Ok(stream),
+        }
+    }
+
     async fn subscribe(relay: &Relay<Libp2p, RuntimeServiceId>, topic: &str) {
         if let Err((e, _)) = relay
             .send(NetworkMsg::Process(Command::PubSub(Subscribe(
@@ -273,7 +339,7 @@ where
                 let additional_blocks = additional_blocks.clone();
                 async move {
                     let stream = self
-                        .request_blocks_from_peer(
+                        .request_validated_blocks_stream_from_peer(
                             peer,
                             target_block,
                             local_tip,
@@ -290,6 +356,7 @@ where
             })
             .collect::<Vec<_>>();
 
+        // First peer with a validated first response wins
         select_ok(requests).await.map(|(stream, _)| stream)
     }
 }

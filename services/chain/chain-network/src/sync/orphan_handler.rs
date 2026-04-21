@@ -8,6 +8,7 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_core::header::HeaderId;
+use lb_cryptarchia_sync::{BlocksUnavailableReason, ChainSyncError, ChainSyncErrorKind};
 use overwatch::DynError;
 use tracing::{debug, error, warn};
 
@@ -179,26 +180,63 @@ where
         self.remove_orphan(&block_id)
     }
 
+    fn is_retryable_block_not_found(err: &DynError) -> bool {
+        err.downcast_ref::<ChainSyncError>().is_some_and(|err| {
+            matches!(
+                err.kind,
+                ChainSyncErrorKind::BlockProviderUnavailable(
+                    BlocksUnavailableReason::BlockNotFound(_)
+                )
+            )
+        })
+    }
+
     async fn request_blocks_stream(
         network: NetAdapter,
         orphan_info: OrphanInfo,
         known_blocks: HashSet<HeaderId>,
         download_started_at: Instant,
     ) -> Result<ActiveDownload<NetAdapter::Block>, DynError> {
-        let result = network
-            .request_blocks_from_peers(
-                orphan_info.orphan_id,
-                orphan_info.tip,
-                orphan_info.lib,
-                known_blocks.clone(),
-            )
-            .await;
+        let mut attempts_remaining = 3usize;
+        let mut last_err: Option<DynError> = None;
 
-        if result.is_err() {
-            metrics::orphan_observe_parent_fetch_err();
+        while attempts_remaining > 0 {
+            match network
+                .request_blocks_from_peers(
+                    orphan_info.orphan_id,
+                    orphan_info.tip,
+                    orphan_info.lib,
+                    known_blocks.clone(),
+                )
+                .await
+            {
+                Ok(stream) => {
+                    return Ok(ActiveDownload::new(
+                        orphan_info,
+                        stream,
+                        download_started_at,
+                    ));
+                }
+                Err(err) if Self::is_retryable_block_not_found(&err) => {
+                    warn!(
+                        target: LOG_TARGET,
+                        ?err,
+                        orphan_id = ?orphan_info.orphan_id,
+                        attempts_remaining,
+                        "Orphan fetch hit transient BlockNotFound; retrying with a reshuffled peer selection"
+                    );
+                    last_err = Some(err);
+                    attempts_remaining -= 1;
+                }
+                Err(err) => {
+                    metrics::orphan_observe_parent_fetch_err();
+                    return Err(err);
+                }
+            }
         }
 
-        result.map(|stream| ActiveDownload::new(orphan_info, stream, download_started_at))
+        metrics::orphan_observe_parent_fetch_err();
+        Err(last_err.unwrap_or_else(|| DynError::from("orphan recovery exhausted retries")))
     }
 
     pub fn remove_orphan(&mut self, block_id: &HeaderId) -> Option<OrphanInfo> {

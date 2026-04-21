@@ -10,7 +10,7 @@ use bytes::Bytes;
 use futures::{StreamExt as _, TryStreamExt as _, future, stream, stream::BoxStream};
 use lb_core::{block::Block, header::HeaderId};
 use lb_cryptarchia_engine::{Branch, Slot};
-use lb_cryptarchia_sync::{BlocksResponse, ProviderResponse};
+use lb_cryptarchia_sync::{BlocksResponse, BlocksUnavailableReason, ProviderResponse};
 use lb_storage_service::{StorageMsg, api::chain::StorageChainApi, backends::StorageBackend};
 use overwatch::DynError;
 use serde::Serialize;
@@ -22,7 +22,7 @@ use crate::relays::StorageRelay;
 
 const MAX_NUMBER_OF_BLOCKS: usize = 1000;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum GetBlocksError {
     #[error("Storage channel dropped")]
     ChannelDropped,
@@ -99,11 +99,23 @@ where
                 }
             }
             Err(e) => {
-                Self::send_error(
-                    format!("Failed to create a block stream: {e:?}"),
-                    reply_sender,
-                )
-                .await;
+                let reason = e.downcast_ref::<GetBlocksError>().map_or_else(
+                    || {
+                        BlocksUnavailableReason::Unknown(format!(
+                            "Failed to create a block stream: {e:?}"
+                        ))
+                    },
+                    |err| match err {
+                        GetBlocksError::BlockNotFound(id) => {
+                            BlocksUnavailableReason::BlockNotFound(*id)
+                        }
+                        GetBlocksError::StartBlockNotFound => {
+                            BlocksUnavailableReason::StartBlockNotFound
+                        }
+                        other => BlocksUnavailableReason::Unknown(other.to_string()),
+                    },
+                );
+                Self::send_error(reason, reply_sender).await;
             }
         }
     }
@@ -537,8 +549,15 @@ where
         rx.await.map_err(|_| GetBlocksError::ChannelDropped)
     }
 
-    async fn send_error(reason: String, reply_sender: Sender<BlocksResponse>) {
-        error!(reason);
+    async fn send_error(reason: BlocksUnavailableReason, reply_sender: Sender<BlocksResponse>) {
+        if let BlocksUnavailableReason::BlockNotFound(target) = &reason {
+            error!(
+                ?target,
+                "Failed to create a block stream: requested target block is unavailable"
+            );
+        } else {
+            error!(reason = %reason, "Failed to create a block stream");
+        }
 
         if let Err(e) = reply_sender
             .send(ProviderResponse::Unavailable { reason })
@@ -935,7 +954,7 @@ mod tests {
             let error_occurred = if let Some(response) = rx.recv().await {
                 match response {
                     ProviderResponse::Unavailable { reason } => {
-                        reason.contains(expected_error_type)
+                        reason.to_string().contains(expected_error_type)
                     }
                     ProviderResponse::Available(mut stream) => {
                         stream.next().await.is_some_and(|result| result.is_err())
