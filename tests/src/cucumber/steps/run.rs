@@ -1,6 +1,8 @@
 use cucumber::{then, when};
-use lb_testing_framework::{LbcK8sDeployer, LbcLocalDeployer};
-use testing_framework_core::scenario::{Application, Deployer, Scenario};
+use lb_testing_framework::{
+    LbcEnv, LbcK8sDeployer, LbcLocalDeployer, run_with_failure_diagnostics,
+};
+use testing_framework_core::scenario::{Deployer, Scenario};
 
 use crate::cucumber::{
     error::{StepError, StepResult},
@@ -64,15 +66,14 @@ fn unsupported_compose_run() -> StepResult {
     })
 }
 
-async fn deploy_and_run<D, E>(
+async fn deploy_and_run<D>(
     deployer: &D,
-    scenario: &mut Scenario<E>,
+    scenario: &mut Scenario<LbcEnv>,
     deploy_error_message: &'static str,
 ) -> StepResult
 where
-    D: Deployer<E>,
+    D: Deployer<LbcEnv>,
     D::Error: std::fmt::Display,
-    E: Application,
 {
     let runner = deployer
         .deploy(scenario)
@@ -81,8 +82,7 @@ where
             message: format!("{deploy_error_message}: {error}"),
         })?;
 
-    runner
-        .run(scenario)
+    run_with_failure_diagnostics(runner, scenario)
         .await
         .map_err(|error| StepError::RunFailed {
             message: format!("scenario run failed: {error}"),

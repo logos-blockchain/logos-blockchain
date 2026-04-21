@@ -7,6 +7,7 @@
 
 use std::sync::LazyLock;
 
+mod diagnostics;
 pub mod env;
 mod framework;
 pub use framework::local::USER_CONFIG_FILE;
@@ -21,6 +22,9 @@ pub use unique_persistent::{
 pub static IS_DEBUG_TRACING: LazyLock<bool> = LazyLock::new(env::debug_tracing);
 pub const LOGOS_BLOCKCHAIN_LOG_LEVEL: &str = "LOGOS_BLOCKCHAIN_LOG_LEVEL";
 
+pub use diagnostics::{
+    FailureDiagnosticsExpectation, ScenarioRunDiagnosticsError, run_with_failure_diagnostics,
+};
 pub use framework::{
     BlockFeed, BlockFeedExtensionFactory, BlockFeedObservation, BlockFeedObserver,
     BlockFeedSnapshot, BlockFeedWaitError, BlockRecord, CoreBuilderExt, LbcComposeDeployer, LbcEnv,

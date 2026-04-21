@@ -3617,7 +3617,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "lb_config"
-version = "0.2.1"
+version = "0.1.2"
 dependencies = [
  "hex",
  "logos-blockchain-core",
@@ -8324,6 +8324,7 @@ dependencies = [
  "logos-blockchain-network-service",
  "logos-blockchain-node",
  "logos-blockchain-time-service",
+ "logos-blockchain-tx-service",
  "logos-blockchain-utils",
  "num-bigint",
  "rand 0.8.5",

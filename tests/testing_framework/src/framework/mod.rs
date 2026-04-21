@@ -31,6 +31,7 @@ use testing_framework_core::{
 use testing_framework_runner_local::{ManualCluster, ProcessDeployer};
 
 use crate::{
+    FailureDiagnosticsExpectation,
     node::{
         DeploymentPlan, NodeHttpClient,
         configs::{
@@ -251,11 +252,15 @@ impl ScenarioBuilderExt for ScenarioBuilderWith {
     }
 
     fn expect_consensus_liveness(self) -> Self {
-        self.with_expectation(ConsensusLiveness::default())
+        self.with_expectation(FailureDiagnosticsExpectation::new(
+            ConsensusLiveness::default(),
+        ))
     }
 
     fn expect_cluster_fork_monitor(self) -> Self {
-        self.with_expectation(ClusterForkMonitor::<LbcEnv>::default())
+        self.with_expectation(FailureDiagnosticsExpectation::new(ClusterForkMonitor::<
+            LbcEnv,
+        >::default()))
     }
 
     fn initialize_wallet(self, total_funds: u64, users: usize) -> Self {
