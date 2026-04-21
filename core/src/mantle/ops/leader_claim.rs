@@ -4,10 +4,19 @@ use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::{Fr, ZkHash};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::{
     crypto::ZkHasher,
-    mantle::{Note, Utxo, Value, encoding::encode_leader_claim, ops::OpId},
+    mantle::{
+        Note, TxHash, Utxo, Value,
+        encoding::encode_leader_claim,
+        ledger::{Operation, Utxos},
+        ops::OpId,
+    },
+    proofs::leader_claim_proof::{
+        Groth16LeaderClaimProof, LeaderClaimProof as _, LeaderClaimPublic,
+    },
 };
 
 static REWARD_VOUCHER: LazyLock<Fr> = LazyLock::new(|| {
@@ -131,5 +140,80 @@ impl VoucherCm {
         let mut hash = ZkHasher::new();
         hash.compress(&[*REWARD_VOUCHER, voucher_secret.into()]);
         hash.finalize().into()
+    }
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum LeaderClaimError {
+    #[error("voucher nullifier already used")]
+    DuplicatedVoucherNullifier,
+    #[error("voucher not found")]
+    VoucherNotFound,
+    #[error("Invalid Proof of Claim")]
+    InvalidPoC,
+}
+
+pub struct LeaderClaimValidationContext<'a> {
+    pub nullifiers: &'a rpds::HashTrieSetSync<VoucherNullifier>,
+    pub claimable_vouchers_root: &'a RewardsRoot,
+    pub proof_of_claim: &'a Groth16LeaderClaimProof,
+    pub tx_hash: &'a TxHash,
+}
+
+pub struct LeaderClaimExecutionContext {
+    pub nullifiers: rpds::HashTrieSetSync<VoucherNullifier>,
+    pub reward_amount: Value,
+    pub claimable_rewards: Value,
+    pub utxos: Utxos,
+}
+
+impl Operation for LeaderClaimOp {
+    type ValidationContext<'a>
+        = LeaderClaimValidationContext<'a>
+    where
+        Self: 'a;
+    type ExecutionContext<'a>
+        = LeaderClaimExecutionContext
+    where
+        Self: 'a;
+    type Error = LeaderClaimError;
+
+    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+        // Check that the nullifier isn't in the set
+        if ctx.nullifiers.contains(&self.voucher_nullifier) {
+            return Err(LeaderClaimError::DuplicatedVoucherNullifier);
+        }
+
+        // Check that the voucher root is the same as in the ledger
+        if ctx.claimable_vouchers_root != &self.rewards_root {
+            return Err(LeaderClaimError::VoucherNotFound);
+        }
+
+        // Check the proof of claim
+        if ctx.proof_of_claim.verify(&LeaderClaimPublic {
+            voucher_root: ctx.claimable_vouchers_root.0,
+            mantle_tx_hash: ctx.tx_hash.0,
+        }) {
+            return Err(LeaderClaimError::InvalidPoC);
+        }
+
+        Ok(())
+    }
+
+    fn execute(
+        &self,
+        mut ctx: Self::ExecutionContext<'_>,
+    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+        // Add the nullifier to the nullifier set
+        ctx.nullifiers = ctx.nullifiers.insert(self.voucher_nullifier);
+
+        // Distribute the reward
+        let utxo = self.utxo(ctx.reward_amount);
+        ctx.utxos = ctx.utxos.insert(utxo.id(), utxo).0;
+
+        // Remove the distributed rewards from the pool
+        ctx.claimable_rewards -= ctx.reward_amount;
+
+        Ok(ctx)
     }
 }

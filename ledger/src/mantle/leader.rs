@@ -77,6 +77,29 @@ impl LeaderState {
         }
     }
 
+    #[must_use]
+    pub const fn nullifiers(&self) -> &rpds::HashTrieSetSync<VoucherNullifier> {
+        &self.nfs
+    }
+
+    #[must_use]
+    pub fn nullifiers_cloned(&self) -> rpds::HashTrieSetSync<VoucherNullifier> {
+        self.nfs.clone()
+    }
+
+    pub fn update_nullifiers(&mut self, nullifiers: rpds::HashTrieSetSync<VoucherNullifier>) {
+        self.nfs = nullifiers;
+    }
+
+    pub const fn update_rewards(&mut self, claimable_rewards: Value) {
+        self.claimable_rewards = claimable_rewards;
+    }
+
+    #[must_use]
+    pub const fn claimable_rewards(&self) -> Value {
+        self.claimable_rewards
+    }
+
     pub fn try_apply_header(self, epoch: Epoch, voucher_cm: VoucherCm) -> Result<Self, Error> {
         Ok(self
             .update_epoch_state(epoch)?

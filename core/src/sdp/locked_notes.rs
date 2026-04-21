@@ -88,6 +88,17 @@ impl LockedNotes {
         Ok(self)
     }
 
+    #[must_use]
+    pub fn is_locked_for_service(&self, note_id: &NoteId, service_type: &ServiceType) -> bool {
+        if let Some(locked) = self.locked_notes.get(note_id) {
+            if locked.services.contains(service_type) {
+                return true;
+            }
+            return false;
+        }
+        false
+    }
+
     pub fn unlock(&mut self, service_type: ServiceType, note_id: &NoteId) -> Result<Note, Error> {
         if let Some(note) = self.locked_notes.get_mut(note_id) {
             if !note.services.remove(&service_type) {

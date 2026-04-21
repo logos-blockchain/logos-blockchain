@@ -13,7 +13,7 @@ use thiserror::Error;
 use crate::{
     crypto::{Hash, ZkHasher},
     mantle::ops::OpId,
-    sdp::locked_notes::LockedNotes,
+    sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
 };
 
 pub trait Operation {
@@ -32,6 +32,7 @@ pub trait Operation {
 }
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
+pub type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
 
 pub type Value = u64;
 
@@ -53,6 +54,14 @@ pub enum OutputsError {
     ZeroValueNote,
     #[error("Sum of output values overflows")]
     OutputsOverflow,
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum LedgerError {
+    #[error("Inputs error: {0}")]
+    Inputs(#[from] InputsError),
+    #[error("Outputs error: {0}")]
+    Outputs(#[from] OutputsError),
 }
 
 #[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize)]

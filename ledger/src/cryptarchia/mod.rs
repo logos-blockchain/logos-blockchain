@@ -545,6 +545,11 @@ impl LedgerState {
     }
 
     #[must_use]
+    pub fn update_utxos(self, utxos: UtxoTree) -> Self {
+        Self { utxos, ..self }
+    }
+
+    #[must_use]
     pub const fn execution_base_fee(&self) -> &GasPrice {
         &self.execution_base_fee
     }

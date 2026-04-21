@@ -78,10 +78,11 @@ impl Operation for TransferOp {
     type Error = TransferError;
 
     fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
-        // Validate Inputs
+        // Ensure the inputs is non-empty
         if self.inputs.is_empty() {
             return Err(TransferError::NoInputTransfer);
         }
+        // Validate Inputs
         self.inputs.validate(ctx.locked_notes, ctx.utxos)?;
         // Validate Outputs
         self.outputs.validate()?;
@@ -90,7 +91,6 @@ impl Operation for TransferOp {
         if !ZkPublicKey::verify_multi(&pks, &ctx.tx_hash.0, ctx.transfer_sig) {
             return Err(TransferError::InvalidProof);
         }
-
         Ok(())
     }
 
@@ -98,9 +98,9 @@ impl Operation for TransferOp {
         &self,
         mut utxos: Self::ExecutionContext<'_>,
     ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
-        // Execute inputs
+        // Remove inputs from the ledger
         utxos = self.inputs.execute(utxos)?;
-        // Execute outputs
+        // Add outputs from the ledger
         utxos = self.outputs.execute(utxos, self);
         Ok(utxos)
     }

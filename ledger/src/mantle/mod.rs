@@ -9,12 +9,13 @@ use lb_core::{
     crypto::ZkHash,
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
+        ledger::Operation as _,
         ops::{
             channel::{
-                deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp,
-                withdraw::ChannelWithdrawOp,
+                inscribe::{InscriptionOp, InscriptionValidationContext},
+                set_keys::{SetKeysOp, SetKeysValidationContext},
             },
-            leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm},
+            leader_claim::{LeaderClaimError, LeaderClaimOp, RewardsRoot, VoucherCm},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferError,
         },
@@ -43,6 +44,8 @@ pub enum Error {
     Sdp(#[from] SdpLedgerError),
     #[error(transparent)]
     Transfer(#[from] TransferError),
+    #[error(transparent)]
+    LeaderClaim(#[from] LeaderClaimError),
     #[error("Note not found: {0:?}")]
     NoteNotFound(NoteId),
 }
@@ -110,6 +113,11 @@ impl LedgerState {
     }
 
     #[must_use]
+    pub fn update_channels(self, channels: channel::Channels) -> Self {
+        Self { channels, ..self }
+    }
+
+    #[must_use]
     pub fn active_session_providers(
         &self,
         service_type: ServiceType,
@@ -162,18 +170,21 @@ impl LedgerState {
     pub fn try_apply_channel_inscription(
         mut self,
         inscription_op: &InscriptionOp,
+        inscription_sig: &Ed25519Signature,
+        tx_hash: TxHash,
     ) -> Result<Self, Error> {
-        self.channels = self
-            .channels
-            .apply_msg(
-                inscription_op.channel_id,
-                &inscription_op.parent,
-                inscription_op.id(),
-                &inscription_op.signer,
-            )
-            .inspect_err(
-                |err| error!(target: LOG_TARGET, %err, "failed to apply channel inscribe message"),
-            )?;
+        //validate the inscription
+        inscription_op.validate(&InscriptionValidationContext {
+            channels: &self.channels,
+            tx_hash: &tx_hash,
+            inscribe_sig: inscription_sig,
+        })?;
+
+        // Execute the inscription
+        self.channels = inscription_op.execute(self.channels).inspect_err(
+            |err| error!(target: LOG_TARGET, %err, "failed to apply channel inscribe message"),
+        )?;
+
         Ok(self)
     }
 
@@ -183,34 +194,18 @@ impl LedgerState {
         set_keys_sig: &Ed25519Signature,
         tx_hash: &TxHash,
     ) -> Result<Self, Error> {
-        self.channels = self
-            .channels
-            .set_keys(set_keys_op.channel, set_keys_op, set_keys_sig, tx_hash)
-            .inspect_err(
-                |err| error!(target: LOG_TARGET, %err, "failed to apply channel set-keys message"),
-            )?;
-        Ok(self)
-    }
+        // Validate the SetKeys
+        set_keys_op.validate(&SetKeysValidationContext {
+            channels: &self.channels,
+            tx_hash,
+            setkeys_sig: set_keys_sig,
+        })?;
 
-    pub fn try_apply_channel_deposit(
-        mut self,
-        op: &DepositOp,
-        amount_deposited: Value,
-    ) -> Result<Self, Error> {
-        self.channels = self.channels.deposit(op, amount_deposited).inspect_err(
-            |err| error!(target: LOG_TARGET, %err, "Failed to apply the Channel Deposit message."),
+        // Execute the SetKeys
+        self.channels = set_keys_op.execute(self.channels).inspect_err(
+            |err| error!(target: LOG_TARGET, %err, "failed to apply channel set-keys message"),
         )?;
-        Ok(self)
-    }
 
-    pub fn try_apply_channel_withdraw(
-        mut self,
-        op: &ChannelWithdrawOp,
-        amount_withdrawed: Value,
-    ) -> Result<Self, Error> {
-        self.channels = self.channels.withdraw(op, amount_withdrawed).inspect_err(
-            |err| error!(target: LOG_TARGET, %err, "Failed to apply the Channel Withdraw message."),
-        )?;
         Ok(self)
     }
 
@@ -223,14 +218,11 @@ impl LedgerState {
         tx_hash: TxHash,
         config: &Config,
     ) -> Result<Self, Error> {
-        let Some((utxo, _)) = utxo_tree.utxos().get(&sdp_declare_op.locked_note_id) else {
-            return Err(Error::NoteNotFound(sdp_declare_op.locked_note_id));
-        };
         self.sdp = self
             .sdp
-            .apply_declare_msg(
+            .try_apply_sdp_declaration(
+                utxo_tree,
                 sdp_declare_op,
-                utxo.note,
                 sdp_declare_zk_sig,
                 sdp_declare_ed_sig,
                 tx_hash,
@@ -265,6 +257,7 @@ impl LedgerState {
 
     pub fn try_apply_sdp_withdraw(
         mut self,
+        utxo_tree: &UtxoTree,
         sdp_withdraw_op: &SDPWithdrawOp,
         sdp_withdraw_zk_sig: &ZkSignature,
         tx_hash: TxHash,
@@ -273,6 +266,7 @@ impl LedgerState {
         self.sdp = self
             .sdp
             .apply_withdrawn_msg(
+                utxo_tree,
                 sdp_withdraw_op,
                 sdp_withdraw_zk_sig,
                 tx_hash,

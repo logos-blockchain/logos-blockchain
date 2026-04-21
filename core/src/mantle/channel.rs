@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
-use lb_key_management_system_keys::keys::Ed25519Signature;
 use serde::{Deserialize, Serialize};
 
 use crate::mantle::{
-    TxHash, Value,
+    Value, ledger,
+    ledger::Operation as _,
     ops::channel::{
-        ChannelId, ChannelKeyIndex, Ed25519PublicKey as PublicKey, MsgId, deposit::DepositOp,
-        inscribe::InscriptionOp, set_keys::SetKeysOp, withdraw::ChannelWithdrawOp,
+        ChannelId, ChannelKeyIndex, Ed25519PublicKey as PublicKey, MsgId, inscribe::InscriptionOp,
     },
     tx::MantleTxGasContext,
 };
@@ -39,6 +38,18 @@ pub enum Error {
     InvalidWithdrawNonce,
     #[error("Withdraw Nonce overflow")]
     WithdrawNonceOverflow,
+    #[error("Inputs error: {0}")]
+    Inputs(#[from] ledger::InputsError),
+    #[error("Outputs error: {0}")]
+    Outputs(#[from] ledger::OutputsError),
+    #[error(
+        "Invalid number of signatures (treshold:?) for channel {channel_id:?}, expected {actual:?}"
+    )]
+    WithdrawThresholdUnmet {
+        channel_id: ChannelId,
+        threshold: u16,
+        actual: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,10 +77,10 @@ pub struct ChannelState {
     // Indicating how many accredited keys are required to withdraw
     // funds from the channel.
     pub withdraw_threshold: ChannelKeyIndex,
-    pub withdraw_nonce: u32,
+    pub withdrawal_nonce: u32,
 }
 
-const DEFAULT_WITHDRAW_THRESHOLD: ChannelKeyIndex = 1;
+pub(crate) const DEFAULT_WITHDRAW_THRESHOLD: ChannelKeyIndex = 1;
 
 impl Default for Channels {
     fn default() -> Self {
@@ -79,128 +90,8 @@ impl Default for Channels {
 
 impl Channels {
     pub fn from_genesis(op: &InscriptionOp) -> Result<Self, Error> {
-        Self::default().apply_msg(op.channel_id, &op.parent, op.id(), &op.signer)
-    }
-
-    pub fn apply_msg(
-        mut self,
-        channel_id: ChannelId,
-        parent: &MsgId,
-        msg: MsgId,
-        signer: &PublicKey,
-    ) -> Result<Self, Error> {
-        let channel = self
-            .channels
-            .get(&channel_id)
-            .cloned()
-            .unwrap_or_else(|| ChannelState {
-                tip: MsgId::root(),
-                keys: vec![*signer].into(),
-                balance: 0,
-                withdraw_threshold: DEFAULT_WITHDRAW_THRESHOLD,
-                withdraw_nonce: 0,
-            });
-
-        if *parent != channel.tip {
-            return Err(Error::InvalidParent {
-                channel_id,
-                parent: (*parent).into(),
-                actual: channel.tip.into(),
-            });
-        }
-
-        if !channel.keys.contains(signer) {
-            return Err(Error::UnauthorizedSigner {
-                channel_id,
-                signer: format!("{signer:?}"),
-            });
-        }
-
-        self.channels = self.channels.insert(
-            channel_id,
-            ChannelState {
-                tip: msg,
-                keys: Arc::clone(&channel.keys),
-                balance: channel.balance,
-                withdraw_threshold: channel.withdraw_threshold,
-                withdraw_nonce: channel.withdraw_nonce,
-            },
-        );
-        Ok(self)
-    }
-
-    // TODO: Replace with CHANNEL_CONFIG op: https://github.com/logos-blockchain/logos-blockchain/issues/2461
-    pub fn set_keys(
-        mut self,
-        channel_id: ChannelId,
-        op: &SetKeysOp,
-        sig: &Ed25519Signature,
-        tx_hash: &TxHash,
-    ) -> Result<Self, Error> {
-        if op.keys.is_empty() {
-            return Err(Error::EmptyKeys { channel_id });
-        }
-
-        if let Some(channel) = self.channels.get_mut(&channel_id) {
-            if channel.keys[0]
-                .verify(tx_hash.as_signing_bytes().as_ref(), sig)
-                .is_err()
-            {
-                return Err(Error::InvalidSignature);
-            }
-            channel.keys = op.keys.clone().into();
-        } else {
-            self.channels = self.channels.insert(
-                channel_id,
-                ChannelState {
-                    tip: MsgId::root(),
-                    keys: op.keys.clone().into(),
-                    balance: 0,
-                    // TODO: Replace with `ChannelConfig.withdraw_threshold`
-                    // once this op is replaced with CHANNEL_CONFIG op: https://github.com/logos-blockchain/logos-blockchain/issues/2461
-                    withdraw_threshold: DEFAULT_WITHDRAW_THRESHOLD,
-                    withdraw_nonce: 0,
-                },
-            );
-        }
-
-        Ok(self)
-    }
-
-    pub fn deposit(mut self, op: &DepositOp, amount: Value) -> Result<Self, Error> {
-        if let Some(channel) = self.channels.get_mut(&op.channel_id) {
-            channel.balance = channel
-                .balance
-                .checked_add(amount)
-                .ok_or(Error::BalanceOverflow)?;
-            Ok(self)
-        } else {
-            Err(Error::ChannelNotFound {
-                channel_id: op.channel_id,
-            })
-        }
-    }
-
-    pub fn withdraw(mut self, op: &ChannelWithdrawOp, amount: Value) -> Result<Self, Error> {
-        if let Some(channel) = self.channels.get_mut(&op.channel_id) {
-            if channel.withdraw_nonce == op.withdraw_nonce {
-                channel.balance = channel
-                    .balance
-                    .checked_sub(amount)
-                    .ok_or(Error::InsufficientFunds)?;
-                channel.withdraw_nonce = channel
-                    .withdraw_nonce
-                    .checked_add(1)
-                    .ok_or(Error::WithdrawNonceOverflow)?;
-                Ok(self)
-            } else {
-                Err(Error::InvalidWithdrawNonce)
-            }
-        } else {
-            Err(Error::ChannelNotFound {
-                channel_id: op.channel_id,
-            })
-        }
+        let channels = op.execute(Self::default())?;
+        Ok(channels)
     }
 
     #[must_use]
@@ -218,18 +109,47 @@ impl Channels {
 
 #[cfg(test)]
 mod tests {
+    use ark_ff::Field as _;
     use lb_groth16::Fr;
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
-
-    use crate::mantle::{
-        Note, NoteId,
-        ledger::{Inputs, Outputs},
-    };
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
+    use lb_utils::blake_rng::RngCore as _;
+    use rand::thread_rng;
 
     use super::*;
+    use crate::{
+        mantle::{
+            Note, Utxo,
+            ledger::{Inputs, Outputs, Utxos},
+            ops::channel::{
+                deposit::{DepositExecutionContext, DepositOp},
+                withdraw::{ChannelWithdrawOp, WithdrawExecutionContext},
+            },
+        },
+        sdp::locked_notes::LockedNotes,
+    };
 
     fn test_public_key(seed: u8) -> PublicKey {
         Ed25519Key::from_bytes(&[seed; 32]).public_key()
+    }
+
+    fn utxo(value: Value) -> (ZkKey, Utxo) {
+        let mut op_id = [0u8; 32];
+        thread_rng().fill_bytes(&mut op_id);
+        let zk_sk = ZkKey::from(Fr::ZERO);
+        let utxo = Utxo {
+            op_id,
+            output_index: 0,
+            note: Note::new(value, zk_sk.to_public_key()),
+        };
+        (zk_sk, utxo)
+    }
+
+    fn utxo_tree(utxos: Vec<Utxo>) -> Utxos {
+        let mut utxo_tree = Utxos::new();
+        for utxo in utxos {
+            (utxo_tree, _) = utxo_tree.insert(utxo.id(), utxo);
+        }
+        utxo_tree
     }
 
     impl Channels {
@@ -243,7 +163,7 @@ mod tests {
                         keys: vec![test_public_key(7)].into(),
                         balance,
                         withdraw_threshold: 1,
-                        withdraw_nonce: 0,
+                        withdrawal_nonce: 0,
                     },
                 ),
             }
@@ -265,7 +185,7 @@ mod tests {
                         keys: vec![test_public_key(11)].into(),
                         balance: 5,
                         withdraw_threshold: 1,
-                        withdraw_nonce: 0,
+                        withdrawal_nonce: 0,
                     },
                 )
                 .insert(
@@ -275,7 +195,7 @@ mod tests {
                         keys: vec![test_public_key(22), test_public_key(23)].into(),
                         balance: 9,
                         withdraw_threshold: 2,
-                        withdraw_nonce: 0,
+                        withdrawal_nonce: 0,
                     },
                 ),
         };
@@ -292,18 +212,28 @@ mod tests {
         let channel_id = ChannelId::from([0u8; 32]);
         let channels = Channels::with_balance(channel_id, 10);
 
-        let updated = channels
-            .deposit(
-                &DepositOp {
-                    channel_id,
-                    inputs: Inputs::new(vec![NoteId(Fr::from(0u32))]),
-                    metadata: vec![],
-                },
-                6,
-            )
-            .expect("deposit should succeed");
+        let (_, utxo) = utxo(6u64);
 
-        assert_eq!(updated.channel_state(&channel_id).unwrap().balance, 16);
+        let deposit_op = DepositOp {
+            channel_id,
+            inputs: Inputs::new(vec![utxo.id()]),
+            metadata: vec![],
+        };
+
+        let utxo_tree = utxo_tree(vec![utxo]);
+
+        let updated = deposit_op
+            .execute(DepositExecutionContext {
+                channels,
+                locked_notes: LockedNotes::new(),
+                utxos: utxo_tree,
+            })
+            .expect("execution should succeed");
+
+        assert_eq!(
+            updated.channels.channel_state(&channel_id).unwrap().balance,
+            16
+        );
     }
 
     #[test]
@@ -311,21 +241,30 @@ mod tests {
         let channel_id = ChannelId::from([0u8; 32]);
         let channels = Channels::with_balance(channel_id, 10);
 
-        let updated = channels
-            .withdraw(
-                &ChannelWithdrawOp {
-                    channel_id,
-                    outputs: Outputs::new(vec![Note {
-                        value: 6,
-                        pk: ZkPublicKey::zero(),
-                    }]),
-                    withdraw_nonce: 0,
-                },
-                6,
-            )
-            .expect("withdraw should succeed");
+        let (_, utxo) = utxo(6u64);
 
-        assert_eq!(updated.channel_state(&channel_id).unwrap().balance, 4);
+        let withdraw_op = ChannelWithdrawOp {
+            channel_id,
+            outputs: Outputs::new(vec![Note {
+                value: 6,
+                pk: ZkPublicKey::zero(),
+            }]),
+            withdraw_nonce: 0,
+        };
+
+        let utxo_tree = utxo_tree(vec![utxo]);
+
+        let updated = withdraw_op
+            .execute(WithdrawExecutionContext {
+                channels,
+                utxos: utxo_tree,
+            })
+            .expect("execution should succeed");
+
+        assert_eq!(
+            updated.channels.channel_state(&channel_id).unwrap().balance,
+            4
+        );
     }
 
     #[test]
@@ -333,34 +272,48 @@ mod tests {
         let channel_id = ChannelId::from([0u8; 32]);
         let channels = Channels::with_balance(channel_id, 3);
 
-        let result = channels.withdraw(
-            &ChannelWithdrawOp {
-                channel_id,
-                outputs: Outputs::new(vec![Note {
-                    value: 6,
-                    pk: ZkPublicKey::zero(),
-                }]),
-                withdraw_nonce: 0,
-            },
-            6,
-        );
+        let (_, utxo) = utxo(6u64);
+
+        let withdraw_op = ChannelWithdrawOp {
+            channel_id,
+            outputs: Outputs::new(vec![Note {
+                value: 6,
+                pk: ZkPublicKey::zero(),
+            }]),
+            withdraw_nonce: 0,
+        };
+
+        let utxo_tree = utxo_tree(vec![utxo]);
+
+        let result = withdraw_op.execute(WithdrawExecutionContext {
+            channels,
+            utxos: utxo_tree,
+        });
 
         assert!(matches!(result, Err(Error::InsufficientFunds)));
     }
 
     #[test]
     fn withdraw_fails_for_missing_channel() {
-        let result = Channels::new().withdraw(
-            &ChannelWithdrawOp {
-                channel_id: ChannelId::from([0u8; 32]),
-                outputs: Outputs::new(vec![Note {
-                    value: 1,
-                    pk: ZkPublicKey::zero(),
-                }]),
-                withdraw_nonce: 0,
-            },
-            1,
-        );
+        let channel_id = ChannelId::from([0u8; 32]);
+        let channels = Channels::new();
+        let (_, utxo) = utxo(6u64);
+
+        let withdraw_op = ChannelWithdrawOp {
+            channel_id,
+            outputs: Outputs::new(vec![Note {
+                value: 6,
+                pk: ZkPublicKey::zero(),
+            }]),
+            withdraw_nonce: 0,
+        };
+
+        let utxo_tree = utxo_tree(vec![utxo]);
+
+        let result = withdraw_op.execute(WithdrawExecutionContext {
+            channels,
+            utxos: utxo_tree,
+        });
 
         assert!(matches!(result, Err(Error::ChannelNotFound { .. })));
     }
