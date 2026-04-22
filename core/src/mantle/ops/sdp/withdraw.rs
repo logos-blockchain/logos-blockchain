@@ -39,11 +39,13 @@ impl Operation for SDPWithdrawOp {
     type Error = SdpError;
 
     fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+        // Check that the declaration exists
         let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
         };
 
-        if ctx
+        // Check that the locked note is locked for this service
+        if !ctx
             .locked_notes
             .is_locked_for_service(&self.locked_note_id, &declaration.service_type)
         {
@@ -53,6 +55,8 @@ impl Operation for SDPWithdrawOp {
             });
         }
 
+        // Check that the locked note exist (it corresponds to the declaration locked
+        // note)
         if declaration.locked_note_id != self.locked_note_id {
             return Err(SdpError::InvalidLockedNote {
                 note_id: self.locked_note_id,
@@ -60,10 +64,13 @@ impl Operation for SDPWithdrawOp {
             });
         }
 
+        // Check the note can be unlocked
         if declaration.created + ctx.lock_period >= *ctx.block_number {
             return Err(SdpError::WithdrawalWhileLocked);
         }
 
+        // Ensure locked note pk and zk_id attached to this declaration authorized this
+        // Operation.
         let note = ctx
             .locked_notes
             .get(&self.locked_note_id)
@@ -76,6 +83,7 @@ impl Operation for SDPWithdrawOp {
             return Err(SdpError::InvalidZkSignature);
         }
 
+        // Check that the nonce is greater than the previous one
         if self.nonce <= declaration.nonce {
             return Err(SdpError::InvalidNonce {
                 message_nonce: self.nonce,

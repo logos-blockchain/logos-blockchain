@@ -72,6 +72,7 @@ impl From<&Channels> for MantleTxGasContext {
 pub struct ChannelState {
     pub tip: MsgId,
     // avoid cloning the keys every new message
+    #[serde(with = "arc_slice")]
     pub keys: Arc<[PublicKey]>, // keys.len() <= ChannelKeyIndex::MAX
     pub balance: Value,
     // Indicating how many accredited keys are required to withdraw
@@ -104,6 +105,22 @@ impl Channels {
     #[must_use]
     pub fn channel_state(&self, channel_id: &ChannelId) -> Option<&ChannelState> {
         self.channels.get(channel_id)
+    }
+}
+
+mod arc_slice {
+    use std::sync::Arc;
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<T: Serialize, S: Serializer>(v: &Arc<[T]>, s: S) -> Result<S::Ok, S::Error> {
+        v.as_ref().serialize(s)
+    }
+
+    pub fn deserialize<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Arc<[T]>, D::Error> {
+        Vec::<T>::deserialize(d).map(Into::into)
     }
 }
 

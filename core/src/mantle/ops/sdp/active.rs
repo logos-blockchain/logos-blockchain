@@ -1,10 +1,14 @@
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use tracing::info;
 
-use crate::block::BlockNumber;
-use crate::mantle::{TxHash, ledger::{Declarations, Operation}};
-
 use super::{SDPActiveOp, SdpError};
+use crate::{
+    block::BlockNumber,
+    mantle::{
+        TxHash,
+        ledger::{Declarations, Operation},
+    },
+};
 
 pub struct SDPActiveValidationContext<'a> {
     pub declarations: &'a Declarations,
@@ -29,10 +33,12 @@ impl Operation for SDPActiveOp {
     type Error = SdpError;
 
     fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+        // Check the declaration exist
         let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
         };
 
+        // Check the nonce is increasing
         if self.nonce <= declaration.nonce {
             return Err(SdpError::InvalidNonce {
                 message_nonce: self.nonce,
@@ -40,6 +46,7 @@ impl Operation for SDPActiveOp {
             });
         }
 
+        // Check the signature over the `zk_id`
         if !ZkPublicKey::verify_multi(&[declaration.zk_id], &ctx.tx_hash.0, ctx.active_sig) {
             return Err(SdpError::InvalidZkSignature);
         }

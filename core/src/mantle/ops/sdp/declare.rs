@@ -39,15 +39,18 @@ impl Operation for SDPDeclareOp {
     type Error = SdpError;
 
     fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+        // Check that the note exist
         let Some((utxo, _)) = ctx.utxo_tree.utxos().get(&self.locked_note_id) else {
             return Err(SdpError::InexistingNote(self.locked_note_id));
         };
 
+        // Ensure locked note exists and ownership over the locked note and `zk_id`
         let note = utxo.note;
         if !ZkPublicKey::verify_multi(&[note.pk, self.zk_id], &ctx.tx_hash.0, ctx.declare_zk_sig) {
             return Err(SdpError::InvalidZkSignature);
         }
 
+        // Ensure ownership over the `provider_id`
         self.provider_id
             .0
             .verify(
@@ -56,14 +59,17 @@ impl Operation for SDPDeclareOp {
             )
             .map_err(|_| SdpError::InvalidEddsaSignature)?;
 
+        // Check that the declaration doesn't already exist
         if ctx.declarations.contains_key(&self.id()) {
             return Err(SdpError::DuplicateDeclaration(self.id()));
         }
 
+        // Ensure it has no more than 8 locators.
         if self.locators.len() > MAX_DECLARATION_LOCATOR {
             return Err(SdpError::TooMuchLocators);
         }
 
+        // Ensure value of locked note is sufficient for joining the service.
         if note.value < ctx.min_stake.threshold {
             return Err(SdpError::NoteInsufficientValue {
                 note_id: self.locked_note_id,
@@ -71,6 +77,7 @@ impl Operation for SDPDeclareOp {
             });
         }
 
+        // Ensure the note has not already been locked for this service.
         if ctx
             .locked_notes
             .is_locked_for_service(&self.locked_note_id, &self.service_type)

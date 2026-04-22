@@ -79,7 +79,7 @@ impl Operation for ChannelWithdrawOp {
 
         // Check the signature
         let signatures = ctx.withdraw_sigs.signatures();
-        if signatures.len() != channel.withdrawal_nonce as usize {
+        if signatures.len() != channel.withdraw_threshold as usize {
             return Err(Error::WithdrawThresholdUnmet {
                 channel_id: self.channel_id,
                 threshold: channel.withdraw_threshold,
