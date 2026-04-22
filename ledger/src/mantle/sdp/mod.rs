@@ -1019,19 +1019,19 @@ mod tests {
             .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
 
         // Add declaration at block 0
-        let utxo = utxo();
+        let utxo_1 = utxo();
         let declare_op_1 = &SDPDeclareOp {
             service_type: service_a,
-            locked_note_id: utxo.id(),
+            locked_note_id: utxo_1.id(),
             zk_id: zk_key_1.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
             locators: Vec::new(),
         };
         let declaration_id_1 = declare_op_1.id();
 
-        let utxo_tree = utxo_tree(vec![utxo]);
+        let utxo_tree_1 = utxo_tree(vec![utxo_1]);
         sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, declare_op_1, &zk_key_1, &config)
+            apply_declare_with_dummies(&utxo_tree_1, sdp_ledger, declare_op_1, &zk_key_1, &config)
                 .unwrap();
 
         // Move to block 9 (last block before session boundary)
@@ -1047,17 +1047,19 @@ mod tests {
         assert_eq!(sdp_ledger.block_number, 10);
 
         let zk_key_2 = create_zk_key(2);
+        let utxo_2 = utxo();
         let declare_op_2 = &SDPDeclareOp {
             service_type: service_a,
-            locked_note_id: utxo.id(),
+            locked_note_id: utxo_2.id(),
             zk_id: zk_key_2.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
             locators: Vec::new(),
         };
         let declaration_id_2 = declare_op_2.id();
 
+        let utxo_tree_2 = utxo_tree(vec![utxo_1, utxo_2]);
         sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, declare_op_2, &zk_key_2, &config)
+            apply_declare_with_dummies(&utxo_tree_2, sdp_ledger, declare_op_2, &zk_key_2, &config)
                 .unwrap();
 
         // Jump to session 2 (block 20)
@@ -1177,19 +1179,19 @@ mod tests {
         assert!(forming_session.declarations.is_empty());
 
         // Create first declaration at block 9
-        let utxo = utxo();
+        let utxo_1 = utxo();
         let declare_op_1 = &SDPDeclareOp {
             service_type: service_a,
-            locked_note_id: utxo.id(),
+            locked_note_id: utxo_1.id(),
             zk_id: zk_key_1.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
             locators: Vec::new(),
         };
         let declaration_id_1 = declare_op_1.id();
 
-        let utxo_tree = utxo_tree(vec![utxo]);
+        let utxo_tree_1 = utxo_tree(vec![utxo_1]);
         sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, declare_op_1, &zk_key_1, &config)
+            apply_declare_with_dummies(&utxo_tree_1, sdp_ledger, declare_op_1, &zk_key_1, &config)
                 .unwrap();
 
         // Cross to block 10 (session boundary - start of session 1)
@@ -1208,17 +1210,19 @@ mod tests {
 
         // Create second declaration at block 10 (first block of session 1)
         let zk_key_2 = create_zk_key(2);
+        let utxo_2 = utxo();
         let declare_op_2 = &SDPDeclareOp {
             service_type: service_a,
-            locked_note_id: utxo.id(),
+            locked_note_id: utxo_2.id(),
             zk_id: zk_key_2.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
             locators: Vec::new(),
         };
         let declaration_id_2 = declare_op_2.id();
 
+        let utxo_tree_2 = utxo_tree(vec![utxo_1, utxo_2]);
         sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, declare_op_2, &zk_key_2, &config)
+            apply_declare_with_dummies(&utxo_tree_2, sdp_ledger, declare_op_2, &zk_key_2, &config)
                 .unwrap();
 
         // Forming session 2 still only has declaration_1 (snapshot was already taken at

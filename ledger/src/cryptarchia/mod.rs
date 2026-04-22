@@ -1474,7 +1474,7 @@ pub mod tests {
                     &transfer_sig,
                     tx.hash(),
                 );
-            assert!(matches!(result, Err(LedgerError::Inputs(_))));
+            assert!(matches!(result, Err(LedgerError::Mantle(_))));
         }
     }
 
@@ -1575,7 +1575,7 @@ pub mod tests {
             &transfer_sig,
             tx.hash(),
         );
-        assert!(matches!(result, Err(LedgerError::Outputs(_))));
+        assert!(matches!(result, Err(LedgerError::Mantle(_))));
     }
 
     #[test]
