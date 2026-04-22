@@ -1,8 +1,6 @@
 use std::{collections::HashSet, hash::BuildHasher, time::Duration};
 
 use lb_common_http_client::ApiBlock;
-use lb_core::header::HeaderId;
-use lb_common_http_client::ApiBlock;
 use lb_core::{
     header::HeaderId,
     mantle::{Transaction as _, TxHash},

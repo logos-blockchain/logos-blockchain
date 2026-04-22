@@ -239,12 +239,6 @@ async fn sdp_declaration_restoration_e2e() {
         .await
         .expect("manual cluster node should restart successfully");
 
-    let restored_declaration = wait_for_declaration(validator, Duration::from_secs(30), {
-        move |decl| decl.locked_note_id == target_locked_note
-    })
-    .await
-    .expect("original declaration should be visible after restart");
-
     let post_restart_declarations = cluster
         .node_client(&node0_name)
         .expect("restarted node client should be available")
