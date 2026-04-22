@@ -273,7 +273,7 @@ const fn node_binary_config() -> BinaryConfig {
 fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layers {
     debug!(prefix, base_dir = %base_dir.display(), "configuring node logging");
 
-    if let Some(log_dir) = tf_env::nomos_log_dir() {
+    if let Some(log_dir) = tf_env::logos_blockchain_log_dir() {
         match fs::create_dir_all(&log_dir) {
             Ok(()) => {
                 return logger::Layers {

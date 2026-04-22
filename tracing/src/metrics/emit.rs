@@ -9,7 +9,7 @@ use opentelemetry::{
 };
 
 fn meter() -> Meter {
-    global::meter("nomos-node")
+    global::meter("logos-blockchain-node")
 }
 
 static U64_COUNTERS: LazyLock<Mutex<HashMap<&'static str, Counter<u64>>>> =

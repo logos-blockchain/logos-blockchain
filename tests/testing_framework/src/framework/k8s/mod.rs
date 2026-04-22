@@ -120,7 +120,7 @@ fn build_runtime_spec(
 
     let node_image = resolve_k8s_node_image();
     let bootstrap_image = resolve_k8s_bootstrap_image();
-    let default_pull_policy = tf_env::nomos_testnet_image_pull_policy();
+    let default_pull_policy = tf_env::logos_blockchain_testnet_image_pull_policy();
     let node_image_pull_policy = resolve_image_pull_policy(
         LOGOS_K8S_NODE_IMAGE_PULL_POLICY,
         &node_image,
@@ -157,7 +157,7 @@ fn build_runtime_spec(
             .with_extra_files(vec![SharedServiceFileSpec::inline(
                 "cfgsync.entropy".to_owned(),
                 "cfgsync.entropy".to_owned(),
-                "nomos-testing-framework-cfgsync-entropy".to_owned(),
+                "logos-blockchain-testing-framework-cfgsync-entropy".to_owned(),
             )]),
         ),
         node_start_script_file: scripts.run_node,
