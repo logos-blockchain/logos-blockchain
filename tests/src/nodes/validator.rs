@@ -325,7 +325,7 @@ impl Validator {
             Err(e) => {
                 let body_preview: String = body.chars().take(500).collect();
                 eprintln!(
-                    "[get_block] deser error for block {id}: {e}\nbody preview: {body_preview}",
+                    "[get_block] deser error for block {id}: {e}\nbody preview: {body_preview}"
                 );
                 None
             }

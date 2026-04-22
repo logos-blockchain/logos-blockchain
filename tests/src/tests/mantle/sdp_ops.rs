@@ -68,8 +68,7 @@ async fn sdp_ops_e2e() {
     let inclusion_timeout = Duration::from_mins(1);
     let state_timeout = Duration::from_secs(45);
 
-    let existing = node0
-        .get_sdp_declarations()
+    let existing = wait_for_sdp_declarations(&node0, Duration::from_secs(30))
         .await
         .expect("fetching SDP declarations should succeed");
     let locked: HashSet<_> = existing.iter().map(|decl| decl.locked_note_id).collect();
@@ -222,8 +221,7 @@ async fn sdp_declaration_restoration_e2e() {
     let (scenario_base_dir, cluster, node0_name, node0, ..) =
         start_sdp_manual_cluster("sdp-declaration-restoration").await;
 
-    let declarations = node0
-        .get_sdp_declarations()
+    let declarations = wait_for_sdp_declarations(&node0, Duration::from_secs(30))
         .await
         .expect("fetching SDP declarations should succeed");
     assert!(
@@ -239,12 +237,21 @@ async fn sdp_declaration_restoration_e2e() {
         .await
         .expect("manual cluster node should restart successfully");
 
-    let post_restart_declarations = cluster
+    let restarted_node = cluster
         .node_client(&node0_name)
-        .expect("restarted node client should be available")
-        .get_sdp_declarations()
-        .await
-        .expect("fetching post-restart SDP declarations should succeed");
+        .expect("restarted node client should be available");
+
+    // Restart can return before the testing API has started listening.
+    let post_restart_declarations = timeout(Duration::from_secs(30), async {
+        loop {
+            match restarted_node.get_sdp_declarations().await {
+                Ok(declarations) if !declarations.is_empty() => break declarations,
+                Ok(_) | Err(_) => sleep(Duration::from_millis(200)).await,
+            }
+        }
+    })
+    .await
+    .expect("fetching post-restart SDP declarations should succeed");
     assert!(
         !post_restart_declarations.is_empty(),
         "declarations should be visible after restart"
@@ -281,11 +288,9 @@ where
 {
     timeout(duration, async {
         loop {
-            let declarations = node
-                .get_sdp_declarations()
-                .await
-                .expect("fetching SDP declarations should succeed");
-            if let Some(declaration) = declarations.into_iter().find(|decl| predicate(decl)) {
+            if let Ok(declarations) = node.get_sdp_declarations().await
+                && let Some(declaration) = declarations.into_iter().find(|decl| predicate(decl))
+            {
                 break declaration;
             }
 
@@ -306,9 +311,11 @@ async fn wait_for_declaration_absence(
             let present = node
                 .get_sdp_declarations()
                 .await
-                .expect("fetching SDP declarations should succeed")
-                .into_iter()
-                .any(|decl| decl.locked_note_id == locked_note_id);
+                .map_or(true, |declarations| {
+                    declarations
+                        .into_iter()
+                        .any(|decl| decl.locked_note_id == locked_note_id)
+                });
 
             if !present {
                 break;
@@ -319,6 +326,23 @@ async fn wait_for_declaration_absence(
     })
     .await
     .is_ok()
+}
+
+async fn wait_for_sdp_declarations(
+    node: &NodeHttpClient,
+    duration: Duration,
+) -> Option<Vec<Declaration>> {
+    timeout(duration, async {
+        loop {
+            if let Ok(declarations) = node.get_sdp_declarations().await {
+                break declarations;
+            }
+
+            sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .ok()
 }
 
 #[expect(

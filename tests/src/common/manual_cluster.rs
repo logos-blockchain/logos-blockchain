@@ -82,6 +82,11 @@ where
 }
 
 pub fn ensure_local_node_binary_env() {
+    // Respect an existing binary override (for example, a testing-featured build).
+    if std::env::var_os("LOGOS_BLOCKCHAIN_NODE_BIN").is_some() {
+        return;
+    }
+
     // SAFETY: Tests set this process-local env var before spawning node processes.
     // We do not read-modify-write shared data through references here.
     unsafe {
