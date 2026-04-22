@@ -39,10 +39,8 @@ use crate::cucumber::{
         matching_child_dirs, peer_id_from_node_yaml, track_progress, truncate_hash,
     },
     world::{
-        ChainInfoMap, CucumberWorld, ManualNodeConfigOverrides, NodeInfo,
-        PublicCryptarchiaEndpointPeer, UserConfigOverride, WalletInfo, WalletInfoMap, WalletType,
-        ChainInfoMap, ConfigOverride, CucumberWorld, NodeInfo, PublicCryptarchiaEndpointPeer,
-        WalletInfo, WalletInfoMap, WalletType,
+        ChainInfoMap, ConfigOverride, CucumberWorld, ManualNodeConfigOverrides, NodeInfo,
+        PublicCryptarchiaEndpointPeer, WalletInfo, WalletInfoMap, WalletType,
     },
 };
 
@@ -623,8 +621,8 @@ pub async fn start_node(
                     prepare_config_patch(
                         &mut config,
                         startup_settings.join_external_network,
-                        startup_settings.deployment_override.as_ref(),
-                        &startup_settings.config_overrides,
+                        startup_settings.deployment_settings_override.as_ref(),
+                        &startup_settings.manual_node_config_overrides,
                         startup_settings.initial_peers_override.as_ref(),
                         &startup_settings.ibd_peers,
                         &startup_settings.user_config_overrides,
@@ -845,12 +843,10 @@ struct StartupSettings {
     is_bootstrap_node: bool,
     initial_peers_override: Option<Vec<Multiaddr>>,
     join_external_network: bool,
-    deployment_override: DeploymentSettings,
     user_config_overrides: Vec<ConfigOverride>,
     deployment_config_overrides: Vec<ConfigOverride>,
-    deployment_override: Option<DeploymentSettings>,
-    config_overrides: ManualNodeConfigOverrides,
-    user_config_overrides: Vec<UserConfigOverride>,
+    deployment_settings_override: Option<DeploymentSettings>,
+    manual_node_config_overrides: ManualNodeConfigOverrides,
 }
 
 fn get_startup_settings(
@@ -880,7 +876,7 @@ fn get_startup_settings(
     let is_bootstrap_node = initial_peers.is_empty();
     let initial_peers_override = world.initial_peers_override.clone();
     let join_external_network = world.join_external_network.unwrap_or_default();
-    let deployment_override = world
+    let deployment_settings_override = world
         .deployment_config_override_path
         .clone()
         .map(|path| load_run_config(&path))
@@ -894,13 +890,14 @@ fn get_startup_settings(
         is_bootstrap_node,
         initial_peers_override,
         join_external_network,
-        deployment_override,
-        config_overrides: world.manual_node_config_overrides.clone(),
+        deployment_settings_override,
+        manual_node_config_overrides: world.manual_node_config_overrides.clone(),
         user_config_overrides,
         deployment_config_overrides,
     })
 }
 
+#[expect(clippy::too_many_arguments, reason = "all needed")]
 fn prepare_config_patch(
     config: &mut RunConfig,
     join_external_network: bool,
@@ -1061,17 +1058,32 @@ pub async fn wait_all_nodes_responive(
         })
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "Singular fn with multiple branches to handle different events and futures."
-)]
 async fn verify_reponsive_and_network_ready(
     client: &NodeHttpClient,
     node_name: &str,
     started_node_name: &str,
 ) -> StepResult {
+    verify_reponsive_and_network_ready_with_timeout(
+        client,
+        node_name,
+        started_node_name,
+        Duration::from_mins(1),
+    )
+    .await
+}
+
+/// Wait for the node to be responsive and network ready, with a timeout.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Singular fn with multiple branches to handle different events and futures."
+)]
+pub async fn verify_reponsive_and_network_ready_with_timeout(
+    client: &NodeHttpClient,
+    node_name: &str,
+    started_node_name: &str,
+    time_out: Duration,
+) -> StepResult {
     let start = Instant::now();
-    let time_out = Duration::from_mins(1);
     let mut count = 0usize;
     let mut can_provide_consensus_info;
     let mut is_network_ready;

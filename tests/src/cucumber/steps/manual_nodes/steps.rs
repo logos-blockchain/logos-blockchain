@@ -27,7 +27,8 @@ use crate::{
                     poll_all_nodes_and_update_consensus_cache, restart_node, start_node,
                     start_nodes_order_respecting_dependencies,
                     verify_genesis_wallet_resources_table_indexes,
-                    verify_node_wallet_resources_table_indexes, wait_all_nodes_responive,
+                    verify_node_wallet_resources_table_indexes,
+                    verify_reponsive_and_network_ready_with_timeout, wait_all_nodes_responive,
                     wait_for_all_nodes_to_be_synced_to_chain,
                 },
             },
@@ -819,6 +820,27 @@ async fn step_wait_all_nodes_responsive(
             message: format!("Step `{}` error: {e}", step.value),
         });
     }
+
+    let wait_tasks: Vec<_> = world
+        .nodes_info
+        .values()
+        .map(|node| {
+            let fut = verify_reponsive_and_network_ready_with_timeout(
+                &node.started_node.client,
+                &node.name,
+                &node.started_node.name,
+                Duration::from_secs(time_out_seconds),
+            );
+            let step_value = step.value.clone();
+            async move {
+                fut.await.map_err(|e| StepError::StepFail {
+                    message: format!("Step `{step_value}` error: {e}"),
+                })
+            }
+        })
+        .collect();
+
+    futures::future::try_join_all(wait_tasks).await?;
 
     Ok(())
 }
