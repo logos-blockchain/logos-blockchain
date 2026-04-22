@@ -5186,6 +5186,7 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "tokio",
+ "tonic 0.14.5",
  "tracing",
  "tracing-appender",
  "tracing-gelf",

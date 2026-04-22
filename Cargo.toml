@@ -192,6 +192,7 @@ thiserror         = { default-features = false, version = "2.0" }
 time              = { default-features = false, version = "0.3" }
 tokio             = { default-features = false, version = "1" }
 tokio-stream      = { default-features = false, version = "0.1.18" }
+tonic             = { default-features = false, version = "0.14.5" }
 tracing           = { default-features = false, version = "0.1" }
 utoipa            = { default-features = false, version = "4.0" }
 utoipa-swagger-ui = { default-features = false, version = "7.0" }

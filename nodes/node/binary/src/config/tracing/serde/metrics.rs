@@ -16,6 +16,7 @@ impl From<Layer> for MetricsLayerSettings {
             Layer::Otlp(config) => Self::Otlp(OtlpMetricsConfig {
                 endpoint: config.endpoint,
                 host_identifier: config.host_identifier,
+                authorization_header: config.authorization_header,
             }),
             Layer::None => Self::None,
         }
@@ -26,4 +27,6 @@ impl From<Layer> for MetricsLayerSettings {
 pub struct OtlpConfig {
     pub endpoint: Url,
     pub host_identifier: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization_header: Option<String>,
 }
