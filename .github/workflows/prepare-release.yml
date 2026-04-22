@@ -29,11 +29,11 @@ jobs:
           if [[ "$TAG_NAME" == "${{ env.TEST_TAG_NAME }}" ]]; then
             echo "Test workflow run. Setting version to 0.0.0 for testing."
             VERSION=0.0.0
-          elif [[ "$TAG_NAME" =~ ^([0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+)?)$ ]]; then
+          elif [[ "$TAG_NAME" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?)$ ]]; then
             echo "Release workflow run for tag '$TAG_NAME'. Setting version to '$TAG_NAME'."
             VERSION="$TAG_NAME"
           else
-            echo "Tag name '$TAG_NAME' is not valid. It must either be '${{ env.TEST_TAG_NAME }}' or follow the format 'X.Y.Z'."
+            echo "Tag name '$TAG_NAME' is not valid. It must either be '${{ env.TEST_TAG_NAME }}' or follow the format 'X.Y.Z[-rc.N]'."
             exit 1
           fi
 
