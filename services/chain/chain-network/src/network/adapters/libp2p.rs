@@ -34,6 +34,9 @@ use crate::{
 
 type Relay<T, RuntimeServiceId> =
     OutboundRelay<<NetworkService<T, RuntimeServiceId> as ServiceData>::Message>;
+type BlockStreamItem<Tx> = Result<(HeaderId, Block<Tx>), DynError>;
+type FirstBlockResponse<Tx> = Result<Option<BlockStreamItem<Tx>>, DynError>;
+type BlockDownloadStream<Tx> = BoxedStream<BlockStreamItem<Tx>>;
 
 #[derive(Clone)]
 pub struct LibP2pAdapter<Tx, RuntimeServiceId>
@@ -65,15 +68,15 @@ where
     // before this peer is considered a successful candidate by `select_ok`.
     //
     // Behavior:
-    // - If the first item is any error, returns `Err` so this peer is excluded
-    //   from winner selection.
-    // - Otherwise, returns a reconstructed stream where the first item is put
-    //   back (`iter([first_item]).chain(stream)`) so downstream consumers see
-    //   the full original stream.
+    // - If the first item is any error, returns `Err` so this peer is excluded from
+    //   winner selection.
+    // - Otherwise, returns a reconstructed stream where the first item is put back
+    //   (`iter([first_item]).chain(stream)`) so downstream consumers see the full
+    //   original stream.
     // - If the stream is immediately exhausted (`None`), returns it unchanged.
     fn validate_first_block_response(
-        first_item: Option<Result<(HeaderId, Block<Tx>), DynError>>,
-    ) -> Result<Option<Result<(HeaderId, Block<Tx>), DynError>>, DynError> {
+        first_item: Option<BlockStreamItem<Tx>>,
+    ) -> FirstBlockResponse<Tx> {
         match first_item {
             Some(Err(err)) => Err(err),
             Some(first_item) => Ok(Some(first_item)),
@@ -88,7 +91,7 @@ where
         local_tip: HeaderId,
         latest_immutable_block: HeaderId,
         additional_blocks: HashSet<HeaderId>,
-    ) -> Result<BoxedStream<Result<(HeaderId, Block<Tx>), DynError>>, DynError>
+    ) -> Result<BlockDownloadStream<Tx>, DynError>
     where
         Tx: AuthenticatedMantleTx
             + Serialize
@@ -386,8 +389,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use lb_cryptarchia_sync::{BlocksUnavailableReason, ChainSyncError, ChainSyncErrorKind};
+
+    use super::*;
 
     #[test]
     fn validate_first_block_response_rejects_block_not_found() {

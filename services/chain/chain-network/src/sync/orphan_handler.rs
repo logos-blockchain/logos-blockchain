@@ -460,8 +460,11 @@ mod tests {
 
     use futures::stream;
     use lb_cryptarchia_sync::GetTipResponse;
-    use lb_network_service::backends::libp2p::PeerId;
-    use lb_network_service::{NetworkService, backends::mock::Mock, message::ChainSyncEvent};
+    use lb_network_service::{
+        NetworkService,
+        backends::{libp2p::PeerId, mock::Mock},
+        message::ChainSyncEvent,
+    };
     use overwatch::services::{ServiceData, relay::OutboundRelay};
     use tokio::time::timeout;
 
