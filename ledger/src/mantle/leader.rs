@@ -143,6 +143,11 @@ impl LeaderState {
         self.vouchers_snapshot.root
     }
 
+    /// Get the MMR of voucher commitments collected up to the current block.
+    pub(crate) const fn vouchers(&self) -> &MerkleMountainRange<VoucherCm, ZkHasher> {
+        &self.vouchers
+    }
+
     /// Compute the per-voucher reward given current state.
     #[must_use]
     pub fn reward_amount(&self) -> Value {

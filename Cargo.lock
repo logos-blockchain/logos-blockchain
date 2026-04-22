@@ -5305,6 +5305,7 @@ dependencies = [
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-ledger",
+ "logos-blockchain-mmr",
  "logos-blockchain-utils",
  "num-bigint",
  "rpds",

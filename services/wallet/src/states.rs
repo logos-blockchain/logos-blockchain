@@ -48,7 +48,7 @@ impl<'u> ServiceState<'u> {
     ) -> Self {
         Self {
             next_new_voucher_index: state.next_new_voucher_index,
-            wallet: Wallet::from_lib(
+            wallet: Wallet::from_lib_ledger_state(
                 settings
                     .known_keys
                     .clone()

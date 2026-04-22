@@ -6,6 +6,7 @@ pub mod sdp;
 use std::collections::HashMap;
 
 use lb_core::{
+    crypto::ZkHasher,
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
         ops::{
@@ -20,6 +21,7 @@ use lb_core::{
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
+use lb_mmr::MerkleMountainRange;
 use sdp::{Error as SdpLedgerError, locked_notes::LockedNotes};
 use tracing::error;
 
@@ -119,9 +121,16 @@ impl LedgerState {
         self.sdp.declarations()
     }
 
+    /// Get the root of the voucher commitments snapshot.
     #[must_use]
     pub const fn vouchers_snapshot_root(&self) -> RewardsRoot {
         self.leaders.vouchers_snapshot_root()
+    }
+
+    /// Get the MMR of voucher commitments collected up to the current block.
+    #[must_use]
+    pub const fn vouchers(&self) -> &MerkleMountainRange<VoucherCm, ZkHasher> {
+        self.leaders.vouchers()
     }
 
     #[must_use]
