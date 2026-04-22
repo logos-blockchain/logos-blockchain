@@ -71,6 +71,7 @@ members = [
   "testnet/l2-sequencer-archival-demo/sequencer",
   "tests",
   "tests/testing_framework",
+  "tools/config",
   "tracing",
   "utils",
   "utxotree",
@@ -152,6 +153,7 @@ lb-wallet-service                  = { default-features = false, package = "logo
 lb-witness-generator               = { default-features = false, package = "logos-blockchain-witness-generator", path = "./zk/circuits/witness-generator" }
 lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
 lb-zone-sdk                        = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
+lb_config                          = { default-features = false, package = "lb_config", path = "./tools/config" }
 lb_network                         = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
 testing-framework-core             = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "d3bb6348" }
 testing-framework-runner-compose   = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "d3bb6348" }

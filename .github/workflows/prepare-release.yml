@@ -2,6 +2,14 @@ name: Prepare release draft with built binaries
 
 on:
   workflow_dispatch:
+    inputs:
+      release-type:
+        description: Type of release to prepare
+        required: true
+        type: choice
+        options:
+          - release
+          - release-candidate
 
 concurrency:
   group: ${{ github.workflow }}@${{ github.ref_name }}
@@ -18,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.define-version.outputs.version }}
+      is_prerelease: ${{ steps.define-version.outputs.is_prerelease }}
 
     steps:
       # Take the version of the tag from which the workflow is dispatched, or use `0.0.0` for test runs with the `release-ci-test` tag.
@@ -25,19 +34,24 @@ jobs:
         id: define-version
         env:
           TAG_NAME: ${{ github.ref_name }}
+          RELEASE_TYPE: ${{ inputs.release-type }}
         run: |
           if [[ "$TAG_NAME" == "${{ env.TEST_TAG_NAME }}" ]]; then
             echo "Test workflow run. Setting version to 0.0.0 for testing."
             VERSION=0.0.0
-          elif [[ "$TAG_NAME" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?)$ ]]; then
+          elif [[ "$RELEASE_TYPE" == "release" && "$TAG_NAME" =~ ^([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Release workflow run for tag '$TAG_NAME'. Setting version to '$TAG_NAME'."
+            VERSION="$TAG_NAME"
+          elif [[ "$RELEASE_TYPE" == "release-candidate" && "$TAG_NAME" =~ ^([0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+)$ ]]; then
             echo "Release workflow run for tag '$TAG_NAME'. Setting version to '$TAG_NAME'."
             VERSION="$TAG_NAME"
           else
-            echo "Tag name '$TAG_NAME' is not valid. It must either be '${{ env.TEST_TAG_NAME }}' or follow the format 'X.Y.Z[-rc.N]'."
+            echo "Tag name '$TAG_NAME' is not valid for release type '$RELEASE_TYPE'. It must either be '${{ env.TEST_TAG_NAME }}', 'X.Y.Z' for 'release', or 'X.Y.Z-rc.N' for 'release-candidate'."
             exit 1
           fi
 
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$([[ "$RELEASE_TYPE" == "release-candidate" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
 
   build:
     name: "Build and tar binaries for ${{ matrix.platform.os-display }} (${{ matrix.platform.arch }})"
@@ -136,6 +150,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.configure-version.outputs.version }}
+      IS_PRERELEASE: ${{ needs.configure-version.outputs.is_prerelease }}
     outputs:
       upload_url: ${{ steps.create-draft-release.outputs.upload_url }}
 
@@ -153,7 +168,7 @@ jobs:
           release_name: Logos Blockchain Node ${{ env.VERSION }}
           body_path: .github/release/release-content.md
           draft: true
-          prerelease: true
+          prerelease: ${{ env.IS_PRERELEASE }}
 
   upload-binaries:
     name: Upload binaries to release

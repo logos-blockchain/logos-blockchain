@@ -5,11 +5,11 @@ use std::{
     time::Duration,
 };
 
+use lb_config::GeneralConfig;
 use lb_node::config::{
     TracingConfig,
     deployment::{DeploymentSettings, WellKnownDeployment},
 };
-use lb_tests::topology::configs::GeneralConfig;
 use time::OffsetDateTime;
 use tokio::{sync::oneshot::Sender, time::timeout};
 
