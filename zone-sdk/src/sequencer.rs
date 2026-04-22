@@ -566,7 +566,7 @@ where
                 handle_inflight(inflight_result, &mut self.resubmit_active);
                 None
             }
-            _ = self.resubmit_interval.tick(), if *self.ready_tx.borrow() && !self.resubmit_active => {
+            _ = self.resubmit_interval.tick(), if self.current_tip.is_some() && !self.resubmit_active => {
                 enqueue_resubmit(
                     self.state.as_ref().unwrap(),
                     self.current_tip.unwrap(),
