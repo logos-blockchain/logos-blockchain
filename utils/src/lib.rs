@@ -93,7 +93,9 @@ pub mod serde {
             }
         }
 
-        pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        pub fn deserialize<'de, D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<Vec<u8>, D::Error> {
             if deserializer.is_human_readable() {
                 let s = String::deserialize(deserializer)?;
                 const_hex::decode(s).map_err(serde::de::Error::custom)

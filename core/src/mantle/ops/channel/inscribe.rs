@@ -19,6 +19,7 @@ use crate::{
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
+    #[serde(with = "serde_bytes_vec")]
     pub inscription: Vec<u8>,
     /// Enforce that this inscription comes after this tx
     pub parent: MsgId,
@@ -126,5 +127,39 @@ impl Operation for InscriptionOp {
             },
         );
         Ok(channels)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample() -> InscriptionOp {
+        InscriptionOp {
+            channel_id: ChannelId([0u8; 32]),
+            inscription: b"genesis".to_vec(),
+            parent: MsgId([0u8; 32]),
+            signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+        }
+    }
+
+    #[test]
+    fn json_round_trip() {
+        let op = sample();
+        let json = serde_json::to_string(&op).unwrap();
+        assert!(
+            json.contains("\"67656e65736973\""),
+            "inscription should be hex in JSON"
+        );
+        let recovered: InscriptionOp = serde_json::from_str(&json).unwrap();
+        assert_eq!(op, recovered);
+    }
+
+    #[test]
+    fn bincode_round_trip() {
+        let op = sample();
+        let bytes = bincode::serialize(&op).unwrap();
+        let recovered: InscriptionOp = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(op, recovered);
     }
 }
