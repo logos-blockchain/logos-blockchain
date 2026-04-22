@@ -5,7 +5,7 @@ use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::StreamExt as _;
+use futures::{StreamExt as _, TryStreamExt as _};
 use lb_chain_service::{
     Epoch, LibUpdate, Slot,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -1131,15 +1131,17 @@ where
 
         // Fetch block IDs in [state.lib, tip]
         let missing_headers = cryptarchia_api
-            .get_headers(Some(tip), Some(state.lib()))
+            .get_headers(tip, state.lib())
             .await
             .map_err(WalletServiceError::CryptarchiaApi)
             .inspect_err(|e| {
                 error!(block_id = ?tip, err = %e, "Failed to fetch missing headers for backfill");
-            })?;
+            })?
+            .try_collect::<Vec<_>>()
+            .await?;
 
         // Load/apply blocks in order from `state.lib` to `tip`
-        for header_id in missing_headers.iter().rev().copied() {
+        for header_id in missing_headers.into_iter().rev() {
             if state.wallet().has_processed_block(header_id) {
                 debug!("skipping already processed block");
                 continue;

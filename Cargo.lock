@@ -4515,6 +4515,7 @@ version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
+ "derivative",
  "futures",
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-core",
