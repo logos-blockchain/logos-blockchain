@@ -4293,7 +4293,6 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-libp2p",
- "logos-blockchain-tracing",
  "test-log",
  "tokio",
  "tokio-stream",
