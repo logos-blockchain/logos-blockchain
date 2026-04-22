@@ -274,13 +274,17 @@ impl From<LeaderPrivate> for lb_pol::PolWitnessInputsData {
 }
 
 mod proof_serde {
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::{Deserialize, Deserializer, Serialize as _, Serializer};
 
     pub fn serialize<S>(item: &lb_pol::PoLProof, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_bytes(&item.to_bytes())
+        if serializer.is_human_readable() {
+            item.to_bytes().to_vec().serialize(serializer)
+        } else {
+            serializer.serialize_bytes(&item.to_bytes())
+        }
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<lb_pol::PoLProof, D::Error>
