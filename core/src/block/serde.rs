@@ -24,7 +24,6 @@ mod tests {
     fn test_json_round_trip() {
         let block = make_empty_block();
         let json = serde_json::to_string(&block).expect("JSON serialization should succeed");
-        println!("{}", json);
         let restored: Block<MantleTx> =
             serde_json::from_str(&json).expect("JSON deserialization should succeed");
         assert_eq!(block.header().id(), restored.header().id());
