@@ -8,9 +8,7 @@ use lb_core::{
     header::HeaderId,
     mantle::AuthenticatedMantleTx,
 };
-use lb_cryptarchia_sync::{
-    BlocksUnavailableReason, ChainSyncError, ChainSyncErrorKind, GetTipResponse,
-};
+use lb_cryptarchia_sync::GetTipResponse;
 use lb_network_service::{
     NetworkService,
     backends::libp2p::{
@@ -63,32 +61,26 @@ impl<Tx, RuntimeServiceId> LibP2pAdapter<Tx, RuntimeServiceId>
 where
     Tx: Clone + Eq + Serialize,
 {
-    // Returns `true` when the error is a typed provider-side `BlockNotFound`.
-    //
-    // We treat this case as retryable peer selection noise rather than a hard
-    // failure for the whole request.
-    fn is_block_not_found(err: &DynError) -> bool {
-        err.downcast_ref::<ChainSyncError>().is_some_and(|err| {
-            matches!(
-                err.kind,
-                ChainSyncErrorKind::BlockProviderUnavailable(
-                    BlocksUnavailableReason::BlockNotFound(_)
-                )
-            )
-        })
-    }
-
     // Requests a blocks stream from a single peer and validates the first item
     // before this peer is considered a successful candidate by `select_ok`.
     //
     // Behavior:
-    // - If the first item is a typed
-    //   `ChainSyncErrorKind::BlockProviderUnavailable(BlocksUnavailableReason::BlockNotFound(_))`,
-    //   returns `Err` so this peer is excluded from winner selection.
+    // - If the first item is any error, returns `Err` so this peer is excluded
+    //   from winner selection.
     // - Otherwise, returns a reconstructed stream where the first item is put
     //   back (`iter([first_item]).chain(stream)`) so downstream consumers see
     //   the full original stream.
     // - If the stream is immediately exhausted (`None`), returns it unchanged.
+    fn validate_first_block_response(
+        first_item: Option<Result<(HeaderId, Block<Tx>), DynError>>,
+    ) -> Result<Option<Result<(HeaderId, Block<Tx>), DynError>>, DynError> {
+        match first_item {
+            Some(Err(err)) => Err(err),
+            Some(first_item) => Ok(Some(first_item)),
+            None => Ok(None),
+        }
+    }
+
     async fn request_validated_blocks_stream_from_peer(
         &self,
         peer: PeerId,
@@ -117,8 +109,7 @@ where
             )
             .await?;
 
-        match stream.next().await {
-            Some(Err(err)) if Self::is_block_not_found(&err) => Err(err),
+        match Self::validate_first_block_response(stream.next().await)? {
             Some(first_item) => {
                 let rebuilt = tokio_stream::iter([first_item]).chain(stream);
                 Ok(Box::new(rebuilt))
@@ -396,6 +387,42 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lb_cryptarchia_sync::{BlocksUnavailableReason, ChainSyncError, ChainSyncErrorKind};
+
+    #[test]
+    fn validate_first_block_response_rejects_block_not_found() {
+        let block_not_found = ChainSyncError::new(
+            PeerId::random(),
+            ChainSyncErrorKind::BlockProviderUnavailable(BlocksUnavailableReason::BlockNotFound(
+                HeaderId::from([9u8; 32]),
+            )),
+        );
+        let first_item: Result<(HeaderId, Block<()>), DynError> = Err(Box::new(block_not_found));
+
+        assert!(LibP2pAdapter::<(), ()>::validate_first_block_response(Some(first_item)).is_err());
+    }
+
+    #[test]
+    fn validate_first_block_response_rejects_other_provider_errors() {
+        let unknown = ChainSyncError::new(
+            PeerId::random(),
+            ChainSyncErrorKind::BlockProviderUnavailable(BlocksUnavailableReason::Unknown(
+                "oops".to_owned(),
+            )),
+        );
+        let first_item: Result<(HeaderId, Block<()>), DynError> = Err(Box::new(unknown));
+
+        assert!(LibP2pAdapter::<(), ()>::validate_first_block_response(Some(first_item)).is_err());
+    }
+
+    #[test]
+    fn validate_first_block_response_accepts_empty_stream() {
+        assert!(
+            LibP2pAdapter::<(), ()>::validate_first_block_response(None)
+                .unwrap()
+                .is_none()
+        );
+    }
 
     #[test]
     fn choose_peers() {

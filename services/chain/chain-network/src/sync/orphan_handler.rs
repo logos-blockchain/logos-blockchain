@@ -186,6 +186,7 @@ where
                 err.kind,
                 ChainSyncErrorKind::BlockProviderUnavailable(
                     BlocksUnavailableReason::BlockNotFound(_)
+                        | BlocksUnavailableReason::StartBlockNotFound
                 )
             )
         })
@@ -223,7 +224,7 @@ where
                         ?err,
                         orphan_id = ?orphan_info.orphan_id,
                         attempts_remaining,
-                        "Orphan fetch hit transient BlockNotFound; retrying with a reshuffled peer selection"
+                        "Orphan fetch hit transient provider not-found; retrying with a reshuffled peer selection"
                     );
                     last_err = Some(err);
                     attempts_remaining -= 1;
@@ -459,6 +460,7 @@ mod tests {
 
     use futures::stream;
     use lb_cryptarchia_sync::GetTipResponse;
+    use lb_network_service::backends::libp2p::PeerId;
     use lb_network_service::{NetworkService, backends::mock::Mock, message::ChainSyncEvent};
     use overwatch::services::{ServiceData, relay::OutboundRelay};
     use tokio::time::timeout;
@@ -672,6 +674,49 @@ mod tests {
 
     const TEST_TIP: [u8; 32] = [10u8; 32];
     const TEST_LIB: [u8; 32] = [11u8; 32];
+
+    #[test]
+    fn retryable_block_not_found_variants() {
+        let block_not_found = ChainSyncError::new(
+            PeerId::random(),
+            ChainSyncErrorKind::BlockProviderUnavailable(BlocksUnavailableReason::BlockNotFound(
+                HeaderId::from([99u8; 32]),
+            )),
+        );
+        let start_block_not_found = ChainSyncError::new(
+            PeerId::random(),
+            ChainSyncErrorKind::BlockProviderUnavailable(
+                BlocksUnavailableReason::StartBlockNotFound,
+            ),
+        );
+
+        assert!(
+            OrphanBlocksDownloader::<MockNetworkAdapter, usize>::is_retryable_block_not_found(
+                &(Box::new(block_not_found) as DynError),
+            )
+        );
+        assert!(
+            OrphanBlocksDownloader::<MockNetworkAdapter, usize>::is_retryable_block_not_found(
+                &(Box::new(start_block_not_found) as DynError),
+            )
+        );
+    }
+
+    #[test]
+    fn non_retryable_provider_error_is_rejected() {
+        let unknown = ChainSyncError::new(
+            PeerId::random(),
+            ChainSyncErrorKind::BlockProviderUnavailable(BlocksUnavailableReason::Unknown(
+                "boom".to_owned(),
+            )),
+        );
+
+        assert!(
+            !OrphanBlocksDownloader::<MockNetworkAdapter, usize>::is_retryable_block_not_found(
+                &(Box::new(unknown) as DynError),
+            )
+        );
+    }
 
     #[tokio::test]
     async fn test_orphan_cache_limit() {
