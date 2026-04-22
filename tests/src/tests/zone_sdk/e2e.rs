@@ -257,31 +257,50 @@ fn spawn_drive(
 
 /// Drive the sequencer with republish-on-conflict behavior.
 ///
-/// Use for multi-sequencer tests where conflicts are expected.
-///
-/// Tracks all known payloads (adopted + already republished) to avoid
-/// publishing the same payload twice.
+/// On each `ChannelUpdate`:
+/// 1. remove `orphaned` from local state,
+/// 2. apply `adopted` to local state,
+/// 3. republish each `invalidated` entry that is ours, not in state, and not in
+///    `pending`.
 fn spawn_drive_republish(
     mut sequencer: ZoneSequencer<Node>,
     handle: SequencerHandle<Node>,
+    own_payloads: HashSet<Vec<u8>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let mut state: HashSet<Vec<u8>> = HashSet::new();
+
         loop {
-            if let Some(Event::ChannelUpdate {
-                orphaned, adopted, ..
+            let Some(Event::ChannelUpdate {
+                orphaned,
+                adopted,
+                pending,
+                invalidated,
+                ..
             }) = sequencer.next_event().await
-            {
-                let adopted_payloads: HashSet<Vec<u8>> =
-                    adopted.into_iter().map(|a| a.payload).collect();
-                for inv in orphaned {
-                    if !adopted_payloads.contains(&inv.payload) {
-                        debug!(
-                            "Re-publishing orphaned: {:?}",
-                            String::from_utf8_lossy(&inv.payload)
-                        );
-                        if let Err(e) = handle.publish_message(inv.payload).await {
-                            debug!("Failed to re-publish: {e}");
-                        }
+            else {
+                continue;
+            };
+
+            for o in &orphaned {
+                state.remove(&o.payload);
+            }
+            for a in &adopted {
+                state.insert(a.payload.clone());
+            }
+
+            let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
+            for inv in &invalidated {
+                if own_payloads.contains(&inv.payload)
+                    && !state.contains(&inv.payload)
+                    && !pending_payloads.contains(&inv.payload)
+                {
+                    debug!(
+                        "Re-publishing invalidated: {:?}",
+                        String::from_utf8_lossy(&inv.payload)
+                    );
+                    if let Err(e) = handle.publish_message(inv.payload.clone()).await {
+                        debug!("Failed to re-publish: {e}");
                     }
                 }
             }
@@ -635,9 +654,21 @@ async fn test_concurrent_multi_sequencer() {
         None,
     );
 
-    let poll_a = spawn_drive_republish(sequencer_a, handle_a.clone());
-    let poll_b = spawn_drive_republish(sequencer_b, handle_b.clone());
-    let poll_c = spawn_drive_republish(sequencer_c, handle_c.clone());
+    let poll_a = spawn_drive_republish(
+        sequencer_a,
+        handle_a.clone(),
+        data_a.iter().cloned().collect(),
+    );
+    let poll_b = spawn_drive_republish(
+        sequencer_b,
+        handle_b.clone(),
+        data_b.iter().cloned().collect(),
+    );
+    let poll_c = spawn_drive_republish(
+        sequencer_c,
+        handle_c.clone(),
+        data_c.iter().cloned().collect(),
+    );
 
     // Wait for all three to be ready
     handle_a.wait_ready().await;
@@ -689,9 +720,8 @@ async fn test_concurrent_multi_sequencer() {
     wait_for_indexer_unordered(&indexer, &expected_all, Duration::from_mins(20)).await;
 
     // Wait for enough blocks so any late re-published duplicates would have
-    // landed. With k=5 and 1s slots, finality is ~5 blocks. We wait 30s
-    // (~30 blocks) to be safe — enough for resubmit cycles (3s) and any
-    // in-flight transactions to settle.
+    // landed. With k=3 and 1s slots, finality is ~3 blocks. We wait 30s
+    // to be safe — enough for resubmit cycles and in-flight txs to settle.
     sleep(Duration::from_secs(30)).await;
 
     let mut all_payloads: Vec<Vec<u8>> = Vec::new();
@@ -707,6 +737,11 @@ async fn test_concurrent_multi_sequencer() {
             got_any = true;
             if let ZoneMessage::Block(block) = msg {
                 if expected_all.contains(&block.data) {
+                    debug!(
+                        "Post-settlement scan: {:?} id={:?} slot={slot:?}",
+                        String::from_utf8_lossy(&block.data),
+                        block.id,
+                    );
                     all_payloads.push(block.data.clone());
                 }
                 last_zone_block = Some((block.id, slot));
@@ -749,49 +784,61 @@ fn spawn_sequencer_sorted_policy(
     discarded: DiscardedSet,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let mut state: HashSet<Vec<u8>> = HashSet::new();
         let mut max_seen_on_chain: Option<Vec<u8>> = None;
 
         loop {
-            if let Some(Event::ChannelUpdate {
-                orphaned, adopted, ..
+            let Some(Event::ChannelUpdate {
+                orphaned,
+                adopted,
+                pending,
+                invalidated,
+                ..
             }) = sequencer.next_event().await
-            {
-                for a in &adopted {
-                    discarded.lock().await.remove(&a.payload);
-                    if max_seen_on_chain
-                        .as_ref()
-                        .is_none_or(|max| a.payload > *max)
-                    {
-                        max_seen_on_chain = Some(a.payload.clone());
-                    }
+            else {
+                continue;
+            };
+
+            for o in &orphaned {
+                state.remove(&o.payload);
+            }
+            for a in &adopted {
+                state.insert(a.payload.clone());
+                discarded.lock().await.remove(&a.payload);
+                if max_seen_on_chain.as_ref().is_none_or(|m| a.payload > *m) {
+                    max_seen_on_chain = Some(a.payload.clone());
                 }
+            }
 
-                for inv in orphaned {
-                    let should_republish = max_seen_on_chain
-                        .as_ref()
-                        .is_some_and(|max| inv.payload >= *max);
+            let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
 
-                    if should_republish {
-                        debug!(
-                            "Sorted policy: re-publishing {:?} (larger than max {:?})",
-                            String::from_utf8_lossy(&inv.payload),
-                            max_seen_on_chain
-                                .as_ref()
-                                .map(|m| String::from_utf8_lossy(m).to_string()),
-                        );
-                        if let Err(e) = handle.publish_message(inv.payload).await {
-                            debug!("Failed to re-publish: {e}");
-                        }
-                    } else {
-                        debug!(
-                            "Sorted policy: dropping {:?} (< max {:?})",
-                            String::from_utf8_lossy(&inv.payload),
-                            max_seen_on_chain
-                                .as_ref()
-                                .map(|m| String::from_utf8_lossy(m).to_string()),
-                        );
-                        discarded.lock().await.insert(inv.payload);
+            for inv in &invalidated {
+                if state.contains(&inv.payload) || pending_payloads.contains(&inv.payload) {
+                    continue;
+                }
+                let larger_or_equal = max_seen_on_chain
+                    .as_ref()
+                    .is_some_and(|m| inv.payload >= *m);
+                if larger_or_equal {
+                    debug!(
+                        "Sorted policy: re-publishing {:?} (>= max {:?})",
+                        String::from_utf8_lossy(&inv.payload),
+                        max_seen_on_chain
+                            .as_ref()
+                            .map(|m| String::from_utf8_lossy(m).to_string()),
+                    );
+                    if let Err(e) = handle.publish_message(inv.payload.clone()).await {
+                        debug!("Failed to re-publish: {e}");
                     }
+                } else {
+                    debug!(
+                        "Sorted policy: dropping {:?} (< max {:?})",
+                        String::from_utf8_lossy(&inv.payload),
+                        max_seen_on_chain
+                            .as_ref()
+                            .map(|m| String::from_utf8_lossy(m).to_string()),
+                    );
+                    discarded.lock().await.insert(inv.payload.clone());
                 }
             }
         }

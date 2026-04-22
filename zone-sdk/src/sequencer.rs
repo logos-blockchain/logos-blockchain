@@ -91,16 +91,18 @@ pub enum Event {
     },
     /// Channel state changed.
     ///
-    /// When `orphaned` is empty, this is a simple extension — new
-    /// inscriptions appeared without conflicting with our pending chain.
-    /// When `orphaned` is non-empty, a competing inscription or L1 reorg
-    /// orphaned some of our pending inscriptions.
+    /// Consumer pattern:
+    /// 1. Apply `orphaned` and `adopted` to state (revert / add).
+    /// 2. For each entry in `invalidated`, decide whether to republish.
     ChannelUpdate {
-        /// Our pending inscriptions that are now invalid (parent taken).
+        /// Removed from the canonical branch (revert from state).
         orphaned: Vec<InscriptionInfo>,
-        /// New inscriptions that appeared on chain since the last common
-        /// message.
+        /// Added to the canonical branch (apply to state).
         adopted: Vec<InscriptionInfo>,
+        /// Pending tx on this branch.
+        pending: Vec<InscriptionInfo>,
+        /// Submitted tx that is not valid on this branch anymore.
+        invalidated: Vec<InscriptionInfo>,
         /// The new channel tip `MsgId`.
         new_channel_tip: MsgId,
     },
@@ -112,6 +114,7 @@ pub enum Event {
     /// An inscription was created and submitted to the network.
     Published {
         inscription_id: InscriptionId,
+        payload: Vec<u8>,
         checkpoint: SequencerCheckpoint,
     },
 }
@@ -692,7 +695,11 @@ where
 
         debug!("ensure_connected: connecting...");
 
-        // Initialize state from consensus info if needed
+        // Initialize state from consensus info if needed.
+        // `current_tip` stays None on cold start so the first live block
+        // event takes the no-old-canonical branch and emits everything from
+        // LIB up to the new tip as `adopted`. On reconnect this block is
+        // skipped (state is already Some), so `current_tip` is preserved.
         if self.state.is_none() {
             match self.node.consensus_info().await {
                 Ok(info) => {
@@ -701,7 +708,6 @@ where
                         info.tip, info.lib
                     );
                     self.state = Some(TxState::new(info.lib, MsgId::root()));
-                    self.current_tip = Some(info.tip);
                 }
                 Err(e) => {
                     warn!("Failed to fetch consensus info: {e}");
@@ -752,41 +758,18 @@ where
     /// Process a `BlockEventResult`: apply channel updates to local state
     /// and emit events. Returns at most one event; a second is buffered.
     fn apply_block_result(&mut self, result: BlockEventResult) -> Option<Event> {
-        // Apply channel update to local publish head
-        if let Some(ref update) = result.channel_update {
-            debug!(
-                "ChannelUpdate: orphaned={}, adopted={}, new_tip={:?}",
-                update.orphaned.len(),
-                update.adopted.len(),
-                update.new_channel_tip,
-            );
+        if let Some(update) = result.channel_update.as_ref() {
+            Self::log_channel_update(update);
             let has_pending = self
                 .state
                 .as_ref()
                 .is_some_and(TxState::has_pending_inscriptions);
-
-            if !update.orphaned.is_empty() {
-                self.last_msg_id = update.new_channel_tip;
-                if let Some(s) = self.state.as_mut() {
-                    for inv in &update.orphaned {
-                        debug!(
-                            "Invalidated: payload={:?}",
-                            String::from_utf8_lossy(&inv.payload)
-                        );
-                        s.remove_pending(&inv.tx_hash);
-                    }
-                }
-            } else if !has_pending {
+            if !update.orphaned.is_empty() || !has_pending {
                 self.last_msg_id = update.new_channel_tip;
             }
         }
 
-        // Build events
-        let channel_event = result.channel_update.map(|u| Event::ChannelUpdate {
-            orphaned: u.orphaned,
-            adopted: u.adopted,
-            new_channel_tip: u.new_channel_tip,
-        });
+        let channel_event = result.channel_update.map(|u| self.build_channel_event(u));
         let finalized_event = (!result.finalized_tx_hashes.is_empty()
             || !result.finalized_inscriptions.is_empty())
         .then_some(Event::TxsFinalized {
@@ -794,7 +777,6 @@ where
             inscriptions: result.finalized_inscriptions,
         });
 
-        // Emit one event now, buffer the other if both exist
         match (channel_event, finalized_event) {
             (Some(ce), Some(fe)) => {
                 self.buffered_event = Some(fe);
@@ -806,6 +788,80 @@ where
                 Some(e)
             }
             (None, None) => None,
+        }
+    }
+
+    fn log_channel_update(update: &crate::state::ChannelUpdateInfo) {
+        debug!(
+            "ChannelUpdate: orphaned={}, adopted={}, new_tip={:?}",
+            update.orphaned.len(),
+            update.adopted.len(),
+            update.new_channel_tip,
+        );
+        for inv in &update.orphaned {
+            debug!(
+                "  orphaned: payload={:?}, tx={:?}, msg_id={:?}",
+                String::from_utf8_lossy(&inv.payload),
+                inv.tx_hash,
+                inv.this_msg,
+            );
+        }
+        for inv in &update.adopted {
+            debug!(
+                "  adopted: payload={:?}, tx={:?}, msg_id={:?}",
+                String::from_utf8_lossy(&inv.payload),
+                inv.tx_hash,
+                inv.this_msg,
+            );
+        }
+    }
+
+    /// Build the `ChannelUpdate` event. `invalidated` = orphaned blocks ∪
+    /// pending shed because lineage no longer reaches the new channel tip.
+    /// Shedding keeps `self.pending` linear so `publish_parent` stays
+    /// unambiguous.
+    fn build_channel_event(&mut self, u: crate::state::ChannelUpdateInfo) -> Event {
+        let shed = match (self.state.as_mut(), self.current_tip) {
+            (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
+            _ => Vec::new(),
+        };
+        let pending = match (self.state.as_ref(), self.current_tip) {
+            (Some(s), Some(tip)) => s.pending_on_branch(tip),
+            _ => Vec::new(),
+        };
+
+        let orphaned_hashes: std::collections::HashSet<TxHash> =
+            u.orphaned.iter().map(|i| i.tx_hash).collect();
+        let mut invalidated = u.orphaned.clone();
+        invalidated.extend(
+            shed.into_iter()
+                .filter(|i| !orphaned_hashes.contains(&i.tx_hash)),
+        );
+
+        for inv in &pending {
+            debug!(
+                "  pending: payload={:?}, tx={:?}, msg_id={:?}, parent={:?}",
+                String::from_utf8_lossy(&inv.payload),
+                inv.tx_hash,
+                inv.this_msg,
+                inv.parent_msg,
+            );
+        }
+        for inv in &invalidated {
+            debug!(
+                "  invalidated: payload={:?}, tx={:?}, msg_id={:?}",
+                String::from_utf8_lossy(&inv.payload),
+                inv.tx_hash,
+                inv.this_msg,
+            );
+        }
+
+        Event::ChannelUpdate {
+            orphaned: u.orphaned,
+            adopted: u.adopted,
+            pending,
+            invalidated,
+            new_channel_tip: u.new_channel_tip,
         }
     }
 
@@ -868,15 +924,17 @@ where
         } else {
             self.last_msg_id
         };
-        debug!(" Publishing with parent={parent:?}");
         let (signed_tx, new_msg_id) =
             create_inscribe_tx(self.channel_id, &self.signing_key, data.clone(), parent);
         let id = signed_tx.mantle_tx.hash();
 
-        s.submit_inscription(signed_tx.clone(), parent, new_msg_id, data);
-        self.last_msg_id = new_msg_id;
+        debug!(
+            "Publishing: payload={:?}, parent={parent:?}, msg_id={new_msg_id:?}, tx={id:?}",
+            String::from_utf8_lossy(&data),
+        );
 
-        info!("Created inscription {id:?}");
+        s.submit_inscription(signed_tx.clone(), parent, new_msg_id, data.clone());
+        self.last_msg_id = new_msg_id;
 
         // Post to network (best effort, resubmit timer retries if needed)
         if let Err(e) = self.node.post_transaction(signed_tx).await {
@@ -886,6 +944,7 @@ where
         let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
         let event = Event::Published {
             inscription_id: id,
+            payload: data,
             checkpoint,
         };
         drop(self.event_tx.send(event.clone()));
@@ -1035,33 +1094,31 @@ where
     // On first event (old_tip is None), check for existing inscriptions on
     // the channel — this handles clean start on an existing channel.
     // On subsequent events, detect channel update if tip changed.
-    let mut channel_update = match old_tip {
+    let channel_update = match old_tip {
         Some(old) if old != tip => s.detect_channel_update(old, tip),
         None => {
-            // First event — check if the channel already has inscriptions.
-            // Treat as a reorg from root: the LCM is finalized_msg, and
-            // any pending inscriptions chaining from it are orphaned.
+            // First event — no old canonical exists yet, so nothing can be
+            // orphaned. Report any inscriptions on the initial tip as adopted.
             let channel_tip = s.channel_tip_at(tip);
             if channel_tip == MsgId::root() {
                 None
             } else {
                 let adopted = s.collect_inscriptions_on_branch(tip);
-                let orphaned = s.collect_pending_suffix(s.finalized_msg());
-                (!adopted.is_empty() || !orphaned.is_empty()).then_some(
-                    crate::state::ChannelUpdateInfo {
-                        orphaned,
-                        adopted,
-                        new_channel_tip: channel_tip,
-                    },
-                )
+                (!adopted.is_empty()).then_some(crate::state::ChannelUpdateInfo {
+                    orphaned: Vec::new(),
+                    adopted,
+                    new_channel_tip: channel_tip,
+                })
             }
         }
         _ => None, // tip unchanged
     };
 
-    // On LIB advance, catch stale pending not valid on any branch.
+    // On LIB advance, silently drop pending txs that can no longer be
+    // included anywhere (dead branches below LIB). Not reported in the
+    // channel update — user reconciles via intent tracking.
     if !lib_finalized.is_empty() {
-        merge_stale_pending(s, tip, &mut channel_update);
+        prune_stale_pending(s);
     }
 
     BlockEventResult {
@@ -1071,27 +1128,9 @@ where
     }
 }
 
-fn merge_stale_pending(
-    s: &TxState,
-    tip: HeaderId,
-    channel_update: &mut Option<crate::state::ChannelUpdateInfo>,
-) {
-    let stale = s.collect_stale_pending();
-    if stale.is_empty() {
-        return;
-    }
-    if let Some(update) = channel_update {
-        let existing: std::collections::HashSet<TxHash> =
-            update.orphaned.iter().map(|i| i.tx_hash).collect();
-        update
-            .orphaned
-            .extend(stale.into_iter().filter(|i| !existing.contains(&i.tx_hash)));
-    } else {
-        *channel_update = Some(crate::state::ChannelUpdateInfo {
-            orphaned: stale,
-            adopted: Vec::new(),
-            new_channel_tip: s.channel_tip_at(tip),
-        });
+fn prune_stale_pending(s: &mut TxState) {
+    for inv in s.collect_stale_pending() {
+        s.remove_pending(&inv.tx_hash);
     }
 }
 
@@ -1246,6 +1285,22 @@ fn enqueue_resubmit<Node>(
 
     if pending.is_empty() {
         return;
+    }
+
+    for (id, tx) in &pending {
+        let payloads: Vec<String> = tx
+            .mantle_tx
+            .ops
+            .iter()
+            .filter_map(|op| {
+                if let Op::ChannelInscribe(ins) = op {
+                    Some(String::from_utf8_lossy(&ins.inscription).to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        debug!("  resubmit: tx={id:?}, payloads={payloads:?}");
     }
 
     debug!("Resubmitting {} pending inscription(s)", pending.len());
