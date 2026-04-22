@@ -132,9 +132,9 @@ Having issues? Reach out to the Logos Blockchain team on [Discord][testnet-disco
 > **Internal — remove this section before publishing.**
 
 - [ ] Generate the changelog (GitHub feature) using the tag of the previous release.
-    * If this is the first release candidate, then the previous tag is the version of the latest release. E.g. `0.1.3-rc.1` compares against `0.1.2`
-    * If this is a release candidate but not the first one that has a GH release, then the previous tag is the version of previous release candidate for this release. E.g., `0.1.3-rc.2` compares against `0.1.3-rc.1`
-    * If this is an actual release, then the previous tag is the latest release. E.g., `0.1.3` compares against `0.1.2`
+    * If this is the first release candidate, then the previous tag is the version of the latest release, e.g. `0.1.3-rc.1` compares against `0.1.2`
+    * If this is a release candidate but not the first one that has a GH release, then the previous tag is the version of previous release candidate for this release, e.g., `0.1.3-rc.2` compares against `0.1.3-rc.1`
+    * If this is an actual release, then the previous tag is the latest release, e.g., `0.1.3` compares against `0.1.2`
 - [ ] Verify binaries are present for **Mac** and **Linux**
 - [ ] Verify circuits of the expected version are present for **Mac** and **Linux**
 - [ ] Replace `{TODO}` peer IDs for both devnet and testnet:

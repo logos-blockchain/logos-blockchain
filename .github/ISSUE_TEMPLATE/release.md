@@ -18,7 +18,7 @@ labels: release
 
 # Branch Setup (done once per full release cycle - skipped for new release candidates)
 
-- [ ] Branch out from the latest `master` commit with a branch `release/0.1.3`
+- [ ] Branch out from the latest `master` commit with a release branch, e.g., `release/0.1.3`
 - [ ] Apply and push any changes to the devnet deployment settings. If a ceremony will be run, stuff like genesis block can be ignored since it will be overridden as the outcome of the ceremony
 
 # Devnet (release candidates)
@@ -31,7 +31,6 @@ labels: release
 - [ ] Verify the right image with the right tag was pushed to the [GitHub container registry][logos-tools-image-container-registry]
 - [ ] Checkout and hard reset the `devnet` branch to point to the latest commit on the current release branch
 - [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml` with `ln -s -f compose.setup.yml compose.static.yml`
-- [ ] Add a file called `entropy` in the `testnet` folder with any content. Using the same entropy content as a previous deployment will result in the same faucet keys. We recommend using the current release candidate version (i.e., `X.Y.Z-rc.N`)
 - [ ] Push to `devnet` branch to trigger a new deployment
 - [ ] Wait around 1 minute for deployment to be updated with the new changes and for the ceremony to happen. Until ready, you should see a `502` error while the containers restart when visiting [https://devnet.blockchain.logos.co/web/cfgsync/deployment-settings](https://devnet.blockchain.logos.co/web/cfgsync/deployment-settings
 - [ ] Download the new deployment configuration from the link above
@@ -71,7 +70,6 @@ labels: release
 - [ ] Verify the right image with the right tag was pushed to the [GitHub container registry][logos-tools-image-container-registry]
 - [ ] Checkout and hard reset the `testnet` branch to point to the latest commit on the current release branch
 - [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml` with `ln -s -f compose.setup.yml compose.static.yml`
-- [ ] Add a file called `entropy` in the `testnet` folder with any content. Using the same entropy content as a previous deployment will result in the same faucet keys. We recommend using the current release version (i.e., `X.Y.Z`)
 - [ ] Push to `testnet` branch to trigger a new deployment
 - [ ] Wait around 1 minute for deployment to be updated with the new changes and for the ceremony to happen. Until ready, you should see a `502` error while the containers restart when visiting [https://testnet.blockchain.logos.co/web/cfgsync/deployment-settings](https://testnet.blockchain.logos.co/web/cfgsync/deployment-settings
 - [ ] Download the new deployment configuration from the link above
