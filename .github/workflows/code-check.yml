@@ -20,7 +20,7 @@ jobs:
         uses: actions-rs/toolchain@88dc2356392166efad76775c878094f4e83ff746  # Version 1.0.6
         with:
           # The same version must be used in the `.pre-commit-config.yaml` file
-          toolchain: nightly-2026-01-18
+          toolchain: nightly-2026-02-28
           profile: minimal
           components: rustfmt
           override: true

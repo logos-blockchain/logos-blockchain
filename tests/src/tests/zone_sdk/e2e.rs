@@ -131,7 +131,7 @@ async fn test_sequencer_publish_and_indexer_read() {
     let mut last_zone_block = None;
 
     let start = std::time::Instant::now();
-    let timeout = Duration::from_secs(360);
+    let timeout = Duration::from_mins(6);
 
     loop {
         assert!(
@@ -174,7 +174,7 @@ async fn test_sequencer_publish_and_indexer_read() {
         .expect("set_keys should succeed");
 
     // Wait for set_keys transaction to finalize
-    tokio::time::timeout(Duration::from_secs(360), finalized)
+    tokio::time::timeout(Duration::from_mins(6), finalized)
         .await
         .expect("Timeout waiting for set_keys to finalize")
         .expect("set_keys finalization failed");
@@ -281,7 +281,7 @@ async fn test_sequencer_checkpoint_resume() {
     let mut last_zone_block = None;
 
     let start = std::time::Instant::now();
-    let timeout = Duration::from_secs(360);
+    let timeout = Duration::from_mins(6);
 
     loop {
         assert!(
@@ -388,7 +388,7 @@ async fn test_sequencer_stale_checkpoint_resume() {
     let start = std::time::Instant::now();
     loop {
         assert!(
-            start.elapsed() <= Duration::from_secs(360),
+            start.elapsed() <= Duration::from_mins(6),
             "Phase 1 finalization timeout"
         );
         let stream = indexer
@@ -445,7 +445,7 @@ async fn test_sequencer_stale_checkpoint_resume() {
     let start = std::time::Instant::now();
     loop {
         assert!(
-            start.elapsed() <= Duration::from_secs(360),
+            start.elapsed() <= Duration::from_mins(6),
             "Phase 2 finalization timeout"
         );
         let stream = indexer
@@ -498,7 +498,7 @@ async fn test_sequencer_stale_checkpoint_resume() {
     let start = std::time::Instant::now();
     loop {
         assert!(
-            start.elapsed() <= Duration::from_secs(360),
+            start.elapsed() <= Duration::from_mins(6),
             "Phase 3 finalization timeout"
         );
         let stream = indexer
@@ -612,7 +612,7 @@ async fn test_subscribe_to_finalized_deposit() {
         channel_id,
         NodeHttpClient::new(CommonHttpClient::new(None), node_url),
     );
-    wait_for_zone_block(&indexer, msg1, Duration::from_secs(60)).await;
+    wait_for_zone_block(&indexer, msg1, Duration::from_mins(1)).await;
 
     // Now, submit a deposit directly to Bedrock
     let deposit = DepositOp {
@@ -624,7 +624,7 @@ async fn test_subscribe_to_finalized_deposit() {
     submit_deposit(validator, deposit.clone(), pk).await;
 
     // Wait for the deposit to be finalized and detected by the ZoneIndexer
-    wait_for_deposit(&indexer, &deposit, Duration::from_secs(120)).await;
+    wait_for_deposit(&indexer, &deposit, Duration::from_mins(2)).await;
 
     sequencer_task.abort();
 }
@@ -683,7 +683,7 @@ async fn test_atomic_deposit_inscription() {
         channel_id,
         NodeHttpClient::new(CommonHttpClient::new(None), node_url),
     );
-    wait_for_zone_block(&indexer, msg1, Duration::from_secs(60)).await;
+    wait_for_zone_block(&indexer, msg1, Duration::from_mins(1)).await;
 
     // Now, prepare a tx for deposit (from user) + inscription (from sequencer)
     let deposit = DepositOp {
@@ -731,8 +731,8 @@ async fn test_atomic_deposit_inscription() {
     handle.submit_signed_tx(signed_tx, msg_id).await.unwrap();
 
     // Wait for deposit/inscription to be finalized and detected by the ZoneIndexer
-    wait_for_deposit(&indexer, &deposit, Duration::from_secs(120)).await;
-    wait_for_zone_block(&indexer, inscription_data, Duration::from_secs(120)).await;
+    wait_for_deposit(&indexer, &deposit, Duration::from_mins(2)).await;
+    wait_for_zone_block(&indexer, inscription_data, Duration::from_mins(2)).await;
 
     sequencer_task.abort();
 }
@@ -791,7 +791,7 @@ async fn test_subscribe_to_finalized_withdraw() {
         channel_id,
         NodeHttpClient::new(CommonHttpClient::new(None), node_url),
     );
-    wait_for_zone_block(&indexer, msg1, Duration::from_secs(60)).await;
+    wait_for_zone_block(&indexer, msg1, Duration::from_mins(1)).await;
 
     // Deposit 3 into the channel
     let deposit = DepositOp {
@@ -803,7 +803,7 @@ async fn test_subscribe_to_finalized_withdraw() {
     submit_deposit(validator, deposit.clone(), pk).await;
 
     // Wait for the deposit to be finalized and detected by the ZoneIndexer
-    wait_for_deposit(&indexer, &deposit, Duration::from_secs(120)).await;
+    wait_for_deposit(&indexer, &deposit, Duration::from_mins(2)).await;
 
     // Withdraw 1 from the channel
     let withdraw = ChannelWithdrawOp {
@@ -861,8 +861,8 @@ async fn test_subscribe_to_finalized_withdraw() {
     handle.submit_signed_tx(signed_tx, msg_id).await.unwrap();
 
     // Wait for withdraw/inscription to be finalized and detected by the ZoneIndexer
-    wait_for_withdraw(&indexer, &withdraw, Duration::from_secs(120)).await;
-    wait_for_zone_block(&indexer, inscription_data, Duration::from_secs(120)).await;
+    wait_for_withdraw(&indexer, &withdraw, Duration::from_mins(2)).await;
+    wait_for_zone_block(&indexer, inscription_data, Duration::from_mins(2)).await;
 
     sequencer_task.abort();
 }
@@ -891,7 +891,7 @@ async fn spawn_validators(
 
     // Wait for the chain to produce at least one block.
     // Use generous timeout since leader election is probabilistic.
-    assert!(wait_for_height(&validators[0], target_block, Duration::from_secs(120)).await);
+    assert!(wait_for_height(&validators[0], target_block, Duration::from_mins(2)).await);
 
     validators
 }

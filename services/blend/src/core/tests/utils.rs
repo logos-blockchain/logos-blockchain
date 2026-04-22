@@ -67,6 +67,7 @@ use crate::{
         state::RecoveryServiceState,
         tests::RuntimeServiceId,
     },
+    message::NetworkInfo,
     settings::TimingSettings,
     test_utils,
 };
@@ -194,6 +195,10 @@ where
     fn listen_to_incoming_messages(
         &mut self,
     ) -> Pin<Box<dyn Stream<Item = (EncapsulatedMessageWithVerifiedSignature, u64)> + Send>> {
+        unimplemented!()
+    }
+
+    async fn network_info(&self) -> Option<NetworkInfo<NodeId>> {
         unimplemented!()
     }
 }

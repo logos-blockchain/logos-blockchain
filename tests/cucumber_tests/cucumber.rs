@@ -229,7 +229,7 @@ fn prepare_world_for_scenario(
         .unwrap_or_default()
         .as_nanos();
 
-    let raw_context = format!("{}::{started_at_ns}", scenario_dir.display(),);
+    let raw_context = format!("{}::{started_at_ns}", scenario_dir.display());
     world.set_test_context(hash_str(&raw_context));
 }
 

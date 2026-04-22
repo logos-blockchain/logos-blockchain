@@ -179,7 +179,7 @@ impl CommonHttpClient {
         match status {
             StatusCode::OK => Ok(lib_stream),
             StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server("Error".to_owned())),
-            _ => Err(Error::Server(format!("Unexpected response [{status}]",))),
+            _ => Err(Error::Server(format!("Unexpected response [{status}]"))),
         }
     }
 
@@ -274,7 +274,7 @@ impl CommonHttpClient {
         match status {
             StatusCode::OK => Ok(blocks_stream),
             StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server("Error".to_owned())),
-            _ => Err(Error::Server(format!("Unexpected response [{status}]",))),
+            _ => Err(Error::Server(format!("Unexpected response [{status}]"))),
         }
     }
 

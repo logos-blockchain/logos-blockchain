@@ -156,11 +156,9 @@ impl LeaderState {
         let n_unclaimed_vouchers = self
             .n_claimable_vouchers
             .saturating_sub(self.nfs.size() as u64);
-        if n_unclaimed_vouchers > 0 {
-            self.claimable_rewards / n_unclaimed_vouchers
-        } else {
-            0
-        }
+        self.claimable_rewards
+            .checked_div(n_unclaimed_vouchers)
+            .unwrap_or(0)
     }
 
     /// Claim the reward associated with a voucher.

@@ -124,7 +124,7 @@ services:
 
   nginx:
     container_name: nginx
-    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
+    image: docker.io/library/nginx:stable-trixie-perl
     ports:
       - "13000:13000"
       - "13001:13001"
@@ -132,11 +132,14 @@ services:
       - cfgsync
       - explorer
       - faucet
+    environment:
+      - ENV_TITLE_STRING=${IMAGE_LABEL}
     volumes:
       - node-data:/node-data
-      - ./testnet/nginx/run.conf:/etc/nginx/nginx.conf:ro
-      - ./testnet/nginx/static/run:/usr/share/nginx/html:ro
-    entrypoint: [ "nginx", "-g", "daemon off;" ]
+      - ./testnet/nginx/run.conf:/etc/nginx/nginx.conf
+      - ./testnet/nginx/static/run:/usr/share/nginx/html_template
+      - ./testnet/scripts/run_nginx.sh:/etc/run_nginx.sh
+    entrypoint: /etc/run_nginx.sh
 
   # L2 Sequencer Demo Services
   l2-sequencer:

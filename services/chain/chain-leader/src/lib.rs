@@ -228,8 +228,11 @@ impl<
     >
 where
     BlendService: ServiceData<
-            Message = lb_blend_service::message::ServiceMessage<BlendService::BroadcastSettings>,
-        > + lb_blend_service::ServiceComponents
+            Message = lb_blend_service::message::ServiceMessage<
+                BlendService::BroadcastSettings,
+                BlendService::NodeId,
+            >,
+        > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
         + Sync
         + 'static,
@@ -353,7 +356,7 @@ where
         // (except Chain and ChainLeader)
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_secs(60)),
+            Some(Duration::from_mins(1)),
             BlendService,
             TxMempoolService<_, _, _, _>,
             TimeService<_, _>,
@@ -508,8 +511,11 @@ impl<
     >
 where
     BlendService: ServiceData<
-            Message = lb_blend_service::message::ServiceMessage<BlendService::BroadcastSettings>,
-        > + lb_blend_service::ServiceComponents
+            Message = lb_blend_service::message::ServiceMessage<
+                BlendService::BroadcastSettings,
+                BlendService::NodeId,
+            >,
+        > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
         + Sync
         + 'static,

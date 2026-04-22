@@ -64,7 +64,7 @@ mod real_gateway_tests {
         let random_port: u64 = thread_rng().gen_range(10000..=64000);
         let local_address = format!("/ip4/{local_ip}/tcp/{random_port}");
 
-        println!("Testing NAT mapping for local address: {local_address}",);
+        println!("Testing NAT mapping for local address: {local_address}");
 
         let local_address: Multiaddr = local_address.parse().expect("valid multiaddr");
 

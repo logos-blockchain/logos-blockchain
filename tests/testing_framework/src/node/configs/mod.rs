@@ -14,8 +14,9 @@ pub mod network {
 }
 
 pub(crate) use dynamic::create_node_config_for_node;
+pub use node_configs::GeneralConfig as Config;
 pub(crate) use node_configs::{
-    GeneralConfig as Config, create_general_configs_from_ids as create_node_configs_from_ids,
+    create_general_configs_from_ids as create_node_configs_from_ids,
     network::{Libp2pNetworkLayout, NetworkParams},
 };
 

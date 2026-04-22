@@ -12,13 +12,17 @@ use std::{
 };
 
 use async_trait::async_trait;
-pub use block_feed::{BlockFeed, BlockFeedSnapshot, BlockRecord, NodeHeadSnapshot};
+pub use block_feed::{
+    BlockFeed, BlockFeedExtensionFactory, BlockFeedObservation, BlockFeedObserver,
+    BlockFeedSnapshot, BlockFeedWaitError, BlockRecord, NodeHeadSnapshot, ObservedBlock,
+    block_feed_source_provider, block_feed_sources, named_block_feed_sources,
+};
 use common_http_client::BasicAuthCredentials;
 use lb_node::config::RunConfig;
 use reqwest::Url;
 use testing_framework_core::{
     scenario::{
-        Application, DynError, ExternalNodeSource, FeedRuntime, NodeAccess, NodeClients,
+        Application, DynError, ExternalNodeSource, NodeAccess,
         ScenarioBuilder as CoreScenarioBuilder,
     },
     topology::{DeploymentProvider, DeploymentSeed, DynTopologyError},
@@ -26,7 +30,6 @@ use testing_framework_core::{
 use testing_framework_runner_local::{ManualCluster, ProcessDeployer};
 
 use crate::{
-    framework::block_feed::{BlockFeedRuntime, prepare_block_feed},
     node::{
         DeploymentPlan, NodeHttpClient,
         configs::{
@@ -60,8 +63,6 @@ impl Application for LbcEnv {
 
     type NodeConfig = RunConfig;
 
-    type FeedRuntime = BlockFeedRuntime;
-
     fn external_node_client(source: &ExternalNodeSource) -> Result<Self::NodeClient, DynError> {
         let endpoint = Url::parse(source.endpoint())?;
         let basic_auth = external_basic_auth(&endpoint);
@@ -84,12 +85,6 @@ impl Application for LbcEnv {
     fn node_readiness_path() -> &'static str {
         lb_http_api_common::paths::CRYPTARCHIA_INFO
     }
-
-    async fn prepare_feed(
-        node_clients: NodeClients<Self>,
-    ) -> Result<(<Self::FeedRuntime as FeedRuntime>::Feed, Self::FeedRuntime), DynError> {
-        prepare_block_feed(node_clients).await
-    }
 }
 
 fn external_basic_auth(endpoint: &Url) -> Option<BasicAuthCredentials> {
@@ -111,13 +106,24 @@ pub trait CoreBuilderExt: Sized {
     fn deployment_with(f: impl FnOnce(DeploymentBuilder) -> DeploymentBuilder) -> Self;
 
     #[must_use]
+    fn with_block_feed(self) -> Self;
+
+    #[must_use]
     fn with_wallet_config(self, wallet: WalletConfig) -> Self;
 }
 
 impl CoreBuilderExt for ScenarioBuilder {
     fn deployment_with(f: impl FnOnce(DeploymentBuilder) -> DeploymentBuilder) -> Self {
         let topology = f(DeploymentBuilder::new(TopologyConfig::empty()));
-        Self::new(Box::new(topology))
+
+        Self::new(Box::new(topology)).with_block_feed()
+    }
+
+    fn with_block_feed(self) -> Self {
+        testing_framework_core::scenario::CoreBuilderExt::with_runtime_extension_factory(
+            self,
+            Box::new(BlockFeedExtensionFactory),
+        )
     }
 
     fn with_wallet_config(self, wallet: WalletConfig) -> Self {

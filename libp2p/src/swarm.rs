@@ -27,7 +27,7 @@ pub use crate::{
 };
 
 /// How long to keep a connection alive once it is idling.
-const IDLE_CONN_TIMEOUT: Duration = Duration::from_secs(300);
+const IDLE_CONN_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Wraps [`libp2p::Swarm`], and config it for use within Logos blockchain.
 pub struct Swarm<R: Clone + Send + RngCore + 'static> {
