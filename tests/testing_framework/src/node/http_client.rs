@@ -4,16 +4,18 @@ use common_http_client::{
     ApiBlock, BasicAuthCredentials, CommonHttpClient, Error, ProcessedBlockEvent,
 };
 use futures::Stream;
+use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
 use lb_chain_service::CryptarchiaInfo;
 use lb_core::{header::HeaderId, mantle::SignedMantleTx, sdp::Declaration};
 use lb_http_api_common::{
     bodies::wallet::transfer_funds::{
         WalletTransferFundsRequestBody, WalletTransferFundsResponseBody,
     },
-    paths::{DIAL_PEER, MANTLE_SDP_DECLARATIONS, NETWORK_INFO},
+    paths::{BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, NETWORK_INFO},
 };
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_network_service::backends::libp2p::Libp2pInfo;
+use lb_tx_service::MempoolMetrics;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
@@ -77,6 +79,22 @@ impl NodeHttpClient {
     pub async fn block(&self, id: &HeaderId) -> Result<Option<ApiBlock>, Error> {
         self.http_client
             .get_block_by_id(self.base_url.clone(), *id)
+            .await
+    }
+
+    pub async fn blend_info(&self) -> Result<Option<BlendNetworkInfo<PeerId>>, Error> {
+        let request_url = Self::join_path(&self.base_url, BLEND_NETWORK_INFO)?;
+
+        self.http_client
+            .get::<(), Option<BlendNetworkInfo<PeerId>>>(request_url, None)
+            .await
+    }
+
+    pub async fn mantle_metrics(&self) -> Result<MempoolMetrics, Error> {
+        let request_url = Self::join_path(&self.base_url, MANTLE_METRICS)?;
+
+        self.http_client
+            .get::<(), MempoolMetrics>(request_url, None)
             .await
     }
 

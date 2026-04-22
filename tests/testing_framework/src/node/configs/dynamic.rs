@@ -1,3 +1,4 @@
+use lb_config::kms::key_id_for_preload_backend;
 use lb_key_management_system_service::keys::Key;
 use lb_libp2p::Multiaddr;
 use lb_node::config::KmsConfig;
@@ -110,19 +111,15 @@ fn build_kms_config_for_node(
                     Key::Zk(secret_zk_key.clone()),
                 ),
                 (
-                    super::key_id_for_preload_backend(&Key::Zk(
-                        consensus_config.blend_note.sk.clone(),
-                    )),
+                    key_id_for_preload_backend(&Key::Zk(consensus_config.blend_note.sk.clone())),
                     Key::Zk(consensus_config.blend_note.sk.clone()),
                 ),
                 (
-                    super::key_id_for_preload_backend(&Key::Zk(consensus_config.known_key.clone())),
+                    key_id_for_preload_backend(&Key::Zk(consensus_config.known_key.clone())),
                     Key::Zk(consensus_config.known_key.clone()),
                 ),
                 (
-                    super::key_id_for_preload_backend(&Key::Zk(
-                        consensus_config.funding_sk.clone(),
-                    )),
+                    key_id_for_preload_backend(&Key::Zk(consensus_config.funding_sk.clone())),
                     Key::Zk(consensus_config.funding_sk.clone()),
                 ),
             ]

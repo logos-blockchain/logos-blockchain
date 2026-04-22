@@ -17,9 +17,7 @@
 
 ### ⚙️ Initialize Your Node
 
-Generate a default configuration by connecting to the bootstrap peers.
-
-#### Devnet peers
+Generate a default configuration by connecting to the bootstrap peers:
 
 ```bash
 ./logos-blockchain-node init \
@@ -27,16 +25,6 @@ Generate a default configuration by connecting to the bootstrap peers.
     -p /ip4/65.108.203.235/udp/3001/quic-v1/p2p/{TODO} \
     -p /ip4/65.108.203.235/udp/3002/quic-v1/p2p/{TODO} \
     -p /ip4/65.108.203.235/udp/3003/quic-v1/p2p/{TODO}
-```
-
-#### Testnet peers
-
-```bash
-./logos-blockchain-node init \
-    -p /ip4/65.109.51.37/udp/3000/quic-v1/p2p/{TODO} \
-    -p /ip4/65.109.51.37/udp/3001/quic-v1/p2p/{TODO} \
-    -p /ip4/65.109.51.37/udp/3002/quic-v1/p2p/{TODO} \
-    -p /ip4/65.109.51.37/udp/3003/quic-v1/p2p/{TODO}
 ```
 
 If your node has a known public IP address and you want to disable NAT traversal, you can add `--external-address /ip4/<public-ip>/udp/<port>/quic-v1` to the previous command. Nodes behind NAT or CG-NAT require no extra flags — NAT traversal is enabled by default.
@@ -137,10 +125,9 @@ Having issues? Reach out to the Logos Blockchain team on [Discord][testnet-disco
     * If this is an actual release, then the previous tag is the latest release, e.g., `0.1.3` compares against `0.1.2`
 - [ ] Verify binaries are present for **Mac** and **Linux**
 - [ ] Verify circuits of the expected version are present for **Mac** and **Linux**
-- [ ] Replace `{TODO}` peer IDs for both devnet and testnet:
-    * For a release candidate (for devnet), copy-paste the new devnet addresses from the [devnet dashboard][devnet-dashboard] and the existing testnet addresses from the [testnet dashboard][testnet-dashboard]
-    * For a release (for testnet), copy-paste the addresses of the latest deployed devnet from the [devnet dashboard][devnet-dashboard] and the new testnet addresses from the [testnet dashboard][testnet-dashboard]
-- [ ] Set the release type: mark the release as **pre-release** for release candidates (`X.Y.Z-rc.N`), **latest** for final releases (`X.Y.Z`)
+- [ ] Replace `{TODO}` peer IDs:
+    * For a release candidate (for devnet), copy-paste the new devnet addresses from the [devnet dashboard][devnet-dashboard]
+    * For a release (for testnet), copy-paste the new testnet addresses from the [testnet dashboard][testnet-dashboard]
 - [ ] Delete this checklist and publish
 
 [release-notion]: https://www.notion.so/nomos-tech/Internal-Devnet-Launch-February-2026-2fe261aa09df8025ad94e380933b4cf9#2ff261aa09df8058935ecb85aa587564
