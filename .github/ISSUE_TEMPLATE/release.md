@@ -22,8 +22,9 @@ Most of the template content is the same or very similar to what is in `release-
 
 ## Branch Setup
 
+- [ ] Edit the name of this issue to use the actual version being released
 - [ ] Verify that the `HEAD` of the release branch `release/X.Y.Z` is the same commit that was released in the latest rc
-- [ ] Post the link of the latest rc GH release and the previous rc checklist that we are promoting to a full release
+- [ ] Post the link of the latest release candidate GH release and the previous release candidate checklist that we are promoting to a full release
 - [ ] Change the testnet deployment settings to use the version number in ALL protocol names, e.g., `/logos-blockchain-testnet-X.Y.Z/mempool/1.0.0`
 - [ ] Apply any other changes to the testnet deployment settings and push the changes. If a ceremony will be run, stuff like genesis block can be ignored since it will be overridden as the outcome of the ceremony.
 
@@ -35,7 +36,7 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Verify the right image with the right tag was pushed to the [GitHub container registry][logos-tools-image-container-registry]
 - [ ] Checkout and hard reset the `testnet` branch to point to the latest commit on the current release branch
 - [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml` with `ln -s -f compose.setup.yml compose.static.yml`
-- [ ] Push to `testnet` branch to trigger a new deployment
+- [ ] Push to `testnet` branch to trigger the ceremony and generate a new genesis state
 - [ ] Wait around 1 minute for deployment to be updated with the new changes and for the ceremony to happen. Until ready, you should see a `502` error while the containers restart when visiting [https://testnet.blockchain.logos.co/web/cfgsync/deployment-settings](https://testnet.blockchain.logos.co/web/cfgsync/deployment-settings
 - [ ] Download the new deployment configuration from the link above
 - [ ] Verify that the `time.chain_start_time` value in the deployment file indicates the right start time, which should be within the last few minutes
@@ -49,10 +50,10 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Bump the version value for the C bindings (`logos-blockchain-c`) in the root `flake.nix` file to match the new release version `X.Y.Z`
 - [ ] Verify the HEAD of the release branch has green CI ✅
 - [ ] Tag the commit with `X.Y.Z` and push the tag
-- [ ] Manually trigger the [bundling workflow][release-bundling-workflow] from the `X.Y.Z` tag on GitHub with the `release` input
+- [ ] Manually trigger the [bundling workflow][release-bundling-workflow] from the `X.Y.Z` tag on GitHub with the `release` input to prepare the GitHub release draft with the build binaries
 - [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the bundling workflow to complete and generate a draft GitHub release. While the release is in progress, follow the steps in the [Testnet deployment][testnet-deployment-section] section below.
-- [ ] Address checklist of the generated GitHub release
+- [ ] Address checklist of the generated GitHub release in [https://github.com/logos-blockchain/logos-blockchain/releases](https://github.com/logos-blockchain/logos-blockchain/releases)
 - [ ] Publish release
 - [ ] Post the link to the published release to this issue for easier review
 
