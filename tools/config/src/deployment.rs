@@ -63,6 +63,7 @@ const MIN_STAKE_TIMESTAMP: u64 = 0;
 const LEARNING_RATE: f64 = 0.1;
 
 const MEMPOOL_TOPIC: &str = "mantle_e2e_tests";
+const DEFAULT_PROTOCOL_NAMESPACE: &str = "integration/logos-blockchain";
 
 fn get_or_init_chain_start_time() -> OffsetDateTime {
     *CHAIN_START_TIME.get_or_init(OffsetDateTime::now_utc)
@@ -73,7 +74,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
     let slot_duration_in_secs = std::env::var(CONSENSUS_SLOT_TIME_VAR)
         .map_or(DEFAULT_SLOT_TIME_IN_SECS, |s| s.parse::<u64>().unwrap());
 
-    let protocol_identity = ProtocolIdentity::from_env();
+    let protocol_identity = ProtocolIdentity::from_env(DEFAULT_PROTOCOL_NAMESPACE);
 
     DeploymentSettings {
         blend: BlendDeploymentSettings {

@@ -1,6 +1,5 @@
 use lb_libp2p::{libp2p::StreamProtocol as Libp2pStreamProtocol, protocol_name::StreamProtocol};
 
-const DEFAULT_PROTOCOL_NAMESPACE: &str = "integration/logos-blockchain";
 const PROTOCOL_NAMESPACE_VAR: &str = "LOGOS_BLOCKCHAIN_PROTOCOL_NAMESPACE";
 const PROTOCOL_TYPE_VAR: &str = "LOGOS_BLOCKCHAIN_PROTOCOL_TYPE";
 const PROTOCOL_RELEASE_VAR: &str = "LOGOS_BLOCKCHAIN_PROTOCOL_RELEASE";
@@ -11,7 +10,7 @@ pub struct ProtocolIdentity {
 
 impl ProtocolIdentity {
     #[must_use]
-    pub fn from_env() -> Self {
+    pub fn from_env(default_namespace: &str) -> Self {
         if let Some(namespace) = env_protocol_value(PROTOCOL_NAMESPACE_VAR) {
             return Self { namespace };
         }
@@ -20,7 +19,7 @@ impl ProtocolIdentity {
         let protocol_release = env_protocol_value(PROTOCOL_RELEASE_VAR);
 
         let namespace = match (protocol_type, protocol_release) {
-            (None, None) => DEFAULT_PROTOCOL_NAMESPACE.to_owned(),
+            (None, None) => default_namespace.to_owned(),
             (protocol_type, protocol_release) => {
                 let mut namespace = "logos-blockchain".to_owned();
 
@@ -72,7 +71,7 @@ mod tests {
     #[test]
     fn uses_default_namespace_when_env_is_unset() {
         with_protocol_env(None, None, None, || {
-            let identity = ProtocolIdentity::from_env();
+            let identity = ProtocolIdentity::from_env("integration/logos-blockchain");
 
             assert_eq!(
                 identity.protocol_name("identify/1.0.0"),
@@ -92,7 +91,7 @@ mod tests {
             Some("ignored"),
             Some("ignored"),
             || {
-                let identity = ProtocolIdentity::from_env();
+                let identity = ProtocolIdentity::from_env("integration/logos-blockchain");
 
                 assert_eq!(
                     identity.protocol_name("chainsync/1.0.0"),
@@ -105,7 +104,7 @@ mod tests {
     #[test]
     fn derives_namespace_from_type_and_release() {
         with_protocol_env(None, Some("testnet"), Some("v0.1.2"), || {
-            let identity = ProtocolIdentity::from_env();
+            let identity = ProtocolIdentity::from_env("integration/logos-blockchain");
 
             assert_eq!(
                 identity.protocol_name("cryptarchia/proto/1.0.0"),
@@ -117,7 +116,7 @@ mod tests {
     #[test]
     fn skips_empty_type_or_release_values() {
         with_protocol_env(None, Some("  "), Some("/v0.1.2/"), || {
-            let identity = ProtocolIdentity::from_env();
+            let identity = ProtocolIdentity::from_env("integration/logos-blockchain");
 
             assert_eq!(
                 identity.protocol_name("identify/1.0.0"),

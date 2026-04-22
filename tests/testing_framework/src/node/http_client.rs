@@ -11,9 +11,7 @@ use lb_http_api_common::{
     bodies::wallet::transfer_funds::{
         WalletTransferFundsRequestBody, WalletTransferFundsResponseBody,
     },
-    paths::{
-        BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, NETWORK_INFO,
-    },
+    paths::{BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, NETWORK_INFO},
 };
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_network_service::backends::libp2p::Libp2pInfo;
