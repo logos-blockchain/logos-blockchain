@@ -25,12 +25,6 @@ use crate::{
 
 pub(super) mod conn_maintenance;
 
-// Metrics
-const VALUE_FULLY_NEGOTIATED_INBOUND: &str = "fully_negotiated_inbound";
-const VALUE_FULLY_NEGOTIATED_OUTBOUND: &str = "fully_negotiated_outbound";
-const VALUE_DIAL_UPGRADE_ERROR: &str = "dial_upgrade_error";
-const VALUE_IGNORED: &str = "ignored";
-
 const LOG_TARGET: &str = "blend::network::core::core::conn::handler";
 
 pub struct ConnectionHandler<ConnectionWindowClock> {
@@ -170,11 +164,6 @@ where
     ) -> Poll<
         ConnectionHandlerEvent<Self::OutboundProtocol, Self::OutboundOpenInfo, Self::ToBehaviour>,
     > {
-        tracing::trace!(gauge.pending_outbound_messages = self.outbound_msgs.len() as u64,);
-        tracing::trace!(
-            gauge.pending_events_to_behaviour = self.pending_events_to_behaviour.len() as u64,
-        );
-
         // Short-circuit so that we do not poll the connection monitor anymore in case
         // either of the two substreams has been dropped.
         if matches!(self.inbound_substream, Some(InboundSubstreamState::Dropped))
@@ -359,7 +348,7 @@ where
             Self::OutboundOpenInfo,
         >,
     ) {
-        let event_name = match event {
+        match event {
             ConnectionEvent::FullyNegotiatedInbound(FullyNegotiatedInbound {
                 protocol: stream,
                 ..
@@ -369,7 +358,6 @@ where
                     Some(InboundSubstreamState::PendingRecv(recv_msg(stream).boxed()));
                 self.pending_events_to_behaviour
                     .push_back(ToBehaviour::FullyNegotiatedInbound);
-                VALUE_FULLY_NEGOTIATED_INBOUND
             }
             ConnectionEvent::FullyNegotiatedOutbound(FullyNegotiatedOutbound {
                 protocol: stream,
@@ -379,22 +367,18 @@ where
                 self.outbound_substream = Some(OutboundSubstreamState::Idle(stream));
                 self.pending_events_to_behaviour
                     .push_back(ToBehaviour::FullyNegotiatedOutbound);
-                VALUE_FULLY_NEGOTIATED_OUTBOUND
             }
             ConnectionEvent::DialUpgradeError(e) => {
                 tracing::error!(target: LOG_TARGET, "DialUpgradeError for connection {:?}: {:?}", self.connection_details, e);
                 self.pending_events_to_behaviour
                     .push_back(ToBehaviour::DialUpgradeError(e));
                 self.close_substreams();
-                VALUE_DIAL_UPGRADE_ERROR
             }
             event => {
                 tracing::trace!(target: LOG_TARGET, ?event, "Ignoring connection event");
-                VALUE_IGNORED
             }
-        };
+        }
 
-        tracing::trace!(counter.connection_event = 1, event = event_name);
         self.try_wake();
     }
 }

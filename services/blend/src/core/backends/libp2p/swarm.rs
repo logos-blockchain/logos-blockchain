@@ -382,7 +382,6 @@ where
             }
             _ => {
                 tracing::trace!(target: LOG_TARGET, "Received event from blend network that will be ignored.");
-                tracing::trace!(counter.ignored_event = 1);
             }
         }
     }
