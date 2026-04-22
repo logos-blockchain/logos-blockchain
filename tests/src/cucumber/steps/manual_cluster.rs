@@ -1,5 +1,6 @@
 use std::{collections::HashMap, hash::BuildHasher, time::Duration};
 
+use lb_libp2p::{Multiaddr, PeerId, Protocol};
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, LbcLocalDeployer, NodeHttpClient, TopologyConfig,
     configs::wallet::WalletAccount, internal::DeploymentPlan,
@@ -284,6 +285,46 @@ pub async fn assert_manual_node_has_peers(
         );
         sleep(Duration::from_secs(1)).await;
     }
+}
+
+pub async fn connect_manual_node_to_node(
+    world: &CucumberWorld,
+    source_node_name: &str,
+    target_node_name: &str,
+) -> StepResult {
+    let source_client = world.resolve_node_http_client(source_node_name)?;
+    let target_client = world.resolve_node_http_client(target_node_name)?;
+    let target_network = target_client.network_info().await?;
+    let target_addr = compose_dial_addr(
+        target_network.listen_addresses.first(),
+        target_network.peer_id,
+    )
+    .ok_or_else(|| StepError::LogicalError {
+        message: format!("node '{target_node_name}' has no listen address to dial"),
+    })?;
+
+    source_client
+        .dial_peer(target_addr)
+        .await
+        .map(|_| ())
+        .map_err(|error| StepError::LogicalError {
+            message: format!(
+                "failed to connect node '{source_node_name}' to node '{target_node_name}': {error}"
+            ),
+        })
+}
+
+fn compose_dial_addr(listen_addr: Option<&Multiaddr>, peer_id: PeerId) -> Option<Multiaddr> {
+    let mut addr = listen_addr?.clone();
+    let has_peer_id = addr
+        .iter()
+        .any(|protocol| matches!(protocol, Protocol::P2p(_)));
+
+    if !has_peer_id {
+        addr.push(Protocol::P2p(peer_id));
+    }
+
+    Some(addr)
 }
 
 pub fn build_user_wallets(

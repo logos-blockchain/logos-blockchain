@@ -133,7 +133,7 @@ services:
       - explorer
       - faucet
     environment:
-      - ENV_TITLE_STRING=${IMAGE_LABEL}
+      - ENV_TITLE_STRING=${ENV_TITLE_STRING}
     volumes:
       - node-data:/node-data
       - ./testnet/nginx/run.conf:/etc/nginx/nginx.conf

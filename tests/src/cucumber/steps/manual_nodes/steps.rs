@@ -11,6 +11,7 @@ use crate::{
         steps::{
             TARGET,
             manual_cluster::{
+                assert_manual_node_has_peers, connect_manual_node_to_node,
                 install_local_manual_cluster, rebuild_pending_local_manual_cluster,
                 stop_active_manual_cluster,
             },
@@ -181,6 +182,33 @@ async fn step_start_manual_stand_alone_node(
     node_name: String,
 ) -> StepResult {
     start_node(world, &step.value, &node_name, &Vec::new(), &Vec::new()).await
+}
+
+#[when(expr = "I connect node {string} to node {string} at runtime")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step entrypoints must take `&mut World`"
+)]
+async fn step_connect_nodes_at_runtime(
+    world: &mut CucumberWorld,
+    source_node_name: String,
+    target_node_name: String,
+) -> StepResult {
+    connect_manual_node_to_node(world, &source_node_name, &target_node_name).await
+}
+
+#[then(expr = "node {string} has at least {int} peers within {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step entrypoints must take `&mut World`"
+)]
+async fn step_node_has_peers(
+    world: &mut CucumberWorld,
+    node_name: String,
+    min_peers: usize,
+    timeout_secs: u64,
+) -> StepResult {
+    assert_manual_node_has_peers(world, &node_name, min_peers, timeout_secs).await
 }
 
 #[when(expr = "I restart node {string}")]
