@@ -16,7 +16,7 @@ use tokio::{sync::oneshot::Sender, time::timeout};
 use crate::{
     Entropy, FaucetSettings, Host,
     config::{create_node_config_from_template, create_node_configs},
-    load_entropy,
+    load_entropy, random_entropy,
     server::CfgSyncConfig,
 };
 
@@ -40,7 +40,13 @@ pub struct ConfigRepo {
 
 impl From<CfgSyncConfig> for Arc<ConfigRepo> {
     fn from(config: CfgSyncConfig) -> Self {
-        let entropy = load_entropy(&config.entropy_file).expect("Failed to load entropy file");
+        let entropy = config
+            .entropy_file
+            .as_ref()
+            .map_or_else(random_entropy, |path| {
+                load_entropy(path).expect("Failed to load entropy file")
+            });
+
         ConfigRepo::new(
             config.n_hosts,
             entropy,
