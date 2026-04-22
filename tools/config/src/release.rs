@@ -171,11 +171,13 @@ mod tests {
     fn set_optional_env(name: &str, value: Option<&str>) {
         match value {
             Some(value) => {
-                // SAFETY: tests hold ENV_LOCK for the full mutation window, so env access here is serialized.
+                // SAFETY: tests hold ENV_LOCK for the full mutation window, so env access here
+                // is serialized.
                 unsafe { std::env::set_var(name, value) }
             }
             None => {
-                // SAFETY: tests hold ENV_LOCK for the full mutation window, so env access here is serialized.
+                // SAFETY: tests hold ENV_LOCK for the full mutation window, so env access here
+                // is serialized.
                 unsafe { std::env::remove_var(name) }
             }
         }

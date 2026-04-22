@@ -160,7 +160,7 @@ impl DiagnosticSources {
             &diagnostics,
         );
 
-        let sections = vec![
+        let sections = [
             summary.render(),
             summary.render_connectivity(),
             self.render_block_feed(),
@@ -352,17 +352,16 @@ impl NodeDiagnostic {
                         format!("{}:{suffix}", resolve_peer_label(peer_labels, peer))
                     })
                     .collect::<Vec<_>>();
-                let old = info
-                    .old_session_peers
-                    .as_ref()
-                    .map(|peers| {
+                let old = info.old_session_peers.as_ref().map_or_else(
+                    || "none".to_owned(),
+                    |peers| {
                         peers
                             .iter()
                             .map(|peer| resolve_peer_label(peer_labels, peer))
                             .collect::<Vec<_>>()
                             .join(", ")
-                    })
-                    .unwrap_or_else(|| "none".to_owned());
+                    },
+                );
 
                 format!(
                     "ok session_peers={} unhealthy={} old_session=[{}] current_session=[{}]",
