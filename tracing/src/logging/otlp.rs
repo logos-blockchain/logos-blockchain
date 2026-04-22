@@ -6,10 +6,7 @@ use opentelemetry_otlp::{WithExportConfig as _, WithTonicConfig as _};
 use opentelemetry_sdk::{Resource, logs::SdkLoggerProvider};
 use opentelemetry_semantic_conventions::resource::SERVICE_NAME;
 use serde::{Deserialize, Serialize};
-use tonic::{
-    Request, Status,
-    metadata::{Ascii, MetadataValue},
-};
+use tonic::metadata::MetadataMap;
 use url::Url;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -34,16 +31,9 @@ pub fn create_otlp_layer(
             .with_tonic()
             .with_endpoint(config.endpoint.to_string());
         if let Some(auth_header) = config.authorization_header {
-            let Ok(auth_header_metadata) = auth_header.parse::<MetadataValue<Ascii>>() else {
-                return Err(Box::new(Status::invalid_argument(
-                    "Invalid authorization header value",
-                )));
-            };
-            exporter = exporter.with_interceptor(move |mut req: Request<()>| {
-                req.metadata_mut()
-                    .insert("authorization", auth_header_metadata.clone());
-                Ok(req)
-            });
+            let mut metadata = MetadataMap::new();
+            metadata.insert("authorization", auth_header.parse()?);
+            exporter = exporter.with_metadata(metadata);
         }
 
         exporter.build()?
