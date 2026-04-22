@@ -4,7 +4,6 @@ use lb_common_http_client::{
     ApiBlock, BlockInfo, CommonHttpClient, CryptarchiaInfo, Error, ProcessedBlockEvent, Slot,
 };
 use lb_core::{
-    block::Block,
     header::HeaderId,
     mantle::{Op, SignedMantleTx, ops::channel::ChannelId},
 };
@@ -22,7 +21,7 @@ pub trait Node {
 
     async fn lib_stream(&self) -> Result<impl Stream<Item = BlockInfo> + Send, Error>;
 
-    async fn block(&self, id: HeaderId) -> Result<Option<Block<SignedMantleTx>>, Error>;
+    async fn block(&self, id: HeaderId) -> Result<Option<ApiBlock>, Error>;
 
     async fn blocks(&self, slot_from: Slot, slot_to: Slot) -> Result<Vec<ApiBlock>, Error>;
 
@@ -71,8 +70,8 @@ impl Node for NodeHttpClient {
         self.client.get_lib_stream(self.base_url.clone()).await
     }
 
-    async fn block(&self, id: HeaderId) -> Result<Option<Block<SignedMantleTx>>, Error> {
-        self.client.get_block(self.base_url.clone(), id).await
+    async fn block(&self, id: HeaderId) -> Result<Option<ApiBlock>, Error> {
+        self.client.get_block_by_id(self.base_url.clone(), id).await
     }
 
     async fn blocks(&self, slot_from: Slot, slot_to: Slot) -> Result<Vec<ApiBlock>, Error> {
@@ -92,9 +91,9 @@ impl Node for NodeHttpClient {
     ) -> Result<impl Stream<Item = ZoneMessage>, Error> {
         let transactions = self
             .client
-            .get_block(self.base_url.clone(), id)
+            .get_block_by_id(self.base_url.clone(), id)
             .await?
-            .map_or_else(|| Vec::with_capacity(0), Block::into_transactions);
+            .map_or_else(|| Vec::with_capacity(0), |block| block.transactions);
 
         Ok(stream::iter(
             transactions

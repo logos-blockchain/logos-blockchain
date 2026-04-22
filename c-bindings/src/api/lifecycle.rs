@@ -11,9 +11,14 @@ use lb_node::{
 };
 use tokio::runtime::Runtime;
 
-use crate::{LogosBlockchainNode, PointerResult, errors::OperationStatus};
+use crate::{
+    LogosBlockchainNode,
+    errors::OperationStatus,
+    result::{FfiStatusResult, StatusResult},
+    return_error_if_null_pointer,
+};
 
-pub type InitializedLogosBlockchainNodeResult = PointerResult<LogosBlockchainNode, OperationStatus>;
+pub type FfiInitializedLogosBlockchainNodeResult = FfiStatusResult<*mut LogosBlockchainNode>;
 
 /// Creates and starts a Logos blockchain node based on the provided
 /// configuration file path.
@@ -28,16 +33,16 @@ pub type InitializedLogosBlockchainNodeResult = PointerResult<LogosBlockchainNod
 ///
 /// # Returns
 ///
-/// An `InitializedLogosBlockchainNodeResult` containing either a pointer to the
-/// initialized `LogosBlockchainNode` or an error code.
+/// An [`FfiInitializedLogosBlockchainNodeResult`] containing either a pointer
+/// to the initialized [`LogosBlockchainNode`] or an error code.
 #[unsafe(no_mangle)]
 pub extern "C" fn start_lb_node(
     config_path: *const c_char,
     deployment: *const c_char,
-) -> InitializedLogosBlockchainNodeResult {
+) -> FfiInitializedLogosBlockchainNodeResult {
     initialize_lb_node(config_path, deployment).map_or_else(
-        InitializedLogosBlockchainNodeResult::from_error,
-        InitializedLogosBlockchainNodeResult::from_value,
+        FfiInitializedLogosBlockchainNodeResult::err,
+        FfiInitializedLogosBlockchainNodeResult::from_value,
     )
 }
 
@@ -54,18 +59,18 @@ pub extern "C" fn start_lb_node(
 ///
 /// # Returns
 ///
-/// A `Result` containing either the initialized `LogosBlockchainNode` or an
+/// A [`Result`] containing either the initialized [`LogosBlockchainNode`] or an
 /// error code.
 fn initialize_lb_node(
     config_path: *const c_char,
     deployment: *const c_char,
-) -> Result<LogosBlockchainNode, OperationStatus> {
+) -> StatusResult<LogosBlockchainNode> {
     let run_config = RunConfig {
         deployment: get_deployment_config(deployment)?,
         user: get_user_config(config_path)?,
     };
 
-    let rt = Runtime::new().unwrap();
+    let rt = Runtime::new().expect("Failed to create Tokio runtime");
     let app = run_node_from_config(run_config).map_err(|e| {
         log::error!("Could not initialize Overwatch: {e}");
         OperationStatus::InitializationError
@@ -91,7 +96,7 @@ fn initialize_lb_node(
     Ok(LogosBlockchainNode::new(app, rt))
 }
 
-fn get_user_config(config_path: *const c_char) -> Result<UserConfig, OperationStatus> {
+fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {
     let user_config_path = unsafe { std::ffi::CStr::from_ptr(config_path) }
         .to_str()
         .map_err(|e| {
@@ -105,9 +110,7 @@ fn get_user_config(config_path: *const c_char) -> Result<UserConfig, OperationSt
         })
 }
 
-fn get_deployment_config(
-    deployment_arg: *const c_char,
-) -> Result<DeploymentSettings, OperationStatus> {
+fn get_deployment_config(deployment_arg: *const c_char) -> StatusResult<DeploymentSettings> {
     let deployment_type: DeploymentType = if deployment_arg.is_null() {
         WellKnownDeployment::default().into()
     } else {
@@ -140,25 +143,21 @@ fn get_deployment_config(
 ///
 /// # Arguments
 ///
-/// - `node`: A pointer to the `LogosBlockchainNode` instance to be stopped.
+/// - `node`: A pointer to the [`LogosBlockchainNode`] instance to be stopped.
 ///
 /// # Returns
 ///
-/// An `OperationStatus` indicating success or failure.
+/// An [`OperationStatus`] indicating success or failure.
 ///
 /// # Safety
 ///
 /// The caller must ensure that:
-/// - `node` is a valid pointer to a `LogosBlockchainNode` instance
-/// - The `LogosBlockchainNode` instance was created by this library
+/// - `node` is a valid pointer to a [`LogosBlockchainNode`] instance
+/// - The [`LogosBlockchainNode`] instance was created by this library
 /// - The pointer will not be used after this function returns
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn stop_node(node: *mut LogosBlockchainNode) -> OperationStatus {
-    if node.is_null() {
-        log::error!("Attempted to stop a null node pointer. This is a bug. Aborting.");
-        return OperationStatus::NullPointer;
-    }
-
+    return_error_if_null_pointer!("stop_node", node);
     let node = unsafe { Box::from_raw(node) };
     node.stop()
 }

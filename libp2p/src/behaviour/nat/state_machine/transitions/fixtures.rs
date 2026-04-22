@@ -88,9 +88,7 @@ impl<'a> StateMachine {
     }
 }
 
-impl Eq for TestEvent<'_> {
-    fn assert_receiver_is_total_eq(&self) {}
-}
+impl Eq for TestEvent<'_> {}
 
 impl PartialEq for TestEvent<'_> {
     fn eq(&self, other: &Self) -> bool {

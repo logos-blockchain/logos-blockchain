@@ -2,13 +2,41 @@ use core::fmt::{self, Debug, Formatter};
 
 use lb_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
 use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot;
+
+/// Information about the current Blend network peers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkInfo<NodeId> {
+    /// Negotiated peers for the current session, with a flag indicating whether
+    /// they are healthy (`true`) or not (`false`).
+    pub current_session_peers: Vec<(NodeId, bool)>,
+    /// Negotiated peers for the old session, if a session transition is in
+    /// progress.
+    pub old_session_peers: Option<Vec<NodeId>>,
+}
 
 /// A message that is handled by [`BlendService`].
-#[derive(Debug)]
-pub enum ServiceMessage<BroadcastSettings> {
+pub enum ServiceMessage<BroadcastSettings, NodeId> {
     /// To send a message to the blend network and eventually broadcast it to
     /// the [`NetworkService`].
     Blend(NetworkMessage<BroadcastSettings>),
+    /// Request the current blend network info (connected peers).
+    /// The reply will be `None` if the node is not in core mode.
+    GetNetworkInfo {
+        reply: oneshot::Sender<Option<NetworkInfo<NodeId>>>,
+    },
+}
+
+impl<BroadcastSettings, NodeId> Debug for ServiceMessage<BroadcastSettings, NodeId>
+where
+    BroadcastSettings: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Blend(msg) => f.debug_tuple("Blend").field(msg).finish(),
+            Self::GetNetworkInfo { .. } => f.debug_struct("GetNetworkInfo").finish(),
+        }
+    }
 }
 
 /// A message that is sent to the blend network.

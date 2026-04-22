@@ -9,6 +9,11 @@ use std::{
 
 use async_trait::async_trait;
 use lb_core::mantle::{
+    GasCalculator as _, GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo,
+    gas::MainnetGasConstants,
+    genesis_tx::GENESIS_STORAGE_GAS_PRICE,
+    tx::{MantleTxContext, MantleTxGasContext},
+    tx_builder::MantleTxBuilder,
     GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo, ops::OpId as _,
     tx::MantleTxContext, tx_builder::MantleTxBuilder,
 };
@@ -184,9 +189,9 @@ impl<'a, E: LbcScenarioEnv> Submission<'a, E> {
     }
 
     async fn execute(mut self) -> Result<(), DynError> {
-        let tx_context = MantleTxContext::default();
+        let gas_context = MantleTxGasContext::new(HashMap::new());
         while let Some(input) = self.plan.pop_front() {
-            submit_wallet_transaction(self.ctx, &input, tx_context.clone()).await?;
+            submit_wallet_transaction(self.ctx, &input, gas_context.clone()).await?;
             if !self.interval.is_zero() {
                 sleep(self.interval).await;
             }
@@ -198,9 +203,9 @@ impl<'a, E: LbcScenarioEnv> Submission<'a, E> {
 async fn submit_wallet_transaction(
     ctx: &RunContext<impl LbcScenarioEnv>,
     input: &WalletInput,
-    tx_context: MantleTxContext,
+    gas_context: MantleTxGasContext,
 ) -> Result<(), DynError> {
-    let signed_tx = Arc::new(build_wallet_transaction(input, tx_context)?);
+    let signed_tx = Arc::new(build_wallet_transaction(input, &gas_context)?);
     submit_transaction_via_cluster(ctx, signed_tx).await
 }
 
@@ -267,11 +272,36 @@ fn cluster_client_exhausted_error() -> DynError {
 
 fn build_wallet_transaction(
     input: &WalletInput,
-    tx_context: MantleTxContext,
+    gas_context: &MantleTxGasContext,
 ) -> Result<SignedMantleTx, DynError> {
-    let tx = MantleTxBuilder::new(tx_context)
+    let receiver = input.account.public_key();
+    let tx_context = MantleTxContext {
+        gas_context: gas_context.clone(),
+        leader_reward_amount: 0,
+    };
+
+    let provisional_tx = MantleTxBuilder::new(tx_context.clone())
+        .set_execution_gas_price(0.into())
+        .set_storage_gas_price(GENESIS_STORAGE_GAS_PRICE)
         .add_ledger_input(input.utxo)
-        .add_ledger_output(Note::new(input.utxo.note.value, input.account.public_key()))
+        .add_ledger_output(Note::new(input.utxo.note.value, receiver))
+        .build();
+
+    let fee = provisional_tx
+        .total_gas_cost::<MainnetGasConstants>(gas_context)?
+        .into_inner();
+    let output_value = input.utxo.note.value.checked_sub(fee).ok_or_else(|| {
+        format!(
+            "input note value {} below fee {}",
+            input.utxo.note.value, fee
+        )
+    })?;
+
+    let tx = MantleTxBuilder::new(tx_context)
+        .set_execution_gas_price(0.into())
+        .set_storage_gas_price(GENESIS_STORAGE_GAS_PRICE)
+        .add_ledger_input(input.utxo)
+        .add_ledger_output(Note::new(output_value, receiver))
         .build();
 
     let signature = ZkKey::multi_sign(

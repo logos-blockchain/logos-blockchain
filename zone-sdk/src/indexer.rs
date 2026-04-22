@@ -151,6 +151,7 @@ mod tests {
         mantle::{NoteId, SignedMantleTx, ledger::Inputs},
     };
     use lb_groth16::Fr;
+    use lb_core::{header::HeaderId, mantle::SignedMantleTx};
 
     use super::*;
     use crate::{Deposit, ZoneBlock};
@@ -235,15 +236,9 @@ mod tests {
     async fn next_messages_skip_msg_not_found() {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
-            (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
-                Slot::new(0),
-            ),
+            (deposit_msg(10, &[10]), Slot::new(0)),
             (block_msg(2, &[2]), Slot::new(1)),
-            (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), &[11]),
-                Slot::new(2),
-            ),
+            (deposit_msg(11, &[11]), Slot::new(2)),
             (block_msg(4, &[4]), Slot::new(2)),
         ];
         let indexer = indexer(Slot::new(2), messages.clone());
@@ -264,10 +259,7 @@ mod tests {
     async fn next_messages_skip_but_nothing_left() {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
-            (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
-                Slot::new(0),
-            ),
+            (deposit_msg(10, &[10]), Slot::new(0)),
             (block_msg(2, &[2]), Slot::new(1)),
         ];
         let indexer = indexer(Slot::new(2), messages.clone());
@@ -286,10 +278,7 @@ mod tests {
     async fn next_messages_across_batches() {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
-            (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
-                BATCH_SIZE,
-            ),
+            (deposit_msg(10, &[10]), BATCH_SIZE),
             (
                 block_msg(2, &[2]),
                 BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
@@ -299,7 +288,7 @@ mod tests {
                 BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
             ),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), &[11]),
+                deposit_msg(11, &[11]),
                 BATCH_SIZE.into_inner().checked_mul(3).unwrap().into(),
             ),
             (
@@ -394,7 +383,7 @@ mod tests {
         async fn block(
             &self,
             _id: HeaderId,
-        ) -> Result<Option<Block<SignedMantleTx>>, lb_common_http_client::Error> {
+        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
             Ok(None)
         }
 

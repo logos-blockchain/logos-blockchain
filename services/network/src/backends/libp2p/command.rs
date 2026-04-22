@@ -39,6 +39,7 @@ pub struct Dial {
 pub struct Libp2pInfo {
     pub listen_addresses: Vec<Multiaddr>,
     pub peer_id: PeerId,
+    pub connected_peers: Vec<PeerId>,
     pub n_peers: usize,
     pub n_connections: u32,
     pub n_pending_connections: u32,

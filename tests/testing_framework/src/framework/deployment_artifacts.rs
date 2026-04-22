@@ -82,7 +82,11 @@ fn deployment_settings(
         .clone()
         .ok_or(ArtifactError::MissingGenesisTx)?;
 
-    let providers = collect_runtime_blend_providers(topology.nodes(), hostnames)?;
+    let providers = collect_runtime_blend_providers(
+        topology.nodes(),
+        hostnames,
+        topology.config().blend_core_nodes,
+    )?;
     let transfer_op = genesis_tx.genesis_transfer().clone();
     let genesis_tx = create_genesis_tx_with_declarations(
         transfer_op,
@@ -96,6 +100,7 @@ fn deployment_settings(
 fn collect_runtime_blend_providers(
     nodes: &[NodePlan],
     hostnames: &[String],
+    n_blend_core_nodes: usize,
 ) -> Result<Vec<ProviderInfo>> {
     if nodes.len() != hostnames.len() {
         return Err(ArtifactError::HostnameCountMismatch {
@@ -105,9 +110,14 @@ fn collect_runtime_blend_providers(
         .into());
     }
 
-    let mut providers = Vec::with_capacity(nodes.len());
+    let mut providers = Vec::with_capacity(n_blend_core_nodes);
 
-    for (index, (node, hostname)) in nodes.iter().zip(hostnames.iter()).enumerate() {
+    for (index, (node, hostname)) in nodes
+        .iter()
+        .zip(hostnames.iter())
+        .take(n_blend_core_nodes)
+        .enumerate()
+    {
         let port = blend_udp_port(node, index)?;
         let locator = runtime_blend_locator(hostname, port);
         let (_, provider_sk, zk_sk) = &node.general.blend_config;

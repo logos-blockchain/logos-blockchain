@@ -201,11 +201,11 @@ impl Sequencer {
     }
 
     fn block_contains_inscription(
-        block: &lb_core::block::Block<SignedMantleTx>,
+        block: &lb_common_http_client::ApiBlock,
         expected: &InscriptionOp,
         block_id: HeaderId,
     ) -> bool {
-        for tx in block.transactions() {
+        for tx in &block.transactions {
             for op in &tx.mantle_tx.ops {
                 if let Op::ChannelInscribe(inscribe) = op {
                     tracing::debug!(
@@ -244,7 +244,7 @@ impl Sequencer {
 
             let Some(block) = self
                 .http_client
-                .get_block(self.node_url.clone(), block_id)
+                .get_block_by_id(self.node_url.clone(), block_id)
                 .await?
             else {
                 break;
@@ -257,14 +257,14 @@ impl Sequencer {
                 "Checking block {} (depth {}): {} transactions",
                 block_id,
                 depth,
-                block.transactions().len()
+                block.transactions.len()
             );
 
             if Self::block_contains_inscription(&block, expected, block_id) {
                 return Ok(true);
             }
 
-            current_id = Some(block.header().parent());
+            current_id = Some(block.header.parent_block);
         }
 
         Ok(false)

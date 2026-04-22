@@ -31,3 +31,29 @@ pre-commit install
 ```
 
 3. That's it! The pre-commit hooks will now run automatically when you make a commit.
+
+## Logging Guidelines
+
+Use log levels consistently so logs are easier to read and easier to filter by target.
+
+- Log entries should use the correct target for the subsystem they belong to, and new logs should follow the existing target structure.
+
+- `error`
+  - Use when something failed that should normally work.
+  - If this log appears, someone should probably look at it.
+
+- `warn`
+  - Use when something is off, missing, or degraded, but the node can still continue.
+  - If this log appears occasionally, it may be acceptable; if it repeats, it is probably a problem.
+
+- `info`
+  - Use for important events that explain the node's current state or major transitions.
+  - Someone reading only `info` logs should still understand whether the node is starting, syncing, progressing, changing epoch/session, proposing blocks, or hitting notable conditions.
+
+- `debug`
+  - Use for details that explain why the node behaved a certain way.
+  - These logs should help answer follow-up questions such as why a decision was taken, why something was skipped, which peers were selected, or why a block was treated a certain way.
+
+- `trace`
+  - Use for step-by-step internal flow or very frequent events.
+  - These logs should only be needed when doing a deep dive into one specific area.

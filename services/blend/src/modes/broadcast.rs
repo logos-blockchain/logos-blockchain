@@ -16,12 +16,12 @@ use crate::{
     modes::Error,
 };
 
-pub struct BroadcastMode<Adapter, RuntimeServiceId> {
+pub struct BroadcastMode<Adapter, NodeId, RuntimeServiceId> {
     adapter: Adapter,
-    _phantom: PhantomData<RuntimeServiceId>,
+    _phantom: PhantomData<(NodeId, RuntimeServiceId)>,
 }
 
-impl<Adapter, RuntimeServiceId> BroadcastMode<Adapter, RuntimeServiceId>
+impl<Adapter, NodeId, RuntimeServiceId> BroadcastMode<Adapter, NodeId, RuntimeServiceId>
 where
     Adapter: NetworkAdapter<RuntimeServiceId> + Send + Sync,
 {
@@ -35,7 +35,7 @@ where
     {
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_secs(60)),
+            Some(Duration::from_mins(1)),
             NetworkService
         )
         .await?;
@@ -48,25 +48,37 @@ where
     }
 }
 
-impl<Adapter, RuntimeServiceId> BroadcastMode<Adapter, RuntimeServiceId>
+impl<Adapter, NodeId, RuntimeServiceId> BroadcastMode<Adapter, NodeId, RuntimeServiceId>
 where
     Adapter: NetworkAdapter<RuntimeServiceId> + Send + Sync + 'static,
+    NodeId: Send + Sync,
     RuntimeServiceId: Send + Sync + 'static,
 {
     pub async fn handle_inbound_message<Message>(&self, message: Message) -> Result<(), Error>
     where
         Message: MessageComponents<
+                NodeId,
                 Payload: Into<Vec<u8>>,
                 BroadcastSettings: Into<Adapter::BroadcastSettings>,
             > + Send
             + Sync
             + 'static,
     {
-        let (payload, broadcast_settings) = message.into_components();
-        self.adapter
-            .broadcast(payload.into(), broadcast_settings.into())
-            .await;
-        Ok(())
+        // If this is a network info request, respond with None (broadcast mode
+        // has no blend peers).
+        match message.try_into_network_info_request() {
+            Ok(reply) => {
+                drop(reply.send(None));
+                Ok(())
+            }
+            Err(message) => {
+                let (payload, broadcast_settings) = message.into_components();
+                self.adapter
+                    .broadcast(payload.into(), broadcast_settings.into())
+                    .await;
+                Ok(())
+            }
+        }
     }
 }
 
@@ -83,11 +95,12 @@ pub mod tests {
             state::{NoOperator, NoState},
         },
     };
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, oneshot};
     use tokio_stream::wrappers::BroadcastStream;
     use tracing::{debug, info};
 
     use super::*;
+    use crate::message::NetworkInfo;
 
     #[test_log::test(test)]
     fn broadcast_mode() {
@@ -104,7 +117,7 @@ pub mod tests {
             .unwrap();
 
             // Create the BroadcastMode
-            let mut mode = BroadcastMode::<TestNetworkAdapter, RuntimeServiceId>::new::<
+            let mut mode = BroadcastMode::<TestNetworkAdapter, (), RuntimeServiceId>::new::<
                 TestNetworkService,
             >(app.handle())
             .await
@@ -124,7 +137,7 @@ pub mod tests {
             );
 
             // Check if the mode can be created again.
-            let mut mode = BroadcastMode::<TestNetworkAdapter, RuntimeServiceId>::new::<
+            let mut mode = BroadcastMode::<TestNetworkAdapter, (), RuntimeServiceId>::new::<
                 TestNetworkService,
             >(app.handle())
             .await
@@ -259,12 +272,21 @@ pub mod tests {
     #[derive(Debug)]
     pub struct TestMessage(Vec<u8>);
 
-    impl MessageComponents for TestMessage {
+    impl<NodeId> MessageComponents<NodeId> for TestMessage {
         type Payload = Vec<u8>;
         type BroadcastSettings = ();
 
         fn into_components(self) -> (Self::Payload, Self::BroadcastSettings) {
             (self.0, ())
+        }
+
+        fn try_into_network_info_request(
+            self,
+        ) -> Result<oneshot::Sender<Option<NetworkInfo<NodeId>>>, Self>
+        where
+            Self: Sized,
+        {
+            Err(self)
         }
     }
 

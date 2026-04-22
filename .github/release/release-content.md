@@ -17,7 +17,7 @@
 
 ### ⚙️ Initialize Your Node
 
-Generate a default configuration by connecting to the devnet bootstrap peers:
+Generate a default configuration by connecting to the testnet bootstrap peers:
 
 ```bash
 ./logos-blockchain-node init \
@@ -27,7 +27,7 @@ Generate a default configuration by connecting to the devnet bootstrap peers:
     -p /ip4/65.109.51.37/udp/3003/quic-v1/p2p/{TODO}
 ```
 
-If you know for sure your node will not have a publicly reachable IP address (e.g., if behind a NAT or CG-NAT), then you can add `--no-public-ip-check` to the end of the previous command to skip checking if your IP is publicly reachable.
+If your node has a known public IP address and you want to disable NAT traversal, you can add `--external-address /ip4/<public-ip>/udp/<port>/quic-v1` to the previous command. Nodes behind NAT or CG-NAT require no extra flags — NAT traversal is enabled by default.
 
 This takes a few seconds and produces a `user_config.yaml` file.
 
@@ -52,7 +52,7 @@ curl -w "\n" http://localhost:8080/cryptarchia/info
 Your node should be in `Bootstrapping` mode for a few minutes, with both `slot` and `height` steadily increasing.
 
 After boostrapping is complete, your node will move to `Online` mode.
-You can compare against the fleet nodes at the [Logos devnet dashboard][devnet-dashboard].
+You can compare against the fleet nodes at the [Logos testnet dashboard][testnet-dashboard].
 
 ---
 
@@ -76,7 +76,7 @@ Either key can be used.
 
 **2. 🚰 Request funds from the faucet**
 
-Visit the [devnet faucet][devnet-faucet] and enter the credentials provided by the Logos Blockchain team (you can reach out to them on [Discord][devnet-discord-public]), then paste your wallet key.
+Visit the [testnet faucet][testnet-faucet] and enter the credentials provided by the Logos Blockchain team (you can reach out to them on [Discord][testnet-discord-public]), then paste your wallet key.
 
 A word of caution - do not _powerclick_ your way through as only one request can be made per block! So if you want to receive funds more than once, wait until your balance increases before requesting new funds.
 
@@ -110,7 +110,7 @@ Start publishing messages to the blockchain using the built in text sequencer:
 
 ## 🛟 Troubleshooting
 
-Having issues? Reach out to the Logos Blockchain team on [Discord][devnet-discord-public] or check the [devnet Notion page][release-notion] for FAQs and up-to-date instructions.
+Having issues? Reach out to the Logos Blockchain team on [Discord][testnet-discord-public] or check the [testnet Notion page][release-notion] for FAQs and up-to-date instructions.
 
 ---
 
@@ -121,11 +121,11 @@ Having issues? Reach out to the Logos Blockchain team on [Discord][devnet-discor
 - [ ] Auto-generate the changelog (GitHub feature) using the tag of the previous release, then move the changelog section to the **top** of the release notes
 - [ ] Verify binaries are present for **Mac** and **Linux**
 - [ ] Verify circuits of the expected version are present for **Mac** and **Linux**
-- [ ] Replace `{TODO}` peer IDs by visiting the [devnet dashboard][devnet-dashboard] and copying each node's address + peer ID from their network info
+- [ ] Replace `{TODO}` peer IDs by visiting the [testnet dashboard][testnet-dashboard] and copying each node's address + peer ID from their network info
 - [ ] Set the release type: check **pre-release** or **latest** as appropriate
 - [ ] Delete this checklist and publish
 
 [release-notion]: https://www.notion.so/nomos-tech/Internal-Devnet-Launch-February-2026-2fe261aa09df8025ad94e380933b4cf9#2ff261aa09df8058935ecb85aa587564
-[devnet-faucet]: https://devnet.blockchain.logos.co/web/faucet/
-[devnet-dashboard]: https://devnet.blockchain.logos.co/web/
-[devnet-discord-public]: https://discord.com/channels/973324189794697286/1468535289604735038
+[testnet-faucet]: https://testnet.blockchain.logos.co/web/faucet/
+[testnet-dashboard]: https://testnet.blockchain.logos.co/web/
+[testnet-discord-public]: https://discord.com/channels/973324189794697286/1468535289604735038

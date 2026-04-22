@@ -34,8 +34,7 @@ fn get_or_init_chain_start_time() -> OffsetDateTime {
 #[must_use]
 pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> DeploymentSettings {
     let slot_duration_in_secs = std::env::var(CONSENSUS_SLOT_TIME_VAR)
-        .map(|s| s.parse::<u64>().unwrap())
-        .unwrap_or(DEFAULT_SLOT_TIME_IN_SECS);
+        .map_or(DEFAULT_SLOT_TIME_IN_SECS, |s| s.parse::<u64>().unwrap());
 
     DeploymentSettings {
         blend: BlendDeploymentSettings {

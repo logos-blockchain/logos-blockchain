@@ -378,6 +378,14 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
         &self.negotiated_peers
     }
 
+    /// Returns the peer IDs of the old session's negotiated peers, if a
+    /// session transition is in progress.
+    pub fn old_session_peer_ids(&self) -> Option<impl Iterator<Item = &PeerId> + '_> {
+        self.old_session
+            .as_ref()
+            .map(OldSession::negotiated_peer_ids)
+    }
+
     fn try_wake(&mut self) {
         if let Some(waker) = self.waker.take() {
             waker.wake();
@@ -978,9 +986,10 @@ where
             Either::Left(ConnectionHandler::new(
                 ConnectionMonitor::new(self.observation_window_clock_provider.interval_stream()),
                 self.protocol_name.clone(),
+                (peer_id, connection_id),
             ))
         } else {
-            tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with edge peer {peer_id:?}.");
+            tracing::trace!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with edge peer {peer_id:?}.");
             Either::Right(DummyConnectionHandler)
         })
     }
@@ -1026,6 +1035,7 @@ where
             Either::Left(ConnectionHandler::new(
                 ConnectionMonitor::new(self.observation_window_clock_provider.interval_stream()),
                 self.protocol_name.clone(),
+                (peer_id, connection_id),
             ))
         } else {
             tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with edge peer {peer_id:?}.");

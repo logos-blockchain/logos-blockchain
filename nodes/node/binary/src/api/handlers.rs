@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Display};
 
+use ::libp2p::PeerId;
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -8,7 +9,7 @@ use axum::{
 };
 use futures::FutureExt as _;
 use lb_api_service::http::{
-    DynError,
+    DynError, blend,
     consensus::{self, Cryptarchia},
     libp2p, mantle, mempool,
     storage::StorageAdapter,
@@ -20,7 +21,7 @@ use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Transaction, gas::MainnetGasConstants, ops::channel::ChannelId,
+        Op, SignedMantleTx, Transaction, TxHash, gas::MainnetGasConstants, ops::channel::ChannelId,
         tx_builder::MantleTxBuilder,
     },
 };
@@ -56,7 +57,10 @@ use crate::api::{
     openapi::schema,
     queries::BlockRangeQuery,
     responses::{self, overwatch::get_relay_or_500},
-    serializers::blocks::{ApiBlock, ApiProcessedBlockEvent},
+    serializers::{
+        blocks::{ApiBlock, ApiProcessedBlockEvent},
+        transactions::ApiSignedTransactionRef,
+    },
 };
 
 #[macro_export]
@@ -124,16 +128,6 @@ where
         StorageAdapter,
         RuntimeServiceId,
     >(&handle))
-}
-
-pub async fn get_sdp_declarations<RuntimeServiceId>(
-    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-) -> Response
-where
-    RuntimeServiceId:
-        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
-{
-    make_request_and_return_response!(mantle::get_sdp_declarations::<RuntimeServiceId>(&handle))
 }
 
 #[utoipa::path(
@@ -283,27 +277,27 @@ where
 }
 
 #[utoipa::path(
-    post,
-    path = paths::STORAGE_BLOCK,
+    get,
+    path = paths::BLEND_NETWORK_INFO,
     responses(
-        (status = 200, description = "Get the block by block id", body = HeaderId),
+        (status = 200, description = "Query the blend network information", body = Option<lb_blend_service::message::BlendNetworkInfo>),
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn block<HttpStorageAdapter, RuntimeServiceId>(
+pub async fn blend_info<BlendService, BroadcastSettings, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(id): Json<HeaderId>,
 ) -> Response
 where
-    HttpStorageAdapter: StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
-    RuntimeServiceId:
-        AsServiceId<StorageService<RocksBackend, RuntimeServiceId>> + Debug + Sync + Display,
+    BlendService: ServiceData<Message = lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>>
+        + 'static,
+    BroadcastSettings: Send + 'static,
+    RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
 {
-    let relay = match get_relay_or_500(&handle).await {
-        Ok(relay) => relay,
-        Err(error_response) => return error_response,
-    };
-    make_request_and_return_response!(HttpStorageAdapter::get_block::<SignedMantleTx>(relay, id))
+    make_request_and_return_response!(blend::blend_info::<
+        BlendService,
+        BroadcastSettings,
+        RuntimeServiceId,
+    >(&handle))
 }
 
 #[utoipa::path(
@@ -649,6 +643,39 @@ where
 }
 
 #[utoipa::path(
+    post,
+    path = paths::BLOCKS_DETAIL,
+    responses(
+        (status = 200, description = "Block found"),
+        (status = 404, description = "Block not found"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn block<HttpStorageAdapter, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(id): Path<HeaderId>,
+) -> Response
+where
+    HttpStorageAdapter: StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
+    RuntimeServiceId:
+        AsServiceId<StorageService<RocksBackend, RuntimeServiceId>> + Debug + Sync + Display,
+{
+    let relay = match get_relay_or_500(&handle).await {
+        Ok(relay) => relay,
+        Err(error_response) => return error_response,
+    };
+    let block = HttpStorageAdapter::get_block::<SignedMantleTx>(relay, id).await;
+    match block {
+        Ok(Some(block)) => {
+            let api_block = ApiBlock::from(block);
+            (StatusCode::OK, Json(api_block)).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND,).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response(),
+    }
+}
+
+#[utoipa::path(
     get,
     path = paths::BLOCKS_STREAM,
     responses(
@@ -679,6 +706,48 @@ where
     match stream {
         Ok(stream) => responses::ndjson::from_stream(stream),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = paths::TRANSACTION,
+    responses(
+        (status = 200, description = "Transaction found"),
+        (status = 404, description = "Transaction not found"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn transaction<HttpStorageAdapter, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(id): Path<TxHash>,
+) -> Response
+where
+    HttpStorageAdapter: StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
+    RuntimeServiceId:
+        AsServiceId<StorageService<RocksBackend, RuntimeServiceId>> + Debug + Sync + Display,
+{
+    let relay = match get_relay_or_500(&handle).await {
+        Ok(relay) => relay,
+        Err(error_response) => return error_response,
+    };
+    let Ok(transactions) = HttpStorageAdapter::get_transactions::<SignedMantleTx>(relay, id).await
+    else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response();
+    };
+    match transactions.as_slice() {
+        [] => (StatusCode::NOT_FOUND,).into_response(),
+        [transaction] => {
+            let api_transaction = ApiSignedTransactionRef::from(transaction);
+            (StatusCode::OK, Json(api_transaction)).into_response()
+        }
+        _ => {
+            let error_body = serde_json::json!({
+                "error": "Multiple transactions found",
+                "len": transactions.len()
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_body)).into_response()
+        }
     }
 }
 

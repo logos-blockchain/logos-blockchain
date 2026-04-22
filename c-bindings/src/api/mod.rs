@@ -5,7 +5,7 @@ pub mod lifecycle;
 pub(crate) mod memory;
 pub mod sdp;
 pub mod storage;
-mod subscriptions;
+pub mod subscriptions;
 pub(crate) mod types;
 pub mod wallet;
 

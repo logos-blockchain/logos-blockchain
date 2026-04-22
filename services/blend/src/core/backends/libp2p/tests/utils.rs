@@ -1,4 +1,4 @@
-use core::{ops::RangeInclusive, time::Duration};
+use core::{num::NonZeroU64, ops::RangeInclusive, time::Duration};
 use std::iter::repeat_with;
 
 use async_trait::async_trait;
@@ -93,6 +93,7 @@ pub fn build_membership(
 pub struct SwarmBuilder {
     identity: Keypair,
     public_info: PublicInfo<PeerId>,
+    max_dial_attempts: Option<NonZeroU64>,
 }
 
 impl SwarmBuilder {
@@ -101,7 +102,13 @@ impl SwarmBuilder {
         Self {
             identity,
             public_info,
+            max_dial_attempts: None,
         }
+    }
+
+    pub fn with_max_dial_attempts(mut self, max_dial_attempts: NonZeroU64) -> Self {
+        self.max_dial_attempts = Some(max_dial_attempts);
+        self
     }
 
     pub fn build<BehaviourConstructor>(
@@ -122,7 +129,8 @@ impl SwarmBuilder {
             incoming_message_sender,
             self.public_info,
             BlakeRng::from_entropy(),
-            3u64.try_into().unwrap(),
+            self.max_dial_attempts
+                .unwrap_or_else(|| 3u64.try_into().unwrap()),
             1usize.try_into().unwrap(),
         );
 
