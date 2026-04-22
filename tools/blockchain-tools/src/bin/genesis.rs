@@ -14,8 +14,8 @@ use lb_core::{
     },
 };
 use lb_node::config::deployment::{DeploymentSettings, WellKnownDeployment};
+use logos_blockchain_tools::{overwrite_yaml, value_from_dotted_kv};
 use serde_yml::Value;
-use tools::{overwrite_yaml, value_from_dotted_kv};
 
 // ── CLI definition
 // ────────────────────────────────────────────────────────────
