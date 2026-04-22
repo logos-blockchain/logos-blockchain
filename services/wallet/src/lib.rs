@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt as _;
 use lb_chain_service::{
-    LibUpdate,
+    Epoch, LibUpdate, Slot,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
     storage::{StorageAdapter as _, adapters::StorageAdapter},
 };
@@ -29,7 +29,6 @@ use lb_core::{
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
 };
-use lb_groth16::Fr;
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::{KMSBackend, preload::PreloadKMSBackend},
@@ -40,12 +39,12 @@ use lb_key_management_system_service::{
     operators::zk::voucher::UnsafeVoucherOperator,
 };
 use lb_ledger::LedgerState;
+use lb_mmr::MerklePath;
 use lb_services_utils::{
     overwatch::{JsonFileBackend, RecoveryOperator, recovery::backends::FileBackendSettings},
     wait_until_services_are_ready,
 };
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
-use lb_utxotree::MerklePath;
 use lb_wallet::{WalletBalance, WalletBlock, WalletError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -327,6 +326,12 @@ where
         // Subscribe to LIB updates for wallet state pruning
         let mut lib_receiver = cryptarchia_api.subscribe_lib_updates().await?;
 
+        let (epoch_config, consensus_config) = cryptarchia_api.get_epoch_config().await?;
+        let epoch_config = EpochConfig {
+            epoch_config,
+            consensus_config,
+        };
+
         // Initialize wallet from LIB and LIB LedgerState
         let lib = chain_info.lib;
 
@@ -350,6 +355,7 @@ where
             &mut state,
             &storage_adapter,
             &cryptarchia_api,
+            &epoch_config,
         )
         .await?;
 
@@ -359,10 +365,10 @@ where
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage_adapter, &cryptarchia_api, &kms).await;
+                    Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage_adapter, &cryptarchia_api, &kms, &epoch_config).await;
                 }
                 Ok(event) = new_block_receiver.recv() => {
-                    Self::handle_new_block(event.block_id, &mut state, &storage_adapter, &cryptarchia_api).await;
+                    Self::handle_new_block(event.block_id, &mut state, &storage_adapter, &cryptarchia_api, &epoch_config).await;
                 }
                 Ok(lib_update) = lib_receiver.recv() => {
                     Self::handle_lib_update(&lib_update, &storage_adapter, &mut state).await;
@@ -408,9 +414,11 @@ where
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        epoch_config: &EpochConfig,
     ) {
         if let Err(err) =
-            Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia).await
+            Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia, epoch_config)
+                .await
         {
             warn!(err=?err, "Failed backfilling wallet to message tip; continuing to process the message {msg:?}");
         }
@@ -482,7 +490,7 @@ where
                     }
                 };
 
-                let resp = Self::sign_tx(tx_builder, ledger, kms, state.wallet())
+                let resp = Self::sign_tx(tx_builder, tip, ledger, kms, state.wallet())
                     .await
                     .map(|signed_tx| TipResponse {
                         tip,
@@ -680,7 +688,7 @@ where
     async fn sign_leader_claim(
         tx_hash: TxHash,
         leader_claim_op: &LeaderClaimOp,
-        ledger: &LedgerState,
+        tip: HeaderId,
         wallet: &Wallet,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<OpProof, WalletServiceError> {
@@ -693,11 +701,10 @@ where
             Self::derive_voucher_from_kms(kms, voucher_master_key_id.clone(), *voucher_index).await;
 
         let voucher_cm = VoucherCm::from_secret(voucher_secret);
-        let path = todo!("get path from wallet, not from ledger");
-        // ledger
-        // .mantle_ledger()
-        // .voucher_merkle_path(voucher_cm)
-        // .ok_or(WalletServiceError::VoucherMerklePathNotFound(voucher_cm))?;
+        let path = wallet
+            .voucher_path_snapshot(tip, &voucher_cm)
+            .map_err(WalletServiceError::WalletError)?
+            .ok_or(WalletServiceError::VoucherMerklePathNotFound(voucher_cm))?;
         let rewards_root = leader_claim_op.rewards_root;
 
         // TODO: This should happen in KMS
@@ -720,7 +727,8 @@ where
 
     async fn sign_tx(
         tx_builder: MantleTxBuilder,
-        ledger: LedgerState,
+        tip: HeaderId,
+        tip_leader: LedgerState,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         wallet: &Wallet,
     ) -> Result<SignedMantleTx, WalletServiceError> {
@@ -742,7 +750,7 @@ where
                     Self::sign_inscription(tx_hash, inscribe_op, kms).await?
                 }
                 Op::ChannelSetKeys(set_keys_op) => {
-                    Self::sign_channel_set_key(tx_hash, set_keys_op, &ledger, kms).await?
+                    Self::sign_channel_set_key(tx_hash, set_keys_op, &tip_leader, kms).await?
                 }
                 Op::ChannelDeposit(_deposit_op) => OpProof::NoProof,
                 Op::ChannelWithdraw(_channel_withdraw_op) => {
@@ -752,16 +760,16 @@ where
                     OpProof::ChannelWithdrawProof(proof)
                 }
                 Op::SDPDeclare(declare_op) => {
-                    Self::sign_sdp_declare(tx_hash, declare_op, &ledger, kms).await?
+                    Self::sign_sdp_declare(tx_hash, declare_op, &tip_leader, kms).await?
                 }
                 Op::SDPWithdraw(withdraw_op) => {
-                    Self::sign_sdp_withdraw(tx_hash, withdraw_op, &ledger, kms).await?
+                    Self::sign_sdp_withdraw(tx_hash, withdraw_op, &tip_leader, kms).await?
                 }
                 Op::SDPActive(active_op) => {
-                    Self::sign_sdp_active(tx_hash, active_op, &ledger, kms).await?
+                    Self::sign_sdp_active(tx_hash, active_op, &tip_leader, kms).await?
                 }
                 Op::LeaderClaim(claim_op) => {
-                    Self::sign_leader_claim(tx_hash, claim_op, &ledger, wallet, kms).await?
+                    Self::sign_leader_claim(tx_hash, claim_op, tip, wallet, kms).await?
                 }
                 Op::Transfer(_) => Self::sign_transfer(tx_hash, input_pks.clone(), kms).await?,
             };
@@ -825,7 +833,7 @@ where
 
     fn generate_poc(
         voucher_secret: VoucherSecret,
-        path: &MerklePath<Fr>,
+        path: &MerklePath,
         rewards_root: RewardsRoot,
         tx_hash: TxHash,
     ) -> Result<Groth16LeaderClaimProof, WalletServiceError> {
@@ -957,13 +965,7 @@ where
             }
         };
 
-        // Get the ledger state at the specified tip
-        let Ok(Some(ledger_state)) = cryptarchia.get_ledger_state(tip).await else {
-            Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(tip));
-            return;
-        };
-
-        let voucher = Self::find_claimable_voucher(wallet, &ledger_state);
+        let voucher = Self::find_claimable_voucher(wallet, tip);
         if resp_tx
             .send(Ok(TipResponse {
                 tip,
@@ -976,19 +978,18 @@ where
     }
 
     fn find_claimable_voucher(
-        _wallet: &Wallet,
-        _ledger_state: &LedgerState,
+        wallet: &Wallet,
+        tip: HeaderId,
     ) -> Option<VoucherCommitmentAndNullifier> {
-        todo!("find a claimable voucher from wallet, not from ledger");
-        // for (nf, cm) in wallet.voucher_commitments_and_nullifiers() {
-        //     if ledger_state.mantle_ledger().has_claimable_voucher(cm) {
-        //         return Some(VoucherCommitmentAndNullifier {
-        //             commitment: *cm,
-        //             nullifier: *nf,
-        //         });
-        //     }
-        // }
-        // None
+        for (nf, cm) in wallet.voucher_commitments_and_nullifiers() {
+            if let Ok(Some(_)) = wallet.voucher_path_snapshot(tip, cm) {
+                return Some(VoucherCommitmentAndNullifier {
+                    commitment: *cm,
+                    nullifier: *nf,
+                });
+            }
+        }
+        None
     }
 
     async fn backfill_if_not_in_sync(
@@ -996,6 +997,7 @@ where
         state: &mut ServiceState<'_>,
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        epoch_config: &EpochConfig,
     ) -> Result<(), WalletServiceError> {
         let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
 
@@ -1008,7 +1010,7 @@ where
         // To resolve this, we do a JIT backfill to try to sync the wallet with
         // cryptarchia. If we still have not caught up after the backfill, we return an
         // error to the caller
-        Self::backfill_missing_blocks(tip, state, storage, cryptarchia).await?;
+        Self::backfill_missing_blocks(tip, state, storage, cryptarchia, epoch_config).await?;
 
         if state.wallet().has_processed_block(tip) {
             Ok(())
@@ -1027,6 +1029,7 @@ where
         state: &mut ServiceState<'_>,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        epoch_config: &EpochConfig,
     ) {
         let Ok(block) = Self::load_block(
             header_id,
@@ -1039,7 +1042,8 @@ where
             return;
         };
 
-        let wallet_block = WalletBlock::from(block);
+        let wallet_block =
+            WalletBlock::from_block(&block, epoch_config.epoch(block.header().slot()));
         match state.apply_block(&wallet_block) {
             Ok(()) => {
                 trace!(block_id=?wallet_block.id, "Applied block to wallet");
@@ -1051,6 +1055,7 @@ where
                     state,
                     storage_adapter,
                     cryptarchia_api,
+                    epoch_config,
                 )
                 .await
                 {
@@ -1085,6 +1090,7 @@ where
             "Received LIB update"
         );
 
+        state.advance_lib(lib_update.new_lib);
         state.prune_states(lib_update.pruned_blocks.all());
         let immutable_blocks: Vec<Block<Tx>> =
             futures::stream::iter(lib_update.pruned_blocks.immutable_blocks.values())
@@ -1110,20 +1116,29 @@ where
         state.prune_vouchers(claimed_nullifiers);
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn backfill_missing_blocks(
         tip: HeaderId,
         state: &mut ServiceState<'_>,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        epoch_config: &EpochConfig,
     ) -> Result<(), WalletServiceError> {
+        debug!(from_tip = ?tip, to_state_lib = ?state.lib(), "backfilling missing blocks");
+
+        // Fetch block IDs in [state.lib, tip]
         let missing_headers = cryptarchia_api
-            .get_headers_to_lib(tip)
+            .get_headers(Some(tip), Some(state.lib()))
             .await
             .map_err(WalletServiceError::CryptarchiaApi)
             .inspect_err(|e| {
                 error!(block_id = ?tip, err = %e, "Failed to fetch missing headers for backfill");
             })?;
 
+        // Load/apply blocks in order from `state.lib` to `tip`
         for header_id in missing_headers.iter().rev().copied() {
             if state.wallet().has_processed_block(header_id) {
                 debug!("skipping already processed block");
@@ -1131,8 +1146,10 @@ where
             }
 
             let block = Self::load_block(header_id, storage_adapter).await?;
+            let wallet_block =
+                WalletBlock::from_block(&block, epoch_config.epoch(block.header().slot()));
 
-            if let Err(e) = state.apply_block(&block.into()) {
+            if let Err(e) = state.apply_block(&wallet_block) {
                 error!(
                     block_id = ?header_id,
                     err = %e,
@@ -1192,5 +1209,18 @@ where
         if let Err(e) = resp_tx.send(Ok(ledger_state.tx_context())) {
             error!(err = ?e, "Failed to send gas context response");
         }
+    }
+}
+
+/// A config to calculate epoch from slot
+struct EpochConfig {
+    epoch_config: lb_cryptarchia_engine::EpochConfig,
+    consensus_config: lb_cryptarchia_engine::Config,
+}
+
+impl EpochConfig {
+    fn epoch(&self, slot: Slot) -> Epoch {
+        self.epoch_config
+            .epoch(slot, self.consensus_config.base_period_length())
     }
 }

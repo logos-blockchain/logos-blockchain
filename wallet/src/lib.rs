@@ -27,6 +27,8 @@ use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_ledger::LedgerState;
 use lb_mmr::{MerkleMountainRange, MerklePath};
+use serde::{Deserialize, Serialize};
+use tracing::info;
 
 pub use crate::voucher::Vouchers;
 
@@ -59,7 +61,7 @@ impl WalletBlock {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletState {
     pub utxos: rpds::HashTrieMapSync<NoteId, Utxo>,
     pub pk_index: rpds::HashTrieMapSync<ZkPublicKey, rpds::HashTrieSetSync<NoteId>>,
@@ -320,6 +322,14 @@ where
         let known_keys = known_keys.into_iter().collect();
         let wallet_state = WalletState::from_ledger(&known_keys, ledger);
 
+        info!(
+            ?lib,
+            n_known_keys = known_keys.len(),
+            n_known_vouchers = known_vouchers.count(),
+            n_all_vouchers = wallet_state.vouchers.len(),
+            "initializing wallet with LIB ledger state"
+        );
+
         Self {
             known_keys,
             known_vouchers,
@@ -338,8 +348,20 @@ where
         lib: HeaderId,
         wallet_state: WalletState,
     ) -> Self {
+        let known_keys = known_keys.into_iter().collect::<HashMap<_, _>>();
+
+        info!(
+            ?lib,
+            n_known_keys = known_keys.len(),
+            n_known_vouchers = known_vouchers.count(),
+            n_all_vouchers = wallet_state.vouchers.len(),
+            n_voucher_paths = wallet_state.voucher_paths.size(),
+            n_snapshotted_voucher_paths = wallet_state.voucher_paths_snapshot.size(),
+            "initializing wallet with LIB wallet state"
+        );
+
         Self {
-            known_keys: known_keys.into_iter().collect(),
+            known_keys,
             known_vouchers,
             wallet_states: [(lib, wallet_state)].into(),
         }

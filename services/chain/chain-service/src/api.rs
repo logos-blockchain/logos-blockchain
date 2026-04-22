@@ -185,6 +185,30 @@ where
         })
     }
 
+    /// Get the epoch and consensus configs
+    pub async fn get_epoch_config(
+        &self,
+    ) -> Result<
+        (
+            lb_cryptarchia_engine::EpochConfig,
+            lb_cryptarchia_engine::Config,
+        ),
+        ApiError,
+    > {
+        let (tx, rx) = oneshot::channel();
+
+        self.relay
+            .send(ConsensusMsg::GetEpochConfig { tx })
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending GetEpochConfig"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetEpochConfig"))
+        })
+    }
+
     /// Apply a block through the chain service,
     /// and return the tip and reorged txs if successful.
     pub async fn apply_block(

@@ -1,6 +1,7 @@
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{Utxo, gas::MainnetGasConstants, tx_builder::MantleTxBuilder};
 use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_mmr::MerkleMountainRange;
 use lb_testing_framework::NodeHttpClient;
 use lb_wallet::{WalletError, WalletState};
 use rpds::{HashTrieMapSync, HashTrieSetSync};
@@ -103,5 +104,9 @@ fn wallet_state_from_utxos(utxos: Vec<Utxo>) -> WalletState {
     WalletState {
         utxos: utxo_map,
         pk_index,
+        epoch: 0.into(),
+        vouchers: MerkleMountainRange::new(),
+        voucher_paths: HashTrieMapSync::new_sync(),
+        voucher_paths_snapshot: HashTrieMapSync::new_sync(),
     }
 }

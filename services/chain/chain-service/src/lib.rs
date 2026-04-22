@@ -131,6 +131,12 @@ pub enum ConsensusMsg<Tx> {
         slot: Slot,
         tx: oneshot::Sender<Result<EpochState, Error>>,
     },
+    GetEpochConfig {
+        tx: oneshot::Sender<(
+            lb_cryptarchia_engine::EpochConfig,
+            lb_cryptarchia_engine::Config,
+        )>,
+    },
     /// Apply a block to the chain,
     /// and return the tip and reorged txs if successful.
     ApplyBlock {
@@ -829,6 +835,13 @@ where
                 tx.send(result).unwrap_or_else(|_| {
                     error!("Could not send epoch state through channel");
                 });
+            }
+            ConsensusMsg::GetEpochConfig { tx } => {
+                let config = cryptarchia.ledger.config();
+                tx.send((config.epoch_config, config.consensus_config.clone()))
+                    .unwrap_or_else(|_| {
+                        error!("Could not send epoch config through channel");
+                    });
             }
             ConsensusMsg::ApplyBlock { .. } => {
                 // ApplyBlock is handled separately in the run loop where we have async

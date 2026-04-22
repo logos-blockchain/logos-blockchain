@@ -11,11 +11,13 @@ use crate::{Root, empty_subtree_root};
 /// Paths are created via [`crate::MerkleMountainRange::push_with_paths`] and
 /// kept up-to-date by passing them to subsequent `push_with_paths` calls.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MerklePath {
     /// The 0-indexed leaf position in the tree.
     pub leaf_index: usize,
     /// Sibling hashes from height 1 (bottom) up to height `MAX_HEIGHT - 1`.
     /// `siblings[h - 1]` is the root of the sibling subtree at height `h`.
+    #[cfg_attr(feature = "serde", serde(with = "lb_groth16::serde::serde_fr_vec"))]
     pub siblings: Vec<Fr>,
 }
 
@@ -123,7 +125,8 @@ pub fn update_paths_above_merge<Hash: Digest, const MAX_HEIGHT: u8>(
 }
 
 /// Whether `leaf` sits in the left subtree at the given tree `height`.
-const fn is_left_child(leaf: usize, height: usize) -> bool {
+#[must_use]
+pub const fn is_left_child(leaf: usize, height: usize) -> bool {
     (leaf >> (height - 1)) & 1 == 0
 }
 
