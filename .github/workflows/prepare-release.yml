@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.define-version.outputs.version }}
-      is-prerelease: ${{ steps.define-version.outputs.prerelease }}
+      is_prerelease: ${{ steps.define-version.outputs.is_prerelease }}
 
     steps:
       # Take the version of the tag from which the workflow is dispatched, or use `0.0.0` for test runs with the `release-ci-test` tag.
@@ -51,7 +51,7 @@ jobs:
           fi
 
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "is-prerelease=$([[ "$RELEASE_TYPE" == "release-candidate" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$([[ "$RELEASE_TYPE" == "release-candidate" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
 
   build:
     name: "Build and tar binaries for ${{ matrix.platform.os-display }} (${{ matrix.platform.arch }})"
@@ -150,7 +150,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.configure-version.outputs.version }}
-      IS_PRERELEASE: ${{ needs.configure-version.outputs.is-prerelease }}
+      IS_PRERELEASE: ${{ needs.configure-version.outputs.is_prerelease }}
     outputs:
       upload_url: ${{ steps.create-draft-release.outputs.upload_url }}
 

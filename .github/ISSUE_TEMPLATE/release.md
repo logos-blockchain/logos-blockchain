@@ -7,7 +7,7 @@ labels: release
 
 <!---
 
-Most of the template content is the same or very similar to what is in `release.md`. So any changes to this file should be reflected there where relevant, and viceversa.
+Most of the template content is the same or very similar to what is in `release-candidate.md`. So any changes to this file should be reflected there where relevant, and viceversa.
 
 --->
 
@@ -25,7 +25,7 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Verify that the `HEAD` of the release branch `release/X.Y.Z` is the same commit that was released in the latest rc
 - [ ] Post the link of the latest rc GH release and the previous rc checklist that we are promoting to a full release
 - [ ] Change the testnet deployment settings to use the version number in ALL protocol names, e.g., `/logos-blockchain-testnet-X.Y.Z/mempool/1.0.0`
-- [ ] Apply any other changes to the devnet deployment settings and push the changes. If a ceremony will be run, stuff like genesis block can be ignored since it will be overridden as the outcome of the ceremony. 
+- [ ] Apply any other changes to the testnet deployment settings and push the changes. If a ceremony will be run, stuff like genesis block can be ignored since it will be overridden as the outcome of the ceremony.
 
 ## Testnet ceremony (optional, only whenever a testnet ceremony is required)
 

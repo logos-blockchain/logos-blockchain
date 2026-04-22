@@ -1,7 +1,7 @@
 ---
-name: Release Checklist
+name: Release Candidate Checklist
 about: Checklist for releasing a new candidate
-title: Release Checklist for X.Y.Z.rc-N
+title: Release Checklist for X.Y.Z-rc.N
 labels: release
 ---
 
@@ -16,8 +16,8 @@ Most of the template content is the same or very similar to what is in `release.
 **READ THIS BEFORE STARTING WITH THE RELEASE**
 
 * If any changes other than release-specific ones are needed, e.g. a bugfix or some ceremony-related fix that is useful also for future releases, they should be merged with a PR against `master` and not pushed to the release branch. Then, there are two possible strategies:
-    * the release continues from the same branch, in which case the fix is cherry-picked from `master` into the release branch and the branch setup step is skipped
-    * a new release candidate is started from a new `master` fork: in this case the current release branch (and related PR) is closed in favor of the new one, which will follow the full checklist again
+    * the release continues from the same branch, in which case the fix is cherry-picked from `master` into the release branch and the branching/reset step as part of the branch setup is skipped
+    * a new release candidate is restarted from the latest `master`: in this case the existing `release/X.Y.Z` branch is hard-reset back onto `master` and force-pushed, discarding the previous rc's commits from the branch tip (the tags remain)
 * Progress on the checklist must be provided as comments to the issue.
 
 ---
@@ -25,9 +25,9 @@ Most of the template content is the same or very similar to what is in `release.
 ## Branch Setup
 
 - [ ] Branch out from the latest `master` commit with a release branch named `release/X.Y.Z`. If this is not the first rc for this version, HARD reset the branch on top of `master` and force-push the new tip
-- [ ] If this is not the first rc for this version, post the link of the previous rc GH release and the previous rc checklist
+- [ ] If this is not the first rc for this version, post the link of the previous rc GH release and the previous rc checklist. E.g., for the `X.Y.Z-rc.2` candidate, post the checklist and GH release for `X.Y.Z-rc.1`
 - [ ] Change the devnet deployment settings to use the version number in ALL protocol names, e.g., `/logos-blockchain-devnet-X.Y.Z-rc.N/mempool/1.0.0`
-- [ ] Apply any other changes to the devnet deployment settings and push the changes. If a ceremony will be run, stuff like genesis block can be ignored since it will be overridden as the outcome of the ceremony. 
+- [ ] Apply any other changes to the devnet deployment settings and push the changes. If a ceremony will be run, stuff like genesis block can be ignored since it will be overridden as the outcome of the ceremony.
 
 ## Devnet ceremony (optional, only whenever a devnet ceremony is required)
 
