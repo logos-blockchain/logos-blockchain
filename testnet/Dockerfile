@@ -45,7 +45,7 @@ LABEL maintainer="augustinas@status.im" \
     description="Logos Blockchain node and other binaries image"
 
 RUN apt-get update && apt-get install -yq \
-    libstdc++6 libssl3 ca-certificates nginx \
+    libstdc++6 libssl3 ca-certificates \
     python3 python3-pip curl git \
     && rm -rf /var/lib/apt/lists/*
 

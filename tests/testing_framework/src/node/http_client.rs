@@ -5,15 +5,17 @@ use common_http_client::{
 };
 use futures::Stream;
 use lb_chain_service::CryptarchiaInfo;
-use lb_core::{header::HeaderId, mantle::SignedMantleTx};
+use lb_core::{header::HeaderId, mantle::SignedMantleTx, sdp::Declaration};
 use lb_http_api_common::{
     bodies::wallet::transfer_funds::{
         WalletTransferFundsRequestBody, WalletTransferFundsResponseBody,
     },
-    paths::NETWORK_INFO,
+    paths::{DIAL_PEER, MANTLE_SDP_DECLARATIONS, NETWORK_INFO},
 };
+use lb_libp2p::{Multiaddr, PeerId};
 use lb_network_service::backends::libp2p::Libp2pInfo;
 use reqwest::Url;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
 pub struct NodeHttpClient {
@@ -104,6 +106,28 @@ impl NodeHttpClient {
             .await
     }
 
+    pub async fn get_sdp_declarations(&self) -> Result<Vec<Declaration>, Error> {
+        if let Some(testing_url) = self.testing_url.clone()
+            && let Ok(declarations) = self.get_sdp_declarations_at(testing_url).await
+        {
+            return Ok(declarations);
+        }
+
+        self.get_sdp_declarations_at(self.base_url.clone()).await
+    }
+
+    pub async fn dial_peer(&self, addr: Multiaddr) -> Result<PeerId, Error> {
+        let testing_url = self
+            .testing_url
+            .clone()
+            .ok_or_else(|| Error::Client("testing api unavailable".to_owned()))?;
+        let request_url = Self::join_path(&testing_url, DIAL_PEER)?;
+
+        self.http_client
+            .post::<_, PeerId>(request_url, &DialPeerRequestBody { addr })
+            .await
+    }
+
     #[must_use]
     pub const fn base_url(&self) -> &Url {
         &self.base_url
@@ -114,12 +138,33 @@ impl NodeHttpClient {
         self.testing_url.as_ref()
     }
 
+    /// Fetches network info from one explicit base URL.
     async fn network_info_at(&self, base_url: Url) -> Result<Libp2pInfo, Error> {
-        let request_url = base_url
-            .join(NETWORK_INFO.trim_start_matches('/'))
-            .map_err(Error::Url)?;
+        let request_url = Self::join_path(&base_url, NETWORK_INFO)?;
+
         self.http_client
             .get::<(), Libp2pInfo>(request_url, None)
             .await
     }
+
+    /// Fetches testing-only SDP declarations from one explicit base URL.
+    async fn get_sdp_declarations_at(&self, base_url: Url) -> Result<Vec<Declaration>, Error> {
+        let request_url = Self::join_path(&base_url, MANTLE_SDP_DECLARATIONS)?;
+
+        self.http_client
+            .get::<(), Vec<Declaration>>(request_url, None)
+            .await
+    }
+
+    /// Joins one static API path against a base URL.
+    fn join_path(base_url: &Url, path: &str) -> Result<Url, Error> {
+        base_url
+            .join(path.trim_start_matches('/'))
+            .map_err(Error::Url)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DialPeerRequestBody {
+    addr: Multiaddr,
 }

@@ -122,7 +122,7 @@ where
     type Settings = StartingBlendConfig<Backend::Settings>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
-    type Message = ServiceMessage<BroadcastSettings>;
+    type Message = ServiceMessage<BroadcastSettings, NodeId>;
 }
 
 #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
@@ -256,11 +256,20 @@ where
         }
         .await;
 
-        let messages_to_blend_stream = inbound_relay.map(|ServiceMessage::Blend(message)| {
-            NetworkMessage::<BroadcastSettings>::to_bytes(&message)
-                .expect("NetworkMessage should be able to be serialized")
-                .to_vec()
-        });
+        let messages_to_blend_stream = Box::pin(inbound_relay.filter_map(async |msg| {
+            match msg {
+                ServiceMessage::Blend(message) => Some(
+                    NetworkMessage::<BroadcastSettings>::to_bytes(&message)
+                        .expect("NetworkMessage should be able to be serialized")
+                        .to_vec(),
+                ),
+                ServiceMessage::GetNetworkInfo { reply } => {
+                    // Edge nodes don't return any Blend peer info.
+                    drop(reply.send(None));
+                    None
+                }
+            }
+        }));
 
         let epoch_handler = async {
             let chain_service = CryptarchiaServiceApi::<ChainService, _>::new(

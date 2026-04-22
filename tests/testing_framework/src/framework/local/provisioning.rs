@@ -150,7 +150,9 @@ impl LocalDeployerEnv for LbcEnv {
         Ok(build_node_launch_spec(dir, user_yaml, deployment_yaml))
     }
 
-    fn node_endpoints(config: &<Self as Application>::NodeConfig) -> NodeEndpoints {
+    fn node_endpoints(
+        config: &<Self as Application>::NodeConfig,
+    ) -> Result<NodeEndpoints, DynError> {
         let mut endpoints = NodeEndpoints {
             api: config.user.api.backend.listen_address,
             ..Default::default()
@@ -158,7 +160,7 @@ impl LocalDeployerEnv for LbcEnv {
 
         add_endpoint_ports(&mut endpoints, config);
 
-        endpoints
+        Ok(endpoints)
     }
 
     fn node_peer_port(node: &Node<Self>) -> u16 {
@@ -167,12 +169,12 @@ impl LocalDeployerEnv for LbcEnv {
             .unwrap_or_else(|| node.config().user.network.backend.swarm.port)
     }
 
-    fn node_client(endpoints: &NodeEndpoints) -> Self::NodeClient {
+    fn node_client(endpoints: &NodeEndpoints) -> Result<Self::NodeClient, DynError> {
         let testing_api = endpoints
             .port(&NodeEndpointPort::TestingApi)
             .map(|port| (endpoints.api.ip(), port).into());
 
-        NodeHttpClient::new(endpoints.api, testing_api)
+        Ok(NodeHttpClient::new(endpoints.api, testing_api))
     }
 
     fn readiness_endpoint_path() -> &'static str {
@@ -501,14 +503,14 @@ fn build_run_config(config: Config, genesis_tx: GenesisTx) -> RunConfig {
         },
         storage: storage::serde::Config::default(),
         sdp: sdp::serde::Config {
-            declaration_id: None,
+            declaration_id: config.sdp_config.declaration_id,
             wallet: sdp::serde::WalletConfig {
                 max_tx_fee: mantle::Value::MAX.into(),
                 funding_pk: config.consensus_config.funding_sk.as_public_key(),
             },
         },
-        wallet: wallet::serde::Config {
-            known_keys: HashMap::from_iter([
+        wallet: {
+            let known_keys: HashMap<_, _> = [
                 (
                     key_id_for_preload_backend(&Key::Zk(config.consensus_config.known_key.clone())),
                     config.consensus_config.known_key.as_public_key(),
@@ -519,10 +521,36 @@ fn build_run_config(config: Config, genesis_tx: GenesisTx) -> RunConfig {
                     )),
                     config.consensus_config.funding_sk.as_public_key(),
                 ),
-            ]),
-            voucher_master_key_id: key_id_for_preload_backend(&Key::Zk(
-                config.consensus_config.known_key.clone(),
-            )),
+            ]
+            .into_iter()
+            .chain(config.consensus_config.other_keys.iter().map(|sk| {
+                (
+                    key_id_for_preload_backend(&sk.clone().into()),
+                    sk.as_public_key(),
+                )
+            }))
+            .chain(
+                config
+                    .kms_config
+                    .backend
+                    .keys
+                    .values()
+                    .filter_map(|key| match key {
+                        Key::Zk(sk) => Some((
+                            key_id_for_preload_backend(&Key::Zk(sk.clone())),
+                            sk.as_public_key(),
+                        )),
+                        Key::Ed25519(_) => None,
+                    }),
+            )
+            .collect();
+
+            wallet::serde::Config {
+                known_keys,
+                voucher_master_key_id: key_id_for_preload_backend(&Key::Zk(
+                    config.consensus_config.known_key.clone(),
+                )),
+            }
         },
         kms: config::kms::serde::Config {
             backend: config::kms::serde::PreloadKmsBackendSettings {

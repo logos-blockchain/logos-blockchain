@@ -29,7 +29,7 @@ use lb_blend::{
 use lb_libp2p::{DialOpts, SwarmEvent};
 use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, swarm::dial_opts::PeerCondition};
 use rand::RngCore;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::{
     core::{
@@ -42,6 +42,7 @@ use crate::{
         },
         settings::RunningBlendConfig as BlendConfig,
     },
+    message::NetworkInfo,
     metrics,
 };
 
@@ -53,6 +54,9 @@ pub enum BlendSwarmMessage {
     },
     StartNewSession(SessionInfo<PeerId>),
     CompleteSessionTransition,
+    GetNetworkInfo {
+        reply: oneshot::Sender<Option<NetworkInfo<PeerId>>>,
+    },
 }
 
 pub struct DialAttempt {
@@ -247,6 +251,22 @@ where
         self.check_and_dial_new_peers_except(HashSet::from([peer_id]));
     }
 
+    fn collect_network_info(&self) -> NetworkInfo<PeerId> {
+        let core_behaviour = self.swarm.behaviour().blend.with_core();
+        let current_session_peers = core_behaviour
+            .negotiated_peers()
+            .iter()
+            .map(|(peer_id, peer_state)| (*peer_id, peer_state.negotiated_state().is_healthy()))
+            .collect();
+        let old_session_peers = core_behaviour
+            .old_session_peer_ids()
+            .map(|peers| peers.copied().collect());
+        NetworkInfo {
+            current_session_peers,
+            old_session_peers,
+        }
+    }
+
     fn handle_unhealthy_peer(&mut self, peer_id: PeerId) {
         tracing::trace!(target: LOG_TARGET, "Peer {peer_id} is unhealthy");
         self.check_and_dial_new_peers_except(HashSet::from([peer_id]));
@@ -384,6 +404,10 @@ where
             }
             BlendSwarmMessage::CompleteSessionTransition => {
                 self.swarm.behaviour_mut().blend.finish_session_transition();
+            }
+            BlendSwarmMessage::GetNetworkInfo { reply } => {
+                let info = self.collect_network_info();
+                drop(reply.send(Some(info)));
             }
         }
     }
