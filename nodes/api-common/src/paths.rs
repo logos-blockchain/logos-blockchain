@@ -29,3 +29,4 @@ pub mod wallet {
 
 // testing paths
 pub const UPDATE_MEMBERSHIP: &str = "/test/membership/update";
+pub const DIAL_PEER: &str = "/test/network/dial_peer";

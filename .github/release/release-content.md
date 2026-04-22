@@ -17,14 +17,14 @@
 
 ### ⚙️ Initialize Your Node
 
-Generate a default configuration by connecting to the testnet bootstrap peers:
+Generate a default configuration by connecting to the bootstrap peers:
 
 ```bash
 ./logos-blockchain-node init \
-    -p /ip4/65.109.51.37/udp/3000/quic-v1/p2p/{TODO} \
-    -p /ip4/65.109.51.37/udp/3001/quic-v1/p2p/{TODO} \
-    -p /ip4/65.109.51.37/udp/3002/quic-v1/p2p/{TODO} \
-    -p /ip4/65.109.51.37/udp/3003/quic-v1/p2p/{TODO}
+    -p /ip4/65.108.203.235/udp/3000/quic-v1/p2p/{TODO} \
+    -p /ip4/65.108.203.235/udp/3001/quic-v1/p2p/{TODO} \
+    -p /ip4/65.108.203.235/udp/3002/quic-v1/p2p/{TODO} \
+    -p /ip4/65.108.203.235/udp/3003/quic-v1/p2p/{TODO}
 ```
 
 If your node has a known public IP address and you want to disable NAT traversal, you can add `--external-address /ip4/<public-ip>/udp/<port>/quic-v1` to the previous command. Nodes behind NAT or CG-NAT require no extra flags — NAT traversal is enabled by default.
@@ -51,8 +51,9 @@ curl -w "\n" http://localhost:8080/cryptarchia/info
 
 Your node should be in `Bootstrapping` mode for a few minutes, with both `slot` and `height` steadily increasing.
 
-After boostrapping is complete, your node will move to `Online` mode.
-You can compare against the fleet nodes at the [Logos testnet dashboard][testnet-dashboard].
+After bootstrapping is complete, your node will move to `Online` mode.
+If you have joined the devnet, you can compare against the fleet nodes at the [Logos devnet dashboard][devnet-dashboard].
+For testnet, you can check the [Logos testnet dashboard][testnet-dashboard].
 
 ---
 
@@ -76,7 +77,7 @@ Either key can be used.
 
 **2. 🚰 Request funds from the faucet**
 
-Visit the [testnet faucet][testnet-faucet] and enter the credentials provided by the Logos Blockchain team (you can reach out to them on [Discord][testnet-discord-public]), then paste your wallet key.
+Visit the [devnet faucet][devnet-faucet] or [testnet faucet][testnet-faucet] and enter the credentials provided by the Logos Blockchain team (you can reach out to them on [Discord][testnet-discord-public]), then paste your wallet key.
 
 A word of caution - do not _powerclick_ your way through as only one request can be made per block! So if you want to receive funds more than once, wait until your balance increases before requesting new funds.
 
@@ -118,14 +119,20 @@ Having issues? Reach out to the Logos Blockchain team on [Discord][testnet-disco
 
 > **Internal — remove this section before publishing.**
 
-- [ ] Auto-generate the changelog (GitHub feature) using the tag of the previous release, then move the changelog section to the **top** of the release notes
+- [ ] Generate the changelog (GitHub feature) using the tag of the previous release.
+    * If this is the first release candidate, then the previous tag is the version of the latest release, e.g. `0.1.3-rc.1` compares against `0.1.2`
+    * If this is a release candidate but not the first one that has a GH release, then the previous tag is the version of previous release candidate for this release, e.g., `0.1.3-rc.2` compares against `0.1.3-rc.1`
+    * If this is an actual release, then the previous tag is the latest release, e.g., `0.1.3` compares against `0.1.2`
 - [ ] Verify binaries are present for **Mac** and **Linux**
 - [ ] Verify circuits of the expected version are present for **Mac** and **Linux**
-- [ ] Replace `{TODO}` peer IDs by visiting the [testnet dashboard][testnet-dashboard] and copying each node's address + peer ID from their network info
-- [ ] Set the release type: check **pre-release** or **latest** as appropriate
+- [ ] Replace `{TODO}` peer IDs:
+    * For a release candidate (for devnet), copy-paste the new devnet addresses from the [devnet dashboard][devnet-dashboard]
+    * For a release (for testnet), copy-paste the new testnet addresses from the [testnet dashboard][testnet-dashboard]
 - [ ] Delete this checklist and publish
 
 [release-notion]: https://www.notion.so/nomos-tech/Internal-Devnet-Launch-February-2026-2fe261aa09df8025ad94e380933b4cf9#2ff261aa09df8058935ecb85aa587564
 [testnet-faucet]: https://testnet.blockchain.logos.co/web/faucet/
+[devnet-faucet]: https://devnet.blockchain.logos.co/web/faucet/
 [testnet-dashboard]: https://testnet.blockchain.logos.co/web/
+[devnet-dashboard]: https://devnet.blockchain.logos.co/web/
 [testnet-discord-public]: https://discord.com/channels/973324189794697286/1468535289604735038

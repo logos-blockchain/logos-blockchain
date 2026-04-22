@@ -87,7 +87,7 @@ services:
     depends_on:
       - cfgsync
     environment:
-      - ENV_TITLE_STRING=${IMAGE_LABEL}
+      - ENV_TITLE_STRING=${ENV_TITLE_STRING}
     volumes:
       - node-data:/node-data
       - ./testnet/nginx/setup.conf:/etc/nginx/nginx.conf

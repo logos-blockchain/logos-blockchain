@@ -45,4 +45,4 @@
 * [ ] 4. Main contact(s) (developers and specification authors) added
 * [ ] 5. Implementation and Specification are 100% in sync including changes. This is critical.
 * [ ] 6. Link PR to a specific milestone.
-* [ ] 7. New or changed logs were reviewed against the [logging guidelines](../../CONTRIBUTING.md#logging-guidelines).
+* [ ] 7. New or changed logs were reviewed against the [logging guidelines](https://github.com/logos-blockchain/logos-blockchain/blob/master/CONTRIBUTING.md#logging-guidelines).
