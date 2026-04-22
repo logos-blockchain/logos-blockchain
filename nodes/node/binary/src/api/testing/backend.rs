@@ -9,7 +9,7 @@ use axum::{
     routing::{get, post},
 };
 use lb_api_service::Backend;
-use lb_http_api_common::paths::{MANTLE_SDP_DECLARATIONS, TEST_NETWORK_CONNECT};
+use lb_http_api_common::paths::{DIAL_PEER, MANTLE_SDP_DECLARATIONS};
 use lb_network_service::{NetworkService, backends::libp2p::Libp2p as NetworkBackend};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;
@@ -25,7 +25,7 @@ use tracing::Level as TracingLevel;
 use crate::{
     api::{
         backend::AxumBackendSettings,
-        testing::handlers::{connect_network_peer, get_sdp_declarations},
+        testing::handlers::{dial_peer, get_sdp_declarations},
     },
     generic_services::{self, SdpService},
 };
@@ -85,10 +85,7 @@ where
                 MANTLE_SDP_DECLARATIONS,
                 get(get_sdp_declarations::<RuntimeServiceId>),
             )
-            .route(
-                TEST_NETWORK_CONNECT,
-                post(connect_network_peer::<RuntimeServiceId>),
-            )
+            .route(DIAL_PEER, post(dial_peer::<RuntimeServiceId>))
             .with_state(handle)
             .layer(axum::extract::DefaultBodyLimit::max(
                 self.settings.max_body_size,

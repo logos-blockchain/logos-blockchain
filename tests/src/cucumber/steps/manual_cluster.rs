@@ -304,7 +304,7 @@ pub async fn connect_manual_node_to_node(
     })?;
 
     source_client
-        .connect_network_peer(target_addr)
+        .dial_peer(target_addr)
         .await
         .map(|_| ())
         .map_err(|error| StepError::LogicalError {

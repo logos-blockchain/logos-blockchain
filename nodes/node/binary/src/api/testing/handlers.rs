@@ -14,7 +14,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConnectNetworkPeerRequestBody {
+pub struct DialPeerRequestBody {
     pub addr: Multiaddr,
 }
 
@@ -34,9 +34,9 @@ where
     make_request_and_return_response!(mantle::get_sdp_declarations::<RuntimeServiceId>(&handle))
 }
 
-pub async fn connect_network_peer<RuntimeServiceId>(
+pub async fn dial_peer<RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(req): Json<ConnectNetworkPeerRequestBody>,
+    Json(req): Json<DialPeerRequestBody>,
 ) -> Response
 where
     RuntimeServiceId: Debug
