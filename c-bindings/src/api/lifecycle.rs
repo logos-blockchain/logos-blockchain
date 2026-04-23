@@ -40,6 +40,8 @@ pub extern "C" fn start_lb_node(
     config_path: *const c_char,
     deployment: *const c_char,
 ) -> FfiInitializedLogosBlockchainNodeResult {
+    return_error_if_null_pointer!("start_lb_node", config_path);
+
     initialize_lb_node(config_path, deployment).map_or_else(
         FfiInitializedLogosBlockchainNodeResult::err,
         FfiInitializedLogosBlockchainNodeResult::from_value,
@@ -70,11 +72,20 @@ fn initialize_lb_node(
         user: get_user_config(config_path)?,
     };
 
-    let rt = Runtime::new().expect("Failed to create Tokio runtime");
-    let app = run_node_from_config(run_config).map_err(|e| {
-        log::error!("Could not initialize Overwatch: {e}");
+    let rt = Runtime::new().map_err(|e| {
+        log::error!("Failed to create Tokio runtime: {e}");
         OperationStatus::InitializationError
     })?;
+
+    // `run_node_from_config` passes `Handle::current()` into Overwatch; the thread must have
+    // entered this runtime first. Without this, the call panics as soon as Overwatch starts.
+    let app = {
+        let _guard = rt.enter();
+        run_node_from_config(run_config).map_err(|e| {
+            log::error!("Could not initialize Overwatch: {e}");
+            OperationStatus::InitializationError
+        })?
+    };
 
     let app_handle = app.handle();
 
