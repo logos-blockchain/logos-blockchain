@@ -1,9 +1,14 @@
 on:
-  schedule:
-    - cron: '0 0 * * *' # 00:00 UTC is 01:00 CET (standard time)
+  push:
+    branches:
+      - master
   workflow_dispatch: # Allow manual triggering
 
-name: Nightly Cargo Hack
+name: Cargo Hack on Push
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   issues: write
@@ -51,7 +56,7 @@ jobs:
         uses: ./.github/actions/setup-cargo-cache
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          key-prefix: nightly/cargo-hack/${{ matrix.platform.label }}
+          key-prefix: cargo-hack/${{ matrix.platform.label }}
 
       - name: Run Cargo Hack Check (Cache-Aware)
         uses: ./.github/actions/cargo-hack-check-cached
@@ -61,7 +66,7 @@ jobs:
         uses: ./.github/actions/update-cargo-cache
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          key-prefix: nightly/cargo-hack/${{ matrix.platform.label }}
+          key-prefix: cargo-hack/${{ matrix.platform.label }}
 
       - name: Clean up build artifacts
         if: success() || failure()
@@ -70,14 +75,14 @@ jobs:
           command: clean
 
       - name: Create issue on failure
-        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: failure() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: |
           # Use gh CLI to create an issue. 
           # We check if an open issue with the same title already exists to avoid duplicates.
-          TITLE="Nightly Cargo Hack failed on ${{ matrix.platform.label }}"
+          TITLE="Cargo Hack failed on ${{ matrix.platform.label }}"
           EXISTING_ISSUE=$(gh issue list --search "$TITLE" --state open --json number --jq '.[0].number')
           
-          BODY="Nightly Cargo Hack check failed for platform: ${{ matrix.platform.label }}.
+          BODY="Cargo Hack check failed for platform: ${{ matrix.platform.label }}.
           See details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           
           if [ -z "$EXISTING_ISSUE" ]; then
